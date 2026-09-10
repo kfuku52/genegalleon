@@ -1,0 +1,81 @@
+{
+  "dataset": "random-effect2-seed29101",
+  "mode": "estimated-alpha",
+  "true_k": 5,
+  "effect": 2,
+  "search_seconds": 2.26645137599553,
+  "ungated": {
+    "k": 10,
+    "tp": 3,
+    "fp": 7,
+    "precision": 0.3,
+    "recall": 0.6,
+    "rmse": 0.889058270518389,
+    "alpha": "6.182350311438881"
+  },
+  "null_alpha": "2.5558083272633865",
+  "inputs": {
+    "tree.nwk": "22e497828540da4ab0344518df4d7c951a1eee7be62f77946de36ea81aeb5ab5",
+    "traits.tsv": "77b8e49141a8bc2e84b2e9be1f75a58dc6fba12713f151cc95ea71909c818397",
+    "truth.json": "ab3593a6809b88e82255a9c33e0d745e4defc58499a11b5b4bdb29da39f21743"
+  },
+  "gate_seconds": 37.59014939298504,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": 0.0,
+    "rmse": 0.5103579900095038,
+    "alpha": "2.5558083272633865"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 100101,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 20.000077219006073,
+    "exceedances": 14,
+    "p_value": 0.75,
+    "rejected": false,
+    "bootstrap_statistics": [
+      47.5506574001713,
+      10.834694799092688,
+      28.88458612310913,
+      25.005130334878004,
+      30.832876826414235,
+      35.96430178367572,
+      11.791723131288478,
+      18.17629179926763,
+      29.191762937945953,
+      30.676202116251005,
+      34.29273677435984,
+      30.80569722285864,
+      31.508004355200626,
+      10.390454489742467,
+      24.559716554517024,
+      34.82832804485531,
+      28.42462141710095,
+      12.41594105861779,
+      25.554882534126108
+    ],
+    "ungated_shift_branch_ids": [
+      14,
+      35,
+      52,
+      68,
+      91,
+      108,
+      132,
+      137,
+      141,
+      189
+    ]
+  }
+}

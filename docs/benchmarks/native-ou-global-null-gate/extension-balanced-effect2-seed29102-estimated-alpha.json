@@ -1,0 +1,80 @@
+{
+  "dataset": "balanced-effect2-seed29102",
+  "mode": "estimated-alpha",
+  "true_k": 5,
+  "effect": 2,
+  "search_seconds": 1.0769406250037719,
+  "ungated": {
+    "k": 9,
+    "tp": 4,
+    "fp": 5,
+    "precision": 0.4444444444444444,
+    "recall": 0.8,
+    "rmse": 0.6532566257557902,
+    "alpha": "865.269945677647"
+  },
+  "null_alpha": "1.6406136849021722",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "c2572d8db08983bfd54404d082bdbe8bdfbe318c4f9c5c3a4750eb3f6d04fdb1",
+    "truth.json": "c36144a530f8003c9db7cfc71bffff2b40d4ee107049c6db72629066b6be5e6b"
+  },
+  "gate_seconds": 31.74214443101664,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": 0.0,
+    "rmse": 0.6695596445989858,
+    "alpha": "1.6406136849021722"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 100102,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 28.983529054389237,
+    "exceedances": 4,
+    "p_value": 0.25,
+    "rejected": false,
+    "bootstrap_statistics": [
+      13.178324882015374,
+      23.286620819281154,
+      15.21876170106384,
+      14.4724470984292,
+      35.55691356575056,
+      33.45817818544043,
+      26.390919620250656,
+      38.118376582905285,
+      37.61765306525945,
+      21.022095894098072,
+      21.752425930361085,
+      21.503532926836158,
+      24.840699293209354,
+      24.290490875689443,
+      20.26247092757842,
+      20.948779008755537,
+      17.978359614864132,
+      22.358709066669235,
+      19.60661657114133
+    ],
+    "ungated_shift_branch_ids": [
+      3,
+      32,
+      38,
+      57,
+      60,
+      82,
+      90,
+      99,
+      100
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "status": "passed",
+  "paired_noise_identical_tolerance": 1e-12,
+  "checks": [
+    {
+      "dataset": "effect2-seed30101",
+      "tips": 1000,
+      "true_shifts": 100,
+      "shifted_tips": 779,
+      "min_shift_clade_size": 7,
+      "max_shift_clade_size": 8
+    },
+    {
+      "dataset": "effect2-seed30102",
+      "tips": 1000,
+      "true_shifts": 100,
+      "shifted_tips": 781,
+      "min_shift_clade_size": 7,
+      "max_shift_clade_size": 8
+    },
+    {
+      "dataset": "effect2-seed30103",
+      "tips": 1000,
+      "true_shifts": 100,
+      "shifted_tips": 784,
+      "min_shift_clade_size": 7,
+      "max_shift_clade_size": 8
+    },
+    {
+      "dataset": "effect6-seed30101",
+      "tips": 1000,
+      "true_shifts": 100,
+      "shifted_tips": 779,
+      "min_shift_clade_size": 7,
+      "max_shift_clade_size": 8
+    },
+    {
+      "dataset": "effect6-seed30102",
+      "tips": 1000,
+      "true_shifts": 100,
+      "shifted_tips": 781,
+      "min_shift_clade_size": 7,
+      "max_shift_clade_size": 8
+    },
+    {
+      "dataset": "effect6-seed30103",
+      "tips": 1000,
+      "true_shifts": 100,
+      "shifted_tips": 784,
+      "min_shift_clade_size": 7,
+      "max_shift_clade_size": 8
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+[
+  {
+    "root": "OUfixedRoot",
+    "shared": false,
+    "criterion": "AIC",
+    "score": 27.43055085895929,
+    "log_likelihood": -7.7152754294796448
+  },
+  {
+    "root": "OUfixedRoot",
+    "shared": false,
+    "criterion": "AICc",
+    "score": 111.43055085895929,
+    "log_likelihood": -7.7152754294796448
+  },
+  {
+    "root": "OUfixedRoot",
+    "shared": true,
+    "criterion": "AIC",
+    "score": 25.454747981962875,
+    "log_likelihood": -7.7273739909814374
+  },
+  {
+    "root": "OUfixedRoot",
+    "shared": true,
+    "criterion": "AICc",
+    "score": 55.454747981962875,
+    "log_likelihood": -7.7273739909814374
+  },
+  {
+    "root": "OUrandomRoot",
+    "shared": false,
+    "criterion": "AIC",
+    "score": 27.827307819426249,
+    "log_likelihood": -7.9136539097131244
+  },
+  {
+    "root": "OUrandomRoot",
+    "shared": false,
+    "criterion": "AICc",
+    "score": 111.82730781942625,
+    "log_likelihood": -7.9136539097131244
+  },
+  {
+    "root": "OUrandomRoot",
+    "shared": true,
+    "criterion": "AIC",
+    "score": 25.85150494242983,
+    "log_likelihood": -7.9257524712149152
+  },
+  {
+    "root": "OUrandomRoot",
+    "shared": true,
+    "criterion": "AICc",
+    "score": 55.851504942429827,
+    "log_likelihood": -7.9257524712149152
+  }
+]

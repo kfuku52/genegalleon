@@ -1,0 +1,37 @@
+✔ | F W  S  OK | Context
+
+⠏ |          0 | aic                                                            
+✔ |          6 | aic
+
+⠏ |          0 | convergent-observation-errors                                  
+⠋ |          1 | convergent-observation-errors                                  
+⠼ |          5 | convergent-observation-errors                                  
+✔ |          6 | convergent-observation-errors
+
+⠏ |          0 | convergent-regime-regressions                                  
+⠋ |      2  19 | convergent-regime-regressions                                  
+⠙ |      2  40 | convergent-regime-regressions                                  
+⠋ |      2  49 | convergent-regime-regressions                                  
+✔ |      2  61 | convergent-regime-regressions
+
+⠏ |          0 | multivariate-improvements                                      
+⠇ |          9 | multivariate-improvements                                      
+⠹ |         33 | multivariate-improvements                                      
+⠇ |         39 | multivariate-improvements                                      
+⠼ |         55 | multivariate-improvements                                      
+✔ |         64 | multivariate-improvements [2.3s]
+
+⠏ |          0 | pbic-coordinates                                               
+⠋ |         11 | pbic-coordinates                                               
+⠼ |         25 | pbic-coordinates                                               
+⠴ |         36 | pbic-coordinates                                               
+✔ |         39 | pbic-coordinates
+
+══ Results ═════════════════════════════════════════════════════════════════════
+Duration: 3.5 s
+
+── Skipped tests (2) ───────────────────────────────────────────────────────────
+• {genlasso} is not installed (2): 'test-convergent-regime-regressions.R:66:3',
+  'test-convergent-regime-regressions.R:97:3'
+
+[ FAIL 0 | WARN 0 | SKIP 2 | PASS 176 ]

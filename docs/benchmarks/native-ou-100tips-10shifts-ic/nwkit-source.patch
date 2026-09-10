@@ -1,0 +1,383 @@
+diff --git a/nwkit/shift.py b/nwkit/shift.py
+index 81f9a87..bdb26b0 100644
+--- a/nwkit/shift.py
++++ b/nwkit/shift.py
+@@ -39,14 +39,16 @@ def _validate_options(args):
+         args.criterion = "pBIC"
+     if args.selection == "calibrated" and args.criterion is not None:
+         raise ValueError(
+-            "--criterion requires --selection ic; calibrated selection uses bootstrap tests."
++            "--criterion requires --selection ic or native; calibrated selection uses bootstrap tests."
+         )
+     if (
+         args.selection == "ic"
+         and args.convergence
+-        and args.criterion not in {"AICc", "BIC", "pBIC"}
++        and args.criterion not in {"AIC", "AICc", "BIC", "pBIC"}
+     ):
+-        raise ValueError("--convergence supports only AICc, BIC and pBIC criteria.")
++        raise ValueError(
++            "--convergence supports only AIC, AICc, BIC and pBIC criteria."
++        )
+     if not 0 <= args.bootstrap <= 2147483647:
+         raise ValueError("--bootstrap must be between 0 and 2147483647.")
+     if not 0 <= args.bootstrap_seed <= 2147483647:
+diff --git a/nwkit/shift_cli.py b/nwkit/shift_cli.py
+index 9e690ca..a2639a6 100644
+--- a/nwkit/shift_cli.py
++++ b/nwkit/shift_cli.py
+@@ -60,9 +60,9 @@ def register_shift(subparsers, tree_input, table_output):
+     )
+     parser.add_argument(
+         "--criterion",
+-        choices=["pBIC", "pBICess", "mBIC", "BIC", "AICc"],
++        choices=["pBIC", "pBICess", "mBIC", "BIC", "AIC", "AICc"],
+         default=None,
+-        help="IC-only score (default with --selection ic: pBIC). Uncorrected pBIC backends are rejected before fitting.",
++        help="Information criterion (native: AIC/BIC/pBIC; native default: bootstrap; ic default: pBIC). Uncorrected pBIC backends are rejected before fitting.",
+     )
+     parser.add_argument(
+         "--root-model",
+@@ -98,7 +98,7 @@ def register_shift(subparsers, tree_input, table_output):
+     parser.add_argument(
+         "--convergence",
+         action="store_true",
+-        help="Include shared-effect candidates; calibrated search enumerates them jointly, IC uses backward convergence (AICc/BIC/pBIC only).",
++        help="Include shared-effect candidates; calibrated search enumerates them jointly, IC uses backward convergence (AIC/AICc/BIC/pBIC only).",
+     )
+     parser.add_argument(
+         "--bootstrap-seed",
+diff --git a/nwkit/shift_native_heuristic.py b/nwkit/shift_native_heuristic.py
+index 423bf24..21cd610 100644
+--- a/nwkit/shift_native_heuristic.py
++++ b/nwkit/shift_native_heuristic.py
+@@ -111,9 +111,9 @@ def neighboring_layouts(data, layout, pool, convergence):
+ 
+ 
+ class _HeuristicSearch:
+-    def __init__(self, data, options, fit_arguments):
++    def __init__(self, data, options, fit_arguments, criterion=None):
+         self.data, self.options = data, options
+-        self.evaluator = NativeLayoutEvaluator(data, fit_arguments)
++        self.evaluator = NativeLayoutEvaluator(data, fit_arguments, criterion)
+         self.null = ShiftLayout.build(data.tree)
+         self.evaluator.evaluate(self.null)
+         null_fit = self.evaluator.best[0]
+@@ -236,10 +236,10 @@ class _HeuristicSearch:
+             self.refit(ranked, self.options.beam_width)
+ 
+ 
+-def heuristic_native_search(data, *, options=None, fit_arguments=None):
++def heuristic_native_search(data, *, options=None, fit_arguments=None, criterion=None):
+     options = NativeSearchOptions() if options is None else options
+     options.validate(data)
+-    search = _HeuristicSearch(data, options, fit_arguments or {})
++    search = _HeuristicSearch(data, options, fit_arguments or {}, criterion)
+     search.forward()
+     search.refine()
+     metadata = {
+diff --git a/nwkit/shift_native_input.py b/nwkit/shift_native_input.py
+index 219e4a9..4116e84 100644
+--- a/nwkit/shift_native_input.py
++++ b/nwkit/shift_native_input.py
+@@ -117,9 +117,9 @@ def read_native_layout(path, tree):
+ 
+ 
+ def native_fit_arguments(args, data):
+-    if args.fit_out or args.criterion is not None:
++    if args.fit_out or args.criterion not in {None, "AIC", "BIC", "pBIC"}:
+         raise ValueError(
+-            "Native shift inference exports JSON; --fit-out and IC criteria belong to --selection ic."
++            "Native inference exports JSON and supports AIC, BIC, or pBIC; --fit-out requires --selection ic."
+         )
+     alpha = numeric_parameters(args.alpha, len(data.trait_names), "--alpha")
+     if alpha is not None:
+diff --git a/nwkit/shift_native_output.py b/nwkit/shift_native_output.py
+index f52aaf1..c648773 100644
+--- a/nwkit/shift_native_output.py
++++ b/nwkit/shift_native_output.py
+@@ -302,6 +302,12 @@ def native_main(args):
+         result, metadata = select_native(data, args, arguments)
+     else:
+         result = fit_native_layout(data, layout, **arguments)
++        if args.criterion is not None:
++            from nwkit.shift_native_ic import native_information_criterion
++
++            metadata["information_criterion"] = native_information_criterion(
++                data, result, args.criterion
++            )
+     model = _model(data, result, native_tables(data, result, names))
+     model.update(metadata)
+     model.update(provenance)
+diff --git a/nwkit/shift_native_provenance.py b/nwkit/shift_native_provenance.py
+index 85f3cdc..9d4a0be 100644
+--- a/nwkit/shift_native_provenance.py
++++ b/nwkit/shift_native_provenance.py
+@@ -83,6 +83,7 @@ def native_provenance(data, args, layout=None, names=None):
+             "seed",
+             "calibration_replicates",
+             "calibration_level",
++            "criterion",
+             "bootstrap",
+             "bootstrap_seed",
+         )
+diff --git a/nwkit/shift_native_search.py b/nwkit/shift_native_search.py
+index 009313f..02ebb40 100644
+--- a/nwkit/shift_native_search.py
++++ b/nwkit/shift_native_search.py
+@@ -8,6 +8,7 @@ import numpy as np
+ 
+ from nwkit.shift_candidates import set_partitions
+ from nwkit.shift_native_fit import fit_native_layout
++from nwkit.shift_native_ic import native_information_criterion
+ from nwkit.shift_native_model import ShiftLayout
+ 
+ 
+@@ -106,6 +107,7 @@ class NativeSearchResult:
+     records: list[dict]
+     best_by_complexity: dict[int, dict]
+     metadata: dict
++    best_information: dict | None = None
+ 
+     def families(self):
+         families, best = [], None
+@@ -119,7 +121,9 @@ class NativeSearchResult:
+ class NativeLayoutEvaluator:
+     """Retain scalar candidate records and at most one full fit per complexity."""
+ 
+-    def __init__(self, data, fit_arguments):
++    def __init__(self, data, fit_arguments, criterion=None):
++        self.criterion = criterion
++        self.best_information = None
+         self.data = data
+         self.fit_arguments = fit_arguments
+         self.records: list[dict] = []
+@@ -165,6 +169,18 @@ class NativeLayoutEvaluator:
+                 "A native search covariance mode failed; complete the fit before selection: "
+                 + str(unresolved[0])
+             )
++        information = None
++        if self.criterion is not None:
++            information = native_information_criterion(
++                self.data, result, self.criterion
++            )
++            result["information_criterion"] = information
++            if information["score"] is not None and (
++                self.best_information is None
++                or information["score"]
++                < self.best_information["information_criterion"]["score"] - 1e-9
++            ):
++                self.best_information = result
+         score = result["log_likelihood"]
+         self.scores[layout] = score
+         complexity = layout_complexity(layout)
+@@ -178,6 +194,7 @@ class NativeLayoutEvaluator:
+                     r["optimizer"]["evaluations"] for r in result["traits"]
+                 ),
+                 "complete_covariance_modes": not unresolved,
++                **({"information_criterion": information} if information else {}),
+             }
+         )
+         if (
+@@ -188,16 +205,24 @@ class NativeLayoutEvaluator:
+         return score
+ 
+     def finish(self, metadata):
+-        return NativeSearchResult(self.records, self.best, metadata)
++        return NativeSearchResult(
++            self.records, self.best, metadata, self.best_information
++        )
+ 
+ 
+ def exhaustive_native_search(
+-    data, *, max_shifts=2, convergence=False, limit=5000, fit_arguments=None
++    data,
++    *,
++    max_shifts=2,
++    convergence=False,
++    limit=5000,
++    fit_arguments=None,
++    criterion=None,
+ ):
+     layouts, metadata = enumerate_native_layouts(
+         data, max_shifts, convergence=convergence, limit=limit
+     )
+-    evaluator = NativeLayoutEvaluator(data, fit_arguments or {})
++    evaluator = NativeLayoutEvaluator(data, fit_arguments or {}, criterion)
+     for layout in layouts:
+         evaluator.evaluate(layout)
+     return evaluator.finish(
+diff --git a/nwkit/shift_native_selection.py b/nwkit/shift_native_selection.py
+index fbaaad1..3191422 100644
+--- a/nwkit/shift_native_selection.py
++++ b/nwkit/shift_native_selection.py
+@@ -1,4 +1,4 @@
+-"""Replayable native search and experimental calibrated selection."""
++"""Replayable native search with bootstrap or information-criterion selection."""
+ 
+ from nwkit.shift_native_bootstrap import (
+     calibrate_native_search,
+@@ -15,6 +15,7 @@ class NativeSearchRunner:
+     def __init__(self, data, args, fit_arguments):
+         if args.search_strategy not in {"auto", "exhaustive", "lasso"}:
+             raise ValueError("Native strategy must be auto, exhaustive, or lasso.")
++        self.criterion = args.criterion
+         self.fit_arguments = fit_arguments
+         self.layouts = None
+         self.metadata: dict = {}
+@@ -48,9 +49,12 @@ class NativeSearchRunner:
+     def __call__(self, data):
+         if self.layouts is None:
+             return heuristic_native_search(
+-                data, options=self.options, fit_arguments=self.fit_arguments
++                data,
++                options=self.options,
++                fit_arguments=self.fit_arguments,
++                criterion=self.criterion,
+             )
+-        evaluator = NativeLayoutEvaluator(data, self.fit_arguments)
++        evaluator = NativeLayoutEvaluator(data, self.fit_arguments, self.criterion)
+         for layout in self.layouts:
+             evaluator.evaluate(layout)
+         return evaluator.finish(
+@@ -65,7 +69,7 @@ class NativeSearchRunner:
+ def select_native(data, args, arguments):
+     if args.bootstrap < 0 or args.seed < 0 or args.bootstrap_seed < 0:
+         raise ValueError("Native bootstrap count and seeds must be nonnegative.")
+-    if (
++    if args.criterion is None and (
+         args.calibration_replicates < 1
+         or not 0 < args.calibration_level < 1
+         or 1 / (args.calibration_replicates + 1) > args.calibration_level
+@@ -73,27 +77,30 @@ def select_native(data, args, arguments):
+         raise ValueError("Calibration draws cannot resolve the requested test level.")
+     runner = NativeSearchRunner(data, args, arguments)
+     search = runner(data)
+-    result, calibration = calibrate_native_search(
+-        data,
+-        search,
+-        runner,
+-        replicates=args.calibration_replicates,
+-        seed=args.seed,
+-        level=args.calibration_level,
+-    )
++
++    def choose(searched, sample, seed):
++        if args.criterion is not None:
++            if searched.best_information is None:
++                raise ValueError(
++                    "No candidate has finite native information criterion."
++                )
++            return searched.best_information, None
++        return calibrate_native_search(
++            sample,
++            searched,
++            runner,
++            replicates=args.calibration_replicates,
++            seed=seed,
++            level=args.calibration_level,
++        )
++
++    result, calibration = choose(search, data, args.seed)
+     support = None
+     if args.bootstrap:
+ 
+         def select(sample, seed):
+             searched = runner(sample)
+-            return calibrate_native_search(
+-                sample,
+-                searched,
+-                runner,
+-                replicates=args.calibration_replicates,
+-                seed=seed,
+-                level=args.calibration_level,
+-            )[0]
++            return choose(searched, sample, seed)[0]
+ 
+         support = native_selection_support(
+             data, result, select, replicates=args.bootstrap, seed=args.bootstrap_seed
+@@ -102,6 +109,7 @@ def select_native(data, args, arguments):
+         "inference_role": "research_joint_shift_selection",
+         "adoption_status": "not_validated_for_production",
+         "selection_calibration": calibration,
++        "information_criterion": result.get("information_criterion"),
+         "selection_support": support,
+         "search": search.metadata,
+         "candidates": search.records,
+diff --git a/nwkit/shift_native_ic.py b/nwkit/shift_native_ic.py
+new file mode 100644
+index 0000000..7c5d6e9
+--- /dev/null
++++ b/nwkit/shift_native_ic.py
+@@ -0,0 +1,71 @@
++"""Information criteria at native maximum-likelihood fits.
++
++pBIC uses conditional information in OU-optimum coordinates. Boundary fits
++retain the declared parameter count; these scores are not calibrated tests.
++"""
++
++import math
++
++import numpy as np
++
++CRITERIA = {"AIC", "BIC", "pBIC"}
++
++
++def native_information_criterion(data, result, criterion):
++    if criterion not in CRITERIA:
++        raise ValueError("Native information criterion must be AIC, BIC, or pBIC.")
++    shifts = len(result["layout"].shifts)
++    n = len(data.tree.leaf_names)
++    penalty = 2 * shifts if criterion == "AIC" else shifts * math.log(n)
++    if criterion == "pBIC":
++        penalty = 2 * shifts * math.log(len(data.tree.branch_ids) - 2)
++    parameters = shifts
++    for j, (fit, record) in enumerate(
++        zip(result["fits"], result["traits"], strict=True)
++    ):
++        optimizer = record["optimizer"]
++        covariance_parameters = sum(
++            int(optimizer[key])
++            for key in (
++                "alpha_estimated",
++                "process_variance_estimated",
++                "measurement_variance_estimated",
++            )
++        )
++        dimension = fit.num_mean_parameters
++        parameters += dimension + covariance_parameters
++        if criterion == "AIC":
++            penalty += 2 * (dimension + covariance_parameters)
++        elif criterion == "BIC":
++            penalty += (dimension + covariance_parameters) * math.log(
++                fit.num_observations
++            )
++        else:
++            sign, logdet = np.linalg.slogdet(fit.coefficient_covariance)
++            variance = float(np.nanvar(data.values[:, j], ddof=1))
++            if sign <= 0 or variance <= 0 or (dimension > 1 and fit.alpha_height == 0):
++                return {
++                    "criterion": criterion,
++                    "score": None,
++                    "status": "singular_optimum_information",
++                }
++            # Native offset coefficients equal optimum offsets times (1-exp(-alpha*H)).
++            jacobian = (
++                0.0
++                if dimension == 1
++                else 2 * (dimension - 1) * math.log(-math.expm1(-fit.alpha_height))
++            )
++            penalty += (
++                covariance_parameters * math.log(fit.num_observations)
++                - logdet
++                + jacobian
++                + dimension * math.log(variance)
++            )
++    score = -2 * result["log_likelihood"] + penalty
++    return {
++        "criterion": criterion,
++        "score": float(score) if math.isfinite(score) else None,
++        "penalty": float(penalty) if math.isfinite(penalty) else None,
++        "parameter_count": parameters,
++        "status": "ok" if math.isfinite(score) else "nonfinite_information",
++    }

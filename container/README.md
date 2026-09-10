@@ -14,7 +14,7 @@ From the project README and Wiki (`gg_versions`):
 - `GeneGalleon` was originally assembled interactively from a miniconda3 Singularity sandbox.
 - The runtime now uses a single conda `base` env, with selected tools installed from upstream GitHub at build time
   (`kfuku52/amalgkit`, `kfuku52/cdskit`, `kfuku52/csubst`, `kfuku52/nwkit`,
-  `kfuku52/kfl1ou`, `kfuku52/kfFractBias`, `kfuku52/kftools`, `kfuku52/rkftools`).
+  `kfuku52/kfFractBias`, `kfuku52/kftools`, `kfuku52/rkftools`).
   Standard builds follow the moving branches in `source_branches.env` for every
   one of these repositories. Build wrappers resolve those branches once at the
   start of a build, in parallel, so all target architectures use the same snapshot. Explicit
@@ -276,7 +276,7 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   and installed as:
   - `/usr/local/bin/Notung.jar`
 - `BUSCO`, `paml` and official `iqtree3` are fetched from the current tips of their configured branches by default.
-- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfl1ou`, `kfFractBias`, `kftools`, and `rkftools`
+- `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfFractBias`, `kftools`, and `rkftools`
   install from the moving branches in `source_branches.env` by default.
 - `Notung`, `BioPP/testnh`, and `CAFE5` archives are checksum-verified during build.
 - The configured source is a checksum-verified upstream ZIP:
@@ -334,5 +334,5 @@ submodule contents, notices and adapter/build materials are available under
 `/usr/local/share/iqtree3`; NWKIT's wheel contains no IQ-TREE code or binaries.
 
 See the [dependency audit](../docs/container-dependency-audit.md) for removed
-explicit packages and the separate PAML, kfl1ou and R plotting dependencies
+explicit packages and the separate PAML and R plotting dependencies
 that remain required.

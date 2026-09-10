@@ -2,7 +2,7 @@
 set -euo pipefail
 
 artifact_root="${1:?Usage: install_source_artifacts.sh ARTIFACT_ROOT}"
-sources=(amalgkit cdskit csubst nwkit BUSCO paml iqtree kfl1ou kfFractBias kftools rkftools)
+sources=(amalgkit cdskit csubst nwkit BUSCO paml iqtree kfFractBias kftools rkftools)
 wheels=()
 shopt -s nullglob
 for source_name in "${sources[@]}"; do
@@ -38,4 +38,4 @@ micromamba run -n base python -m nwkit.iqtree_library check --interface library 
   > /opt/pg/logs/iqtree3_library_worker.json
 micromamba run -n base python -m pip check
 micromamba run -n base Rscript -e \
-  'stopifnot(requireNamespace("kfl1ou", quietly = TRUE), requireNamespace("rkftools", quietly = TRUE))'
+  'stopifnot(requireNamespace("rkftools", quietly = TRUE))'

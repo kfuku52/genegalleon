@@ -1,0 +1,7 @@
+patching file 'nwkit/shift.py'
+patching file 'nwkit/shift_cli.py'
+patching file 'nwkit/shift_native_heuristic.py'
+patching file 'nwkit/shift_native_input.py'
+patching file 'nwkit/shift_native_path.py'
+patching file 'nwkit/shift_native_screen.py'
+patching file 'nwkit/shift_native_selection.py'

@@ -1,0 +1,10 @@
+FOLLOWUP START effect2-seed27101 kfl1ou
+FOLLOWUP FINISH effect2-seed27101 kfl1ou {"wall_seconds": 8.102228628995363, "peak_rss_mib": 107.296875, "user_seconds": 8.021995, "system_seconds": 0.042165, "timed_out": false, "exit_code": 0}
+FOLLOWUP START effect6-seed27101 nwkit
+FOLLOWUP FINISH effect6-seed27101 nwkit {"wall_seconds": 305.10328613899765, "peak_rss_mib": 112.390625, "user_seconds": 304.590277, "system_seconds": 0.191214, "timed_out": false, "exit_code": 0}
+FOLLOWUP START effect6-seed27102 nwkit
+FOLLOWUP FINISH effect6-seed27102 nwkit {"wall_seconds": 757.3581857210083, "peak_rss_mib": 113.80078125, "user_seconds": 756.823803, "system_seconds": 0.14951899999999999, "timed_out": false, "exit_code": 0}
+FOLLOWUP START effect6-seed27103 nwkit
+FOLLOWUP FINISH effect6-seed27103 nwkit {"wall_seconds": 595.5034573969897, "peak_rss_mib": 114.6328125, "user_seconds": 595.139757, "system_seconds": 0.091639, "timed_out": false, "exit_code": 0}
+FOLLOWUP START effect6-seed27103 kfl1ou
+FOLLOWUP FINISH effect6-seed27103 kfl1ou {"wall_seconds": 6.7095005859737284, "peak_rss_mib": 122.00390625, "user_seconds": 6.576544, "system_seconds": 0.041829, "timed_out": false, "exit_code": 0}

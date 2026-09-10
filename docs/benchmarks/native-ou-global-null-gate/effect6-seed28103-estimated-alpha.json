@@ -1,0 +1,81 @@
+{
+  "dataset": "effect6-seed28103",
+  "mode": "estimated-alpha",
+  "true_k": 10,
+  "effect": 6,
+  "search_seconds": 1.4650538749992847,
+  "ungated": {
+    "k": 10,
+    "tp": 5,
+    "fp": 5,
+    "precision": 0.5,
+    "recall": 0.5,
+    "rmse": 0.5291621297515032,
+    "alpha": "4.779258762449964"
+  },
+  "null_alpha": "0.0",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "a479b17b7f9537bccf08dc17522812ab9bfe36b2ed715df1f506a79faf559498",
+    "truth.json": "203cfc858a8924f696adf1e8aafae500293c7d98c10d75398984abe5c45ef128"
+  },
+  "gate_seconds": 27.038507470017066,
+  "gated": {
+    "k": 10,
+    "tp": 5,
+    "fp": 5,
+    "precision": 0.5,
+    "recall": 0.5,
+    "rmse": 0.5291621297515032,
+    "alpha": "4.779258762449964"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99103,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 107.0498496629599,
+    "exceedances": 0,
+    "p_value": 0.05,
+    "rejected": true,
+    "bootstrap_statistics": [
+      19.266315646329474,
+      44.08269698749473,
+      20.633252707980375,
+      30.307356924408225,
+      48.08214938091487,
+      29.85044736789024,
+      34.72118783052446,
+      15.406593631570388,
+      22.93782589297456,
+      33.643490344011695,
+      27.32758657388041,
+      27.18340294132946,
+      22.235348636025208,
+      42.92766852662686,
+      27.19831277768901,
+      18.468749350474468,
+      44.947960727099826,
+      23.522250994972637,
+      11.437210930191725
+    ],
+    "ungated_shift_branch_ids": [
+      5,
+      7,
+      12,
+      16,
+      19,
+      20,
+      21,
+      22,
+      23,
+      27
+    ]
+  }
+}

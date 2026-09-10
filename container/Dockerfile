@@ -207,18 +207,6 @@ FROM iqtree-build AS iqtree-worker-build
 RUN --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact \
  bash /opt/pg/scripts/build_iqtree_artifact.sh worker /opt/pg/artifact /tmp/nwkit-artifact
 
-FROM source-builder AS kfl1ou-build
-
-ARG KFL1OU_REPO_URL="https://github.com/kfuku52/kfl1ou.git"
-ARG KFL1OU_REPO_REF=""
-ARG KFL1OU_REPO_SHA=""
-
-RUN source /opt/pg/source_branches.env \
- && bash /opt/pg/scripts/build_source_artifact.sh r kfl1ou \
-      "${KFL1OU_REPO_URL}" \
-      "${KFL1OU_REPO_SHA:-${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}}" \
-      /opt/pg/artifact
-
 FROM source-builder AS kffractbias-build
 
 ARG KFFRACTBIAS_REPO_URL="https://github.com/kfuku52/kfFractBias.git"
@@ -281,7 +269,6 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=busco-build,source=/opt/pg/artifact,target=/tmp/artifacts/BUSCO \
  --mount=from=paml-build,source=/opt/pg/artifact,target=/tmp/artifacts/paml \
  --mount=from=iqtree-worker-build,source=/opt/pg/artifact,target=/tmp/artifacts/iqtree \
- --mount=from=kfl1ou-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfl1ou \
  --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \

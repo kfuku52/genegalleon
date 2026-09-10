@@ -1,0 +1,84 @@
+START effect2-seed27101 nwkit-bootstrap
+FINISH effect2-seed27101 nwkit-bootstrap {"wall_seconds": 229.91594648000319, "peak_rss_mib": 114.35546875, "user_seconds": 229.714866, "system_seconds": 0.044794999999999995, "timed_out": false, "exit_code": 0}
+START effect2-seed27101 nwkit-pBIC
+FINISH effect2-seed27101 nwkit-pBIC {"wall_seconds": 4.518420251988573, "peak_rss_mib": 112.81640625, "user_seconds": 4.4179, "system_seconds": 0.041006, "timed_out": false, "exit_code": 0}
+START effect2-seed27101 nwkit-AIC
+FINISH effect2-seed27101 nwkit-AIC {"wall_seconds": 4.571193960000528, "peak_rss_mib": 112.51953125, "user_seconds": 4.442664, "system_seconds": 0.046926999999999996, "timed_out": false, "exit_code": 0}
+START effect2-seed27101 nwkit-BIC
+FINISH effect2-seed27101 nwkit-BIC {"wall_seconds": 4.5226283359806985, "peak_rss_mib": 112.65234375, "user_seconds": 4.419347, "system_seconds": 0.054426999999999996, "timed_out": false, "exit_code": 0}
+START effect2-seed27101 kfl1ou-pBIC
+FINISH effect2-seed27101 kfl1ou-pBIC {"wall_seconds": 7.826105045998702, "peak_rss_mib": 103.46875, "user_seconds": 7.77172, "system_seconds": 0.026729, "timed_out": false, "exit_code": 0}
+START effect2-seed27101 kfl1ou-AIC
+FINISH effect2-seed27101 kfl1ou-AIC {"wall_seconds": 10.424296004988719, "peak_rss_mib": 116.7734375, "user_seconds": 10.332993, "system_seconds": 0.03738, "timed_out": false, "exit_code": 0}
+START effect2-seed27101 kfl1ou-BIC
+FINISH effect2-seed27101 kfl1ou-BIC {"wall_seconds": 7.8366926290036645, "peak_rss_mib": 112.24609375, "user_seconds": 7.788632, "system_seconds": 0.036063, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 nwkit-pBIC
+FINISH effect2-seed27102 nwkit-pBIC {"wall_seconds": 4.46307412700844, "peak_rss_mib": 112.83203125, "user_seconds": 4.371219, "system_seconds": 0.041985999999999996, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 nwkit-AIC
+FINISH effect2-seed27102 nwkit-AIC {"wall_seconds": 4.522382877010386, "peak_rss_mib": 112.5703125, "user_seconds": 4.449251, "system_seconds": 0.046987999999999995, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 nwkit-BIC
+FINISH effect2-seed27102 nwkit-BIC {"wall_seconds": 4.614363252010662, "peak_rss_mib": 112.84765625, "user_seconds": 4.535919, "system_seconds": 0.035712, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 kfl1ou-pBIC
+FINISH effect2-seed27102 kfl1ou-pBIC {"wall_seconds": 7.876130421005655, "peak_rss_mib": 100.140625, "user_seconds": 7.818685, "system_seconds": 0.023524999999999997, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 kfl1ou-AIC
+FINISH effect2-seed27102 kfl1ou-AIC {"wall_seconds": 9.934391170012532, "peak_rss_mib": 115.4765625, "user_seconds": 9.839163, "system_seconds": 0.044400999999999996, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 kfl1ou-BIC
+FINISH effect2-seed27102 kfl1ou-BIC {"wall_seconds": 7.953237087000161, "peak_rss_mib": 108.7890625, "user_seconds": 7.831211, "system_seconds": 0.034695, "timed_out": false, "exit_code": 0}
+START effect2-seed27102 nwkit-bootstrap
+FINISH effect2-seed27102 nwkit-bootstrap {"wall_seconds": 81.09193270400283, "peak_rss_mib": 114.203125, "user_seconds": 80.982717, "system_seconds": 0.039998, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 nwkit-AIC
+FINISH effect2-seed27103 nwkit-AIC {"wall_seconds": 4.3164350430015475, "peak_rss_mib": 112.921875, "user_seconds": 4.195488, "system_seconds": 0.035287, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 nwkit-BIC
+FINISH effect2-seed27103 nwkit-BIC {"wall_seconds": 4.315172626986168, "peak_rss_mib": 112.83984375, "user_seconds": 4.185717, "system_seconds": 0.044357, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 kfl1ou-pBIC
+FINISH effect2-seed27103 kfl1ou-pBIC {"wall_seconds": 7.328425711981254, "peak_rss_mib": 100.0703125, "user_seconds": 7.255456, "system_seconds": 0.030454, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 kfl1ou-AIC
+FINISH effect2-seed27103 kfl1ou-AIC {"wall_seconds": 8.696674795995932, "peak_rss_mib": 113.0234375, "user_seconds": 8.617102, "system_seconds": 0.031328, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 kfl1ou-BIC
+FINISH effect2-seed27103 kfl1ou-BIC {"wall_seconds": 11.618029338977067, "peak_rss_mib": 110.28515625, "user_seconds": 11.579803, "system_seconds": 0.030375, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 nwkit-bootstrap
+FINISH effect2-seed27103 nwkit-bootstrap {"wall_seconds": 78.00632807798684, "peak_rss_mib": 114.22265625, "user_seconds": 77.870873, "system_seconds": 0.055708999999999995, "timed_out": false, "exit_code": 0}
+START effect2-seed27103 nwkit-pBIC
+FINISH effect2-seed27103 nwkit-pBIC {"wall_seconds": 4.361238544021035, "peak_rss_mib": 112.6015625, "user_seconds": 4.278146, "system_seconds": 0.044515, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 nwkit-BIC
+FINISH effect6-seed27101 nwkit-BIC {"wall_seconds": 4.6168189180025365, "peak_rss_mib": 112.66015625, "user_seconds": 4.498353, "system_seconds": 0.048914, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 kfl1ou-pBIC
+FINISH effect6-seed27101 kfl1ou-pBIC {"wall_seconds": 7.916884962003678, "peak_rss_mib": 115.06640625, "user_seconds": 7.77759, "system_seconds": 0.035524, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 kfl1ou-AIC
+FINISH effect6-seed27101 kfl1ou-AIC {"wall_seconds": 8.13137371200719, "peak_rss_mib": 116.50390625, "user_seconds": 8.002773, "system_seconds": 0.036326, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 kfl1ou-BIC
+FINISH effect6-seed27101 kfl1ou-BIC {"wall_seconds": 8.62936029600678, "peak_rss_mib": 117.80078125, "user_seconds": 8.558385, "system_seconds": 0.030816999999999997, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 nwkit-bootstrap
+FINISH effect6-seed27101 nwkit-bootstrap {"wall_seconds": 300.05354851300945, "peak_rss_mib": 114.296875, "user_seconds": 299.801545, "system_seconds": 0.080639, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 nwkit-pBIC
+FINISH effect6-seed27101 nwkit-pBIC {"wall_seconds": 4.516863876982825, "peak_rss_mib": 112.9375, "user_seconds": 4.381612, "system_seconds": 0.046544999999999996, "timed_out": false, "exit_code": 0}
+START effect6-seed27101 nwkit-AIC
+FINISH effect6-seed27101 nwkit-AIC {"wall_seconds": 4.515492586011533, "peak_rss_mib": 112.83984375, "user_seconds": 4.410325, "system_seconds": 0.052314, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 kfl1ou-pBIC
+FINISH effect6-seed27102 kfl1ou-pBIC {"wall_seconds": 8.62092079501599, "peak_rss_mib": 126.77734375, "user_seconds": 8.461474, "system_seconds": 0.073018, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 kfl1ou-AIC
+FINISH effect6-seed27102 kfl1ou-AIC {"wall_seconds": 9.148284337978112, "peak_rss_mib": 126.99609375, "user_seconds": 9.037389, "system_seconds": 0.042259, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 kfl1ou-BIC
+FINISH effect6-seed27102 kfl1ou-BIC {"wall_seconds": 8.821598336973693, "peak_rss_mib": 126.08203125, "user_seconds": 8.675236, "system_seconds": 0.033648, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 nwkit-bootstrap
+FINISH effect6-seed27102 nwkit-bootstrap {"wall_seconds": 786.7155281100131, "peak_rss_mib": 114.1328125, "user_seconds": 786.176553, "system_seconds": 0.09189699999999999, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 nwkit-pBIC
+FINISH effect6-seed27102 nwkit-pBIC {"wall_seconds": 4.731905294000171, "peak_rss_mib": 112.7890625, "user_seconds": 4.589338, "system_seconds": 0.045001, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 nwkit-AIC
+FINISH effect6-seed27102 nwkit-AIC {"wall_seconds": 4.811096502002329, "peak_rss_mib": 112.69921875, "user_seconds": 4.672547, "system_seconds": 0.045396, "timed_out": false, "exit_code": 0}
+START effect6-seed27102 nwkit-BIC
+FINISH effect6-seed27102 nwkit-BIC {"wall_seconds": 4.709887544013327, "peak_rss_mib": 112.82421875, "user_seconds": 4.647784, "system_seconds": 0.036989, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 kfl1ou-AIC
+FINISH effect6-seed27103 kfl1ou-AIC {"wall_seconds": 8.427316294022603, "peak_rss_mib": 122.4609375, "user_seconds": 8.366945, "system_seconds": 0.037545999999999996, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 kfl1ou-BIC
+FINISH effect6-seed27103 kfl1ou-BIC {"wall_seconds": 9.022435795981437, "peak_rss_mib": 120.09375, "user_seconds": 8.87802, "system_seconds": 0.043824999999999996, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 nwkit-bootstrap
+FINISH effect6-seed27103 nwkit-bootstrap {"wall_seconds": 647.6634567529836, "peak_rss_mib": 114.546875, "user_seconds": 647.081346, "system_seconds": 0.125423, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 nwkit-pBIC
+FINISH effect6-seed27103 nwkit-pBIC {"wall_seconds": 5.516380669025239, "peak_rss_mib": 112.60546875, "user_seconds": 5.408263, "system_seconds": 0.05089, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 nwkit-AIC
+FINISH effect6-seed27103 nwkit-AIC {"wall_seconds": 5.61646496100002, "peak_rss_mib": 112.8359375, "user_seconds": 5.514247, "system_seconds": 0.059282999999999995, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 nwkit-BIC
+FINISH effect6-seed27103 nwkit-BIC {"wall_seconds": 5.430648878013017, "peak_rss_mib": 112.71875, "user_seconds": 5.319222, "system_seconds": 0.058053999999999994, "timed_out": false, "exit_code": 0}
+START effect6-seed27103 kfl1ou-pBIC
+FINISH effect6-seed27103 kfl1ou-pBIC {"wall_seconds": 8.708219629013911, "peak_rss_mib": 115.22265625, "user_seconds": 8.565563, "system_seconds": 0.058060999999999995, "timed_out": false, "exit_code": 0}

@@ -43,9 +43,6 @@ PAML_REPO_REF=${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}
 IQTREE_REPO_REF=${IQTREE_REPO_REF:-${GG_SOURCE_IQTREE_REPO_REF}}
 PAML_REPO_SHA=${PAML_REPO_SHA:-}
 IQTREE_REPO_SHA=${IQTREE_REPO_SHA:-}
-KFL1OU_REPO_URL=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
-KFL1OU_REPO_REF=${KFL1OU_REPO_REF:-${GG_SOURCE_KFL1OU_REPO_REF}}
-KFL1OU_REPO_SHA=${KFL1OU_REPO_SHA:-}
 KFFRACTBIAS_REPO_URL=${KFFRACTBIAS_REPO_URL:-https://github.com/kfuku52/kfFractBias.git}
 KFFRACTBIAS_REPO_REF=${KFFRACTBIAS_REPO_REF:-${GG_SOURCE_KFFRACTBIAS_REPO_REF}}
 KFFRACTBIAS_REPO_SHA=${KFFRACTBIAS_REPO_SHA:-}
@@ -139,9 +136,6 @@ render_definition() {
     -e "s|@@IQTREE_REPO_REF@@|$(escape_sed_replacement "${IQTREE_REPO_REF}")|g" \
     -e "s|@@PAML_REPO_SHA@@|$(escape_sed_replacement "${PAML_REPO_SHA}")|g" \
     -e "s|@@IQTREE_REPO_SHA@@|$(escape_sed_replacement "${IQTREE_REPO_SHA}")|g" \
-    -e "s|@@KFL1OU_REPO_URL@@|$(escape_sed_replacement "${KFL1OU_REPO_URL}")|g" \
-    -e "s|@@KFL1OU_REPO_REF@@|$(escape_sed_replacement "${KFL1OU_REPO_REF}")|g" \
-    -e "s|@@KFL1OU_REPO_SHA@@|$(escape_sed_replacement "${KFL1OU_REPO_SHA}")|g" \
     -e "s|@@KFFRACTBIAS_REPO_URL@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_URL}")|g" \
     -e "s|@@KFFRACTBIAS_REPO_REF@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_REF}")|g" \
     -e "s|@@KFFRACTBIAS_REPO_SHA@@|$(escape_sed_replacement "${KFFRACTBIAS_REPO_SHA}")|g" \

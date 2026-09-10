@@ -1,0 +1,6 @@
+{
+  "host_machine": "x86_64",
+  "host_platform": "macOS-26.6.2-x86_64-i386-64bit",
+  "docker_cpu_count": "12",
+  "docker_image_architecture": "arm64"
+}

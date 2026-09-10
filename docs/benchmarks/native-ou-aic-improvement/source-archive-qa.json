@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "archives": {
+    "baseline-source.tar.gz": "d838e0b7cc536867200e6881205ef1bca887a9ac7e68f7bb8683bbe366eec66e",
+    "candidate-source.tar.gz": "95ebd9e2186471da60a80443c6af7b7d31d85617b2247ce03268b57b8998584e"
+  },
+  "member_hashes": "all match frozen source manifest",
+  "excluded": "bytecode and non-Python package assets"
+}

@@ -1,0 +1,86 @@
+{
+  "status": "passed",
+  "tolerance": 2e-06,
+  "checks": [
+    {
+      "root": "OUfixedRoot",
+      "shared": false,
+      "criterion": "AIC",
+      "score": 27.43055085895929,
+      "log_likelihood": -7.715275429479645,
+      "native_score": 27.430550858959286,
+      "score_error": 3.552713678800501e-15,
+      "likelihood_error": 8.881784197001252e-16
+    },
+    {
+      "root": "OUfixedRoot",
+      "shared": false,
+      "criterion": "AICc",
+      "score": 111.4305508589593,
+      "log_likelihood": -7.715275429479645,
+      "native_score": 111.4305508589593,
+      "score_error": 0.0,
+      "likelihood_error": 8.881784197001252e-16
+    },
+    {
+      "root": "OUfixedRoot",
+      "shared": true,
+      "criterion": "AIC",
+      "score": 25.454747981962875,
+      "log_likelihood": -7.727373990981437,
+      "native_score": 25.45474798196288,
+      "score_error": 3.552713678800501e-15,
+      "likelihood_error": 1.7763568394002505e-15
+    },
+    {
+      "root": "OUfixedRoot",
+      "shared": true,
+      "criterion": "AICc",
+      "score": 55.454747981962875,
+      "log_likelihood": -7.727373990981437,
+      "native_score": 55.45474798196288,
+      "score_error": 7.105427357601002e-15,
+      "likelihood_error": 1.7763568394002505e-15
+    },
+    {
+      "root": "OUrandomRoot",
+      "shared": false,
+      "criterion": "AIC",
+      "score": 27.82730781942625,
+      "log_likelihood": -7.913653909713124,
+      "native_score": 27.827307819426245,
+      "score_error": 3.552713678800501e-15,
+      "likelihood_error": 2.6645352591003757e-15
+    },
+    {
+      "root": "OUrandomRoot",
+      "shared": false,
+      "criterion": "AICc",
+      "score": 111.82730781942625,
+      "log_likelihood": -7.913653909713124,
+      "native_score": 111.82730781942624,
+      "score_error": 1.4210854715202004e-14,
+      "likelihood_error": 2.6645352591003757e-15
+    },
+    {
+      "root": "OUrandomRoot",
+      "shared": true,
+      "criterion": "AIC",
+      "score": 25.85150494242983,
+      "log_likelihood": -7.925752471214915,
+      "native_score": 25.851504942429834,
+      "score_error": 3.552713678800501e-15,
+      "likelihood_error": 1.7763568394002505e-15
+    },
+    {
+      "root": "OUrandomRoot",
+      "shared": true,
+      "criterion": "AICc",
+      "score": 55.85150494242983,
+      "log_likelihood": -7.925752471214915,
+      "native_score": 55.851504942429834,
+      "score_error": 7.105427357601002e-15,
+      "likelihood_error": 1.7763568394002505e-15
+    }
+  ]
+}

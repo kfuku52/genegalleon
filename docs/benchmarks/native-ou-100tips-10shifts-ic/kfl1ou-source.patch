@@ -1,0 +1,277 @@
+diff --git a/R/convergent_regions.R b/R/convergent_regions.R
+index 912b4c3..2daf042 100644
+--- a/R/convergent_regions.R
++++ b/R/convergent_regions.R
+@@ -890,6 +890,7 @@ cmp_AICc_CR  <-  function(tree, Y, conv.regimes, alpha, opt){
+         total.n <- total.n + fit$n
+     }
+     p <- nShifts + total.p
++    if(opt$criterion == "AIC") return(score + 2 * p)
+     if(p > total.n - 2L){
+         return(Inf)
+     }
+@@ -964,24 +965,13 @@ cmp_pBIC_CR  <-  function(tree, Y, conv.regimes, alpha, opt){
+             shift.configuration = r$s.c,
+             input_error = r$input_error
+         )
+-        fit2 <- phylolm_interface_CR(
+-            r$tr,
+-            r$y,
+-            trait.regimes,
+-            alpha = alpha[[i]],
+-            fixed.alpha = TRUE,
+-            opt = opt,
+-            shift.configuration = r$s.c,
+-            input_error = r$input_error
+-        )
+-        if( all( is.na(fit) ) ){
+-           return(Inf)
+-        } 
+-        varY  <- var(as.numeric(r$y))
+-        ld    <- as.numeric(determinant(fit2$vcov * (fit$n - fit$d)/(varY*fit$n),
+-                                        logarithm = TRUE)$modulus)
+-        alpha.df <- as.integer(!isTRUE(opt$fixed.alpha))
+-        df.2  <- (1 + alpha.df + extra_error_df(opt))*log(nrow(r$y)) - ld
++        if(all(is.na(fit))){
++            return(Inf)
++        }
++        # The constrained fit returns its design and covariance at its own
++        # fitted alpha. Reusing the unconstrained seed here scores a different
++        # covariance/mean design than the likelihood above.
++        df.2 <- pbic_trait_penalty(fit, r$y)
+         score <- score  -2*fit$logLik + df.2
+     }
+     return( score )
+@@ -1014,7 +1004,7 @@ cmp_model_score_CR <- function(tree, Y, regimes=NULL, alpha=NA, opt){
+         ))
+     }
+ 
+-    if( opt$criterion == "AICc"){
++    if( opt$criterion %in% c("AIC", "AICc")){
+         score <- cmp_AICc_CR(tree, Y, conv.regimes = regimes, alpha=alpha, opt=opt)
+     } else if( opt$criterion == "pBIC"){
+         score <- cmp_pBIC_CR(tree, Y, conv.regimes = regimes, alpha=alpha, opt=opt)
+@@ -1324,7 +1314,7 @@ estimate_convergent_regimes_surface  <-  function(model, opt){
+ #'
+ #'@export
+ estimate_convergent_regimes  <-  function(model, 
+-                                        criterion=c("AICc", "pBIC", "BIC"),
++                                        criterion=c("AICc", "pBIC", "BIC", "AIC"),
+                                         method=c("backward", "rr"),
+ 					fixed.alpha=FALSE,
+ 					nCores=1
+diff --git a/R/model_uncertainty.R b/R/model_uncertainty.R
+index 48a1c71..086336b 100644
+--- a/R/model_uncertainty.R
++++ b/R/model_uncertainty.R
+@@ -847,8 +847,8 @@ sensitivity_l1ou <- function(
+         stop("alpha.upper must contain finite positive values.")
+     }
+     if(is.null(criteria)) criteria <- unique(c(model$l1ou.options$criterion, "BIC"))
+-    allowed <- if(!is.null(model$trait.covariance)) c("BIC", "pBIC") else
+-        c("pBIC", "pBICess", "mBIC", "BIC", "AICc")
++    allowed <- if(!is.null(model$trait.covariance)) c("BIC", "pBIC", "AIC") else
++        c("pBIC", "pBICess", "mBIC", "BIC", "AIC", "AICc")
+     if(any(!criteria %in% allowed)){
+         stop("one or more criteria are unsupported by this covariance model.")
+     }
+diff --git a/R/multivariate_covariance.R b/R/multivariate_covariance.R
+index 670497f..3830e53 100644
+--- a/R/multivariate_covariance.R
++++ b/R/multivariate_covariance.R
+@@ -13,9 +13,9 @@ validate_trait_covariance_mode <- function(mode, Y, criterion){
+         warning("trait.covariance = \"full\" has no effect for a univariate response; using \"diagonal\".")
+         mode <- "diagonal"
+     }
+-    if(mode == "full" && !criterion %in% c("BIC", "pBIC")){
++    if(mode == "full" && !criterion %in% c("BIC", "pBIC", "AIC")){
+         stop(paste0(
+-            "trait.covariance = \"full\" supports criterion = \"BIC\" or ",
++            "trait.covariance = \"full\" supports criterion = \"AIC\", \"BIC\" or ",
+             "the localization-aware \"pBIC\" extension. Small-sample criteria ",
+             "have not been derived for this correlated multivariate OU model."
+         ))
+@@ -1097,7 +1097,8 @@ fit_multivariate_ou_likelihood <- function(tree, Y, shift.configuration, opt,
+ 
+ multivariate_full_information_score <- function(
+         fit, n.shifts, criterion, n.locations=NULL){
+-    criterion <- match.arg(criterion, c("BIC", "pBIC"))
++    criterion <- match.arg(criterion, c("BIC", "pBIC", "AIC"))
++    if(criterion == "AIC") return(-2 * fit$logLik + 2 * (fit$p + n.shifts))
+     if(criterion == "BIC"){
+         parameters <- fit$p + n.shifts
+         return(-2 * fit$logLik + log(fit$sample.size) * parameters)
+diff --git a/R/shift_configuration.R b/R/shift_configuration.R
+index 09eb7a4..5998e55 100644
+--- a/R/shift_configuration.R
++++ b/R/shift_configuration.R
+@@ -65,7 +65,7 @@
+ #' \code{"diagonal"} retains the original trait-by-trait likelihood and allows
+ #' a separate alpha for every trait. \code{"full"} fits a joint multivariate OU
+ #' likelihood and an unrestricted positive-definite evolutionary covariance
+-#' matrix among traits. Full covariance supports ordinary \code{"BIC"} and a
++#' matrix among traits. Full covariance supports ordinary \code{"AIC"}, \code{"BIC"} and a
+ #' localization-aware multivariate \code{"pBIC"} extension.
+ #'@param alpha.structure for full covariance, \code{"shared"} estimates one
+ #' adaptation rate; \code{"diagonal"} estimates one rate per trait.
+@@ -190,7 +190,7 @@
+ #'@export
+ estimate_shift_configuration <- function(tree, Y, 
+            max.nShifts            = NULL, 
+-           criterion              = c("pBIC", "pBICess", "mBIC", "BIC", "AICc"), 
++           criterion              = c("pBIC", "pBICess", "mBIC", "BIC", "AIC", "AICc"),
+            root.model             = c("OUfixedRoot", "OUrandomRoot"),
+            candid.edges           = NA,
+            quietly                = TRUE,
+@@ -1088,7 +1088,7 @@ make_parallel_candidate_search <- function(tree, Y, opt){
+ #' \code{kfl1ou} treats these as known tip-specific variances and estimates an
+ #' additional shared measurement-error variance per trait.
+ #'@param trait.covariance residual covariance model for multivariate traits;
+-#' see \code{\link{estimate_shift_configuration}}. Full covariance supports BIC
++#' see \code{\link{estimate_shift_configuration}}. Full covariance supports AIC, BIC
+ #' and a localization-aware multivariate pBIC extension.
+ #'@param alpha.structure full-covariance adaptation-rate structure.
+ #'@param covariance.regularization optional covariance shrinkage.
+@@ -1105,7 +1105,8 @@ make_parallel_candidate_search <- function(tree, Y, opt){
+ #'@return Information criterion value of the given shift configuration.
+ #'
+ #'@details
+-#'AICc gives the small-sample modification of AIC. BIC penalizes the fitted
++#'AIC penalizes the log likelihood by twice the total parameter count,
++#' including shift locations. AICc gives its small-sample modification. BIC penalizes the fitted
+ #'continuous parameters and adds one shift-location parameter per shift. With
+ #'complete data and unconstrained means for p traits, an additional shift adds
+ #'p mean parameters and one location parameter: p + 1 in total, or two only
+@@ -1121,9 +1122,16 @@ make_parallel_candidate_search <- function(tree, Y, opt){
+ #'
+ #'mBIC is the modified BIC proposed by Ho and Ané (2014).
+ #'pBIC is the phylogenetic BIC for shifts proposed by Khabbazian et al.
++#'For diagonal trait covariance its determinant uses OU optimum-shift
++#'coordinates, including the transformation from fitted mean displacements by
++#'\eqn{1-\exp(-\alpha a_b)}, where \eqn{a_b} is the parent-node age of shift
++#'branch \eqn{b}. A shifted model at exactly zero alpha has unidentifiable
++#'optima and receives an infinite pBIC score. Fixed alpha is excluded from the
++#'covariance-parameter count. Convergent fits evaluate the determinant at their
++#'own fitted alpha; the extension to shared optima remains heuristic.
+ #'pBICess replaces the determinant term with a sum of log effective sample
+ #'sizes (ESS), similar to the ESS proposed by Ané (2008).
+-#'Full covariance supports BIC and a localization-aware multivariate pBIC
++#'Full covariance supports AIC, BIC and a localization-aware multivariate pBIC
+ #'extension. Criteria evaluated at regularized estimates are sensitivity scores.
+ #' 
+ #'@examples
+@@ -1159,7 +1167,7 @@ make_parallel_candidate_search <- function(tree, Y, opt){
+ #'
+ #'@export
+ configuration_ic <- function(tree, Y, shift.configuration, 
+-                     criterion    = c("pBIC", "pBICess", "mBIC", "BIC", "AICc"), 
++                     criterion    = c("pBIC", "pBICess", "mBIC", "BIC", "AIC", "AICc"),
+                      root.model   = c("OUfixedRoot", "OUrandomRoot"),
+                      alpha.starting.value = NA,
+                      alpha.upper  = alpha_upper_bound(tree), 
+@@ -1278,7 +1286,7 @@ configuration_ic <- function(tree, Y, shift.configuration,
+ #' \code{kfl1ou} treats these as known tip-specific variances and estimates an
+ #' additional shared measurement-error variance per trait.
+ #'@param trait.covariance residual covariance model for multivariate traits;
+-#' see \code{\link{estimate_shift_configuration}}. Full covariance supports BIC
++#' see \code{\link{estimate_shift_configuration}}. Full covariance supports AIC, BIC
+ #' and a localization-aware multivariate pBIC extension.
+ #'@param alpha.structure full-covariance adaptation-rate structure.
+ #'@param covariance.regularization optional covariance shrinkage.
+@@ -1343,7 +1351,7 @@ configuration_ic <- function(tree, Y, shift.configuration,
+ #'
+ #'@export
+ fit_OU <- function(tree, Y, shift.configuration, 
+-                     criterion    = c("pBIC", "pBICess", "mBIC", "BIC", "AICc"), 
++                     criterion    = c("pBIC", "pBICess", "mBIC", "BIC", "AIC", "AICc"),
+                      root.model   = c("OUfixedRoot", "OUrandomRoot"),
+                      cr.regimes   = NULL,
+                      alpha.starting.value = NA,
+@@ -1683,7 +1691,8 @@ cmp_model_score <-function(tree, Y, shift.configuration, opt){
+ 
+     res <- NA
+     if( ic == "AIC"){
+-        stop("undefined")
++        res <- summarize_trait_fit_results(tree, shift.configuration, opt,
++            collect_trait_fit_results(tree, Y, shift.configuration, opt), criterion="AIC")
+     } else if( ic == "BIC"){
+         res <- cmp_BIC(tree, Y, shift.configuration, opt)
+     } else if( ic == "AICc"){
+@@ -3169,6 +3178,29 @@ collect_trait_fit_results <- function(tree, Y, shift.configuration, opt, allow.p
+     l1ou_trait_apply(trait.indices, fit_trait, opt=opt, allow.parallel=allow.parallel)
+ }
+ 
++# Conditional coefficient-covariance form of the diagonal-trait pBIC penalty.
++# mean.effect.scales maps optimum changes to the solver's mean displacements;
++# constrained fits already express their covariance in optimum coordinates.
++pbic_trait_penalty <- function(fit, y, mean.effect.scales=numeric()){
++    if(any(!is.finite(mean.effect.scales)) || any(mean.effect.scales <= 0)){
++        # At alpha=0 a shifted mean can be fitted, but its OU optimum is not
++        # identifiable. Do not turn a degenerate determinant into -Inf evidence.
++        return(Inf)
++    }
++    scaled.covariance <- fit$vcov * (fit$n - fit$d) /
++        (stats::var(as.numeric(y)) * fit$n)
++    ld <- determinant(scaled.covariance, logarithm=TRUE)
++    if(ld$sign <= 0 || !is.finite(as.numeric(ld$modulus))){
++        return(Inf)
++    }
++    log.determinant <- as.numeric(ld$modulus) -
++        2 * sum(log(mean.effect.scales))
++    # fit$p counts the actually estimated covariance parameters, including
++    # observation error and excluding alpha when its bounds are fixed.
++    (fit$p - fit$d) * log(fit$n) - log.determinant
++}
++
++
+ summarize_trait_fit_results <- function(tree, shift.configuration, opt, trait.results,
+                                         criterion=opt$criterion){
+ 
+@@ -3183,7 +3215,7 @@ summarize_trait_fit_results <- function(tree, shift.configuration, opt, trait.re
+         return(NA)
+     }
+ 
+-    criterion <- match.arg(criterion, c("BIC", "AICc", "mBIC", "pBICess", "pBIC"))
++    criterion <- match.arg(criterion, c("BIC", "AIC", "AICc", "mBIC", "pBICess", "pBIC"))
+ 
+     if(criterion == "BIC"){
+         score <- log(length(tree$tip.label)) * length(shift.configuration)
+@@ -3201,7 +3233,7 @@ summarize_trait_fit_results <- function(tree, shift.configuration, opt, trait.re
+         return(list(score=score, alpha=alpha, sigma2=sigma2, logLik=logLik))
+     }
+ 
+-    if(criterion == "AICc"){
++    if(criterion %in% c("AIC", "AICc")){
+         score <- 0
+         total.p <- 0
+         total.n <- 0
+@@ -3219,6 +3251,9 @@ summarize_trait_fit_results <- function(tree, shift.configuration, opt, trait.re
+         }
+ 
+         p <- length(shift.configuration) + total.p
++        if(criterion == "AIC"){
++            return(list(score=score + 2 * p, alpha=alpha, sigma2=sigma2, logLik=logLik))
++        }
+         if(p > total.n - 2){
+             return(NA)
+         }
+@@ -3284,12 +3319,13 @@ summarize_trait_fit_results <- function(tree, shift.configuration, opt, trait.re
+         fit <- trait.results[[i]]$fit
+         y <- trait.results[[i]]$y
+ 
+-        varY <- c(var(y))
+-        ld <- as.numeric(determinant(
+-            fit$vcov * (fit$n - fit$d) / (varY * fit$n),
+-            logarithm = TRUE
+-        )$modulus)
+-        df.2 <- (2 + extra_error_df(opt)) * log(nrow(y)) - ld
++        # The solver uses mean displacements (0/1 predictors), whereas pBIC
++        # integrates optimum shifts with X(alpha) in Khabbazian et al. (2016),
++        # equation 5. Transform the covariance determinant, not the likelihood.
++        res <- trait.results[[i]]
++        ages <- tree_edge_ages(res$tr)[res$s.c]
++        scales <- -expm1(-fit$optpar * ages)
++        df.2 <- pbic_trait_penalty(fit, y, mean.effect.scales=scales)
+         score <- score - 2 * fit$logLik + df.2
+ 
+         alpha[[i]] <- fit$optpar

@@ -1,0 +1,75 @@
+{
+  "dataset": "effect6-seed28102",
+  "mode": "estimated-alpha",
+  "true_k": 10,
+  "effect": 6,
+  "search_seconds": 0.47718445799546316,
+  "ungated": {
+    "k": 4,
+    "tp": 3,
+    "fp": 1,
+    "precision": 0.75,
+    "recall": 0.3,
+    "rmse": 3.2659727954472735,
+    "alpha": "0.0"
+  },
+  "null_alpha": "0.0",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "ecff126b172f9a846b921ad6aac0dc10e37dea0e92e1c38bf03d5352e8a974a5",
+    "truth.json": "1a57277bc6e2b2f31a1102b1ac389a8c09d5813200070f7a20012c1472bbce79"
+  },
+  "gate_seconds": 25.895109887002036,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": 0.0,
+    "rmse": 3.9025310952758647,
+    "alpha": "0.0"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99102,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 34.73310882540602,
+    "exceedances": 3,
+    "p_value": 0.2,
+    "rejected": false,
+    "bootstrap_statistics": [
+      28.474203759416866,
+      31.112468431052548,
+      30.5892528841008,
+      42.82981051533801,
+      17.151997496422723,
+      22.400639764170705,
+      17.75164381939419,
+      13.703957538983616,
+      24.018978882798535,
+      18.225499828702368,
+      26.652167286771544,
+      27.447761694575092,
+      26.59533900942671,
+      24.51319947907598,
+      42.282770767186605,
+      45.04839122925574,
+      27.081149053622084,
+      23.21028002711489,
+      32.39861809340999
+    ],
+    "ungated_shift_branch_ids": [
+      8,
+      18,
+      25,
+      26
+    ]
+  }
+}

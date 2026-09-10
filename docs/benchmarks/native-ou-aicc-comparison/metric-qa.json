@@ -1,0 +1,14 @@
+{
+  "fresh_runs": 120,
+  "all_completed": true,
+  "nonnull_comparison_outcomes": 66,
+  "null_comparison_outcomes": 210,
+  "kfl1ou_AIC_replay_verified": [
+    "effect2-seed27101",
+    "effect2-seed27102",
+    "effect2-seed27103",
+    "effect6-seed27101",
+    "effect6-seed27102",
+    "effect6-seed27103"
+  ]
+}

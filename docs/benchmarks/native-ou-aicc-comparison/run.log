@@ -1,0 +1,240 @@
+START effect2-seed27101 nwkit-beam-AICc
+FINISH 1 120 effect2-seed27101 nwkit-beam-AICc 0
+START effect2-seed27101 nwkit-path-AIC
+FINISH 2 120 effect2-seed27101 nwkit-path-AIC 0
+START effect2-seed27101 nwkit-path-AICc
+FINISH 3 120 effect2-seed27101 nwkit-path-AICc 0
+START effect2-seed27101 kfl1ou-AICc
+FINISH 4 120 effect2-seed27101 kfl1ou-AICc 0
+START effect2-seed27101 kfl1ou-AIC-replay
+FINISH 5 120 effect2-seed27101 kfl1ou-AIC-replay 0
+START effect2-seed27102 nwkit-path-AIC
+FINISH 6 120 effect2-seed27102 nwkit-path-AIC 0
+START effect2-seed27102 nwkit-path-AICc
+FINISH 7 120 effect2-seed27102 nwkit-path-AICc 0
+START effect2-seed27102 kfl1ou-AICc
+FINISH 8 120 effect2-seed27102 kfl1ou-AICc 0
+START effect2-seed27102 kfl1ou-AIC-replay
+FINISH 9 120 effect2-seed27102 kfl1ou-AIC-replay 0
+START effect2-seed27102 nwkit-beam-AICc
+FINISH 10 120 effect2-seed27102 nwkit-beam-AICc 0
+START effect2-seed27103 nwkit-path-AICc
+FINISH 11 120 effect2-seed27103 nwkit-path-AICc 0
+START effect2-seed27103 kfl1ou-AICc
+FINISH 12 120 effect2-seed27103 kfl1ou-AICc 0
+START effect2-seed27103 kfl1ou-AIC-replay
+FINISH 13 120 effect2-seed27103 kfl1ou-AIC-replay 0
+START effect2-seed27103 nwkit-beam-AICc
+FINISH 14 120 effect2-seed27103 nwkit-beam-AICc 0
+START effect2-seed27103 nwkit-path-AIC
+FINISH 15 120 effect2-seed27103 nwkit-path-AIC 0
+START effect6-seed27101 kfl1ou-AICc
+FINISH 16 120 effect6-seed27101 kfl1ou-AICc 0
+START effect6-seed27101 kfl1ou-AIC-replay
+FINISH 17 120 effect6-seed27101 kfl1ou-AIC-replay 0
+START effect6-seed27101 nwkit-beam-AICc
+FINISH 18 120 effect6-seed27101 nwkit-beam-AICc 0
+START effect6-seed27101 nwkit-path-AIC
+FINISH 19 120 effect6-seed27101 nwkit-path-AIC 0
+START effect6-seed27101 nwkit-path-AICc
+FINISH 20 120 effect6-seed27101 nwkit-path-AICc 0
+START effect6-seed27102 kfl1ou-AIC-replay
+FINISH 21 120 effect6-seed27102 kfl1ou-AIC-replay 0
+START effect6-seed27102 nwkit-beam-AICc
+FINISH 22 120 effect6-seed27102 nwkit-beam-AICc 0
+START effect6-seed27102 nwkit-path-AIC
+FINISH 23 120 effect6-seed27102 nwkit-path-AIC 0
+START effect6-seed27102 nwkit-path-AICc
+FINISH 24 120 effect6-seed27102 nwkit-path-AICc 0
+START effect6-seed27102 kfl1ou-AICc
+FINISH 25 120 effect6-seed27102 kfl1ou-AICc 0
+START effect6-seed27103 nwkit-beam-AICc
+FINISH 26 120 effect6-seed27103 nwkit-beam-AICc 0
+START effect6-seed27103 nwkit-path-AIC
+FINISH 27 120 effect6-seed27103 nwkit-path-AIC 0
+START effect6-seed27103 nwkit-path-AICc
+FINISH 28 120 effect6-seed27103 nwkit-path-AICc 0
+START effect6-seed27103 kfl1ou-AICc
+FINISH 29 120 effect6-seed27103 kfl1ou-AICc 0
+START effect6-seed27103 kfl1ou-AIC-replay
+FINISH 30 120 effect6-seed27103 kfl1ou-AIC-replay 0
+START effect0-seed28101 nwkit-beam-AICc
+FINISH 31 120 effect0-seed28101 nwkit-beam-AICc 0
+START effect0-seed28101 nwkit-path-AICc
+FINISH 32 120 effect0-seed28101 nwkit-path-AICc 0
+START effect0-seed28101 kfl1ou-AICc
+FINISH 33 120 effect0-seed28101 kfl1ou-AICc 0
+START effect0-seed28102 nwkit-path-AICc
+FINISH 34 120 effect0-seed28102 nwkit-path-AICc 0
+START effect0-seed28102 kfl1ou-AICc
+FINISH 35 120 effect0-seed28102 kfl1ou-AICc 0
+START effect0-seed28102 nwkit-beam-AICc
+FINISH 36 120 effect0-seed28102 nwkit-beam-AICc 0
+START effect0-seed28103 kfl1ou-AICc
+FINISH 37 120 effect0-seed28103 kfl1ou-AICc 0
+START effect0-seed28103 nwkit-beam-AICc
+FINISH 38 120 effect0-seed28103 nwkit-beam-AICc 0
+START effect0-seed28103 nwkit-path-AICc
+FINISH 39 120 effect0-seed28103 nwkit-path-AICc 0
+START effect0-seed28104 nwkit-beam-AICc
+FINISH 40 120 effect0-seed28104 nwkit-beam-AICc 0
+START effect0-seed28104 nwkit-path-AICc
+FINISH 41 120 effect0-seed28104 nwkit-path-AICc 0
+START effect0-seed28104 kfl1ou-AICc
+FINISH 42 120 effect0-seed28104 kfl1ou-AICc 0
+START effect0-seed28105 nwkit-path-AICc
+FINISH 43 120 effect0-seed28105 nwkit-path-AICc 0
+START effect0-seed28105 kfl1ou-AICc
+FINISH 44 120 effect0-seed28105 kfl1ou-AICc 0
+START effect0-seed28105 nwkit-beam-AICc
+FINISH 45 120 effect0-seed28105 nwkit-beam-AICc 0
+START effect0-seed28106 kfl1ou-AICc
+FINISH 46 120 effect0-seed28106 kfl1ou-AICc 0
+START effect0-seed28106 nwkit-beam-AICc
+FINISH 47 120 effect0-seed28106 nwkit-beam-AICc 0
+START effect0-seed28106 nwkit-path-AICc
+FINISH 48 120 effect0-seed28106 nwkit-path-AICc 0
+START effect0-seed28107 nwkit-beam-AICc
+FINISH 49 120 effect0-seed28107 nwkit-beam-AICc 0
+START effect0-seed28107 nwkit-path-AICc
+FINISH 50 120 effect0-seed28107 nwkit-path-AICc 0
+START effect0-seed28107 kfl1ou-AICc
+FINISH 51 120 effect0-seed28107 kfl1ou-AICc 0
+START effect0-seed28108 nwkit-path-AICc
+FINISH 52 120 effect0-seed28108 nwkit-path-AICc 0
+START effect0-seed28108 kfl1ou-AICc
+FINISH 53 120 effect0-seed28108 kfl1ou-AICc 0
+START effect0-seed28108 nwkit-beam-AICc
+FINISH 54 120 effect0-seed28108 nwkit-beam-AICc 0
+START effect0-seed28109 kfl1ou-AICc
+FINISH 55 120 effect0-seed28109 kfl1ou-AICc 0
+START effect0-seed28109 nwkit-beam-AICc
+FINISH 56 120 effect0-seed28109 nwkit-beam-AICc 0
+START effect0-seed28109 nwkit-path-AICc
+FINISH 57 120 effect0-seed28109 nwkit-path-AICc 0
+START effect0-seed28110 nwkit-beam-AICc
+FINISH 58 120 effect0-seed28110 nwkit-beam-AICc 0
+START effect0-seed28110 nwkit-path-AICc
+FINISH 59 120 effect0-seed28110 nwkit-path-AICc 0
+START effect0-seed28110 kfl1ou-AICc
+FINISH 60 120 effect0-seed28110 kfl1ou-AICc 0
+START effect0-seed28111 nwkit-path-AICc
+FINISH 61 120 effect0-seed28111 nwkit-path-AICc 0
+START effect0-seed28111 kfl1ou-AICc
+FINISH 62 120 effect0-seed28111 kfl1ou-AICc 0
+START effect0-seed28111 nwkit-beam-AICc
+FINISH 63 120 effect0-seed28111 nwkit-beam-AICc 0
+START effect0-seed28112 kfl1ou-AICc
+FINISH 64 120 effect0-seed28112 kfl1ou-AICc 0
+START effect0-seed28112 nwkit-beam-AICc
+FINISH 65 120 effect0-seed28112 nwkit-beam-AICc 0
+START effect0-seed28112 nwkit-path-AICc
+FINISH 66 120 effect0-seed28112 nwkit-path-AICc 0
+START effect0-seed28113 nwkit-beam-AICc
+FINISH 67 120 effect0-seed28113 nwkit-beam-AICc 0
+START effect0-seed28113 nwkit-path-AICc
+FINISH 68 120 effect0-seed28113 nwkit-path-AICc 0
+START effect0-seed28113 kfl1ou-AICc
+FINISH 69 120 effect0-seed28113 kfl1ou-AICc 0
+START effect0-seed28114 nwkit-path-AICc
+FINISH 70 120 effect0-seed28114 nwkit-path-AICc 0
+START effect0-seed28114 kfl1ou-AICc
+FINISH 71 120 effect0-seed28114 kfl1ou-AICc 0
+START effect0-seed28114 nwkit-beam-AICc
+FINISH 72 120 effect0-seed28114 nwkit-beam-AICc 0
+START effect0-seed28115 kfl1ou-AICc
+FINISH 73 120 effect0-seed28115 kfl1ou-AICc 0
+START effect0-seed28115 nwkit-beam-AICc
+FINISH 74 120 effect0-seed28115 nwkit-beam-AICc 0
+START effect0-seed28115 nwkit-path-AICc
+FINISH 75 120 effect0-seed28115 nwkit-path-AICc 0
+START effect0-seed28116 nwkit-beam-AICc
+FINISH 76 120 effect0-seed28116 nwkit-beam-AICc 0
+START effect0-seed28116 nwkit-path-AICc
+FINISH 77 120 effect0-seed28116 nwkit-path-AICc 0
+START effect0-seed28116 kfl1ou-AICc
+FINISH 78 120 effect0-seed28116 kfl1ou-AICc 0
+START effect0-seed28117 nwkit-path-AICc
+FINISH 79 120 effect0-seed28117 nwkit-path-AICc 0
+START effect0-seed28117 kfl1ou-AICc
+FINISH 80 120 effect0-seed28117 kfl1ou-AICc 0
+START effect0-seed28117 nwkit-beam-AICc
+FINISH 81 120 effect0-seed28117 nwkit-beam-AICc 0
+START effect0-seed28118 kfl1ou-AICc
+FINISH 82 120 effect0-seed28118 kfl1ou-AICc 0
+START effect0-seed28118 nwkit-beam-AICc
+FINISH 83 120 effect0-seed28118 nwkit-beam-AICc 0
+START effect0-seed28118 nwkit-path-AICc
+FINISH 84 120 effect0-seed28118 nwkit-path-AICc 0
+START effect0-seed28119 nwkit-beam-AICc
+FINISH 85 120 effect0-seed28119 nwkit-beam-AICc 0
+START effect0-seed28119 nwkit-path-AICc
+FINISH 86 120 effect0-seed28119 nwkit-path-AICc 0
+START effect0-seed28119 kfl1ou-AICc
+FINISH 87 120 effect0-seed28119 kfl1ou-AICc 0
+START effect0-seed28120 nwkit-path-AICc
+FINISH 88 120 effect0-seed28120 nwkit-path-AICc 0
+START effect0-seed28120 kfl1ou-AICc
+FINISH 89 120 effect0-seed28120 kfl1ou-AICc 0
+START effect0-seed28120 nwkit-beam-AICc
+FINISH 90 120 effect0-seed28120 nwkit-beam-AICc 0
+START effect0-seed28121 kfl1ou-AICc
+FINISH 91 120 effect0-seed28121 kfl1ou-AICc 0
+START effect0-seed28121 nwkit-beam-AICc
+FINISH 92 120 effect0-seed28121 nwkit-beam-AICc 0
+START effect0-seed28121 nwkit-path-AICc
+FINISH 93 120 effect0-seed28121 nwkit-path-AICc 0
+START effect0-seed28122 nwkit-beam-AICc
+FINISH 94 120 effect0-seed28122 nwkit-beam-AICc 0
+START effect0-seed28122 nwkit-path-AICc
+FINISH 95 120 effect0-seed28122 nwkit-path-AICc 0
+START effect0-seed28122 kfl1ou-AICc
+FINISH 96 120 effect0-seed28122 kfl1ou-AICc 0
+START effect0-seed28123 nwkit-path-AICc
+FINISH 97 120 effect0-seed28123 nwkit-path-AICc 0
+START effect0-seed28123 kfl1ou-AICc
+FINISH 98 120 effect0-seed28123 kfl1ou-AICc 0
+START effect0-seed28123 nwkit-beam-AICc
+FINISH 99 120 effect0-seed28123 nwkit-beam-AICc 0
+START effect0-seed28124 kfl1ou-AICc
+FINISH 100 120 effect0-seed28124 kfl1ou-AICc 0
+START effect0-seed28124 nwkit-beam-AICc
+FINISH 101 120 effect0-seed28124 nwkit-beam-AICc 0
+START effect0-seed28124 nwkit-path-AICc
+FINISH 102 120 effect0-seed28124 nwkit-path-AICc 0
+START effect0-seed28125 nwkit-beam-AICc
+FINISH 103 120 effect0-seed28125 nwkit-beam-AICc 0
+START effect0-seed28125 nwkit-path-AICc
+FINISH 104 120 effect0-seed28125 nwkit-path-AICc 0
+START effect0-seed28125 kfl1ou-AICc
+FINISH 105 120 effect0-seed28125 kfl1ou-AICc 0
+START effect0-seed28126 nwkit-path-AICc
+FINISH 106 120 effect0-seed28126 nwkit-path-AICc 0
+START effect0-seed28126 kfl1ou-AICc
+FINISH 107 120 effect0-seed28126 kfl1ou-AICc 0
+START effect0-seed28126 nwkit-beam-AICc
+FINISH 108 120 effect0-seed28126 nwkit-beam-AICc 0
+START effect0-seed28127 kfl1ou-AICc
+FINISH 109 120 effect0-seed28127 kfl1ou-AICc 0
+START effect0-seed28127 nwkit-beam-AICc
+FINISH 110 120 effect0-seed28127 nwkit-beam-AICc 0
+START effect0-seed28127 nwkit-path-AICc
+FINISH 111 120 effect0-seed28127 nwkit-path-AICc 0
+START effect0-seed28128 nwkit-beam-AICc
+FINISH 112 120 effect0-seed28128 nwkit-beam-AICc 0
+START effect0-seed28128 nwkit-path-AICc
+FINISH 113 120 effect0-seed28128 nwkit-path-AICc 0
+START effect0-seed28128 kfl1ou-AICc
+FINISH 114 120 effect0-seed28128 kfl1ou-AICc 0
+START effect0-seed28129 nwkit-path-AICc
+FINISH 115 120 effect0-seed28129 nwkit-path-AICc 0
+START effect0-seed28129 kfl1ou-AICc
+FINISH 116 120 effect0-seed28129 kfl1ou-AICc 0
+START effect0-seed28129 nwkit-beam-AICc
+FINISH 117 120 effect0-seed28129 nwkit-beam-AICc 0
+START effect0-seed28130 kfl1ou-AICc
+FINISH 118 120 effect0-seed28130 kfl1ou-AICc 0
+START effect0-seed28130 nwkit-beam-AICc
+FINISH 119 120 effect0-seed28130 nwkit-beam-AICc 0
+START effect0-seed28130 nwkit-path-AICc
+FINISH 120 120 effect0-seed28130 nwkit-path-AICc 0

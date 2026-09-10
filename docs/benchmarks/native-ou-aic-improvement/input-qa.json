@@ -1,0 +1,725 @@
+{
+  "status": "passed",
+  "datasets": [
+    {
+      "dataset": "effect0-seed28101",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "14d89d3c64094220ac1d8cf3a4fa3efe8bec12ae4498b1605ce6ebd47e44c523"
+      }
+    },
+    {
+      "dataset": "effect0-seed28102",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "bf26a82c63a974a26d8fa1b56e5806c7559671b0128729ffc10106ee4bbb2c14"
+      }
+    },
+    {
+      "dataset": "effect0-seed28103",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "9c81a06532a1068cb4c83374b50dca2f36c5220b5dc2aa03481f477e39705d08"
+      }
+    },
+    {
+      "dataset": "effect0-seed28104",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "746c14cf8fd54261c945563b89a5307f41260b01c73ca26f1c71093e434eca11"
+      }
+    },
+    {
+      "dataset": "effect0-seed28105",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "7b9ace59186060b6060611bd6f9b0d20f8cb9be19ca47562a9458d2397df0e8f"
+      }
+    },
+    {
+      "dataset": "effect0-seed28106",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "54235a41cf811dc83c0025eaaae7d397770905b86a59900742f84cbfb20fff70"
+      }
+    },
+    {
+      "dataset": "effect0-seed28107",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "e6ec432879e1f1ea6e3bf6f2cbb15f7796ec7ff8e0cb59560ed16f1e59ce0e74"
+      }
+    },
+    {
+      "dataset": "effect0-seed28108",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "fab456f47147b841adec794a9417ef6097280da2203bedfd87b044d8d59222c5"
+      }
+    },
+    {
+      "dataset": "effect0-seed28109",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "56687327942c39323305bbabfac790162ff04f59f20ff136ca9e07208ada7ec0"
+      }
+    },
+    {
+      "dataset": "effect0-seed28110",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "f03bc4c9c156d8705ce86ac52091761632ccdcaf946261e57f36600d764a4662"
+      }
+    },
+    {
+      "dataset": "effect0-seed28111",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "bd62fffd890b78aef12bdc8eb8013ede47890bc822d16700168ee3a4e662aa46"
+      }
+    },
+    {
+      "dataset": "effect0-seed28112",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "6d1ab052fbfbb4b1762cc88457a939ed4ccc077f351444b1b2b74ec9d5229458"
+      }
+    },
+    {
+      "dataset": "effect0-seed28113",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "3983d1286f383491a30bfd515a1b59fa45836e296f2ab909a3e5aee0860aeccd"
+      }
+    },
+    {
+      "dataset": "effect0-seed28114",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "a71ade9e8cbeb32bb9fa1e9903cff3244706248b543a782589e18e1c59bb631e"
+      }
+    },
+    {
+      "dataset": "effect0-seed28115",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "8c2b2cb961795b2c8fea83558d6319f138be39c63227866621f20070c41f9e3d"
+      }
+    },
+    {
+      "dataset": "effect0-seed28116",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "503985bd3b147c83f90961d42f6de50891f681a74ac665a7e314f82c6943e27d"
+      }
+    },
+    {
+      "dataset": "effect0-seed28117",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "2ed89b7d7036d72a9d8857229b020fa09c3e71d1fd65fccc3ead34322e1d6682"
+      }
+    },
+    {
+      "dataset": "effect0-seed28118",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "30fd53d929da48ab99f538ea5a3b92e0d2690e3366cdf849ff9543d112f000bc"
+      }
+    },
+    {
+      "dataset": "effect0-seed28119",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "8471316187f8c22738573002dc21a7a6cdf488c83146828562456b2ac5d2d69b"
+      }
+    },
+    {
+      "dataset": "effect0-seed28120",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "536f302c219006ee09ca7b5d4cb5cbd03d5e0e19c686e3168e8092d02b23a2ea"
+      }
+    },
+    {
+      "dataset": "effect0-seed28121",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "02cc94b4e789d17aca894c204d7b218ad7789fd6815786215c563857feddbcd1"
+      }
+    },
+    {
+      "dataset": "effect0-seed28122",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "9c0018b23afc0a49f27004b97b67a9bf8b17097a5d9d60ccb52dd40622fb9b4f"
+      }
+    },
+    {
+      "dataset": "effect0-seed28123",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "987d2ef1aea801929db78b12416a5c7e781eb0a45b7b0e2b662cd983bbd95e7a"
+      }
+    },
+    {
+      "dataset": "effect0-seed28124",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "8a5e1cd571b182180086fba8c996ded455755687a2aa86c3955fa4616fc085ba"
+      }
+    },
+    {
+      "dataset": "effect0-seed28125",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "d775964a78f17ea318b736849847587fd490726600268aec6e7c611d9c13106a"
+      }
+    },
+    {
+      "dataset": "effect0-seed28126",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "6b7c579bcffc1d782af531eaf526121f223580a202450bd5f9a61adabd42f9d7"
+      }
+    },
+    {
+      "dataset": "effect0-seed28127",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "d254ac5cfaefeb620a7adbfe7986fc378753ca8252fe81339764429f32d7c67f"
+      }
+    },
+    {
+      "dataset": "effect0-seed28128",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "e80d204a4c78f99b04852d1dec9c42b1a1e186204a13d137ca3763918f366251"
+      }
+    },
+    {
+      "dataset": "effect0-seed28129",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "48d4f63ef6b856d23da7fb1cb51eb838519260128d7df70616b3c1e7740eed90"
+      }
+    },
+    {
+      "dataset": "effect0-seed28130",
+      "truth_shifts": 0,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "ad3b56e29dbece465b3875b6f0fc1aaa28b0fc7553dfb8fb2b6c55594da41201"
+      }
+    },
+    {
+      "dataset": "effect2-seed28101",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "342f59143f53bd6bbc08438ceedf5f9f44f386116d3e0e5b9feeb114e0bf207a"
+      }
+    },
+    {
+      "dataset": "effect2-seed28102",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "7956241d9577701c20c60219f2676997a201f63abc5875c8a32ef2b42baf1656"
+      }
+    },
+    {
+      "dataset": "effect2-seed28103",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "5bed0e3e2419be29ed0567c3863645dd094f2ac57b94f1219143b1ea3939bba5"
+      }
+    },
+    {
+      "dataset": "effect2-seed28104",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "0c9ce5447a12500c673f40793a795f1e0f70f1761d0ef695d844a2e2f9c3e0ac"
+      }
+    },
+    {
+      "dataset": "effect2-seed28105",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "e090e83d9a6efd567c0236db805c9997031e7b4f9dca5b213a4f88a71df4b64c"
+      }
+    },
+    {
+      "dataset": "effect2-seed28106",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "0e058c9e890c7068e3b6f20081f0a1361a916f32ea0d8cdba08b9d3d7c0920b3"
+      }
+    },
+    {
+      "dataset": "effect2-seed28107",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "5b6666c6db8a56d900ae9bd2484b2cd26979ad403dd3a193ad5a517b7b872180"
+      }
+    },
+    {
+      "dataset": "effect2-seed28108",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "4c301af73344be2bdd7e146616394d42df5e635ff288580d708452a916477ac7"
+      }
+    },
+    {
+      "dataset": "effect2-seed28109",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "4101228b127f0003ae4395a3a02089f4c3ac6f81d82da2a7deb4495f503cd06c"
+      }
+    },
+    {
+      "dataset": "effect2-seed28110",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "2adf0b91439b0c8d224dd48bfb7441047994f3628a5f62dd1d20e783a0b7708d"
+      }
+    },
+    {
+      "dataset": "effect2-seed28111",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "2f80d86aafefa37e2a71cc1bfb29705404c3270b5b42d40bacb8bae36ce3b544"
+      }
+    },
+    {
+      "dataset": "effect2-seed28112",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "4e39a828ffb6ee9e5c4b9c133ef83f48a8a6f8bc358a98da0459dd1918302b29"
+      }
+    },
+    {
+      "dataset": "effect2-seed28113",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "7eef9f694166a71973f4846826fc1aedd5bccb97827c7145fc125db4f41c91ab"
+      }
+    },
+    {
+      "dataset": "effect2-seed28114",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "9e7cd764410991127ec32593c1f18d12f47dd4af5d4a46c6038a95521c00c10c"
+      }
+    },
+    {
+      "dataset": "effect2-seed28115",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "6f5199a9d3afb2b95911b27d0757e8c54aff26becc917e57840cf61eb3065626"
+      }
+    },
+    {
+      "dataset": "effect2-seed28116",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "ac1e0db1ada292e472bf7f317a6964baafddd4b332275ee98781526532756f71"
+      }
+    },
+    {
+      "dataset": "effect2-seed28117",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "fb61c04922b6077443427399ac3dae739b5283078b553c11436dbdd43478dfa1"
+      }
+    },
+    {
+      "dataset": "effect2-seed28118",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "94be34194bb4e12488feff8d487e4d8957616651e553ab5a0b415f8d1ef8899f"
+      }
+    },
+    {
+      "dataset": "effect2-seed28119",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "afc855175746ce982319c20bf2002dd0cfefeb465239ec6d0cb02e1cdde5daef"
+      }
+    },
+    {
+      "dataset": "effect2-seed28120",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "0e975c0b2067dd8b50c04785b89601d7a9177addfc7fc39058b4e700460b83f0"
+      }
+    },
+    {
+      "dataset": "effect2-seed28121",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "c2623de28bdf208353f31514c273d30f8f834ba163c4a4165f35d82f46064321"
+      }
+    },
+    {
+      "dataset": "effect2-seed28122",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "0308bcb536cb70c8868c451505782b085650ea3193a1e5cce501186518e011ed"
+      }
+    },
+    {
+      "dataset": "effect2-seed28123",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "472dd5b4d48cc0b557f460e83644d8aeb0c3838e3b12408a775e51cd0550b090"
+      }
+    },
+    {
+      "dataset": "effect2-seed28124",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "18d4caece206019c06c43b1800dd12d31904a332115d662d20f71259d6df531f"
+      }
+    },
+    {
+      "dataset": "effect2-seed28125",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "2de8a30761f36ae9a3975c0c1bad90fb2d621029fd247004174a6261d4e3323d"
+      }
+    },
+    {
+      "dataset": "effect2-seed28126",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "df6a4ced378afef44877a21f9f09470f7dd81262776ed3a02448da79df06e8ee"
+      }
+    },
+    {
+      "dataset": "effect2-seed28127",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "afb91754877ac39dc82562a9ce47468dd5a2dada8c9647b860b8a92ae1eb9e40"
+      }
+    },
+    {
+      "dataset": "effect2-seed28128",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "29769f07f1c8bec0f8ba081e8fee775e10ff825521d3111403730bb20bb9bdbd"
+      }
+    },
+    {
+      "dataset": "effect2-seed28129",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "f2ed1e784c38cc2b3c8402928423f85e8412dbc680ecbea4db8d6f89baa72592"
+      }
+    },
+    {
+      "dataset": "effect2-seed28130",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "ba51c23bdb74b316e940a7199e6ed38e937b4f2b1a653f456f98ef976d77c55f"
+      }
+    },
+    {
+      "dataset": "effect6-seed28101",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "adad9e75d1d3e852d8a296c78a1d74adfb6b48628cf2c5c342cd580fca94c2ad"
+      }
+    },
+    {
+      "dataset": "effect6-seed28102",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "ecff126b172f9a846b921ad6aac0dc10e37dea0e92e1c38bf03d5352e8a974a5"
+      }
+    },
+    {
+      "dataset": "effect6-seed28103",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "a479b17b7f9537bccf08dc17522812ab9bfe36b2ed715df1f506a79faf559498"
+      }
+    },
+    {
+      "dataset": "effect6-seed28104",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "0f9e49b4b606e197e21df91b6cb4085fb8af0cdc51350eb1ad3b9f099b5a9514"
+      }
+    },
+    {
+      "dataset": "effect6-seed28105",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "685cffa5e93ea63779c477f6077172072f6878d358654107a82d4915df5c8e28"
+      }
+    },
+    {
+      "dataset": "effect6-seed28106",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "f5c47be5d5e4dc28523219efbceb984fe774c76deb4b10f9f5784eb053eea707"
+      }
+    },
+    {
+      "dataset": "effect6-seed28107",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "5aaed8538a9e2039f8ec4d007ab60b66297e1876efe8e1c0fe116d8c036d2b01"
+      }
+    },
+    {
+      "dataset": "effect6-seed28108",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "90653aa99f2a9d82c364f972c9cc1d42c6242d27ab848863b28ed002f8da418b"
+      }
+    },
+    {
+      "dataset": "effect6-seed28109",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "d74612ed36835faf2be20d5f7ca3a0dd37d847445d0a06b593eb3285b06b3b71"
+      }
+    },
+    {
+      "dataset": "effect6-seed28110",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "10ac5c203f90671a4406852f1127e51ae806ff1c909929afd1b4c01e744059d6"
+      }
+    },
+    {
+      "dataset": "effect6-seed28111",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "67a46d59de6877bea41f9a4f3450734c73582791eaaf6e0959d5c5057ca7fbef"
+      }
+    },
+    {
+      "dataset": "effect6-seed28112",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "a18726ef69f9330d87ec92a9b0242c15351b802f5eea88ddea07442f9c6de645"
+      }
+    },
+    {
+      "dataset": "effect6-seed28113",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "9127cd4154898d96eb65b1432b8a143da046716d87f8964f938848be92dc0cc3"
+      }
+    },
+    {
+      "dataset": "effect6-seed28114",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "f890959b3cb9b504fc9063813c84dca4505dc85d90154797185f5e54b1b5af5e"
+      }
+    },
+    {
+      "dataset": "effect6-seed28115",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "29039a8a8ee73a18d5214dae52605bc3c064444d33c2586f541e22a631560566"
+      }
+    },
+    {
+      "dataset": "effect6-seed28116",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "cd4d51e82294fad5856c3af45b16a9baf3f24a4df40800ad7af07bb3b9bce0e2"
+      }
+    },
+    {
+      "dataset": "effect6-seed28117",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "9f1934c9eb0833b207f93ee23e68b8ae90ee0ffbba7dd1648252b0a46f816b7c"
+      }
+    },
+    {
+      "dataset": "effect6-seed28118",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "b7eabe173d7cb722ecba4dfc4049593f68d9e86fe40a930235d6187028131141"
+      }
+    },
+    {
+      "dataset": "effect6-seed28119",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "001a13647e1e0f488e8f7da23f0151cbd1fb89964dd11a883c961149a8b39a59"
+      }
+    },
+    {
+      "dataset": "effect6-seed28120",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "2b3359eba9108c98e718d4567a96e7f3793c880ead2995d42c2a4cbfe58f8081"
+      }
+    },
+    {
+      "dataset": "effect6-seed28121",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "008ed25dd40530faf1355fa9343506d24359573344cf3ddccdc77cb717e2f936"
+      }
+    },
+    {
+      "dataset": "effect6-seed28122",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "b41f5580ea06edb67b40c5f1b7348bb541f9b2c2a3152dd00e14d6d12115f1dc"
+      }
+    },
+    {
+      "dataset": "effect6-seed28123",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "94ab9442a1b83f7fc95b259027fb2ed3fc06ce9e160e91211f3c056aafae62cd"
+      }
+    },
+    {
+      "dataset": "effect6-seed28124",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "88cb384a5d5fd4ebe5a8e7d92da41dbe932d29c669db4a379dc745656612019b"
+      }
+    },
+    {
+      "dataset": "effect6-seed28125",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "407db57603b130f2f7a8ba9336dd99c47a8e9cb7aa5b45cf50a0609f7d6409c4"
+      }
+    },
+    {
+      "dataset": "effect6-seed28126",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "b6df7b0c01054292b6f8bd6079700031550aa797e5dfaf69f6cc65af15fec99c"
+      }
+    },
+    {
+      "dataset": "effect6-seed28127",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "4d07ffe5aad65558a37f8dc3595c418cd92f6d5cb80dd9d304f2f60258c7be0c"
+      }
+    },
+    {
+      "dataset": "effect6-seed28128",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "0be45e9658f47075e2f0af06248ef6764b9ad9d6437dbb2850ce2e6ab265acd3"
+      }
+    },
+    {
+      "dataset": "effect6-seed28129",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "338198493a2b23b30662483f2c4175e08d6cf3e29588b642de5ff0f6787f3127"
+      }
+    },
+    {
+      "dataset": "effect6-seed28130",
+      "truth_shifts": 10,
+      "hashes": {
+        "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+        "traits.tsv": "cc49c1f56a60165b54d4c7b86234ed4483a05f93e61aedd81b54ad00e2361325"
+      }
+    }
+  ]
+}

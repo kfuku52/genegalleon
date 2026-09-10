@@ -1,0 +1,54 @@
+{
+  "status": "passed",
+  "tolerance": 1e-10,
+  "checks": [
+    {
+      "dataset": "effect2-seed27101",
+      "native_candidate_layouts": 48,
+      "criterion_candidate_likelihood_max_error": 0.0,
+      "previous_bootstrap_mean_max_error": 0.0,
+      "bootstrap_search_calls": 58,
+      "previous_bootstrap_shift_clades": "identical"
+    },
+    {
+      "dataset": "effect2-seed27102",
+      "native_candidate_layouts": 48,
+      "criterion_candidate_likelihood_max_error": 0.0,
+      "previous_bootstrap_mean_max_error": 0.0,
+      "bootstrap_search_calls": 20,
+      "previous_bootstrap_shift_clades": "identical"
+    },
+    {
+      "dataset": "effect2-seed27103",
+      "native_candidate_layouts": 48,
+      "criterion_candidate_likelihood_max_error": 0.0,
+      "previous_bootstrap_mean_max_error": 0.0,
+      "bootstrap_search_calls": 20,
+      "previous_bootstrap_shift_clades": "identical"
+    },
+    {
+      "dataset": "effect6-seed27101",
+      "native_candidate_layouts": 48,
+      "criterion_candidate_likelihood_max_error": 0.0,
+      "previous_bootstrap_mean_max_error": 0.0,
+      "bootstrap_search_calls": 77,
+      "previous_bootstrap_shift_clades": "identical"
+    },
+    {
+      "dataset": "effect6-seed27102",
+      "native_candidate_layouts": 48,
+      "criterion_candidate_likelihood_max_error": 0.0,
+      "previous_bootstrap_mean_max_error": 0.0,
+      "bootstrap_search_calls": 191,
+      "previous_bootstrap_shift_clades": "identical"
+    },
+    {
+      "dataset": "effect6-seed27103",
+      "native_candidate_layouts": 48,
+      "criterion_candidate_likelihood_max_error": 0.0,
+      "previous_bootstrap_mean_max_error": 0.0,
+      "bootstrap_search_calls": 153,
+      "previous_bootstrap_shift_clades": "identical"
+    }
+  ]
+}

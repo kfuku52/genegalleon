@@ -1,0 +1,11 @@
+{
+  "same_selected_clades_and_predictions": [
+    "effect2-seed27101",
+    "effect2-seed27102",
+    "effect2-seed27103",
+    "effect6-seed27101",
+    "effect6-seed27102",
+    "effect6-seed27103"
+  ],
+  "tolerance": 1e-10
+}

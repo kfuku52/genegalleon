@@ -1,0 +1,34 @@
+{
+  "tips": 1000,
+  "true_shifts": 100,
+  "traits": 1,
+  "tree": "balanced",
+  "effect_scales": [
+    2,
+    6
+  ],
+  "seeds": [
+    30101,
+    30102,
+    30103
+  ],
+  "root_model": "OUfixedRoot",
+  "true_alpha_height": 3,
+  "true_process_tip_variance": 1,
+  "estimate_alpha": true,
+  "estimate_process_variance": true,
+  "criterion": "AICc",
+  "global_null_gate": false,
+  "support_bootstrap": 0,
+  "max_shifts": 100,
+  "candidate_pool": 128,
+  "refit_budget": 220,
+  "screening_budget": 20000,
+  "beam_width": 1,
+  "lasso_iterations": 150,
+  "memory_limit_mib": 512,
+  "timeout_seconds_per_run": 1800,
+  "measurement": "sequential fresh processes, alternating order, wall/CPU/peak RSS",
+  "warmup": "one 100-tip/10-shift run per method before primary measurements; warmup times excluded",
+  "threads": 1
+}

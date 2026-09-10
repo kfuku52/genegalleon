@@ -1,0 +1,6 @@
+{
+  "policy": "After first pass, rerun ALL timed-out cases once with a 1200-second ceiling. Preserve first-pass results. Do not change inputs, seeds, search or calibration options. Extend runtime solely to obtain completed selections for accuracy comparison.",
+  "decision_timing": "Recorded while first strong-effect case was running; before any observed timeout.",
+  "harness_preflight": "First kfl1ou call omitted required postorder ordering. Corrected with ape::reorder.phylo; retry that invocation separately. Not counted as a method failure.",
+  "transition": "After the first strong-case 300s timeout, the active first-pass runner was stopped to avoid knowingly repeating 300s cutoffs. All pending runs and all timeouts use the same 1200s ceiling. The interrupted effect6-seed27102 native partial run is retained but excluded from completed-run measurements."
+}

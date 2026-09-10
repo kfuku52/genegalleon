@@ -6,11 +6,7 @@ from pathlib import Path
 import pytest
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_statistics.py"
-TARGET_MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "support"
-    / "prepare_generax_ufboot_target.py"
-)
+TARGET_MODULE_PATH = Path(__file__).resolve().parents[1] / "support" / "prepare_generax_ufboot_target.py"
 
 
 def load_module():
@@ -37,12 +33,20 @@ def test_dating_summary_keeps_conditional_interpretation_and_failed_interval(tmp
     import json
 
     path = tmp_path / "dating.log.txt"
-    path.write_text(json.dumps({
-        "schema": "nwkit-radte-run-v1", "status": "complete",
-        "method": "sequence-empirical-bayes-map", "sequence_model": {"model": "gy94"},
-        "uncertainty": "unavailable-strict-clock-limit", "interval_level": 0.95,
-        "experimental_native_estimator": True, "diagnostics": ["estimated_zero_rate_variance"],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "nwkit-radte-run-v1",
+                "status": "complete",
+                "method": "sequence-empirical-bayes-map",
+                "sequence_model": {"model": "gy94"},
+                "uncertainty": "unavailable-strict-clock-limit",
+                "interval_level": 0.95,
+                "experimental_native_estimator": True,
+                "diagnostics": ["estimated_zero_rate_variance"],
+            }
+        )
+    )
     module = load_module()
     stats = module.read_dating_stats(path)
     assert stats["dating_method"] == "nwkit:sequence-empirical-bayes-map"
@@ -98,9 +102,7 @@ def test_species_mapping_clone_handles_observed_deep_tree_without_recursion():
     assert cloned is not source
     assert len(list(cloned.leaves())) == 804
     assert len(cloned_nodes) == len(source_nodes)
-    assert [len(node.get_children()) for node in cloned_nodes] == [
-        len(node.get_children()) for node in source_nodes
-    ]
+    assert [len(node.get_children()) for node in cloned_nodes] == [len(node.get_children()) for node in source_nodes]
     assert [node.name for node in cloned_nodes] == [node.name for node in source_nodes]
     assert [node.dist for node in cloned_nodes] == [node.dist for node in source_nodes]
     assert [node.support for node in cloned_nodes] == [node.support for node in source_nodes]
@@ -150,17 +152,11 @@ def test_prepared_generax_target_is_unrooted_and_preserves_tips_and_tree_length(
 
 def test_maps_support_by_unrooted_split_and_preserves_legitimate_one_percent():
     mod = load_module()
-    rooted = add_branch_ids(
-        mod.new_tree("(((a:1,b:1):1,(c:1,d:1):1):1,(e:1,f:1):1);", format=1)
-    )
+    rooted = add_branch_ids(mod.new_tree("(((a:1,b:1):1,(c:1,d:1):1):1,(e:1,f:1):1);", format=1))
     # A different root representation of the same three internal splits.
-    support = mod.new_unrooted_tree(
-        "((a:1,b:1)1:1,(c:1,d:1)77:1,(e:1,f:1)95:1);"
-    )
+    support = mod.new_unrooted_tree("((a:1,b:1)1:1,(c:1,d:1)77:1,(e:1,f:1)95:1);")
 
-    mapped, diagnostics = mod.map_internal_support_by_split(
-        rooted, support, support_max=100
-    )
+    mapped, diagnostics = mod.map_internal_support_by_split(rooted, support, support_max=100)
 
     assert diagnostics == {
         "internal_split_count": 3,
@@ -177,12 +173,8 @@ def test_maps_support_by_unrooted_split_and_preserves_legitimate_one_percent():
 
 def test_rejects_incompatible_support_topology_instead_of_silently_dropping_values():
     mod = load_module()
-    rooted = add_branch_ids(
-        mod.new_tree("(((a,b),(c,d)),(e,f));", format=1)
-    )
-    incompatible = mod.new_unrooted_tree(
-        "((a,c)80,(b,d)90,(e,f)95);"
-    )
+    rooted = add_branch_ids(mod.new_tree("(((a,b),(c,d)),(e,f));", format=1))
+    incompatible = mod.new_unrooted_tree("((a,c)80,(b,d)90,(e,f)95);")
 
     with pytest.raises(ValueError, match="incompatible unrooted topologies"):
         mod.map_internal_support_by_split(rooted, incompatible, support_max=100)
@@ -190,12 +182,8 @@ def test_rejects_incompatible_support_topology_instead_of_silently_dropping_valu
 
 def test_rejects_partially_labelled_support_tree():
     mod = load_module()
-    rooted = add_branch_ids(
-        mod.new_tree("(((a,b),(c,d)),(e,f));", format=1)
-    )
-    partially_labelled = mod.new_unrooted_tree(
-        "((a,b)80,(c,d),(e,f)95);"
-    )
+    rooted = add_branch_ids(mod.new_tree("(((a,b),(c,d)),(e,f));", format=1))
+    partially_labelled = mod.new_unrooted_tree("((a,b)80,(c,d),(e,f)95);")
 
     with pytest.raises(ValueError, match="only a subset"):
         mod.map_internal_support_by_split(rooted, partially_labelled, support_max=100)
@@ -203,12 +191,8 @@ def test_rejects_partially_labelled_support_tree():
 
 def test_explicit_support_mapping_rejects_fully_unlabelled_internal_splits():
     mod = load_module()
-    rooted = add_branch_ids(
-        mod.new_tree("(((a,b),(c,d)),(e,f));", format=1)
-    )
-    unlabelled = mod.new_unrooted_tree(
-        "((a,b),(c,d),(e,f));"
-    )
+    rooted = add_branch_ids(mod.new_tree("(((a,b),(c,d)),(e,f));", format=1))
+    unlabelled = mod.new_unrooted_tree("((a,b),(c,d),(e,f));")
 
     with pytest.raises(ValueError, match="no explicit support labels"):
         mod.map_internal_support_by_split(
@@ -221,22 +205,17 @@ def test_explicit_support_mapping_rejects_fully_unlabelled_internal_splits():
 
 def test_reports_all_one_hundred_without_rejecting_a_valid_distribution():
     mod = load_module()
-    rooted = add_branch_ids(
-        mod.new_tree("(((a,b),(c,d)),(e,f));", format=1)
-    )
-    support = mod.new_unrooted_tree(
-        "((a,b)100,(c,d)100,(e,f)100);"
-    )
+    rooted = add_branch_ids(mod.new_tree("(((a,b),(c,d)),(e,f));", format=1))
+    support = mod.new_unrooted_tree("((a,b)100,(c,d)100,(e,f)100);")
 
-    _mapped, diagnostics = mod.map_internal_support_by_split(
-        rooted, support, support_max=100
-    )
+    _mapped, diagnostics = mod.map_internal_support_by_split(rooted, support, support_max=100)
 
     assert diagnostics["all_support_100"] is True
 
 
 def test_observed_intron_counts_survive_without_asr_and_merge_without_suffixes(tmp_path):
     import pandas as pd
+
     module = load_module()
     path = tmp_path / "gff.tsv"
     path.write_text("gene_id\tnum_intron\nA\t0\nB\t20\nC\t\n")
@@ -244,8 +223,14 @@ def test_observed_intron_counts_survive_without_asr_and_merge_without_suffixes(t
     assert traits.num_intron.iloc[:2].tolist() == [0, 20]
     assert pd.isna(traits.num_intron.iloc[2])
     branches = traits.assign(branch_id=[0, 1, 2])
-    asr = pd.DataFrame({"branch_id": [0, 1, 2, 3], "node_name": ["A", "B", "C", "root"],
-                        "num_intron": [0, 20, None, None], "intron_present": [0, 1, .4, .8]})
+    asr = pd.DataFrame(
+        {
+            "branch_id": [0, 1, 2, 3],
+            "node_name": ["A", "B", "C", "root"],
+            "num_intron": [0, 20, None, None],
+            "intron_present": [0, 1, 0.4, 0.8],
+        }
+    )
     merged = module.merge_asr_intron_traits(branches, asr)
     assert merged.num_intron.iloc[:2].tolist() == [0, 20]
     assert merged.num_intron.iloc[2:].isna().all()
@@ -253,3 +238,28 @@ def test_observed_intron_counts_survive_without_asr_and_merge_without_suffixes(t
     asr.loc[1, "num_intron"] = 19
     with pytest.raises(ValueError, match="counts disagree"):
         module.merge_asr_intron_traits(branches, asr)
+
+
+def test_native_dating_stats_records_actual_method(tmp_path):
+    import json
+
+    module = load_module()
+    path = tmp_path / "dating.log.txt"
+    path.write_text(
+        json.dumps(
+            dict(
+                schema="nwkit-radte-run-v1",
+                status="complete",
+                method="sequence-empirical-bayes-map",
+                sequence_model={"model": "ecmk07"},
+                uncertainty="conditional-profile",
+                interval_level=0.95,
+            )
+        )
+    )
+    stats = module.read_dating_stats(path)
+    assert stats["dating_method"] == "nwkit:sequence-empirical-bayes-map"
+    assert stats["dating_sequence_model"] == "ecmk07"
+    assert stats["dating_uncertainty"] == "conditional-profile"
+    path.write_text("legacy-calibrated-node-log\n")
+    assert module.read_dating_stats(path) == {"dating_method": "legacy-calibrated-node-log"}

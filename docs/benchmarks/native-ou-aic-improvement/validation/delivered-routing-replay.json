@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "checks": [
+    {
+      "dataset": "effect2-seed28101",
+      "strategy": "auto",
+      "reference": "baseline",
+      "likelihood_error": 0.0,
+      "prediction_error": 0.0
+    },
+    {
+      "dataset": "effect2-seed28101",
+      "strategy": "native-path",
+      "reference": "candidate",
+      "likelihood_error": 0.0,
+      "prediction_error": 0.0
+    },
+    {
+      "dataset": "effect6-seed28101",
+      "strategy": "auto",
+      "reference": "baseline",
+      "likelihood_error": 0.0,
+      "prediction_error": 0.0
+    },
+    {
+      "dataset": "effect6-seed28101",
+      "strategy": "native-path",
+      "reference": "candidate",
+      "likelihood_error": 0.0,
+      "prediction_error": 0.0
+    }
+  ]
+}

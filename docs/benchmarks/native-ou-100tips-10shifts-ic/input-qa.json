@@ -1,0 +1,95 @@
+{
+  "status": "passed",
+  "unchanged_files": [
+    {
+      "dataset": "effect2-seed27101",
+      "file": "tree.nwk",
+      "sha256": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad"
+    },
+    {
+      "dataset": "effect2-seed27101",
+      "file": "traits.tsv",
+      "sha256": "496a6c6befb87a28a3e881a4f66a77fd5469e5f6ec7b8621afb2043742f2e620"
+    },
+    {
+      "dataset": "effect2-seed27101",
+      "file": "truth.json",
+      "sha256": "c29c16d21854f11f73283bc6d875fdc7e62d9892b6e05bafc658365f3554fc96"
+    },
+    {
+      "dataset": "effect2-seed27102",
+      "file": "tree.nwk",
+      "sha256": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad"
+    },
+    {
+      "dataset": "effect2-seed27102",
+      "file": "traits.tsv",
+      "sha256": "dfd1185d226decdbe4375a909460716c41a99788e50d7b354e4502bde7d3ff45"
+    },
+    {
+      "dataset": "effect2-seed27102",
+      "file": "truth.json",
+      "sha256": "994a8114ff5496c99ea6cc0bf6de43c0bca6d85482366dd7fea72112e9f5bdb8"
+    },
+    {
+      "dataset": "effect2-seed27103",
+      "file": "tree.nwk",
+      "sha256": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad"
+    },
+    {
+      "dataset": "effect2-seed27103",
+      "file": "traits.tsv",
+      "sha256": "f1fde2de521b7f3a4358591840af8ed9e107e04febeaa0a9256fc30d45f7f9dd"
+    },
+    {
+      "dataset": "effect2-seed27103",
+      "file": "truth.json",
+      "sha256": "50b895bc5f5c2c0d7b7f7c4718c5a3c4add4d1ec613004353e0c5749e3d511e3"
+    },
+    {
+      "dataset": "effect6-seed27101",
+      "file": "tree.nwk",
+      "sha256": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad"
+    },
+    {
+      "dataset": "effect6-seed27101",
+      "file": "traits.tsv",
+      "sha256": "d0d338bcfa21305511710bc518cedfaba02e4529cddbf84997bd6e215953c964"
+    },
+    {
+      "dataset": "effect6-seed27101",
+      "file": "truth.json",
+      "sha256": "6850f95558e26bca0d85087933c106a9fe84500091f2d69f8ddf10d403797384"
+    },
+    {
+      "dataset": "effect6-seed27102",
+      "file": "tree.nwk",
+      "sha256": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad"
+    },
+    {
+      "dataset": "effect6-seed27102",
+      "file": "traits.tsv",
+      "sha256": "262aff276ac750afdb5d68a295cd163f1767f4c5046a950f345b51a567332207"
+    },
+    {
+      "dataset": "effect6-seed27102",
+      "file": "truth.json",
+      "sha256": "53d668eebd9e46d9d8952235ba7547d127aebf4af5314b49d94ae3d27c758e2c"
+    },
+    {
+      "dataset": "effect6-seed27103",
+      "file": "tree.nwk",
+      "sha256": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad"
+    },
+    {
+      "dataset": "effect6-seed27103",
+      "file": "traits.tsv",
+      "sha256": "7c0a4ee98aa21251e8e9fe251379180463a1a1a610a2d27dc18c1e7b2f13f318"
+    },
+    {
+      "dataset": "effect6-seed27103",
+      "file": "truth.json",
+      "sha256": "1e71724e0413dba0cdaf413b971aac5ab8a7318ee674eebdd694911603c3490f"
+    }
+  ]
+}

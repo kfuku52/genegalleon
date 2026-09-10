@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from detect_ou_shift_native import branch_summary as native_ou_branch_summary
 from reconciled_speciation_contrast import summarize_for_stat_tree as summarize_rsc_for_stat_tree
 from species_labeling import extract_species_label, scientific_name_from_label, strip_species_label
 from species_tree_pgls import summarize_for_stat_tree as summarize_species_pgls_for_stat_tree
@@ -52,6 +53,30 @@ def read_dating_stats(path):
             stats["dating_interpretation"] += " Profile intervals also condition on the fitted substitution model."
         stats["dating_diagnostics"] = "; ".join(manifest.get("diagnostics", []))
     return stats
+
+
+def load_native_ou_branch_table(model_path, dated_tree_path):
+    model = json.loads(Path(model_path).read_text())
+    if model.get("schema_version") != 8:
+        raise ValueError("Unsupported native OU model schema.")
+    table = native_ou_branch_summary(model)
+    tree = _ensure_branch_ids(new_tree(str(dated_tree_path), format=1))
+    nodes = list(tree.traverse(strategy="levelorder"))
+    native_ids = {node: i for i, node in enumerate(nodes)}
+    rows = {row["branch_id"]: row for row in model["branches"]}
+    if len(rows) != len(model["branches"]) or set(rows) != set(range(len(nodes))):
+        raise ValueError("Native OU IDs do not match the dated tree.")
+    for index, node in enumerate(nodes):
+        row = rows[index]
+        parent = -1 if node_is_root(node) else native_ids[node.up]
+        if (
+            row["name"] != (node.name or "")
+            or row["parent"] != parent
+            or (index and not math.isclose(row["dist"], node.dist, rel_tol=1e-10, abs_tol=1e-12))
+        ):
+            raise ValueError(f"Native OU branch {index} does not match the dated tree.")
+    table["branch_id"] = table.branch_id.map({i: _get_node_label(node) for i, node in enumerate(nodes)})
+    return table
 
 
 def new_tree(newick_or_path, format=1, quoted_node_names=False):
@@ -167,9 +192,7 @@ def _tree_descendant_tip_sets(tree):
         if node_is_leaf(node):
             descendants[node] = frozenset([str(node.name)])
         else:
-            descendants[node] = frozenset().union(
-                *(descendants[child] for child in node.get_children())
-            )
+            descendants[node] = frozenset().union(*(descendants[child] for child in node.get_children()))
     return frozenset(leaf_names), descendants
 
 
@@ -249,16 +272,13 @@ def map_internal_support_by_split(
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"Tree contains an invalid support value: {value!r}")
             if support_max is not None and value > support_max + 1e-8:
-                raise ValueError(
-                    f"Tree support value {value!r} exceeds the expected maximum {support_max}."
-                )
+                raise ValueError(f"Tree support value {value!r} exceeds the expected maximum {support_max}.")
             values.append(value)
         if not values:
             continue
         if max(values) - min(values) > 1e-8:
             raise ValueError(
-                "The two rooted representations of one unrooted split carry "
-                f"different support values: {values}"
+                f"The two rooted representations of one unrooted split carry different support values: {values}"
             )
         support_by_split[split] = values[0]
 
@@ -273,8 +293,7 @@ def map_internal_support_by_split(
         )
     if require_support and support_splits and not support_by_split:
         raise ValueError(
-            "Support tree has internal splits but no explicit support labels: "
-            f"total={len(support_splits)}"
+            f"Support tree has internal splits but no explicit support labels: total={len(support_splits)}"
         )
 
     branch_support = {}
@@ -355,9 +374,7 @@ def build_arg_parser():
     parser.add_argument("--uniprot", metavar="PATH", default="", type=str, help="Path used by --uniprot.")
     parser.add_argument("--synteny", metavar="PATH", default="", type=str, help="Path used by --synteny.")
 
-    parser.add_argument("--l1ou_tree", metavar="PATH", default="", type=str, help="Path used by --l1ou_tree.")
-    parser.add_argument("--l1ou_regime", metavar="PATH", default="", type=str, help="Path used by --l1ou_regime.")
-    parser.add_argument("--l1ou_leaf", metavar="PATH", default="", type=str, help="Path used by --l1ou_leaf.")
+    parser.add_argument("--native_ou_model", metavar="PATH", default="", help="Completed NWKIT OU model JSON.")
     parser.add_argument("--expression", metavar="PATH", default="", type=str, help="Path used by --expression.")
 
     parser.add_argument(
@@ -394,9 +411,7 @@ def build_arg_parser():
     parser.add_argument(
         "--gene_pgls_stats", metavar="PATH", default="", type=str, help="Path used by --gene_pgls_stats."
     )
-    parser.add_argument(
-        "--rsc_regression", metavar="PATH", default="", type=str, help="RSC regression result table."
-    )
+    parser.add_argument("--rsc_regression", metavar="PATH", default="", type=str, help="RSC regression result table.")
     parser.add_argument("--rsc_status", metavar="PATH", default="", type=str, help="RSC regression family status.")
     parser.add_argument(
         "--pgls_comparison",
@@ -714,8 +729,16 @@ def _ensure_branch_ids(tree):
 def load_asr_intron_branch_table(asr_intron_path, dated_tree_path):
     """Translate validated NWKIT level-order IDs to GeneGalleon clade-rank IDs."""
     df = pandas.read_csv(asr_intron_path, sep="\t", dtype={"name": str}, keep_default_na=False)
-    required = {"branch_id", "parent", "node_class", "name", "num_intron", "is_imputed",
-                "p_intron_present", "p_intron_absent"}
+    required = {
+        "branch_id",
+        "parent",
+        "node_class",
+        "name",
+        "num_intron",
+        "is_imputed",
+        "p_intron_present",
+        "p_intron_absent",
+    }
     if not required.issubset(df.columns):
         raise ValueError("Intron ASR summary is missing columns: " + ", ".join(sorted(required - set(df))))
     tree = _ensure_branch_ids(new_tree(dated_tree_path, format=1))
@@ -734,34 +757,41 @@ def load_asr_intron_branch_table(asr_intron_path, dated_tree_path):
         if row["name"] != (node.name or "") or row.node_class != node_class or parents[index] != parent:
             raise ValueError(f"Intron ASR node {row.branch_id} does not match the dated tree.")
     probabilities = df[["p_intron_present", "p_intron_absent"]].apply(pandas.to_numeric, errors="raise")
-    if (not numpy.isfinite(probabilities.to_numpy()).all()
-            or ((probabilities < 0) | (probabilities > 1)).any().any()
-            or not numpy.allclose(probabilities.sum(axis=1), 1, rtol=0, atol=1e-8)):
+    if (
+        not numpy.isfinite(probabilities.to_numpy()).all()
+        or ((probabilities < 0) | (probabilities > 1)).any().any()
+        or not numpy.allclose(probabilities.sum(axis=1), 1, rtol=0, atol=1e-8)
+    ):
         raise ValueError("Invalid intron ASR probabilities.")
     imputed = df.is_imputed.astype(str).str.lower()
     if not imputed.isin(["true", "false"]).all():
         raise ValueError("Intron ASR is_imputed must be boolean.")
     counts = pandas.to_numeric(df.num_intron.replace({"NA": numpy.nan, "": numpy.nan}), errors="raise")
     observed_counts = counts.dropna()
-    if (not numpy.isfinite(observed_counts).all()
-            or (observed_counts < 0).any()
-            or (observed_counts != numpy.floor(observed_counts)).any()):
+    if (
+        not numpy.isfinite(observed_counts).all()
+        or (observed_counts < 0).any()
+        or (observed_counts != numpy.floor(observed_counts)).any()
+    ):
         raise ValueError("Intron ASR num_intron must be a non-negative integer or missing.")
     leaves = df.node_class.eq("leaf")
     measured = counts.notna()
     if (measured & ~leaves).any() or not imputed.eq("true").equals(leaves & ~measured):
         raise ValueError("Intron ASR counts and imputation flags disagree with node observations.")
-    if not numpy.allclose(probabilities.loc[measured, "p_intron_present"],
-                          counts[measured].gt(0).astype(float), rtol=0, atol=1e-8):
+    if not numpy.allclose(
+        probabilities.loc[measured, "p_intron_present"], counts[measured].gt(0).astype(float), rtol=0, atol=1e-8
+    ):
         raise ValueError("Intron ASR probabilities disagree with observed counts.")
-    return pandas.DataFrame({
-        "branch_id": df.branch_id.map({i: _get_node_label(node) for i, node in enumerate(nodes)}),
-        "node_name": df["name"],
-        "num_intron": counts,
-        "intron_present": probabilities.p_intron_present,
-        "intron_absent": probabilities.p_intron_absent,
-        "intron_is_imputed": imputed.eq("true"),
-    })
+    return pandas.DataFrame(
+        {
+            "branch_id": df.branch_id.map({i: _get_node_label(node) for i, node in enumerate(nodes)}),
+            "node_name": df["name"],
+            "num_intron": counts,
+            "intron_present": probabilities.p_intron_present,
+            "intron_absent": probabilities.p_intron_absent,
+            "intron_is_imputed": imputed.eq("true"),
+        }
+    )
 
 
 def flatten_trait_variable_stats(df, key_prefix):
@@ -782,9 +812,7 @@ def load_gff_gene_traits(path):
     traits = pandas.read_csv(path, sep="\t", header=0, index_col=None)
     duplicates = sorted(traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"].astype(str).unique())
     if duplicates:
-        raise ValueError("GFF gene traits must be unique before branch join: {}".format(
-            ", ".join(duplicates[:20])
-        ))
+        raise ValueError("GFF gene traits must be unique before branch join: {}".format(", ".join(duplicates[:20])))
     return traits.rename(columns={"gene_id": "node_name", "feature_size": "intron_feature_size"})
 
 
@@ -1162,115 +1190,6 @@ def main():
             )
         return pandas.DataFrame(rows, columns=cn)
 
-    def ou2table(regime_file, leaf_file, input_tree_file):
-        df_regime = pandas.read_csv(regime_file, sep="\t")
-        df_leaf = pandas.read_csv(leaf_file, sep="\t")
-        regime_regimes = numpy.array(
-            [
-                0,
-            ]
-            + df_regime["regime"].dropna().unique().tolist()
-        ).astype(int)
-        leaf_regimes = df_leaf["regime"].dropna().unique().astype(int)
-        is_same_regime = set(regime_regimes) == set(leaf_regimes)
-        assert is_same_regime, "Regime numbers did not match between the regime and leaf files."
-        tree = new_tree(input_tree_file, format=1)
-        tree = ensure_branch_ids(tree)
-        nodes = list(tree.traverse())
-        tissues = df_leaf.columns[3:].values
-        if "expectations" in df_leaf["param"].values:
-            df_leaf.loc[(df_leaf["param"] == "expectations"), "param"] = "mu"
-        cn1 = ["branch_id", "regime", "is_shift", "num_child_shift"]
-        cn2 = ["tau", "delta_tau", "delta_maxmu", "mu_complementarity"]
-        cn3 = ["mu_" + tissue for tissue in tissues]
-        cn = cn1 + cn2 + cn3
-
-        name_to_regime = (
-            df_regime.loc[df_regime["node_name"].notna(), ["node_name", "regime"]]
-            .drop_duplicates(subset=["node_name"], keep="first")
-            .set_index("node_name")["regime"]
-            .to_dict()
-        )
-        regime_by_label = {}
-        for node in tree.traverse(strategy="preorder"):
-            nlabel = get_node_label(node)
-            inherited_regime = 0 if node_is_root(node) else regime_by_label[get_node_label(node.up)]
-            regime_no = name_to_regime.get(node.name)
-            regime_by_label[nlabel] = inherited_regime if regime_no is None else int(regime_no)
-
-        is_mu = df_leaf["param"] == "mu"
-        regime_cols = [c for c in df_leaf.columns if c not in ["node_name", "param"]]
-        df_leaf_unique = df_leaf.loc[is_mu, regime_cols].copy()
-        numeric_cols = [col for col in df_leaf_unique.columns if col != "regime"]
-        if len(numeric_cols) > 0:
-            df_leaf_unique.loc[:, numeric_cols] = df_leaf_unique.loc[:, numeric_cols].apply(
-                pandas.to_numeric,
-                errors="coerce",
-            )
-        if df_leaf_unique.shape[0] == 0:
-            df_leaf_unique = pandas.DataFrame({"regime": [0]})
-        else:
-            df_leaf_unique = df_leaf_unique.groupby(by="regime", as_index=False).mean(numeric_only=True)
-        if "regime" not in df_leaf_unique.columns:
-            df_leaf_unique["regime"] = 0
-        for tissue in tissues:
-            if tissue not in df_leaf_unique.columns:
-                df_leaf_unique[tissue] = 0.0
-        regime_labels = df_leaf_unique["regime"].to_numpy(dtype=int, copy=False)
-        regime_mu_values = df_leaf_unique.loc[:, tissues].to_numpy(dtype=float, copy=False)
-        regime_to_mu = {
-            int(regime_no): mu_values for regime_no, mu_values in zip(regime_labels, regime_mu_values, strict=True)
-        }
-
-        records = []
-        for node in nodes:
-            nlabel = get_node_label(node)
-            node_regime = regime_by_label[nlabel]
-            parent_regime = regime_by_label[get_node_label(node.up)] if not node_is_root(node) else node_regime
-            row = {
-                "branch_id": nlabel,
-                "regime": node_regime,
-                "is_shift": int((not node_is_root(node)) and (node_regime != parent_regime)),
-                "num_child_shift": 0,
-            }
-            mu_values = regime_to_mu.get(int(node_regime))
-            if mu_values is None:
-                mu_values = numpy.zeros(len(tissues), dtype=float)
-            for tissue, mu_value in zip(tissues, mu_values, strict=True):
-                row["mu_" + tissue] = float(mu_value)
-            records.append(row)
-        df = pandas.DataFrame.from_records(records, columns=cn)
-        df[cn2] = df[cn2].astype(float)
-        df[cn3] = df[cn3].astype(float)
-
-        df["tau"] = kfog.calc_tau(df, cn3, unlog2=True, unPlus1=True)
-        df = df.set_index("branch_id", drop=False)
-        for node in nodes:
-            nlabel = get_node_label(node)
-            if not node_is_root(node):
-                tau_up = float(df.at[get_node_label(node.up), "tau"])
-                tau_my = float(df.at[nlabel, "tau"])
-                df.at[nlabel, "delta_tau"] = tau_my - tau_up
-                if int(df.at[nlabel, "is_shift"]) == 1:
-                    sis_label = get_node_label(node.get_sisters()[0])
-                    my_mu = df.loc[nlabel, cn3].to_numpy(dtype=float)
-                    sis_mu = df.loc[sis_label, cn3].to_numpy(dtype=float)
-                    my_maxmu = my_mu.max()
-                    sis_maxmu = sis_mu.max()
-                    delta_maxmu = my_maxmu - sis_maxmu
-                    df.at[nlabel, "delta_maxmu"] = delta_maxmu
-                    my_mu_unlog = numpy.clip(numpy.exp2(my_mu) - 1, a_min=0, a_max=None)
-                    sis_mu_unlog = numpy.clip(numpy.exp2(sis_mu) - 1, a_min=0, a_max=None)
-                    df.at[nlabel, "mu_complementarity"] = kfog.calc_complementarity(my_mu_unlog, sis_mu_unlog)
-            if not node_is_leaf(node):
-                node_regime = regime_by_label[nlabel]
-                child_labels = [get_node_label(child) for child in node.get_children()]
-                is_child1_shift = node_regime != regime_by_label[child_labels[0]]
-                is_child2_shift = node_regime != regime_by_label[child_labels[1]]
-                num_child_shift = sum([is_child1_shift, is_child2_shift])
-                df.at[nlabel, "num_child_shift"] = num_child_shift
-        return df.reset_index(drop=True)
-
     def get_N_coordinate(file):
         with open_text(file) as fh:
             seqs = fh.read().split(">")
@@ -1513,9 +1432,7 @@ def main():
         df_tmp.loc[:, "bl_unrooted"] = numpy.nan
         unrooted = new_unrooted_tree(params["unrooted_tree"])
         try:
-            mapped_support, support_diagnostics = map_internal_support_by_split(
-                rooted_tree, unrooted
-            )
+            mapped_support, support_diagnostics = map_internal_support_by_split(rooted_tree, unrooted)
             for branch_id, support in mapped_support.items():
                 df_tmp.at[branch_id, "support_unrooted"] = support
             print(
@@ -1532,9 +1449,7 @@ def main():
         try:
             unrooted_for_length = transfer_root(tree_to=unrooted, tree_from=rooted_tree)
             unrooted_for_length = annotate_clade_signatures(unrooted_for_length)
-            unrooted_by_clade = {
-                unode.props.get("clade_sig"): unode for unode in unrooted_for_length.traverse()
-            }
+            unrooted_by_clade = {unode.props.get("clade_sig"): unode for unode in unrooted_for_length.traverse()}
             for rnode in rooted_tree.traverse():
                 unode = unrooted_by_clade.get(rnode.props.get("clade_sig"))
                 if unode is not None:
@@ -1718,11 +1633,8 @@ def main():
     if os.path.exists(params["promoter_fasta"]):
         df_tmp = get_N_coordinate(file=params["promoter_fasta"])
         node_left_merge_tables.append(df_tmp)
-    if os.path.exists(params["l1ou_regime"]) and os.path.exists(params["l1ou_leaf"]):
-        print("processing l1ou")
-        df_tmp = ou2table(params["l1ou_regime"], params["l1ou_leaf"], params["dated_tree"])
-        df_tmp.columns = ["l1ou_" + c if c != "branch_id" else c for c in df_tmp.columns]
-        numlabel_merge_tables.append(df_tmp)
+    if os.path.exists(params["native_ou_model"]):
+        numlabel_merge_tables.append(load_native_ou_branch_table(params["native_ou_model"], params["dated_tree"]))
     if os.path.exists(params["expression"]) and os.path.exists(params["rooted_tree"]):
         col = "clade_min_expression_pearsoncor"
         df_branch.loc[:, col] = numpy.nan
@@ -1844,25 +1756,11 @@ def main():
         tmp = pandas.read_csv(params["codeml_tsv"], sep="\t", header=0, index_col=None, nrows=1)
         for col in tmp.columns:
             tree_info["codeml_" + col] = tmp.loc[:, col].values[0]
-    for method in ["l1ou"]:
-        if os.path.exists(params[method + "_tree"]):
-            tmp = pandas.read_csv(params[method + "_tree"], sep="\t", usecols=["num_shift"], nrows=1)
-            num_shift = tmp["num_shift"].values[0]
-            tree_tmp = {
-                method + "_num_shift": num_shift,
-            }
-            tree_info.update(tree_tmp)
-        if os.path.exists(params[method + "_regime"]):
-            try:
-                tree_tmp = kfog.regime2tree(params[method + "_regime"])
-            except ValueError as exc:
-                print(
-                    "Skipping {} regime summary due to invalid regime parameters: {}".format(method, exc),
-                    flush=True,
-                )
-            else:
-                tree_tmp = add_dict_key_prefix(tree_tmp, method)
-                tree_info.update(tree_tmp)
+    if os.path.exists(params["native_ou_model"]):
+        with open(params["native_ou_model"]) as handle:
+            ou_model = json.load(handle)
+        tree_info["ou_native_num_shift"] = len(ou_model["shift_branch_ids"])
+        tree_info["ou_native_num_regime"] = len({row["regime"] for row in ou_model["branches"]})
     if os.path.exists(params["csubst_cb_stats"]):
         df_tmp = pandas.read_csv(params["csubst_cb_stats"], sep="\t", header=0, index_col=None)
         df_tmp = df_tmp.loc[(df_tmp["arity"] == 2), :]

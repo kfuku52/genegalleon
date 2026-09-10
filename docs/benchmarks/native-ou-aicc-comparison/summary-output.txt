@@ -1,0 +1,20 @@
+# AICc added to the OU shift comparison
+
+Same 100-tip/10-shift nonnull fixtures as the original seven-method comparison; three seeds per effect. Precision, recall, F1 and RMSE are averages across datasets. Higher F1 and lower RMSE are preferable. Native beam and path searches are distinct methods.
+
+| Method | Weak F1 | Weak RMSE | Strong F1 | Strong RMSE |
+|---|---:|---:|---:|---:|
+| NWKIT beam bootstrap (B=19) | 0.000 | 1.275 | 0.412 | 1.145 |
+| NWKIT beam pBIC | 0.100 | 1.207 | 0.378 | 1.504 |
+| NWKIT beam BIC | 0.000 | 1.261 | 0.439 | 0.920 |
+| NWKIT beam AIC | 0.142 | 1.054 | 0.433 | 0.946 |
+| NWKIT beam AICc | 0.159 | 1.061 | 0.439 | 0.935 |
+| NWKIT path AIC | 0.367 | 0.653 | 0.433 | 0.595 |
+| NWKIT path AICc | 0.367 | 0.653 | 0.433 | 0.595 |
+| kfl1ou pBIC | 0.096 | 1.356 | 0.367 | 1.448 |
+| kfl1ou BIC | 0.000 | 1.261 | 0.390 | 0.723 |
+| kfl1ou AIC | 0.296 | 0.700 | 0.421 | 0.746 |
+| kfl1ou AICc | 0.296 | 0.679 | 0.421 | 0.746 |
+
+## No-shift cases
+

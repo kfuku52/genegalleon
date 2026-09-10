@@ -1,0 +1,1727 @@
+{
+  "status": "complete",
+  "selection": "AIC",
+  "method": "candidate",
+  "score": 260.58968904551404,
+  "selected": {
+    "shift_clades": [
+      [
+        "t0",
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t5"
+      ],
+      [
+        "t37",
+        "t38",
+        "t39",
+        "t40",
+        "t41",
+        "t42"
+      ],
+      [
+        "t50",
+        "t51",
+        "t52",
+        "t53",
+        "t54",
+        "t55"
+      ],
+      [
+        "t62",
+        "t63",
+        "t64",
+        "t65",
+        "t66",
+        "t67"
+      ],
+      [
+        "t87",
+        "t88",
+        "t89",
+        "t90",
+        "t91",
+        "t92"
+      ],
+      [
+        "t93",
+        "t94",
+        "t95",
+        "t96",
+        "t97",
+        "t98",
+        "t99"
+      ],
+      [
+        "t50",
+        "t51",
+        "t52"
+      ],
+      [
+        "t96",
+        "t97",
+        "t98",
+        "t99"
+      ],
+      [
+        "t41"
+      ]
+    ],
+    "log_likelihood": -109.29484452275702,
+    "predicted": {
+      "t0": -1.3341700029423103,
+      "t1": -1.3341700029423103,
+      "t2": -1.3341700029423103,
+      "t3": -1.3341700029423103,
+      "t4": -1.3341700029423103,
+      "t5": -1.3341700029423103,
+      "t6": 1.144078376904948,
+      "t7": 1.144078376904948,
+      "t8": 1.144078376904948,
+      "t9": 1.144078376904948,
+      "t10": 1.144078376904948,
+      "t11": 1.144078376904948,
+      "t12": 1.144078376904948,
+      "t13": 1.144078376904948,
+      "t14": 1.144078376904948,
+      "t15": 1.144078376904948,
+      "t16": 1.144078376904948,
+      "t17": 1.144078376904948,
+      "t18": 1.144078376904948,
+      "t19": 1.144078376904948,
+      "t20": 1.144078376904948,
+      "t21": 1.144078376904948,
+      "t22": 1.144078376904948,
+      "t23": 1.144078376904948,
+      "t24": 1.144078376904948,
+      "t25": 1.144078376904948,
+      "t26": 1.144078376904948,
+      "t27": 1.144078376904948,
+      "t28": 1.144078376904948,
+      "t29": 1.144078376904948,
+      "t30": 1.144078376904948,
+      "t31": 1.144078376904948,
+      "t32": 1.144078376904948,
+      "t33": 1.144078376904948,
+      "t34": 1.144078376904948,
+      "t35": 1.144078376904948,
+      "t36": 1.144078376904948,
+      "t37": -0.998421188933201,
+      "t38": -0.998421188933201,
+      "t39": -0.998421188933201,
+      "t40": -0.998421188933201,
+      "t41": -3.028653486318309,
+      "t42": -0.998421188933201,
+      "t43": 1.144078376904948,
+      "t44": 1.144078376904948,
+      "t45": 1.144078376904948,
+      "t46": 1.144078376904948,
+      "t47": 1.144078376904948,
+      "t48": 1.144078376904948,
+      "t49": 1.144078376904948,
+      "t50": -2.1530969996291343,
+      "t51": -2.1530969996291343,
+      "t52": -2.1530969996291343,
+      "t53": -0.7483641005297427,
+      "t54": -0.7483641005297427,
+      "t55": -0.7483641005297427,
+      "t56": 1.144078376904948,
+      "t57": 1.144078376904948,
+      "t58": 1.144078376904948,
+      "t59": 1.144078376904948,
+      "t60": 1.144078376904948,
+      "t61": 1.144078376904948,
+      "t62": -0.14340366584819852,
+      "t63": -0.14340366584819852,
+      "t64": -0.14340366584819852,
+      "t65": -0.14340366584819852,
+      "t66": -0.14340366584819852,
+      "t67": -0.14340366584819852,
+      "t68": 1.144078376904948,
+      "t69": 1.144078376904948,
+      "t70": 1.144078376904948,
+      "t71": 1.144078376904948,
+      "t72": 1.144078376904948,
+      "t73": 1.144078376904948,
+      "t74": 1.144078376904948,
+      "t75": 1.144078376904948,
+      "t76": 1.144078376904948,
+      "t77": 1.144078376904948,
+      "t78": 1.144078376904948,
+      "t79": 1.144078376904948,
+      "t80": 1.144078376904948,
+      "t81": 1.144078376904948,
+      "t82": 1.144078376904948,
+      "t83": 1.144078376904948,
+      "t84": 1.144078376904948,
+      "t85": 1.144078376904948,
+      "t86": 1.144078376904948,
+      "t87": 1.5803943646092344,
+      "t88": 1.5803943646092344,
+      "t89": 1.5803943646092344,
+      "t90": 1.5803943646092344,
+      "t91": 1.5803943646092344,
+      "t92": 1.5803943646092344,
+      "t93": -1.216694133743808,
+      "t94": -1.216694133743808,
+      "t95": -1.216694133743808,
+      "t96": -2.520857041727718,
+      "t97": -2.520857041727718,
+      "t98": -2.520857041727718,
+      "t99": -2.520857041727718
+    }
+  },
+  "alpha": "4.741359838427518",
+  "metadata": {
+    "strategy": "covariance_updated_optimum_path",
+    "complete_discrete_enumeration": false,
+    "continuous_global_optimum_certified": false,
+    "candidate_parameterization": "unstandardized_OU_optimum_increments",
+    "candidate_generation_only": true,
+    "covariance_seed_fits": 1,
+    "refitted_candidates": 23,
+    "refit_budget": 48,
+    "screening_evaluations": 50,
+    "screening_budget": 2000,
+    "budget_exhausted": false,
+    "all_paths_converged": false,
+    "paths": [
+      {
+        "covariance_source_shifts": [],
+        "candidate_layouts": 12,
+        "refitted_candidates": 12,
+        "path": [
+          {
+            "relative_strength": 0.999,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 61,
+            "kkt_residual": 5.6719336773092266e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.934208955942192,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 20,
+            "kkt_residual": 3.499268902995567e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.8736199933559565,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 8,
+            "kkt_residual": 4.790540568411217e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.8169605824657586,
+            "active_branches": 2,
+            "truncated_at_shift_cap": false,
+            "iterations": 5,
+            "kkt_residual": 1.0656851582524496e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.7639758686599214,
+            "active_branches": 2,
+            "truncated_at_shift_cap": false,
+            "iterations": 5,
+            "kkt_residual": 3.335882622934605e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.7144275261519664,
+            "active_branches": 3,
+            "truncated_at_shift_cap": false,
+            "iterations": 8,
+            "kkt_residual": 3.953543350565525e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.6680926859887804,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 5,
+            "kkt_residual": 1.5166715440884104e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.6247629335837771,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 5,
+            "kkt_residual": 5.200991907816643e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.5842433712659474,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 8,
+            "kkt_residual": 2.6811265187998146e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.5463517416281353,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 5,
+            "kkt_residual": 3.099268456541182e-06,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.5109176077313499,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 7,
+            "kkt_residual": 4.766379473375437e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.4777815864776645,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 7,
+            "kkt_residual": 8.810208254050877e-06,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.4467946317034065,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 10,
+            "kkt_residual": 3.079619362456043e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.4178173637679836,
+            "active_branches": 6,
+            "truncated_at_shift_cap": false,
+            "iterations": 14,
+            "kkt_residual": 5.7542898094453676e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3907194426228298,
+            "active_branches": 7,
+            "truncated_at_shift_cap": false,
+            "iterations": 16,
+            "kkt_residual": 5.541103639616907e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3653789815405296,
+            "active_branches": 7,
+            "truncated_at_shift_cap": false,
+            "iterations": 16,
+            "kkt_residual": 5.6851135632918215e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3416819988670667,
+            "active_branches": 8,
+            "truncated_at_shift_cap": false,
+            "iterations": 47,
+            "kkt_residual": 5.9944106121534446e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3195219053311748,
+            "active_branches": 9,
+            "truncated_at_shift_cap": false,
+            "iterations": 58,
+            "kkt_residual": 5.63856802813234e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2987990246047015,
+            "active_branches": 10,
+            "truncated_at_shift_cap": false,
+            "iterations": 44,
+            "kkt_residual": 4.240547851552812e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.279420144957461,
+            "active_branches": 15,
+            "truncated_at_shift_cap": true,
+            "iterations": 57,
+            "kkt_residual": 6.0249764199049594e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2612980999899155,
+            "active_branches": 19,
+            "truncated_at_shift_cap": true,
+            "iterations": 53,
+            "kkt_residual": 5.855085677408667e-05,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2443513765578153,
+            "active_branches": 22,
+            "truncated_at_shift_cap": true,
+            "iterations": 72,
+            "kkt_residual": 6.114073128182795e-05,
+            "converged": true
+          }
+        ]
+      },
+      {
+        "covariance_source_shifts": [
+          15,
+          21,
+          23,
+          25,
+          29,
+          30,
+          47,
+          62,
+          155
+        ],
+        "candidate_layouts": 12,
+        "refitted_candidates": 10,
+        "path": [
+          {
+            "relative_strength": 0.999,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 60,
+            "kkt_residual": 0.0007864662293712854,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.934208955942192,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 20,
+            "kkt_residual": 0.0005029914883607489,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.8736199933559565,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 8,
+            "kkt_residual": 0.0007101812493601756,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.8169605824657586,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 5,
+            "kkt_residual": 0.0001385485873441894,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.7639758686599214,
+            "active_branches": 1,
+            "truncated_at_shift_cap": false,
+            "iterations": 3,
+            "kkt_residual": 0.0006726887951558069,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.7144275261519664,
+            "active_branches": 2,
+            "truncated_at_shift_cap": false,
+            "iterations": 10,
+            "kkt_residual": 0.00044888918844776526,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.6680926859887804,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 7,
+            "kkt_residual": 0.000504573245194706,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.6247629335837771,
+            "active_branches": 4,
+            "truncated_at_shift_cap": false,
+            "iterations": 12,
+            "kkt_residual": 0.00032409424322565883,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.5842433712659474,
+            "active_branches": 6,
+            "truncated_at_shift_cap": false,
+            "iterations": 22,
+            "kkt_residual": 0.0007506041220963766,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.5463517416281353,
+            "active_branches": 6,
+            "truncated_at_shift_cap": false,
+            "iterations": 22,
+            "kkt_residual": 0.0006563246529580624,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.5109176077313499,
+            "active_branches": 6,
+            "truncated_at_shift_cap": false,
+            "iterations": 24,
+            "kkt_residual": 0.0005132715749951444,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.4777815864776645,
+            "active_branches": 6,
+            "truncated_at_shift_cap": false,
+            "iterations": 23,
+            "kkt_residual": 0.0005731796927221922,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.4467946317034065,
+            "active_branches": 6,
+            "truncated_at_shift_cap": false,
+            "iterations": 22,
+            "kkt_residual": 0.0006234720840581076,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.4178173637679836,
+            "active_branches": 7,
+            "truncated_at_shift_cap": false,
+            "iterations": 32,
+            "kkt_residual": 0.0008022817314454755,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3907194426228298,
+            "active_branches": 7,
+            "truncated_at_shift_cap": false,
+            "iterations": 29,
+            "kkt_residual": 0.0007110672861365686,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3653789815405296,
+            "active_branches": 7,
+            "truncated_at_shift_cap": false,
+            "iterations": 29,
+            "kkt_residual": 0.0007581659018676135,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3416819988670667,
+            "active_branches": 8,
+            "truncated_at_shift_cap": false,
+            "iterations": 47,
+            "kkt_residual": 0.0006923042243691668,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.3195219053311748,
+            "active_branches": 8,
+            "truncated_at_shift_cap": false,
+            "iterations": 60,
+            "kkt_residual": 0.000582013972667994,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2987990246047015,
+            "active_branches": 8,
+            "truncated_at_shift_cap": false,
+            "iterations": 67,
+            "kkt_residual": 0.0007730523415290236,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.279420144957461,
+            "active_branches": 9,
+            "truncated_at_shift_cap": false,
+            "iterations": 66,
+            "kkt_residual": 0.0007747558252297893,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2612980999899155,
+            "active_branches": 10,
+            "truncated_at_shift_cap": false,
+            "iterations": 68,
+            "kkt_residual": 0.0008119664780075198,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2443513765578153,
+            "active_branches": 11,
+            "truncated_at_shift_cap": true,
+            "iterations": 81,
+            "kkt_residual": 0.0007643018862211193,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.2285037481252393,
+            "active_branches": 13,
+            "truncated_at_shift_cap": true,
+            "iterations": 80,
+            "kkt_residual": 0.0008071025277587296,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.21368393189685425,
+            "active_branches": 13,
+            "truncated_at_shift_cap": true,
+            "iterations": 88,
+            "kkt_residual": 0.000700859073507587,
+            "converged": true
+          },
+          {
+            "relative_strength": 0.19982526818716986,
+            "active_branches": 18,
+            "truncated_at_shift_cap": true,
+            "iterations": 150,
+            "kkt_residual": 0.0023698178304094597,
+            "converged": false
+          },
+          {
+            "relative_strength": 0.18686542058458905,
+            "active_branches": 20,
+            "truncated_at_shift_cap": true,
+            "iterations": 150,
+            "kkt_residual": 0.023293885531536773,
+            "converged": false
+          },
+          {
+            "relative_strength": 0.17474609556158915,
+            "active_branches": 20,
+            "truncated_at_shift_cap": true,
+            "iterations": 150,
+            "kkt_residual": 0.022042696043669707,
+            "converged": false
+          },
+          {
+            "relative_strength": 0.16341278026983655,
+            "active_branches": 21,
+            "truncated_at_shift_cap": true,
+            "iterations": 150,
+            "kkt_residual": 0.020787980113150084,
+            "converged": false
+          }
+        ]
+      }
+    ]
+  },
+  "candidate_scores": [
+    {
+      "shift_branch_ids": [],
+      "groups": [
+        [
+          0
+        ]
+      ],
+      "complexity": 0,
+      "log_likelihood": -145.638938556957,
+      "evaluations": 122,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 297.277877113914,
+        "penalty": 6.0,
+        "parameter_count": 3,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 2,
+      "log_likelihood": -140.80192523001836,
+      "evaluations": 145,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 291.6038504600367,
+        "penalty": 10.0,
+        "parameter_count": 5,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        21,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          21
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 4,
+      "log_likelihood": -136.36764447578076,
+      "evaluations": 122,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 286.73528895156153,
+        "penalty": 14.0,
+        "parameter_count": 7,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 6,
+      "log_likelihood": -131.18308072212017,
+      "evaluations": 121,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 280.36616144424033,
+        "penalty": 18.0,
+        "parameter_count": 9,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 8,
+      "log_likelihood": -122.3929352908985,
+      "evaluations": 111,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 266.785870581797,
+        "penalty": 22.0,
+        "parameter_count": 11,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        29,
+        30,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 12,
+      "log_likelihood": -120.05287123329808,
+      "evaluations": 114,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 270.10574246659615,
+        "penalty": 30.0,
+        "parameter_count": 15,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        29,
+        30,
+        47,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 14,
+      "log_likelihood": -118.36518096294529,
+      "evaluations": 138,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 270.7303619258906,
+        "penalty": 34.0,
+        "parameter_count": 17,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        29,
+        30,
+        47,
+        62,
+        155
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ],
+        [
+          155
+        ]
+      ],
+      "complexity": 16,
+      "log_likelihood": -114.49713956364576,
+      "evaluations": 113,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 266.9942791272915,
+        "penalty": 38.0,
+        "parameter_count": 19,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        25,
+        29,
+        30,
+        47,
+        62,
+        155
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ],
+        [
+          155
+        ]
+      ],
+      "complexity": 18,
+      "log_likelihood": -109.29484452275702,
+      "evaluations": 132,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 260.58968904551404,
+        "penalty": 42.0,
+        "parameter_count": 21,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        25,
+        26,
+        29,
+        30,
+        47,
+        62,
+        155
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          26
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ],
+        [
+          155
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -109.29460062678184,
+      "evaluations": 136,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 264.5892012535637,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        25,
+        29,
+        30,
+        47,
+        62,
+        96,
+        155
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ],
+        [
+          96
+        ],
+        [
+          155
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -108.19191593468598,
+      "evaluations": 136,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 262.383831869372,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        29,
+        30,
+        47,
+        62,
+        80,
+        96,
+        155
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ],
+        [
+          80
+        ],
+        [
+          96
+        ],
+        [
+          155
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -111.67757910168191,
+      "evaluations": 113,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 269.3551582033638,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        15,
+        21,
+        23,
+        30,
+        47,
+        62,
+        80,
+        96,
+        110,
+        155
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ],
+        [
+          80
+        ],
+        [
+          96
+        ],
+        [
+          110
+        ],
+        [
+          155
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -110.75681210434092,
+      "evaluations": 119,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 267.51362420868185,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        23,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          23
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 4,
+      "log_likelihood": -137.56457906007,
+      "evaluations": 124,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 289.12915812014,
+        "penalty": 14.0,
+        "parameter_count": 7,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        5,
+        9,
+        15,
+        21,
+        23,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          5
+        ],
+        [
+          9
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 12,
+      "log_likelihood": -119.57274743042716,
+      "evaluations": 135,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 269.14549486085434,
+        "penalty": 30.0,
+        "parameter_count": 15,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        5,
+        7,
+        9,
+        15,
+        21,
+        23,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          9
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 14,
+      "log_likelihood": -118.82920762945606,
+      "evaluations": 140,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 271.6584152589121,
+        "penalty": 34.0,
+        "parameter_count": 17,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        4,
+        5,
+        7,
+        9,
+        15,
+        21,
+        23,
+        30
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          9
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          30
+        ]
+      ],
+      "complexity": 16,
+      "log_likelihood": -118.20482589704646,
+      "evaluations": 137,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 274.40965179409295,
+        "penalty": 38.0,
+        "parameter_count": 19,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        4,
+        5,
+        7,
+        15,
+        21,
+        23,
+        25,
+        30,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          30
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 18,
+      "log_likelihood": -113.36281237659679,
+      "evaluations": 109,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 268.7256247531936,
+        "penalty": 42.0,
+        "parameter_count": 21,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        4,
+        5,
+        7,
+        15,
+        21,
+        22,
+        23,
+        25,
+        30,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          22
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          30
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -113.04238124414414,
+      "evaluations": 110,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 272.0847624882883,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        4,
+        5,
+        7,
+        15,
+        21,
+        23,
+        25,
+        30,
+        47,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -110.93196232329949,
+      "evaluations": 105,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 267.863924646599,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        5,
+        7,
+        15,
+        21,
+        22,
+        23,
+        25,
+        30,
+        47,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          22
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -110.66774151739679,
+      "evaluations": 115,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 267.3354830347936,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        5,
+        7,
+        15,
+        21,
+        23,
+        25,
+        29,
+        30,
+        47,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          5
+        ],
+        [
+          7
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -111.11539597958595,
+      "evaluations": 119,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 268.23079195917194,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    },
+    {
+      "shift_branch_ids": [
+        5,
+        15,
+        21,
+        22,
+        23,
+        25,
+        29,
+        30,
+        47,
+        62
+      ],
+      "groups": [
+        [
+          0
+        ],
+        [
+          5
+        ],
+        [
+          15
+        ],
+        [
+          21
+        ],
+        [
+          22
+        ],
+        [
+          23
+        ],
+        [
+          25
+        ],
+        [
+          29
+        ],
+        [
+          30
+        ],
+        [
+          47
+        ],
+        [
+          62
+        ]
+      ],
+      "complexity": 20,
+      "log_likelihood": -110.77240917290995,
+      "evaluations": 112,
+      "complete_covariance_modes": true,
+      "information_criterion": {
+        "criterion": "AIC",
+        "score": 267.54481834581986,
+        "penalty": 46.0,
+        "parameter_count": 23,
+        "status": "ok"
+      }
+    }
+  ],
+  "elapsed_seconds": 1.5887111669871956
+}

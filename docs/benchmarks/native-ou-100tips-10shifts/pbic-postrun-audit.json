@@ -1,0 +1,9 @@
+{
+  "contract": "ou-optimum-information-v1",
+  "image": "local/genegalleon:native-ou-dev",
+  "status": "failed",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "Error: kfl1ou pBIC capability check failed: OUfixedRoot/fixed/free/pBIC. Install a corrected backend; original 3.0.9 is incompatible. No alternative criterion has been substituted.\nExecution halted\n",
+  "interpretation": "The benchmark used an uncorrected pBIC backend. Do not interpret these results as a comparison against corrected pBIC; rerun the baseline after validation."
+}

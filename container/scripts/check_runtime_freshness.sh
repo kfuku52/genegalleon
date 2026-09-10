@@ -193,7 +193,6 @@ sha_variables=(
   BUSCO_REPO_SHA
   PAML_REPO_SHA
   IQTREE_REPO_SHA
-  KFL1OU_REPO_SHA
   KFFRACTBIAS_REPO_SHA
   KFTOOLS_REPO_SHA
   RKFTOOLS_REPO_SHA
@@ -210,8 +209,6 @@ resolution_variables=(
   IQTREE_REPO_URL
   PAML_REPO_REF
   IQTREE_REPO_REF
-  KFL1OU_REPO_URL
-  KFL1OU_REPO_REF
   KFFRACTBIAS_REPO_URL
   KFFRACTBIAS_REPO_REF
   KFTOOLS_REPO_URL
@@ -292,7 +289,6 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       BUSCO) variable=BUSCO_REPO_SHA ;;
       paml) variable=PAML_REPO_SHA ;;
       iqtree) variable=IQTREE_REPO_SHA ;;
-      kfl1ou) variable=KFL1OU_REPO_SHA ;;
       kfFractBias) variable=KFFRACTBIAS_REPO_SHA ;;
       kftools) variable=KFTOOLS_REPO_SHA ;;
       rkftools) variable=RKFTOOLS_REPO_SHA ;;

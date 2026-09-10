@@ -29,6 +29,23 @@ run_generate_expression_matrix="${run_generate_expression_matrix:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
 run_extract_promoter_fasta="${run_extract_promoter_fasta:-0}"
 run_expression_trait_pgls="${run_expression_trait_pgls:-0}"
+run_native_ou="${run_native_ou:-0}"
+native_ou_criterion="${native_ou_criterion:-AICc}"
+native_ou_max_shifts="${native_ou_max_shifts:-10}"
+native_ou_calibration_replicates="${native_ou_calibration_replicates:-199}"
+native_ou_calibration_level="${native_ou_calibration_level:-0.05}"
+native_ou_bootstrap="${native_ou_bootstrap:-0}"
+native_ou_seed="${native_ou_seed:-1}"
+native_ou_bootstrap_seed="${native_ou_bootstrap_seed:-2}"
+native_ou_convergence="${native_ou_convergence:-0}"
+native_ou_root_model="${native_ou_root_model:-OUfixedRoot}"
+native_ou_estimate_measurement_error="${native_ou_estimate_measurement_error:-yes}"
+native_ou_search_strategy="${native_ou_search_strategy:-native-path}"
+native_ou_candidate_pool="${native_ou_candidate_pool:-24}"
+native_ou_refit_budget="${native_ou_refit_budget:-48}"
+native_ou_screening_budget="${native_ou_screening_budget:-2000}"
+native_ou_beam_width="${native_ou_beam_width:-2}"
+native_ou_replicate_separator="${native_ou_replicate_separator-_}"
 treevis_query_marker="${treevis_query_marker:-1}"
 query_blast_evalue="${query_blast_evalue:-auto}"
 query_blast_auto_evalue_maxlen_cutoffs="${query_blast_auto_evalue_maxlen_cutoffs:-40:1000,80:100,150:10,300:1,inf:0.01}"
@@ -1766,13 +1783,7 @@ file_og_promoter_fasta="${dir_output_active}/promoter_fasta/${og_id}_promoter.fa
 file_og_meme="${dir_output_active}/meme/${og_id}_meme.xml"
 file_og_fimo="${dir_output_active}/fimo/${og_id}_fimo.tsv"
 file_og_fimo_collapsed="${dir_output_active}/fimo_collapsed/${og_id}_fimo.collapsed.tsv"
-file_og_l1ou_fit_rdata="${dir_output_active}/l1ou_fit_rdata/${og_id}_l1ou.RData"
-file_og_l1ou_fit_conv_rdata="${dir_output_active}/l1ou_fit_conv_rdata/${og_id}_l1ou.conv.RData"
-file_og_l1ou_fit_tree="${dir_output_active}/l1ou_fit_tree/${og_id}_l1ou.tree.tsv"
-file_og_l1ou_fit_regime="${dir_output_active}/l1ou_fit_regime/${og_id}_l1ou.regime.tsv"
-file_og_l1ou_fit_leaf="${dir_output_active}/l1ou_fit_leaf/${og_id}_l1ou.leaf.tsv"
-file_og_l1ou_fit_plot="${dir_output_active}/l1ou_fit_plot/${og_id}_l1ou.pdf"
-file_og_l1ou_bootstrap="${dir_output_active}/l1ou_bootstrap/${og_id}_l1ou.bootstrap.tsv"
+file_og_native_ou_prefix="${dir_output_active}/ou_native/${og_id}_ou_native"
 # Protein convergence analysis
 file_og_iqtree_anc="${dir_output_active}/iqtree_anc/${og_id}_iqtree.anc.zip"
 file_og_csubst_b="${dir_output_active}/csubst_b/${og_id}_csubst_b.tsv"
@@ -1887,7 +1898,7 @@ else
   echo '${run_generate_expression_matrix}, ${run_tree_pruning}, and other options are deactivated.'
   run_tree_pruning=0
   run_generate_expression_matrix=0
-  run_l1ou=0
+  run_native_ou=0
 fi
 if [[ -d "${dir_sp_genome}" ]] && [[ -n "$(find "${dir_sp_genome}" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null)" ]]; then
   echo "\${dir_sp_genome} is not empty. Continued: ${dir_sp_genome}"
@@ -4544,7 +4555,7 @@ if [[ ${run_tree_pruning} -eq 1 ]]; then
     assert_strictly_bifurcating_tree "${file_og_dated_tree_analysis}" "Dated analysis tree"
   fi
 fi
-if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then
+if [[ -s "${file_og_expression}" && ${run_native_ou} -eq 1 ]]; then
   # This block should be run after tree pruning.
   num_gene_trait=$(($(wc -l < "${file_og_expression}") - 1)) # -1 for header
   num_gene_tree=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
@@ -4552,7 +4563,7 @@ if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then
     echo "num_gene_trait (${num_gene_trait}) and num_gene_tree (${num_gene_tree}) matched."
   else
     echo "num_gene_trait (${num_gene_trait}) and num_gene_tree (${num_gene_tree}) did not match."
-    if [[ ${run_tree_pruning} -ne 1 && ${run_l1ou} -eq 1 ]]; then
+    if [[ ${run_tree_pruning} -ne 1 ]]; then
       echo "Set run_tree_pruning=1 to run phylogenetic comparative analysis. Exiting."
       exit 1
     fi
@@ -4571,12 +4582,6 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_asr_intron_plot}"
     "${file_og_asr_intron_model}"
     "${file_og_asr_intron_tree}"
-    "${file_og_l1ou_fit_rdata}"
-    "${file_og_l1ou_fit_conv_rdata}"
-    "${file_og_l1ou_fit_tree}"
-    "${file_og_l1ou_fit_regime}"
-    "${file_og_l1ou_fit_leaf}"
-    "${file_og_l1ou_fit_plot}"
     "${file_og_iqtree_anc}"
     "${file_og_csubst_b}"
     "${file_og_csubst_cb_stats}"
@@ -5106,93 +5111,52 @@ else
   gg_step_skip "${task}"
 fi
 
-task="kfl1ou OU shift detection"
-disable_if_no_input_file "run_l1ou" "${file_og_trimmed_aln_analysis}" "${file_og_expression}" "${file_og_dated_tree_analysis}"
-l1ou_needs_update=0
-kfl1ou_identity="unavailable"
-if [[ ${run_l1ou} -eq 1 ]]; then
-  kfl1ou_identity=$(Rscript -e 'cat(as.character(packageVersion("kfl1ou")))') || exit $?
-fi
-l1ou_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.l1ou.json"
-  --step "l1ou"
-  --family-id "${og_id}"
-  --logical-root "${dir_output_active}"
-  --workspace-root "${gg_workspace_dir}"
-  --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
-  --input "expression=${file_og_expression}"
-  --input "dated_tree=${file_og_dated_tree_analysis}"
-  --output "fit=${file_og_l1ou_fit_rdata}"
-  --output "tree=${file_og_l1ou_fit_tree}"
-  --output "regime=${file_og_l1ou_fit_regime}"
-  --output "leaf=${file_og_l1ou_fit_leaf}"
-  --output "plot=${file_og_l1ou_fit_plot}"
-  --input "adapter=${gg_support_dir}/detect_OU_shift_kfl1ou.r"
-  --parameter "engine=kfl1ou"
-  --parameter "kfl1ou_identity=${kfl1ou_identity}"
-  --parameter "criterion=${l1ou_criterion}"
-  --parameter "alpha_upper=${l1ou_alpha_upper}"
-  --parameter "convergence=${l1ou_convergence}"
-  --parameter "nbootstrap=${l1ou_nbootstrap}"
-  --parameter "large_tree_num_gene=${large_tree_num_gene}"
-  --parameter "large_tree_max_nshift=${large_tree_max_nshift}"
-)
-if [[ ${l1ou_convergence} -eq 1 ]]; then
-  l1ou_provenance_args+=(--output "convergent_fit=${file_og_l1ou_fit_conv_rdata}")
-fi
-if [[ ${l1ou_nbootstrap} -gt 0 ]]; then
-  l1ou_provenance_args+=(--output "bootstrap=${file_og_l1ou_bootstrap}")
-fi
-gg_artifact_prepare_stage l1ou_needs_update run_l1ou "${l1ou_provenance_args[@]}" || exit $?
-if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then
-  gg_step_start "${task}"
-
-  num_gene=$(gg_count_fasta_records "${file_og_trimmed_aln_analysis}")
-  if [[ ${num_gene} -ge ${large_tree_num_gene} ]]; then
-    max_nshift=${large_tree_max_nshift}
-  else
-    max_nshift=0
-  fi
-
-  fit_ind_file=''
-  if [[ ${l1ou_use_fit_file} -eq 1 && -s "${file_og_l1ou_fit_rdata}" ]]; then
-    fit_ind_file=${file_og_l1ou_fit_rdata}
-  fi
-
-  l1ou_cmd=(
-    Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"
-    --max_nshift="${max_nshift}"
-    --tree_file="${file_og_dated_tree_analysis}"
-    --trait_file="${file_og_expression}"
-    --nslots="${GG_TASK_CPUS}"
-    --criterion="${l1ou_criterion}"
-    --nbootstrap="${l1ou_nbootstrap}"
-    --fit_ind_file="${fit_ind_file}"
-    --fit_conv_file=''
-    --alpha_upper="${l1ou_alpha_upper}"
-    --detect_convergence="${l1ou_convergence}"
-    --replicate_sep="_"
+task="NWKIT OU shift detection"
+disable_if_no_input_file "run_native_ou" "${file_og_expression}" "${file_og_dated_tree_analysis}"
+if [[ ${run_native_ou} -eq 1 ]]; then
+  native_ou_identity=$(python -c 'from nwkit.shift_native_provenance import native_implementation_sha256; print(native_implementation_sha256())') || exit $?
+  native_ou_provenance_args=(
+    --manifest "${dir_output_active}/artifact_provenance/${og_id}.ou_native.json"
+    --step "ou_native" --family-id "${og_id}"
+    --logical-root "${dir_output_active}" --workspace-root "${gg_workspace_dir}"
+    --input "expression=${file_og_expression}" --input "dated_tree=${file_og_dated_tree_analysis}"
+    --input "adapter=${gg_support_dir}/detect_ou_shift_native.py"
+    --parameter "nwkit_implementation=${native_ou_identity}"
   )
-  "${l1ou_cmd[@]}"
-
-  mv_out fit_ind.RData "${file_og_l1ou_fit_rdata}"
-  mv_out l1ou_tree.tsv "${file_og_l1ou_fit_tree}"
-  mv_out l1ou_regime.tsv "${file_og_l1ou_fit_regime}"
-  mv_out l1ou_leaf.tsv "${file_og_l1ou_fit_leaf}"
-  mv_out l1ou_plot.pdf "${file_og_l1ou_fit_plot}"
-  if [[ ${l1ou_nbootstrap} -gt 0 ]]; then
-    cp_out l1ou_bootstrap.tsv "${file_og_l1ou_bootstrap}"
+  native_ou_cmd=(python "${gg_support_dir}/detect_ou_shift_native.py"
+    --tree "${file_og_dated_tree_analysis}" --traits "${file_og_expression}"
+    --output-prefix "native_ou"
+  )
+  for native_ou_option in criterion max_shifts calibration_replicates calibration_level bootstrap seed bootstrap_seed root_model estimate_measurement_error search_strategy candidate_pool refit_budget screening_budget beam_width replicate_separator; do
+    native_ou_variable="native_ou_${native_ou_option}"
+    native_ou_cmd+=("--${native_ou_option//_/-}" "${!native_ou_variable}")
+    native_ou_provenance_args+=(--parameter "${native_ou_option}=${!native_ou_variable}")
+  done
+  native_ou_provenance_args+=(--parameter "convergence=${native_ou_convergence}")
+  if [[ ${native_ou_convergence} -eq 1 ]]; then
+    native_ou_cmd+=(--convergence)
   fi
-  if [[ ${l1ou_convergence} -eq 1 ]]; then
-    cp_out fit_conv.RData "${file_og_l1ou_fit_conv_rdata}"
+  native_ou_outputs=(model.json regime-map.tsv effects.tsv regimes.tsv tips.tsv replicates.tsv branch-summary.tsv pdf)
+  for native_ou_suffix in "${native_ou_outputs[@]}"; do
+    native_ou_provenance_args+=(--output "${native_ou_suffix}=${file_og_native_ou_prefix}.${native_ou_suffix}")
+  done
+  native_ou_needs_update=0
+  gg_artifact_prepare_stage native_ou_needs_update run_native_ou "${native_ou_provenance_args[@]}" || exit $?
+  if [[ ${native_ou_needs_update} -eq 1 && ${run_native_ou} -eq 1 ]]; then
+    gg_step_start "${task}"
+    "${native_ou_cmd[@]}" || exit $?
+    native_ou_bundle=()
+    for native_ou_suffix in "${native_ou_outputs[@]}"; do
+      native_ou_bundle+=("native_ou.${native_ou_suffix}" "${file_og_native_ou_prefix}.${native_ou_suffix}")
+    done
+    mv_out_bundle "${native_ou_bundle[@]}" || exit $?
+    gg_artifact_record "${native_ou_provenance_args[@]}"
+  else
+    gg_step_skip "${task}"
   fi
-  gg_artifact_record "${l1ou_provenance_args[@]}"
-
 else
   gg_step_skip "${task}"
 fi
-# shellcheck shell=bash
-# Sourced by gg_gene_evolution_core.sh.
 
 task="Expression-trait phylogenetic regression"
 rsc_gene_tree="${file_og_dated_tree_analysis}"
@@ -6214,6 +6178,7 @@ fi
 
 task="summary statistics"
 summary_input_files=(
+  "${file_og_native_ou_prefix}.model.json"
   "${species_tree_pruned}"
   "${file_og_untrimmed_aln_analysis}"
   "${file_og_trimmed_aln_analysis}"
@@ -6227,9 +6192,6 @@ summary_input_files=(
   "${file_og_hyphy_dnds}"
   "${file_og_hyphy_relax}"
   "${file_og_hyphy_relax_reversed}"
-  "${file_og_l1ou_fit_tree}"
-  "${file_og_l1ou_fit_regime}"
-  "${file_og_l1ou_fit_leaf}"
   "${file_og_expression}"
   "${file_og_mapdnds_dn}"
   "${file_og_mapdnds_ds}"
@@ -6442,9 +6404,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --hyphy_dnds_json "${file_og_hyphy_dnds}" \
     --hyphy_relax_json "${file_og_hyphy_relax}" \
     --hyphy_relax_reversed_json "${file_og_hyphy_relax_reversed}" \
-    --l1ou_tree "${file_og_l1ou_fit_tree}" \
-    --l1ou_regime "${file_og_l1ou_fit_regime}" \
-    --l1ou_leaf "${file_og_l1ou_fit_leaf}" \
+    --native_ou_model "${file_og_native_ou_prefix}.model.json" \
     --expression "${file_og_expression}" \
     --mapdnds_tree_dn "${file_og_mapdnds_dn}" \
     --mapdnds_tree_ds "${file_og_mapdnds_ds}" \

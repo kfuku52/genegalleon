@@ -1,0 +1,81 @@
+{
+  "dataset": "effect0-seed28109",
+  "mode": "estimated-alpha",
+  "true_k": 0,
+  "effect": 0,
+  "search_seconds": 1.3282894590229262,
+  "ungated": {
+    "k": 10,
+    "tp": 0,
+    "fp": 10,
+    "precision": 0.0,
+    "recall": null,
+    "rmse": 0.725215300720319,
+    "alpha": "7.960314128781068"
+  },
+  "null_alpha": "2.416759707597081",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "56687327942c39323305bbabfac790162ff04f59f20ff136ca9e07208ada7ec0",
+    "truth.json": "0bc32578d2e1b5640d853aa57369eba5dd50ae63615d277200074b88685a91a5"
+  },
+  "gate_seconds": 28.36152226201375,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": null,
+    "rmse": 0.03856231169037135,
+    "alpha": "2.416759707597081"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99109,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 24.169776409676786,
+    "exceedances": 8,
+    "p_value": 0.45,
+    "rejected": false,
+    "bootstrap_statistics": [
+      23.30326443881566,
+      30.614957224076704,
+      24.90030362359414,
+      17.374355140599164,
+      42.0507197258859,
+      28.10389121436981,
+      17.234135782922408,
+      21.425094605698888,
+      17.665970567701663,
+      14.702560445606025,
+      10.786339724185126,
+      21.36021349541977,
+      37.74539703633164,
+      34.70480307157274,
+      23.523748077071247,
+      11.270173832187766,
+      28.479828702035036,
+      25.220120201903512,
+      16.410689546304695
+    ],
+    "ungated_shift_branch_ids": [
+      11,
+      13,
+      16,
+      28,
+      36,
+      38,
+      56,
+      72,
+      86,
+      123
+    ]
+  }
+}

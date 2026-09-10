@@ -157,7 +157,7 @@ run_hyphy_relax_reversed="${run_hyphy_relax_reversed:-0}" # Run HyPhy RELAX with
 
 # Comparative-analysis workflow flags
 run_asr_intron=0 # NWKIT ancestral-state probabilities of intron presence/absence.
-run_l1ou=0 # OU modeling of gene expression using the kfl1ou-backed l1ou-compatible outputs.
+run_native_ou=0 # OU modeling of gene expression using NWKIT; set 1 to enable.
 run_expression_trait_pgls=0 # Unified expression ~ species-trait analysis with selectable RSC and species-tree PGLS methods.
 run_iqtree_anc=0 # Ancestral state reconstruction required for CSUBST.
 run_csubst=0 # Protein convergence analysis with CSUBST.
@@ -271,13 +271,22 @@ fimo_qvalue="0.05" # False discovery rate threshold for FIMO motif search
 jaspar_file="latest" # "latest"/"auto" or explicit JASPAR filename in ${dir_jaspardb}
 
 # Ornstein-Uhlenbeck modeling of gene expression evolution
-l1ou_criterion="AICc" # "pBIC", "mBIC", "BIC", or "AICc"; model-selection criterion used by l1ou to choose the number and placement of OU expression-regime shifts.
-l1ou_nbootstrap=0 # Number of bootstrap replicates for l1ou OU-shift support; 0 disables bootstrap output.
-l1ou_use_fit_file=1 # Reuse an existing l1ou individual-fit RData file as the starting fit when available.
-l1ou_alpha_upper="auto" # Numeric value or "auto"/"l1ou" to use the kfl1ou default upper bound.
-l1ou_convergence=1 # Also estimate convergent OU regimes and save the convergent-fit RData output.
-large_tree_num_gene=1000 # Gene-tree tip-count threshold that activates a capped l1ou shift search for large families.
-large_tree_max_nshift=10 # Maximum l1ou shift count used when a family reaches large_tree_num_gene.
+native_ou_criterion="AICc" # AICc|AIC|BIC|pBIC|bootstrap; path requires AIC or AICc.
+native_ou_max_shifts=10 # Explicit cap for native search on every tree size.
+native_ou_calibration_replicates=199 # Complete searches per test when criterion=bootstrap.
+native_ou_calibration_level="0.05" # Sequential plug-in bootstrap test level.
+native_ou_bootstrap=0 # Complete selection repetitions for stability frequencies.
+native_ou_seed=1 # Calibration random stream.
+native_ou_bootstrap_seed=2 # Independent stability-bootstrap random stream.
+native_ou_convergence=0 # Set 1 with auto/exhaustive/lasso for shared regimes and nested returns.
+native_ou_root_model="OUfixedRoot" # OUfixedRoot|OUrandomRoot.
+native_ou_estimate_measurement_error="yes" # yes|no; estimate extra observation variance beyond sampling SE.
+native_ou_search_strategy="native-path" # native-path|auto|exhaustive|lasso.
+native_ou_candidate_pool=24 # Maximum candidate branches retained by screening.
+native_ou_refit_budget=48 # Maximum unpenalized covariance/model refits per search.
+native_ou_screening_budget=2000 # Maximum cheap candidate-profile evaluations per search.
+native_ou_beam_width=2 # Retained forward-search layouts and refinement refits per seed.
+native_ou_replicate_separator="_" # Final suffix delimiter for replicate groups; empty keeps columns separate.
 
 # CSUBST options
 csubst_max_arity=10 # Maximum foreground arity considered by CSUBST.
@@ -309,7 +318,7 @@ treevis_event_method="species_overlap" # "auto", "generax", or "species_overlap"
 treevis_clade_ortholog=1 # Prefix clade-ortholog labels in treevis plots with the resolved annotation species when available.
 treevis_support_value="auto" # "auto", "support_generax_ufboot", "support_unrooted", "dup_conf_score", "no"; auto prefers GeneRax-topology UFBoot when available.
 treevis_branch_length="bl_rooted" # "bl_dated", "bl_rooted", "mapdnds_omega"; branch-length metric used for treevis tree geometry.
-treevis_branch_color="l1ou_regime" # "species", "no", or *_regime; branch color source for treevis, including species colors or inferred regime assignments.
+treevis_branch_color="ou_native_regime" # "species", "no", or *_regime; branch color source for treevis, including species colors or inferred regime assignments.
 treevis_retrotransposition_delta_intron="-0.5" # Delta-intron cutoff used to flag retrotransposition candidates in plots.
 treevis_heatmap_transform="no" # "no", "log2", "log10p1", "log2p1"; transform applied to numeric matrix values before rendering treevis heatmaps.
 treevis_pie_chart_value_transformation="identity" # identity|delog2|delog2p1|delog10|delog10p1; transform expression-like values before pie-chart rendering.

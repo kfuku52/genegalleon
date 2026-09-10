@@ -1,0 +1,2 @@
+# Benchmark fingerprints cover exact input/output/source bytes, including CSV CRLF.
+docs/benchmarks/native-ou-*/** -text

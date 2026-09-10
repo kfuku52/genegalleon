@@ -1,0 +1,22 @@
+{
+  "time_utc": "2026-09-10T11:01:04.693242+00:00",
+  "source_manifest_sha256": "5d5de2cca18d3c4fe62b9deea8e97da139fa6183036208e8b3d07bc2fd81fd99",
+  "primary_datasets": 90,
+  "primary_planned_runs": 270,
+  "extension_datasets": 12,
+  "extension_planned_runs": 36,
+  "candidate_path_points": 80,
+  "candidate_covariance_cycles": 2,
+  "max_shifts": 10,
+  "refit_budget": 48,
+  "screening_budget": 2000,
+  "lasso_iterations": 150,
+  "primary_seeds": [
+    28101,
+    28130
+  ],
+  "extension_seeds": [
+    29101,
+    29103
+  ]
+}

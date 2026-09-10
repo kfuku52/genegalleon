@@ -1,0 +1,80 @@
+[
+  {
+    "dataset": "effect2-seed27101",
+    "label": "NWKIT uncalibrated maximum-likelihood candidate; not completed selection",
+    "tp": 0,
+    "fp": 10,
+    "fn": 10,
+    "selected_shifts": 10,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "mean_rmse": 0.9136851409568111,
+    "tip_partition_ari": 0.07635080451495582
+  },
+  {
+    "dataset": "effect2-seed27102",
+    "label": "NWKIT uncalibrated maximum-likelihood candidate; not completed selection",
+    "tp": 3,
+    "fp": 7,
+    "fn": 7,
+    "selected_shifts": 10,
+    "precision": 0.3,
+    "recall": 0.3,
+    "f1": 0.3,
+    "mean_rmse": 1.005568663505381,
+    "tip_partition_ari": 0.2016816156082666
+  },
+  {
+    "dataset": "effect2-seed27103",
+    "label": "NWKIT uncalibrated maximum-likelihood candidate; not completed selection",
+    "tp": 1,
+    "fp": 9,
+    "fn": 9,
+    "selected_shifts": 10,
+    "precision": 0.1,
+    "recall": 0.1,
+    "f1": 0.1,
+    "mean_rmse": 1.2629519196142145,
+    "tip_partition_ari": 0.1537154604912759
+  },
+  {
+    "dataset": "effect6-seed27101",
+    "label": "NWKIT uncalibrated maximum-likelihood candidate; not completed selection",
+    "tp": 0,
+    "fp": 10,
+    "fn": 10,
+    "selected_shifts": 10,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "mean_rmse": 1.510888668822351,
+    "tip_partition_ari": 0.11111486524535143
+  },
+  {
+    "dataset": "effect6-seed27102",
+    "label": "NWKIT uncalibrated maximum-likelihood candidate; not completed selection",
+    "tp": 10,
+    "fp": 0,
+    "fn": 0,
+    "selected_shifts": 10,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "mean_rmse": 0.4509550591466549,
+    "tip_partition_ari": 1.0
+  },
+  {
+    "dataset": "effect6-seed27103",
+    "label": "NWKIT uncalibrated maximum-likelihood candidate; not completed selection",
+    "tp": 3,
+    "fp": 7,
+    "fn": 7,
+    "selected_shifts": 10,
+    "precision": 0.3,
+    "recall": 0.3,
+    "f1": 0.3,
+    "mean_rmse": 0.8753594551013301,
+    "tip_partition_ari": 0.5520822816037978
+  }
+]

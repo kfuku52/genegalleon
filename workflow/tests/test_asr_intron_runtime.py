@@ -193,7 +193,7 @@ def test_intron_core_stage_caches_and_rebuilds_model_tree_and_plot(tmp_path):
     tree, gff = inputs(tmp_path, [1, None, 0, None])
     core = CORE.read_text()
     begin = core.index('task="Ancestral reconstruction of intron presence with NWKIT"')
-    stage = core[begin:core.index('\ntask="kfl1ou OU shift detection"', begin)]
+    stage = core[begin:core.index('\ntask="NWKIT OU shift detection"', begin)]
     output = tmp_path / "output" / "orthogroup"
     declarations = "\n".join(line for line in core.splitlines() if line.startswith("file_og_asr_intron_"))
     script = tmp_path / "stage.sh"

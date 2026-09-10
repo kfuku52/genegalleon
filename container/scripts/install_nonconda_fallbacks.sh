@@ -10,9 +10,6 @@ tool_env_name=${GG_TOOL_ENV_NAME:-base}
 r_env_name=${GG_R_ENV_NAME:-base}
 testnh_tarball_sha256=${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}
 cafe5_tarball_sha256=${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}
-kfl1ou_repo_url=${KFL1OU_REPO_URL:-https://github.com/kfuku52/kfl1ou.git}
-kfl1ou_repo_ref=${KFL1OU_REPO_REF:-main}
-kfl1ou_repo_sha=${KFL1OU_REPO_SHA:-}
 
 env_prefix() {
   local env_name=$1
@@ -358,27 +355,6 @@ install_r_cran_packages() {
   micromamba run -n "${env_name}" Rscript -e "pkgs <- c(${pkg_expr}); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env %s: %s', '${env_name}', paste(missing, collapse=', ')))"
 }
 
-install_r_kfl1ou() {
-  local jobs
-  local source_ref
-  local source_dir
-  jobs=$(build_jobs)
-  source_ref="${kfl1ou_repo_sha:-${kfl1ou_repo_ref}}"
-  source_dir=$(mktemp -d "/tmp/kfl1ou.XXXXXX")
-  log "Ensuring GitHub package in '${r_env_name}' with ${jobs} job(s): kfl1ou"
-  if ! bash "${fetch_git_repo_script}" "${kfl1ou_repo_url}" "${source_ref}" "${source_dir}"; then
-    rm -rf -- "${source_dir}"
-    log "ERROR: Failed to fetch kfl1ou source."
-    exit 1
-  fi
-  MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
-    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); dep_levels <- c('Depends','Imports','LinkingTo'); required <- c('remotes'); missing <- required[!vapply(required, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) install.packages(missing, dependencies=dep_levels)"
-  MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
-    micromamba run -n "${r_env_name}" Rscript -e "options(repos=c(CRAN='https://cloud.r-project.org')); options(Ncpus=${jobs}L); remotes::install_local('${source_dir}', dependencies=NA, upgrade='never', force=TRUE)"
-  rm -rf -- "${source_dir}"
-  micromamba run -n "${r_env_name}" Rscript -e "if (!requireNamespace('kfl1ou', quietly=TRUE)) stop('Missing package in env ${r_env_name}: kfl1ou')"
-}
-
 verify_plotting_packages_in_r() {
   log "Verifying plotting packages are available in '${r_env_name}'"
   micromamba run -n "${r_env_name}" Rscript -e "pkgs <- c('Rtsne','ape','aplot','cowplot','ggplot2','ggrepel','ggtree','phangorn','posterior','svglite','viridis','xml2'); missing <- pkgs[!vapply(pkgs, requireNamespace, quietly=TRUE, FUN.VALUE=logical(1))]; if (length(missing) > 0) stop(sprintf('Missing packages in env ${r_env_name}: %s', paste(missing, collapse=', ')))"
@@ -389,7 +365,7 @@ main() {
   local component
 
   if [[ ${#components[@]} -eq 0 ]]; then
-    components=(cafe5 mapnh astral r-cran kfl1ou verify-r)
+    components=(cafe5 mapnh astral r-cran verify-r)
   fi
 
   for component in "${components[@]}"; do
@@ -406,14 +382,11 @@ main() {
       r-cran)
         install_r_cran_packages "${r_env_name}" Rtsne
         ;;
-      kfl1ou)
-        install_r_kfl1ou
-        ;;
       verify-r)
         verify_plotting_packages_in_r
         ;;
       *)
-        echo "Usage: $0 [cafe5|mapnh|astral|r-cran|kfl1ou|verify-r ...]" >&2
+        echo "Usage: $0 [cafe5|mapnh|astral|r-cran|verify-r ...]" >&2
         exit 2
         ;;
     esac

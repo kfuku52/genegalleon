@@ -1,0 +1,197 @@
+--- a/nwkit/shift.py
++++ b/nwkit/shift.py
+@@ -35,6 +35,12 @@
+ 
+ 
+ def _validate_options(args):
++    if getattr(args, "global_null_gate", False) and (
++        args.selection != "native" or args.criterion != "AIC" or args.regime_map
++    ):
++        raise ValueError(
++            "--global-null-gate requires native AIC search without --regime-map."
++        )
+     if args.search_strategy == "native-path" and args.selection != "native":
+         raise ValueError("--search-strategy native-path requires --selection native.")
+     if args.selection == "ic" and args.criterion is None:
+--- a/nwkit/shift_cli.py
++++ b/nwkit/shift_cli.py
+@@ -15,6 +15,12 @@
+         help="Method (default: calibrated; 4..16 tips, <=2 shifts). Native fits multivariate fixed layouts or runs experimental calibrated search without R; IC is the legacy external method.",
+     )
+     parser.add_argument(
++        "--global-null-gate",
++        "--global_null_gate",
++        action="store_true",
++        help="Native AIC search only: full-search plug-in bootstrap gate for the no-shift null; does not control false branches when shifts exist.",
++    )
++    parser.add_argument(
+         "--calibration-replicates",
+         "--calibration_replicates",
+         type=int,
+@@ -26,7 +32,7 @@
+         "--calibration_level",
+         type=float,
+         default=0.05,
+-        help="Sequential test level (default: 0.05; plug-in calibration, not an exact error guarantee).",
++        help="Calibration test level (default: 0.05; plug-in calibration, not an exact error guarantee).",
+     )
+     parser.add_argument(
+         "--trait", required=True, help="TSV with leaf_name and a numeric trait column."
+@@ -195,6 +201,12 @@
+ 
+ 
+ def _command_shift(args):
++    if args.global_null_gate and (
++        args.selection != "native" or args.criterion != "AIC" or args.regime_map
++    ):
++        raise ValueError(
++            "--global-null-gate requires native AIC search without --regime-map."
++        )
+     if args.selection == "native":
+         from nwkit.shift_native_output import native_main
+ 
+--- a/nwkit/shift_native_bootstrap.py
++++ b/nwkit/shift_native_bootstrap.py
+@@ -111,6 +111,77 @@
+         "replicates_per_test": replicates,
+         "level": level,
+         "tests": tests,
++    }
++
++
++def _aic_gain(search):
++    null = search.best_by_complexity.get(0)
++    selected = search.best_information
++    if null is None or selected is None:
++        raise ValueError(
++            "Global-null calibration requires the null fit and AIC winner."
++        )
++    scores = []
++    for result in (null, selected):
++        record = result.get("information_criterion", {})
++        score = record.get("score")
++        if (
++            record.get("criterion") != "AIC"
++            or score is None
++            or not math.isfinite(score)
++        ):
++            raise ValueError("Global-null calibration requires finite AIC scores.")
++        scores.append(score)
++    return max(0.0, scores[0] - scores[1])
++
++
++def gate_native_aic(data, search, run_search, *, replicates, seed, level=0.05):
++    """Test the global no-shift null by replaying the entire AIC search.
++
++    The statistic is max(0, AIC(null) - min AIC). Passing the gate retains
++    the original AIC winner; this does not test individual selected branches.
++    """
++    if (
++        isinstance(replicates, bool)
++        or not isinstance(replicates, int)
++        or replicates < 1
++    ):
++        raise ValueError("Native calibration requires a positive integer draw count.")
++    if not 0 < level < 1 or 1 / (replicates + 1) > level:
++        raise ValueError("Calibration draws cannot resolve the requested test level.")
++    statistic = _aic_gain(search)
++    null = search.best_by_complexity[0]
++    samples = []
++    for draw, stream in enumerate(np.random.SeedSequence(seed).spawn(replicates)):
++        try:
++            simulated = simulate_native_data(data, null, np.random.default_rng(stream))
++            samples.append(_aic_gain(run_search(simulated)))
++        except (ValueError, ArithmeticError, np.linalg.LinAlgError) as exc:
++            raise ValueError(
++                f"Native global-null calibration failed at draw {draw}; no draws discarded: {exc}"
++            ) from exc
++    exceedances = sum(
++        value >= statistic - 1e-10 * max(1, statistic) for value in samples
++    )
++    p_value = (1 + exceedances) / (replicates + 1)
++    rejected = p_value <= level
++    return (search.best_information if rejected else null), {
++        "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
++        "research_only": True,
++        "uniform_composite_null_control_proven": False,
++        "controls_false_branches_under_nonnull": False,
++        "full_search_repeated": True,
++        "failed_draw_policy": "abort_without_discarding",
++        "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
++        "seed": seed,
++        "replicates": replicates,
++        "level": level,
++        "statistic": statistic,
++        "exceedances": exceedances,
++        "p_value": p_value,
++        "rejected": rejected,
++        "bootstrap_statistics": samples,
++        "ungated_shift_branch_ids": list(search.best_information["layout"].shifts),
+     }
+ 
+ 
+--- a/nwkit/shift_native_input.py
++++ b/nwkit/shift_native_input.py
+@@ -117,6 +117,12 @@
+ 
+ 
+ def native_fit_arguments(args, data):
++    if getattr(args, "global_null_gate", False) and (
++        args.criterion != "AIC" or args.regime_map
++    ):
++        raise ValueError(
++            "--global-null-gate requires native AIC search without --regime-map."
++        )
+     if args.search_strategy == "native-path" and (
+         args.criterion != "AIC" or args.convergence
+     ):
+--- a/nwkit/shift_native_provenance.py
++++ b/nwkit/shift_native_provenance.py
+@@ -83,6 +83,7 @@
+             "seed",
+             "calibration_replicates",
+             "calibration_level",
++            "global_null_gate",
+             "criterion",
+             "bootstrap",
+             "bootstrap_seed",
+--- a/nwkit/shift_native_selection.py
++++ b/nwkit/shift_native_selection.py
+@@ -2,6 +2,7 @@
+ 
+ from nwkit.shift_native_bootstrap import (
+     calibrate_native_search,
++    gate_native_aic,
+     native_selection_support,
+ )
+ from nwkit.shift_native_heuristic import NativeSearchOptions, heuristic_native_search
+@@ -78,7 +79,12 @@
+ def select_native(data, args, arguments):
+     if args.bootstrap < 0 or args.seed < 0 or args.bootstrap_seed < 0:
+         raise ValueError("Native bootstrap count and seeds must be nonnegative.")
+-    if args.criterion is None and (
++    gate = getattr(args, "global_null_gate", False)
++    if gate and (args.criterion != "AIC" or getattr(args, "regime_map", None)):
++        raise ValueError(
++            "--global-null-gate requires native AIC search without --regime-map."
++        )
++    if (args.criterion is None or gate) and (
+         args.calibration_replicates < 1
+         or not 0 < args.calibration_level < 1
+         or 1 / (args.calibration_replicates + 1) > args.calibration_level
+@@ -88,6 +94,15 @@
+     search = runner(data)
+ 
+     def choose(searched, sample, seed):
++        if gate:
++            return gate_native_aic(
++                sample,
++                searched,
++                runner,
++                replicates=args.calibration_replicates,
++                seed=seed,
++                level=args.calibration_level,
++            )
+         if args.criterion is not None:
+             if searched.best_information is None:
+                 raise ValueError(

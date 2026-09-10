@@ -1,0 +1,81 @@
+{
+  "dataset": "effect0-seed28124",
+  "mode": "estimated-alpha",
+  "true_k": 0,
+  "effect": 0,
+  "search_seconds": 1.6278376260015648,
+  "ungated": {
+    "k": 10,
+    "tp": 0,
+    "fp": 10,
+    "precision": 0.0,
+    "recall": null,
+    "rmse": 0.7516065202546025,
+    "alpha": "4.965305847205672"
+  },
+  "null_alpha": "4.200366432518745",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "8a5e1cd571b182180086fba8c996ded455755687a2aa86c3955fa4616fc085ba",
+    "truth.json": "89a973eebaeb47e7caa6f3329216e06aeca93564e90fbd86e2c1892e828d8809"
+  },
+  "gate_seconds": 30.694464223022806,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": null,
+    "rmse": 0.1357145716475144,
+    "alpha": "4.200366432518745"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99124,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 29.929195642163506,
+    "exceedances": 6,
+    "p_value": 0.35,
+    "rejected": false,
+    "bootstrap_statistics": [
+      33.528333984753345,
+      12.519328268854565,
+      16.030468817182168,
+      27.5749202602872,
+      30.17602479673843,
+      36.09469661152082,
+      8.064303030732106,
+      22.830233182643894,
+      24.01691793646745,
+      22.5106176930135,
+      19.25092807883965,
+      12.548992357442216,
+      12.203715525074983,
+      4.925984246391636,
+      23.33039378265687,
+      34.65650574542866,
+      46.189067827767474,
+      24.475325691576245,
+      43.984501465142074
+    ],
+    "ungated_shift_branch_ids": [
+      19,
+      34,
+      80,
+      83,
+      87,
+      91,
+      94,
+      121,
+      147,
+      150
+    ]
+  }
+}

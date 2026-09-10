@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "checks": [
+    {
+      "set": "primary",
+      "runs": 270,
+      "status": "passed"
+    },
+    {
+      "set": "extension",
+      "runs": 36,
+      "status": "passed"
+    }
+  ],
+  "metrics": "stdlib recomputation of raw clades and tip-mean errors; all match CSV at 1e-12",
+  "inputs": "hashes verified",
+  "scripts": "AST parse passed"
+}

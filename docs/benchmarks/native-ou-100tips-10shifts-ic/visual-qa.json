@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "rendered_png_inspected": true,
+  "dimensions": [
+    2700,
+    2160
+  ],
+  "panels": 6,
+  "observations_per_panel": 42,
+  "metric_axes": "time logarithmic; RSS/RMSE zero-based; precision/recall/F1 common 0..1",
+  "noncolor_encodings": "circle/triangle, vertical group offset and seed jitter",
+  "text_collision_or_clipping": false,
+  "source": "metrics.csv",
+  "exports": [
+    "comparison.png",
+    "comparison.svg"
+  ]
+}

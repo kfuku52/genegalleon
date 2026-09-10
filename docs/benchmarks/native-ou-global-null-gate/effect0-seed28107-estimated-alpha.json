@@ -1,0 +1,81 @@
+{
+  "dataset": "effect0-seed28107",
+  "mode": "estimated-alpha",
+  "true_k": 0,
+  "effect": 0,
+  "search_seconds": 1.2236860420089215,
+  "ungated": {
+    "k": 10,
+    "tp": 0,
+    "fp": 10,
+    "precision": 0.0,
+    "recall": null,
+    "rmse": 0.7192493356167112,
+    "alpha": "10.52137571802588"
+  },
+  "null_alpha": "2.565664955731849",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "e6ec432879e1f1ea6e3bf6f2cbb15f7796ec7ff8e0cb59560ed16f1e59ce0e74",
+    "truth.json": "f5336e2acd2f8939949b83c23687d6961377cc925a104651b1e50b43d3dbc0d3"
+  },
+  "gate_seconds": 26.281368595024105,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": null,
+    "rmse": 0.16536788179690284,
+    "alpha": "2.565664955731849"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99107,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 17.63359979827669,
+    "exceedances": 14,
+    "p_value": 0.75,
+    "rejected": false,
+    "bootstrap_statistics": [
+      20.77989482060042,
+      17.867727184895273,
+      23.0893826837534,
+      39.01351789797948,
+      15.802971321416862,
+      29.558638383542984,
+      23.697387611500147,
+      23.532133042223904,
+      16.928574059204664,
+      13.328324278400572,
+      30.774664771931555,
+      41.422540352053915,
+      21.960277956807317,
+      18.271668269513327,
+      13.974224775003336,
+      18.85711403849359,
+      24.05841961589283,
+      18.718741459533987,
+      2.511812366582376
+    ],
+    "ungated_shift_branch_ids": [
+      3,
+      10,
+      30,
+      60,
+      69,
+      95,
+      102,
+      107,
+      113,
+      119
+    ]
+  }
+}

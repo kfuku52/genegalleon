@@ -1,0 +1,137 @@
+--- a/nwkit/shift_cli.py
++++ b/nwkit/shift_cli.py
+@@ -68,7 +68,7 @@
+         "--criterion",
+         choices=["pBIC", "pBICess", "mBIC", "BIC", "AIC", "AICc"],
+         default=None,
+-        help="Information criterion (native: AIC/BIC/pBIC; native default: bootstrap; ic default: pBIC). Uncorrected pBIC backends are rejected before fitting.",
++        help="Information criterion (native: AIC/AICc/BIC/pBIC; native default: bootstrap; ic default: pBIC). Uncorrected pBIC backends are rejected before fitting.",
+     )
+     parser.add_argument(
+         "--root-model",
+@@ -82,7 +82,7 @@
+         "--search_strategy",
+         choices=["auto", "lasso", "ensemble", "exhaustive", "native-path"],
+         default="auto",
+-        help="Candidate search; native-path requires native AIC without convergence.",
++        help="Candidate search; native-path requires native AIC or AICc without convergence.",
+     )
+     parser.add_argument(
+         "--exhaustive-max-configurations",
+--- a/nwkit/shift_native_ic.py
++++ b/nwkit/shift_native_ic.py
+@@ -8,15 +8,17 @@
+ 
+ import numpy as np
+ 
+-CRITERIA = {"AIC", "BIC", "pBIC"}
++CRITERIA = {"AIC", "AICc", "BIC", "pBIC"}
+ 
+ 
+ def native_information_criterion(data, result, criterion):
+     if criterion not in CRITERIA:
+-        raise ValueError("Native information criterion must be AIC, BIC, or pBIC.")
++        raise ValueError(
++            "Native information criterion must be AIC, AICc, BIC, or pBIC."
++        )
+     shifts = len(result["layout"].shifts)
+     n = len(data.tree.leaf_names)
+-    penalty = 2 * shifts if criterion == "AIC" else shifts * math.log(n)
++    penalty = 2 * shifts if criterion in {"AIC", "AICc"} else shifts * math.log(n)
+     if criterion == "pBIC":
+         penalty = 2 * shifts * math.log(len(data.tree.branch_ids) - 2)
+     parameters = shifts
+@@ -34,7 +36,7 @@
+         )
+         dimension = fit.num_mean_parameters
+         parameters += dimension + covariance_parameters
+-        if criterion == "AIC":
++        if criterion in {"AIC", "AICc"}:
+             penalty += 2 * (dimension + covariance_parameters)
+         elif criterion == "BIC":
+             penalty += (dimension + covariance_parameters) * math.log(
+@@ -61,6 +63,25 @@
+                 + jacobian
+                 + dimension * math.log(variance)
+             )
++    correction = {}
++    if criterion == "AICc":
++        # Match kfl1ou's independent-trait convention: shared locations count
++        # once, and observed scalar coordinates sum across traits.
++        observations = sum(fit.num_observations for fit in result["fits"])
++        denominator = observations - parameters - 1
++        correction = {"sample_size": observations, "small_sample_correction": None}
++        if denominator <= 0:
++            return {
++                "criterion": criterion,
++                "score": None,
++                "penalty": None,
++                "parameter_count": parameters,
++                "status": "insufficient_aicc_sample_size",
++                **correction,
++            }
++        extra = 2 * parameters * (parameters + 1) / denominator
++        penalty += extra
++        correction["small_sample_correction"] = extra
+     score = -2 * result["log_likelihood"] + penalty
+     return {
+         "criterion": criterion,
+@@ -68,4 +89,5 @@
+         "penalty": float(penalty) if math.isfinite(penalty) else None,
+         "parameter_count": parameters,
+         "status": "ok" if math.isfinite(score) else "nonfinite_information",
++        **correction,
+     }
+--- a/nwkit/shift_native_input.py
++++ b/nwkit/shift_native_input.py
+@@ -124,12 +124,12 @@
+             "--global-null-gate requires native AIC search without --regime-map."
+         )
+     if args.search_strategy == "native-path" and (
+-        args.criterion != "AIC" or args.convergence
++        args.criterion not in {"AIC", "AICc"} or args.convergence
+     ):
+-        raise ValueError("Native path search requires AIC without convergence.")
+-    if args.fit_out or args.criterion not in {None, "AIC", "BIC", "pBIC"}:
++        raise ValueError("Native path search requires AIC or AICc without convergence.")
++    if args.fit_out or args.criterion not in {None, "AIC", "AICc", "BIC", "pBIC"}:
+         raise ValueError(
+-            "Native inference exports JSON and supports AIC, BIC, or pBIC; --fit-out requires --selection ic."
++            "Native inference exports JSON and supports AIC, AICc, BIC, or pBIC; --fit-out requires --selection ic."
+         )
+     alpha = numeric_parameters(args.alpha, len(data.trait_names), "--alpha")
+     if alpha is not None:
+--- a/nwkit/shift_native_path.py
++++ b/nwkit/shift_native_path.py
+@@ -96,11 +96,13 @@
+ def sparse_native_search(data, *, options=None, fit_arguments=None, criterion="AIC"):
+     options = NativeSearchOptions() if options is None else options
+     options.validate(data, uses_candidate_pool=False)
+-    if criterion != "AIC" or options.convergence:
+-        raise ValueError("Native path search requires AIC without convergence.")
++    if criterion not in {"AIC", "AICc"} or options.convergence:
++        raise ValueError("Native path search requires AIC or AICc without convergence.")
+     fit_arguments = fit_arguments or {}
+     evaluator = NativeLayoutEvaluator(data, fit_arguments, criterion)
+     evaluator.evaluate(ShiftLayout.build(data.tree))
++    if evaluator.best_information is None:
++        raise ValueError("No candidate has finite native information criterion.")
+     paths: list[dict] = []
+     covariance_fits = 0
+     if options.max_shifts:
+--- a/nwkit/shift_native_selection.py
++++ b/nwkit/shift_native_selection.py
+@@ -20,9 +20,11 @@
+                 "Native strategy must be auto, exhaustive, lasso, or native-path."
+             )
+         if args.search_strategy == "native-path" and (
+-            args.criterion != "AIC" or args.convergence
++            args.criterion not in {"AIC", "AICc"} or args.convergence
+         ):
+-            raise ValueError("Native path search requires AIC without convergence.")
++            raise ValueError(
++                "Native path search requires AIC or AICc without convergence."
++            )
+         self.use_path = args.search_strategy == "native-path"
+         self.criterion = args.criterion
+         self.fit_arguments = fit_arguments

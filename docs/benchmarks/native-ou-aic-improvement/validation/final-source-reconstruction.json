@@ -1,0 +1,5 @@
+{
+  "status": "passed",
+  "modules": 219,
+  "method": "candidate archive plus final-integration.patch matches every delivered module hash"
+}

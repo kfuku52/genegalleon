@@ -112,3 +112,25 @@ marked_domain <- add_protein_domain_column(input,args,rps,show_introns=TRUE)$dom
 has_marks <- function(p) any(vapply(p$layers,function(layer)
     isTRUE(attr(layer,'treevis_intron_marks')),logical(1)))
 stopifnot(!has_marks(default_domain),has_marks(marked_domain))
+
+# NWKIT supplies named regimes without the legacy optimum-expression columns.
+# Render both a no-shift model and a multi-regime model through the real driver.
+for (regimes in list(rep('root', 5), c('root', 'shift_2', 'shift_2', 'shift_2', 'root'))) {
+    branch$ou_native_regime <- regimes
+    write.table(branch,file.path(output,'native-branch.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+    native_runner <- file.path(output,'native-render.R')
+    writeLines(c(sprintf('source(%s)',encodeString(driver,quote='"')),
+        "stopifnot(nrow(g$tree$data) == 5L)",
+        "stopifnot(all(!is.na(g$tree$data$regime_color)))",
+        "stopifnot(!any(startsWith(names(g$tree$data), 'ou_native_mu_')))"), native_runner)
+    oldwd <- setwd(output)
+    logs <- system2('Rscript', c(shQuote(native_runner), '--stat_branch=native-branch.tsv',
+        '--panel1=tree,bl_rooted,no,ou_native_regime,L', '--show_branch_id=no',
+        '--event_method=species_overlap', '--species_color_table=PLACEHOLDER',
+        '--pie_chart_value_transformation=identity', '--max_delta_intron_present=-0.5',
+        '--long_branch_display=no'), stdout=TRUE, stderr=TRUE)
+    setwd(oldwd)
+    if (!is.null(attr(logs,'status'))) stop(paste(logs,collapse='\n'))
+    stopifnot(file.info(file.path(output,'stat_branch2tree_plot.pdf'))$size > 1000)
+}
+cat('NWKIT named-regime tree rendering passed.\n')

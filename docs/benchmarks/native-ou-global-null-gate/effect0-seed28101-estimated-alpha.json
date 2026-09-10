@@ -1,0 +1,81 @@
+{
+  "dataset": "effect0-seed28101",
+  "mode": "estimated-alpha",
+  "true_k": 0,
+  "effect": 0,
+  "search_seconds": 1.8798215010028798,
+  "ungated": {
+    "k": 10,
+    "tp": 0,
+    "fp": 10,
+    "precision": 0.0,
+    "recall": null,
+    "rmse": 0.6025123329148865,
+    "alpha": "inf"
+  },
+  "null_alpha": "9.77545882002538",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "14d89d3c64094220ac1d8cf3a4fa3efe8bec12ae4498b1605ce6ebd47e44c523",
+    "truth.json": "0976c0f880baf1cb496e6e9de8287bb4a3b78fdbf016f571c1743d6ba0466094"
+  },
+  "gate_seconds": 32.05145663997973,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": null,
+    "rmse": 0.02588962182204505,
+    "alpha": "9.77545882002538"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99101,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 26.470963286612687,
+    "exceedances": 4,
+    "p_value": 0.25,
+    "rejected": false,
+    "bootstrap_statistics": [
+      34.1967116705662,
+      11.703272016299167,
+      6.434589602411421,
+      12.657060230366454,
+      17.585529060500704,
+      17.742535409478933,
+      32.593396772606894,
+      18.82611207379648,
+      16.347474829306236,
+      28.811424664368786,
+      18.854380479654594,
+      25.781693297083848,
+      8.491376062654183,
+      10.469238122708646,
+      26.697987054600787,
+      11.411048784262334,
+      10.152009703891451,
+      13.328059407880374,
+      14.403339291544086
+    ],
+    "ungated_shift_branch_ids": [
+      7,
+      24,
+      30,
+      31,
+      38,
+      42,
+      104,
+      139,
+      140,
+      154
+    ]
+  }
+}

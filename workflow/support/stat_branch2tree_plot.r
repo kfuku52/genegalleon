@@ -119,7 +119,7 @@ cat('long_branch_display settings:',
 # tree: phylogenetic tree. format = tree,BRANCH_LENGTH,NODE_LABEL,BRANCH_COLOR,ORIENTATION
 # BRANCH_LENGTH: the column name for branch length in the --stat_branch file. e.g., "bl_dated", "bl_rooted", "mapdnds_omega"
 # NODE_LABEL: the column name for node labels in the --stat_branch file. e.g., "support_unrooted", "no" to suppress.
-# BRANCH_COLOR: the column name for branch colors. e.g., "species", "mapdnds_omega", "l1ou_regime", "no"
+# BRANCH_COLOR: the column name for branch colors. e.g., "species", "mapdnds_omega", "ou_native_regime", "no"
 # ORIENTATION: tree orientation. "L" for left-to-right time flow, or "R" in reverse.
 
 # heatmap: trait heatmap. format = heatmap,TRANSFORM,GENEWISE_SCALE,REPLICATE_SEPARATOR,INFILE[,LABEL]

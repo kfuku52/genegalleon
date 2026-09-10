@@ -16,6 +16,7 @@
     "test_nwkit_tree_workflows_runtime.py",
     "test_asr_intron_runtime.py",
     "test_native_tree_dating.py",
+    "test_native_ou_shift.py",
     "test_synteny_search_integration.py",
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",
@@ -46,8 +47,7 @@
     ["Rscript", "workflow/tests/test_treevis_synteny_similarity.R"],
     ["Rscript", "workflow/tests/test_treevis_sequence_cis_similarity.R"],
     ["Rscript", "workflow/tests/test_treevis_synteny.R"],
-    ["Rscript", "workflow/tests/test_treevis_legends.R"],
-    ["Rscript", "workflow/tests/test_kf_dependency_integrations.R"]
+    ["Rscript", "workflow/tests/test_treevis_legends.R"]
   ],
   "allowed_skips": {}
 }

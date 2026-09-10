@@ -1,0 +1,81 @@
+{
+  "dataset": "effect2-seed28103",
+  "mode": "estimated-alpha",
+  "true_k": 10,
+  "effect": 2,
+  "search_seconds": 1.6333625839906745,
+  "ungated": {
+    "k": 10,
+    "tp": 3,
+    "fp": 7,
+    "precision": 0.3,
+    "recall": 0.3,
+    "rmse": 0.6833161019721405,
+    "alpha": "5.952511566752537"
+  },
+  "null_alpha": "0.3820831725074455",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "5bed0e3e2419be29ed0567c3863645dd094f2ac57b94f1219143b1ea3939bba5",
+    "truth.json": "efa5cf3de4e5e40c99286c490997b7616251f5cb8a5299ab2e2c8c78430ef93b"
+  },
+  "gate_seconds": 27.69872817900614,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": 0.0,
+    "rmse": 1.1366097048453854,
+    "alpha": "0.3820831725074455"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 99103,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 42.115060516508095,
+    "exceedances": 3,
+    "p_value": 0.2,
+    "rejected": false,
+    "bootstrap_statistics": [
+      17.692014603288385,
+      44.63956582397773,
+      20.542307696013097,
+      28.279683057127784,
+      45.242745416420775,
+      24.900892304723357,
+      28.966363503924697,
+      14.71622934058837,
+      20.197730716233252,
+      31.162225398995986,
+      22.854141370287664,
+      33.201565423755824,
+      22.133242800682694,
+      40.19764342133806,
+      26.143238356407892,
+      19.677162741133998,
+      44.86113185943873,
+      22.15540562068196,
+      15.038756194476264
+    ],
+    "ungated_shift_branch_ids": [
+      7,
+      12,
+      19,
+      21,
+      23,
+      27,
+      29,
+      108,
+      143,
+      176
+    ]
+  }
+}

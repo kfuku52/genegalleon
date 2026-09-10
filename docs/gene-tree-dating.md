@@ -165,13 +165,12 @@ workflow's explicit `artifact_stale_policy=rerun` setting. Output publication is
 transactional: an inference or rendering failure preserves the previous bundle
 and does not delete downstream analyses.
 
-OU shift detection already uses **kfl1ou**, through
-`workflow/support/detect_OU_shift_kfl1ou.r`. The stage and provenance identify that
-engine and its version, while `run_l1ou`, the existing options, and `l1ou_*` output
-names continue to connect to downstream readers. Its dated-tree input participates
-in cache validation, so changed dates invalidate an old fit. The standalone legacy
-RADTE R program is no longer installed in new containers. PAML remains available
-for the separate species-tree workflow.
+OU shift detection uses [NWKIT native OU analysis](native-ou-shifts.md), enabled
+with `run_native_ou=1`. The default is AICc with path search. JSON, TSV and PDF
+outputs replace kfl1ou RData and tables; dated-tree inputs and the NWKIT source
+identity participate in cache validation. The legacy RADTE R program and kfl1ou
+are no longer installed in new containers. PAML remains available for the
+separate species-tree workflow.
 
 ### IQ-TREE numerical limits
 

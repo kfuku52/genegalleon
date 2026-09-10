@@ -1,0 +1,15 @@
+--- a/nwkit/shift_native_selection.py
++++ b/nwkit/shift_native_selection.py
+@@ -22,11 +22,7 @@
+             args.criterion != "AIC" or args.convergence
+         ):
+             raise ValueError("Native path search requires AIC without convergence.")
+-        self.use_path = args.search_strategy == "native-path" or (
+-            args.search_strategy == "auto"
+-            and args.criterion == "AIC"
+-            and not args.convergence
+-        )
++        self.use_path = args.search_strategy == "native-path"
+         self.criterion = args.criterion
+         self.fit_arguments = fit_arguments
+         self.layouts = None

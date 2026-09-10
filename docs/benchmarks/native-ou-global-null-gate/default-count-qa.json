@@ -1,0 +1,30 @@
+{
+  "count": 3,
+  "p_value_check": "passed",
+  "results": [
+    {
+      "dataset": "effect0-seed28101",
+      "B": 199,
+      "p_value": 0.2,
+      "ungated_k": 10,
+      "gated_k": 0,
+      "gate_seconds": 327.4989434389863
+    },
+    {
+      "dataset": "effect2-seed28101",
+      "B": 199,
+      "p_value": 0.01,
+      "ungated_k": 10,
+      "gated_k": 10,
+      "gate_seconds": 287.08815667097224
+    },
+    {
+      "dataset": "effect6-seed28101",
+      "B": 199,
+      "p_value": 0.005,
+      "ungated_k": 10,
+      "gated_k": 10,
+      "gate_seconds": 277.5474578749854
+    }
+  ]
+}

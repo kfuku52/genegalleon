@@ -1,0 +1,8 @@
+{
+  "status": "passed",
+  "unique_runs": 42,
+  "complete": 42,
+  "truth_shift_denominator": 10,
+  "input_prediction_tip_sets": "all equal",
+  "precision_recall_f1_bounds": "passed"
+}

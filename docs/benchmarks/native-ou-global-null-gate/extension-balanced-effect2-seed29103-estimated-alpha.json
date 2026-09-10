@@ -1,0 +1,81 @@
+{
+  "dataset": "balanced-effect2-seed29103",
+  "mode": "estimated-alpha",
+  "true_k": 5,
+  "effect": 2,
+  "search_seconds": 1.2171768760017585,
+  "ungated": {
+    "k": 10,
+    "tp": 3,
+    "fp": 7,
+    "precision": 0.3,
+    "recall": 0.6,
+    "rmse": 0.765945036321065,
+    "alpha": "2.771233118547697"
+  },
+  "null_alpha": "0.9250948482337159",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "dea9ef6ff2ff3910aac375fe6e5f02589f7ca0be39cdd6cc01edef3050ebacb5",
+    "truth.json": "31f0f2870a5ddde3e656c1dfdf83274a039325728a84006dc38057a1b928dff9"
+  },
+  "gate_seconds": 28.62363880398334,
+  "gated": {
+    "k": 0,
+    "tp": 0,
+    "fp": 0,
+    "precision": null,
+    "recall": 0.0,
+    "rmse": 0.6772277739594731,
+    "alpha": "0.9250948482337159"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 100103,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 33.351462172707784,
+    "exceedances": 5,
+    "p_value": 0.3,
+    "rejected": false,
+    "bootstrap_statistics": [
+      20.45782958027968,
+      30.444986830565483,
+      20.318161392301704,
+      35.00499892718335,
+      34.448695740001995,
+      29.824103493132043,
+      31.74703744463028,
+      28.720736193169728,
+      19.73689547386664,
+      33.62273180855897,
+      8.06449290697799,
+      41.518821102891195,
+      26.827759722712585,
+      22.01499497621711,
+      42.91457354652573,
+      23.99923294487894,
+      26.231109629935077,
+      30.380962725172708,
+      29.868161374247848
+    ],
+    "ungated_shift_branch_ids": [
+      34,
+      35,
+      51,
+      60,
+      61,
+      100,
+      104,
+      107,
+      122,
+      157
+    ]
+  }
+}

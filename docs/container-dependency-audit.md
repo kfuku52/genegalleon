@@ -1,3 +1,8 @@
+> Update: GeneGalleon now uses NWKIT for OU inference; kfl1ou has been removed
+> from the workflow and container dependency set. The earlier audit observations
+> below describe the environment before that migration. Current OU integration
+> coverage is in `workflow/tests/test_native_ou_shift.py`.
+
 # Container dependencies after the NWKIT migrations
 
 The audit covers the standard amd64/arm64 Conda manifests, source artifacts,
@@ -25,7 +30,7 @@ use the official source artifact, whose revision is recorded separately.
 | --- | --- |
 | IQ2MC-compatible PAML/MCMCtree source build | `gg_genome_evolution_core.sh` still prepares IQ2MC input and runs the species-tree MCMCtree analysis. NWKIT now handles gene-tree dating, not this separate species-tree fit. |
 | Conda PAML | `gg_gene_evolution_core.sh` still runs `codeml` for two-ratio models. The source artifact installs MCMCtree only. |
-| kfl1ou | OU shift/convergence detection still calls `detect_OU_shift_kfl1ou.r`. NWKIT shift work does not replace that workflow stage yet. |
+| kfl1ou | Removed after migration to NWKIT native OU inference. |
 | `ape`, `Rcpp`, `nlme` | kfl1ou imports ape/Rcpp; ape itself imports nlme/Rcpp. Tree and plotting helpers also use ape. |
 | `phytools`, `phangorn`, `igraph` | rkftools imports phytools; phytools imports phangorn; phangorn imports igraph. Annotation plots also load phytools. |
 | `missMDA` | `multispecies_transcriptome_summary.r` still calls `estim_ncpPCA` and `imputePCA`. |

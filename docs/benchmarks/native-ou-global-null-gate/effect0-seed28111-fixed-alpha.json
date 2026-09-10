@@ -1,0 +1,22 @@
+{
+  "dataset": "effect0-seed28111",
+  "mode": "fixed-alpha",
+  "true_k": 0,
+  "effect": 0,
+  "search_seconds": 0.20122745801927522,
+  "ungated": {
+    "k": 10,
+    "tp": 0,
+    "fp": 10,
+    "precision": 0.0,
+    "recall": null,
+    "rmse": 0.7309061254966469,
+    "alpha": "3.0"
+  },
+  "null_alpha": "3.0",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "bd62fffd890b78aef12bdc8eb8013ede47890bc822d16700168ee3a4e662aa46",
+    "truth.json": "7a4f9fafbb5c183fcf542ccbe7df3e77769e2b47088964ee91d1cdf2b3349b0b"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "scope": "Paired development comparison of seven configured selection procedures; not an adoption study",
+  "tips": 100,
+  "true_shifts": 10,
+  "traits": 1,
+  "datasets": 6,
+  "seeds": [
+    27101,
+    27102,
+    27103
+  ],
+  "effect_scales": [
+    2,
+    6
+  ],
+  "root_model": "OUfixedRoot",
+  "alpha_height_truth": 3,
+  "marginal_process_tip_variance_truth": 1,
+  "measurement_error": false,
+  "missingness": false,
+  "tree": "one balanced tree, height one; ten disjoint 6-7-tip clades selected randomly",
+  "simulation": "independent Gaussian branch recursion, no inference-package simulator",
+  "convergence_search": false,
+  "selection": {
+    "nwkit": "bootstrap B19 level .05, pBIC, AIC or BIC; shared heuristic pool24/refit48/screen2000/beam2; cap10",
+    "kfl1ou": "corrected pBIC, ordinary AIC or BIC; default candidate search; cap10"
+  },
+  "covariance_fit": "alpha and process variance estimated independently by each method; each method retains its existing bounds/optimizer",
+  "timeout_seconds_per_method_dataset": 1800,
+  "threads": 1,
+  "order": "sequential; cyclic method-order rotation across datasets",
+  "wall_scope": "process startup + input + inference + JSON, no plots or support bootstrap",
+  "memory": "Linux wait4 ru_maxrss in MiB; single-worker process high-water RSS, not host or VM memory",
+  "accuracy": [
+    "exact descendant-clade precision",
+    "exact descendant-clade recall",
+    "exact descendant-clade F1",
+    "tip expected-mean RMSE",
+    "tip regime-partition adjusted Rand index"
+  ],
+  "failure_policy": "retain every failure/timeout; do not treat uncalibrated candidate as a completed selection; report conditional accuracy separately",
+  "native_auxiliary": "record initial search and uncalibrated maximum-likelihood candidate as diagnostics only",
+  "image": "local/genegalleon:native-ic-dev",
+  "image_id": "sha256:a27135d47119b6341fb373322cb1e492c1471b419df4860630012d19e354be69",
+  "comparison_methods": [
+    "NWKIT bootstrap",
+    "NWKIT pBIC",
+    "NWKIT AIC",
+    "NWKIT BIC",
+    "kfl1ou pBIC",
+    "kfl1ou AIC",
+    "kfl1ou BIC"
+  ],
+  "baseline_requirement": "Corrected pBIC capability attestation must pass before timing",
+  "resource_limit_seconds": 1800
+}

@@ -1,0 +1,12 @@
+Linux ad64dec3adc7 6.12.76-linuxkit #1 SMP Tue Jul 21 14:38:37 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+3.12.14 1.26.4 1.17.1
+[1] "R version 4.4.3 (2025-02-28)"
+[1] ‘3.0.9’
+                                    BLAS 
+"/opt/conda/lib/libopenblasp-r0.3.34.so" 
+MemTotal:        8024004 kB
+MemFree:         2263820 kB
+MemAvailable:    5845868 kB
+machdep.cpu.brand_string: Apple M2 Max
+hw.memsize: 68719476736
+hw.physicalcpu: 12

@@ -15,7 +15,6 @@ PROGRAM_SHA_VARS = (
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
     "IQTREE_REPO_SHA",
-    "KFL1OU_REPO_SHA",
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
@@ -74,9 +73,8 @@ def test_all_container_build_paths_resolve_one_snapshot_per_build():
     assert 'ARG KFU52_REPO_REF=""' in dockerfile
     assert 'ARG KFU52_AMALGKIT_REPO_REF=""' in dockerfile
     assert 'ARG KFU52_CSUBST_REPO_REF=""' in dockerfile
-    assert 'ARG KFL1OU_REPO_REF=""' in dockerfile
     for wrapper in (buildx, apptainer):
-        assert "resolve_source_revisions.sh\" --format env --scope all" in wrapper
+        assert 'resolve_source_revisions.sh" --format env --scope all' in wrapper
         assert "resolve_source_sha " not in wrapper
     installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text()
     assert "> /opt/pg/logs/source_revisions.tsv" in installer
@@ -117,15 +115,9 @@ def test_container_build_paths_share_python_compatibility_constraints():
 def test_container_build_paths_refresh_system_security_packages_daily():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
-    build_hash = (
-        REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh"
-    ).read_text(encoding="utf-8")
-    apptainer_template = (
-        REPO_ROOT / "container" / "apptainer_local_build.def.template"
-    ).read_text(encoding="utf-8")
-    apptainer_build = (
-        REPO_ROOT / "container" / "apptainer_local_build.sh"
-    ).read_text(encoding="utf-8")
+    build_hash = (REPO_ROOT / "container" / "scripts" / "compute_build_input_hash.sh").read_text(encoding="utf-8")
+    apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
+    apptainer_build = (REPO_ROOT / "container" / "apptainer_local_build.sh").read_text(encoding="utf-8")
 
     assert 'ARG SECURITY_REFRESH_EPOCH=""' in dockerfile
     assert "apt-get upgrade --with-new-pkgs -y" in dockerfile
@@ -164,7 +156,6 @@ def test_native_apptainer_build_records_source_revisions():
         "BUSCO",
         "paml",
         "iqtree",
-        "kfl1ou",
         "kfFractBias",
         "kftools",
         "rkftools",
@@ -213,7 +204,7 @@ def test_source_resolution_runs_concurrently_and_publishes_only_complete_snapsho
     barrier = tmp_path / "barrier"
     barrier.mkdir()
     git = bin_dir / "git"
-    # Every lookup waits for all eleven to start. A serial implementation fails
+    # Every lookup waits for all configured sources to start. A serial implementation fails
     # at this barrier instead of relying on a timing-sensitive speed assertion.
     git.write_text(f"""#!{sys.executable}
 import hashlib
@@ -227,7 +218,7 @@ name = sys.argv[3].rsplit("/", 1)[-1].removesuffix(".git")
 barrier = Path(os.environ["MOCK_GIT_BARRIER"])
 (barrier / name).touch()
 deadline = time.monotonic() + 10
-while len(list(barrier.iterdir())) != 11:
+while len(list(barrier.iterdir())) != {len(PROGRAM_SHA_VARS)}:
     if time.monotonic() >= deadline:
         sys.exit("source lookups did not start concurrently")
     time.sleep(0.01)
@@ -239,14 +230,20 @@ print(hashlib.sha1(name.encode()).hexdigest(), sys.argv[4], sep="\\t")
     env = os.environ.copy()
     for variable in PROGRAM_SHA_VARS:
         env.pop(variable, None)
-    env.update({
-        "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
-        "MOCK_GIT_BARRIER": str(barrier),
-        "MOCK_GIT_FAIL_SOURCE": fail_source,
-    })
+    env.update(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+            "MOCK_GIT_BARRIER": str(barrier),
+            "MOCK_GIT_FAIL_SOURCE": fail_source,
+        }
+    )
     completed = subprocess.run(
         ["bash", str(REPO_ROOT / "container/scripts/resolve_source_revisions.sh")],
-        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=20,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert len(list(barrier.iterdir())) == len(PROGRAM_SHA_VARS)
     if fail_source:
@@ -266,7 +263,7 @@ def test_source_stages_have_independent_revision_inputs_and_no_runtime_ancestry(
     stages = {}
     for index, declaration in enumerate(declarations):
         end = declarations[index + 1].start() if index + 1 < len(declarations) else len(dockerfile)
-        stages[declaration[2]] = (declaration[1], dockerfile[declaration.end():end])
+        stages[declaration[2]] = (declaration[1], dockerfile[declaration.end() : end])
 
     def ancestry(name, target="runtime"):
         while name in stages:
@@ -353,7 +350,7 @@ def test_iqtree3_overlay_uses_unmodified_official_source():
     dockerfile = (REPO_ROOT / "container/Dockerfile.iqtree3").read_text()
     assert "https://github.com/iqtree/iqtree3.git" in wrapper
     assert 'source "${script_dir}/source_branches.env"' in wrapper
-    assert '${GG_SOURCE_IQTREE_REPO_REF}' in wrapper
+    assert "${GG_SOURCE_IQTREE_REPO_REF}" in wrapper
     assert "submodule update --init --recursive" in wrapper
     assert 'git -C "${build_directory}/iqtree" rev-parse HEAD' in wrapper
     assert "IQTREE_SOURCE_REVISION=${revision}" in wrapper

@@ -1,0 +1,81 @@
+{
+  "dataset": "balanced-effect6-seed29103",
+  "mode": "estimated-alpha",
+  "true_k": 5,
+  "effect": 6,
+  "search_seconds": 1.6950660010043066,
+  "ungated": {
+    "k": 10,
+    "tp": 5,
+    "fp": 5,
+    "precision": 0.5,
+    "recall": 1.0,
+    "rmse": 0.6637427417983921,
+    "alpha": "3.418280125581826"
+  },
+  "null_alpha": "0.0",
+  "inputs": {
+    "tree.nwk": "d5288a58daeda50e0012c13aabe8df84f1aa6c30ddfd479d80dbd9ea88fef0ad",
+    "traits.tsv": "a9f0942d767336ca2547854638e846c759f7a0c937ccbd03b94a08799011bcf6",
+    "truth.json": "13ada506be408267187ea4064547b5a46844d2e8535fbf17d67acaed2fc66400"
+  },
+  "gate_seconds": 26.084638970001834,
+  "gated": {
+    "k": 10,
+    "tp": 5,
+    "fp": 5,
+    "precision": 0.5,
+    "recall": 1.0,
+    "rmse": 0.6637427417983921,
+    "alpha": "3.418280125581826"
+  },
+  "calibration": {
+    "method": "full_search_plugin_parametric_bootstrap_global_null_aic_gate",
+    "research_only": true,
+    "uniform_composite_null_control_proven": false,
+    "controls_false_branches_under_nonnull": false,
+    "full_search_repeated": true,
+    "failed_draw_policy": "abort_without_discarding",
+    "statistic_name": "max_zero_null_aic_minus_minimum_search_aic",
+    "seed": 100103,
+    "replicates": 19,
+    "level": 0.05,
+    "statistic": 95.53892700833057,
+    "exceedances": 0,
+    "p_value": 0.05,
+    "rejected": true,
+    "bootstrap_statistics": [
+      19.13955121982275,
+      15.110010752257608,
+      22.84675215597838,
+      29.609779597058036,
+      46.04009605320118,
+      25.223100332745958,
+      33.642324526720415,
+      34.53212083453781,
+      20.432520534777325,
+      0.0,
+      11.563060011427467,
+      43.7188631849661,
+      26.772211932022515,
+      38.13442395361926,
+      48.566612097865345,
+      25.215680970576273,
+      28.369434881212896,
+      36.550683757310026,
+      31.30544901061711
+    ],
+    "ungated_shift_branch_ids": [
+      30,
+      34,
+      35,
+      45,
+      51,
+      60,
+      61,
+      104,
+      107,
+      157
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "dataset": "effect2-seed27101",
+    "status": "passed"
+  },
+  {
+    "dataset": "effect2-seed27102",
+    "status": "passed"
+  },
+  {
+    "dataset": "effect2-seed27103",
+    "status": "passed"
+  },
+  {
+    "dataset": "effect6-seed27101",
+    "status": "passed"
+  },
+  {
+    "dataset": "effect6-seed27102",
+    "status": "passed"
+  },
+  {
+    "dataset": "effect6-seed27103",
+    "status": "passed"
+  }
+]

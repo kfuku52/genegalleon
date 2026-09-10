@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "artifact": "comparison.png",
+  "checks": [
+    "render inspected",
+    "labels and intervals readable",
+    "no clipping or overlapping data labels",
+    "zero-based accuracy and null axes",
+    "mean intervals and paired comparison intervals distinguished",
+    "null 30/30 counts displayed"
+  ],
+  "dimensions": [
+    2160,
+    1620
+  ]
+}

@@ -546,40 +546,15 @@ def test_gene_evolution_scripts_do_not_use_removed_run_pgls_gene_tree_toggle():
     assert "run_pgls_gene_tree" not in entrypoint_text
 
 
-def test_gene_evolution_core_passes_gg_task_cpus_to_kfl1ou():
-    script = CORE_DIR / "gg_gene_evolution_core.sh"
-    text = _read_text(script)
-    assert "CPU_PER_HOST=" not in text
-    assert 'cpu_pick="${GG_TASK_CPUS}"' not in text
-    assert '--nslots="${GG_TASK_CPUS}"' in text
-    assert "taskset" not in text
-    assert "cpu_id=$(python -c" not in text
-    assert '"${l1ou_cmd[@]}"' in text
-
-
-def test_gene_evolution_core_uses_kfl1ou_wrapper_with_supported_args_only():
-    script = CORE_DIR / "gg_gene_evolution_core.sh"
-    text = _read_text(script)
-    block_start = text.index('task="kfl1ou OU shift detection"')
-    block_end = text.index("mv_out fit_ind.RData", block_start)
-    l1ou_block = text[block_start:block_end]
-
-    assert "detect_OU_shift_l1ou.r" not in l1ou_block
-    assert 'Rscript "${gg_support_dir}/detect_OU_shift_kfl1ou.r"' in l1ou_block
-    assert '--require_internal_node_labels="${require_internal_node_labels:-1}"' not in l1ou_block
-    assert '--clade_collapse_similarity_method="${clade_collapse_similarity_method}"' not in l1ou_block
-    assert '--clade_collapse_similarity_threshold="${clade_collapse_similarity_threshold}"' not in l1ou_block
-    assert "--ceil_negative=0" not in l1ou_block
-    assert '--replicate_sep="_"' in l1ou_block
-
-
-def test_detect_ou_shift_kfl1ou_enables_measurement_error_by_default():
-    script = WORKFLOW_DIR / "support" / "detect_OU_shift_kfl1ou.r"
-    text = _read_text(script)
-    assert "measurement_error = TRUE" in text
-    assert "input_error = input_error_fit" in text
-    assert "replicate_column_mask(original_cols, trait_name, replicate_sep)" in text
-    assert "startsWith(original_cols, paste0(trait_name, replicate_sep))" not in text
+def test_gene_evolution_core_uses_nwkit_ou_adapter():
+    text = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
+    assert 'task="NWKIT OU shift detection"' in text
+    assert 'python "${gg_support_dir}/detect_ou_shift_native.py"' in text
+    assert '"${native_ou_cmd[@]}" || exit $?' in text
+    assert 'native_ou_criterion="${native_ou_criterion:-AICc}"' in text
+    assert 'native_ou_search_strategy="${native_ou_search_strategy:-native-path}"' in text
+    assert "kfl1ou" not in text
+    assert "run_l1ou" not in text
 
 
 def test_expression_matrix_allows_a_valid_no_data_result():
@@ -598,7 +573,8 @@ def test_gene_evolution_core_uses_explicit_ne_and_grouped_logic_for_tree_pruning
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     assert "if [[ ! ${run_tree_pruning} -eq 1 && ${run_l1ou} -eq 1 ]]; then" not in text
-    assert "if [[ ${run_tree_pruning} -ne 1 && ${run_l1ou} -eq 1 ]]; then" in text
+    assert 'if [[ -s "${file_og_expression}" && ${run_native_ou} -eq 1 ]]; then' in text
+    assert "if [[ ${run_tree_pruning} -ne 1 ]]; then" in text
 
 
 def test_genome_evolution_core_replaces_busco_count_cache_guards_with_provenance():
@@ -675,7 +651,10 @@ def test_cp_out_and_mv_out_prepare_destination_dir_for_multisource_or_trailing_s
     text = _read_text(util_path)
     cp_body = _function_body(text, "cp_out")
     mv_body = _function_body(text, "mv_out")
-    assert 'if [[ ${source_count} -gt 1 || "${destination_argument}" == */ || -d "${destination_argument}" ]]; then' in cp_body
+    assert (
+        'if [[ ${source_count} -gt 1 || "${destination_argument}" == */ || -d "${destination_argument}" ]]; then'
+        in cp_body
+    )
     assert 'if [[ $# -gt 2 || "${dest}" == */ ]]; then' in mv_body
     assert 'ensure_dir "${destination_argument%/}"' in cp_body
     assert 'ensure_dir "${dest%/}"' in mv_body
@@ -1376,7 +1355,7 @@ def test_gene_family_zip_reruns_use_family_lock_receipts_and_explicit_completion
     assert '"${gene_family_run_lock_path}" \\' in core
     assert '"gene-family producer (${og_id})"' in core
     assert 'gg_shared_lock_start_heartbeat "${gene_family_run_lock_path}"' in core
-    assert core.index('if ! gg_shared_lock_acquire \\') < core.index(
+    assert core.index("if ! gg_shared_lock_acquire \\") < core.index(
         'gene_family_task_tmp_dir="${dir_output_active}/tmp/${GG_ARRAY_TASK_ID}_${og_id}"'
     )
     assert "gg_advisory_shared_lock_acquire" in core
@@ -1937,19 +1916,10 @@ def test_gene_evolution_offers_reconciliation_rooting_without_changing_default()
     assert 'tree_rooting_method="${tree_rooting_method:-mad}"' in entrypoint
     assert "mad|reconciliation|notung|midpoint|md" in entrypoint
     assert '"${tree_rooting_method}" != "reconciliation"' in core
-    assert (
-        '"${tree_rooting_method}" == "notung" || '
-        '"${tree_rooting_method}" == "reconciliation"'
-    ) in core
+    assert ('"${tree_rooting_method}" == "notung" || "${tree_rooting_method}" == "reconciliation"') in core
     assert 'nwkit_root_args+=(--species-tree "${species_tree_pruned}")' in core
-    assert (
-        '"${nwkit_root_method}" == "taxonomy" || '
-        '"${nwkit_root_method}" == "reconciliation"'
-    ) in core
-    assert (
-        "tree_rooting_method=reconciliation requires species tree: "
-        "${species_tree_pruned}"
-    ) in core
+    assert ('"${nwkit_root_method}" == "taxonomy" || "${nwkit_root_method}" == "reconciliation"') in core
+    assert ("tree_rooting_method=reconciliation requires species tree: ${species_tree_pruned}") in core
 
 
 def test_genome_evolution_reuse_check_precedes_busco_lineage_resolution():
@@ -2015,14 +1985,14 @@ def test_genome_evolution_species_tree_plotting_uses_independent_stage_flags():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     assert (
-        'run_species_tree_comparison_plot=${run_plot_species_trees}\nif [[ ${run_species_tree_comparison_plot} -eq 1 ]]; then'
+        "run_species_tree_comparison_plot=${run_plot_species_trees}\nif [[ ${run_species_tree_comparison_plot} -eq 1 ]]; then"
         in core
     )
     assert (
         'disable_if_no_nonempty_input_file "run_species_tree_comparison_plot" "${file_concat_iqtree_dna_root}" "${file_concat_iqtree_pep_root}" "${file_astral_tree_dna}" "${file_astral_tree_pep}"'
         in core
     )
-    assert 'run_species_tree_busco_plot=${run_plot_species_trees}' in core
+    assert "run_species_tree_busco_plot=${run_plot_species_trees}" in core
     assert (
         'disable_if_no_matching_input_file "run_species_tree_busco_plot" "${dir_species_busco_full}" "*busco.full.tsv"'
         in core
@@ -2188,9 +2158,6 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         "--hyphy_dnds_json ${file_og_hyphy_dnds}",
         "--hyphy_relax_json ${file_og_hyphy_relax}",
         "--hyphy_relax_reversed_json ${file_og_hyphy_relax_reversed}",
-        "--l1ou_tree ${file_og_l1ou_fit_tree}",
-        "--l1ou_regime ${file_og_l1ou_fit_regime}",
-        "--l1ou_leaf ${file_og_l1ou_fit_leaf}",
         "--expression ${file_og_expression}",
         "--mapdnds_tree_dn ${file_og_mapdnds_dn}",
         "--mapdnds_tree_ds ${file_og_mapdnds_ds}",
@@ -2226,9 +2193,6 @@ def test_gene_evolution_core_quotes_trait_promoter_and_summary_path_options():
         '--hyphy_dnds_json "${file_og_hyphy_dnds}"',
         '--hyphy_relax_json "${file_og_hyphy_relax}"',
         '--hyphy_relax_reversed_json "${file_og_hyphy_relax_reversed}"',
-        '--l1ou_tree "${file_og_l1ou_fit_tree}"',
-        '--l1ou_regime "${file_og_l1ou_fit_regime}"',
-        '--l1ou_leaf "${file_og_l1ou_fit_leaf}"',
         '--expression "${file_og_expression}"',
         '--mapdnds_tree_dn "${file_og_mapdnds_dn}"',
         '--mapdnds_tree_ds "${file_og_mapdnds_ds}"',
@@ -2358,7 +2322,7 @@ def test_orthofinder_core_result_publication_replaces_existing_trees_transaction
     block = core[start:end]
 
     assert "orthofinder_publication_pairs=()" in block
-    assert block.count('orthofinder_publication_pairs+=(') == 2
+    assert block.count("orthofinder_publication_pairs+=(") == 2
     assert '"${dir_orthofinder}/${orthofinder_output##*/}"' in block
     assert '"${dir_orthofinder}/core/${orthofinder_output##*/}"' in block
     assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
@@ -2373,7 +2337,7 @@ def test_orthofinder_single_round_publication_replaces_existing_trees_transactio
     block = core[start:end]
 
     assert "orthofinder_publication_pairs=()" in block
-    assert block.count('orthofinder_publication_pairs+=(') == 1
+    assert block.count("orthofinder_publication_pairs+=(") == 1
     assert '"${dir_orthofinder}/${orthofinder_output##*/}"' in block
     assert 'mv_out_bundle "${orthofinder_publication_pairs[@]}"' in block
     assert 'mv_out "${orthofinder_main_outputs[@]}"' not in block
@@ -2381,9 +2345,7 @@ def test_orthofinder_single_round_publication_replaces_existing_trees_transactio
 
 def test_orthofinder_replaces_complete_publication_to_remove_stale_outputs():
     core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
-    start = core.index(
-        'if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then'
-    )
+    start = core.index("if [[ ${orthofinder_needs_update} -eq 1 && ${run_orthofinder} -eq 1 ]]; then")
     end = core.index('  gg_artifact_record "${orthofinder_provenance_args[@]}"', start)
     block = core[start:end]
 
@@ -2391,7 +2353,7 @@ def test_orthofinder_replaces_complete_publication_to_remove_stale_outputs():
     assert 'dir_orthofinder="${orthofinder_stage_parent}/orthofinder"' in block
     assert 'mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"' in block
     assert block.index('mv_out_bundle "${dir_orthofinder}" "${orthofinder_public_dir}"') > block.index(
-        'Required root-level HOG table was not found'
+        "Required root-level HOG table was not found"
     )
 
 
@@ -2893,7 +2855,9 @@ def test_gene_evolution_core_routes_extracted_rooted_tree_to_downstream_analysis
     assert "file_og_orthogroup_extraction_rooted_nwk=" in text
     assert '--output "extracted_rooted_tree=${file_og_orthogroup_extraction_rooted_nwk}"' in text
     assert "gg_artifact_prepare_stage orthogroup_extraction_needs_update" in text
-    assert 'mv_out "${og_id}.orthogroup_extraction.rooted.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    assert (
+        'mv_out "${og_id}.orthogroup_extraction.rooted.tmp.nwk" "${file_og_orthogroup_extraction_rooted_nwk}"' in text
+    )
     assert 'set_analysis_file rooted_tree "${file_og_orthogroup_extraction_rooted_nwk}"' in text
 
 
@@ -2918,8 +2882,8 @@ def test_gene_evolution_core_uses_writable_orthogroup_intersection_outputs():
     extraction_end = text.index('task="GeneRax"', extraction_start)
     extraction_block = text[extraction_start:extraction_end]
 
-    assert '--outfile /dev/null' not in extraction_block
-    assert '--seqout /dev/null' not in extraction_block
+    assert "--outfile /dev/null" not in extraction_block
+    assert "--seqout /dev/null" not in extraction_block
     assert '--outfile "${og_id}.orthogroup_extraction.rooted.tmp.nwk"' in extraction_block
     assert '--seqout "${og_id}.orthogroup_extraction.intersected.tmp.fasta"' in extraction_block
 
@@ -3024,9 +2988,7 @@ def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
     text = _read_text(script)
     assert "Skipping IQ-TREE --fast because this stage must generate UFBoot replicate trees." in text
 
-    ufboot_block_start = text.index(
-        'task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"'
-    )
+    ufboot_block_start = text.index('task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"')
     ufboot_block_end = text.index('task="NOTUNG reconciliation"', ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
     assert "--fast" not in ufboot_block.replace(
@@ -3038,13 +3000,11 @@ def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
 def test_gene_evolution_core_maps_unconstrained_bootstrap_splits_to_generax_tree():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    ufboot_block_start = text.index(
-        'task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"'
-    )
+    ufboot_block_start = text.index('task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"')
     ufboot_block_end = text.index('task="NOTUNG reconciliation"', ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
 
-    assert 'other_iqtree_params=(--ufboot 1000 --bnni --boot-trees --keep-ident)' in ufboot_block
+    assert "other_iqtree_params=(--ufboot 1000 --bnni --boot-trees --keep-ident)" in ufboot_block
     assert '--parameter "bootstrap_topology_search=unconstrained"' in ufboot_block
     assert '--parameter "bootstrap_identical_sequences=keep"' in ufboot_block
     assert ' -g "${og_id}.generax_ufboot' not in ufboot_block
@@ -3102,8 +3062,8 @@ def test_generax_enforces_nwkit_reconciliation_root():
     assert 'if [[ "${tree_rooting_method}" == "reconciliation" ]]; then' in generax_block
     assert 'generax_starting_tree="${file_og_rooted_tree}"' in generax_block
     assert 'generax_starting_tree="${file_og_orthogroup_extraction_rooted_nwk}"' in generax_block
-    assert 'generax_rooting_args=(--enforce-gene-tree-root)' in generax_block
-    assert 'generax_rooting_args=(--mad-rooting)' in generax_block
+    assert "generax_rooting_args=(--enforce-gene-tree-root)" in generax_block
+    assert "generax_rooting_args=(--mad-rooting)" in generax_block
     assert '--input "starting_tree=${generax_starting_tree}"' in generax_block
     assert '--parameter "rooting_mode=${generax_rooting_mode}"' in generax_block
     assert '--infile "${generax_starting_tree}"' in generax_block
@@ -3146,7 +3106,6 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         "busco",
         "paml",
         "iqtree",
-        "kfl1ou",
         "kffractbias",
         "kftools",
         "rkftools",
@@ -3165,7 +3124,6 @@ def test_container_ghcr_resolves_moving_source_branches_once_per_build():
         ("BUSCO_REPO_SHA", "busco_repo_sha"),
         ("PAML_REPO_SHA", "paml_repo_sha"),
         ("IQTREE_REPO_SHA", "iqtree_repo_sha"),
-        ("KFL1OU_REPO_SHA", "kfl1ou_repo_sha"),
         ("KFFRACTBIAS_REPO_SHA", "kffractbias_repo_sha"),
         ("KFTOOLS_REPO_SHA", "kftools_repo_sha"),
         ("RKFTOOLS_REPO_SHA", "rkftools_repo_sha"),
@@ -3335,14 +3293,6 @@ def test_orthogroup_statistics_skips_unrooted_annotation_transfer_failures():
     assert "Failed to transfer unrooted-tree branch annotations to the rooted tree" in text
     assert "Leaving support_unrooted as NA" in text
     assert "Leaving bl_unrooted as NA" in text
-
-
-def test_orthogroup_statistics_skips_invalid_regime2tree_summary_instead_of_aborting():
-    script = WORKFLOW_DIR / "support" / "orthogroup_statistics.py"
-    text = _read_text(script)
-    assert 'tree_tmp = kfog.regime2tree(params[method + "_regime"])' in text
-    assert "except ValueError as exc:" in text
-    assert "Skipping {} regime summary due to invalid regime parameters" in text
 
 
 def test_support_python_scalar_conditions_use_logical_and_not_bitwise_and():
@@ -3527,7 +3477,10 @@ def test_gene_summary_csubst_scan_candidate_sites_are_opt_in_and_threshold_packa
         'csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_global}"'
         in entrypoint
     )
-    assert 'csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}"' in entrypoint
+    assert (
+        'csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}"'
+        in entrypoint
+    )
     assert 'csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}"' in entrypoint
     assert "run_csubst_scan_candidate_sites=0" in candidate_body
     assert 'python "${gg_support_dir}/csubst_scan_candidate_sites.py"' in candidate_body
@@ -3666,10 +3619,10 @@ def test_gene_evolution_core_quotes_key_s_checks_in_downstream_tasks():
     for token in banned_tokens:
         assert token not in text
     expected_tokens = [
-        'if [[ -s "${file_og_expression}" && ${run_l1ou} -eq 1 ]]; then',
+        'if [[ -s "${file_og_expression}" && ${run_native_ou} -eq 1 ]]; then',
         "if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then",
         "if [[ ${asr_intron_needs_update} -eq 1 && ${run_asr_intron} -eq 1 ]]; then",
-        "if [[ ${l1ou_needs_update} -eq 1 && ${run_l1ou} -eq 1 ]]; then",
+        "if [[ ${native_ou_needs_update} -eq 1 && ${run_native_ou} -eq 1 ]]; then",
         "if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then",
         'if [[ -s "${file_og_stat_branch}" && -s "${file_og_stat_tree}" && -s "${file_og_tree_plot}" ]]; then',
     ]
@@ -3878,18 +3831,16 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert '--event-weighting "${rsc_event_weighting}"' in core
     assert 'rsc_validate_choice rsc_event_weighting "${rsc_event_weighting}" event contrast' in core
     assert 'rsc_validate_choice rsc_model "${rsc_model}" hierarchical replicate-reml cluster-hc1' in core
-    assert 'rsc_regress_args=(\n        pgls' not in core
+    assert "rsc_regress_args=(\n        pgls" not in core
     assert '--model "${rsc_model}"' not in core
     assert '--allow-large-dense "${rsc_allow_large_dense}"' in core
     assert "/opt/pg/logs/source_revisions.tsv" in core
     assert '--parameter "nwkit_identity=${rsc_nwkit_identity}"' in core
     assert '--parameter "expression_input=unavailable"' in core
     assert "requires the gene-expression matrix" not in core
-    assert 'inspect-audit-error' in core
+    assert "inspect-audit-error" in core
     assert '--output "status=${file_og_rsc_status}"' in core
-    assert (
-        'file_og_rsc_regression="${dir_output_active}/rsc_regression/${og_id}_rsc.regression.tsv"' in core
-    )
+    assert 'file_og_rsc_regression="${dir_output_active}/rsc_regression/${og_id}_rsc.regression.tsv"' in core
     assert '--output "regression=${file_og_rsc_regression}"' in core
     assert '--output "reconciliation=${file_og_rsc_reconciliation}"' in core
     assert '--output "response_sampling_covariance=${file_og_rsc_response_sampling_covariance}"' in core
@@ -3898,7 +3849,7 @@ def test_gene_evolution_wires_matched_expression_trait_pgls_through_stat_tree():
     assert '--output "comparison=${file_og_pgls_comparison}"' in core
     assert 'python "${gg_support_dir}/species_tree_pgls.py" "${species_pgls_args[@]}"' in core
     assert '--paralog-sampling-covariance "${species_paralog_sampling_covariance}"' in core
-    assert 'mv_out_bundle \\' in core
+    assert "mv_out_bundle \\" in core
     assert 'mv_out "${rsc_combined_status}"' not in core
     assert '--rsc_status "${file_og_rsc_status}"' in core
     assert '--rsc_regression "${file_og_rsc_regression}"' in core
