@@ -5,6 +5,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_cafe_branch_specificity_runtime.py",
     "test_mcmctree_calibration_runtime.py",
     "test_gift_retrieval.py",
     "test_gift_retrieval_audit.py",
@@ -30,6 +31,7 @@
     "workflow/tests/test_format_species_inputs_provider_pages.py::test_download_manifest_figshare_extracts_rar_member_from_extensionless_url"
   ],
   "r_commands": [
+    ["Rscript", "workflow/tests/test_cafe_go_enrichment.R"],
     ["bash", "workflow/tests/check_treevis_package.sh"],
     ["Rscript", "workflow/tests/test_r_scripts_parse.R"],
     ["Rscript", "workflow/tests/test_r_species_label_utils.R"],

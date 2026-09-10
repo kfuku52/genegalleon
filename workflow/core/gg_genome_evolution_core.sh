@@ -70,6 +70,15 @@ mcmctree_calibration_diagnostic_chains="${mcmctree_calibration_diagnostic_chains
 mcmctree_calibration_diagnostic_seed="${mcmctree_calibration_diagnostic_seed:-1729}"
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
+go_enrichment_method="${go_enrichment_method:-event}"
+go_cafe_bootstrap_replicates="${go_cafe_bootstrap_replicates:-999}"
+go_cafe_fit_restarts="${go_cafe_fit_restarts:-5}"
+go_cafe_max_iterations="${go_cafe_max_iterations:-1000}"
+go_family_alpha="${go_family_alpha:-0.05}"
+case "${go_enrichment_method}" in
+  event|cafe_lrt) ;;
+  *) echo "Invalid go_enrichment_method: ${go_enrichment_method}" >&2; exit 1 ;;
+esac
 orthogroup_copy_number_max_size_differential="${orthogroup_copy_number_max_size_differential:-9999999}"
 run_orthogroup_copy_number_trait_selection="${run_orthogroup_copy_number_trait_selection:-0}"
 orthogroup_copy_number_trait_selection_folds="${orthogroup_copy_number_trait_selection_folds:-}"
@@ -2508,7 +2517,11 @@ file_orthogroup_copy_number_matrix="${dir_orthogroup_copy_number_trait_pgls}/ort
 file_orthogroup_copy_number_trait_pgls="${dir_orthogroup_copy_number_trait_pgls}/orthogroup_copy_number_trait_pgls.tsv"
 file_orthogroup_copy_number_trait_pgls_significant="${dir_orthogroup_copy_number_trait_pgls}/orthogroup_copy_number_trait_pgls.significant.tsv"
 file_orthogroup_copy_number_trait_pgls_summary_pdf="${dir_orthogroup_copy_number_trait_pgls}/orthogroup_copy_number_trait_pgls.summary.pdf"
-file_go_enrichment_significant="${dir_cafe}/go_enrichment/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
+dir_go_enrichment="${dir_cafe}/go_enrichment"
+if [[ "${go_enrichment_method}" != event ]]; then
+  dir_go_enrichment="${dir_go_enrichment}/${go_enrichment_method}"
+fi
+file_go_enrichment_significant="${dir_go_enrichment}/enrichment_significant_${change_direction_go}_${target_branch_go}_significant_go.tsv"
 genome_evolution_provenance_dir="${gg_workspace_output_dir}/artifact_provenance/genome_evolution"
 # Moving dependency revisions are part of the artifact contract, never defaults.
 genome_nwkit_identity=$(python - <<'PY_NWKIT_IDENTITY'
@@ -6038,6 +6051,34 @@ go_enrichment_provenance_args+=(
   --parameter "go_category=${go_category}"
   --parameter "absence_when_no_significant_terms=valid"
 )
+go_enrichment_provenance_args+=(
+  --input "adapter=${gg_support_dir}/cafe_go_enrichment.r"
+  --parameter "method=${go_enrichment_method}"
+)
+if [[ "${go_enrichment_method}" == cafe_lrt ]]; then
+  go_enrichment_provenance_args+=(
+    --parameter "family_alpha=${go_family_alpha}"
+    --parameter "specificity_contract=native_cafe_base_family_lrt_bootstrap_v1"
+    --parameter "bootstrap_replicates=${go_cafe_bootstrap_replicates}"
+    --parameter "fit_restarts=${go_cafe_fit_restarts}"
+    --parameter "max_iterations=${go_cafe_max_iterations}"
+    --input "native_adapter=${gg_support_dir}/cafe_branch_specificity.py"
+    --input "ancestral_counts=${dir_cafe_output}/Gamma_count.tab"
+    --input "ancestral_tree=${dir_cafe_output}/Gamma_asr.tre"
+    --input "dated_tree=${file_dated_species_tree}"
+    --output "native_family_lrt=${dir_go_enrichment}/native_cafe/family_lrt.tsv"
+    --output "native_metadata=${dir_go_enrichment}/native_cafe/metadata.json"
+    --output "branch_map=${dir_go_enrichment}/native_cafe/branch_map.tsv"
+    --output "family_specificity=${dir_go_enrichment}/family_specificity.tsv"
+    --output "specificity_metadata=${dir_go_enrichment}/specificity_metadata.tsv"
+    --output "all_enrichment=${file_go_enrichment_significant%_significant_go.tsv}_all_go.tsv"
+  )
+  gg_artifact_add_input_if_present go_enrichment_provenance_args "error_model" "${dir_cafe_output}/Gamma_error_model.txt"
+  if [[ ${run_go_enrichment} -eq 1 ]]; then
+    cafe_specificity_executable=$(command -v cafe5) || { echo "cafe_lrt requires cafe5." >&2; exit 1; }
+    go_enrichment_provenance_args+=(--input "cafe_executable=${cafe_specificity_executable}")
+  fi
+fi
 gg_artifact_add_input_if_present go_enrichment_provenance_args "go_annotation" "${file_go_annotation}"
 gg_artifact_prepare_stage go_enrichment_needs_update run_go_enrichment "${go_enrichment_provenance_args[@]}" || exit $?
 if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
@@ -6052,7 +6093,14 @@ if [[ ${go_enrichment_needs_update} -eq 1 && ${run_go_enrichment} -eq 1 ]]; then
     "$(dirname "${file_go_enrichment_significant}")" \
     "${target_branch_go}" \
     "${change_direction_go}" \
-    "${go_category}"; then
+    "${go_category}" \
+    "${go_enrichment_method}" \
+    "${go_family_alpha}" \
+    "${go_cafe_bootstrap_replicates}" \
+    "${go_cafe_fit_restarts}" \
+    "${go_cafe_max_iterations}" \
+    "${GG_TASK_CPUS}" \
+    "${file_dated_species_tree}"; then
     echo "Error in Rscript cafe_go_enrichment.r. Exiting."
     exit 1
   fi

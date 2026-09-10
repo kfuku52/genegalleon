@@ -304,6 +304,11 @@ delete_tmp_dir
 file_trait
 grampa_h1
 go_category
+go_enrichment_method
+go_cafe_bootstrap_replicates
+go_cafe_fit_restarts
+go_cafe_max_iterations
+go_family_alpha
 input_sequence_mode
 max_gene_orthogroup_grampa
 max_num_gene

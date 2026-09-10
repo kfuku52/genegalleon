@@ -2301,3 +2301,21 @@ def test_genome_annotation_species_cds_contract_accepts_symlinked_search_root(tm
     assert str(linked_dir / "Oryza_sativa.fa") in completed.stdout
     assert "All per-species CDS files are valid." in completed.stdout
     assert "Species files are unique in" in completed.stdout
+
+
+def test_forward_config_vars_includes_go_specificity_options(tmp_path):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "go_enrichment_method=cafe_lrt; "
+        "go_cafe_bootstrap_replicates=199; go_cafe_fit_restarts=3; go_cafe_max_iterations=1000; "
+        "go_family_alpha=0.025; "
+        "forward_config_vars_to_container_env gg_genome_evolution_entrypoint.sh; "
+        'printf "%s\\n" "$SINGULARITYENV_go_enrichment_method" '
+        '"$SINGULARITYENV_go_cafe_bootstrap_replicates" "$SINGULARITYENV_go_family_alpha" '
+        '"$SINGULARITYENV_go_cafe_fit_restarts" "$SINGULARITYENV_go_cafe_max_iterations"'
+    )
+    completed = run_bash(command, cwd=tmp_path)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "cafe_lrt", "199", "0.025", "3", "1000"
+    ]

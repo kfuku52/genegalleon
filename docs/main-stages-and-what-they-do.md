@@ -555,6 +555,9 @@ Notable defaults:
   automatically excludes candidates. See [quality diagnostics](copy-number-quality-diagnostics.md),
 - `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
 - GO target can be specified by species name or branch ID.
+- `go_enrichment_method="event"` retains the legacy analysis; the optional
+  [native CAFE family comparison](go-enrichment.md) fits target/background
+  rate models and bootstraps their likelihood ratio before gain/loss GO enrichment.
 
 ### `gg_gene_summary_entrypoint.sh`
 
