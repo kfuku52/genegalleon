@@ -2,6 +2,14 @@
 
 Gene-family dating (`run_tree_dating=1`) uses `nwkit radte --backend native`.
 The native sequence engine remains the default; IQ-TREE is also selectable.
+Native RADTE is an **experimental, exploratory estimator**. A nominal 95%
+interval is not a demonstrated 95% guarantee across gene families. This also
+applies when IQ-TREE supplies the sequence likelihood. Report ages as
+"exploratory RADTE estimates with conditional, nominal intervals" and retain
+the actual estimator and unavailable/calibration-limited interval diagnostics.
+Dating is disabled by default (`run_tree_dating=0`). See the
+[independent native validation record](native-dating-validation.md) for measured
+coverage, numerical fixes and validation limits.
 The species tree must be a dated, rooted, ultrametric chronogram with positive
 branch lengths. An undated substitution tree is not a time calibration.
 
@@ -49,7 +57,7 @@ export GG_GENE_EVOLUTION_RADTE_CODON_FREQUENCIES=f
 | `radte_inference` | `auto` | `auto`, `marginal`, `joint-map` |
 | `radte_likelihood` | `auto` | `auto`, `exact`, `quadratic` |
 | `radte_uncertainty` | `profile` | `profile`, `laplace`, `bootstrap`, `none` |
-| `radte_interval_level` | `0.95` | Conditional interval coverage |
+| `radte_interval_level` | `0.95` | Nominal conditional interval level; general coverage is unvalidated |
 | `radte_rate_sd` | empty | Estimate log-rate SD; a number fixes it |
 | `radte_max_age` | `1000` | Upper age limit for above-root duplications, in the species tree's time units |
 | `radte_maxiter`, `radte_seed` | `1000`, `1` | Optimizer iterations and random seed |
@@ -142,7 +150,11 @@ Existing downstream paths remain `dated_tree/<family>_dated.nwk` and
 manifest. Full native tables, likelihood summary, manifest, and PDF are stored
 under `dated_tree_native/<family>_radte.*`. The orthogroup summary reads the actual
 estimator, sequence model, uncertainty status, and interval level from this
-manifest. Historical text logs remain readable for historical results.
+manifest. Native results also retain `dating_interpretation` (exploratory,
+conditional, with general coverage unestablished) and `dating_diagnostics` in
+the orthogroup statistics. An unavailable interval remains unavailable even
+when the point estimate completed. Historical text logs remain readable for
+historical results.
 
 The cache includes the alignment, reconciliation, species tree, model settings,
 external interval table, genetic-code overrides, NWKIT identity, and the selected

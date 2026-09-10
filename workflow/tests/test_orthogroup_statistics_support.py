@@ -33,6 +33,37 @@ def load_target_module():
     return module
 
 
+def test_dating_summary_keeps_conditional_interpretation_and_failed_interval(tmp_path):
+    import json
+
+    path = tmp_path / "dating.log.txt"
+    path.write_text(json.dumps({
+        "schema": "nwkit-radte-run-v1", "status": "complete",
+        "method": "sequence-empirical-bayes-map", "sequence_model": {"model": "gy94"},
+        "uncertainty": "unavailable-strict-clock-limit", "interval_level": 0.95,
+        "experimental_native_estimator": True, "diagnostics": ["estimated_zero_rate_variance"],
+    }))
+    module = load_module()
+    stats = module.read_dating_stats(path)
+    assert stats["dating_method"] == "nwkit:sequence-empirical-bayes-map"
+    assert stats["dating_sequence_model"] == "gy94"
+    assert stats["dating_uncertainty"] == "unavailable-strict-clock-limit"
+    assert "Exploratory" in stats["dating_interpretation"]
+    assert "General coverage is not established" in stats["dating_interpretation"]
+    assert stats["dating_diagnostics"] == "estimated_zero_rate_variance"
+    manifest = json.loads(path.read_text())
+    manifest["uncertainty"] = "conditional-profile-calibration-limited"
+    path.write_text(json.dumps(manifest))
+    stats = module.read_dating_stats(path)
+    assert "fitted substitution model" in stats["dating_interpretation"]
+    assert stats["dating_uncertainty"] == "conditional-profile-calibration-limited"
+    path.write_text('{"schema":"nwkit-radte-run-v1","status":"failed"}')
+    with pytest.raises(ValueError, match="Invalid NWKIT"):
+        module.read_dating_stats(path)
+    path.write_text("legacy-calibrated-node-log\n")
+    assert module.read_dating_stats(path) == {"dating_method": "legacy-calibrated-node-log"}
+
+
 def add_branch_ids(tree):
     for branch_id, node in enumerate(tree.traverse()):
         node.add_prop("branch_id", branch_id)

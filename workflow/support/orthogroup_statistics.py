@@ -27,6 +27,33 @@ from species_labeling import extract_species_label, scientific_name_from_label, 
 from species_tree_pgls import summarize_for_stat_tree as summarize_species_pgls_for_stat_tree
 
 
+def read_dating_stats(path):
+    """Retain the actual estimator and the interpretation of native intervals."""
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    if not text.lstrip().startswith("{"):
+        return {"dating_method": text.strip()}
+    manifest = json.loads(text)
+    if manifest.get("schema") != "nwkit-radte-run-v1" or manifest.get("status") != "complete":
+        raise ValueError(f"Invalid NWKIT dating manifest: {path}")
+    stats = {
+        "dating_method": "nwkit:" + manifest["method"],
+        "dating_sequence_model": manifest.get("sequence_model", {}).get("model"),
+        "dating_uncertainty": manifest.get("uncertainty"),
+        "dating_interval_level": manifest.get("interval_level"),
+    }
+    if manifest.get("experimental_native_estimator"):
+        stats["dating_interpretation"] = (
+            "Exploratory RADTE estimate; nominal intervals are conditional on the "
+            "species calibration and reconciliation assumptions. General coverage "
+            "is not established."
+        )
+        if "profile" in str(manifest.get("uncertainty")) and manifest.get("sequence_model"):
+            stats["dating_interpretation"] += " Profile intervals also condition on the fitted substitution model."
+        stats["dating_diagnostics"] = "; ".join(manifest.get("diagnostics", []))
+    return stats
+
+
 def new_tree(newick_or_path, format=1, quoted_node_names=False):
     _ = quoted_node_names
     if isinstance(newick_or_path, str) and os.path.exists(newick_or_path):
@@ -1799,7 +1826,7 @@ def main():
     tree_info = dict()
     tree_info.update(branch2tree(df_branch))
     if os.path.exists(params["dated_log"]):
-        tree_info["dating_method"] = kfog.get_dating_method(params["dated_log"])
+        tree_info.update(read_dating_stats(params["dated_log"]))
     tree_info.update(collect_sequence_stats(params["untrimmed_aln"], params["trimmed_aln"]))
     if os.path.exists(params["rooting_log"]):
         tree_tmp = kfog.get_root_stats(params["rooting_log"])
