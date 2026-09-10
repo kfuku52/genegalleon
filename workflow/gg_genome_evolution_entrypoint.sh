@@ -138,6 +138,7 @@ run_busco_dupaware_grampa_dna=0 # Run GRAMPA on rooted duplicate-aware BUSCO DNA
 run_busco_dupaware_grampa_pep=0 # Run GRAMPA on rooted duplicate-aware BUSCO protein trees.
 run_orthogroup_grampa=1 # Run GRAMPA on orthogroup gene trees; requires rooted trees produced by gg_gene_evolution.
 run_cafe=0 # Run CAFE family-size evolution analysis on selected orthogroup gene-count tables and the dated species tree.
+run_orthogroup_copy_number_trait_selection=0 # Exploratory joint elastic-net selection with nested phylogenetic-group CV; no post-selection P-values.
 run_orthogroup_copy_number_trait_pgls=0 # Test associations between orthogroup copy numbers and species traits with species-tree PGLS.
 run_go_enrichment=0 # Run GO enrichment for branches or orthogroups selected by family-size change tests.
 
@@ -194,6 +195,11 @@ grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. 
 orthogroup_copy_number_max_size_differential=9999999 # Maximum family-size difference retained in the shared orthogroup copy-number matrix.
 n_gamma_cats_cafe=4 # Number of gamma categories used by CAFE.
 orthogroup_copy_number_trait="all" # Trait column name(s) in species_trait.tsv to test against orthogroup copy numbers, or "all".
+orthogroup_copy_number_trait_selection_folds="" # Required TSV with leaf_name and fold, at least three phylogenetic groups; workspace-relative or absolute.
+orthogroup_copy_number_trait_selection_strengths="1,0.1,0.01" # Positive regularization strengths explored inside nested CV.
+orthogroup_copy_number_trait_selection_l1_ratios="1,0.5" # 1=lasso; values in (0,1) use elastic net.
+orthogroup_copy_number_trait_selection_prediction="conditional" # conditional|fixed; plug-in predictions with training random modes or fixed effects only.
+orthogroup_copy_number_trait_response_families="" # Comma-separated trait=gaussian|binomial|poisson|negative-binomial; unspecified traits use Gaussian.
 orthogroup_copy_number_trait_min_species=4 # Minimum number of tree-matched species required for each orthogroup copy-number trait PGLS fit.
 orthogroup_copy_number_trait_family_ids="" # Optional comma/space-separated orthogroup IDs to test; empty means use max_families.
 orthogroup_copy_number_trait_family_file="" # Optional file listing orthogroup IDs to test.

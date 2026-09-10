@@ -67,8 +67,14 @@ mcmctree_divergence_time_constraints_str="${mcmctree_divergence_time_constraints
 grampa_h1="${grampa_h1:-}"
 target_branch_go="${target_branch_go:-}"
 orthogroup_copy_number_max_size_differential="${orthogroup_copy_number_max_size_differential:-9999999}"
+run_orthogroup_copy_number_trait_selection="${run_orthogroup_copy_number_trait_selection:-0}"
+orthogroup_copy_number_trait_selection_folds="${orthogroup_copy_number_trait_selection_folds:-}"
+orthogroup_copy_number_trait_selection_strengths="${orthogroup_copy_number_trait_selection_strengths:-1,0.1,0.01}"
+orthogroup_copy_number_trait_selection_l1_ratios="${orthogroup_copy_number_trait_selection_l1_ratios:-1,0.5}"
+orthogroup_copy_number_trait_selection_prediction="${orthogroup_copy_number_trait_selection_prediction:-conditional}"
 run_orthogroup_copy_number_trait_pgls="${run_orthogroup_copy_number_trait_pgls:-0}"
 orthogroup_copy_number_trait="${orthogroup_copy_number_trait:-all}"
+orthogroup_copy_number_trait_response_families="${orthogroup_copy_number_trait_response_families:-}"
 orthogroup_copy_number_trait_min_species="${orthogroup_copy_number_trait_min_species:-4}"
 orthogroup_copy_number_trait_family_ids="${orthogroup_copy_number_trait_family_ids:-}"
 orthogroup_copy_number_trait_family_file="${orthogroup_copy_number_trait_family_file:-}"
@@ -2577,7 +2583,19 @@ cleanup_genome_evolution_on_exit() {
 trap cleanup_genome_evolution_on_exit EXIT
 
 # Runtime setup
-if [[ "${input_sequence_mode}" == "protein" ]]; then
+copy_number_selection_only=0
+if [[ ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then
+  copy_number_selection_only=1
+  while IFS= read -r config_name; do
+    if [[ "${config_name}" == run_* && "${config_name}" != run_orthogroup_copy_number_trait_selection && "${!config_name:-0}" != 0 ]]; then
+      copy_number_selection_only=0
+      break
+    fi
+  done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+fi
+if [[ ${copy_number_selection_only} -eq 1 ]]; then
+  echo "Copy-number selection only: using existing tree, copy-number and trait inputs."
+elif [[ "${input_sequence_mode}" == "protein" ]]; then
   if ! species_protein_input_has_files && ! species_cds_input_has_files; then
     echo "protein mode requires either species_protein inputs or species_cds inputs."
     echo "Checked: ${dir_sp_protein_input} and ${dir_sp_cds}"
@@ -2614,6 +2632,9 @@ else
   check_species_cds "${gg_workspace_dir}"
   check_if_species_files_unique "${dir_sp_cds}"
 fi
+# Imported analysis inputs in selection-only runs are validated and hashed by
+# the copy-number stages below; disabled sequence/tree producers do not own them.
+if [[ ${copy_number_selection_only} -ne 1 ]]; then
 shared_protein_input_signature=$(compute_shared_protein_input_signature)
 species_tree_requested_for_orthofinder=0
 if species_tree_summary_generation_requested; then
@@ -5543,6 +5564,8 @@ else
   gg_step_skip "${task}"
 fi
 
+fi # sequence/tree producer stages
+
 if [[ ${run_cafe} -eq 1 ]]; then
   if [[ -s "${file_orthogroup_copy_number}" ]]; then
     disable_if_no_input_file "run_cafe" "${file_orthogroup_copy_number}" "${file_dated_species_tree}"
@@ -5558,9 +5581,20 @@ if [[ ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
   fi
 fi
 
+if [[ ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then
+  if [[ -z "${orthogroup_copy_number_trait_selection_folds}" ]]; then
+    echo "orthogroup_copy_number_trait_selection_folds is required for nested group CV. Exiting."
+    exit 1
+  fi
+  if [[ "${orthogroup_copy_number_trait_selection_folds}" != /* ]]; then
+    orthogroup_copy_number_trait_selection_folds="${gg_workspace_dir}/${orthogroup_copy_number_trait_selection_folds}"
+  fi
+  disable_if_no_input_file "run_orthogroup_copy_number_trait_selection" "${file_dated_species_tree}" "${file_trait}" "${orthogroup_copy_number_trait_selection_folds}"
+fi
+
 task="Orthogroup copy-number matrix preparation"
 run_orthogroup_copy_number_stage=0
-if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
+if [[ ${run_cafe} -eq 1 || ${run_orthogroup_copy_number_trait_pgls} -eq 1 || ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then
   run_orthogroup_copy_number_stage=1
 fi
 copy_number_needs_update=0
@@ -5670,15 +5704,17 @@ copy_number_pgls_provenance_args+=(
   --input "trait_table=${file_trait}"
   --input "adapter=${gg_support_dir}/orthogroup_copy_number_trait_pgls.r"
   --parameter "engine=nwkit_regress"
+  --parameter "predictor_transform=log1p"
   --parameter "nwkit_identity=${genome_nwkit_identity}"
   --parameter "model=brownian"
-  --parameter "covariance_estimator=gaussian-REML"
+  --parameter "covariance_estimator=family-specific-REML-or-ML"
   --parameter "measurement_error_model=none"
   --output "matrix=${file_orthogroup_copy_number_matrix}"
   --output "pgls=${file_orthogroup_copy_number_trait_pgls}"
   --output "summary_plot=${file_orthogroup_copy_number_trait_pgls_summary_pdf}"
   --output "significant=${file_orthogroup_copy_number_trait_pgls_significant}"
   --output "summary_svg=${file_orthogroup_copy_number_trait_pgls_summary_pdf%.pdf}.svg"
+  --parameter "response_families=${orthogroup_copy_number_trait_response_families}"
   --parameter "trait=${orthogroup_copy_number_trait}"
   --parameter "min_species=${orthogroup_copy_number_trait_min_species}"
   --parameter "family_ids=${orthogroup_copy_number_trait_family_ids}"
@@ -5697,6 +5733,7 @@ if [[ ${copy_number_pgls_needs_update} -eq 1 && ${run_orthogroup_copy_number_tra
     --file_sptree="${file_dated_species_tree}" \
     --file_trait="${file_trait}" \
     --outdir="${dir_orthogroup_copy_number_trait_pgls}" \
+    --response_families="${orthogroup_copy_number_trait_response_families}" \
     --trait="${orthogroup_copy_number_trait}" \
     --min_species="${orthogroup_copy_number_trait_min_species}" \
     --family_ids="${orthogroup_copy_number_trait_family_ids}" \
@@ -5711,6 +5748,52 @@ if [[ ${copy_number_pgls_needs_update} -eq 1 && ${run_orthogroup_copy_number_tra
   fi
   gg_artifact_record "${copy_number_pgls_provenance_args[@]}"
   echo "$(date): End: ${task}"
+else
+  gg_step_skip "${task}"
+fi
+
+
+task="Orthogroup copy-number trait selection"
+dir_orthogroup_copy_number_trait_selection="${dir_orthogroup_copy_number}/trait_selection"
+disable_if_no_input_file "run_orthogroup_copy_number_trait_selection" "${file_orthogroup_copy_number}" "${file_dated_species_tree}" "${file_trait}" "${orthogroup_copy_number_trait_selection_folds}"
+copy_number_selection_needs_update=0
+gg_artifact_contract_init copy_number_selection_provenance_args "orthogroup_copy_number_trait_selection" "all_orthogroups" "${genome_evolution_provenance_dir}/orthogroup.copy_number_trait_selection.json"
+copy_number_selection_provenance_args+=(
+  --input "copy_number=${file_orthogroup_copy_number}"
+  --input "dated_species_tree=${file_dated_species_tree}"
+  --input "trait_table=${file_trait}"
+  --input "adapter=${gg_support_dir}/orthogroup_copy_number_trait_selection.py"
+  --output-logical-directory "selection_bundle=${dir_orthogroup_copy_number_trait_selection}"
+  --parameter "predictor_transform=log1p"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --parameter "response_families=${orthogroup_copy_number_trait_response_families}"
+  --parameter "trait=${orthogroup_copy_number_trait}"
+  --parameter "family_ids=${orthogroup_copy_number_trait_family_ids}"
+  --parameter "max_families=${orthogroup_copy_number_trait_max_families}"
+  --parameter "strengths=${orthogroup_copy_number_trait_selection_strengths}"
+  --parameter "l1_ratios=${orthogroup_copy_number_trait_selection_l1_ratios}"
+  --parameter "prediction=${orthogroup_copy_number_trait_selection_prediction}"
+)
+gg_artifact_add_input_if_present copy_number_selection_provenance_args "folds" "${orthogroup_copy_number_trait_selection_folds}"
+gg_artifact_add_input_if_present copy_number_selection_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
+gg_artifact_prepare_stage copy_number_selection_needs_update run_orthogroup_copy_number_trait_selection "${copy_number_selection_provenance_args[@]}" || exit $?
+if [[ ${copy_number_selection_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then
+  gg_step_start "${task}"
+  python "${gg_support_dir}/orthogroup_copy_number_trait_selection.py" \
+    --copy-number "${file_orthogroup_copy_number}" \
+    --tree "${file_dated_species_tree}" \
+    --traits "${file_trait}" \
+    --folds "${orthogroup_copy_number_trait_selection_folds}" \
+    --trait "${orthogroup_copy_number_trait}" \
+    --response-families "${orthogroup_copy_number_trait_response_families}" \
+    --family-ids "${orthogroup_copy_number_trait_family_ids}" \
+    --family-file "${orthogroup_copy_number_trait_family_file}" \
+    --max-families "${orthogroup_copy_number_trait_max_families}" \
+    --strengths "${orthogroup_copy_number_trait_selection_strengths}" \
+    --l1-ratios "${orthogroup_copy_number_trait_selection_l1_ratios}" \
+    --prediction "${orthogroup_copy_number_trait_selection_prediction}" \
+    --outdir "${dir_orthogroup_copy_number_trait_selection}" || exit $?
+  gg_artifact_record "${copy_number_selection_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi

@@ -535,6 +535,10 @@ Notable defaults:
   `run_go_enrichment=0` by default,
 - `orthogroup_copy_number/orthogroup_copy_number.tsv` is a shared
   species-by-orthogroup copy-number matrix used by CAFE and by trait PGLS,
+- `run_orthogroup_copy_number_trait_selection=1` optionally runs exploratory joint
+  lasso/elastic-net selection with nested phylogenetic-group cross-validation;
+  it requires an explicit folds TSV and does not produce post-selection P-values.
+  See [response families and selection](copy-number-trait-models.md).
 - `run_orthogroup_copy_number_trait_pgls=1` tests associations between
   orthogroup copy numbers and `workspace/input/species_trait/species_trait.tsv`
   with species-tree PGLS; it does not use CAFE5 result files such as

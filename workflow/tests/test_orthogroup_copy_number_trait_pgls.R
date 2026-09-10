@@ -112,9 +112,10 @@ df_stat <- run_orthogroup_copy_number_trait_associations(
 
 og1_height <- df_stat[df_stat$Orthogroup == "OG1" & df_stat$trait == "height", , drop = FALSE]
 stopifnot(nrow(og1_height) == 1)
-stopifnot(identical(og1_height$status, "ok"))
+stopifnot(identical(og1_height$status, "ok"),
+          identical(og1_height$predictor_transform, "log1p"))
 # Independent GLS calculation using ape's Brownian covariance.
-X <- cbind(1, 1:4)
+X <- cbind(1, log1p(1:4))
 y <- c(1, 3, 2, 6)
 V <- ape::vcv.phylo(tree)
 precision <- solve(V)
@@ -205,3 +206,34 @@ stopifnot(inherits(blocked_failure, "error"), dir.exists(blocked_name),
           identical(blocked_before, lapply(file.path(outdir, head(output_names, -1)), readBin, what = "raw", n = 10000)))
 
 cat("test_orthogroup_copy_number_trait_pgls.R: OK\n")
+
+# Family routing uses the actual NWKIT engine, including numeric 0/1 coding.
+stopifnot(identical(unname(resolve_response_families("binary_trait=binomial,height=poisson", c("height", "binary_trait"))), c("poisson", "binomial")))
+for (bad in c("unknown=binomial", "height=bad", "height=poisson,height=gaussian")) {
+  stopifnot(inherits(tryCatch(resolve_response_families(bad, "height"), error = identity), "error"))
+}
+stopifnot(inherits(tryCatch(validate_response_values(c(0, 2), "binomial"), error = identity), "error"))
+stopifnot(inherits(tryCatch(validate_response_values(c(0, 1.5), "poisson"), error = identity), "error"))
+mixed <- run_orthogroup_copy_number_trait_associations(
+  copy_matrix, load_trait_table(trait_file), tree, c("height", "binary_trait"),
+  response_families = "height=poisson,binary_trait=binomial"
+)
+stopifnot(all(mixed$response_family[mixed$trait == "height"] == "poisson"))
+stopifnot(all(mixed$response_family[mixed$trait == "binary_trait"] == "binomial"))
+stopifnot(all(mixed$link_function[mixed$trait == "binary_trait"] == "logit"))
+stopifnot(!any(mixed$status == "error"))
+cat("mixed-family regression: OK\n")
+
+stopifnot(inherits(tryCatch(parse_response_values(c("0", "oops"), "binomial"), error = identity), "error"))
+stopifnot(inherits(tryCatch(parse_response_values(c("1", "Inf"), "poisson"), error = identity), "error"))
+stopifnot(identical(parse_response_values(c("0", "1", "NA"), "binomial"), c(0, 1, NA_real_)))
+
+# Missing responses confined to one root clade must preserve shared history.
+rooted_subset_source <- ape::read.tree(text = "(((a:1.123456789012345,b:1):1,(c:1,d:1):1):2,(e:1,f:1):3);")
+rooted_subset_names <- c("a", "b", "c", "d")
+rooted_subset <- subset_tree_to_species(rooted_subset_source, rooted_subset_names)
+stopifnot(isTRUE(all.equal(
+  ape::vcv(rooted_subset),
+  ape::vcv(rooted_subset_source)[rooted_subset_names, rooted_subset_names],
+  tolerance = 1e-14
+)))

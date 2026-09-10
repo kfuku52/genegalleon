@@ -1743,14 +1743,17 @@ def aggregate_trait_column(
     values = db_df[plan_row.source_column]
     if plan_row.value_type == "binary":
         if plan_row.positive_values:
-            mapped = strip_string_series(values, lower=True).isin(plan_row.positive_values).astype("int8")
+            normalized = strip_string_series(values, lower=True)
+            missing = values.isna() | normalized.isin(["", "na", "nan", "n/a", "null", "none"])
+            mapped = normalized.isin(plan_row.positive_values).astype(float).mask(missing)
         else:
-            mapped = (pandas.to_numeric(values, errors="coerce").fillna(0) > 0).astype("int8")
+            numeric = pandas.to_numeric(values, errors="coerce")
+            mapped = (numeric > 0).astype(float).mask(numeric.isna())
         grouped = mapped.groupby(group_keys, observed=True, sort=False)
         if plan_row.aggregation in ("all", "min"):
             return grouped.min()
         if plan_row.aggregation == "sum":
-            return grouped.sum()
+            return grouped.sum(min_count=1)
         if plan_row.aggregation == "mean":
             return grouped.mean()
         return grouped.max()
@@ -1868,7 +1871,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail when required inputs are missing or no trait columns are produced.",
+        help="Fail when required inputs are missing or any requested output trait has no observed values.",
     )
     parser.add_argument(
         "--dry-run",
@@ -2211,6 +2214,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _log("ERROR: No trait columns were generated.")
         return 1
 
+    empty_traits = [col for col in trait_columns if not output_df[col].ne("").any()]
+    if args.strict and empty_traits and not args.dry_run:
+        _log("ERROR: No observed values for requested traits: {}".format(", ".join(empty_traits)))
+        return 1
+
     if args.dry_run:
         _log("[dry-run] species_trait output would be written to: {}".format(output_path))
     else:
@@ -2224,6 +2232,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "num_target_species": len(species_sorted),
             "num_trait_columns": len(trait_columns),
             "num_species_with_any_trait": num_species_with_any_trait,
+            "num_observed_by_trait": {col: int(output_df[col].ne("").sum()) for col in trait_columns},
             "num_requested_databases": len(requested_databases),
             "num_loaded_databases": len(db_frames),
             "output_path": str(output_path),

@@ -38,7 +38,7 @@ The unused legacy gene-tree R regression helper is also removed. See
 [the expression-trait recipe](common-workflow-recipes.md) for supported models,
 replicate uncertainty, categorical predictors, and species aggregation.
 
-Orthogroup copy-number/trait regression now fits `trait_value ~ copy_number`
+Orthogroup copy-number/trait regression defaults to `trait_value ~ log1p(copy_number)`
 with NWKIT Brownian restricted-maximum-likelihood (REML) GLS and Wald inference.
 Copy numbers are exact predictors. For one complete observation per species,
 the former Rphylopars fit automatically disabled phenotype error and used REML;
@@ -54,6 +54,13 @@ columns are removed. Native coefficient, standard error, statistic, degrees of
 freedom, evolutionary rate, covariance/model/inference metadata, and optimizer
 and small-sample diagnostics are included. `fit_mode` is `nwkit_brownian_reml`.
 Use the full result table and fit status when interpreting screened results.
+
+Binary, Poisson and negative-binomial response families can now be selected
+per trait; non-Gaussian models use NWKIT Laplace ML with the appropriate link.
+The optional joint-selection stage calls `nwkit regress-select` and emits
+exploratory coefficients, nested-CV predictions and selection frequencies.
+See [copy-number models](copy-number-trait-models.md) for configuration and the
+explicit distinction between ordinary tests and selection outputs.
 
 ## Failure handling and cache invalidation
 

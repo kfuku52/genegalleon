@@ -975,3 +975,44 @@ def test_aggregate_trait_column_binary_positive_values():
         "Homo_sapiens": 1,
         "Mus_musculus": 0,
     }
+
+
+def test_binary_missing_values_remain_missing_for_every_aggregation():
+    module = load_script_module()
+    for positives, values in [(set(), [None, "", "NA", "0", "1"]), ({"yes"}, [None, "", "NA", "no", "yes"])]:
+        for aggregation in ["any", "all", "sum", "mean"]:
+            plan = module.TraitPlanRow("gift", "value", "trait", "binary", aggregation, positives, "", "")
+            frame = pandas.DataFrame({"__species_norm": ["a", "a", "a", "b", "c"], "value": values})
+            result = module.aggregate_trait_column(frame, plan)
+            assert pandas.isna(result["a"])
+            assert result["b"] == 0
+            assert result["c"] == 1
+
+
+def test_strict_rejects_all_missing_trait_without_overwriting_output(tmp_path):
+    manifest, source, plan, sources, output = [
+        tmp_path / name for name in ["manifest.tsv", "raw.tsv", "plan.tsv", "sources.tsv", "output.tsv"]
+    ]
+    manifest.write_text("species_key\nArabidopsis_thaliana\n")
+    source.write_text("species\tvalue\nArabidopsis_thaliana\tNA\n")
+    plan.write_text(
+        "database\tsource_column\toutput_trait\tvalue_type\taggregation\naustraits\tvalue\theight\tnumeric\tmedian\n"
+    )
+    sources.write_text(f"database\tacquisition_mode\turi\tspecies_column\naustraits\tbulk\t{source}\tspecies\n")
+    output.write_text("prior result\n")
+    result = run_script(
+        "--download-manifest",
+        str(manifest),
+        "--trait-plan",
+        str(plan),
+        "--database-sources",
+        str(sources),
+        "--output",
+        str(output),
+        "--downloads-dir",
+        str(tmp_path / "downloads"),
+        "--strict",
+    )
+    assert result.returncode != 0
+    assert "No observed values" in result.stdout
+    assert output.read_text() == "prior result\n"

@@ -272,7 +272,9 @@ subset_tree_to_species <- function(tree, species) {
   keep <- unique(as.character(species))
   drop_tips <- tree$tip.label[!tree$tip.label %in% keep]
   if (length(drop_tips)) {
-    tree <- ape::drop.tip(tree, drop_tips)
+    # Preserve the original root and shared Brownian history after missing tips
+    # are removed, including when all retained tips lie in one descendant clade.
+    tree <- ape::drop.tip(tree, drop_tips, collapse.singles = FALSE)
   }
   tree
 }
@@ -290,6 +292,15 @@ make_empty_result_row <- function(family_id, trait_col, n_species = 0L, status =
     statistic = NA_real_,
     degrees_of_freedom = NA_real_,
     evolutionary_rate = NA_real_,
+    response_dispersion = NA_real_,
+    response_reference = "",
+    separation_warning = "",
+    boundary_warning = "",
+    optimizer_converged = "",
+    response_family = "gaussian",
+    link_function = "identity",
+    coefficient_penalty = "none",
+    predictor_transform = "log1p",
     covariance_estimator = "gaussian-REML",
     evolution_model = "brownian",
     measurement_error_model = "none",
@@ -317,7 +328,41 @@ empty_orthogroup_copy_number_trait_result <- function() {
 # Brownian GLS with intercept and REML residual rate preserves the old
 # Rphylopars coefficient/SE test for one complete observation per species.
 # Rphylopars disables phenotype error for those unreplicated inputs.
-fit_nwkit_copy_number_model <- function(model_df, tree) {
+resolve_response_families <- function(spec, trait_cols) {
+  out <- setNames(rep("gaussian", length(trait_cols)), trait_cols)
+  seen <- character()
+  for (token in split_tokens(spec)) {
+    pair <- strsplit(token, "=", fixed = TRUE)[[1]]
+    if (length(pair) != 2L || !pair[[1]] %in% trait_cols ||
+        !pair[[2]] %in% c("gaussian", "binomial", "poisson", "negative-binomial")) {
+      stop("Invalid response family mapping: ", token,
+           ". Use trait=gaussian|binomial|poisson|negative-binomial.")
+    }
+    if (pair[[1]] %in% seen) stop("Duplicate response family: ", pair[[1]])
+    seen <- c(seen, pair[[1]])
+    out[[pair[[1]]]] <- pair[[2]]
+  }
+  out
+}
+
+parse_response_values <- function(values, family) {
+  missing <- is.na(values) | as.character(values) %in% c("", "NA", "NaN", "nan")
+  numeric <- suppressWarnings(as.numeric(values))
+  if (any(!missing & !is.finite(numeric))) stop("Trait values must be numeric and finite, or explicitly missing.")
+  numeric[missing] <- NA_real_
+  validate_response_values(numeric, family)
+  numeric
+}
+
+validate_response_values <- function(values, family) {
+  values <- values[is.finite(values)]
+  if (family == "binomial" && any(!values %in% c(0, 1))) stop("Binomial traits must contain only 0/1 or missing values.")
+  if (family %in% c("poisson", "negative-binomial") && any(values < 0 | values != floor(values))) {
+    stop("Count traits must contain non-negative integers or missing values.")
+  }
+}
+
+fit_nwkit_copy_number_model <- function(model_df, tree, response_family = "gaussian") {
   executable <- Sys.which("nwkit")
   if (!nzchar(executable)) stop("nwkit regress is required for copy-number PGLS.")
   work <- tempfile("nwkit-copy-number-")
@@ -326,14 +371,19 @@ fit_nwkit_copy_number_model <- function(model_df, tree) {
   tree_path <- file.path(work, "tree.nwk")
   data_path <- file.path(work, "data.tsv")
   result_path <- file.path(work, "result.tsv")
-  ape::write.tree(tree, file = tree_path)
+  ape::write.tree(tree, file = tree_path, digits = 17)
   data <- model_df[, c("species", "trait_value", "copy_number"), drop = FALSE]
   names(data)[[1]] <- "leaf_name"
   write_tsv_base(data, data_path)
   command <- c("regress", "--tree", tree_path, "--data", data_path,
                "--responses", "trait_value", "--predictors", "copy_number",
                "--evolution-model", "brownian", "--intercept", "yes",
-               "--reml", "yes", "--inference", "wald", "--outfile", result_path)
+               "--reml", if (response_family == "gaussian") "yes" else "no",
+               "--response-family", paste0("trait_value=", response_family),
+               "--coefficient-penalty", "none", "--inference", "wald", "--outfile", result_path)
+  if (response_family == "binomial") {
+    command <- c(command, "--categorical-responses", "trait_value", "--response-reference", "trait_value=0")
+  }
   log <- suppressWarnings(system2(executable, shQuote(command), stdout = TRUE, stderr = TRUE))
   status <- attr(log, "status")
   if (!is.null(status) && status != 0L) {
@@ -346,8 +396,9 @@ fit_nwkit_copy_number_model <- function(model_df, tree) {
 }
 
 fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trait_col, min_species = 4L,
-                               verbose = FALSE) {
-  model_df$trait_value <- suppressWarnings(as.numeric(model_df$trait_value))
+                               verbose = FALSE, response_family = "gaussian") {
+  model_df$trait_value <- parse_response_values(model_df$trait_value, response_family)
+  validate_response_values(model_df$trait_value, response_family)
   model_df$copy_number <- suppressWarnings(as.numeric(model_df$copy_number))
   model_df <- model_df[
     !is.na(model_df$species) & nzchar(model_df$species) &
@@ -355,6 +406,10 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
     ,
     drop = FALSE
   ]
+  if (any(model_df$copy_number < 0 | model_df$copy_number != floor(model_df$copy_number))) {
+    stop("Predictor copy numbers must be non-negative integers.")
+  }
+  model_df$copy_number <- log1p(model_df$copy_number)
   n_species <- length(unique(model_df$species))
   if (n_species < min_species) {
     return(make_empty_result_row(family_id, trait_col, n_species, "skipped", "too_few_species"))
@@ -377,12 +432,12 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
   pcc <- suppressWarnings(cor(model_df$copy_number, model_df$trait_value, method = "pearson", use = "complete.obs"))
   ols_slope <- suppressWarnings(stats::coef(stats::lm(trait_value ~ copy_number, data = model_df))[["copy_number"]])
 
-  fitted <- tryCatch(fit_nwkit_copy_number_model(model_df, tree_use), error = identity)
+  fitted <- tryCatch(fit_nwkit_copy_number_model(model_df, tree_use, response_family), error = identity)
   if (inherits(fitted, "error")) {
     out <- make_empty_result_row(family_id, trait_col, n_species, "error", "fit_failed")
     out$PCC <- safe_as_num(pcc)
     out$OLS_slope <- safe_as_num(ols_slope)
-    out$fit_mode <- "nwkit_brownian_reml"
+    out$fit_mode <- if (response_family == "gaussian") "nwkit_brownian_reml" else paste0("nwkit_", response_family, "_ml")
     out$error_message <- conditionMessage(fitted)
     return(out)
   }
@@ -396,19 +451,21 @@ fit_one_orthogroup_copy_number_trait <- function(model_df, tree, family_id, trai
   out$logLik <- safe_as_num(fitted$log_likelihood)
   out$PCC <- safe_as_num(pcc)
   out$OLS_slope <- safe_as_num(ols_slope)
-  out$fit_mode <- "nwkit_brownian_reml"
+  out$fit_mode <- if (response_family == "gaussian") "nwkit_brownian_reml" else paste0("nwkit_", response_family, "_ml")
   out
 }
 
 run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tree, trait_cols, min_species = 4L,
-                                        p_adjust_method = "BH", verbose = FALSE) {
+                                        p_adjust_method = "BH", verbose = FALSE, response_families = "") {
+  family_map <- resolve_response_families(response_families, trait_cols)
   rows <- list()
   idx <- 0L
   for (trait_col in trait_cols) {
     if (verbose) {
       cat("Processing trait:", trait_col, "\n")
     }
-    trait_values <- suppressWarnings(as.numeric(trait[[trait_col]]))
+    trait_values <- parse_response_values(trait[[trait_col]], family_map[[trait_col]])
+    validate_response_values(trait_values, family_map[[trait_col]])
     trait_df <- data.frame(species = trait$species, trait_value = trait_values, stringsAsFactors = FALSE)
     for (family_id in colnames(copy_matrix)) {
       idx <- idx + 1L
@@ -420,8 +477,11 @@ run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tr
         family_id = family_id,
         trait_col = trait_col,
         min_species = min_species,
-        verbose = verbose
+        verbose = verbose, response_family = family_map[[trait_col]]
       )
+      rows[[idx]]$covariance_estimator <- if (family_map[[trait_col]] == "gaussian") "gaussian-REML" else "laplace-ML"
+      rows[[idx]]$response_family <- family_map[[trait_col]]
+      rows[[idx]]$link_function <- switch(family_map[[trait_col]], gaussian = "identity", binomial = "logit", "log")
     }
   }
   if (!length(rows)) {
@@ -497,7 +557,7 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
                                 trait_arg = "all", min_species = 4L,
                                 family_ids = "", family_file = "", max_families = "all",
                                 p_adjust_method = "BH", alpha = 0.05, plot_top_n = 50L,
-                                verbose = FALSE) {
+                                verbose = FALSE, response_families = "") {
   if (!nzchar(Sys.which("nwkit"))) stop("nwkit regress is required for copy-number PGLS.")
   work <- tempfile("nwkit-copy-number-results-")
   dir.create(work)
@@ -522,6 +582,7 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
     trait_cols = trait_cols,
     min_species = min_species,
     p_adjust_method = p_adjust_method,
+    response_families = response_families,
     verbose = verbose
   )
   write_tsv_base(df_stat, file.path(work, "orthogroup_copy_number_trait_pgls.tsv"))
@@ -548,6 +609,7 @@ main <- function() {
     file_trait = parse_string(args, "file_trait"),
     outdir = parse_string(args, "outdir"),
     trait_arg = parse_string(args, "trait", "all"),
+    response_families = parse_string(args, "response_families", ""),
     min_species = parse_integer(args, "min_species", 4L),
     family_ids = parse_string(args, "family_ids", ""),
     family_file = parse_string(args, "family_file", ""),

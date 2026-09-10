@@ -5,6 +5,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_copy_number_selection_runtime.py",
     "test_nwkit_tree_workflows_runtime.py",
     "test_asr_intron_runtime.py",
     "test_native_tree_dating.py",

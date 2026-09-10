@@ -194,6 +194,12 @@ Trait-PGLS outputs are written under:
 Use `orthogroup_copy_number_trait="trait_a,trait_b"` to test selected trait
 columns, and use `orthogroup_copy_number_trait_family_ids` or
 `orthogroup_copy_number_trait_family_file` to restrict the orthogroups tested.
+For binary or count traits, set
+`orthogroup_copy_number_trait_response_families="present=binomial,count=negative-binomial"`.
+For exploratory joint selection, enable `run_orthogroup_copy_number_trait_selection=1`
+and supply phylogenetic fold assignments. See [copy-number models and selection](copy-number-trait-models.md)
+for the complete configuration, result schema and inference limits.
+
 This stage tests species-level orthogroup copy numbers against species traits
 with species-tree PGLS. It does not use CAFE5 result files such as
 `Gamma_change.tab`; `run_cafe=1` is only needed when you also want the separate
