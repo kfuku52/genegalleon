@@ -1,10 +1,10 @@
 """Real PAML and advisory-diagnostic integration tests; run in GeneGalleon."""
 import importlib.util
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 

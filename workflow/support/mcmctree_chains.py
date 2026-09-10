@@ -14,16 +14,15 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
-import signal
+import tempfile
 import threading
 import time
-import tempfile
-
+from pathlib import Path
 
 STOP = threading.Event()
 PROCESSES = set()
@@ -208,7 +207,7 @@ def diagnose(paths, root):
             try:
                 rhat, bulk, tail = [float(row[k]) for k in ('rhat', 'ess_bulk', 'ess_tail')]
             except ValueError:
-                raise ValueError('Undefined diagnostics (including constant parameters)')
+                raise ValueError('Undefined diagnostics (including constant parameters)') from None
             if not all(map(math.isfinite, (rhat, bulk, tail))):
                 raise ValueError('Non-finite diagnostics')
             if rhat >= 1.01 or bulk < 400 or tail < 400:

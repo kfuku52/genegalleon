@@ -30,7 +30,7 @@ treevis_gene_structure_data = function(tips, mode='compressed') {
             lens = blocks[,2] - blocks[,1] + 1
             boundary_text = as.character(tips[['transcript_junction_positions']][i])
             boundaries = if (nzchar(boundary_text)) suppressWarnings(as.numeric(strsplit(boundary_text, ';', fixed=TRUE)[[1]])) else numeric()
-            expected = head(cumsum(lens), -1)
+            expected = utils::head(cumsum(lens), -1)
             if (!identical(boundaries, expected)) stop('Invalid trans-splicing junction positions')
             if ('num_intron' %in% names(tips) && !is.na(tips[['num_intron']][i])) {
                 stop('Trans-splicing must not be reported as a cis-intron count')

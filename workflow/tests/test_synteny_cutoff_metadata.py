@@ -1,7 +1,7 @@
 """Keep the plotted cutoff tied to the search that produced the neighbors."""
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pandas as pd
 

@@ -171,6 +171,19 @@ def test_failed_codon_dating_keeps_previous_results(tmp_path):
     assert not (tmp_path / "recorded-provenance.txt").exists()
 
 
+def _assert_profile_output_contract(prefix, manifest):
+    import pandas as pd
+
+    nodes = pd.read_csv(str(prefix) + ".nodes.tsv", sep="\t")
+    if manifest["log_rate_sd"] == 0:
+        # A boundary optimum cannot be reported as a regular profile interval.
+        assert manifest["uncertainty"] == "unavailable-strict-clock-limit"
+        assert "estimated_rate_variance_at_zero_boundary" in manifest["diagnostics"]
+        assert nodes[["interval_lower", "interval_upper"]].isna().all().all()
+    else:
+        assert manifest["uncertainty"].startswith("conditional-profile")
+
+
 def test_default_cds_model_estimates_nuisance_parameters(tmp_path):
     result = _fixture(tmp_path, "gy94", "generax", use_defaults=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -183,8 +196,9 @@ def test_default_cds_model_estimates_nuisance_parameters(tmp_path):
     assert model["alignment_codon_sites"] == 150
     assert manifest["options"]["uncertainty"] == "profile"
     assert manifest["options"]["interval_level"] == 0.95
-    assert manifest["uncertainty"].startswith("conditional-profile")
-    assert "profile_quadratic_failed_validation_refitted_exact" in manifest["diagnostics"]
+    _assert_profile_output_contract(tmp_path / "out/dated_tree_native/OG0000001_radte", manifest)
+    if manifest["log_rate_sd"] > 0:
+        assert "profile_quadratic_failed_validation_refitted_exact" in manifest["diagnostics"]
 
 
 @pytest.mark.parametrize("iqtree_model", ["", "GY+F3X4+R4"])
@@ -196,7 +210,7 @@ def test_iqtree_stage_retains_profile_and_species_age_contract(tmp_path, iqtree_
     assert manifest["sequence_model"]["engine"] == "iqtree"
     assert manifest["sequence_model"]["iqtree_interface"] == "standard-cli-iq2mc"
     assert manifest["sequence_model"]["frozen_model"].startswith("GY{")
-    assert manifest["uncertainty"].startswith("conditional-profile")
+    _assert_profile_output_contract(tmp_path / "out/dated_tree_native/OG0000001_radte", manifest)
     assert manifest["options"]["backend"] == "native"
     assert manifest["options"]["sequence_engine"] == "iqtree"
     assert Path(str(prefix) + ".pdf").read_bytes().startswith(b"%PDF")
@@ -221,7 +235,7 @@ def test_external_iqtree_library_stage_preserves_outputs_and_provenance(tmp_path
     assert manifest["sequence_model"]["iqtree_interface"] == "library-worker-v1"
     library = manifest["sequence_model"]["iqtree_library"]
     assert len(library["library_sha256"]) == len(library["worker_sha256"]) == 64
-    assert manifest["uncertainty"].startswith("conditional-profile")
+    _assert_profile_output_contract(tmp_path / "out/dated_tree_native/OG0000001_radte", manifest)
     assert Path(str(prefix) + ".pdf").read_bytes().startswith(b"%PDF")
     provenance = (tmp_path / "recorded-provenance.txt").read_text()
     assert "iqtree_interface=library" in provenance

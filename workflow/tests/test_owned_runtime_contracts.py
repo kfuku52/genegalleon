@@ -14,6 +14,7 @@ EXPECTED_SOURCES = {
     "nwkit",
     "BUSCO",
     "paml",
+    "iqtree",
     "kfl1ou",
     "kfFractBias",
     "kftools",

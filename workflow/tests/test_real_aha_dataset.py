@@ -59,6 +59,7 @@ def test_real_aha_neighborhoods_are_contiguous_and_annotations_fit():
 def test_all_aha_structures_reconstruct_the_input_cds():
     """Catch wrong isoforms/fragmented models even when IDs resolve correctly."""
     from Bio.Seq import Seq
+
     from workflow.support.gff2genestat import process_single_gff
     manifest=json.loads((INPUT/'dataset_manifest/real_neighborhoods.json').read_text())
     anchors=set((INPUT/'dataset_manifest/aha_anchors.txt').read_text().splitlines())
@@ -67,17 +68,21 @@ def test_all_aha_structures_reconstruct_the_input_cds():
     gff_columns=['sequence','source','feature','start','end','score','strand','phase','attributes']
     for species in manifest['species']:
         files={kind:INPUT/kind/entry['filename'] for kind,entry in species['output_files'].items()}
-        cds=read_records(files['species_cds']);genome=read_records(files['species_genome'])
+        cds=read_records(files['species_cds'])
+        genome=read_records(files['species_genome'])
         selected=sorted(anchors & cds.keys())
         traits=process_single_gff(files['species_gff'].name,str(files['species_gff'].parent),
                                   selected,'CDS','longest',gff_columns,columns)
         for row in traits.itertuples(index=False):
             blocks=[tuple(map(int,b.split('-'))) for b in row.feature_blocks.split(';')]
             pieces=[genome[row.chromosome][1][a-1:b] for a,b in blocks]
-            if row.strand=='-':pieces=[str(Seq(s).reverse_complement()) for s in pieces]
-            sequence=''.join(pieces).upper();target=cds[row.gene_id][1].upper()
+            if row.strand=='-':
+                pieces=[str(Seq(s).reverse_complement()) for s in pieces]
+            sequence=''.join(pieces).upper()
+            target=cds[row.gene_id][1].upper()
             assert len(sequence)==len(target)==row.feature_size, row.gene_id
-            assert all(a==b or b=='N' for a,b in zip(sequence,target)), row.gene_id
-            if row.gene_id.startswith('Cephalotus_'):assert row.num_intron>0
+            assert all(a==b or b=='N' for a,b in zip(sequence, target, strict=True)), row.gene_id
+            if row.gene_id.startswith('Cephalotus_'):
+                assert row.num_intron>0
             checked.add(row.gene_id)
     assert checked==anchors and len(checked)==60

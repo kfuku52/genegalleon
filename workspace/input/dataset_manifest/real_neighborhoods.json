@@ -6729,7 +6729,7 @@
     "fractionation_bias_pairs.example.tsv": "df8fcb592d91c18d3ae7464cc20cd26cdcef5cfeb0e53f8536812cf0662293a8",
     "input_generation/direct_catalog_curated.tsv": "f545fbcdec36dfdd466689ab51ca8cda0d0c369e15997178ec7c7b77f46670e4",
     "input_generation/download_plan.xlsx": "0c326e45a0cadf279c2d1ec711d8a4c506dd7aa451cd4a0ec5e2387085945e5a",
-    "input_generation/trait_database_sources.tsv": "858ac45a830ad62b312638e7d59d448426356d588fb4a17cfaa5c5e1694813a2",
+    "input_generation/trait_database_sources.tsv": "0da784f2c347fa368aa69727ed3bc8f727d7c949df34d57b2a6cc6a6cb746b5a",
     "input_generation/trait_plan.tsv": "50400d02b28ad46fd2a70c83ae14e257d04e04363e9ae46b5237b26de26ca972",
     "query_gene/AHA": "9882e7ec88af8087f14caf424bddfe8c2faf7272751fb485deb993eda9a5239c",
     "query_gene/STRICTCHK": "9882e7ec88af8087f14caf424bddfe8c2faf7272751fb485deb993eda9a5239c",

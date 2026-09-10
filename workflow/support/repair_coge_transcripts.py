@@ -8,6 +8,7 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
+
 from Bio.Seq import Seq
 
 try:
@@ -95,7 +96,7 @@ def repair(gff, cds, genome, species, output, audit, gene_ids=None):
             pieces = [str(Seq(s).reverse_complement()) for s in pieces]
         reconstructed = ''.join(pieces).upper()
         target = sequences[identifier][1].upper()
-        if len(reconstructed) != len(target) or any(a != b and b != 'N' for a,b in zip(reconstructed,target)):
+        if len(reconstructed) != len(target) or any(a != b and b != 'N' for a,b in zip(reconstructed, target, strict=True)):
             raise ValueError(f'Genome/CDS sequence mismatch for {identifier}')
         if not any(b in 'ACGT' for b in target):
             raise ValueError(f'No resolved sequence evidence for {identifier}')
@@ -124,7 +125,8 @@ def repair(gff, cds, genome, species, output, audit, gene_ids=None):
                 handle.write('\t'.join(replaced.get(i,row))+'\n')
     payload['output_sha256'] = sha256(output)
     with audit.open('x') as handle:
-        json.dump(payload,handle,indent=2);handle.write('\n')
+        json.dump(payload,handle,indent=2)
+        handle.write('\n')
     return payload
 
 
