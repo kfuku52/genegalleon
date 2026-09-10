@@ -70,6 +70,7 @@ def inputs(tmp_path):
 
 def test_adapter_real_native_search_artifacts_resume_and_topology_safe_summary(tmp_path):
     args = inputs(tmp_path)
+    args.extend(["--search-strategy", "native-path"])
     main(args)
     model = json.loads((tmp_path / "result.model.json").read_text())
     assert model["information_criterion"]["criterion"] == "AICc"
@@ -110,7 +111,8 @@ def test_failed_adapter_does_not_replace_any_previous_artifact(tmp_path):
     assert not (tmp_path / "result.pdf").exists()
 
 
-def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(tmp_path):
+@pytest.mark.parametrize("use_defaults", [False, True])
+def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(tmp_path, use_defaults):
     inputs(tmp_path)
     core = (SUPPORT.parent / "core" / "gg_gene_evolution_core.sh").read_text()
     defaults = core.split('run_native_ou="${run_native_ou:-0}"', 1)[1].split("treevis_query_marker=", 1)[0]
@@ -130,6 +132,9 @@ def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(t
         "gg_workspace_dir": str(tmp_path),
         "og_id": "family",
     }
+    if use_defaults:
+        variables.pop("native_ou_max_shifts")
+        variables.pop("native_ou_convergence")
     script = "set -euo pipefail\n" + "\n".join(f"{name}={shlex.quote(value)}" for name, value in variables.items())
     script += "\n" + defaults + "\n"
     script += """
@@ -146,13 +151,19 @@ task="native test"
     script += stage
     subprocess.run(["bash", "-c", script], cwd=tmp_path, check=True, capture_output=True, text=True)
     model = json.loads((tmp_path / "published" / "family.model.json").read_text())
-    assert model["shift_branch_ids"] == []
+    if use_defaults:
+        assert model["configuration"]["max_shifts"] == "auto"
+        assert model["configuration"]["convergence"]
+        assert model["search"]["shift_limit"]["resolved"] == 6
+        assert any(len(row["groups"]) < len(row["shift_branch_ids"]) + 1 for row in model["candidates"])
+    else:
+        assert model["shift_branch_ids"] == []
     assert len(list((tmp_path / "published").glob("family.*"))) == 8
     manifest = (tmp_path / "manifest-arguments.txt").read_text()
     assert "nwkit_implementation=" + model["implementation_sha256"] in manifest
     assert "replicate_separator=_" in manifest
     assert "criterion=AICc" in manifest
-    assert "search_strategy=native-path" in manifest
+    assert "search_strategy=auto" in manifest
 
 
 def test_adapter_preserves_numeric_internal_names_for_summary_alignment(tmp_path):

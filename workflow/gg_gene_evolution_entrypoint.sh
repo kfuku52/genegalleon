@@ -272,16 +272,16 @@ jaspar_file="latest" # "latest"/"auto" or explicit JASPAR filename in ${dir_jasp
 
 # Ornstein-Uhlenbeck modeling of gene expression evolution
 native_ou_criterion="AICc" # AICc|AIC|BIC|pBIC|bootstrap; path requires AIC or AICc.
-native_ou_max_shifts=10 # Explicit cap for native search on every tree size.
+native_ou_max_shifts="auto" # Tree- and budget-aware cap; integer overrides remain available.
 native_ou_calibration_replicates=199 # Complete searches per test when criterion=bootstrap.
 native_ou_calibration_level="0.05" # Sequential plug-in bootstrap test level.
 native_ou_bootstrap=0 # Complete selection repetitions for stability frequencies.
 native_ou_seed=1 # Calibration random stream.
 native_ou_bootstrap_seed=2 # Independent stability-bootstrap random stream.
-native_ou_convergence=0 # Set 1 with auto/exhaustive/lasso for shared regimes and nested returns.
+native_ou_convergence=1 # Shared regimes and nested returns; requires auto/exhaustive/lasso.
 native_ou_root_model="OUfixedRoot" # OUfixedRoot|OUrandomRoot.
 native_ou_estimate_measurement_error="yes" # yes|no; estimate extra observation variance beyond sampling SE.
-native_ou_search_strategy="native-path" # native-path|auto|exhaustive|lasso.
+native_ou_search_strategy="auto" # auto|exhaustive|lasso|native-path; path requires convergence=0.
 native_ou_candidate_pool=24 # Maximum candidate branches retained by screening.
 native_ou_refit_budget=48 # Maximum unpenalized covariance/model refits per search.
 native_ou_screening_budget=2000 # Maximum cheap candidate-profile evaluations per search.

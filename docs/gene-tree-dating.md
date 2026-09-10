@@ -166,7 +166,7 @@ transactional: an inference or rendering failure preserves the previous bundle
 and does not delete downstream analyses.
 
 OU shift detection uses [NWKIT native OU analysis](native-ou-shifts.md), enabled
-with `run_native_ou=1`. The default is AICc with path search. JSON, TSV and PDF
+with `run_native_ou=1`. The default is AICc with an automatic shift cap and convergence search. JSON, TSV and PDF
 outputs replace kfl1ou RData and tables; dated-tree inputs and the NWKIT source
 identity participate in cache validation. The legacy RADTE R program and kfl1ou
 are no longer installed in new containers. PAML remains available for the

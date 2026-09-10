@@ -3,7 +3,7 @@
 `run_native_ou=1` in `gg_gene_evolution_entrypoint.sh` enables NWKIT's native
 multivariate OU shift analysis. OU analysis remains disabled unless requested.
 NWKIT replaces the former kfl1ou workflow and container dependency. The default
-selection is **AICc with native-path**, with at most ten shifts per family.
+selection is **AICc with convergence enabled**, with an automatic shift cap.
 This workflow choice does not establish statistical superiority: AICc selects a
 predictive model and does not control false shift detections. See the
 [validation record](native-ou-validation.md) for measured accuracy and limits.
@@ -19,8 +19,8 @@ ultrametric and have positive branches; invalid trees are rejected.
 ```bash
 run_native_ou=1
 native_ou_criterion="AICc"
-native_ou_max_shifts=10
-native_ou_convergence=0
+native_ou_max_shifts="auto"
+native_ou_convergence=1
 native_ou_calibration_replicates=199
 native_ou_calibration_level="0.05"
 native_ou_bootstrap=0
@@ -28,7 +28,7 @@ native_ou_seed=1
 native_ou_bootstrap_seed=2
 native_ou_root_model="OUfixedRoot"
 native_ou_estimate_measurement_error="yes"
-native_ou_search_strategy="native-path"
+native_ou_search_strategy="auto"
 native_ou_candidate_pool=24
 native_ou_refit_budget=48
 native_ou_screening_budget=2000
@@ -37,28 +37,37 @@ native_ou_replicate_separator="_"
 treevis_branch_color="ou_native_regime"
 ```
 
-`native-path` generates joint shift configurations along group-lasso regularization
-paths, refits retained layouts without shrinkage, and selects the smallest AICc.
-It supports `AIC` or `AICc` with convergence disabled. Search is approximate:
-refit/screening budgets and finite optimizer iterations can limit coverage.
-The shift cap applies at every tree size and does not guarantee that many true
-shifts will be recovered.
+`auto` searches the full location/regime space when it fits NWKIT's
+5,000-candidate exhaustive budget, otherwise using beam/local search with
+shared regimes and nested returns. `native_ou_max_shifts="auto"` starts at the
+structural limit of N−2 for N tips. For beam search it is capped further by
+`native_ou_candidate_pool` and `native_ou_refit_budget−1`. With default budgets,
+a 1,000-tip tree therefore permits at most 24 shifts. Raise these budgets when
+more coverage is needed, or set an explicit integer cap. AICc chooses the final
+model among evaluated candidates; the automatic cap is not an estimate of the
+true number of shifts. The model JSON records the requested and resolved limits
+and whether a computational budget reduced the cap.
 
-For shared regimes and nested returns, set `native_ou_convergence=1` and choose
-`auto`, `exhaustive`, or `lasso`. `auto` enumerates small spaces within NWKIT's
-5,000-candidate budget, otherwise using beam/local search. These strategies also
-support `BIC`, `pBIC`, and `bootstrap`. The last uses the experimental sequential
-plug-in bootstrap with `native_ou_calibration_replicates` draws per test; it is
-not a proven uniform error guarantee. Positive `native_ou_bootstrap` repeats the
-entire selected procedure for stability frequencies, including inner calibration
-when `native_ou_criterion="bootstrap"`.
+`native-path` remains available with `native_ou_convergence=0` and criterion
+`AIC` or `AICc`. It generates joint configurations along group-lasso paths,
+refits retained layouts without shrinkage, and selects the lowest criterion.
+Its automatic cap uses N−2 and the refit budget, without the branch-pool limit.
+It does not search shared regimes. Both heuristic strategies are approximate;
+finite budgets and optimizer iterations can limit coverage.
+
+The convergence-capable strategies also support `BIC`, `pBIC`, and `bootstrap`.
+The last uses the experimental sequential plug-in bootstrap with
+`native_ou_calibration_replicates` draws per test; it is not a proven uniform
+error guarantee. Positive `native_ou_bootstrap` repeats the entire selected
+procedure for stability frequencies, including inner calibration when
+`native_ou_criterion="bootstrap"`.
 
 ## Migration from kfl1ou
 
 Replace `run_l1ou=1` with `run_native_ou=1` and remove the old `l1ou_*`,
-`large_tree_num_gene`, and `large_tree_max_nshift` settings. Configure the single
-`native_ou_max_shifts` cap instead. Old RData fits and `l1ou_*` tables are not
-reused. New results use `ou_native/<family>_ou_native.*`; downstream summaries and
+`large_tree_num_gene`, and `large_tree_max_nshift` settings. Use
+`native_ou_max_shifts="auto"` or an explicit integer cap instead. Old RData fits
+and `l1ou_*` tables are not reused. New results use `ou_native/<family>_ou_native.*`; downstream summaries and
 tree coloring read the new model. Set `treevis_branch_color="ou_native_regime"`.
 Old output files can remain on disk but are no longer read by this workflow.
 The old derived optimum-expression/tau columns are not synthesized from
@@ -111,7 +120,7 @@ The helper can be invoked directly inside a GeneGalleon container:
 ```bash
 python /script/support/detect_ou_shift_native.py \
   --tree dated.nwk --traits expression.tsv --output-prefix family_ou \
-  --criterion AICc --search-strategy native-path --max-shifts 10
+  --criterion AICc --search-strategy auto --max-shifts auto --convergence
 ```
 
 An optional `--regime-map` fits a supplied map without discovery. The standalone

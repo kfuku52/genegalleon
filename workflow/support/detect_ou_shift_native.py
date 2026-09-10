@@ -155,7 +155,9 @@ def main(argv=None):
     parser.add_argument("--resume-model")
     parser.add_argument("--regime-map", help="Optional fixed layout; skips shift selection.")
     parser.add_argument("--criterion", choices=["AIC", "AICc", "BIC", "pBIC", "bootstrap"], default="AICc")
-    parser.add_argument("--max-shifts", type=int, default=10)
+    parser.add_argument(
+        "--max-shifts", default="auto", help="Nonnegative integer or auto; NWKIT resolves the search cap."
+    )
     parser.add_argument("--calibration-replicates", type=int, default=199)
     parser.add_argument("--calibration-level", type=float, default=0.05)
     parser.add_argument("--bootstrap", type=int, default=0)
@@ -164,9 +166,7 @@ def main(argv=None):
     parser.add_argument("--convergence", action="store_true")
     parser.add_argument("--estimate-measurement-error", choices=["yes", "no"], default="yes")
     parser.add_argument("--root-model", choices=["OUfixedRoot", "OUrandomRoot"], default="OUfixedRoot")
-    parser.add_argument(
-        "--search-strategy", choices=["auto", "exhaustive", "lasso", "native-path"], default="native-path"
-    )
+    parser.add_argument("--search-strategy", choices=["auto", "exhaustive", "lasso", "native-path"], default="auto")
     for flag, default in [("candidate-pool", 24), ("refit-budget", 48), ("screening-budget", 2000), ("beam-width", 2)]:
         parser.add_argument("--" + flag, type=int, default=default)
     parser.add_argument("--alpha")

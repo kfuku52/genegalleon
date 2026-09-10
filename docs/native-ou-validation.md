@@ -1,15 +1,51 @@
 # Native OU implementation validation, 2026-09-10
 
-Status: GeneGalleon now uses NWKIT AICc/path for enabled OU analysis, replacing
-kfl1ou at the user's request. OU analysis remains off by default. Statistical
+Status: GeneGalleon uses NWKIT AICc with an automatic shift cap and convergence
+search for enabled OU analysis, replacing kfl1ou at the user's request. OU analysis remains off by default. Statistical
 adoption criteria remain unfulfilled; this integration decision is not evidence
 that those criteria passed. See [configuration and outputs](native-ou-shifts.md).
 
-## Backend replacement validation, 2026-09-11
+## Automatic cap and convergence defaults, 2026-09-11
 
-NWKIT commit `b44a397` contains the native information criteria, covariance-updated
-path search and optional global-null AIC gate. GeneGalleon selects AICc/path,
-with convergence off and a ten-shift cap; the OU stage remains opt-in.
+NWKIT commit `0971715` adds native `--max-shifts auto`. The requested value is
+preserved in configuration/replay fingerprints; `search.shift_limit` records the
+resolved cap, applicable constraints and whether budgets reduced it. Explicit
+integer requests are not silently clipped. Large-tree exhaustive preflight
+stops counting when its traversal bound is exceeded.
+
+GeneGalleon now defaults to `native_ou_max_shifts="auto"`,
+`native_ou_convergence=1`, `native_ou_search_strategy="auto"`, and AICc.
+Its default beam cap on a 1,000-tip tree is 24 (the branch-pool budget), not an
+unlimited search. Shared regimes reduce model dimension; AICc eligibility is
+checked per candidate rather than imposing an unconstrained-model parameter
+count on convergent layouts.
+
+Validation for this follow-up:
+
+- NWKIT native/legacy shift and CLI-contract suite: 264 passed, 13 skipped.
+- Final limit/CLI checks, including automatic path caps and bootstrap replay:
+  45 passed. Automatic and equivalent integer caps yield identical candidates,
+  AICc winners and selection-support results.
+- GeneGalleon adapter, shell and entrypoint checks: 265 passed, including a real
+  stage run with the automatic cap and convergence defaults, shared-regime
+  candidates and complete eight-file bundle publication.
+- NWKIT Ruff lint/format, mypy (220 source files), and maintainability hard limits
+  passed. These checks do not establish a speed or statistical-power improvement.
+
+The runtime tests use the GeneGalleon Docker environment. An installed-package
+smoke run in `local/genegalleon:nwkit-ou-auto-dev` (image
+`sha256:40c8c0c545ca39445a57faac6ba8879e6e1075553426c9ee6d7a8205381b56f8`)
+completed AICc/auto/convergence inference and all eight outputs without a NWKIT
+source mount. All 220 installed module hashes matched the committed source.
+SIF and a complete production-image rebuild remain untested. Earlier path-only timing comparisons
+are not measurements of the new convergence-enabled defaults.
+
+## Initial backend replacement validation, 2026-09-11
+
+The initial replacement used NWKIT commit `b44a397`, which contains the native information criteria, covariance-updated
+path search and optional global-null AIC gate. The initial integration selected
+AICc/path, with convergence off and a ten-shift cap. The follow-up changes the
+defaults to an automatic cap and convergence-capable search; OU remains opt-in.
 
 Validation used `local/genegalleon:nwkit-ou-replacement-dev`
 (image `sha256:6b1808a8e8ed078d7e7cac7edab3c01e4912c6339dfe7af0e34d1c5c17800d6b`).
@@ -39,7 +75,7 @@ were not performed. Production build defaults continue to follow moving upstream
 branches; the local NWKIT commit must be published before remote builds can
 consume it. The earlier full NWKIT suite result was 3,986 passed, 57 skipped,
 with two documented pre-existing failures (see the AICc study validation record).
-No NWKIT source changed between that verification and this commit.
+No NWKIT source changed between that verification and the initial backend commit.
 
 ## Comparative studies
 

@@ -552,7 +552,9 @@ def test_gene_evolution_core_uses_nwkit_ou_adapter():
     assert 'python "${gg_support_dir}/detect_ou_shift_native.py"' in text
     assert '"${native_ou_cmd[@]}" || exit $?' in text
     assert 'native_ou_criterion="${native_ou_criterion:-AICc}"' in text
-    assert 'native_ou_search_strategy="${native_ou_search_strategy:-native-path}"' in text
+    assert 'native_ou_search_strategy="${native_ou_search_strategy:-auto}"' in text
+    assert 'native_ou_max_shifts="${native_ou_max_shifts:-auto}"' in text
+    assert 'native_ou_convergence="${native_ou_convergence:-1}"' in text
     assert "kfl1ou" not in text
     assert "run_l1ou" not in text
 
