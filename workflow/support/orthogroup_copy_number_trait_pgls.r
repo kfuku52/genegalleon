@@ -289,6 +289,9 @@ make_empty_result_row <- function(family_id, trait_col, n_species = 0L, status =
     logLik = NA_real_,
     coefficient = NA_real_,
     standard_error = NA_real_,
+    confidence_interval_lower = NA_real_,
+    confidence_interval_upper = NA_real_,
+    confidence_level = 0.95,
     statistic = NA_real_,
     degrees_of_freedom = NA_real_,
     evolutionary_rate = NA_real_,
@@ -380,7 +383,8 @@ fit_nwkit_copy_number_model <- function(model_df, tree, response_family = "gauss
                "--evolution-model", "brownian", "--intercept", "yes",
                "--reml", if (response_family == "gaussian") "yes" else "no",
                "--response-family", paste0("trait_value=", response_family),
-               "--coefficient-penalty", "none", "--inference", "wald", "--outfile", result_path)
+               "--coefficient-penalty", "none", "--inference", "wald",
+               "--confidence-level", "0.95", "--outfile", result_path)
   if (response_family == "binomial") {
     command <- c(command, "--categorical-responses", "trait_value", "--response-reference", "trait_value=0")
   }

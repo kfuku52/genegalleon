@@ -124,9 +124,13 @@ residual <- y - as.vector(X %*% beta)
 rate <- as.numeric(t(residual) %*% precision %*% residual) / (length(y) - ncol(X))
 standard_error <- sqrt(diag(rate * solve(t(X) %*% precision %*% X)))[[2]]
 p_value <- 2 * pt(-abs(beta[[2]] / standard_error), df = length(y) - ncol(X))
+interval <- beta[[2]] + c(-1, 1) * qt(0.975, df = length(y) - ncol(X)) * standard_error
 stopifnot(isTRUE(all.equal(og1_height$coefficient, beta[[2]], tolerance = 1e-10)),
           isTRUE(all.equal(og1_height$standard_error, standard_error, tolerance = 1e-10)),
           isTRUE(all.equal(og1_height$pval, p_value, tolerance = 1e-10)),
+          isTRUE(all.equal(og1_height$confidence_interval_lower, interval[[1]], tolerance = 1e-10)),
+          isTRUE(all.equal(og1_height$confidence_interval_upper, interval[[2]], tolerance = 1e-10)),
+          identical(og1_height$confidence_level, 0.95),
           identical(og1_height$fit_mode, "nwkit_brownian_reml"),
           identical(og1_height$covariance_estimator, "gaussian-REML"))
 
@@ -138,6 +142,7 @@ stopifnot(identical(og10_height$skip_reason, "invariant_copy_number"))
 og1_constant <- df_stat[df_stat$Orthogroup == "OG1" & df_stat$trait == "constant_trait", , drop = FALSE]
 stopifnot(nrow(og1_constant) == 1)
 stopifnot(identical(og1_constant$status, "skipped"))
+stopifnot(is.na(og1_constant$confidence_interval_lower), is.na(og1_constant$confidence_interval_upper))
 stopifnot(identical(og1_constant$skip_reason, "invariant_trait"))
 
 outdir <- file.path(tmp, "out")
@@ -159,9 +164,14 @@ stopifnot(file.exists(file.path(outdir, "orthogroup_copy_number_trait_pgls.signi
 stopifnot(file.exists(file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.pdf")))
 
 written_stats <- read.delim(file.path(outdir, "orthogroup_copy_number_trait_pgls.tsv"), sep = "\t", check.names = FALSE)
+written_significant <- read.delim(file.path(outdir, "orthogroup_copy_number_trait_pgls.significant.tsv"), sep = "\t", check.names = FALSE)
+stopifnot(identical(names(written_stats), names(written_significant)))
 stopifnot(identical(written_stats$Orthogroup, "OG1"))
 stopifnot(identical(written_stats$trait, "height"))
 stopifnot(identical(written_stats$status, "ok"))
+stopifnot(isTRUE(all.equal(written_stats$confidence_interval_lower, interval[[1]], tolerance = 1e-10)),
+          isTRUE(all.equal(written_stats$confidence_interval_upper, interval[[2]], tolerance = 1e-10)),
+          identical(written_stats$confidence_level, 0.95))
 
 # A failed late plot must leave every member of the previous bundle intact.
 output_names <- c("orthogroup_copy_number_matrix.tsv", "orthogroup_copy_number_trait_pgls.tsv",
@@ -222,6 +232,14 @@ stopifnot(all(mixed$response_family[mixed$trait == "height"] == "poisson"))
 stopifnot(all(mixed$response_family[mixed$trait == "binary_trait"] == "binomial"))
 stopifnot(all(mixed$link_function[mixed$trait == "binary_trait"] == "logit"))
 stopifnot(!any(mixed$status == "error"))
+usable_intervals <- mixed$status == "ok" & is.finite(mixed$standard_error)
+stopifnot(any(usable_intervals),
+          isTRUE(all.equal(mixed$confidence_interval_lower[usable_intervals],
+                           mixed$coefficient[usable_intervals] - qnorm(0.975) * mixed$standard_error[usable_intervals],
+                           tolerance = 1e-10)),
+          isTRUE(all.equal(mixed$confidence_interval_upper[usable_intervals],
+                           mixed$coefficient[usable_intervals] + qnorm(0.975) * mixed$standard_error[usable_intervals],
+                           tolerance = 1e-10)))
 cat("mixed-family regression: OK\n")
 
 stopifnot(inherits(tryCatch(parse_response_values(c("0", "oops"), "binomial"), error = identity), "error"))

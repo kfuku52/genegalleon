@@ -125,3 +125,11 @@ When joint selection is the only enabled workflow step (all other `run_*`
 settings are zero), the entrypoint accepts existing dated-tree, selected
 copy-number and trait inputs without requiring CDS/protein FASTA files. Mixed
 runs retain their normal sequence-input validation.
+
+## Confidence intervals and calibration
+
+Result tables preserve `confidence_interval_lower`, `confidence_interval_upper`,
+and `confidence_level=0.95` from NWKIT. Intervals are pointwise on the model's
+coefficient/link scale, not simultaneous intervals adjusted by global BH.
+Significance continues to use the global adjusted P value. See
+[regression calibration](regression-calibration.md) for small-sample evidence and limitations.
