@@ -450,17 +450,12 @@ def test_aggregate_adds_analysis_ids_to_every_bundle_table_and_summarizes(tmp_pa
     assert list(results["analysis_id"]) == ["p001_size", "p002_habitat"]
     status = pandas.read_csv(tmp_path / "status.tsv", sep="\t")
     assert status.loc[0, "status"] == "ok"
-    assert status.loc[0, "min_p_value_raw"] == 0.01
-    assert status.loc[0, "min_p_value"] == 0.02
-    assert status.loc[0, "best_analysis_id"] == "p002_habitat"
+    assert not any("best_" in key or "min_p_value" in key for key in status.columns)
     assert len((tmp_path / "audit.jsonl").read_text().splitlines()) == 2
 
     tree_stats = mod.summarize_for_stat_tree(tmp_path / "combined.regression.tsv", tmp_path / "status.tsv")
     assert tree_stats["rsc_status"] == "ok"
-    assert tree_stats["rsc_min_p_value_raw"] == 0.01
-    assert tree_stats["rsc_min_p_value"] == 0.02
-    assert tree_stats["rsc_best_analysis_id"] == "p002_habitat"
-    assert tree_stats["rsc_best_coefficient"] == -3.0
+    assert not any("best_" in key or "min_p_value" in key for key in tree_stats)
     assert len(tree_stats) < 100
 
 
@@ -652,7 +647,7 @@ def test_prepare_header_only_expression_is_not_estimable(tmp_path: Path):
     assert "expression_has_no_rows" in metadata["reason"]
 
 
-def test_status_excludes_nonconverged_rows_from_best_result(tmp_path: Path):
+def test_status_counts_exclude_nonconverged_rows(tmp_path: Path):
     mod = load_module()
     results = pandas.DataFrame(
         [
@@ -677,8 +672,7 @@ def test_status_excludes_nonconverged_rows_from_best_result(tmp_path: Path):
         ]
     )
     status = mod._status_from_results("OG1", results, 2)
-    assert status.loc[0, "best_analysis_id"] == "usable"
-    assert status.loc[0, "min_p_value"] == 0.02
+    assert not any("best_" in key or "min_p_value" in key for key in status.columns)
     assert status.loc[0, "n_estimable_models"] == 1
     assert status.loc[0, "n_nonconverged_result_rows"] == 1
 
@@ -713,20 +707,18 @@ def test_status_and_stat_tree_summary_exclude_intercepts(tmp_path: Path):
     )
     status = mod._status_from_results("OG1", results, 4)
     assert status.loc[0, "status"] == "ok"
-    assert status.loc[0, "best_term"] == "size"
-    assert status.loc[0, "min_p_value"] == 0.03
+    assert not any("best_" in key or "min_p_value" in key for key in status.columns)
 
     results.to_csv(tmp_path / "regression.tsv", sep="\t", index=False)
     status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
     summary = mod.summarize_for_stat_tree(tmp_path / "regression.tsv", tmp_path / "status.tsv")
-    assert summary["rsc_best_term"] == "size"
-    assert summary["rsc_min_p_value"] == 0.03
+    assert not any("best_" in key or "min_p_value" in key for key in summary)
 
     intercept_only = mod._status_from_results("OG1", results.iloc[[0]], 4)
     assert intercept_only.loc[0, "status"] == "not_estimable"
 
 
-def test_status_and_stat_tree_summary_adjust_all_usable_associations(tmp_path: Path):
+def test_status_and_stat_tree_count_associations_without_minimum_p(tmp_path: Path):
     mod = load_module()
     results = pandas.DataFrame(
         [
@@ -745,18 +737,13 @@ def test_status_and_stat_tree_summary_adjust_all_usable_associations(tmp_path: P
     )
     status = mod._status_from_results("OG1", results, 3)
     assert status.loc[0, "n_tested_associations"] == 3
-    assert status.loc[0, "min_p_value_raw"] == pytest.approx(0.01)
-    assert status.loc[0, "min_p_value_holm"] == pytest.approx(0.03)
-    assert status.loc[0, "min_p_value_bh"] == pytest.approx(0.03)
-    assert status.loc[0, "min_p_value"] == pytest.approx(0.03)
+    assert not any("best_" in key or "min_p_value" in key for key in status.columns)
 
     results.to_csv(tmp_path / "regression.tsv", sep="\t", index=False)
     status.to_csv(tmp_path / "status.tsv", sep="\t", index=False)
     summary = mod.summarize_for_stat_tree(tmp_path / "regression.tsv", tmp_path / "status.tsv")
     assert summary["rsc_num_tested_associations"] == 3
-    assert summary["rsc_best_p_value_raw"] == pytest.approx(0.01)
-    assert summary["rsc_best_p_value"] == pytest.approx(0.03)
-    assert summary["rsc_best_p_value_adjustment"] == "holm"
+    assert not any("best_" in key or "min_p_value" in key for key in summary)
 
 
 def test_audit_value_error_is_classified_as_analysis_not_estimable(tmp_path: Path):

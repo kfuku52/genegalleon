@@ -341,10 +341,10 @@ def test_species_comparison_summary_is_bounded_and_method_specific(tmp_path):
 
     summary = summarize_for_stat_tree(comparison, status)
     assert summary["pgls_species_nwkit_num_ok"] == 1
-    assert summary["pgls_species_nwkit_best_term"] == "size"
+    assert not any("best_" in key or "min_p_value" in key for key in summary)
 
 
-def test_species_summary_adjusts_across_all_method_associations(tmp_path):
+def test_species_summary_counts_associations_without_minimum_p(tmp_path):
     comparison = tmp_path / "comparison.tsv"
     status = tmp_path / "status.tsv"
     pandas.DataFrame(
@@ -366,11 +366,7 @@ def test_species_summary_adjusts_across_all_method_associations(tmp_path):
     summary = summarize_for_stat_tree(comparison, status)
 
     assert summary["pgls_species_nwkit_num_tested_associations"] == 3
-    assert summary["pgls_species_nwkit_best_p_value_raw"] == pytest.approx(0.01)
-    assert summary["pgls_species_nwkit_best_p_value_holm"] == pytest.approx(0.03)
-    assert summary["pgls_species_nwkit_best_p_value_bh"] == pytest.approx(0.03)
-    assert summary["pgls_species_nwkit_best_p_value"] == pytest.approx(0.03)
-    assert summary["pgls_species_nwkit_best_p_value_adjustment"] == "holm"
+    assert not any("best_" in key or "min_p_value" in key for key in summary)
 
 
 def test_native_status_requires_an_estimable_association_not_only_an_intercept():

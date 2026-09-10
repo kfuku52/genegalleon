@@ -490,13 +490,14 @@ Current behavior notes:
   `rsc_*` output directories. Species-method statuses, aggregation audits, and
   side-by-side coefficients are written under `pgls_*`; compact `rsc_*` and
   `pgls_species_*` fields are copied into each
-  family's `stat_tree` row. This summary has a fixed-width status/count schema
-  plus the best converged `rsc_best_*` row; all fitted rows remain in
-  `rsc_regression`,
-- the compact `stat_tree` best-p fields are multiplicity-aware: raw minima are
-  retained under `*_p_value_raw`, while unsuffixed p-values use Holm correction
-  over all usable associations for the family and method; BH-adjusted values
-  and the tested-association count/scope are reported alongside them,
+  family's `stat_tree` row. This summary contains status/count fields only;
+  all fitted rows remain in `rsc_regression` and `pgls_comparison`,
+- `gg_gene_summary` writes every association to the database's
+  `pgls_association` table, with BH across families for each response/predictor
+  pair. Methods and aggregations share that pair's correction; per-family
+  Holm/BH remain available on individual rows. See the
+  [output guide](gene-family-outputs-and-progress-monitoring.md) for scope and
+  missing-model limitations,
 - `run_csubst_scan=1` uses existing CSUBST ancestral-reconstruction inputs and
   writes candidate amino-acid/state changes; it is independent from
   `run_csubst`, which runs branch-combination search.

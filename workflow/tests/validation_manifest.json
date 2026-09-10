@@ -18,6 +18,7 @@
     "test_owned_runtime_contracts.py",
     "test_get_promoter_fasta_runtime.py",
     "test_rsc_runtime_integration.py",
+    "test_pgls_multiplicity.py",
     "test_fractionation_bias_integration.py"
   ],
   "runtime_extra_python": [

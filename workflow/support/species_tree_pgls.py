@@ -983,34 +983,9 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
         selected = selected.loc[numpy.isfinite(selected["_p_value"]) & selected["_p_value"].between(0.0, 1.0)]
         if selected.empty:
             continue
-        holm, bh = _adjust_association_p_values(selected["_p_value"])
-        selected["_p_value_holm"] = holm
-        selected["_p_value_bh"] = bh
-        best = selected.loc[selected["_p_value"].idxmin()]
-        for column in (
-            "aggregation",
-            "analysis_id",
-            "response",
-            "term",
-            "coefficient",
-            "standard_error",
-            "p_value",
-            "evolution_model",
-            "evolution_parameter",
-            "n_species",
-        ):
-            if column in best and not pandas.isna(best[column]):
-                out[f"pgls_{method}_best_{column}"] = best[column]
         prefix = f"pgls_{method}"
         out[f"{prefix}_num_tested_associations"] = int(selected.shape[0])
         out[f"{prefix}_multiplicity_scope"] = "all_usable_family_associations_for_method"
-        out[f"{prefix}_best_p_value_raw"] = float(best["_p_value"])
-        out[f"{prefix}_best_p_value_holm"] = float(best["_p_value_holm"])
-        out[f"{prefix}_best_p_value_bh"] = float(best["_p_value_bh"])
-        # The unsuffixed field is safe for thresholding; the raw value remains
-        # available under the explicit ``_raw`` name for descriptive ranking.
-        out[f"{prefix}_best_p_value"] = float(best["_p_value_holm"])
-        out[f"{prefix}_best_p_value_adjustment"] = "holm"
     return out
 
 

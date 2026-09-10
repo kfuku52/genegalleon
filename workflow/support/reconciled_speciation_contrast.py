@@ -1155,13 +1155,6 @@ def _status_from_results(
         )
         & p_values.between(0.0, 1.0)
     ]
-    best = association_results.loc[finite.idxmin()] if not finite.empty else None
-    if finite.empty:
-        holm = bh = numpy.asarray([], dtype=float)
-        best_position = 0
-    else:
-        holm, bh = _adjust_association_p_values(finite)
-        best_position = int(numpy.argmin(finite.to_numpy()))
     row = {
         "tree_id": tree_id,
         "status": status,
@@ -1182,15 +1175,6 @@ def _status_from_results(
         ),
         "n_tested_associations": int(finite.shape[0]),
         "multiplicity_scope": "all_usable_family_associations",
-        "min_p_value_raw": "" if finite.empty else float(finite.min()),
-        "min_p_value_holm": "" if finite.empty else float(holm[best_position]),
-        "min_p_value_bh": "" if finite.empty else float(bh[best_position]),
-        "min_p_value": "" if finite.empty else float(holm[best_position]),
-        "min_p_value_adjustment": "holm",
-        "best_analysis_id": "" if best is None else best.get("analysis_id", ""),
-        "best_response": "" if best is None else best.get("response", ""),
-        "best_term": "" if best is None else best.get("term", ""),
-        "best_coefficient": "" if best is None else best.get("coefficient", ""),
         "max_n_species_events": (
             ""
             if results.empty or "n_species_events" not in results
@@ -1329,7 +1313,7 @@ def summarize_for_stat_tree(regression_path: str | Path, status_path: str | Path
         status = pandas.read_csv(status_file, sep="\t", nrows=1, low_memory=False)
         if not status.empty:
             for column, value in status.iloc[0].items():
-                if column == "tree_id":
+                if column == "tree_id" or column.startswith(("min_p_value", "best_")):
                     continue
                 if pandas.isna(value):
                     continue
@@ -1357,34 +1341,8 @@ def summarize_for_stat_tree(regression_path: str | Path, status_path: str | Path
     if not finite.any():
         return out
     finite_values = p_values[finite]
-    holm, bh = _adjust_association_p_values(finite_values)
-    best_position = int(numpy.argmin(finite_values.to_numpy()))
-    best = associations.loc[finite_values.idxmin()]
-    identity_columns = (
-        "analysis_id",
-        "model_id",
-        "response",
-        "term",
-        "source_term",
-        "response_level",
-        "predictor_level",
-        "term_test",
-    )
-    for column in (*identity_columns, *STAT_TREE_RESULT_COLUMNS):
-        if column not in results.columns:
-            continue
-        value = best[column]
-        if pandas.isna(value):
-            continue
-        out[f"rsc_best_{_sanitize_stat_component(column)}"] = value
     out["rsc_num_tested_associations"] = int(finite_values.shape[0])
     out["rsc_multiplicity_scope"] = "all_usable_family_associations"
-    out["rsc_best_p_value_raw"] = float(finite_values.iloc[best_position])
-    out["rsc_best_p_value_holm"] = float(holm[best_position])
-    out["rsc_best_p_value_bh"] = float(bh[best_position])
-    # The unsuffixed field is family-wise-error controlled for safe filtering.
-    out["rsc_best_p_value"] = float(holm[best_position])
-    out["rsc_best_p_value_adjustment"] = "holm"
     return out
 
 

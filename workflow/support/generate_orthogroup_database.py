@@ -34,6 +34,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from gene_family_output_store import LEGACY_SUBDIR_ALIASES, GeneFamilyOutputStore
+from pgls_multiplicity import write_association_table
 
 try:
     import sqlalchemy
@@ -907,6 +908,10 @@ def main():
                 columns[stat] = ["orthogroup"] + filtered_columns + additional_filtered
             else:
                 columns[stat] = ["orthogroup"] + max_columns + list(column_names_set - set(max_columns))
+            if stat == "tree":
+                columns[stat] = [col for col in columns[stat] if not (
+                    col.startswith(("rsc_best_", "rsc_min_p_value", "pgls_species_nwkit_best_"))
+                )]
             max_col_len = 300  # Upper limit to detect malformed column names like '\x00\x00\x00\x00...'
             columns[stat] = [col for col in columns[stat] if (len(col) <= max_col_len)]
             logger.info(f"Number of all columns for '{stat}': {len(columns[stat])}")
@@ -1102,6 +1107,7 @@ def main():
             tables = []
 
     add_global_aa_change_fdr_columns(engine)
+    write_association_table(engine, output_store)
 
     with engine.begin() as conn:
         try:

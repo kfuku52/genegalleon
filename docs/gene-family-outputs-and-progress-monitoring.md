@@ -101,22 +101,38 @@ then contain headers only. This makes family completion and ZIP-backed storage
 unambiguous. The expression-trait bundle is staged completely and published as
 a recoverable transaction; a failed move or caught interruption restores the
 previous complete bundle before provenance is recorded. `stat_tree/*.tsv`
-includes the family status and best overall RSC
-summary plus namespaced per-response/per-term fields, all beginning with
-`rsc_`. It also includes bounded `pgls_species_nwkit_*` status/best-row fields. To keep `stat_tree` bounded
-for large screens, it contains counts and
-fields from the best usable (successfully converged) row only, under
-`rsc_best_*`; it does not flatten every RSC result row into a new group of
-columns. The full `rsc_regression` table remains the authoritative result when
-several responses or predictors were fitted. Rows with failed inference or
-failed optimizers cannot become the reported best row. The best row is still
-chosen by its raw p-value, recorded as `rsc_best_p_value_raw` (and the analogous
-species-method field). The unsuffixed `*_best_p_value` and `rsc_min_p_value`
-fields are Holm-adjusted across every usable response, predictor term,
-analysis, and paralog aggregation represented by that family/method. The same
-summary also records the number and scope of tests plus Holm and
-Benjamini-Hochberg values explicitly; use the full result tables for a
-different prespecified multiplicity family.
+includes status and association counts under `rsc_*` and
+`pgls_species_nwkit_*`. No minimum-p-value or best-row summary is produced.
+
+During `gg_gene_summary` database generation, the `pgls_comparison` bundles
+(including RSC) populate the long-form `pgls_association` table. For each
+`response × source_term` pair, `p_value_global_bh` is BH-adjusted across all
+represented families, methods, paralog aggregations, and coefficient/omnibus
+tests for that predictor. Method, aggregation, term, test type and estimand
+remain separate columns. Different pairs are corrected separately; pooling
+their discoveries does not confer an overall FDR guarantee. BH assumes valid
+input p-values and independence or suitable positive dependence.
+
+`p_value_family_holm` and `p_value_family_bh` retain the former correction
+across usable associations within each family/method, now for every row.
+`p_value` is raw. Intercepts are excluded. Failed or invalid association rows
+have NULL adjusted values and count internally as p=1 for global correction.
+`global_n_associations`, `global_n_usable`, and `global_multiplicity_scope`
+make this denominator explicit. Models absent from the input bundles cannot
+be counted: complete the intended family jobs before interpreting the screen.
+The database reads live and ZIP-backed bundles once, without also adding the
+duplicated native RSC rows. Database rebuilds also remove retired best/minimum
+fields from imported `stat_tree` data.
+
+For example, inspect a single pair with:
+
+```sql
+SELECT tree_id, analysis_method, aggregation, term, term_test,
+       coefficient, p_value, p_value_global_bh
+FROM pgls_association
+WHERE response = 'leaf' AND source_term = 'temperature'
+ORDER BY p_value_global_bh;
+```
 
 In `mode_gene_evolution=orthogroup`, the same style of per-family outputs is
 written under `workspace/output/orthogroup/`.

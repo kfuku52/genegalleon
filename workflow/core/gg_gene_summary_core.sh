@@ -673,6 +673,7 @@ run_gene_family_database_for_source() {
     --workspace-root "${gg_workspace_dir}"
     --input-gene-family-store "gene_family_outputs=${dir_gene_family}"
     --output "database=${file_gene_family_db}"
+    --parameter "pgls_multiplicity=by_response_predictor_v1"
     --parameter "row_threshold=8000"
     --parameter "cutoff_stat=OCNany2spe,0.8"
   )
