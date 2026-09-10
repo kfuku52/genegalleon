@@ -216,40 +216,100 @@ summarise_go_enrichment <- function(event_go_df, total_target_events, total_othe
 }
 
 
-# CAFE tests a change in turnover rate; the input reconstruction supplies
-# increase/decrease. Family BH is computed once, before direction selection.
-select_cafe_families <- function(families, alpha, direction) {
-  required <- c("FamilyID", "status", "p_value", "target_change", "lambda_target", "lambda_background")
-  if (!all(required %in% names(families)) || anyNA(families$FamilyID) ||
-      anyDuplicated(families$FamilyID) || any(!nzchar(families$FamilyID))) {
-    stop("Malformed native CAFE family results.")
+# Native-output screening only: branch flags are not target/background LRTs.
+read_cafe_root_branch <- function(path) {
+  con <- file(path, "r"); on.exit(close(con))
+  tree <- ""
+  repeat {
+    line <- readLines(con, n = 1, warn = FALSE)
+    if (!length(line)) break
+    if (nzchar(tree) || grepl("^\\s*TREE\\s+\\S+\\s*=", line, perl = TRUE, ignore.case = TRUE)) {
+      tree <- paste0(tree, line)
+      if (grepl(";", line, fixed = TRUE)) break
+    }
   }
+  match <- regmatches(tree, regexec("\\)(<\\d+>)\\*?_\\d+(?::[0-9eE+.-]+)?;\\s*$", tree, perl = TRUE))[[1]]
+  if (length(match) != 2L) stop("Cannot identify the root in the native CAFE ASR tree.")
+  match[2]
+}
+
+read_cafe_branch_families <- function(changes, probabilities, family_results, family_ids, target, root) {
+  normalize_ids <- function(x, label) {
+    if (names(x)[1] == "#FamilyID") names(x)[1] <- "FamilyID"
+    if (!"FamilyID" %in% names(x) || anyDuplicated(names(x)) || anyNA(x$FamilyID) ||
+        anyDuplicated(x$FamilyID) || any(!nzchar(x$FamilyID))) stop("Invalid FamilyID/header in ", label)
+    x
+  }
+  changes <- normalize_ids(changes, "changes")
+  probabilities <- normalize_ids(probabilities, "branch probabilities")
+  family_results <- normalize_ids(family_results, "family results")
+  branches <- setdiff(names(changes), "FamilyID")
+  if (!root %in% branches || !target %in% branches || target == root ||
+      !setequal(names(changes), names(probabilities))) stop("Native CAFE branch columns/root/target disagree.")
+  if (!"pvalue" %in% names(family_results) || !is.numeric(family_results$pvalue) ||
+      any(!is.finite(family_results$pvalue)) || any(family_results$pvalue < 0 | family_results$pvalue > 1)) {
+    stop("Native family results require finite pvalue values between 0 and 1.")
+  }
+  if (!setequal(changes$FamilyID, family_results$FamilyID) ||
+      !all(probabilities$FamilyID %in% changes$FamilyID) ||
+      !length(family_ids) || anyDuplicated(family_ids) || !all(family_ids %in% changes$FamilyID)) {
+    stop("Native CAFE family tables/GO family universe disagree.")
+  }
+  if (!all(vapply(changes[branches], is.numeric, logical(1))) ||
+      any(!is.finite(as.matrix(changes[branches]))) ||
+      any(as.matrix(changes[branches]) != trunc(as.matrix(changes[branches]))) ||
+      any(changes[[root]] != 0)) stop("Native CAFE changes must be integer-valued with zero root change.")
+  nonroot <- setdiff(branches, root)
+  # Missing rows for non-significant families are normal CAFE output. Missing
+  # entries inside a reported row are not evidence of absent changes.
+  if (nrow(probabilities) && (!all(vapply(probabilities[nonroot], is.numeric, logical(1))) ||
+      any(!is.finite(as.matrix(probabilities[nonroot]))) ||
+      any(as.matrix(probabilities[nonroot]) < 0 | as.matrix(probabilities[nonroot]) > 1) ||
+      any(!is.na(probabilities[[root]])))) stop("Incomplete or invalid native branch-probability row.")
+  ci <- match(family_ids, changes$FamilyID)
+  pi <- match(family_ids, probabilities$FamilyID)
+  fi <- match(family_ids, family_results$FamilyID)
+  result <- data.frame(FamilyID = family_ids, family_p_value = family_results$pvalue[fi],
+    target_change = changes[[target]][ci], branch_reported = !is.na(pi),
+    target_branch_probability = probabilities[[target]][pi],
+    target_flagged = NA, n_other_flagged = NA_integer_, other_flagged_branches = NA_character_)
+  for (i in which(result$branch_reported)) {
+    flagged <- nonroot[vapply(nonroot, function(b) probabilities[[b]][pi[i]] < 0.05 &&
+      changes[[b]][ci[i]] != 0, logical(1))]
+    other <- setdiff(flagged, target)
+    result$target_flagged[i] <- target %in% flagged
+    result$n_other_flagged[i] <- length(other)
+    result$other_flagged_branches[i] <- paste(other, collapse = ", ")
+  }
+  result$direction <- ifelse(result$target_change > 0, "increase",
+    ifelse(result$target_change < 0, "decrease", "unchanged"))
+  result
+}
+
+select_cafe_branch_families <- function(families, alpha, direction) {
   if (length(alpha) != 1L || !is.finite(alpha) || alpha <= 0 || alpha >= 1 ||
       !direction %in% c("increase", "decrease", "both")) stop("Invalid family alpha or direction.")
-  if (anyNA(families$status) || any(families$status != "tested")) {
-    stop("CAFE model comparison is incomplete; refusing to redefine the GO background.")
+  # These are CAFE's existing family-wide P values, not branch contrasts.
+  families$family_p_value_adjusted <- p.adjust(families$family_p_value, "BH")
+  family_pass <- families$family_p_value_adjusted < alpha
+  if (any(family_pass & !families$branch_reported)) {
+    stop("A BH-selected family has no native branch report; provide complete CAFE branch results before GO screening.")
   }
-  numeric_cols <- c("p_value", "target_change", "lambda_target", "lambda_background")
-  if (!all(vapply(families[numeric_cols], is.numeric, logical(1))) ||
-      any(!is.finite(as.matrix(families[numeric_cols]))) ||
-      any(families$p_value < 0 | families$p_value > 1) ||
-      any(families$lambda_target < 0 | families$lambda_background < 0) ||
-      any(families$target_change != trunc(families$target_change))) stop("Invalid native CAFE numerical results.")
-  families$p_value_adjusted <- p.adjust(families$p_value, "BH")
-  families$rate_shift <- ifelse(families$lambda_target > families$lambda_background, "faster",
-                               ifelse(families$lambda_target < families$lambda_background, "slower", "equal"))
-  families$selected <- families$p_value_adjusted < alpha & families$rate_shift == "faster" &
-    if (direction == "increase") families$target_change > 0 else
-      if (direction == "decrease") families$target_change < 0 else families$target_change != 0
+  sign_matches <- if (direction == "both") families$target_change != 0 else families$direction == direction
+  families$selected <- family_pass & families$target_flagged & families$n_other_flagged == 0 & sign_matches
+  families$selection_status <- ifelse(!family_pass, "family_not_significant",
+    ifelse(!families$target_flagged, "target_not_flagged",
+      ifelse(families$n_other_flagged != 0, "other_branches_flagged",
+        ifelse(!sign_matches, "direction_not_requested", "selected"))))
   families
 }
 
-summarise_specific_go <- function(families, annotations, candidate_go, alpha = 0.05) {
-  tested <- families[families$status == "tested", , drop = FALSE]
+summarise_family_go <- function(families, annotations, candidate_go, alpha = 0.05) {
+  tested <- families
   selected <- tested$FamilyID[tested$selected]
   annotations <- unique(annotations[annotations$FamilyID %in% tested$FamilyID, , drop = FALSE])
   out <- candidate_go[, c("go_ids", "go_aspects", "go_terms"), drop = FALSE]
-  for (col in c("n_specific_in_go", "n_other_in_go", "n_specific_out_go", "n_other_out_go")) out[[col]] <- integer(nrow(out))
+  for (col in c("n_selected_in_go", "n_background_in_go", "n_selected_out_go", "n_background_out_go")) out[[col]] <- integer(nrow(out))
   out$odds_ratio <- rep(NA_real_, nrow(out))
   out$p_value <- rep(1, nrow(out))
   out$orthogroup_in_target <- rep("", nrow(out))
@@ -259,7 +319,7 @@ summarise_specific_go <- function(families, annotations, candidate_go, alpha = 0
     b <- sum(!tested$selected & tested$FamilyID %in% ids)
     c <- length(selected) - a
     d <- nrow(tested) - length(selected) - b
-    out[i, c("n_specific_in_go", "n_other_in_go", "n_specific_out_go", "n_other_out_go")] <- list(a, b, c, d)
+    out[i, c("n_selected_in_go", "n_background_in_go", "n_selected_out_go", "n_background_out_go")] <- list(a, b, c, d)
     if (length(selected) > 0 && length(selected) < nrow(tested) && a + b > 0 && c + d > 0) {
       fit <- fisher.test(matrix(c(a, b, c, d), nrow = 2), alternative = "greater")
       out$p_value[i] <- fit$p.value
@@ -275,7 +335,7 @@ summarise_specific_go <- function(families, annotations, candidate_go, alpha = 0
 # Input
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 8) {
-  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_lrt] [family_alpha] [bootstrap_replicates] [fit_restarts] [max_iterations] [cores] [dated_tree]")
+  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_branch_flags] [family_alpha] ")
 }
 outdir <- args[5]
 target_branch <- args[6]
@@ -283,28 +343,24 @@ direction <- args[7]
 go_category <- strsplit(args[8], ",")[[1]]
 
 go_method <- if (length(args) >= 9) args[9] else "event"
-if (!go_method %in% c("event", "cafe_lrt")) stop("Invalid GO method: ", go_method)
-if (go_method == "cafe_lrt") {
+if (!go_method %in% c("event", "cafe_branch_flags")) stop("Invalid GO method: ", go_method)
+if (go_method == "cafe_branch_flags") {
   if (!direction %in% c("increase", "decrease", "both") || grepl("[/\\\\]", target_branch)) {
     stop("Invalid native GO direction or target branch.")
   }
   # Invalidate published summaries before reading or validating new inputs.
-  # Native run caches remain available for a subsequent corrected request.
-  result_names <- c("family_specificity.tsv", "specificity_metadata.tsv",
+  # Other evidence remains available for a subsequent corrected request.
+  result_names <- c("family_branch_flags.tsv", "branch_flags_metadata.tsv",
     paste0("enrichment_significant_", direction, "_", target_branch, c("_all_go.tsv", "_significant_go.tsv")))
   unlink(file.path(outdir, result_names))
 }
 change_df <- read_tsv_base(args[1])
 branch_probabilities_df <- read_tsv_base(args[2], na = c("N/A"))
+native_branch_probabilities_df <- branch_probabilities_df
 orthogroup_df <- read_tsv_base(args[3])
 ref_annotation_df <- read_tsv_base(args[4])
 family_alpha <- if (length(args) >= 10) suppressWarnings(as.numeric(args[10])) else 0.05
-bootstrap_replicates <- if (length(args) >= 11) args[11] else "999"
-fit_restarts <- if (length(args) >= 12) args[12] else "5"
-max_iterations <- if (length(args) >= 13) args[13] else "1000"
-native_cores <- if (length(args) >= 14) args[14] else "1"
-dated_tree <- if (length(args) >= 15) args[15] else ""
-if (go_method == "cafe_lrt" && (length(family_alpha) != 1 || !is.finite(family_alpha) || family_alpha <= 0 || family_alpha >= 1)) {
+if (go_method == "cafe_branch_flags" && (length(family_alpha) != 1 || !is.finite(family_alpha) || family_alpha <= 0 || family_alpha >= 1)) {
   stop("family_alpha must be between 0 and 1.")
 }
 p_value_threshold <- 0.05
@@ -365,10 +421,10 @@ if (direction == "increase") {
   for (col in value_cols) {
     significant_change_df[[col]] <- ifelse(significant_change_df[[col]] == -1, 1, 0)
   }
-} else if (direction == "both" && go_method == "cafe_lrt") {
+} else if (direction == "both" && go_method == "cafe_branch_flags") {
   for (col in value_cols) significant_change_df[[col]] <- abs(significant_change_df[[col]])
 } else {
-  stop("Invalid direction. Use 'increase' or 'decrease' (or 'both' with cafe_lrt).")
+  stop("Invalid direction. Use 'increase' or 'decrease' (or 'both' with cafe_branch_flags).")
 }
 
 if (length(value_cols) > 0) {
@@ -380,9 +436,9 @@ write_tsv_base(significant_change_df, file.path(outdir, paste0("orthogroup_table
 
 
 # Output orthogroups with significant increase/decrease in target branch
-if (!target_branch_id %in% colnames(significant_change_df) && go_method == "cafe_lrt") {
+if (!target_branch_id %in% colnames(significant_change_df) && go_method == "cafe_branch_flags") {
   # No CAFE-significant target events means an empty legacy GO candidate set;
-  # it must not prevent the independent native family model comparison.
+  # it must not prevent the native-output family screen.
   significant_change_df[[target_branch_id]] <- rep(0, nrow(significant_change_df))
 }
 if (!target_branch_id %in% colnames(significant_change_df)) {
@@ -435,46 +491,28 @@ if (nrow(orthogroup_go_df) > 0) {
 
 
 # GO enrichment analysis
-if (go_method == "cafe_lrt") {
-  if (!grepl("_change\\.tab$", args[1])) stop("cafe_lrt requires a native *_change.tab input path.")
+if (go_method == "cafe_branch_flags") {
+  if (!grepl("_change\\.tab$", args[1])) stop("cafe_branch_flags requires a native *_change.tab input path.")
   cafe_prefix <- sub("_change\\.tab$", "", args[1])
-  native_inputs <- paste0(cafe_prefix, c("_count.tab", "_asr.tre"))
-  if (!all(file.exists(native_inputs))) stop("cafe_lrt requires matching native *_count.tab and *_asr.tre files.")
+  family_file <- paste0(cafe_prefix, "_family_results.txt")
+  asr_file <- paste0(cafe_prefix, "_asr.tre")
+  if (!all(file.exists(c(family_file, asr_file)))) stop("cafe_branch_flags requires native *_family_results.txt and *_asr.tre files.")
   metadata <- unique(orthogroup_go_df[, c("go_ids", "go_aspects", "go_terms"), drop = FALSE])
   if (anyNA(metadata) || anyDuplicated(metadata$go_ids)) stop("GO IDs require consistent, nonmissing aspect and term metadata.")
-  if (anyNA(change_df$FamilyID) || anyDuplicated(change_df$FamilyID)) stop("FamilyID must be unique and nonmissing.")
   family_ids <- intersect(change_df$FamilyID, orthogroup_go_df$FamilyID)
-  if (!length(family_ids)) stop("No GO-annotated families available for CAFE model comparison.")
-  family_file <- file.path(outdir, "specificity_family_ids.tsv")
-  write_tsv_base(data.frame(FamilyID = family_ids), family_file)
-  script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-  if (length(script_arg) != 1) stop("Cannot locate native CAFE adapter.")
-  native_script <- file.path(dirname(normalizePath(sub("^--file=", "", script_arg))), "cafe_branch_specificity.py")
-  native_dir <- file.path(outdir, "native_cafe")
-  native_args <- c(native_script, "--counts", native_inputs[1], "--asr-tree", native_inputs[2],
-    "--changes", args[1], "--family-ids", family_file, "--target-branch", target_branch_id,
-    "--output-dir", native_dir, "--bootstrap-replicates", bootstrap_replicates,
-    "--fit-restarts", fit_restarts, "--max-iterations", max_iterations, "--cores", native_cores)
-  if (nzchar(dated_tree)) native_args <- c(native_args, "--tree", dated_tree)
-  error_file <- paste0(cafe_prefix, "_error_model.txt")
-  if (file.exists(error_file)) native_args <- c(native_args, "--error-model", error_file)
-  python <- Sys.which("python")
-  if (!nzchar(python)) stop("Python is required for the native CAFE adapter.")
-  status <- system2(python, shQuote(native_args))
-  if (status != 0) stop("Native CAFE comparison failed; inspect native_cafe/metadata.json and preserved logs.")
-  native <- read_tsv_base(file.path(native_dir, "family_lrt.tsv"), na = "NA")
-  if (!setequal(native$FamilyID, family_ids)) stop("Native CAFE returned a different family universe.")
-  families <- select_cafe_families(native, family_alpha, direction)
-  write_tsv_base(families, file.path(outdir, "family_specificity.tsv"))
+  native <- read_cafe_branch_families(change_df, native_branch_probabilities_df,
+    read_tsv_base(family_file, na = c("N/A", "NA")), family_ids, target_branch_id, read_cafe_root_branch(asr_file))
+  families <- select_cafe_branch_families(native, family_alpha, direction)
+  write_tsv_base(families, file.path(outdir, "family_branch_flags.tsv"))
   directions <- if (direction == "both") c("increase", "decrease") else direction
   go_parts <- lapply(directions, function(d) {
-    # Preserve the legacy tested GO IDs for each direction, before LRT selection.
+    # Preserve the legacy tested GO IDs for each direction, before the native-output family screen.
     signed_ids <- change_df$FamilyID[if (d == "increase") change_df[[target_branch_id]] > 0 else change_df[[target_branch_id]] < 0]
     candidate_ids <- intersect(target_significant_df$FamilyID, signed_ids)
     candidate_go <- unique(orthogroup_go_df[orthogroup_go_df$FamilyID %in% candidate_ids,
       c("go_ids", "go_aspects", "go_terms"), drop = FALSE])
-    selected <- select_cafe_families(native, family_alpha, d)
-    out <- summarise_specific_go(selected, orthogroup_go_df, candidate_go, p_value_threshold)
+    selected <- select_cafe_branch_families(native, family_alpha, d)
+    out <- summarise_family_go(selected, orthogroup_go_df, candidate_go, p_value_threshold)
     out$all$direction <- rep(d, nrow(out$all))
     out$significant$direction <- rep(d, nrow(out$significant))
     out
@@ -482,18 +520,18 @@ if (go_method == "cafe_lrt") {
   go_out <- list(all = do.call(rbind, lapply(go_parts, `[[`, "all")),
                  significant = do.call(rbind, lapply(go_parts, `[[`, "significant")))
   write_tsv_base(data.frame(
-    method = go_method, family_alpha = family_alpha, family_adjustment = "BH_before_direction_selection",
+    method = go_method, family_alpha = family_alpha, family_adjustment = "BH_native_family_pvalues_before_branch_screening",
     n_tested_families = nrow(families), n_selected_families = sum(families$selected),
     n_go_tests = nrow(go_out$all), go_scope = "legacy_target_observed_go_per_direction",
-    interpretation = "native_CAFE_turnover_LRT_with_reconstructed_change_direction",
+    interpretation = "exploratory_target_restricted_native_flags_not_a_rate_contrast",
+    branch_probability_cutoff = 0.05, other_branch_rule = "no_flagged_change_of_either_sign",
+    n_families_without_branch_report = sum(!families$branch_reported),
     target_branch = target_branch_id, direction = direction,
-    go_category = paste(go_category, collapse = ","), go_adjustment = "BH_per_direction",
-    bootstrap_replicates = as.integer(bootstrap_replicates),
-    minimum_bootstrap_p = 1 / (as.integer(bootstrap_replicates) + 1)
-  ), file.path(outdir, "specificity_metadata.tsv"))
+    go_category = paste(go_category, collapse = ","), go_adjustment = "BH_per_direction"
+  ), file.path(outdir, "branch_flags_metadata.tsv"))
   write_tsv_base(go_out$all, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_all_go.tsv")))
   write_tsv_base(go_out$significant, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_significant_go.tsv")))
-  cat("cafe_lrt: selected", sum(families$selected), "families; see native_cafe/metadata.json and docs/go-enrichment.md.\n")
+  cat("cafe_branch_flags: selected", sum(families$selected), "families using native output flags; see docs/go-enrichment.md.\n")
   quit(save = "no", status = 0)
 }
 all_families_with_go <- intersect(significant_change_df$FamilyID, orthogroup_go_df$FamilyID)

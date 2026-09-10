@@ -6,41 +6,51 @@ for (x in parse('workflow/support/cafe_go_enrichment.r')) {
 }
 expect_error <- function(expr) stopifnot(inherits(tryCatch(force(expr), error = identity), 'error'))
 
-# Native model P values are adjusted across all families before selecting sign.
-# An accelerated lambda is turnover, not necessarily an increase in copies.
-families <- data.frame(FamilyID = c('gain', 'loss', 'slow', 'flat', 'background'),
-  status = 'tested', p_value = c(.001, .002, .001, .001, 1),
-  target_change = c(10, -10, 2, 0, 1),
-  lambda_target = c(.2, .2, .01, .2, .1), lambda_background = .1)
-inc <- e$select_cafe_families(families, .05, 'increase')
-dec <- e$select_cafe_families(families, .05, 'decrease')
-both <- e$select_cafe_families(families, .05, 'both')
-stopifnot(identical(inc$FamilyID[inc$selected], 'gain'),
-          identical(dec$FamilyID[dec$selected], 'loss'),
-          setequal(both$FamilyID[both$selected], c('gain', 'loss')),
-          identical(inc$p_value_adjusted, dec$p_value_adjusted),
-          identical(both$p_value_adjusted, p.adjust(families$p_value, 'BH')))
-bad <- families; bad$status[1] <- 'failed'
-expect_error(e$select_cafe_families(bad, .05, 'both'))
-bad <- families; bad$p_value[1] <- NA
-expect_error(e$select_cafe_families(bad, .05, 'both'))
-bad <- families; bad$FamilyID[1] <- bad$FamilyID[2]
-expect_error(e$select_cafe_families(bad, .05, 'both'))
-expect_error(e$select_cafe_families(families, NA_real_, 'both'))
-
-# One observation per tested family; zero selected GO terms stay in the set.
-ann <- data.frame(FamilyID = families$FamilyID,
-  go_ids = c('GO:G', 'GO:L', 'GO:U', 'GO:U', 'GO:U'), go_aspects = 'BP',
-  go_terms = c('gain', 'loss', 'ubiquitous', 'ubiquitous', 'ubiquitous'))
-candidate <- unique(ann[, c('go_ids', 'go_aspects', 'go_terms')])
-g <- e$summarise_specific_go(inc, rbind(ann, ann), candidate)
-stopifnot(setequal(g$all$go_ids, candidate$go_ids),
-          g$all$n_specific_in_go[g$all$go_ids == 'GO:G'] == 1,
-          all(g$all$p_value[g$all$go_ids != 'GO:G'] == 1))
+# Existing family-wide P values are adjusted before branch/sign screening.
+ids <- c('gain','loss','broad','mixed','flat','background','unreported')
+changes <- data.frame(FamilyID=ids,check.names=FALSE)
+changes[['A<1>']] <- c(3,-3,3,-3,0,1,1)
+changes[['B<2>']] <- c(0,0,4,4,0,0,0)
+changes[['C<3>']] <- 0L; changes[['<4>']] <- 0L; changes[['<5>']] <- 0L
+prob <- changes[1:6,]; prob[-1] <- .9
+prob[['A<1>']] <- .01; prob[['B<2>']][3:4] <- .01; prob[['<4>']] <- NA_real_
+fam <- data.frame(FamilyID=ids,pvalue=c(.001,.002,.001,.001,.001,.9,.8))
+native <- e$read_cafe_branch_families(changes,prob,fam,ids,'A<1>','<4>')
+inc <- e$select_cafe_branch_families(native,.05,'increase')
+dec <- e$select_cafe_branch_families(native,.05,'decrease')
+both <- e$select_cafe_branch_families(native,.05,'both')
+stopifnot(identical(inc$FamilyID[inc$selected],'gain'),identical(dec$FamilyID[dec$selected],'loss'),
+  setequal(both$FamilyID[both$selected],c('gain','loss')),
+  identical(both$family_p_value_adjusted,p.adjust(fam$pvalue,'BH')),
+  identical(inc$family_p_value_adjusted,dec$family_p_value_adjusted),
+  both$selection_status[both$FamilyID=='mixed']=='other_branches_flagged',
+  is.na(both$n_other_flagged[both$FamilyID=='unreported']),!both$selected[7])
+bad <- native; bad$family_p_value[7] <- .0001
+expect_error(e$select_cafe_branch_families(bad,.05,'both'))
+bad <- prob; bad[['B<2>']][1] <- NA_real_
+expect_error(e$read_cafe_branch_families(changes,bad,fam,ids,'A<1>','<4>'))
+bad <- prob; bad[['<4>']] <- 0
+expect_error(e$read_cafe_branch_families(changes,bad,fam,ids,'A<1>','<4>'))
+bad <- fam; bad$pvalue[1] <- NaN
+expect_error(e$read_cafe_branch_families(changes,prob,bad,ids,'A<1>','<4>'))
+expect_error(e$read_cafe_branch_families(changes,rbind(prob,prob[1,]),fam,ids,'A<1>','<4>'))
+expect_error(e$read_cafe_branch_families(changes,prob,fam[-1,],ids,'A<1>','<4>'))
+expect_error(e$read_cafe_branch_families(changes,prob,fam,ids,'<4>','<4>'))
+none_reported <- e$read_cafe_branch_families(changes,prob[0,],transform(fam,pvalue=1),ids,'A<1>','<4>')
+stopifnot(!any(e$select_cafe_branch_families(none_reported,.05,'both')$selected))
+asr <- tempfile(); writeLines(c('#nexus','BEGIN TREES;',
+  ' TREE family = ((A<1>_9:1,B<2>_3:1)<5>_4:1,C<3>_4:2)<4>_4;','END;'),asr)
+stopifnot(e$read_cafe_root_branch(asr)=='<4>'); unlink(asr)
+# One row per family; rejected candidate GO terms retain P=1.
+ann <- data.frame(FamilyID=ids,go_ids=paste0('GO:',seq_along(ids)),go_aspects='BP',go_terms=ids)
+candidate <- unique(ann[,c('go_ids','go_aspects','go_terms')])
+g <- e$summarise_family_go(inc,rbind(ann,ann),candidate)
+stopifnot(setequal(g$all$go_ids,candidate$go_ids),g$all$n_selected_in_go[g$all$go_ids=='GO:1']==1,
+  all(g$all$p_value[g$all$go_ids!='GO:1']==1))
 none <- inc; none$selected <- FALSE
-g0 <- e$summarise_specific_go(none, ann, candidate)
-stopifnot(nrow(g0$all) == 3, all(g0$all$p_value == 1), nrow(g0$significant) == 0)
-stopifnot(nrow(e$summarise_specific_go(none, ann, candidate[FALSE, ])$all) == 0)
+g0 <- e$summarise_family_go(none,ann,candidate)
+stopifnot(nrow(g0$all)==7,all(g0$all$p_value==1),nrow(g0$significant)==0,
+  nrow(e$summarise_family_go(inc,ann,candidate[0,])$all)==0)
 
 # Legacy default remains unchanged, including its original GO filtering rule.
 events <- data.frame(FamilyID = paste0('F', 1:100), is_target = c(rep(TRUE, 10), rep(FALSE, 90)))
@@ -54,7 +64,7 @@ for (i in 1:8) {
 legacy <- e$summarise_go_enrichment(rows, 10, 90, .05)
 stopifnot(nrow(legacy$all) == 2, abs(legacy$all$p_value_adjusted[legacy$all$go_ids == 'GO:T'] - .01644975288516) < 1e-12)
 
-cat('CAFE GO native selection and legacy numerical regressions passed\n')
+cat('CAFE GO native-output selection and legacy numerical regressions passed\n')
 
 # Eight-argument legacy CLI and explicit event mode must remain equivalent,
 # without any of the new native-comparison input files being present.
@@ -88,16 +98,16 @@ cat('CAFE GO default CLI equivalence passed\n')
 # A bad new input must not leave old optional GO summaries published.
 tmp <- tempfile('cafe-go-failure-'); dir.create(tmp)
 tryCatch({
-  names <- c('family_specificity.tsv', 'specificity_metadata.tsv',
+  names <- c('family_branch_flags.tsv', 'branch_flags_metadata.tsv',
     'enrichment_significant_both_A<1>_all_go.tsv',
     'enrichment_significant_both_A<1>_significant_go.tsv')
   for (name in names) writeLines('old success', file.path(tmp, name))
-  dir.create(file.path(tmp, 'native_cafe'))
-  writeLines('retained native evidence', file.path(tmp, 'native_cafe', 'cache.txt'))
+  dir.create(file.path(tmp, 'source_evidence'))
+  writeLines('retained native evidence', file.path(tmp, 'source_evidence', 'cache.txt'))
   argv <- c(file.path(root, 'workflow/support/cafe_go_enrichment.r'),
-    rep(file.path(tmp, 'missing.tsv'), 4), tmp, 'A<1>', 'both', 'BP', 'cafe_lrt')
+    rep(file.path(tmp, 'missing.tsv'), 4), tmp, 'A<1>', 'both', 'BP', 'cafe_branch_flags')
   result <- suppressWarnings(system2(file.path(R.home('bin'), 'Rscript'), shQuote(argv), stdout=TRUE, stderr=TRUE))
   stopifnot(!is.null(attr(result, 'status')), !any(file.exists(file.path(tmp, names))),
-    file.exists(file.path(tmp, 'native_cafe', 'cache.txt')))
+    file.exists(file.path(tmp, 'source_evidence', 'cache.txt')))
 }, finally=unlink(tmp, recursive=TRUE))
 cat('CAFE GO failed-input publication regression passed\n')
