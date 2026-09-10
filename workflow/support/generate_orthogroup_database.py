@@ -89,17 +89,14 @@ pd.set_option("display.max_columns", 1000)
 MAX_SQL_VARIABLES = 999
 AA_CHANGE_TABLE = "aa_change"
 AA_CHANGE_UNIT_TABLE = "aa_change_unit"
-AA_CHANGE_FDR_PVALUE_COLUMNS = {
-    "p_rate_enrichment": "q_rate_enrichment_global",
-    "p_rate_enrichment_empirical": "q_rate_enrichment_empirical_global",
-    "p_rate_enrichment_empirical_maxT": "q_rate_enrichment_empirical_maxT_global",
-}
 CSUBST_SCAN_BASELINE_COLUMNS = {
     AA_CHANGE_TABLE: {
         "site_rate_categorized",
-        "q_rate_enrichment_empirical",
-        "q_rate_enrichment_empirical_by_trait",
-        "q_rate_enrichment_empirical_by_trait_match",
+        "score_rate_enrichment",
+        "p_rate_enrichment_asymptotic",
+        "q_rate_enrichment_asymptotic_by_trait_match",
+        "scan_inference_status",
+        "scan_rate_testable",
     },
     AA_CHANGE_UNIT_TABLE: {
         "fg_clade_branch_ids",
@@ -261,6 +258,8 @@ def create_indexes(engine, tables):
     require_sqlalchemy()
     with engine.begin() as conn:
         for table in tables:
+            if table == "aa_change_fdr_metadata":
+                continue
             try:
                 index_name = f"idx_orthogroup_{table}"
                 conn.execute(sqlalchemy.text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} (orthogroup);"))
@@ -269,107 +268,57 @@ def create_indexes(engine, tables):
                 logger.error(f"Failed to create index on table '{table}': {e}")
 
 
-def quote_sql_identifier(identifier):
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(identifier)):
-        raise ValueError(f"Unsafe SQL identifier: {identifier}")
-    return f'"{identifier}"'
-
-
-def table_exists(conn, table_name):
-    query = sqlalchemy.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:name")
-    return conn.execute(query, {"name": table_name}).fetchone() is not None
-
-
-def table_columns(conn, table_name):
-    table_sql = quote_sql_identifier(table_name)
-    info = pd.read_sql_query(sql=sqlalchemy.text(f"PRAGMA TABLE_INFO({table_sql})"), con=conn)
-    if info.empty:
-        return []
-    return info["name"].tolist()
-
-
 def calculate_bh_fdr(pvalues):
-    pvalues = pd.to_numeric(pd.Series(pvalues), errors="coerce").to_numpy(dtype=float)
-    qvalues = np.full(shape=pvalues.shape, fill_value=np.nan, dtype=float)
-    finite = np.isfinite(pvalues)
-    if not finite.any():
-        return qvalues
-    finite_index = np.flatnonzero(finite)
-    finite_p = np.clip(pvalues[finite], 0.0, 1.0)
-    order = np.argsort(finite_p, kind="mergesort")
-    ranked = finite_p[order]
-    ranks = np.arange(1, ranked.shape[0] + 1, dtype=float)
-    ranked_q = ranked * ranked.shape[0] / ranks
-    ranked_q = np.minimum.accumulate(ranked_q[::-1])[::-1]
-    ranked_q = np.clip(ranked_q, 0.0, 1.0)
-    qvalues[finite_index[order]] = ranked_q
+    """BH over finite analytical tests; undefined tests remain undefined."""
+    values = pd.to_numeric(pd.Series(pvalues), errors="raise").to_numpy(dtype=float)
+    invalid = np.isinf(values) | (np.isfinite(values) & ((values < 0) | (values > 1)))
+    if invalid.any():
+        raise ValueError("Analytical P values must be finite probabilities in [0, 1] or missing.")
+    qvalues = np.full(values.shape, np.nan)
+    positions = np.flatnonzero(np.isfinite(values))
+    if positions.size:
+        order = np.argsort(values[positions], kind="stable")
+        ranked_positions = positions[order]
+        adjusted = values[ranked_positions] * positions.size / np.arange(1, positions.size + 1)
+        qvalues[ranked_positions] = np.minimum(1.0, np.minimum.accumulate(adjusted[::-1])[::-1])
     return qvalues
 
 
-def add_global_aa_change_fdr_columns(engine, table_name=AA_CHANGE_TABLE):
-    require_sqlalchemy()
+def add_analytical_aa_change_fdr(engine):
+    """One BH family across all imported OG/trait/match candidate rows."""
+    p_column = "p_rate_enrichment_asymptotic"
+    q_column = "q_rate_enrichment_asymptotic_global"
     with engine.begin() as conn:
-        if not table_exists(conn, table_name):
-            logger.info(f"Skipping global FDR calculation because table '{table_name}' does not exist.")
-            return []
-        columns = table_columns(conn, table_name)
-        pvalue_columns = [col for col in AA_CHANGE_FDR_PVALUE_COLUMNS if col in columns]
-        if not pvalue_columns:
-            logger.info(f"Skipping global FDR calculation because '{table_name}' has no recognized P-value columns.")
-            return []
-
-        table_sql = quote_sql_identifier(table_name)
-        for p_col in pvalue_columns:
-            q_col = AA_CHANGE_FDR_PVALUE_COLUMNS[p_col]
-            if q_col not in columns:
-                conn.execute(sqlalchemy.text(f"ALTER TABLE {table_sql} ADD COLUMN {quote_sql_identifier(q_col)} REAL"))
-                logger.info(f"Added global FDR column '{q_col}' to table '{table_name}'.")
-
-        select_cols = ["rowid AS _rowid"] + [quote_sql_identifier(col) for col in pvalue_columns]
-        df = pd.read_sql_query(
-            sql=sqlalchemy.text(f"SELECT {', '.join(select_cols)} FROM {table_sql}"),
-            con=conn,
+        if not sqlalchemy.inspect(conn).has_table(AA_CHANGE_TABLE):
+            return
+        frame = pd.read_sql_query(
+            sqlalchemy.text(f'SELECT rowid AS _rowid, "{p_column}" FROM "{AA_CHANGE_TABLE}"'), conn,
         )
-        if df.empty:
-            logger.info(f"Table '{table_name}' is empty; global FDR columns were added without row updates.")
-            return [AA_CHANGE_FDR_PVALUE_COLUMNS[col] for col in pvalue_columns]
-
-        update_df = pd.DataFrame({"_rowid": df["_rowid"].astype(int)})
-        for p_col in pvalue_columns:
-            q_col = AA_CHANGE_FDR_PVALUE_COLUMNS[p_col]
-            update_df[q_col] = calculate_bh_fdr(df[p_col])
-
-        temp_table = "_tmp_aa_change_global_fdr"
-        update_df.to_sql(
-            temp_table,
-            con=conn,
-            if_exists="replace",
-            index=False,
-            chunksize=calculate_chunksize(update_df.shape[1]),
-            method="multi",
-        )
-        conn.execute(
-            sqlalchemy.text(
-                f"CREATE INDEX IF NOT EXISTS idx_{temp_table}_rowid ON {quote_sql_identifier(temp_table)} (_rowid);"
-            )
-        )
-        temp_sql = quote_sql_identifier(temp_table)
-        for q_col in update_df.columns:
-            if q_col == "_rowid":
-                continue
-            q_col_sql = quote_sql_identifier(q_col)
-            conn.execute(
-                sqlalchemy.text(
-                    f"UPDATE {table_sql} "
-                    f"SET {q_col_sql} = (SELECT {q_col_sql} FROM {temp_sql} WHERE {temp_sql}._rowid = {table_sql}.rowid) "
-                    f"WHERE rowid IN (SELECT _rowid FROM {temp_sql});"
-                )
-            )
-        conn.execute(sqlalchemy.text(f"DROP TABLE {temp_sql};"))
-        logger.info(
-            f"Calculated global BH FDR for {update_df.shape[0]:,} '{table_name}' rows using columns: {', '.join(pvalue_columns)}"
-        )
-        return [AA_CHANGE_FDR_PVALUE_COLUMNS[col] for col in pvalue_columns]
+        qvalues = calculate_bh_fdr(frame[p_column])
+        if q_column not in {column["name"] for column in sqlalchemy.inspect(conn).get_columns(AA_CHANGE_TABLE)}:
+            conn.execute(sqlalchemy.text(f'ALTER TABLE "{AA_CHANGE_TABLE}" ADD COLUMN "{q_column}" REAL'))
+        if len(frame):
+            updates = pd.DataFrame({"_rowid": frame["_rowid"], "qvalue": qvalues})
+            updates.to_sql("_tmp_aa_change_bh", conn, if_exists="replace", index=False,
+                           chunksize=calculate_chunksize(2), method=None)
+            conn.execute(sqlalchemy.text('CREATE INDEX idx_tmp_aa_change_bh ON _tmp_aa_change_bh (_rowid)'))
+            conn.execute(sqlalchemy.text(
+                f'UPDATE "{AA_CHANGE_TABLE}" SET "{q_column}" = '
+                '(SELECT qvalue FROM _tmp_aa_change_bh WHERE _rowid = aa_change.rowid)'
+            ))
+            conn.execute(sqlalchemy.text('DROP TABLE _tmp_aa_change_bh'))
+        pd.DataFrame([{
+            "method": "Benjamini-Hochberg",
+            "p_column": p_column,
+            "q_column": q_column,
+            "scope": "all_imported_candidate_rows_across_orthogroups_traits_matches",
+            "candidate_count": len(frame),
+            "test_count": int(np.isfinite(qvalues).sum()),
+            "undefined_count": int(np.isnan(qvalues).sum()),
+            "interpretation": "nominal_FDR_depends_on_analytical_P_and_selection_validity",
+        }]).to_sql("aa_change_fdr_metadata", conn, if_exists="replace", index=False)
+        logger.info("Calculated analytical BH-FDR across %d finite candidate tests (%d undefined).",
+                    np.isfinite(qvalues).sum(), np.isnan(qvalues).sum())
 
 
 def validate_directories(required_dirs, db_path):
@@ -1046,7 +995,7 @@ def main():
                 processing_errors.append((file_path, str(e)))
     finally:
         chunks.close()
-    # The loop target otherwise retains the final chunk during indexing/FDR.
+    # The loop target otherwise retains the final chunk during indexing.
     df = None
 
     if processing_errors:
@@ -1095,6 +1044,13 @@ def main():
     buffer_list = None
     logger.info(f"{datetime.datetime.today()}: Completed adding infiles to the database.")
 
+    # A successfully scanned family can have no candidates. Preserve its table
+    # schema so downstream readers distinguish an empty scan from absent output.
+    with engine.begin() as conn:
+        for stat in (AA_CHANGE_TABLE, AA_CHANGE_UNIT_TABLE):
+            if total_files.get(stat, 0) and not sqlalchemy.inspect(conn).has_table(stat):
+                pd.DataFrame(columns=columns[stat]).to_sql(stat, conn, index=False)
+
     # Retrieve table info
     with engine.begin() as conn:
         try:
@@ -1106,7 +1062,7 @@ def main():
             logger.error(f"Failed to retrieve tables after insertion: {e}")
             tables = []
 
-    add_global_aa_change_fdr_columns(engine)
+    add_analytical_aa_change_fdr(engine)
     write_association_table(engine, output_store)
 
     with engine.begin() as conn:

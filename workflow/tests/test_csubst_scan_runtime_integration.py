@@ -1,8 +1,12 @@
 import ast
+import json
+import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -18,8 +22,11 @@ CSUBST_CORE_SCRIPT = REPO_ROOT / "workflow" / "core" / "gg_gene_evolution_core.s
 CSUBST_SITE_WRAPPER = REPO_ROOT / "workflow" / "support" / "csubst_site_wrapper.py"
 BASELINE_SCAN_COLUMNS = {
     "site_rate_categorized",
-    "q_rate_enrichment_empirical",
-    "q_rate_enrichment_empirical_by_trait",
+    "p_rate_enrichment_asymptotic",
+    "scan_inference_status",
+    "scan_rate_testable",
+    "score_rate_enrichment",
+    "q_rate_enrichment_asymptotic_by_trait_match",
     "q_rate_enrichment_empirical_by_trait_match",
 }
 
@@ -162,23 +169,28 @@ def toy_scan_context():
         "scan_pvalue_calibration": "none",
         "scan_n_permutations": 0,
         "scan_permutation_seed": 1,
-        "scan_permutation_sample_original": False,
-        "scan_permutation_retry_sample_original": True,
+        "scan_permutation_sample_original": True,
+        "scan_permutation_retry_sample_original": False,
         "min_clade_bin_count": 1,
     }
     return context, on_tensor
 
 
-def test_current_csubst_scan_output_imports_into_gene_family_database(tmp_path):
+@pytest.mark.parametrize("calibration, empty", [("none", False), ("none", True)])
+def test_current_csubst_scan_output_imports_into_gene_family_database(tmp_path, calibration, empty):
     context, on_tensor = toy_scan_context()
+    context.update(scan_pvalue_calibration=calibration, scan_n_permutations=0)
+    if empty:
+        on_tensor[:] = 0
     scan_df, units_df = substitution_scan.scan_substitutions(
         g=context, ON_tensor=on_tensor
     )
 
-    assert scan_df.shape[0] == 1
+    assert scan_df.shape[0] == (0 if empty else 1)
     assert BASELINE_SCAN_COLUMNS.issubset(scan_df.columns)
     assert "fg_clade_branch_ids" in units_df.columns
-    assert scan_df.iloc[0]["site_rate"] == pytest.approx(0.25)
+    if not empty:
+        assert scan_df.iloc[0]["site_rate"] == pytest.approx(0.25)
 
     stat_tree = tmp_path / "stat_tree"
     stat_branch = tmp_path / "stat_branch"
@@ -242,7 +254,81 @@ def test_current_csubst_scan_output_imports_into_gene_family_database(tmp_path):
     with sqlite3.connect(db_path) as conn:
         db_scan = pd.read_sql_query("SELECT * FROM aa_change", conn)
         db_units = pd.read_sql_query("SELECT * FROM aa_change_unit", conn)
+        metadata = pd.read_sql_query("SELECT * FROM aa_change_fdr_metadata", conn).iloc[0]
+        assert metadata["test_count"] == (0 if empty else 1)
     assert db_scan.shape[0] == scan_df.shape[0]
     assert db_units.shape[0] == units_df.shape[0]
     assert set(scan_df.columns).issubset(db_scan.columns)
     assert set(units_df.columns).issubset(db_units.columns)
+
+    assert "q_rate_enrichment_asymptotic_global" in db_scan
+    probability_columns = [column for column in scan_df if column.startswith(("p_rate_", "q_rate_"))]
+    for column in probability_columns:
+        np.testing.assert_allclose(db_scan[column].to_numpy(dtype=float), scan_df[column].to_numpy(dtype=float), equal_nan=True)
+    from workflow.support import csubst_scan_candidate_sites as candidates
+    from workflow.support import plot_csubst_aa_change_summary as summary
+    ranked, score_column, score_kind = summary.ranked_candidates(db_scan)
+    assert (score_column, score_kind) == ((None, "") if empty else ("q_rate_enrichment_asymptotic_global", "BH-FDR"))
+    summary_path = tmp_path / "summary.tsv"
+    ranked.to_csv(summary_path, sep="\t", index=False)
+    selected = candidates.load_threshold_candidates(
+        summary_path, minimum_support=2,
+        probability_column="q_rate_enrichment_asymptotic_global", probability_threshold=1.0,
+        max_candidates=0, csubst_nonsyn_recode="no", pdb="none",
+    )
+    assert len(selected) == (0 if empty else 1)
+
+
+def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
+    """Execute the actual analytical core command and audit publication."""
+    fixtures = REPO_ROOT / "workflow/tests/data/csubst_scan_inference"
+    shutil.copyfile(fixtures / "input.fa", tmp_path / "input.fasta")
+    shutil.copyfile(fixtures / "tree.nwk", tmp_path / "input.nwk")
+    (tmp_path / "foreground.tsv").write_text(
+        "name\ttrait\n" + "".join(f"{name}\t{1 if name == 'a' else 2 if name == 'e' else 0}\n" for name in "abcdefgh")
+    )
+    # Prepare the same intermediate files supplied by GeneGalleon's ASR stage.
+    fitted = subprocess.run([
+        "csubst", "scan", "--alignment_file", "input.fasta", "--rooted_tree_file", "input.nwk",
+        "--foreground", "foreground.tsv", "--fg_format", "2", "--iqtree_model", "GY+FQ",
+        "--scan_pvalue_calibration", "none", "--scan_n_permutations", "0", "--scan_site_plot", "no",
+        "--iqtree_outdir", "fit", "--outdir", "prepare", "--threads", "1",
+    ], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+    assert fitted.returncode == 0, fitted.stdout + fitted.stderr
+    for suffix in ("treefile", "state", "rate", "iqtree", "log"):
+        paths = list((tmp_path / "fit").glob(f"*.{suffix}"))
+        assert len(paths) == 1
+        shutil.copyfile(paths[0], tmp_path / f"input.{suffix}")
+    core = CSUBST_CORE_SCRIPT.read_text()
+    command_start = core.index('  csubst_scan_dir="csubst_scan"')
+    command_end = core.index('\n  if [[ -s "${csubst_scan_dir}/csubst_scan.tsv"', command_start)
+    archive_start = core.index('    if [[ ! -s "${csubst_scan_dir}/csubst_scan_calibration.json"', command_end)
+    archive_end = core.index('    echo "CSUBST scan was successful."', archive_start)
+    shell = core[command_start:command_end] + "\n" + core[archive_start:archive_end]
+    environment = dict(os.environ, csubst_input_base="./input", genetic_code="1", codon_model="GY+FQ",
+                       csubst_scan_unit_mode="clade", csubst_scan_match="any2spe",
+                       csubst_scan_min_event_pp="0.5", csubst_scan_min_support="2",
+                       csubst_scan_rate_event_mode="posterior_sum", csubst_scan_rate_length="n_rescaled",
+                       csubst_scan_rate_exposure="q_weighted", csubst_scan_other_scope="all",
+                       csubst_scan_site_plot="no",
+                       csubst_scan_tree_site_plot_format="pdf", csubst_scan_tree_site_plot_max_sites="30",
+                       csubst_nonsyn_recode="no", GG_TASK_CPUS="1", og_id="OGTEST",
+                       gg_support_dir=str(REPO_ROOT / "workflow/support"),
+                       file_og_csubst_scan_audit=str(tmp_path / "published" / "OGTEST_csubst_scan_audit.zip"))
+    result = subprocess.run(["bash", "-euo", "pipefail", "-c", shell], cwd=tmp_path,
+                            env=environment, capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, result.stdout + result.stderr
+    frame = pd.read_csv(tmp_path / "csubst_scan/csubst_scan.tsv", sep="\t")
+    assert not frame.empty
+    with zipfile.ZipFile(environment["file_og_csubst_scan_audit"]) as archive:
+        assert archive.testzip() is None
+        inference = json.loads(archive.read("csubst_scan/csubst_scan_inference.json"))
+        assert inference["calibration"] == "none"
+        assert inference["requested_replicates"] == 0
+        assert "bootstrap" not in inference
+        assert all(frame[column].isna().all() for column in ["p_rate_enrichment_empirical", "p_rate_enrichment_empirical_maxT", "p_rate_enrichment_bootstrap_maxT"])
+        assert frame["p_rate_enrichment_asymptotic"].notna().any()
+        assert not any("/rep000" in name for name in archive.namelist())
+        assert "csubst_scan/csubst_scan_calibration.json" in archive.namelist()
+        assert "csubst_scan/inputs/alignment.fasta" in archive.namelist()
+        assert "csubst_scan/inputs/foreground.tsv" in archive.namelist()

@@ -252,7 +252,7 @@ def test_forward_config_vars_includes_gene_evolution_csubst_scan_options(tmp_pat
     assert completed.stdout.strip().splitlines() == [
         "run=1",
         "match=all",
-        "perm=25",
+        "perm=",
     ]
 
 
@@ -297,12 +297,12 @@ def test_gene_summary_candidate_site_options_are_forwarded(tmp_path):
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         "run_csubst_scan_candidate_sites=1; "
         "csubst_scan_candidate_sites_min_support=5; "
-        "csubst_scan_candidate_sites_q_threshold=0.01; "
+        "csubst_scan_candidate_sites_probability_threshold=0.01; "
         "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
         'printf "run=%s\\nmin=%s\\nq=%s\\n" '
         '"${SINGULARITYENV_run_csubst_scan_candidate_sites:-}" '
         '"${SINGULARITYENV_csubst_scan_candidate_sites_min_support:-}" '
-        '"${SINGULARITYENV_csubst_scan_candidate_sites_q_threshold:-}"'
+        '"${SINGULARITYENV_csubst_scan_candidate_sites_probability_threshold:-}"'
     )
 
     completed = run_bash(command, cwd=tmp_path)

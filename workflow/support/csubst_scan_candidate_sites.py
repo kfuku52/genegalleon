@@ -38,8 +38,13 @@ from safe_zip_extract import (  # noqa: E402
 
 
 DEFAULT_MIN_SUPPORT = 5
-DEFAULT_Q_COLUMN = "q_rate_enrichment_global"
-DEFAULT_Q_THRESHOLD = 0.05
+DEFAULT_PROBABILITY_COLUMN = "q_rate_enrichment_asymptotic_global"
+DEFAULT_PROBABILITY_THRESHOLD = 0.05
+PROBABILITY_COLUMNS = {
+    "p_rate_enrichment_asymptotic",
+    "q_rate_enrichment_asymptotic_by_trait_match",
+    "q_rate_enrichment_asymptotic_global",
+}
 RUN_LOCK_HEARTBEAT_SECONDS = 5
 RUN_LOCK_STALE_SECONDS = 300
 BESTHIT_COLUMNS = [
@@ -96,8 +101,8 @@ ARCHIVE_MANIFEST_COLUMNS = [
     "csubst_version",
     "csubst_signature",
     "runtime_dependency_versions",
-    "q_column",
-    "q_threshold",
+    "probability_column",
+    "probability_threshold",
     "archive_zip",
     "skipped_candidates_tsv",
     "status",
@@ -114,8 +119,8 @@ CANDIDATE_MANIFEST_COLUMNS = [
     "support_unit_count",
     "support_unit_ids",
     "support_branch_ids",
-    "q_column",
-    "q_value",
+    "probability_column",
+    "probability_value",
     "candidate_tsv",
     "focused_tree_site_pdf",
     "report_pdf",
@@ -145,7 +150,7 @@ MISSING_INPUT_REMEDIATION = (
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Run CSUBST sites for significant CSUBST scan candidates once, then "
+            "Run CSUBST sites for CSUBST scan candidates once, then "
             "package self-contained candidate reports into descending min_support ZIP files."
         )
     )
@@ -162,14 +167,14 @@ def parse_args():
     parser.add_argument("--file_trait", metavar="PATH", required=True)
     parser.add_argument("--out_dir", metavar="PATH", required=True)
     parser.add_argument("--min_support", metavar="INT", default=DEFAULT_MIN_SUPPORT, type=int)
-    parser.add_argument("--q_column", metavar="COLUMN", default=DEFAULT_Q_COLUMN)
-    parser.add_argument("--q_threshold", metavar="FLOAT", default=DEFAULT_Q_THRESHOLD, type=float)
+    parser.add_argument("--probability_column", metavar="COLUMN", default=DEFAULT_PROBABILITY_COLUMN)
+    parser.add_argument("--probability_threshold", metavar="FLOAT", default=DEFAULT_PROBABILITY_THRESHOLD, type=float)
     parser.add_argument(
         "--max_candidates",
         metavar="INT",
         default=0,
         type=int,
-        help="Maximum candidates per min_support ZIP. Zero retains all significant candidates.",
+        help="Maximum candidates per min_support ZIP. Zero retains all selected candidates.",
     )
     parser.add_argument("--ncpu", metavar="INT", default=1, type=int)
     parser.add_argument(
@@ -190,12 +195,12 @@ def parse_args():
 def validate_args(args):
     if args.min_support < 2:
         raise ValueError("--min_support must be an integer >= 2.")
-    if not np.isfinite(args.q_threshold) or not 0.0 <= args.q_threshold <= 1.0:
-        raise ValueError("--q_threshold must be between 0 and 1.")
+    if not np.isfinite(args.probability_threshold) or not 0.0 <= args.probability_threshold <= 1.0:
+        raise ValueError("--probability_threshold must be between 0 and 1.")
     if args.max_candidates < 0:
         raise ValueError("--max_candidates must be >= 0.")
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(args.q_column)) is None:
-        raise ValueError(f"Unsafe q-value column name: {args.q_column}")
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(args.probability_column)) is None:
+        raise ValueError(f"Unsafe probability column name: {args.probability_column}")
     args.ncpu = max(1, int(args.ncpu))
     dir_orthogroup = Path(args.dir_orthogroup).resolve()
     file_trait = Path(args.file_trait).resolve()
@@ -412,14 +417,16 @@ def assign_candidate_ids(frame, csubst_nonsyn_recode, pdb):
 def load_threshold_candidates(
     summary_path,
     minimum_support,
-    q_column,
-    q_threshold,
+    probability_column,
+    probability_threshold,
     max_candidates,
     csubst_nonsyn_recode,
     pdb,
 ):
     frame = pd.read_csv(summary_path, sep="\t", low_memory=False)
-    required = [*CANDIDATE_REQUIRED_COLUMNS, q_column]
+    if probability_column not in PROBABILITY_COLUMNS:
+        raise ValueError(f"Unsupported scan probability column: {probability_column}. Use a current CSUBST source P/q column.")
+    required = [*CANDIDATE_REQUIRED_COLUMNS, probability_column]
     missing = [column for column in required if column not in frame.columns]
     if missing:
         raise ValueError(f"{summary_path} is missing required candidate column(s): {', '.join(missing)}")
@@ -429,10 +436,20 @@ def load_threshold_candidates(
         raise ValueError(
             f"{summary_path} contains {int(invalid_support.sum()):,} row(s) below min_support={minimum_support}."
         )
-    qvalues = pd.to_numeric(frame[q_column], errors="coerce")
-    keep = np.isfinite(qvalues.to_numpy(dtype=float)) & (qvalues <= q_threshold)
+    raw_probability = frame[probability_column]
+    qvalues = pd.to_numeric(raw_probability, errors="coerce")
+    invalid = (raw_probability.notna() & qvalues.isna()) | (qvalues.notna() & (~np.isfinite(qvalues) | ~qvalues.between(0, 1)))
+    if invalid.any():
+        raise ValueError(f"{summary_path} contains invalid probabilities in {probability_column}.")
+    # Missing FDR remains missing; never substitute another probability column.
+    finite = qvalues.notna()
+    if finite.any() and "scan_rate_testable" in frame:
+        testable = frame["scan_rate_testable"].astype(str).str.lower().isin(["true", "1"])
+        if (finite & ~testable).any():
+            raise ValueError(f"{summary_path}: an untestable candidate has a finite probability.")
+    keep = np.isfinite(qvalues.to_numpy(dtype=float)) & (qvalues <= probability_threshold)
     selected = frame.loc[keep, :].copy()
-    selected[q_column] = qvalues.loc[keep].astype(float)
+    selected[probability_column] = qvalues.loc[keep].astype(float)
     selected["support_unit_count"] = support.loc[keep].astype(int)
     selected["codon_site_alignment"] = [
         integer_value(value, "codon_site_alignment", minimum=1) for value in selected["codon_site_alignment"]
@@ -451,11 +468,11 @@ def load_threshold_candidates(
         raise ValueError(f"{summary_path} contains blank orthogroup values among selected candidates.")
     if selected["trait"].isna().any() or selected["trait"].eq("").any():
         raise ValueError(f"{summary_path} contains blank trait values among selected candidates.")
-    sort_columns = [q_column]
+    sort_columns = [probability_column]
     ascending = [True]
-    if "p_rate_enrichment" in selected.columns:
-        selected["p_rate_enrichment"] = pd.to_numeric(selected["p_rate_enrichment"], errors="coerce")
-        sort_columns.append("p_rate_enrichment")
+    if "p_rate_enrichment_asymptotic" in selected.columns:
+        selected["p_rate_enrichment_asymptotic"] = pd.to_numeric(selected["p_rate_enrichment_asymptotic"], errors="coerce")
+        sort_columns.append("p_rate_enrichment_asymptotic")
         ascending.append(True)
     sort_columns.extend(["support_unit_count", "orthogroup", "codon_site_alignment", "state_change"])
     ascending.extend([False, True, True, True])
@@ -828,7 +845,7 @@ def printable_value(value):
     return str(value)
 
 
-def candidate_annotation_text(row, q_column, q_threshold):
+def candidate_annotation_text(row, probability_column, probability_threshold):
     lines = [
         "CSUBST scan candidate",
         "",
@@ -844,10 +861,10 @@ def candidate_annotation_text(row, q_column, q_threshold):
         "Selection",
         "",
         f"min_support: {int(row['_selection_min_support'])}",
-        f"q column: {q_column}",
-        f"q threshold: <= {format_float_token(q_threshold)}",
-        f"q value: {printable_value(row[q_column])}",
-        f"Analytical P value: {printable_value(row.get('p_rate_enrichment', np.nan))}",
+        f"Probability column: {probability_column}",
+        f"Probability threshold: <= {format_float_token(probability_threshold)}",
+        f"Probability value: {printable_value(row[probability_column])}",
+        f"Asymptotic P (exploratory): {printable_value(row.get('p_rate_enrichment_asymptotic', np.nan))}",
         f"Source summary: {row['_source_summary_tsv']}",
         "",
         "Representative best hits",
@@ -857,14 +874,14 @@ def candidate_annotation_text(row, q_column, q_threshold):
     return "\n\n".join(lines)
 
 
-def candidate_output_frame(row, q_column, q_threshold):
+def candidate_output_frame(row, probability_column, probability_threshold):
     source_columns = [column for column in row.index if column not in INTERNAL_COLUMNS]
     output = pd.DataFrame([row[source_columns].to_dict()])
     output.insert(0, "candidate_id", row["_candidate_id"])
     output.insert(0, "candidate_rank", int(row["_candidate_rank"]))
     output.insert(2, "selection_min_support", int(row["_selection_min_support"]))
-    output.insert(3, "selection_q_column", q_column)
-    output.insert(4, "selection_q_threshold", float(q_threshold))
+    output.insert(3, "selection_probability_column", probability_column)
+    output.insert(4, "selection_probability_threshold", float(probability_threshold))
     output["support_branch_ids"] = row["_canonical_support_branch_ids"]
     return output
 
@@ -924,7 +941,7 @@ def make_csubst_manifests_portable(candidate_dir):
             temporary_path.unlink(missing_ok=True)
 
 
-def package_candidate(row, package_root, cache_root, q_column, q_threshold):
+def package_candidate(row, package_root, cache_root, probability_column, probability_threshold):
     candidate_dir_name = f"candidate_{int(row['_candidate_rank']):04d}_{row['_candidate_id']}"
     candidate_dir = package_root / candidate_dir_name
     cache_dir = Path(cache_root) / row["_cache_name"]
@@ -932,10 +949,10 @@ def package_candidate(row, package_root, cache_root, q_column, q_threshold):
         raise RuntimeError(f"Candidate cache is incomplete: {cache_dir}")
     copy_candidate_cache(cache_dir, candidate_dir)
     candidate_tsv = candidate_dir / "candidate.tsv"
-    candidate_output_frame(row, q_column, q_threshold).to_csv(candidate_tsv, sep="\t", index=False)
+    candidate_output_frame(row, probability_column, probability_threshold).to_csv(candidate_tsv, sep="\t", index=False)
     annotation_pdf = candidate_dir / "annotation.pdf"
     site_wrapper.create_pdf(
-        candidate_annotation_text(row, q_column, q_threshold),
+        candidate_annotation_text(row, probability_column, probability_threshold),
         str(annotation_pdf),
     )
     focused_pdf = candidate_dir / f"{row['_candidate_id']}.focused_tree_site.pdf"
@@ -957,8 +974,8 @@ def package_candidate(row, package_root, cache_root, q_column, q_threshold):
         "support_unit_count": int(row["support_unit_count"]),
         "support_unit_ids": row["support_unit_ids"],
         "support_branch_ids": row["_canonical_support_branch_ids"],
-        "q_column": q_column,
-        "q_value": row[q_column],
+        "probability_column": probability_column,
+        "probability_value": row[probability_column],
         "candidate_tsv": f"{candidate_dir_name}/{candidate_tsv.name}",
         "focused_tree_site_pdf": f"{candidate_dir_name}/{focused_pdf.name}",
         "report_pdf": f"{candidate_dir_name}/{report_pdf.name}",
@@ -969,8 +986,8 @@ def package_candidate(row, package_root, cache_root, q_column, q_threshold):
 def write_package_readme(
     path,
     threshold,
-    q_column,
-    q_threshold,
+    probability_column,
+    probability_threshold,
     selected_candidate_count,
     packaged_candidate_count,
     skipped_candidate_count,
@@ -980,10 +997,12 @@ def write_package_readme(
     text = "\n".join(
         [
             "CSUBST scan candidate sites",
+            "Exploratory candidate report. Analytical P and BH-FDR values are preserved across support views.",
+            "Global BH uses all imported scan candidate rows; its validity depends on the analytical P model.",
             "",
             f"Source summary: {source_summary}",
             f"Selection: support_unit_count >= {threshold}",
-            f"Selection: {q_column} <= {format_float_token(q_threshold)}",
+            f"Selection: {probability_column} <= {format_float_token(probability_threshold)}",
             f"Selected candidates: {selected_candidate_count}",
             f"Packaged candidates: {packaged_candidate_count}",
             f"Skipped candidates with missing required inputs: {skipped_candidate_count}",
@@ -1002,8 +1021,8 @@ def write_package_readme(
 def write_package_metadata(
     path,
     threshold,
-    q_column,
-    q_threshold,
+    probability_column,
+    probability_threshold,
     selected_candidate_count,
     packaged_candidate_count,
     skipped_candidate_count,
@@ -1014,8 +1033,8 @@ def write_package_metadata(
         [
             {
                 "min_support": int(threshold),
-                "q_column": q_column,
-                "q_threshold": float(q_threshold),
+                "probability_column": probability_column,
+                "probability_threshold": float(probability_threshold),
                 "candidate_count": int(packaged_candidate_count),
                 "selected_candidate_count": int(selected_candidate_count),
                 "packaged_candidate_count": int(packaged_candidate_count),
@@ -1218,8 +1237,8 @@ def package_threshold(
     archive_path,
     packages_root,
     cache_root,
-    q_column,
-    q_threshold,
+    probability_column,
+    probability_threshold,
     skipped_candidates=None,
 ):
     if skipped_candidates is None:
@@ -1238,8 +1257,8 @@ def package_threshold(
                     row=row,
                     package_root=package_root,
                     cache_root=cache_root,
-                    q_column=q_column,
-                    q_threshold=q_threshold,
+                    probability_column=probability_column,
+                    probability_threshold=probability_threshold,
                 )
             )
         pd.DataFrame(manifest_rows, columns=CANDIDATE_MANIFEST_COLUMNS).to_csv(
@@ -1251,8 +1270,8 @@ def package_threshold(
         write_package_readme(
             package_root / "README.txt",
             threshold=threshold,
-            q_column=q_column,
-            q_threshold=q_threshold,
+            probability_column=probability_column,
+            probability_threshold=probability_threshold,
             selected_candidate_count=selected_candidate_count,
             packaged_candidate_count=candidates.shape[0],
             skipped_candidate_count=skipped_candidates.shape[0],
@@ -1262,8 +1281,8 @@ def package_threshold(
         write_package_metadata(
             package_root / "package_metadata.tsv",
             threshold=threshold,
-            q_column=q_column,
-            q_threshold=q_threshold,
+            probability_column=probability_column,
+            probability_threshold=probability_threshold,
             selected_candidate_count=selected_candidate_count,
             packaged_candidate_count=candidates.shape[0],
             skipped_candidate_count=skipped_candidates.shape[0],
@@ -1284,8 +1303,8 @@ def package_threshold(
         shutil.rmtree(package_root)
 
 
-def output_suffix(q_column, q_threshold, max_candidates, nonsyn_recode, pdb):
-    suffix = f"{sanitize_token(q_column)}_le_{sanitize_token(format_float_token(q_threshold))}"
+def output_suffix(probability_column, probability_threshold, max_candidates, nonsyn_recode, pdb):
+    suffix = f"{sanitize_token(probability_column)}_le_{sanitize_token(format_float_token(probability_threshold))}"
     if max_candidates > 0:
         suffix += f"_top{max_candidates}"
     suffix += site_wrapper.csubst_nonsyn_recode_output_suffix(nonsyn_recode)
@@ -1298,13 +1317,13 @@ def archive_path_for_threshold(
     summary_prefix,
     out_dir,
     threshold,
-    q_column,
-    q_threshold,
+    probability_column,
+    probability_threshold,
     max_candidates,
     nonsyn_recode,
     pdb,
 ):
-    suffix = output_suffix(q_column, q_threshold, max_candidates, nonsyn_recode, pdb)
+    suffix = output_suffix(probability_column, probability_threshold, max_candidates, nonsyn_recode, pdb)
     return Path(out_dir) / (f"{Path(summary_prefix).name}_candidate_sites_min_support_{threshold}_{suffix}.zip")
 
 
@@ -1396,8 +1415,8 @@ def run(args):
     output_dir = Path(args.out_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     run_suffix = output_suffix(
-        args.q_column,
-        args.q_threshold,
+        args.probability_column,
+        args.probability_threshold,
         args.max_candidates,
         args.csubst_nonsyn_recode,
         args.pdb,
@@ -1424,8 +1443,8 @@ def run_locked(args, output_dir, run_suffix):
         candidates = load_threshold_candidates(
             summary_path=summary_path,
             minimum_support=threshold,
-            q_column=args.q_column,
-            q_threshold=args.q_threshold,
+            probability_column=args.probability_column,
+            probability_threshold=args.probability_threshold,
             max_candidates=args.max_candidates,
             csubst_nonsyn_recode=args.csubst_nonsyn_recode,
             pdb=args.pdb,
@@ -1466,8 +1485,8 @@ def run_locked(args, output_dir, run_suffix):
             summary_prefix=args.summary_prefix,
             out_dir=output_dir,
             threshold=threshold,
-            q_column=args.q_column,
-            q_threshold=args.q_threshold,
+            probability_column=args.probability_column,
+            probability_threshold=args.probability_threshold,
             max_candidates=args.max_candidates,
             nonsyn_recode=args.csubst_nonsyn_recode,
             pdb=args.pdb,
@@ -1485,8 +1504,8 @@ def run_locked(args, output_dir, run_suffix):
                 "csubst_version": csubst_version(),
                 "csubst_signature": csubst_signature(),
                 "runtime_dependency_versions": runtime_dependency_versions(),
-                "q_column": args.q_column,
-                "q_threshold": float(args.q_threshold),
+                "probability_column": args.probability_column,
+                "probability_threshold": float(args.probability_threshold),
                 "archive_zip": archive_path.name,
                 "skipped_candidates_tsv": skipped_path.name,
                 "status": "pending",
@@ -1551,8 +1570,8 @@ def run_locked(args, output_dir, run_suffix):
                 archive_path=archive_path,
                 packages_root=packages_root,
                 cache_root=cache_root,
-                q_column=args.q_column,
-                q_threshold=args.q_threshold,
+                probability_column=args.probability_column,
+                probability_threshold=args.probability_threshold,
                 skipped_candidates=skipped,
             )
         except Exception as error:

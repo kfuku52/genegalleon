@@ -32,8 +32,9 @@ def candidate_rows():
                 "support_unit_count": 5,
                 "support_unit_ids": "1,2,3,4,5",
                 "support_branch_ids": "7, 3,7",
-                "p_rate_enrichment": 0.001,
-                "q_rate_enrichment_global": 0.02,
+                "p_rate_enrichment_asymptotic": 0.001,
+                "scan_calibration_status": "conditional_assignment",
+                "q_rate_enrichment_asymptotic_global": 0.02,
                 "besthit_0.05": "protein B",
             },
             {
@@ -44,8 +45,9 @@ def candidate_rows():
                 "support_unit_count": 6,
                 "support_unit_ids": "1,2,3,4,5,6",
                 "support_branch_ids": "8,9",
-                "p_rate_enrichment": 0.002,
-                "q_rate_enrichment_global": 0.01,
+                "p_rate_enrichment_asymptotic": 0.002,
+                "scan_calibration_status": "conditional_assignment",
+                "q_rate_enrichment_asymptotic_global": 0.01,
                 "besthit_0.05": "protein A",
             },
             {
@@ -56,8 +58,9 @@ def candidate_rows():
                 "support_unit_count": 7,
                 "support_unit_ids": "1,2,3,4,5,6,7",
                 "support_branch_ids": "10,11",
-                "p_rate_enrichment": 0.02,
-                "q_rate_enrichment_global": 0.2,
+                "p_rate_enrichment_asymptotic": 0.02,
+                "scan_calibration_status": "conditional_assignment",
+                "q_rate_enrichment_asymptotic_global": 0.2,
                 "besthit_0.05": "protein C",
             },
         ]
@@ -108,8 +111,8 @@ def test_load_threshold_candidates_filters_q_and_canonicalizes_branches(tmp_path
     selected = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         csubst_nonsyn_recode="no",
         pdb="none",
@@ -121,13 +124,13 @@ def test_load_threshold_candidates_filters_q_and_canonicalizes_branches(tmp_path
     assert selected["_candidate_id"].str.contains(r"_[0-9a-f]{16}$").all()
 
 
-def test_candidate_analysis_identity_is_stable_across_recalculated_q_values(tmp_path):
+def test_candidate_analysis_identity_is_stable_across_recalculated_probability_values(tmp_path):
     mod = load_module()
     first_path = tmp_path / "first.tsv"
     second_path = tmp_path / "second.tsv"
     first = candidate_rows().iloc[[0]].copy()
     second = first.copy()
-    second["q_rate_enrichment_global"] = 0.03
+    second["q_rate_enrichment_asymptotic_global"] = 0.03
     write_summary(first_path, first)
     write_summary(second_path, second)
 
@@ -135,8 +138,8 @@ def test_candidate_analysis_identity_is_stable_across_recalculated_q_values(tmp_
         mod.load_threshold_candidates(
             summary_path=path,
             minimum_support=5,
-            q_column="q_rate_enrichment_global",
-            q_threshold=0.05,
+            probability_column="q_rate_enrichment_asymptotic_global",
+            probability_threshold=0.05,
             max_candidates=0,
             csubst_nonsyn_recode="no",
             pdb="none",
@@ -158,8 +161,8 @@ def test_candidate_analysis_identity_ignores_tool_versions_but_tracks_parameters
     first = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         csubst_nonsyn_recode="no",
         pdb="none",
@@ -169,8 +172,8 @@ def test_candidate_analysis_identity_ignores_tool_versions_but_tracks_parameters
     second = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         csubst_nonsyn_recode="no",
         pdb="none",
@@ -178,8 +181,8 @@ def test_candidate_analysis_identity_ignores_tool_versions_but_tracks_parameters
     changed_parameter = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         csubst_nonsyn_recode="dayhoff6",
         pdb="none",
@@ -274,8 +277,8 @@ def test_load_threshold_candidates_rejects_invalid_branch_ids(tmp_path):
         mod.load_threshold_candidates(
             summary_path=summary,
             minimum_support=5,
-            q_column="q_rate_enrichment_global",
-            q_threshold=0.05,
+            probability_column="q_rate_enrichment_asymptotic_global",
+            probability_threshold=0.05,
             max_candidates=0,
             csubst_nonsyn_recode="no",
             pdb="none",
@@ -374,8 +377,8 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
     candidates = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         csubst_nonsyn_recode="no",
         pdb="none",
@@ -393,8 +396,8 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         archive_path=archive,
         packages_root=tmp_path / "packages",
         cache_root=cache_root,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
     )
 
     assert archive.is_file()
@@ -411,7 +414,7 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         assert f"{candidate_prefix}/{row['_candidate_id']}.report.pdf" in names
         candidate_table = pd.read_csv(zipped.open(f"{candidate_prefix}/candidate.tsv"), sep="\t")
         assert candidate_table.loc[0, "selection_min_support"] == 5
-        assert candidate_table.loc[0, "selection_q_column"] == "q_rate_enrichment_global"
+        assert candidate_table.loc[0, "selection_probability_column"] == "q_rate_enrichment_asymptotic_global"
         assert candidate_table.loc[0, "besthit_0.05"] == "protein A"
         output_manifest = pd.read_csv(
             zipped.open(f"{candidate_prefix}/csubst_sites/csubst.branch_id8,9/csubst.outputs.tsv"),
@@ -473,8 +476,8 @@ def test_package_threshold_records_candidates_skipped_for_missing_inputs(tmp_pat
     selected = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         csubst_nonsyn_recode="no",
         pdb="none",
@@ -494,8 +497,8 @@ def test_package_threshold_records_candidates_skipped_for_missing_inputs(tmp_pat
         archive_path=archive,
         packages_root=tmp_path / "packages",
         cache_root=tmp_path / "cache",
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         skipped_candidates=skipped,
     )
 
@@ -536,8 +539,8 @@ def test_archive_names_record_selection_and_optional_analysis_modes(tmp_path):
         summary_prefix=tmp_path / "orthogroup_csubst_aa_change",
         out_dir=tmp_path,
         threshold=7,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=20,
         nonsyn_recode="dayhoff6",
         pdb="besthit",
@@ -545,11 +548,11 @@ def test_archive_names_record_selection_and_optional_analysis_modes(tmp_path):
 
     assert path.name == (
         "orthogroup_csubst_aa_change_candidate_sites_min_support_7_"
-        "q_rate_enrichment_global_le_0.05_top20_nonsynRecode-dayhoff6_pdb-besthit.zip"
+        "q_rate_enrichment_asymptotic_global_le_0.05_top20_nonsynRecode-dayhoff6_pdb-besthit.zip"
     )
 
 
-def test_validate_args_rejects_invalid_q_threshold(tmp_path):
+def test_validate_args_rejects_invalid_probability_threshold(tmp_path):
     mod = load_module()
     trait = tmp_path / "trait.tsv"
     trait.write_text("species\taquatic\nsp1\t1\n", encoding="utf-8")
@@ -557,9 +560,9 @@ def test_validate_args_rejects_invalid_q_threshold(tmp_path):
     families.mkdir()
     args = argparse.Namespace(
         min_support=5,
-        q_threshold=1.1,
+        probability_threshold=1.1,
         max_candidates=0,
-        q_column="q_rate_enrichment_global",
+        probability_column="q_rate_enrichment_asymptotic_global",
         ncpu=1,
         dir_orthogroup=str(families),
         file_trait=str(trait),
@@ -618,8 +621,8 @@ def test_package_threshold_writes_valid_empty_zip(tmp_path):
     empty = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.0,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.0,
         max_candidates=0,
         csubst_nonsyn_recode="no",
         pdb="none",
@@ -632,8 +635,8 @@ def test_package_threshold_writes_valid_empty_zip(tmp_path):
         archive_path=archive,
         packages_root=tmp_path / "packages",
         cache_root=tmp_path / "cache",
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.0,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.0,
     )
 
     assert mod.archive_matches_source(archive, summary)
@@ -654,8 +657,8 @@ def make_run_args(tmp_path):
         file_trait=str(trait_file),
         out_dir=str(tmp_path / "out"),
         min_support=5,
-        q_column="q_rate_enrichment_global",
-        q_threshold=0.05,
+        probability_column="q_rate_enrichment_asymptotic_global",
+        probability_threshold=0.05,
         max_candidates=0,
         ncpu=2,
         csubst_nonsyn_recode="no",
@@ -665,7 +668,7 @@ def make_run_args(tmp_path):
 
 def write_run_summaries(tmp_path):
     frame = candidate_rows().copy()
-    frame["q_rate_enrichment_global"] = 0.01
+    frame["q_rate_enrichment_asymptotic_global"] = 0.01
     for threshold in (5, 6, 7):
         write_summary(
             tmp_path
@@ -1013,8 +1016,9 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
                 "support_unit_count": 6,
                 "support_unit_ids": "1,2,3,4,5,6",
                 "support_branch_ids": "0,1",
-                "p_rate_enrichment": 0.001,
-                "q_rate_enrichment_global": 0.01,
+                "p_rate_enrichment_asymptotic": 0.001,
+                "scan_calibration_status": "conditional_assignment",
+                "q_rate_enrichment_asymptotic_global": 0.01,
                 "besthit_0.05": "annotated protein",
             },
             {
@@ -1025,8 +1029,9 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
                 "support_unit_count": 6,
                 "support_unit_ids": "1,2,3,4,5,6",
                 "support_branch_ids": "2,3",
-                "p_rate_enrichment": 0.002,
-                "q_rate_enrichment_global": 0.02,
+                "p_rate_enrichment_asymptotic": 0.002,
+                "scan_calibration_status": "conditional_assignment",
+                "q_rate_enrichment_asymptotic_global": 0.02,
                 "besthit_0.05": "second annotated protein",
             },
         ]
@@ -1124,3 +1129,39 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
                 ).file_size
     assert not any(output_dir.glob(".*.work"))
     assert not any(output_dir.glob(".*.lock*"))
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01, float("inf"), "invalid"])
+def test_candidate_selection_rejects_invalid_source_probabilities(tmp_path, value):
+    mod = load_module()
+    frame = candidate_rows().astype({"q_rate_enrichment_asymptotic_global": object})
+    frame.loc[0, "q_rate_enrichment_asymptotic_global"] = value
+    source = tmp_path / "summary.tsv"
+    write_summary(source, frame)
+    with pytest.raises(ValueError, match="invalid probabilities"):
+        mod.load_threshold_candidates(source, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+
+
+def test_missing_fdr_never_uses_asymptotic_values(tmp_path):
+    mod = load_module()
+    frame = candidate_rows()
+    frame["q_rate_enrichment_asymptotic_global"] = float("nan")
+    frame["scan_calibration_status"] = "unavailable_failed_trials"
+    source = tmp_path / "summary.tsv"
+    write_summary(source, frame)
+    selected = mod.load_threshold_candidates(source, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+    assert selected.empty
+    frame = frame.drop(columns="q_rate_enrichment_asymptotic_global")
+    write_summary(source, frame)
+    with pytest.raises(ValueError, match="missing required candidate column"):
+        mod.load_threshold_candidates(source, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+
+
+
+
+def test_empirical_probability_columns_are_not_accepted(tmp_path):
+    mod = load_module()
+    source = tmp_path / "summary.tsv"
+    write_summary(source)
+    with pytest.raises(ValueError, match="Unsupported scan probability column"):
+        mod.load_threshold_candidates(source, 5, "p_rate_enrichment_empirical_maxT", 0.05, 0, "no", "none")

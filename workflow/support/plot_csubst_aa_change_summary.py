@@ -11,44 +11,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-FDR_PRIORITY = [
-    "q_rate_enrichment_empirical_maxT_global",
-    "q_rate_enrichment_empirical_global",
-    "q_rate_enrichment_global",
-    "q_rate_enrichment_empirical_maxT",
-    "q_rate_enrichment_empirical",
-    "q_rate_enrichment",
-]
-P_PRIORITY = [
-    "p_rate_enrichment_empirical_maxT",
-    "p_rate_enrichment_empirical",
-    "p_rate_enrichment",
-]
+# BH is calculated once in the database and preserved in all support views.
+P_PRIORITY = ["p_rate_enrichment_asymptotic"]
+DIAGNOSTIC_Q_COLUMNS = ["q_rate_enrichment_asymptotic_global"]
 PVALUE_QVALUE_METHODS = [
-    {
-        "label": "Analytical",
-        "short_label": "Analytical",
-        "p_column": "p_rate_enrichment",
-        "q_column": "q_rate_enrichment_global",
-        "color": "#2F6B9A",
-        "linestyle": "-",
-    },
-    {
-        "label": "Empirical (candidate-level)",
-        "short_label": "Empirical",
-        "p_column": "p_rate_enrichment_empirical",
-        "q_column": "q_rate_enrichment_empirical_global",
-        "color": "#D17A22",
-        "linestyle": "--",
-    },
-    {
-        "label": "Empirical maxT (full-scan)",
-        "short_label": "Empirical maxT",
-        "p_column": "p_rate_enrichment_empirical_maxT",
-        "q_column": "q_rate_enrichment_empirical_maxT_global",
-        "color": "#6B7F2A",
-        "linestyle": ":",
-    },
+    {"label": "Analytical P / global BH-FDR", "short_label": "Analytical",
+     "p_column": P_PRIORITY[0], "q_column": DIAGNOSTIC_Q_COLUMNS[0],
+     "color": "#2F6B9A", "linestyle": "-"},
 ]
 PROBABILITY_COUNT_THRESHOLDS = (0.05, 0.01, 0.001)
 SUPPORT_SIGNIFICANCE_THRESHOLD = 0.05
@@ -62,23 +31,6 @@ ORTHOGROUP_BESTHIT_COLUMNS = [
     "besthit_0.75",
     "besthit_0.95",
 ]
-GLOBAL_QVALUE_COLUMNS = {
-    "p_rate_enrichment": "q_rate_enrichment_global",
-    "p_rate_enrichment_empirical": "q_rate_enrichment_empirical_global",
-    "p_rate_enrichment_empirical_maxT": "q_rate_enrichment_empirical_maxT_global",
-}
-GROUPED_QVALUE_COLUMNS = {
-    "p_rate_enrichment": {
-        "q_rate_enrichment": ("orthogroup",),
-        "q_rate_enrichment_by_trait": ("orthogroup", "trait"),
-        "q_rate_enrichment_by_trait_match": ("orthogroup", "trait", "scan_match"),
-    },
-    "p_rate_enrichment_empirical": {
-        "q_rate_enrichment_empirical": ("orthogroup",),
-        "q_rate_enrichment_empirical_by_trait": ("orthogroup", "trait"),
-        "q_rate_enrichment_empirical_by_trait_match": ("orthogroup", "trait", "scan_match"),
-    },
-}
 AA_ORDER = list("ACDEFGHIKLMNPQRSTVWY")
 DISPLAY_COLUMNS = [
     "orthogroup",
@@ -102,15 +54,15 @@ DISPLAY_COLUMNS = [
     "support_unit_ids",
     "support_branch_ids",
     "rate_ratio",
-    "p_rate_enrichment",
-    "p_rate_enrichment_empirical",
-    "p_rate_enrichment_empirical_maxT",
-    "q_rate_enrichment_global",
-    "q_rate_enrichment_empirical_global",
-    "q_rate_enrichment_empirical_maxT_global",
-    "q_rate_enrichment_empirical",
-    "q_rate_enrichment_empirical_by_trait",
-    "q_rate_enrichment_empirical_by_trait_match",
+    "score_rate_enrichment",
+    *P_PRIORITY,
+    *DIAGNOSTIC_Q_COLUMNS,
+    "scan_rate_testable",
+    "scan_inference_status",
+    "scan_calibration_status",
+    "scan_maxT_scope",
+    "scan_bh_family_id",
+    "scan_bh_family_size",
 ]
 
 
@@ -161,8 +113,12 @@ def table_exists(conn, table):
 def read_table(conn, table):
     validate_table_name(table)
     columns = [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()]
+    required = {"score_rate_enrichment", "p_rate_enrichment_asymptotic", "q_rate_enrichment_asymptotic_global"}
+    missing = sorted(required.difference(columns))
+    if missing:
+        raise ValueError("Legacy CSUBST database schema; rerun scan and rebuild the database. Missing: " + ", ".join(missing))
     selected = [col for col in DISPLAY_COLUMNS if col in columns]
-    for col in FDR_PRIORITY + P_PRIORITY:
+    for col in DIAGNOSTIC_Q_COLUMNS + P_PRIORITY:
         if col in columns and col not in selected:
             selected.append(col)
     selected.extend(col for col in columns if col not in selected)
@@ -278,12 +234,11 @@ def attach_orthogroup_besthits(df, annotation_path):
 
 
 def choose_score_column(df):
-    for col in FDR_PRIORITY:
-        if col in df.columns and pd.to_numeric(df[col], errors="coerce").notna().any():
-            return col, "FDR"
-    for col in P_PRIORITY:
-        if col in df.columns and pd.to_numeric(df[col], errors="coerce").notna().any():
-            return col, "P"
+    if "q_rate_enrichment_asymptotic_global" in df.columns:
+        return "q_rate_enrichment_asymptotic_global", "BH-FDR"
+    # Direct score-only input can still be ranked without inventing FDR values.
+    if "score_rate_enrichment" in df.columns:
+        return "score_rate_enrichment", "Score"
     return None, ""
 
 
@@ -301,61 +256,16 @@ def ranked_candidates(df):
         return df, None, ""
     out = df.copy()
     out["_score"] = pd.to_numeric(out[score_col], errors="coerce")
-    out["_p_rate_enrichment"] = numeric_column(out, "p_rate_enrichment")
+    out["_rate_score"] = numeric_column(out, "score_rate_enrichment")
     out["_support_fraction"] = numeric_column(out, "support_fraction")
     out = out.sort_values(
-        ["_score", "_p_rate_enrichment", "_support_fraction"],
-        ascending=[True, True, False],
+        ["_score", "_rate_score", "_support_fraction"],
+        ascending=[score_kind == "BH-FDR", False, False],
         na_position="last",
         kind="mergesort",
     )
-    internal_cols = ["_score", "_p_rate_enrichment", "_support_fraction"]
+    internal_cols = ["_score", "_rate_score", "_support_fraction"]
     return out.drop(columns=[col for col in internal_cols if col in out.columns]), score_col, score_kind
-
-
-def calculate_bh_fdr(pvalues):
-    pvalues = pd.to_numeric(pd.Series(pvalues), errors="coerce").to_numpy(dtype=float)
-    qvalues = np.full(shape=pvalues.shape, fill_value=np.nan, dtype=float)
-    finite = np.isfinite(pvalues)
-    if not finite.any():
-        return qvalues
-    finite_index = np.flatnonzero(finite)
-    finite_p = np.clip(pvalues[finite], 0.0, 1.0)
-    order = np.argsort(finite_p, kind="mergesort")
-    ranked = finite_p[order]
-    ranks = np.arange(1, ranked.shape[0] + 1, dtype=float)
-    ranked_q = ranked * ranked.shape[0] / ranks
-    ranked_q = np.minimum.accumulate(ranked_q[::-1])[::-1]
-    ranked_q = np.clip(ranked_q, 0.0, 1.0)
-    qvalues[finite_index[order]] = ranked_q
-    return qvalues
-
-
-def calculate_grouped_bh_fdr(df, p_column, group_columns):
-    qvalues = np.full(shape=df.shape[0], fill_value=np.nan, dtype=float)
-    grouped_positions = df.groupby(list(group_columns), sort=False, dropna=False).indices.values()
-    for positions in grouped_positions:
-        positions = np.asarray(positions, dtype=np.int64)
-        qvalues[positions] = calculate_bh_fdr(df.iloc[positions][p_column])
-    return qvalues
-
-
-def recalculate_sensitivity_qvalues(df):
-    recalculated = []
-    for p_column, q_column in GLOBAL_QVALUE_COLUMNS.items():
-        if p_column not in df.columns:
-            continue
-        df[q_column] = calculate_bh_fdr(df[p_column])
-        recalculated.append(q_column)
-    for p_column, q_columns in GROUPED_QVALUE_COLUMNS.items():
-        if p_column not in df.columns:
-            continue
-        for q_column, group_columns in q_columns.items():
-            if not set(group_columns).issubset(df.columns):
-                continue
-            df[q_column] = calculate_grouped_bh_fdr(df, p_column, group_columns)
-            recalculated.append(q_column)
-    return recalculated
 
 
 def min_support_sensitivity_thresholds(df, start=MIN_SUPPORT_SENSITIVITY_START):
@@ -465,16 +375,18 @@ def write_min_support_sensitivity(df, out_prefix):
     for threshold in thresholds:
         threshold_paths = min_support_sensitivity_paths(out_prefix, threshold)
         subset = df.loc[support >= threshold].copy()
-        q_columns = recalculate_sensitivity_qvalues(subset)
+        probability_columns = [col for col in P_PRIORITY + DIAGNOSTIC_Q_COLUMNS if col in subset.columns]
         subset.to_csv(threshold_paths["summary_tsv"], sep="\t", index=False)
         write_pvalue_qvalue_distributions(subset, threshold_paths["plot_pdf"])
         row = {
             "min_support": threshold,
+            "probability_policy": "global_bh_preserved_across_support_views",
+            "inference_scope": "display_filter_of_global_candidate_bh_family",
             "candidate_rows": int(subset.shape[0]),
             "summary_tsv": threshold_paths["summary_tsv"].name,
             "plot_pdf": threshold_paths["plot_pdf"].name,
         }
-        for q_column in q_columns:
+        for q_column in probability_columns:
             metrics = qvalue_manifest_metrics(subset[q_column])
             for metric, value in metrics.items():
                 row[f"{q_column}_{metric}"] = value
@@ -673,7 +585,7 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
     p_series = probability_series(df, "p_column")
     q_series = probability_series(df, "q_column")
     if not p_series and not q_series:
-        write_empty_plot(out_pdf, "No finite P-value or global q-value columns were available.")
+        write_empty_plot(out_pdf, "No finite analytical P or global BH-FDR values were available.")
         return
 
     with plt.rc_context(
@@ -689,11 +601,11 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
     ):
         fig, axes = plt.subplots(2, 2, figsize=(11.2, 8.4))
         plot_probability_cdf(axes[0, 0], p_series, "P-value", "A")
-        plot_probability_cdf(axes[0, 1], q_series, "global q-value", "B")
+        plot_probability_cdf(axes[0, 1], q_series, "BH-FDR", "B")
         plot_probability_histogram(axes[1, 0], p_series, "P", "C")
-        plot_probability_histogram(axes[1, 1], q_series, "global q", "D")
+        plot_probability_histogram(axes[1, 1], q_series, "BH-FDR", "D")
         fig.suptitle(
-            "CSUBST scan P-value and global q-value distributions",
+            "CSUBST scan probability distributions",
             x=0.07,
             y=0.985,
             ha="left",
@@ -706,7 +618,7 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
             0.952,
             (
                 f"All {df.shape[0]:,} candidate state-change rows; "
-                "global q-values use BH-FDR across all gene families"
+                "BH across all imported candidate rows; unchanged in support views"
             ),
             ha="left",
             va="top",
@@ -717,8 +629,8 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
             0.07,
             0.018,
             (
-                "Colors identify the P/q method pair. Empirical values are discrete at the permutation resolution; "
-                "the maxT method compares against the strongest null candidate per permutation."
+                "Analytical P is asymptotic; BH-FDR validity depends on its model and candidate selection. "
+                "No empirical P values are computed."
             ),
             ha="left",
             va="bottom",
@@ -755,7 +667,7 @@ def support_significance_data(
 
     method_series = []
     for method in PVALUE_QVALUE_METHODS:
-        column = method["q_column"]
+        column = method["q_column"] or method["p_column"]
         if column not in df.columns:
             continue
         q_values = pd.to_numeric(df[column], errors="coerce")
@@ -797,7 +709,7 @@ def write_support_significance_rate(df, out_pdf):
     ensure_parent(out_pdf)
     centers, candidate_counts, method_series = support_significance_data(df)
     if not method_series:
-        write_empty_plot(out_pdf, "No finite foreground-support/global-q pairs were available.")
+        write_empty_plot(out_pdf, "No finite foreground-support/probability pairs were available.")
         return
 
     marker_shapes = ["o", "s", "^"]
@@ -845,21 +757,21 @@ def write_support_significance_rate(df, out_pdf):
 
         upper_limit = 1.0 if maximum_rate <= 0 else min(100.0, maximum_rate * 1.18 + 0.1)
         rate_ax.set_ylim(0.0, upper_limit)
-        rate_ax.set_ylabel(f"Candidates with global q <= {SUPPORT_SIGNIFICANCE_THRESHOLD:g} (%)")
+        rate_ax.set_ylabel(f"Candidates with source P/q <= {SUPPORT_SIGNIFICANCE_THRESHOLD:g} (%)")
         rate_ax.grid(True, color="#E5E7EB", linewidth=0.75)
         rate_ax.legend(
             loc="upper left",
             frameon=False,
             fontsize=8.3,
             handlelength=3.0,
-            title="Significant / finite-q candidates",
+            title="Below cutoff / available candidates",
             title_fontsize=8.3,
         )
         if not any_significant:
             rate_ax.text(
                 0.98,
                 0.08,
-                f"No candidates with global q <= {SUPPORT_SIGNIFICANCE_THRESHOLD:g}",
+                f"No candidates with source P/q <= {SUPPORT_SIGNIFICANCE_THRESHOLD:g}",
                 ha="right",
                 va="bottom",
                 transform=rate_ax.transAxes,
@@ -886,7 +798,7 @@ def write_support_significance_rate(df, out_pdf):
             for spine in ["top", "right"]:
                 axis.spines[spine].set_visible(False)
         fig.suptitle(
-            "CSUBST scan foreground support and significance",
+            "CSUBST scan foreground support and probability cutoffs",
             x=0.09,
             y=0.985,
             ha="left",
@@ -897,7 +809,7 @@ def write_support_significance_rate(df, out_pdf):
         fig.text(
             0.09,
             0.945,
-            "Global BH-FDR significance rate within each foreground-support bin",
+            "Global analytical BH-FDR cutoffs, preserved across support views",
             ha="left",
             va="top",
             fontsize=9,
@@ -989,7 +901,7 @@ def main():
         remove_stale_min_support_sensitivity_outputs(args.out_prefix, [])
         write_empty_plot_set(paths, "No CSUBST scan candidates in aa_change.")
     elif score_col is None:
-        write_empty_plot_set(paths, "No CSUBST scan P-value or FDR columns were available.")
+        write_empty_plot_set(paths, "CSUBST ranking score is unavailable; rerun scan with the current version.")
     else:
         write_support_significance_rate(ranked, paths["support_significance_rate"])
         write_substitution_spectrum(ranked, paths["substitution_spectrum"])

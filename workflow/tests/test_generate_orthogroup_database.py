@@ -164,7 +164,7 @@ def test_database_releases_consumed_input_frames_before_indexing(tmp_path, monke
             branch_dir / f"OG{number}_stat.branch.tsv", sep="\t", index=False)
     references = []
     original_reader = mod.read_csv_chunks
-    original_fdr = mod.add_global_aa_change_fdr_columns
+    original_indexes = mod.create_indexes
 
     def read(*args, **kwargs):
         for frame in original_reader(*args, **kwargs):
@@ -175,10 +175,10 @@ def test_database_releases_consumed_input_frames_before_indexing(tmp_path, monke
         gc.collect()
         assert references
         assert not any(reference() is not None for reference in references)
-        return original_fdr(*args, **kwargs)
+        return original_indexes(*args, **kwargs)
 
     monkeypatch.setattr(mod, "read_csv_chunks", read)
-    monkeypatch.setattr(mod, "add_global_aa_change_fdr_columns", check_released)
+    monkeypatch.setattr(mod, "create_indexes", check_released)
     database = tmp_path / "result.sqlite3"
     monkeypatch.setattr(sys, "argv", [str(SCRIPT_PATH), "--overwrite", "1", "--dbpath", str(database),
                                     "--dir_stat_tree", str(tree_dir), "--dir_stat_branch", str(branch_dir),
@@ -218,16 +218,7 @@ def test_gene_family_id_from_path_recognizes_csubst_scan_suffixes():
     assert mod.gene_family_id_from_path("/tmp/HOG0002.csubst_scan_units.tsv") == "HOG0002"
 
 
-def test_calculate_bh_fdr_preserves_nan_and_original_order():
-    mod = load_module()
-
-    out = mod.calculate_bh_fdr([0.01, 0.04, 0.03, float("nan")])
-
-    assert out[:3].tolist() == [0.03, 0.04, 0.04]
-    assert math.isnan(out[3])
-
-
-def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
+def test_database_builder_computes_analytical_global_bh(tmp_path):
     stat_tree = tmp_path / "stat_tree"
     stat_branch = tmp_path / "stat_branch"
     aa_change = tmp_path / "csubst_scan"
@@ -244,10 +235,12 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
                 "state_change": "10K",
                 "site_rate": 0.15,
                 "site_rate_categorized": 2.0,
-                "p_rate_enrichment": 1e-7,
+                "p_rate_enrichment_asymptotic": 1e-7,
                 "p_rate_enrichment_empirical": 2e-6,
-                "q_rate_enrichment_empirical": 0.03,
-                "q_rate_enrichment_empirical_by_trait": 0.04,
+                "score_rate_enrichment": 0.03,
+                "scan_inference_status": "exploratory_asymptotic",
+                "scan_rate_testable": True,
+                "q_rate_enrichment_asymptotic_by_trait_match": 0.04,
                 "q_rate_enrichment_empirical_by_trait_match": 0.05,
             },
             {
@@ -255,10 +248,12 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
                 "state_change": "12S",
                 "site_rate": 0.25,
                 "site_rate_categorized": 3.0,
-                "p_rate_enrichment": 0.04,
+                "p_rate_enrichment_asymptotic": 0.04,
                 "p_rate_enrichment_empirical": 0.50,
-                "q_rate_enrichment_empirical": 0.50,
-                "q_rate_enrichment_empirical_by_trait": 0.60,
+                "score_rate_enrichment": 0.50,
+                "scan_inference_status": "exploratory_asymptotic",
+                "scan_rate_testable": True,
+                "q_rate_enrichment_asymptotic_by_trait_match": 0.60,
                 "q_rate_enrichment_empirical_by_trait_match": 0.70,
             },
         ]
@@ -301,10 +296,13 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "aa_change" in tables
         assert "aa_change_unit" in tables
+        assert {row[1] for row in conn.execute("PRAGMA table_info(aa_change)") if row[1].endswith("_global")} == {"q_rate_enrichment_asymptotic_global"}
+        assert conn.execute("SELECT test_count, undefined_count FROM aa_change_fdr_metadata").fetchone() == (2, 0)
+        assert [row[0] for row in conn.execute("SELECT q_rate_enrichment_asymptotic_global FROM aa_change ORDER BY state_change")] == pytest.approx([2e-7, 0.04])
         aa_df = pandas.read_sql_query(
             "SELECT orthogroup, state_change, site_rate, site_rate_categorized, "
-            "q_rate_enrichment_empirical_by_trait_match, q_rate_enrichment_global, "
-            "q_rate_enrichment_empirical_global FROM aa_change ORDER BY state_change",
+            "q_rate_enrichment_empirical_by_trait_match, p_rate_enrichment_asymptotic, "
+            "p_rate_enrichment_empirical FROM aa_change ORDER BY state_change",
             conn,
         )
         unit_df = pandas.read_sql_query(
@@ -313,10 +311,10 @@ def test_database_builder_adds_aa_change_tables_and_global_fdr(tmp_path):
         )
 
     assert aa_df["orthogroup"].tolist() == ["OG0001", "OG0001"]
-    assert math.isclose(aa_df.loc[0, "q_rate_enrichment_global"], 2e-7)
-    assert math.isclose(aa_df.loc[1, "q_rate_enrichment_global"], 0.04)
-    assert math.isclose(aa_df.loc[0, "q_rate_enrichment_empirical_global"], 4e-6)
-    assert math.isclose(aa_df.loc[1, "q_rate_enrichment_empirical_global"], 0.5)
+    assert math.isclose(aa_df.loc[0, "p_rate_enrichment_asymptotic"], 1e-7)
+    assert math.isclose(aa_df.loc[1, "p_rate_enrichment_asymptotic"], 0.04)
+    assert math.isclose(aa_df.loc[0, "p_rate_enrichment_empirical"], 2e-6)
+    assert math.isclose(aa_df.loc[1, "p_rate_enrichment_empirical"], 0.5)
     assert aa_df["site_rate"].tolist() == [0.15, 0.25]
     assert aa_df["site_rate_categorized"].tolist() == [2.0, 3.0]
     assert aa_df["q_rate_enrichment_empirical_by_trait_match"].tolist() == [0.05, 0.7]
@@ -407,7 +405,7 @@ def test_database_builder_rejects_legacy_scan_schema_before_overwriting_database
     stat_tree_frame(tree_metric=1.0).to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
     stat_branch_frame(branch_metric=2.0).to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
     pandas.DataFrame(
-        [{"trait": "traitA", "state_change": "10K", "p_rate_enrichment": 0.01}]
+        [{"trait": "traitA", "state_change": "10K", "p_rate_enrichment_asymptotic": 0.01}]
     ).to_csv(aa_change / "OG0001_csubst_scan.tsv", sep="\t", index=False)
     pandas.DataFrame(
         [{"trait": "traitA", "unit_id": 1}]
@@ -457,9 +455,12 @@ def test_scan_schema_preflight_allows_different_optional_column_sets(tmp_path):
             {
                 "trait": "traitA",
                 "state_change": "A10V",
+                "p_rate_enrichment_asymptotic": 0.01,
                 "site_rate_categorized": 2.0,
-                "q_rate_enrichment_empirical": 0.03,
-                "q_rate_enrichment_empirical_by_trait": 0.04,
+                "score_rate_enrichment": 0.03,
+                "scan_inference_status": "exploratory_asymptotic",
+                "scan_rate_testable": True,
+                "q_rate_enrichment_asymptotic_by_trait_match": 0.04,
                 "q_rate_enrichment_empirical_by_trait_match": 0.05,
             }
         ]
@@ -469,9 +470,12 @@ def test_scan_schema_preflight_allows_different_optional_column_sets(tmp_path):
             {
                 "trait": "traitA",
                 "state_change": "A20V",
+                "p_rate_enrichment_asymptotic": 0.02,
                 "site_rate_categorized": 3.0,
-                "q_rate_enrichment_empirical": 0.06,
-                "q_rate_enrichment_empirical_by_trait": 0.07,
+                "score_rate_enrichment": 0.06,
+                "scan_inference_status": "exploratory_asymptotic",
+                "scan_rate_testable": True,
+                "q_rate_enrichment_asymptotic_by_trait_match": 0.07,
                 "q_rate_enrichment_empirical_by_trait_match": 0.08,
                 "future_optional_metric": 42.0,
             }
@@ -494,9 +498,11 @@ def test_database_builder_imports_variable_current_scan_columns(tmp_path):
     baseline = {
         "trait": "traitA",
         "site_rate_categorized": 2.0,
-        "p_rate_enrichment": 0.01,
-        "q_rate_enrichment_empirical": 0.03,
-        "q_rate_enrichment_empirical_by_trait": 0.04,
+        "p_rate_enrichment_asymptotic": 0.01,
+        "score_rate_enrichment": 0.03,
+        "scan_inference_status": "exploratory_asymptotic",
+        "scan_rate_testable": True,
+        "q_rate_enrichment_asymptotic_by_trait_match": 0.04,
         "q_rate_enrichment_empirical_by_trait_match": 0.05,
     }
     pandas.DataFrame([{**baseline, "state_change": "A10V"}]).to_csv(
@@ -732,3 +738,34 @@ def test_empty_csubst_cb_prefix_does_not_scan_working_directory(tmp_path, monkey
     monkeypatch.chdir(tmp_path)
 
     assert mod.discover_csubst_cb_dirs("") == []
+
+
+def test_analytical_bh_handles_ties_missing_and_original_order():
+    mod = load_module()
+    observed = mod.calculate_bh_fdr([0.04, 0.01, 0.01, float("nan"), 1.0, 0.0])
+    assert observed[[0, 1, 2, 4, 5]].tolist() == pytest.approx([0.05, 1/60, 1/60, 1.0, 0.0])
+    assert math.isnan(observed[3])
+
+
+@pytest.mark.parametrize("values", [[-0.01], [1.01], [float("inf")], ["invalid"]])
+def test_analytical_bh_rejects_invalid_input(values):
+    with pytest.raises(ValueError):
+        load_module().calculate_bh_fdr(values)
+
+
+def test_analytical_bh_pools_orthogroups_traits_and_matches(tmp_path):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
+    source = pandas.DataFrame({
+        "orthogroup": ["OG1", "OG2", "OG2", "OG3"],
+        "trait": ["A", "B", "B", "A"], "scan_match": ["any2spe", "spe2spe", "any2spe", "spe2spe"],
+        "p_rate_enrichment_asymptotic": [0.01, 0.04, 0.03, float("nan")],
+    })
+    source.to_sql("aa_change", engine, index=False)
+    mod.add_analytical_aa_change_fdr(engine)
+    observed = pandas.read_sql_table("aa_change", engine)
+    assert observed["q_rate_enrichment_asymptotic_global"][:3].tolist() == pytest.approx([0.03, 0.04, 0.04])
+    assert math.isnan(observed["q_rate_enrichment_asymptotic_global"][3])
+    metadata = pandas.read_sql_table("aa_change_fdr_metadata", engine).iloc[0]
+    assert (metadata["test_count"], metadata["undefined_count"]) == (3, 1)
+    engine.dispose()

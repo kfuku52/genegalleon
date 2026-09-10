@@ -3418,7 +3418,8 @@ def test_gene_evolution_core_runs_csubst_scan_as_aa_change_stage():
     assert "csubst_scan_unit_mode" in config_vars
     assert '--scan_unit_mode "${csubst_scan_unit_mode}"' in core
     assert '--scan_match "${csubst_scan_match}"' in core
-    assert '--scan_pvalue_calibration "${csubst_scan_pvalue_calibration}"' in core
+    assert "--scan_pvalue_calibration none" in core
+    assert "--scan_n_permutations 0" in core
     assert '--nonsyn_recode "${csubst_nonsyn_recode}"' in core
     assert 'mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"' in core
     assert 'mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"' in core
@@ -3445,7 +3446,7 @@ def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_ch
     assert "csubst_scan_needs_update=0" in core
     assert "gg_artifact_prepare_stage csubst_scan_needs_update run_csubst_scan" in core
     assert '--parameter "scan_min_support=${csubst_scan_min_support}"' in core
-    assert '--parameter "scan_pvalue_calibration=${csubst_scan_pvalue_calibration}"' in core
+    assert '--parameter "scan_pvalue_calibration=none"' in core
     assert 'python "${gg_support_dir}/validate_csubst_branch_identity.py"' in core
     assert '--iqtree-anc "${file_og_iqtree_anc}"' in core
 
@@ -3502,7 +3503,8 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert 'output_dir = prefix.parent / "min_support_sensitivity"' not in plot_script
     assert "remove_legacy_min_support_output_layout" in plot_script
     assert "write_min_support_sensitivity" in plot_script
-    assert "recalculate_sensitivity_qvalues" in plot_script
+    assert "recalculate_sensitivity_qvalues" not in plot_script
+    assert "global_bh_preserved_across_support_views" in plot_script
     assert '"--out_prefix"' in plot_script
     assert "required=True" in plot_script
     assert '"--out_pdf"' not in plot_script
@@ -3522,18 +3524,18 @@ def test_gene_summary_csubst_scan_candidate_sites_are_opt_in_and_threshold_packa
     assert "run_csubst_scan_candidate_sites" in config_vars
     assert 'csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"' in entrypoint
     assert (
-        'csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}"'
+        'csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_global}"'
         in entrypoint
     )
-    assert 'csubst_scan_candidate_sites_q_threshold="${csubst_scan_candidate_sites_q_threshold:-0.05}"' in entrypoint
+    assert 'csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}"' in entrypoint
     assert 'csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}"' in entrypoint
     assert "run_csubst_scan_candidate_sites=0" in candidate_body
     assert 'python "${gg_support_dir}/csubst_scan_candidate_sites.py"' in candidate_body
     assert '--summary_prefix "${summary_output_dir}/${gene_family_source}_csubst_aa_change"' in candidate_body
     assert '--out_dir "${summary_output_dir}"' in candidate_body
     assert '--min_support "${csubst_scan_candidate_sites_min_support}"' in candidate_body
-    assert '--q_column "${csubst_scan_candidate_sites_q_column}"' in candidate_body
-    assert '--q_threshold "${csubst_scan_candidate_sites_q_threshold}"' in candidate_body
+    assert '--probability_column "${csubst_scan_candidate_sites_probability_column}"' in candidate_body
+    assert '--probability_threshold "${csubst_scan_candidate_sites_probability_threshold}"' in candidate_body
     assert '--pdb "${csubst_scan_candidate_sites_pdb}"' in candidate_body
     assert core.index("run_csubst_scan_aa_change_summary_for_source\n") < core.index(
         "run_csubst_scan_candidate_sites_for_source\n"

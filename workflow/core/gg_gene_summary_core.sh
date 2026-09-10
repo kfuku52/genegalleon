@@ -26,8 +26,8 @@ run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
 csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"
-csubst_scan_candidate_sites_q_column="${csubst_scan_candidate_sites_q_column:-q_rate_enrichment_global}"
-csubst_scan_candidate_sites_q_threshold="${csubst_scan_candidate_sites_q_threshold:-0.05}"
+csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_global}"
+csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}"
 csubst_scan_candidate_sites_max_candidates="${csubst_scan_candidate_sites_max_candidates:-0}"
 csubst_scan_candidate_sites_pdb=$(echo "${csubst_scan_candidate_sites_pdb:-none}" | tr '[:upper:]' '[:lower:]')
 presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
@@ -674,6 +674,7 @@ run_gene_family_database_for_source() {
     --input-gene-family-store "gene_family_outputs=${dir_gene_family}"
     --output "database=${file_gene_family_db}"
     --parameter "pgls_multiplicity=by_response_predictor_v1"
+    --parameter "scan_inference_contract=analytical_bh_global_v1"
     --parameter "row_threshold=8000"
     --parameter "cutoff_stat=OCNany2spe,0.8"
   )
@@ -753,6 +754,7 @@ run_csubst_scan_aa_change_summary_for_source() {
     --output "pvalue_plot=${aa_summary_prefix}_min_support_2_pvalue_qvalue_distributions.pdf"
     --optional-output "sensitivity_manifest=${aa_summary_prefix}_min_support_manifest.tsv"
     --parameter "primary_min_support=2"
+    --parameter "scan_inference_contract=analytical_bh_global_v1"
   )
   if [[ "${gene_family_source}" == "orthogroup" && -n "${file_orthogroup_genecount_annotated}" ]]; then
     aa_summary_provenance_args+=(--input "orthogroup_annotations=${file_orthogroup_genecount_annotated}")
@@ -809,8 +811,8 @@ run_csubst_scan_candidate_sites_for_source() {
     --file_trait "${candidate_trait_file}" \
     --out_dir "${summary_output_dir}" \
     --min_support "${csubst_scan_candidate_sites_min_support}" \
-    --q_column "${csubst_scan_candidate_sites_q_column}" \
-    --q_threshold "${csubst_scan_candidate_sites_q_threshold}" \
+    --probability_column "${csubst_scan_candidate_sites_probability_column}" \
+    --probability_threshold "${csubst_scan_candidate_sites_probability_threshold}" \
     --max_candidates "${csubst_scan_candidate_sites_max_candidates}" \
     --ncpu "${GG_TASK_CPUS:-1}" \
     --csubst_nonsyn_recode "${csubst_site_nonsyn_recode}" \

@@ -414,148 +414,122 @@ lineage ID as foreground, including IDs of `2` or greater.
 
 ## CSUBST scan
 
-`workflow/gg_gene_evolution_entrypoint.sh` also exposes `run_csubst_scan` for
-`csubst scan`, a direct recurrent amino-acid/state-change scan that is separate
-from the branch-combination search used by `run_csubst`.
-
-Key options:
+`workflow/gg_gene_evolution_entrypoint.sh` exposes `run_csubst_scan` for
+recurrent amino-acid state changes. GeneGalleon runs **analytical P only**:
+`--scan_pvalue_calibration none --scan_n_permutations 0` is fixed in the core.
+No candidate-fixed, full-scan maxT or parametric-bootstrap P values are computed.
+The previous calibration/permutation configuration variables are no longer
+forwarded. The separate arity-based `run_csubst` workflow is unchanged.
 
 ```bash
-run_iqtree_anc=1
 run_csubst_scan=1
 csubst_scan_unit_mode="clade"
 csubst_scan_match="any2spe"
 csubst_scan_min_support="2"
-csubst_scan_pvalue_calibration="full_scan"
-csubst_scan_n_permutations="1000"
 csubst_scan_site_plot="yes"
 ```
 
-`csubst_scan_min_support` preserves the spelling passed to `csubst`: `"1"`
-means one foreground unit, fractional values such as `"0.5"` are proportions,
-and `"1.0"` means 100% of foreground units.
+`csubst_scan_min_support` preserves CSUBST's spelling: `"1"` means one unit,
+`"0.5"` is a proportion, and `"1.0"` means 100%. `lineage`, `stem` and `clade`
+unit modes, event threshold/mass, exposure, branch-length scale, control scope
+and nonsynonymous recoding remain configurable. The scan consumes the existing
+IQ-TREE ancestral-reconstruction archive and foreground table.
 
-`csubst_scan_unit_mode` defines the independent foreground support units. The
-default `clade` mode automatically splits disconnected foreground regions and
-uses every branch within each foreground clade. `stem` uses the same automatic
-split but scans only each clade's stem branch. `lineage` uses each positive
-foreground lineage ID as one unit and follows `csubst_fg_stem_only`; use
-distinct positive IDs in `workspace/input/species_trait/species_trait.tsv` when
-independent lineages must remain separate in this mode.
+### Analytical P and global BH-FDR
 
-Per-family outputs are written under `csubst_scan/`, `csubst_scan_units/`,
-`csubst_scan_foreground_branch/`, `csubst_scan_plot/`, and `csubst_scan_log/`.
-Database preparation imports `csubst_scan/*.tsv` into the `aa_change` table and
-`csubst_scan_units/*.tsv` into `aa_change_unit`. The `aa_change` table is a
-candidate state-change table, not a one-row-per-site table; GeneGalleon adds
-global BH-FDR columns such as `q_rate_enrichment_global` after aggregating all
-candidate substitutions into the SQLite database. In `gg_gene_summary`, set
-`run_csubst_scan_aa_change_summary=1` to write ranked candidate TSV output plus
-`*_csubst_aa_change_min_support_2_summary.tsv`,
-`*_csubst_aa_change_min_support_2_support_significance_rate.pdf`,
-`*_csubst_aa_change_min_support_2_substitution_spectrum.pdf`, and
-`*_csubst_aa_change_min_support_2_pvalue_qvalue_distributions.pdf`. The
-`min_support_2` label reflects the default `csubst_scan_min_support=2`. The
-orthogroup TSVs also receive `besthit_0.05`, `besthit_0.25`, `besthit_0.5`,
-`besthit_0.75`, and `besthit_0.95` immediately after `orthogroup`, joined from
-`orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv` when
-that table is available. These annotations propagate to every filtered
-`min_support` TSV; query2family summaries are unchanged.
-The support-significance plot groups candidates into 0.1-wide foreground-support
-bins, compares the fraction with global q values at or below 0.05 across the
-three calibration methods, and shows each bin's candidate count. The last plot
-compares the analytical, candidate-level empirical, and full-scan empirical maxT P-value
-distributions with their corresponding global BH-FDR q-value distributions.
-Without an additional option, the same summary run writes the sensitivity
-series directly beside those primary files. For every integer `min_support`
-from 3 through the largest observed `support_unit_count`, it writes
-`*_min_support_<N>_summary.tsv`,
-`*_min_support_<N>_pvalue_qvalue_distributions.pdf`, and a combined
-`*_min_support_manifest.tsv`. Each TSV retains candidates with
-`support_unit_count >= N` and recalculates the recognized global,
-orthogroup-level, trait-level, and trait/match-level BH q-value columns within
-that filtered candidate set. The original analytical, empirical, and maxT
-P-values are retained. Consequently, these files are a post-hoc multiple-test
-sensitivity analysis; changing `csubst_scan_min_support` and rerunning
-`csubst scan` can also change the empirical null distributions and is required
-for an exact empirical/maxT reanalysis.
+Database preparation imports scan candidates into `aa_change` and support
+units into `aa_change_unit`. A candidate row is a state-change hypothesis,
+not necessarily a unique site or orthogroup. It retains CSUBST's
+`score_rate_enrichment`, `p_rate_enrichment_asymptotic`, trait × match diagnostic
+q values and inference metadata, then calculates:
 
-Set `run_csubst_scan_candidate_sites=1` in `gg_gene_summary_entrypoint.sh` to
-turn significant rows from that sensitivity series into focused site reports.
-This is opt-in because `csubst sites` and tree rendering can be expensive. The
-defaults are:
+- `q_rate_enrichment_asymptotic_global`: Benjamini–Hochberg correction of
+  `p_rate_enrichment_asymptotic` over **all finite candidate P values in this
+  database**, pooling orthogroups, traits and requested match classes.
+- `aa_change_fdr_metadata`: the correction method, source/destination columns,
+  family definition, candidate count, finite test count and undefined count.
+
+For ordered P values, BH uses `min(1, min_{j>=i}(m * p[j] / j))`, where `m`
+is the number of finite tested candidate rows. It does not use the number of
+orthogroups as the denominator. Undefined P values remain undefined; malformed,
+infinite or out-of-range inputs stop the database build rather than being
+clipped. Empty scan inputs retain a table schema and zero-test metadata.
+
+These are **nominal BH-FDR estimates**. Their error-rate interpretation depends
+on the validity of the analytical P model, candidate selection and dependence
+assumptions. CSUBST's fractional posterior event masses and same-data candidate
+selection are not repaired by BH. The correction covers the imported candidate
+set, not unreported hypotheses, additional databases or settings explored later.
+
+### Summary and candidate reports
+
+In `gg_gene_summary_entrypoint.sh`, set `run_gene_family_database_build=1` and
+`run_csubst_scan_aa_change_summary=1` to rebuild the database and create the
+`*_csubst_aa_change_min_support_2_summary.tsv` and its support, substitution
+spectrum and P/FDR distribution PDFs. Ranking uses global BH-FDR, breaking ties
+with the rate score. The `min_support_2` filename reflects the default scan
+support; changing discovery support requires rerunning scan.
+
+The five `besthit_*` annotations are joined by orthogroup from the annotated
+Orthogroups gene-count table when available. They propagate to the filtered
+support views. Query2family summaries do not require these annotations.
+
+For each integer support threshold from 3 to the observed maximum, the summary
+also writes `*_min_support_<N>_summary.tsv` and its probability plot, plus
+`*_min_support_manifest.tsv`. **P and global FDR remain unchanged in these
+views**: BH is not recomputed after filtering on support. The manifest records
+this policy and cutoff counts. The views are post-hoc display filters of the
+original correction family, not independent significance analyses.
+
+Candidate-site reports are opt-in:
 
 ```bash
-run_csubst_scan_candidate_sites=0
+run_csubst_scan_candidate_sites=1
 csubst_scan_candidate_sites_min_support=5
-csubst_scan_candidate_sites_q_column="q_rate_enrichment_global"
-csubst_scan_candidate_sites_q_threshold="0.05"
+csubst_scan_candidate_sites_probability_column="q_rate_enrichment_asymptotic_global"
+csubst_scan_candidate_sites_probability_threshold="0.05"
 csubst_scan_candidate_sites_max_candidates=0
 csubst_scan_candidate_sites_pdb="none"
 ```
 
-GeneGalleon visits the available integer thresholds from the observed maximum
-down to `csubst_scan_candidate_sites_min_support`. Candidate selection is
-performed independently against each threshold's recalculated q-value column.
-The expensive site analysis is cached by orthogroup, alignment site, state
-change, supporting branch set, recoding mode, and PDB mode, so a candidate
-retained at several thresholds is analyzed once during the run and reused.
-`csubst_scan_candidate_sites_max_candidates=0` keeps all significant rows;
-positive values keep the best-ranked rows separately at each threshold.
-Protein-structure searching is disabled by default and can be enabled with
-`csubst_scan_candidate_sites_pdb="besthit"`.
+The default selects global analytical BH-FDR <= 0.05. Analytical P or CSUBST's
+within-trait × match analytical q column may be selected explicitly. Empirical
+and bootstrap columns are not accepted by this helper. Missing FDR does not
+fall back to P. Thresholds are visited from observed maximum down to the
+configured minimum; a zero candidate cap retains all qualifying rows.
 
-Each threshold produces one self-contained ZIP directly under
-`gene_summary/<source>`:
+Each threshold produces a ZIP such as
+`<source>_csubst_aa_change_candidate_sites_min_support_<N>_q_rate_enrichment_asymptotic_global_le_0.05.zip`.
+It contains manifests, candidate source rows, raw `csubst sites` outputs,
+focused tree/site plots and combined reports. Shared candidate analyses are
+cached once across thresholds; source summaries, selection parameters and
+required input signatures govern archive reuse. Missing report inputs are
+recorded as skipped candidates. `pdb="besthit"` enables optional structure
+searching. The report can be computationally expensive even without scan
+permutations.
 
-```text
-<source>_csubst_aa_change_candidate_sites_min_support_<N>_q_rate_enrichment_global_le_0.05.zip
-```
+### Outputs and migration
 
-The ZIP contains a candidate manifest plus one directory per selected row.
-Each candidate directory contains its one-row annotated TSV, raw `csubst sites`
-outputs, a tree PDF restricted to the selected alignment site, and a combined
-PDF report. The sibling `*_candidate_sites_*_manifest.tsv` records threshold
-order, candidate counts, archive names, completion status, and analysis-engine
-provenance. Existing ZIPs and cached analyses are reused when the source
-summary, declared report parameters, and required per-family inputs match and
-the archive is complete. GeneGalleon, container, csubst, and Python dependency
-versions are recorded for diagnosis but do not invalidate an otherwise current
-result. Input-content or output-affecting parameter changes rebuild the affected
-analysis.
-The existing arity-based `run_csubst_site_convergence_summary` output is
-unchanged.
+Per-family outputs are written under `csubst_scan/`, `csubst_scan_units/`,
+`csubst_scan_foreground_branch/`, `csubst_scan_plot/` and `csubst_scan_log/`.
+`csubst_scan_audit/<family>_csubst_scan_audit.zip` preserves the complete scan
+output, JSON inference definitions/disabled-calibration record and copies of
+its input alignment, topology and foreground table. It is verified and
+atomically published before scratch cleanup, including for empty scans.
+Source execution paths may need relocation when reproducing a saved run.
 
-Combine it with
-`run_gene_family_database_build=1` to refresh the database and plots in one run.
-Before replacing the database, GeneGalleon audits the raw or ZIP-backed
-gene-family provenance manifests and validates that every shared CSUBST and
-`stat_branch` branch ID represents the same descendant-tip clade. The audit is
-written to `gene_summary/<source>/<source>_artifact_provenance_audit.tsv`, and
-database generation stops on changed declared inputs or outputs and on
-branch-identity mismatches. Legacy outputs without manifests are reported as
-`legacy_untracked` but remain usable and do not stop the build.
+Current score/analytical-P/analytical-q/testability/inference marker columns are
+required; optional columns are unioned by header name. Unsupported legacy scan
+schemas are rejected before replacing a database. Regenerate scan outputs,
+then the database and summaries together. New provenance contracts invalidate
+old statistical outputs.
 
-GeneGalleon does not require a fixed CSUBST scan column count. Columns are
-matched by header name, the union of reported columns is retained, and optional
-columns absent from an individual per-family TSV are stored as `NULL` in the
-SQLite database. The semantic baseline for this release requires
-`site_rate_categorized` and the three empirical q-value columns in
-`csubst_scan.tsv`, plus `fg_clade_branch_ids` in
-`csubst_scan_units.tsv`; any number of additional columns is accepted without a
-GeneGalleon change. Legacy outputs missing those baseline markers are rejected
-before the SQLite database is overwritten. When a csubst upgrade changes scan
-statistic semantics rather than only adding report columns, regenerate all scan
-tables, plots, logs, and foreground-branch outputs together so that the result
-set remains internally consistent.
+Remove old `csubst_scan_pvalue_calibration`, `csubst_scan_n_permutations` and
+`csubst_scan_permutation_seed` settings. Candidate settings formerly named
+`*_q_column` / `*_q_threshold` now use `*_probability_column` /
+`*_probability_threshold`; the helper CLI and manifests follow those names.
+The legacy `q_rate_enrichment_global` is replaced by the explicit
+`q_rate_enrichment_asymptotic_global` name.
 
-For current scan outputs, `site_rate` is the posterior-mean rate and the former
-IQ-TREE categorical rate is retained as `site_rate_categorized`.
-`site_rate_quantile` is calculated from posterior-mean rates with tied values
-sharing the same average rank. Target and other event/rate quantities cover the
-full foreground clades, and q-weighted exposure uses the parent-codon posterior
-and codon Q values. Analytical and empirical P/q values therefore should not be
-compared directly with values from legacy scan outputs. For 3Di analyses,
-`scan_rate_exposure` records the effective `state_aware` model even when the
-requested default was `q_weighted`. These provenance and new empirical q-value
-columns are retained in the database and the ranked AA-change summary TSV.
+See [integration validation](reviews/2026-09-10-csubst-scan-integration.md) for
+execution coverage and the remaining analytical-model limitations.

@@ -28,10 +28,9 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
                 "site_rate": 0.125,
                 "site_rate_categorized": 3.0,
                 "site_rate_quantile": 0.75,
-                "p_rate_enrichment": 0.01,
-                "q_rate_enrichment_global": 0.02,
-                "q_rate_enrichment_empirical": 0.03,
-                "q_rate_enrichment_empirical_by_trait": 0.04,
+                "p_rate_enrichment_asymptotic": 0.01,
+                "score_rate_enrichment": 0.03,
+                "q_rate_enrichment_asymptotic_global": 0.04,
                 "q_rate_enrichment_empirical_by_trait_match": 0.05,
                 "future_csubst_metric": 42.0,
             }
@@ -46,8 +45,8 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
         "site_rate",
         "site_rate_categorized",
         "site_rate_quantile",
-        "q_rate_enrichment_empirical",
-        "q_rate_enrichment_empirical_by_trait",
+        "score_rate_enrichment",
+        "q_rate_enrichment_asymptotic_global",
         "q_rate_enrichment_empirical_by_trait_match",
         "future_csubst_metric",
     }
@@ -59,8 +58,8 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
 
     ranked, score_column, score_kind = mod.ranked_candidates(observed)
     assert ranked.shape[0] == 1
-    assert score_column == "q_rate_enrichment_global"
-    assert score_kind == "FDR"
+    assert score_column == "q_rate_enrichment_asymptotic_global"
+    assert score_kind == "BH-FDR"
 
 
 def test_attach_orthogroup_besthits_is_many_to_one_and_orders_columns(tmp_path):
@@ -196,9 +195,9 @@ def test_support_significance_data_retains_flat_max_t_as_zero_rate():
     frame = pandas.DataFrame(
         {
             "support_fraction": [0.05, 0.15, 0.55, 0.95],
-            "q_rate_enrichment_global": [0.01, 0.04, 0.2, 1.0],
-            "q_rate_enrichment_empirical_global": [0.02, 0.08, 0.4, 1.0],
-            "q_rate_enrichment_empirical_maxT_global": [1.0, 1.0, 1.0, 1.0],
+            "q_rate_enrichment_asymptotic_global": [0.01, 0.04, 0.2, 1.0],
+            "q_rate_enrichment_empirical_by_trait_match": [0.02, 0.08, 0.4, 1.0],
+            "p_rate_enrichment_empirical_maxT": [1.0, 1.0, 1.0, 1.0],
         }
     )
 
@@ -208,9 +207,6 @@ def test_support_significance_data_retains_flat_max_t_as_zero_rate():
     assert candidate_counts.sum() == 4
     observed = {item["method"]["short_label"]: item for item in series}
     assert observed["Analytical"]["significant_counts"].sum() == 2
-    assert observed["Empirical"]["significant_counts"].sum() == 1
-    assert observed["Empirical maxT"]["significant_counts"].sum() == 0
-    assert observed["Empirical maxT"]["percentages"][0] == 0.0
 
 
 def test_probability_count_label_reports_three_threshold_counts():
@@ -222,30 +218,6 @@ def test_probability_count_label_reports_three_threshold_counts():
     assert observed == "Analytical: 5 / 3 / 2"
 
 
-def test_recalculate_sensitivity_qvalues_updates_global_and_grouped_fdr():
-    mod = load_module()
-    frame = pandas.DataFrame(
-        {
-            "orthogroup": ["OG1", "OG1", "OG2", "OG2"],
-            "trait": ["A", "A", "A", "B"],
-            "scan_match": ["m1", "m1", "m1", "m2"],
-            "p_rate_enrichment": [0.01, 0.04, 0.03, 0.002],
-            "p_rate_enrichment_empirical": [0.02, 0.08, 0.06, 0.004],
-            "p_rate_enrichment_empirical_maxT": [0.1, 0.4, 0.3, 0.02],
-            "q_rate_enrichment_global": [1.0] * 4,
-            "q_rate_enrichment": [1.0] * 4,
-        }
-    )
-
-    q_columns = mod.recalculate_sensitivity_qvalues(frame)
-
-    assert "q_rate_enrichment_global" in q_columns
-    assert "q_rate_enrichment_by_trait_match" in q_columns
-    assert frame["q_rate_enrichment_global"].tolist() == [0.02, 0.04, 0.04, 0.008]
-    assert frame["q_rate_enrichment"].tolist() == [0.02, 0.04, 0.03, 0.004]
-    assert frame["q_rate_enrichment_by_trait_match"].tolist() == [0.02, 0.04, 0.03, 0.002]
-
-
 def test_write_min_support_sensitivity_writes_threshold_series(tmp_path):
     mod = load_module()
     frame = pandas.DataFrame(
@@ -254,12 +226,12 @@ def test_write_min_support_sensitivity_writes_threshold_series(tmp_path):
             "trait": ["A", "A", "A", "B"],
             "scan_match": ["m1", "m1", "m1", "m2"],
             "support_unit_count": [2, 3, 4, 5],
-            "p_rate_enrichment": [0.001, 0.01, 0.03, 0.5],
+            "p_rate_enrichment_asymptotic": [0.001, 0.01, 0.03, 0.5],
             "p_rate_enrichment_empirical": [0.002, 0.02, 0.04, 0.8],
             "p_rate_enrichment_empirical_maxT": [0.05, 0.1, 0.2, 1.0],
-            "q_rate_enrichment_global": [0.004, 0.03, 0.04, 0.5],
-            "q_rate_enrichment_empirical_global": [0.008, 0.04, 0.06, 0.8],
-            "q_rate_enrichment_empirical_maxT_global": [0.2, 0.3, 0.4, 1.0],
+            "q_rate_enrichment_asymptotic_global": [0.004, 0.03, 0.04, 0.5],
+            "q_rate_enrichment_empirical_by_trait_match": [0.008, 0.04, 0.06, 0.8],
+            "p_rate_enrichment_bootstrap_maxT": [0.2, 0.3, 0.4, 1.0],
             "besthit_0.05": ["hit-a", "hit-b", "hit-c", "hit-d"],
             "besthit_0.25": ["hit-e", "hit-f", "hit-g", "hit-h"],
             "besthit_0.5": ["hit-i", "hit-j", "hit-k", "hit-l"],
@@ -279,7 +251,7 @@ def test_write_min_support_sensitivity_writes_threshold_series(tmp_path):
     manifest = pandas.read_csv(manifest_path, sep="\t")
     assert manifest["min_support"].tolist() == [3, 4, 5]
     assert manifest["candidate_rows"].tolist() == [3, 2, 1]
-    assert manifest["q_rate_enrichment_global_le_0.05"].tolist() == [2, 0, 0]
+    assert manifest["q_rate_enrichment_asymptotic_global_le_0.05"].tolist() == [2, 1, 0]
     assert not stale_paths["summary_tsv"].exists()
     assert not stale_paths["plot_pdf"].exists()
     assert not (tmp_path / "min_support_sensitivity").exists()
@@ -287,6 +259,9 @@ def test_write_min_support_sensitivity_writes_threshold_series(tmp_path):
         paths = mod.min_support_sensitivity_paths(out_prefix, threshold)
         subset = pandas.read_csv(paths["summary_tsv"], sep="\t")
         assert subset.shape[0] == expected_rows
+        expected = frame.loc[frame["support_unit_count"] >= threshold].reset_index(drop=True)
+        pandas.testing.assert_frame_equal(subset, expected, check_dtype=False)
+        assert {column for column in subset if column.endswith("_global")} == {"q_rate_enrichment_asymptotic_global"}
         assert (subset["support_unit_count"] >= threshold).all()
         assert set(mod.ORTHOGROUP_BESTHIT_COLUMNS).issubset(subset.columns)
         assert paths["plot_pdf"].is_file()
@@ -297,12 +272,12 @@ def test_write_pvalue_qvalue_distributions(tmp_path):
     mod = load_module()
     frame = pandas.DataFrame(
         {
-            "p_rate_enrichment": [0.001, 0.01, 0.2, 1.0],
+            "p_rate_enrichment_asymptotic": [0.001, 0.01, 0.2, 1.0],
             "p_rate_enrichment_empirical": [0.002, 0.02, 0.3, 1.0],
             "p_rate_enrichment_empirical_maxT": [0.05, 0.4, 0.9, 1.0],
-            "q_rate_enrichment_global": [0.004, 0.03, 0.4, 1.0],
-            "q_rate_enrichment_empirical_global": [0.006, 0.04, 0.5, 1.0],
-            "q_rate_enrichment_empirical_maxT_global": [1.0, 1.0, 1.0, 1.0],
+            "q_rate_enrichment_asymptotic_global": [0.004, 0.03, 0.4, 1.0],
+            "q_rate_enrichment_empirical_by_trait_match": [0.006, 0.04, 0.5, 1.0],
+            "p_rate_enrichment_bootstrap_maxT": [1.0, 1.0, 1.0, 1.0],
         }
     )
     out_pdf = tmp_path / "pvalue_qvalue_distributions.pdf"
@@ -323,15 +298,16 @@ def test_main_writes_pvalue_qvalue_distribution_by_default(tmp_path, monkeypatch
             "state_change": ["10V", "20L", "30A", "40G"],
             "from_state": ["A", "I", "V", "S"],
             "to_state": ["V", "L", "A", "G"],
+            "score_rate_enrichment": [3.0, 2.0, 0.7, 0.0],
             "support_fraction": [0.75, 0.5, 0.4, 0.25],
             "support_unit_count": [3, 2, 2, 1],
             "support_unit_ids": ["1,2,3", "1,2", "2,3", "3"],
-            "p_rate_enrichment": [0.001, 0.01, 0.2, 1.0],
+            "p_rate_enrichment_asymptotic": [0.001, 0.01, 0.2, 1.0],
             "p_rate_enrichment_empirical": [0.002, 0.02, 0.3, 1.0],
             "p_rate_enrichment_empirical_maxT": [0.05, 0.4, 0.9, 1.0],
-            "q_rate_enrichment_global": [0.004, 0.03, 0.4, 1.0],
-            "q_rate_enrichment_empirical_global": [0.006, 0.04, 0.5, 1.0],
-            "q_rate_enrichment_empirical_maxT_global": [1.0, 1.0, 1.0, 1.0],
+            "q_rate_enrichment_asymptotic_global": [0.004, 0.03, 0.4, 1.0],
+            "q_rate_enrichment_empirical_by_trait_match": [0.006, 0.04, 0.5, 1.0],
+            "p_rate_enrichment_bootstrap_maxT": [1.0, 1.0, 1.0, 1.0],
         }
     )
     with sqlite3.connect(db_path) as conn:
@@ -400,3 +376,22 @@ def test_remove_legacy_min_support_output_layout_removes_only_generated_files(tm
     assert not legacy_primary.exists()
     assert not legacy_generated.exists()
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_summary_rejects_legacy_database_instead_of_using_old_global_q(tmp_path):
+    mod = load_module()
+    with sqlite3.connect(tmp_path / "legacy.sqlite3") as conn:
+        pandas.DataFrame({"p_rate_enrichment": [0.01], "q_rate_enrichment_global": [0.02]}).to_sql("aa_change", conn, index=False)
+        with pytest.raises(ValueError, match="rerun scan and rebuild"):
+            mod.read_table(conn, "aa_change")
+
+
+def test_ranking_uses_stable_score_even_if_calibration_is_unavailable():
+    mod = load_module()
+    frame = pandas.DataFrame({"score_rate_enrichment": [3.0, 8.0, float("nan")],
+                              "p_rate_enrichment_asymptotic": [0.001, 1e-8, float("nan")],
+                              "p_rate_enrichment_empirical_maxT": [float("nan")] * 3})
+    ranked, column, kind = mod.ranked_candidates(frame)
+    assert (column, kind) == ("score_rate_enrichment", "Score")
+    assert ranked.index.tolist() == [1, 0, 2]
+    assert ranked["p_rate_enrichment_empirical_maxT"].isna().all()

@@ -1187,8 +1187,6 @@ csubst_scan_rate_event_mode=$(echo "${csubst_scan_rate_event_mode:-posterior_sum
 csubst_scan_rate_length=$(echo "${csubst_scan_rate_length:-n_rescaled}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_rate_exposure=$(echo "${csubst_scan_rate_exposure:-q_weighted}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_other_scope=$(echo "${csubst_scan_other_scope:-all}" | tr '[:upper:]' '[:lower:]')
-csubst_scan_pvalue_calibration=$(echo "${csubst_scan_pvalue_calibration:-full_scan}" | tr '[:upper:]' '[:lower:]')
-csubst_scan_n_permutations="${csubst_scan_n_permutations:-1000}"
 csubst_scan_site_plot=$(echo "${csubst_scan_site_plot:-yes}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_tree_site_plot_format=$(echo "${csubst_scan_tree_site_plot_format:-pdf}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_tree_site_plot_max_sites="${csubst_scan_tree_site_plot_max_sites:-30}"
@@ -1444,15 +1442,6 @@ case "${csubst_scan_other_scope}" in
   *)
     echo "Invalid csubst_scan_other_scope: ${csubst_scan_other_scope}"
     echo 'csubst_scan_other_scope must be either "all" or "sister". Exiting.'
-    exit 1
-    ;;
-esac
-case "${csubst_scan_pvalue_calibration}" in
-  none|candidate_fixed|full_scan)
-    ;;
-  *)
-    echo "Invalid csubst_scan_pvalue_calibration: ${csubst_scan_pvalue_calibration}"
-    echo 'csubst_scan_pvalue_calibration must be one of none, candidate_fixed, full_scan. Exiting.'
     exit 1
     ;;
 esac
@@ -1790,6 +1779,7 @@ file_og_csubst_b="${dir_output_active}/csubst_b/${og_id}_csubst_b.tsv"
 file_og_csubst_cb_2="${dir_output_active}/csubst_cb_2/${og_id}_csubst_cb_2.tsv"
 file_og_csubst_cb_stats="${dir_output_active}/csubst_cb_stats/${og_id}_csubst_cb_stats.tsv"
 file_og_csubst_scan="${dir_output_active}/csubst_scan/${og_id}_csubst_scan.tsv"
+file_og_csubst_scan_audit="${dir_output_active}/csubst_scan_audit/${og_id}_csubst_scan_audit.zip"
 file_og_csubst_scan_units="${dir_output_active}/csubst_scan_units/${og_id}_csubst_scan_units.tsv"
 file_og_csubst_scan_foreground_branch="${dir_output_active}/csubst_scan_foreground_branch/${og_id}_csubst_foreground_branch.txt"
 file_og_csubst_scan_plot="${dir_output_active}/csubst_scan_plot/${og_id}_csubst_scan.tree_site.${csubst_scan_tree_site_plot_format}"
@@ -4592,6 +4582,7 @@ if [[ ${check_pruned} -eq 1 ]]; then
     "${file_og_csubst_cb_stats}"
     "${file_og_csubst_scan}"
     "${file_og_csubst_scan_units}"
+    "${file_og_csubst_scan_audit}"
     "${file_og_csubst_scan_foreground_branch}"
     "${file_og_csubst_scan_plot}"
     "${file_og_csubst_scan_log}"
@@ -6078,6 +6069,8 @@ csubst_scan_provenance_args=(
   --input "foreground_trait=${file_sp_trait}"
   --output "csubst_scan=${file_og_csubst_scan}"
   --output "csubst_scan_units=${file_og_csubst_scan_units}"
+  --output "csubst_scan_audit=${file_og_csubst_scan_audit}"
+  --parameter "scan_inference_contract=analytical_bh_global_v1"
   --parameter "codon_model=${codon_model}"
   --parameter "genetic_code=${genetic_code}"
   --parameter "scan_unit_mode=${csubst_scan_unit_mode}"
@@ -6088,8 +6081,8 @@ csubst_scan_provenance_args=(
   --parameter "scan_rate_length=${csubst_scan_rate_length}"
   --parameter "scan_rate_exposure=${csubst_scan_rate_exposure}"
   --parameter "scan_other_scope=${csubst_scan_other_scope}"
-  --parameter "scan_pvalue_calibration=${csubst_scan_pvalue_calibration}"
-  --parameter "scan_n_permutations=${csubst_scan_n_permutations}"
+  --parameter "scan_pvalue_calibration=none"
+  --parameter "scan_n_permutations=0"
   --parameter "scan_site_plot=${csubst_scan_site_plot}"
   --parameter "tree_site_plot_format=${csubst_scan_tree_site_plot_format}"
   --parameter "tree_site_plot_max_sites=${csubst_scan_tree_site_plot_max_sites}"
@@ -6144,6 +6137,7 @@ if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
     --iqtree_iqtree "${csubst_input_base}.iqtree" \
     --iqtree_log "${csubst_input_base}.log" \
     --iqtree_model "${codon_model}" \
+    --iqtree_outdir "${csubst_scan_dir}/iqtree" \
     --foreground foreground.tsv \
     --fg_format 2 \
     --scan_unit_mode "${csubst_scan_unit_mode}" \
@@ -6154,17 +6148,33 @@ if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
     --scan_rate_length "${csubst_scan_rate_length}" \
     --scan_rate_exposure "${csubst_scan_rate_exposure}" \
     --scan_other_scope "${csubst_scan_other_scope}" \
-    --scan_pvalue_calibration "${csubst_scan_pvalue_calibration}" \
-    --scan_n_permutations "${csubst_scan_n_permutations}" \
+    --scan_pvalue_calibration none \
+    --scan_n_permutations 0 \
     --scan_site_plot "${csubst_scan_site_plot}" \
     --tree_site_plot_format "${csubst_scan_tree_site_plot_format}" \
     --tree_site_plot_max_sites "${csubst_scan_tree_site_plot_max_sites}" \
     --nonsyn_recode "${csubst_nonsyn_recode}" \
     --threads "${GG_TASK_CPUS}" \
     --outdir "${csubst_scan_dir}" \
-    --output_prefix csubst
+    --output_prefix csubst || exit $?
 
   if [[ -s "${csubst_scan_dir}/csubst_scan.tsv" && -s "${csubst_scan_dir}/csubst_scan_units.tsv" ]]; then
+    if [[ ! -s "${csubst_scan_dir}/csubst_scan_calibration.json" || ! -s "${csubst_scan_dir}/csubst_scan_inference.json" ]]; then
+      echo "CSUBST scan inference records are missing. Rebuild the runtime with current CSUBST and rerun scan." >&2
+      exit 1
+    fi
+    mkdir -p "${csubst_scan_dir}/inputs"
+    cp "${csubst_input_base}.fasta" "${csubst_scan_dir}/inputs/alignment.fasta"
+    cp "${csubst_input_base}.nwk" "${csubst_scan_dir}/inputs/rooted_tree.nwk"
+    cp foreground.tsv "${csubst_scan_dir}/inputs/foreground.tsv"
+    # Preserve the complete run before moving tables or removing scratch files.
+    # This includes empty scans, diagnostic definitions and the disabled-calibration record.
+    python -m zipfile -c "${og_id}.csubst_scan_audit.zip" "${csubst_scan_dir}" || exit $?
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${og_id}.csubst_scan_audit.zip" \
+      --destination "${file_og_csubst_scan_audit}" \
+      --expected-prefix "${csubst_scan_dir}" \
+      --remove-source
     echo "CSUBST scan was successful."
     mv_out "${csubst_scan_dir}/csubst_scan.tsv" "${file_og_csubst_scan}"
     mv_out "${csubst_scan_dir}/csubst_scan_units.tsv" "${file_og_csubst_scan_units}"
