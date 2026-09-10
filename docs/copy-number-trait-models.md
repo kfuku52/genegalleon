@@ -154,3 +154,12 @@ and `confidence_level=0.95` from NWKIT. Intervals are pointwise on the model's
 coefficient/link scale, not simultaneous intervals adjusted by global BH.
 Significance continues to use the global adjusted P value. See
 [regression calibration](regression-calibration.md) for small-sample evidence and limitations.
+
+
+GBIF observation responses require explicit trait selection and the generated
+hash-bound metadata. `all` excludes them, including custom column aliases.
+Both individual PGLS and nested-CV selection mask incomplete acquisitions and
+publish `selected_species_traits.tsv`, its metadata, and `species_trait_input.json`.
+Selection's per-trait metadata also records the input audit. See
+[GBIF observation traits](gbif-observation-traits.md) for the interpretation and
+acquisition rules; these associations concern retained records, not true ranges.

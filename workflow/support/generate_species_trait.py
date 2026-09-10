@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from io import StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
-from urllib.parse import quote, unquote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request
 
 import pandas
@@ -25,8 +25,13 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from format_species_network import guarded_urlopen as urlopen
+from gbif_observations import DEFAULT_GBIF_DISTRIBUTION_TRAITS, METRIC_DEFINITIONS
+from gbif_observations import effective_config as gbif_effective_config
+from gbif_observations import fetch_gbif_distribution_table as _fetch_gbif_distribution_table
+from gbif_observations import input_identity as gbif_input_identity
 from gift_retrieval import GiftRetrieval, load_reviewed_mappings
 from species_labeling import base_species_label, species_label_from_taxonomic_text
+from species_trait_contract import sidecar_paths, trait_bundle_payloads
 from species_trait_schema import schema_path, schema_payload
 
 try:
@@ -130,29 +135,7 @@ DEFAULT_OUTPUT_PATH = Path("workspace/input/species_trait/species_trait.tsv")
 DEFAULT_GIFT_API = "https://gift.uni-goettingen.de/api/extended/"
 DEFAULT_GIFT_PAGE_SIZE = 10000
 GIFT_TRAIT_ID_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
-DEFAULT_GBIF_API = "https://api.gbif.org/v1/"
-DEFAULT_GBIF_PAGE_SIZE = 300
-DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES = 100000
-GBIF_SEARCH_HARD_LIMIT = 100000
-DEFAULT_GBIF_GRID_DEGREES = 1.0
-DEFAULT_GBIF_MIN_MATCH_CONFIDENCE = 90.0
-EARTH_RADIUS_KM = 6371.0088
-DEFAULT_GBIF_DISTRIBUTION_TRAITS = (
-    ("gbif_occurrence_count", "numeric"),
-    ("gbif_occurrence_used", "numeric"),
-    ("gbif_occurrence_truncated", "binary"),
-    ("gbif_northern_limit_lat", "numeric"),
-    ("gbif_southern_limit_lat", "numeric"),
-    ("gbif_latitudinal_breadth_deg", "numeric"),
-    ("gbif_western_limit_lon", "numeric"),
-    ("gbif_eastern_limit_lon", "numeric"),
-    ("gbif_longitudinal_breadth_deg", "numeric"),
-    ("gbif_occupied_grid_area_km2", "numeric"),
-    ("gbif_convex_hull_area_km2", "numeric"),
-    ("gbif_centroid_lat", "numeric"),
-    ("gbif_centroid_lon", "numeric"),
-    ("gbif_country_count", "numeric"),
-)
+
 
 
 @dataclass
@@ -1183,444 +1166,10 @@ def _fetch_gift_api_table(database, config, plan_rows, species, timeout, data_ap
     return merged
 
 
-def gbif_config_float(config: Dict[str, str], key_name: str, default: float) -> float:
-    value = parse_optional_float_option(config.get(key_name, ""), key_name=key_name)
-    return default if value is None else value
-
-
-def gbif_config_optional_float(config: Dict[str, str], key_name: str) -> Optional[float]:
-    return parse_optional_float_option(config.get(key_name, ""), key_name=key_name)
-
-
-def gbif_config_positive_int(config: Dict[str, str], key_name: str, default: int) -> int:
-    return parse_positive_int_option(config.get(key_name, ""), key_name=key_name, default=default)
-
-
-def normalize_longitude(value: float) -> float:
-    normalized = ((float(value) + 180.0) % 360.0) - 180.0
-    if normalized == -180.0 and float(value) > 0:
-        return 180.0
-    return normalized
-
-
-def circular_mean_longitude(longitudes: Sequence[float]) -> object:
-    if len(longitudes) == 0:
-        return pandas.NA
-    angles = [math.radians(lon) for lon in longitudes]
-    mean_sin = sum(math.sin(angle) for angle in angles) / len(angles)
-    mean_cos = sum(math.cos(angle) for angle in angles) / len(angles)
-    if mean_sin == 0 and mean_cos == 0:
-        return 0.0
-    return normalize_longitude(math.degrees(math.atan2(mean_sin, mean_cos)))
-
-
-def minimal_longitude_interval(longitudes: Sequence[float]) -> Tuple[object, object, object]:
-    if len(longitudes) == 0:
-        return (pandas.NA, pandas.NA, pandas.NA)
-    longitudes_360 = sorted((float(lon) + 360.0) % 360.0 for lon in longitudes)
-    if len(longitudes_360) == 1:
-        lon = normalize_longitude(longitudes_360[0])
-        return (lon, lon, 0.0)
-    gaps = [longitudes_360[index + 1] - longitudes_360[index] for index in range(len(longitudes_360) - 1)]
-    gaps.append(longitudes_360[0] + 360.0 - longitudes_360[-1])
-    largest_gap_index = max(range(len(gaps)), key=lambda index: gaps[index])
-    west_360 = longitudes_360[(largest_gap_index + 1) % len(longitudes_360)]
-    east_360 = longitudes_360[largest_gap_index]
-    breadth = 360.0 - gaps[largest_gap_index]
-    return (normalize_longitude(west_360), normalize_longitude(east_360), breadth)
-
-
-def unwrap_longitudes_around_center(longitudes: Sequence[float], center_longitude: float) -> List[float]:
-    return [center_longitude + ((float(lon) - center_longitude + 180.0) % 360.0) - 180.0 for lon in longitudes]
-
-
-def occupied_grid_area_km2(points: Sequence[Tuple[float, float, str]], grid_degrees: float) -> object:
-    if len(points) == 0:
-        return pandas.NA
-    if grid_degrees <= 0:
-        raise ValueError("gbif_grid_degrees must be positive: {}".format(grid_degrees))
-    occupied_cells: Set[Tuple[int, int]] = set()
-    for lat, lon, _country in points:
-        lat_clamped = min(max(float(lat), -90.0), 90.0 - 1e-12)
-        lon_normalized = normalize_longitude(float(lon))
-        lat_index = int(math.floor((lat_clamped + 90.0) / grid_degrees))
-        lon_index = int(math.floor((lon_normalized + 180.0) / grid_degrees))
-        occupied_cells.add((lat_index, lon_index))
-
-    area = 0.0
-    lon_width_rad = math.radians(grid_degrees)
-    for lat_index, _lon_index in occupied_cells:
-        lat_min = -90.0 + lat_index * grid_degrees
-        lat_max = min(lat_min + grid_degrees, 90.0)
-        area += (
-            EARTH_RADIUS_KM
-            * EARTH_RADIUS_KM
-            * lon_width_rad
-            * abs(math.sin(math.radians(lat_max)) - math.sin(math.radians(lat_min)))
-        )
-    return area
-
-
-def monotonic_chain_convex_hull(points: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
-    unique_points = sorted(set(points))
-    if len(unique_points) <= 1:
-        return unique_points
-
-    def cross(origin: Tuple[float, float], point_a: Tuple[float, float], point_b: Tuple[float, float]) -> float:
-        return (point_a[0] - origin[0]) * (point_b[1] - origin[1]) - (point_a[1] - origin[1]) * (point_b[0] - origin[0])
-
-    lower: List[Tuple[float, float]] = []
-    for point in unique_points:
-        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
-            lower.pop()
-        lower.append(point)
-
-    upper: List[Tuple[float, float]] = []
-    for point in reversed(unique_points):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
-            upper.pop()
-        upper.append(point)
-
-    return lower[:-1] + upper[:-1]
-
-
-def polygon_area_km2(points: Sequence[Tuple[float, float]]) -> float:
-    if len(points) < 3:
-        return 0.0
-    area = 0.0
-    for index, point in enumerate(points):
-        next_point = points[(index + 1) % len(points)]
-        area += point[0] * next_point[1] - next_point[0] * point[1]
-    return abs(area) / 2.0
-
-
-def convex_hull_area_km2(points: Sequence[Tuple[float, float, str]]) -> object:
-    if len(points) == 0:
-        return pandas.NA
-    if len(points) < 3:
-        return 0.0
-    latitudes = [float(point[0]) for point in points]
-    longitudes = [float(point[1]) for point in points]
-    center_lat = sum(latitudes) / len(latitudes)
-    center_lon = circular_mean_longitude(longitudes)
-    if center_lon is pandas.NA:
-        return pandas.NA
-    unwrapped_longitudes = unwrap_longitudes_around_center(longitudes, float(center_lon))
-    projected_points = [
-        (
-            EARTH_RADIUS_KM * math.radians(lon - float(center_lon)) * math.cos(math.radians(center_lat)),
-            EARTH_RADIUS_KM * math.radians(lat - center_lat),
-        )
-        for lat, lon in zip(latitudes, unwrapped_longitudes, strict=True)
-    ]
-    hull = monotonic_chain_convex_hull(projected_points)
-    return polygon_area_km2(hull)
-
-
-def build_gbif_distribution_metrics(
-    reported_count: int,
-    points: Sequence[Tuple[float, float, str]],
-    truncated: bool,
-    grid_degrees: float,
-) -> Dict[str, object]:
-    metrics: Dict[str, object] = {
-        "gbif_occurrence_count": int(reported_count),
-        "gbif_occurrence_used": int(len(points)),
-        "gbif_occurrence_truncated": int(bool(truncated)),
-    }
-    if len(points) == 0:
-        for key_name, _value_type in DEFAULT_GBIF_DISTRIBUTION_TRAITS:
-            metrics.setdefault(key_name, pandas.NA)
-        metrics["gbif_occurrence_count"] = int(reported_count)
-        metrics["gbif_occurrence_used"] = 0
-        metrics["gbif_occurrence_truncated"] = int(bool(truncated))
-        return metrics
-
-    latitudes = [float(point[0]) for point in points]
-    longitudes = [float(point[1]) for point in points]
-    west_lon, east_lon, lon_breadth = minimal_longitude_interval(longitudes)
-    countries = {str(point[2]).strip() for point in points if str(point[2]).strip() != ""}
-    metrics.update(
-        {
-            "gbif_northern_limit_lat": max(latitudes),
-            "gbif_southern_limit_lat": min(latitudes),
-            "gbif_latitudinal_breadth_deg": max(latitudes) - min(latitudes),
-            "gbif_western_limit_lon": west_lon,
-            "gbif_eastern_limit_lon": east_lon,
-            "gbif_longitudinal_breadth_deg": lon_breadth,
-            "gbif_occupied_grid_area_km2": occupied_grid_area_km2(points, grid_degrees=grid_degrees),
-            "gbif_convex_hull_area_km2": convex_hull_area_km2(points),
-            "gbif_centroid_lat": sum(latitudes) / len(latitudes),
-            "gbif_centroid_lon": circular_mean_longitude(longitudes),
-            "gbif_country_count": len(countries),
-        }
+def fetch_gbif_distribution_table(database, config, species, downloads_dir, timeout, dry_run):
+    return _fetch_gbif_distribution_table(
+        database, config, species, downloads_dir, timeout, dry_run, fetch_json=fetch_json_payload,
     )
-    return metrics
-
-
-def empty_gbif_distribution_metrics() -> Dict[str, object]:
-    return {key_name: pandas.NA for key_name, _value_type in DEFAULT_GBIF_DISTRIBUTION_TRAITS}
-
-
-def gbif_query_url(api_base: str, resource: str, params: Dict[str, object]) -> str:
-    return "{}{}?{}".format(api_base, resource.lstrip("/"), urlencode(params, doseq=True))
-
-
-def fetch_gbif_species_match(api_base: str, species_name: str, timeout: float) -> Dict[str, object]:
-    url = gbif_query_url(
-        api_base=api_base,
-        resource="species/match",
-        params={"name": species_name.replace("_", " "), "verbose": "false"},
-    )
-    payload = fetch_json_payload(url=url, timeout=timeout)
-    if isinstance(payload, dict):
-        return payload
-    return {}
-
-
-def gbif_match_taxon_key(match_row: Dict[str, object]) -> str:
-    for key_name in ("speciesKey", "usageKey", "acceptedUsageKey"):
-        value = str(match_row.get(key_name, "") or "").strip()
-        if value != "":
-            return value
-    return ""
-
-
-def gbif_parse_float(value: object) -> Optional[float]:
-    try:
-        parsed = float(str(value or "").strip())
-    except Exception:
-        return None
-    if math.isnan(parsed):
-        return None
-    return parsed
-
-
-def gbif_occurrence_query_params(
-    taxon_key: str,
-    limit: int,
-    offset: int,
-    config: Dict[str, str],
-) -> Dict[str, object]:
-    params: Dict[str, object] = {
-        "taxonKey": taxon_key,
-        "hasCoordinate": "true",
-        "hasGeospatialIssue": "false",
-        "occurrenceStatus": "PRESENT",
-        "limit": int(limit),
-        "offset": int(offset),
-    }
-    include_basis = split_csv_tokens(config.get("gbif_include_basis_of_record", ""))
-    if include_basis:
-        params["basisOfRecord"] = include_basis
-    return params
-
-
-def gbif_row_passes_local_filters(row: Dict[str, object], config: Dict[str, str]) -> bool:
-    basis = str(row.get("basisOfRecord", "") or "").strip().upper()
-    include_basis = {token.upper() for token in split_csv_tokens(config.get("gbif_include_basis_of_record", ""))}
-    exclude_basis = {token.upper() for token in split_csv_tokens(config.get("gbif_exclude_basis_of_record", ""))}
-    if include_basis and basis not in include_basis:
-        return False
-    if exclude_basis and basis in exclude_basis:
-        return False
-
-    max_uncertainty = gbif_config_optional_float(config, "gbif_max_coordinate_uncertainty_m")
-    if max_uncertainty is not None:
-        uncertainty = gbif_parse_float(row.get("coordinateUncertaintyInMeters", ""))
-        if uncertainty is not None and uncertainty > max_uncertainty:
-            return False
-
-    max_centroid_distance = gbif_config_optional_float(config, "gbif_max_distance_from_centroid_m")
-    if max_centroid_distance is not None:
-        centroid_distance = gbif_parse_float(row.get("distanceFromCentroidInMeters", ""))
-        if centroid_distance is not None and centroid_distance > max_centroid_distance:
-            return False
-
-    return True
-
-
-def gbif_row_to_point(row: Dict[str, object], config: Dict[str, str]) -> Optional[Tuple[float, float, str]]:
-    if not gbif_row_passes_local_filters(row=row, config=config):
-        return None
-    lat = gbif_parse_float(row.get("decimalLatitude", ""))
-    lon = gbif_parse_float(row.get("decimalLongitude", ""))
-    if lat is None or lon is None:
-        return None
-    if lat < -90.0 or lat > 90.0 or lon < -180.0 or lon > 180.0:
-        return None
-    return (lat, normalize_longitude(lon), str(row.get("countryCode", "") or "").strip())
-
-
-def fetch_gbif_occurrence_points(
-    api_base: str,
-    taxon_key: str,
-    config: Dict[str, str],
-    timeout: float,
-) -> Tuple[int, List[Tuple[float, float, str]], bool]:
-    page_size = gbif_config_positive_int(config, "gbif_page_size", DEFAULT_GBIF_PAGE_SIZE)
-    page_size = min(page_size, DEFAULT_GBIF_PAGE_SIZE)
-    requested_max = gbif_config_positive_int(
-        config,
-        "gbif_max_occurrences_per_species",
-        DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES,
-    )
-    fetch_limit = min(requested_max, GBIF_SEARCH_HARD_LIMIT)
-    count_url = gbif_query_url(
-        api_base=api_base,
-        resource="occurrence/search",
-        params=gbif_occurrence_query_params(taxon_key=taxon_key, limit=0, offset=0, config=config),
-    )
-    count_payload = fetch_json_payload(url=count_url, timeout=timeout)
-    reported_count = int(count_payload.get("count", 0) if isinstance(count_payload, dict) else 0)
-    target_records = min(reported_count, fetch_limit)
-    truncated = reported_count > target_records
-    points: List[Tuple[float, float, str]] = []
-    offset = 0
-    while offset < target_records:
-        limit = min(page_size, target_records - offset)
-        page_url = gbif_query_url(
-            api_base=api_base,
-            resource="occurrence/search",
-            params=gbif_occurrence_query_params(taxon_key=taxon_key, limit=limit, offset=offset, config=config),
-        )
-        page_payload = fetch_json_payload(url=page_url, timeout=timeout)
-        if not isinstance(page_payload, dict):
-            break
-        rows = page_payload.get("results", [])
-        if not isinstance(rows, list) or len(rows) == 0:
-            break
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            point = gbif_row_to_point(row=row, config=config)
-            if point is not None:
-                points.append(point)
-        offset += len(rows)
-        if len(rows) < limit:
-            break
-    return reported_count, points, truncated
-
-
-def gbif_cache_key(
-    species: Sequence[str],
-    config: Dict[str, str],
-) -> str:
-    cache_config_keys = [
-        "uri",
-        "gbif_page_size",
-        "gbif_max_occurrences_per_species",
-        "gbif_grid_degrees",
-        "gbif_min_match_confidence",
-        "gbif_max_coordinate_uncertainty_m",
-        "gbif_max_distance_from_centroid_m",
-        "gbif_include_basis_of_record",
-        "gbif_exclude_basis_of_record",
-    ]
-    payload = {
-        "species": sorted(species),
-        "config": {key: str(config.get(key, "") or "") for key in cache_config_keys},
-        "version": 1,
-    }
-    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-    return digest[:16]
-
-
-def gbif_cache_path(downloads_dir: Path, species: Sequence[str], config: Dict[str, str]) -> Path:
-    return downloads_dir / "gbif" / "gbif_distribution_{}.tsv".format(gbif_cache_key(species, config))
-
-
-def fetch_gbif_distribution_table(
-    database: str,
-    config: Dict[str, str],
-    species: Sequence[str],
-    downloads_dir: Path,
-    timeout: float,
-    dry_run: bool,
-) -> Optional[pandas.DataFrame]:
-    api_base = normalize_base_uri(config.get("uri", ""), DEFAULT_GBIF_API)
-    grid_degrees = gbif_config_float(config, "gbif_grid_degrees", DEFAULT_GBIF_GRID_DEGREES)
-    min_match_confidence = gbif_config_float(
-        config,
-        "gbif_min_match_confidence",
-        DEFAULT_GBIF_MIN_MATCH_CONFIDENCE,
-    )
-    use_cache = parse_bool_option(config.get("gbif_use_cache", ""), key_name="gbif_use_cache", default=True)
-    effective_config = dict(config)
-    effective_config["uri"] = api_base
-    cache_path = gbif_cache_path(downloads_dir=downloads_dir, species=species, config=effective_config)
-    # gg-cache-guard: audited - gbif_cache_path hashes the species set and every result-affecting GBIF parameter.
-    if use_cache and cache_path.exists() and not dry_run:
-        _log("[{}] using cached GBIF distribution table: {}".format(database, cache_path))
-        return read_table(cache_path, delimiter="\t")
-
-    records: List[Dict[str, object]] = []
-    for species_name in species:
-        if dry_run:
-            match_url = gbif_query_url(
-                api_base=api_base,
-                resource="species/match",
-                params={"name": species_name.replace("_", " "), "verbose": "false"},
-            )
-            _log("[dry-run] {} request: {}".format(database, match_url))
-            continue
-        match_row = fetch_gbif_species_match(api_base=api_base, species_name=species_name, timeout=timeout)
-        match_confidence = gbif_parse_float(match_row.get("confidence", ""))
-        taxon_key = gbif_match_taxon_key(match_row)
-        record: Dict[str, object] = {
-            "species": species_name,
-            "gbif_taxon_key": taxon_key,
-            "gbif_match_confidence": match_confidence if match_confidence is not None else pandas.NA,
-            "gbif_match_type": str(match_row.get("matchType", "") or "").strip(),
-        }
-        if taxon_key == "":
-            _log("WARNING: [gbif] no taxon key resolved for '{}'.".format(species_name))
-            record.update(empty_gbif_distribution_metrics())
-            records.append(record)
-            continue
-        if match_confidence is not None and match_confidence < min_match_confidence:
-            _log(
-                "WARNING: [gbif] low-confidence match for '{}': confidence={} taxonKey={}".format(
-                    species_name,
-                    match_confidence,
-                    taxon_key,
-                )
-            )
-            record.update(empty_gbif_distribution_metrics())
-            records.append(record)
-            continue
-        reported_count, points, truncated = fetch_gbif_occurrence_points(
-            api_base=api_base,
-            taxon_key=taxon_key,
-            config=effective_config,
-            timeout=timeout,
-        )
-        record.update(
-            build_gbif_distribution_metrics(
-                reported_count=reported_count,
-                points=points,
-                truncated=truncated,
-                grid_degrees=grid_degrees,
-            )
-        )
-        records.append(record)
-        _log(
-            "[gbif] {}: occurrence_count={} used={} truncated={}".format(
-                species_name,
-                reported_count,
-                len(points),
-                int(bool(truncated)),
-            )
-        )
-
-    if dry_run:
-        return None
-    out = pandas.DataFrame.from_records(records)
-    if use_cache:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        out.to_csv(cache_path, sep="\t", index=False)
-        _log("[{}] cached GBIF distribution table: {}".format(database, cache_path))
-    return out
 
 
 def load_database_table(
@@ -1634,6 +1183,10 @@ def load_database_table(
 ) -> Optional[pandas.DataFrame]:
     default_mode = SUPPORTED_DATABASES.get(database, {}).get("acquisition_mode", "bulk")
     acquisition_mode = str(config.get("acquisition_mode", default_mode) or default_mode).strip().lower()
+    if acquisition_mode == "gbif_distribution" and database != "gbif":
+        raise ValueError("GBIF occurrence acquisition must use database=gbif so observation roles and quality cannot be lost")
+    if database == "gbif" and acquisition_mode != "gbif_distribution":
+        raise ValueError("GBIF observations require acquisition_mode=gbif_distribution; use gbif_occurrence_file for local exports")
     if acquisition_mode == "bulk":
         return load_bulk_database(
             database=database,
@@ -1895,31 +1448,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--gbif-api",
-        default=DEFAULT_GBIF_API,
+        default=None,
         help="Base URI for the GBIF API used by gbif_distribution.",
     )
     parser.add_argument(
         "--gbif-page-size",
         type=int,
-        default=DEFAULT_GBIF_PAGE_SIZE,
+        default=None,
         help="Occurrence search page size for gbif_distribution.",
     )
     parser.add_argument(
         "--gbif-max-occurrences-per-species",
         type=int,
-        default=DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES,
+        default=None,
         help="Maximum occurrence-search records to fetch per species without GBIF login.",
     )
     parser.add_argument(
         "--gbif-grid-degrees",
         type=float,
-        default=DEFAULT_GBIF_GRID_DEGREES,
-        help="Grid size in degrees for gbif_occupied_grid_area_km2.",
+        default=None,
+        help="Grid size in degrees for the observed occupied-cell area (not IUCN AOO).",
     )
     parser.add_argument(
         "--gbif-min-match-confidence",
         type=float,
-        default=DEFAULT_GBIF_MIN_MATCH_CONFIDENCE,
+        default=None,
         help="Minimum GBIF species-match confidence used for occurrence retrieval.",
     )
     parser.add_argument(
@@ -1928,35 +1481,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional maximum coordinateUncertaintyInMeters for GBIF occurrence points.",
     )
     parser.add_argument(
-        "--gbif-max-distance-from-centroid-m",
+        "--gbif-min-distance-from-known-centroid-m",
         default="",
-        help="Optional maximum distanceFromCentroidInMeters for GBIF occurrence points.",
+        help="Exclude points nearer than this distance to known georeferencing centroids (not the species mean).",
     )
+    parser.add_argument("--print-gbif-input-files", action="store_true", help="Print local GBIF source files for workflow provenance and exit.")
+    parser.add_argument("--print-gbif-input-identity", action="store_true", help="Print the effective GBIF config/source identity for workflow provenance and exit.")
+    for name, help_text in (
+        ("gbif-year-min", "Minimum event year; date intervals must fit entirely inside the window."),
+        ("gbif-year-max", "Maximum event year."),
+        ("gbif-countries", "Comma-separated country codes to retain."),
+        ("gbif-include-basis-of-record", "Comma-separated basisOfRecord values to retain."),
+        ("gbif-exclude-basis-of-record", "Comma-separated basisOfRecord values to exclude."),
+        ("gbif-include-establishment-means", "Retain these establishmentMeans values; unknown is not native."),
+        ("gbif-missing-date", "keep|exclude for unknown dates with an active year filter (default exclude)."),
+        ("gbif-missing-uncertainty", "keep|exclude for unknown uncertainty with an active threshold (default keep)."),
+        ("gbif-missing-centroid-distance", "keep|exclude for unknown known-centroid distance (default keep)."),
+        ("gbif-use-cache", "yes|no; reuse a verified saved acquisition or acquire a new snapshot (default yes)."),
+        ("gbif-require-complete", "yes|no; fail instead of publishing NA for incomplete/unresolved acquisitions (default no)."),
+        ("gbif-occurrence-file", "Local GBIF SIMPLE_CSV TSV, TSV.gz, or single-table ZIP; no API requests."),
+        ("gbif-taxon-map", "Reviewed TSV with species, taxon_key and scientific_name for local records."),
+        ("gbif-download-metadata", "Saved official download metadata JSON; required to establish complete_download."),
+    ):
+        parser.add_argument("--" + name, default="", help=help_text)
     return parser
 
 
 def apply_gbif_cli_overrides(config: Dict[str, str], args: argparse.Namespace) -> Dict[str, str]:
     merged = dict(config)
-    if str(args.gbif_api).strip() != DEFAULT_GBIF_API:
-        merged["uri"] = str(args.gbif_api).strip()
-    cli_defaults = {
-        "gbif_page_size": DEFAULT_GBIF_PAGE_SIZE,
-        "gbif_max_occurrences_per_species": DEFAULT_GBIF_MAX_OCCURRENCES_PER_SPECIES,
-        "gbif_grid_degrees": DEFAULT_GBIF_GRID_DEGREES,
-        "gbif_min_match_confidence": DEFAULT_GBIF_MIN_MATCH_CONFIDENCE,
-    }
-    for key_name, default_value in cli_defaults.items():
-        arg_value = getattr(args, key_name)
-        if str(arg_value) != str(default_value):
-            merged[key_name] = str(arg_value)
-    optional_args = [
-        "gbif_max_coordinate_uncertainty_m",
-        "gbif_max_distance_from_centroid_m",
-    ]
-    for arg_name in optional_args:
-        arg_value = str(getattr(args, arg_name) or "").strip()
-        if arg_value != "":
-            merged[arg_name] = arg_value
+    for name, value in vars(args).items():
+        if not name.startswith("gbif_") or value is None or str(value).strip() == "":
+            continue
+        merged["uri" if name == "gbif_api" else name] = str(value).strip()
     return merged
 
 
@@ -2028,6 +1584,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 if config.get("gift_species_mapping_file"):
                     print(config["gift_species_mapping_file"])
         return 0
+    if args.print_gbif_input_identity or args.print_gbif_input_files:
+        sources = read_database_sources(Path(args.database_sources)) if Path(args.database_sources).exists() else {}
+        plan = read_trait_plan(Path(args.trait_plan)) if Path(args.trait_plan).exists() else []
+        requested = resolve_requested_databases(args.databases, plan, sources)
+        if "gbif" not in requested:
+            if args.print_gbif_input_identity:
+                print("not_requested")
+            return 0
+        config = apply_gbif_cli_overrides(sources.get("gbif", {}), args)
+        if args.print_gbif_input_files:
+            config = gbif_effective_config(config)
+            for key in ("gbif_occurrence_file", "gbif_taxon_map", "gbif_download_metadata"):
+                if config[key]:
+                    print(config[key])
+        else:
+            print(gbif_input_identity(config, Path(args.output).expanduser().resolve()))
+        return 0
+
     if args.print_supported_databases:
         print_supported_databases()
         return 0
@@ -2096,11 +1670,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             parsed = urlparse(uri)
             if parsed.scheme in {"", "file"}:
                 input_paths.append(Path(unquote(parsed.path)))
-    protected_directories = [downloads_dir / "gift"]
+    gbif_config = apply_gbif_cli_overrides(source_rows.get("gbif", {}), args)
+    input_paths.extend(Path(gbif_config[key]).expanduser() for key in ("gbif_occurrence_file", "gbif_taxon_map", "gbif_download_metadata") if gbif_config.get(key))
+    input_paths.extend([SCRIPT_DIR / "gbif_observations.py", SCRIPT_DIR / "species_trait_contract.py"])
+    protected_directories = [downloads_dir / "gift", downloads_dir / "gbif"]
     if args.species_source == "species_cds":
         protected_directories.append(species_cds_dir)
     try:
-        validate_trait_output_paths([output_path, schema_output_path, stats_output_path], input_paths, protected_directories)
+        validate_trait_output_paths([output_path, schema_output_path, *sidecar_paths(output_path).values(), stats_output_path], input_paths, protected_directories)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -2134,6 +1711,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     db_frames: Dict[str, pandas.DataFrame] = {}
     db_configs: Dict[str, Dict[str, str]] = {}
     trait_key_series_cache: Dict[Tuple[str, str], pandas.Series] = {}
+    gbif_bundle = None
+    trait_definitions = {}
 
     for database in requested_databases:
         config = source_rows.get(database, {})
@@ -2155,7 +1734,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         except Exception as exc:
             message = "[{}] failed to load source: {}".format(database, exc)
-            if args.strict:
+            if args.strict or database == "gbif":
                 errors.append(message)
             else:
                 warnings.append(message)
@@ -2168,6 +1747,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             warnings.append("[{}] source table is empty.".format(database))
             continue
 
+        if database == "gbif":
+            gbif_bundle = db_table.attrs.get("gbif_bundle")
         db_configs[database] = config
         species_column = detect_species_column(db_table, config.get("species_column", ""))
         db_table = db_table.copy()
@@ -2190,6 +1771,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for plan_row in plan_rows:
         if plan_row.database not in requested_databases:
             continue
+        if plan_row.database == "gbif":
+            if plan_row.source_column not in METRIC_DEFINITIONS:
+                errors.append("GBIF quality/legacy fields cannot be exported as traits: " + plan_row.source_column)
+                continue
+            if plan_row.value_type != "numeric" or plan_row.trait_key:
+                errors.append("GBIF observation metrics must remain numeric without trait-key filtering")
+                continue
+            unit, meaning = METRIC_DEFINITIONS[plan_row.source_column]
+            definition = {"source": "gbif", "source_column": plan_row.source_column, "role": "observation", "unit": unit, "meaning": meaning}
+        else:
+            definition = {"source": plan_row.database, "source_column": plan_row.source_column, "role": "trait"}
+        prior_definition = trait_definitions.get(plan_row.output_trait)
+        if prior_definition and prior_definition != definition and (definition["source"] == "gbif" or prior_definition["source"] == "gbif"):
+            errors.append("A GBIF observation cannot share an output column with another definition: " + plan_row.output_trait)
+            continue
+        trait_definitions[plan_row.output_trait] = definition
         if args.dry_run:
             continue
         db_df = db_frames.get(plan_row.database)
@@ -2296,8 +1893,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _log("ERROR: No observed values for requested traits: {}".format(", ".join(empty_traits)))
         return 1
 
-    payloads = {output_path: output_df.to_csv(sep="\t", index=False).encode("utf-8")}
-    payloads[schema_output_path] = schema_payload(payloads[output_path], trait_types)
+    payloads = {}
     if args.dry_run:
         _log("[dry-run] trait schema would be written to: {}".format(schema_output_path))
         _log("[dry-run] species_trait output would be written to: {}".format(output_path))
@@ -2319,7 +1915,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _log("[dry-run] stats output would be written to: {}".format(stats_output_path))
 
     if not args.dry_run:
-        validate_trait_output_paths([output_path, schema_output_path, stats_output_path], input_paths, protected_directories)
+        validate_trait_output_paths([output_path, *sidecar_paths(output_path).values(), stats_output_path], input_paths, protected_directories)
+        if gbif_bundle is not None:
+            input_paths.append(Path(gbif_bundle["records_path"]))
+        bundle_payloads = trait_bundle_payloads(output_df, output_path, {key: value for key, value in trait_definitions.items() if key in trait_columns}, gbif_bundle)
+        # Publish stats and all sidecars together, with metadata last.
+        payloads = {**payloads, schema_output_path: schema_payload(bundle_payloads[output_path], trait_types), **bundle_payloads}
+        validate_trait_output_paths(list(payloads), input_paths, protected_directories)
         publish_trait_outputs(payloads)
         _log("species_trait.tsv written: {}".format(output_path))
 

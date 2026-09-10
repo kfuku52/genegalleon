@@ -39,7 +39,7 @@ def read_table(table):
     return payload, header, rows[1:]
 
 
-def select_traits(table, requested="all"):
+def select_traits(table, requested="all", eligible=None):
     payload, header, rows = read_table(table)
     available = header[1:]
     kinds = dict.fromkeys(available, "unspecified")
@@ -64,6 +64,8 @@ def select_traits(table, requested="all"):
         kind = kinds[trait]
         selected = trait in chosen
         reason = "" if selected else "not_requested"
+        if selected and eligible is not None and trait not in eligible:
+            selected, reason = False, "observation_contract_excluded"
         if selected and kind in {"text", "categorical"}:
             if not automatic:
                 raise ValueError(f"Trait {trait} is declared {kind}; explicitly encode it in a numeric/binary trait column first.")

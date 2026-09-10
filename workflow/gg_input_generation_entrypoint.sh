@@ -149,15 +149,33 @@ trait_download_timeout=120 # Per-request timeout in seconds for trait database d
 gbif_api="" # Optional GBIF API base URI override for trait_profile=gbif_distribution.
 gbif_page_size="" # Number of occurrence records requested per GBIF API page.
 gbif_max_occurrences_per_species="" # Maximum no-login GBIF occurrence records fetched per species before summarizing distribution traits.
-gbif_grid_degrees="" # Latitude/longitude grid size in degrees used to estimate occupied GBIF area.
+gbif_grid_degrees="" # Grid size in degrees for observed occupied-cell area (not IUCN AOO).
 gbif_min_match_confidence="" # Minimum GBIF species-match confidence required before using occurrence records.
 gbif_max_coordinate_uncertainty_m="" # Optional maximum GBIF coordinate uncertainty in meters; blank keeps GBIF records regardless of uncertainty.
-gbif_max_distance_from_centroid_m="" # Optional maximum distance from the species occurrence centroid in meters; blank disables centroid-distance filtering.
+gbif_min_distance_from_known_centroid_m="" # Minimum distance from a known georeferencing centroid in meters; blank disables proximity filtering.
+gbif_year_min="" # Minimum event year; date intervals must lie inside the selected window.
+gbif_year_max="" # Maximum event year.
+gbif_countries="" # Comma-separated country codes to retain.
+gbif_include_basis_of_record="" # Comma-separated basisOfRecord values to retain.
+gbif_exclude_basis_of_record="" # Comma-separated basisOfRecord values to exclude.
+gbif_include_establishment_means="" # Retain specified establishmentMeans values; unknown is not native.
+gbif_missing_date="" # keep|exclude for unknown dates with an active year filter; default exclude.
+gbif_missing_uncertainty="" # keep|exclude for unknown uncertainty with an active threshold; default keep.
+gbif_missing_centroid_distance="" # keep|exclude for missing known-centroid distance; default keep.
+gbif_use_cache="" # yes|no; reuse verified records or acquire a new snapshot; default yes.
+gbif_require_complete="" # yes|no; fail on incomplete acquisition instead of publishing NA; default no.
+gbif_occurrence_file="" # Local GBIF SIMPLE_CSV table (.tsv, .csv, .gz or single-table .zip).
+gbif_taxon_map="" # Reviewed TSV with species, taxon_key and scientific_name for local records.
+gbif_download_metadata="" # Saved official GBIF download metadata JSON to verify completeness.
 
 ### End: Modify this block to tailor your analysis ###
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
 
+if [[ -n "${GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M:-}" || -n "${gbif_max_distance_from_centroid_m:-}" ]]; then
+  echo "Removed GBIF maximum-centroid option: use gbif_min_distance_from_known_centroid_m / GG_INPUT_GBIF_MIN_DISTANCE_FROM_KNOWN_CENTROID_M."
+  exit 1
+fi
 # Apply documented GG_INPUT_* overrides, then forward canonical config variables.
 gg_apply_registered_env_overrides "${gg_entrypoint_name}"
 forward_config_vars_to_container_env "${gg_entrypoint_name}"

@@ -703,7 +703,7 @@ Alternative runtime overrides (without editing files) via env vars:
   `GG_INPUT_GBIF_GRID_DEGREES`,
   `GG_INPUT_GBIF_MIN_MATCH_CONFIDENCE`,
   `GG_INPUT_GBIF_MAX_COORDINATE_UNCERTAINTY_M`,
-  `GG_INPUT_GBIF_MAX_DISTANCE_FROM_CENTROID_M`.
+  `GG_INPUT_GBIF_MIN_DISTANCE_FROM_KNOWN_CENTROID_M`.
 - database download caps (also used by the fair in-process dispatcher;
   RefSeq/GenBank use NCBI and Ensembl variants use ENSEMBL;
   see [shared database limits](input-generation-arrays.md#shared-database-request-limits)):
@@ -730,8 +730,13 @@ Quick preset example (enable trait stage with GIFT starter config):
 GG_INPUT_TRAIT_PROFILE=gift_starter bash workflow/gg_input_generation_entrypoint.sh
 ```
 
-Quick GBIF distribution-trait preset (no trait-plan file or GBIF login required):
+Quick GBIF observation-trait preset (no trait-plan file or GBIF login required):
 
 ```bash
 GG_INPUT_TRAIT_PROFILE=gbif_distribution bash workflow/gg_input_generation_entrypoint.sh
 ```
+
+These are summaries of retained observations, not estimates of the true species
+range. Keep the generated metadata and quality sidecars. See
+[GBIF observation traits](gbif-observation-traits.md) for local downloads, filters,
+explicit analysis selection, sensitivity replay and migration from older columns.

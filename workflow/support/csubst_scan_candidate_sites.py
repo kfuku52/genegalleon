@@ -577,7 +577,8 @@ def write_tsv_atomic(frame, path, columns):
 
 
 def write_trait_color_tables(file_trait, traits, output_dir):
-    trait_frame = pd.read_csv(file_trait, sep="\t", low_memory=False)
+    from species_trait_contract import select_foreground_traits
+    trait_frame, _audit = select_foreground_traits(file_trait, ",".join(sorted(set(traits))))
     if "species" not in trait_frame.columns:
         raise ValueError(f"Trait table is missing the species column: {file_trait}")
     output_dir = Path(output_dir)

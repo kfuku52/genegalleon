@@ -13,6 +13,7 @@ import argparse
 import importlib.metadata
 import json
 import math
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,10 @@ from typing import Any, Iterable, Sequence
 import numpy
 import pandas
 from scipy import sparse
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 METHODS = ("rsc", "species-nwkit")
 AGGREGATIONS = ("sum", "mean", "max")
@@ -924,6 +929,11 @@ def _write_empty_outputs(args: argparse.Namespace, methods: Sequence[str], reaso
         },
         *(_audit_status_record(row) for row in status_rows),
     ]
+    if args.metadata.is_file():
+        prepared_contract = _read_metadata(args.metadata).get("predictor_input_contract", "")
+        if prepared_contract:
+            input_audit = json.loads(prepared_contract)
+            audit_records.insert(0, {"stage": "species_trait_input", **input_audit})
     args.audit_out.write_text(
         "".join(json.dumps(record, sort_keys=True) + "\n" for record in audit_records),
         encoding="utf-8",
@@ -1003,8 +1013,14 @@ def run(args: argparse.Namespace) -> int:
         "paralog_sampling_covariance", "rsc_results", "rsc_status",
     )
     outputs = {field: getattr(args, field) for field in output_fields}
+    inputs = [(field, getattr(args, field)) for field in input_fields if getattr(args, field, None) is not None]
+    if getattr(args, "species_traits", None) is not None:
+        from species_trait_contract import metadata_path
+        trait_metadata = metadata_path(Path(args.species_traits))
+        if trait_metadata.exists():
+            inputs.append(("species_trait_metadata", trait_metadata))
     validate_outputs_do_not_replace_inputs(
-        [(field, getattr(args, field)) for field in input_fields if getattr(args, field, None) is not None],
+        inputs,
         list(outputs.items()),
     )
     with output_transaction(outputs.values(), create_parents=True) as staged:
@@ -1051,7 +1067,14 @@ def _run_staged(args: argparse.Namespace) -> int:
         raise ValueError("Prepared RSC analysis plan is empty")
     tree = read_tree(str(args.species_tree), "auto", True)
     leaf_names = _prune_tree_to_family_species(tree, _gene_species_map(reconciliation))
-    species_traits = _subset_species_traits(_read_tsv(args.species_traits), leaf_names)
+    from species_trait_contract import select_species_traits
+    predictor_names = list(dict.fromkeys(name for value in plan["predictors"] for name in _csv(value)))
+    trait_header = pandas.read_csv(args.species_traits, sep="\t", nrows=0).columns.tolist()
+    selected_traits, trait_input_audit = select_species_traits(
+        args.species_traits, ",".join(predictor_names),
+        auxiliary=tuple(name for name in trait_header[1:] if name not in predictor_names),
+    )
+    species_traits = _subset_species_traits(selected_traits, leaf_names)
     aggregated, aggregation_audit = aggregate_species_expression(
         expression,
         reconciliation,
@@ -1075,7 +1098,7 @@ def _run_staged(args: argparse.Namespace) -> int:
         nwkit_version = "unknown"
     native_frames: list[pandas.DataFrame] = []
     status_rows: list[dict[str, object]] = _read_rsc_method_status(args.rsc_status, nwkit_version)
-    audit_records: list[dict[str, object]] = []
+    audit_records: list[dict[str, object]] = [{"stage": "species_trait_input", **trait_input_audit}]
     response_summary_frames: list[pandas.DataFrame] = []
     response_covariance_frames: list[pandas.DataFrame] = []
     predictor_summary_frames: list[pandas.DataFrame] = []

@@ -53,7 +53,21 @@ gbif_max_occurrences_per_species="${gbif_max_occurrences_per_species:-}"
 gbif_grid_degrees="${gbif_grid_degrees:-}"
 gbif_min_match_confidence="${gbif_min_match_confidence:-}"
 gbif_max_coordinate_uncertainty_m="${gbif_max_coordinate_uncertainty_m:-}"
-gbif_max_distance_from_centroid_m="${gbif_max_distance_from_centroid_m:-}"
+gbif_min_distance_from_known_centroid_m="${gbif_min_distance_from_known_centroid_m:-}"
+gbif_year_min="${gbif_year_min:-}"
+gbif_year_max="${gbif_year_max:-}"
+gbif_countries="${gbif_countries:-}"
+gbif_include_basis_of_record="${gbif_include_basis_of_record:-}"
+gbif_exclude_basis_of_record="${gbif_exclude_basis_of_record:-}"
+gbif_include_establishment_means="${gbif_include_establishment_means:-}"
+gbif_missing_date="${gbif_missing_date:-}"
+gbif_missing_uncertainty="${gbif_missing_uncertainty:-}"
+gbif_missing_centroid_distance="${gbif_missing_centroid_distance:-}"
+gbif_use_cache="${gbif_use_cache:-}"
+gbif_require_complete="${gbif_require_complete:-}"
+gbif_occurrence_file="${gbif_occurrence_file:-}"
+gbif_taxon_map="${gbif_taxon_map:-}"
+gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
 format_contract_version=9
@@ -1651,6 +1665,30 @@ run_trait_stage() {
     fi
   fi
 
+  local -a gbif_cli_args=()
+  [[ -z "${gbif_api}" ]] || gbif_cli_args+=(--gbif-api "${gbif_api}")
+  [[ -z "${gbif_page_size}" ]] || gbif_cli_args+=(--gbif-page-size "${gbif_page_size}")
+  [[ -z "${gbif_max_occurrences_per_species}" ]] || gbif_cli_args+=(--gbif-max-occurrences-per-species "${gbif_max_occurrences_per_species}")
+  [[ -z "${gbif_grid_degrees}" ]] || gbif_cli_args+=(--gbif-grid-degrees "${gbif_grid_degrees}")
+  [[ -z "${gbif_min_match_confidence}" ]] || gbif_cli_args+=(--gbif-min-match-confidence "${gbif_min_match_confidence}")
+  [[ -z "${gbif_max_coordinate_uncertainty_m}" ]] || gbif_cli_args+=(--gbif-max-coordinate-uncertainty-m "${gbif_max_coordinate_uncertainty_m}")
+  [[ -z "${gbif_min_distance_from_known_centroid_m}" ]] || gbif_cli_args+=(--gbif-min-distance-from-known-centroid-m "${gbif_min_distance_from_known_centroid_m}")
+  [[ -z "${gbif_year_min}" ]] || gbif_cli_args+=(--gbif-year-min "${gbif_year_min}")
+  [[ -z "${gbif_year_max}" ]] || gbif_cli_args+=(--gbif-year-max "${gbif_year_max}")
+  [[ -z "${gbif_countries}" ]] || gbif_cli_args+=(--gbif-countries "${gbif_countries}")
+  [[ -z "${gbif_include_basis_of_record}" ]] || gbif_cli_args+=(--gbif-include-basis-of-record "${gbif_include_basis_of_record}")
+  [[ -z "${gbif_exclude_basis_of_record}" ]] || gbif_cli_args+=(--gbif-exclude-basis-of-record "${gbif_exclude_basis_of_record}")
+  [[ -z "${gbif_include_establishment_means}" ]] || gbif_cli_args+=(--gbif-include-establishment-means "${gbif_include_establishment_means}")
+  [[ -z "${gbif_missing_date}" ]] || gbif_cli_args+=(--gbif-missing-date "${gbif_missing_date}")
+  [[ -z "${gbif_missing_uncertainty}" ]] || gbif_cli_args+=(--gbif-missing-uncertainty "${gbif_missing_uncertainty}")
+  [[ -z "${gbif_missing_centroid_distance}" ]] || gbif_cli_args+=(--gbif-missing-centroid-distance "${gbif_missing_centroid_distance}")
+  [[ -z "${gbif_use_cache}" ]] || gbif_cli_args+=(--gbif-use-cache "${gbif_use_cache}")
+  [[ -z "${gbif_require_complete}" ]] || gbif_cli_args+=(--gbif-require-complete "${gbif_require_complete}")
+  [[ -z "${gbif_occurrence_file}" ]] || gbif_cli_args+=(--gbif-occurrence-file "${gbif_occurrence_file}")
+  [[ -z "${gbif_taxon_map}" ]] || gbif_cli_args+=(--gbif-taxon-map "${gbif_taxon_map}")
+  [[ -z "${gbif_download_metadata}" ]] || gbif_cli_args+=(--gbif-download-metadata "${gbif_download_metadata}")
+  local gbif_source_identity
+  gbif_source_identity=$(python "${gg_support_dir}/generate_species_trait.py" --database-sources "${trait_database_sources}" --trait-plan "${trait_plan}" --databases "${trait_databases}" --output "${species_trait_output}" "${gbif_cli_args[@]}" --print-gbif-input-identity) || return $?
   gg_artifact_contract_init trait_provenance_args "input_generation_species_trait" "all_species" "${input_generation_provenance_dir}/species_trait.json"
   gg_artifact_add_input_if_present trait_provenance_args "download_manifest" "${trait_manifest_path}"
   if [[ "${trait_species_source}" == "species_cds" ]]; then
@@ -1676,6 +1714,13 @@ run_trait_stage() {
   trait_provenance_args+=(
     --output "species_trait=${species_trait_output}"
     --output "species_trait_schema=${species_trait_output}.schema.json"
+    --output "trait_metadata=${species_trait_output}.metadata.json"
+    --output "gbif_quality=${species_trait_output}.gbif-quality.tsv"
+    --output "gbif_observations=${species_trait_output}.gbif-observations.tsv"
+    --input "trait_generator=${gg_support_dir}/generate_species_trait.py"
+    --input "gbif_adapter=${gg_support_dir}/gbif_observations.py"
+    --input "trait_contract=${gg_support_dir}/species_trait_contract.py"
+    --parameter "gbif_source_identity=${gbif_source_identity}"
     --parameter "trait_profile=${trait_profile}"
     --parameter "trait_species_source=${trait_species_source}"
     --parameter "trait_databases=${trait_databases}"
@@ -1685,7 +1730,21 @@ run_trait_stage() {
     --parameter "gbif_grid_degrees=${gbif_grid_degrees}"
     --parameter "gbif_min_match_confidence=${gbif_min_match_confidence}"
     --parameter "gbif_max_coordinate_uncertainty_m=${gbif_max_coordinate_uncertainty_m}"
-    --parameter "gbif_max_distance_from_centroid_m=${gbif_max_distance_from_centroid_m}"
+    --parameter "gbif_min_distance_from_known_centroid_m=${gbif_min_distance_from_known_centroid_m}"
+    --parameter "gbif_year_min=${gbif_year_min}"
+    --parameter "gbif_year_max=${gbif_year_max}"
+    --parameter "gbif_countries=${gbif_countries}"
+    --parameter "gbif_include_basis_of_record=${gbif_include_basis_of_record}"
+    --parameter "gbif_exclude_basis_of_record=${gbif_exclude_basis_of_record}"
+    --parameter "gbif_include_establishment_means=${gbif_include_establishment_means}"
+    --parameter "gbif_missing_date=${gbif_missing_date}"
+    --parameter "gbif_missing_uncertainty=${gbif_missing_uncertainty}"
+    --parameter "gbif_missing_centroid_distance=${gbif_missing_centroid_distance}"
+    --parameter "gbif_use_cache=${gbif_use_cache}"
+    --parameter "gbif_require_complete=${gbif_require_complete}"
+    --parameter "gbif_occurrence_file=${gbif_occurrence_file}"
+    --parameter "gbif_taxon_map=${gbif_taxon_map}"
+    --parameter "gbif_download_metadata=${gbif_download_metadata}"
     --parameter "strict=${strict}"
   )
   if [[ ${dry_run} -eq 0 ]]; then
@@ -1714,27 +1773,7 @@ run_trait_stage() {
   cmd+=(--output "${species_trait_output}")
   cmd+=(--download-timeout "${trait_download_timeout}")
   cmd+=(--stats-output "${trait_stats_file}")
-  if [[ -n "${gbif_api}" ]]; then
-    cmd+=(--gbif-api "${gbif_api}")
-  fi
-  if [[ -n "${gbif_page_size}" ]]; then
-    cmd+=(--gbif-page-size "${gbif_page_size}")
-  fi
-  if [[ -n "${gbif_max_occurrences_per_species}" ]]; then
-    cmd+=(--gbif-max-occurrences-per-species "${gbif_max_occurrences_per_species}")
-  fi
-  if [[ -n "${gbif_grid_degrees}" ]]; then
-    cmd+=(--gbif-grid-degrees "${gbif_grid_degrees}")
-  fi
-  if [[ -n "${gbif_min_match_confidence}" ]]; then
-    cmd+=(--gbif-min-match-confidence "${gbif_min_match_confidence}")
-  fi
-  if [[ -n "${gbif_max_coordinate_uncertainty_m}" ]]; then
-    cmd+=(--gbif-max-coordinate-uncertainty-m "${gbif_max_coordinate_uncertainty_m}")
-  fi
-  if [[ -n "${gbif_max_distance_from_centroid_m}" ]]; then
-    cmd+=(--gbif-max-distance-from-centroid-m "${gbif_max_distance_from_centroid_m}")
-  fi
+  cmd+=("${gbif_cli_args[@]}")
   if [[ -n "${trait_manifest_path}" ]]; then
     cmd+=(--download-manifest "${trait_manifest_path}")
   fi
@@ -2162,11 +2201,19 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     species_summary_output resolved_manifest_output species_trait_output file_multispecies_summary \
     trait_profile trait_species_source trait_databases trait_plan trait_database_sources trait_download_dir trait_download_timeout \
     gbif_api gbif_page_size gbif_max_occurrences_per_species gbif_grid_degrees gbif_min_match_confidence \
-    gbif_max_coordinate_uncertainty_m gbif_max_distance_from_centroid_m; do
+    gbif_max_coordinate_uncertainty_m gbif_min_distance_from_known_centroid_m \
+    gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
   if [[ ${run_generate_species_trait} -eq 1 ]]; then
     array_settings_cmd+=(--file "${trait_plan}" --file "${trait_database_sources}")
+    gbif_input_files=$(python "${gg_support_dir}/generate_species_trait.py" \
+      --database-sources "${trait_database_sources}" --trait-plan "${trait_plan}" --databases "${trait_databases}" \
+      --gbif-occurrence-file "${gbif_occurrence_file}" --gbif-taxon-map "${gbif_taxon_map}" \
+      --gbif-download-metadata "${gbif_download_metadata}" --print-gbif-input-files) || exit $?
+    while IFS= read -r gbif_input_file; do
+      [[ -z "${gbif_input_file}" ]] || array_settings_cmd+=(--file "${gbif_input_file}")
+    done <<< "${gbif_input_files}"
   fi
   [[ "${input_generation_mode}" != array_prepare ]] || array_settings_cmd+=(--prepare)
   "${array_settings_cmd[@]}"

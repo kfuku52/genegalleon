@@ -811,6 +811,10 @@ def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp
         "200": [],
     }
 
+    for taxon_key, rows in occurrences.items():
+        for index, row in enumerate(rows):
+            row.update(key=index + 1, speciesKey=taxon_key, occurrenceStatus="PRESENT", issues=[])
+
     class GbifHandler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
             parsed = urlparse(self.path)
@@ -820,6 +824,7 @@ def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp
                 name = query_map.get("name", [""])[0]
                 if name == "Homo sapiens":
                     payload = {
+                        "rank": "SPECIES",
                         "usageKey": 100,
                         "speciesKey": 100,
                         "matchType": "EXACT",
@@ -827,6 +832,7 @@ def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp
                     }
                 elif name == "Mus musculus":
                     payload = {
+                        "rank": "SPECIES",
                         "usageKey": 200,
                         "speciesKey": 200,
                         "matchType": "EXACT",
@@ -892,37 +898,42 @@ def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp
     assert completed is not None
     assert completed.returncode == 0, completed.stderr + completed.stdout
     df = pandas.read_csv(output, sep="\t")
-    assert "gbif_northern_limit_lat" in df.columns
-    assert "gbif_occupied_grid_area_km2" in df.columns
+    assert "gbif_observed_northern_limit_lat" in df.columns
+    assert "gbif_observed_occupied_grid_area_km2" in df.columns
 
     rows = {row["species"]: row for row in df.to_dict(orient="records")}
     homo = rows["Homo_sapiens"]
-    assert homo["gbif_occurrence_count"] == 3
-    assert homo["gbif_occurrence_used"] == 3
-    assert homo["gbif_occurrence_truncated"] == 0
-    assert homo["gbif_northern_limit_lat"] == 20
-    assert homo["gbif_southern_limit_lat"] == 10
-    assert homo["gbif_latitudinal_breadth_deg"] == 10
-    assert homo["gbif_western_limit_lon"] == 100
-    assert homo["gbif_eastern_limit_lon"] == 110
-    assert homo["gbif_longitudinal_breadth_deg"] == 10
-    assert homo["gbif_country_count"] == 2
-    assert homo["gbif_occupied_grid_area_km2"] > 0
-    assert homo["gbif_convex_hull_area_km2"] > 0
-    assert 100 <= homo["gbif_centroid_lon"] <= 110
+    quality = pandas.read_csv(str(output) + ".gbif-quality.tsv", sep="\t").set_index("species")
+    assert quality.loc["Homo_sapiens", "reported_count"] == 3
+    assert quality.loc["Homo_sapiens", "retained_count"] == 3
+    assert quality.loc["Homo_sapiens", "status"] == "complete_search"
+    assert not {"gbif_occurrence_count", "gbif_occurrence_used", "gbif_occurrence_truncated"}.intersection(df.columns)
+    metadata = json.loads(Path(str(output) + ".metadata.json").read_text())
+    assert metadata["traits"]["gbif_observed_northern_limit_lat"]["role"] == "observation"
+    assert Path(metadata["gbif"]["records_path"]).is_file()
+    assert homo["gbif_observed_northern_limit_lat"] == 20
+    assert homo["gbif_observed_southern_limit_lat"] == 10
+    assert homo["gbif_observed_latitudinal_breadth_deg"] == 10
+    assert homo["gbif_observed_western_limit_lon"] == 100
+    assert homo["gbif_observed_eastern_limit_lon"] == 110
+    assert homo["gbif_observed_longitudinal_breadth_deg"] == 10
+    assert homo["gbif_observed_country_count"] == 2
+    assert homo["gbif_observed_occupied_grid_area_km2"] > 0
+    assert 100 <= homo["gbif_observed_record_circular_mean_lon"] <= 110
 
     mus = rows["Mus_musculus"]
-    assert mus["gbif_occurrence_count"] == 0
-    assert mus["gbif_occurrence_used"] == 0
-    assert pandas.isna(mus["gbif_northern_limit_lat"])
+    assert quality.loc["Mus_musculus", "reported_count"] == 0
+    assert quality.loc["Mus_musculus", "retained_count"] == 0
+    assert pandas.isna(mus["gbif_observed_northern_limit_lat"])
     search_calls = [query for path, query in request_log if path == "/v1/occurrence/search"]
     assert any(query.get("limit") == ["0"] and query.get("taxonKey") == ["100"] for query in search_calls)
     assert any(query.get("offset") == ["2"] and query.get("taxonKey") == ["100"] for query in search_calls)
 
 
 def test_gbif_longitude_interval_handles_antimeridian():
-    module = load_script_module()
-    west, east, breadth = module.minimal_longitude_interval([179.0, -179.0])
+    load_script_module()  # establishes the support-module import path
+    from gbif_observations import minimal_longitude_interval
+    west, east, breadth = minimal_longitude_interval([179.0, -179.0])
     assert west == 179.0
     assert east == -179.0
     assert breadth == 2.0

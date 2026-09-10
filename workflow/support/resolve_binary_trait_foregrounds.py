@@ -150,7 +150,9 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    header, rows = read_trait_table(args.input)
+    from species_trait_contract import select_foreground_traits
+    frame, _audit = select_foreground_traits(args.input)
+    header, rows = frame.columns.tolist(), frame.values.tolist()
     tree = Phylo.read(args.species_tree, "newick")
     resolved_traits = resolve_binary_foregrounds(header, rows, tree)
     write_trait_table(args.output, header, rows)

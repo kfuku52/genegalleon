@@ -200,7 +200,7 @@ max_gene_orthogroup_grampa=50 # Maximum gene count allowed for GRAMPA-ready orth
 grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".
 orthogroup_copy_number_max_size_differential=9999999 # Maximum family-size difference retained in the shared orthogroup copy-number matrix.
 n_gamma_cats_cafe=4 # Number of gamma categories used by CAFE.
-orthogroup_copy_number_trait="all" # Trait column name(s) in species_trait.tsv to test against orthogroup copy numbers, or "all".
+orthogroup_copy_number_trait="all" # Ordinary traits automatically; explicitly name GBIF observed columns with metadata, or other trait column name(s).
 orthogroup_copy_number_trait_selection_folds="" # Required TSV with leaf_name and fold, at least three phylogenetic groups; workspace-relative or absolute.
 orthogroup_copy_number_trait_selection_strengths="1,0.1,0.01" # Positive regularization strengths explored inside nested CV.
 orthogroup_copy_number_trait_selection_l1_ratios="1,0.5" # 1=lasso; values in (0,1) use elastic net.

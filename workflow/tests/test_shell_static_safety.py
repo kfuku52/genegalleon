@@ -1565,7 +1565,7 @@ def test_genome_evolution_exposes_orthogroup_copy_number_trait_pgls_parameters()
     expected_entrypoint_tokens = [
         "run_orthogroup_copy_number_trait_pgls=0 # Test associations between orthogroup copy numbers and species traits with species-tree PGLS.",
         "orthogroup_copy_number_max_size_differential=9999999 # Maximum family-size difference retained in the shared orthogroup copy-number matrix.",
-        'orthogroup_copy_number_trait="all" # Trait column name(s) in species_trait.tsv to test against orthogroup copy numbers, or "all".',
+        'orthogroup_copy_number_trait="all" # Ordinary traits automatically; explicitly name GBIF observed columns with metadata, or other trait column name(s).',
         "orthogroup_copy_number_trait_min_species=4 # Minimum number of tree-matched species required for each orthogroup copy-number trait PGLS fit.",
         'orthogroup_copy_number_trait_family_ids="" # Optional comma/space-separated orthogroup IDs to test; empty means use max_families.',
         'orthogroup_copy_number_trait_family_file="" # Optional file listing orthogroup IDs to test.',

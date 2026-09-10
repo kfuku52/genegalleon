@@ -5849,6 +5849,13 @@ copy_number_pgls_provenance_args+=(
 gg_artifact_add_input_if_present copy_number_pgls_provenance_args "trait_schema" "${file_trait}.schema.json"
 copy_number_pgls_provenance_args+=(--input "trait_schema_adapter=${gg_support_dir}/species_trait_schema.py")
 gg_artifact_add_input_if_present copy_number_pgls_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
+gg_artifact_add_input_if_present copy_number_pgls_provenance_args "trait_metadata" "${file_trait}.metadata.json"
+copy_number_pgls_provenance_args+=(--input "trait_contract=${gg_support_dir}/species_trait_contract.py"
+  --input "gbif_contract=${gg_support_dir}/gbif_observations.py"
+  --output "selected_traits=${dir_orthogroup_copy_number_trait_pgls}/selected_species_traits.tsv"
+  --output "selected_trait_metadata=${dir_orthogroup_copy_number_trait_pgls}/selected_species_traits.tsv.metadata.json"
+  --output "selected_trait_schema=${dir_orthogroup_copy_number_trait_pgls}/selected_species_traits.tsv.schema.json"
+  --output "trait_input_audit=${dir_orthogroup_copy_number_trait_pgls}/species_trait_input.json")
 gg_artifact_prepare_stage copy_number_pgls_needs_update run_orthogroup_copy_number_trait_pgls "${copy_number_pgls_provenance_args[@]}" || exit $?
 if [[ ${copy_number_pgls_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5904,6 +5911,8 @@ gg_artifact_add_input_if_present copy_number_selection_provenance_args "folds" "
 gg_artifact_add_input_if_present copy_number_selection_provenance_args "trait_schema" "${file_trait}.schema.json"
 copy_number_selection_provenance_args+=(--input "trait_schema_adapter=${gg_support_dir}/species_trait_schema.py")
 gg_artifact_add_input_if_present copy_number_selection_provenance_args "family_file" "${orthogroup_copy_number_trait_family_file}"
+gg_artifact_add_input_if_present copy_number_selection_provenance_args "trait_metadata" "${file_trait}.metadata.json"
+copy_number_selection_provenance_args+=(--input "trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage copy_number_selection_needs_update run_orthogroup_copy_number_trait_selection "${copy_number_selection_provenance_args[@]}" || exit $?
 if [[ ${copy_number_selection_needs_update} -eq 1 && ${run_orthogroup_copy_number_trait_selection} -eq 1 ]]; then
   gg_step_start "${task}"

@@ -312,15 +312,14 @@ prepare_synteny_evalue_fasta() {
 binarize_species_trait() {
   local file_in="$1"
   local file_out="$2"
-  python - "${file_in}" "${file_out}" << 'PY'
+  PYTHONPATH="${gg_support_dir}${PYTHONPATH:+:${PYTHONPATH}}" python - "${file_in}" "${file_out}" << 'PY'
 import sys
 import numpy
 import pandas
 
 file_in, file_out = sys.argv[1], sys.argv[2]
-df = pandas.read_csv(file_in, sep="\t", header=0, dtype=str)
-if df.shape[1] < 2:
-    raise ValueError(f"Trait file must have at least 2 columns: {file_in}")
+from species_trait_contract import select_foreground_traits
+df, trait_audit = select_foreground_traits(file_in, allow_empty=True)
 
 species_col = df.columns[0]
 out = pandas.DataFrame()
@@ -339,19 +338,19 @@ for col in df.columns[1:]:
     if valid.size > 0:
         uniq = set(valid.astype(float).tolist())
         if uniq.issubset({0.0, 1.0}):
-            binary = numeric.fillna(0).astype(float).clip(0, 1).round().astype(int)
+            binary = numeric.astype("Int64")
         else:
             threshold = float(valid.median())
-            binary = (numeric > threshold).astype(int)
+            binary = (numeric > threshold).astype("Int64")
             # Keep the split informative when many values are tied at median.
-            if int(binary.sum()) in {0, int(binary.shape[0])}:
+            if int(binary.loc[numeric.notna()].sum()) in {0, int(valid.size)}:
                 threshold = float(valid.mean())
-                binary = (numeric > threshold).astype(int)
-            binary.loc[numeric.isna()] = 0
+                binary = (numeric > threshold).astype("Int64")
+            binary.loc[numeric.isna()] = pandas.NA
     else:
         lowered = raw.fillna("").str.lower()
-        mapped = lowered.map(lambda x: 1 if x in truthy else (0 if x in falsey else 0))
-        binary = mapped.astype(int)
+        mapped = lowered.map(lambda x: 1 if x in truthy else (0 if x in falsey else pandas.NA))
+        binary = mapped.astype("Int64")
 
     out[col] = binary
 
@@ -536,6 +535,7 @@ import re
 import sys
 
 from species_labeling import extract_species_label
+from species_trait_contract import select_foreground_traits
 
 RANK_OR_QUALIFIER_TOKENS = (
     "cf", "aff", "nr", "sp", "spp",
@@ -556,12 +556,10 @@ def species_foreground_regex(value):
 
 
 infile, outfile = sys.argv[1:3]
-with open(infile, "r", encoding="utf-8", errors="replace", newline="") as src, open(
-    outfile, "w", encoding="utf-8", newline=""
-) as dst:
-    reader = csv.reader(src, delimiter="\t")
+frame, trait_audit = select_foreground_traits(infile)
+with open(outfile, "w", encoding="utf-8", newline="") as dst:
     writer = csv.writer(dst, delimiter="\t", lineterminator="\n")
-    for row_index, row in enumerate(reader):
+    for row_index, row in enumerate([frame.columns.tolist(), *frame.values.tolist()]):
         if row_index > 0 and row:
             row[0] = species_foreground_regex(row[0])
         writer.writerow(row)
@@ -4804,6 +4802,8 @@ codeml_two_ratio_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "model=two_ratio"
 )
+gg_artifact_add_input_if_present codeml_two_ratio_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
+codeml_two_ratio_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage codeml_two_ratio_needs_update run_codeml_two_ratio "${codeml_two_ratio_provenance_args[@]}" || exit $?
 if [[ ${codeml_two_ratio_needs_update} -eq 1 && ${run_codeml_two_ratio} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5014,6 +5014,8 @@ hyphy_relax_provenance_args=(
   --parameter "foreground=1"
   --parameter "mode=classic_minimal"
 )
+gg_artifact_add_input_if_present hyphy_relax_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
+hyphy_relax_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage hyphy_relax_needs_update run_hyphy_relax "${hyphy_relax_provenance_args[@]}" || exit $?
 if [[ ${hyphy_relax_needs_update} -eq 1 && ${run_hyphy_relax} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5045,6 +5047,8 @@ hyphy_relax_reversed_provenance_args=(
   --parameter "foreground=0"
   --parameter "mode=classic_minimal"
 )
+gg_artifact_add_input_if_present hyphy_relax_reversed_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
+hyphy_relax_reversed_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage hyphy_relax_reversed_needs_update run_hyphy_relax_reversed "${hyphy_relax_reversed_provenance_args[@]}" || exit $?
 if [[ ${hyphy_relax_reversed_needs_update} -eq 1 && ${run_hyphy_relax_reversed} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5387,6 +5391,8 @@ fi
 if [[ -s "${file_og_expression}" && -n "${species_label_map_tsv}" ]]; then
   rsc_provenance_args+=(--input "species_map=${species_label_map_tsv}")
 fi
+gg_artifact_add_input_if_present rsc_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
+rsc_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage rsc_needs_update run_expression_trait_pgls "${rsc_provenance_args[@]}" || exit $?
 if [[ ${rsc_needs_update} -eq 1 && ${run_expression_trait_pgls} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5920,6 +5926,8 @@ if [[ -s "${file_sp_trait}" ]]; then
 else
   csubst_provenance_args+=(--parameter "foreground_present=0")
 fi
+gg_artifact_add_input_if_present csubst_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
+csubst_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage csubst_needs_update run_csubst "${csubst_provenance_args[@]}" || exit $?
 if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -6090,6 +6098,8 @@ csubst_scan_provenance_args=(
 if [[ "${csubst_scan_site_plot}" == "yes" ]]; then
   csubst_scan_provenance_args+=(--output "csubst_scan_plot=${file_og_csubst_scan_plot}")
 fi
+gg_artifact_add_input_if_present csubst_scan_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
+csubst_scan_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
 gg_artifact_prepare_stage csubst_scan_needs_update run_csubst_scan "${csubst_scan_provenance_args[@]}" || exit $?
 if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
   gg_step_start "${task}"

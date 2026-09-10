@@ -15,11 +15,22 @@ import hashlib
 import json
 import math
 import re
+import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
 import numpy
 import pandas
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from species_trait_contract import (
+    metadata_path,
+    select_species_traits,
+    trait_output_transaction,
+    write_derived_contract,
+)
 
 MISSING_VALUES = {"", "NA", "NaN", "nan", "?", "missing", "unknown", "."}
 
@@ -729,6 +740,11 @@ def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
             raise ValueError("Predictor technical IDs must be unique within each species/biological observation")
     available = [column for column in traits.columns[1:] if column not in metadata_columns]
     predictors = _parse_csv_names(args.predictors, available, "--predictors")
+    traits, input_contract = select_species_traits(
+        args.species_traits, args.predictors, auxiliary=tuple(metadata_columns), allow_empty=True,
+    )
+    traits[leaf_column] = traits[leaf_column].astype(str).str.strip()
+    predictors = input_contract["selected"]
     _validate_generated_trait_names(predictors, "Predictor")
 
     standard_error_columns = [
@@ -820,6 +836,7 @@ def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
     columns = [leaf_column] + retained + sorted(metadata_columns, key=list(traits.columns).index)
     output = traits[columns].rename(columns={leaf_column: "leaf_name"})
     return output, {
+        "input_contract": input_contract,
         "status": "ready" if retained else "not_estimable",
         "reason": ";".join(skipped) if skipped else ("" if retained else "no_usable_predictors"),
         "predictors": ",".join(retained),
@@ -835,6 +852,22 @@ def _prepare_predictors(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
 
 
 def prepare(args: argparse.Namespace) -> int:
+    fields = ("expression_output", "species_traits_output", "analysis_plan_output", "metadata_output")
+    outputs = {field: getattr(args, field) for field in fields}
+    sidecar = metadata_path(args.species_traits_output)
+    inputs = [args.expression, args.species_traits, metadata_path(args.species_traits)]
+    if args.sample_metadata is not None:
+        inputs.append(args.sample_metadata)
+    with trait_output_transaction([*outputs.values(), sidecar], inputs) as staged:
+        staged_args = argparse.Namespace(**vars(args))
+        for field, path in outputs.items():
+            setattr(staged_args, field, staged[path])
+        _prepare_staged(staged_args)
+        metadata_path(staged_args.species_traits_output).replace(staged[sidecar])
+    return 0
+
+
+def _prepare_staged(args: argparse.Namespace) -> int:
     expression, expression_meta = _prepare_expression(args)
     predictors, predictor_meta = _prepare_predictors(args)
 
@@ -842,6 +875,7 @@ def prepare(args: argparse.Namespace) -> int:
     args.species_traits_output.parent.mkdir(parents=True, exist_ok=True)
     expression.to_csv(args.expression_output, sep="\t", index=False, na_rep="NA")
     predictors.to_csv(args.species_traits_output, sep="\t", index=False, na_rep="NA")
+    write_derived_contract(args.species_traits_output, predictor_meta["input_contract"])
 
     status = "ready"
     reasons = [value for value in (expression_meta["reason"], predictor_meta["reason"]) if value]
@@ -916,6 +950,7 @@ def prepare(args: argparse.Namespace) -> int:
             "sample_size_columns": expression_meta["sample_size_columns"],
             "response_sampling_uncertainty": expression_meta["response_sampling_uncertainty"],
             "predictor_sampling_uncertainty": predictor_meta["predictor_sampling_uncertainty"],
+            "predictor_input_contract": json.dumps(predictor_meta["input_contract"], sort_keys=True),
         },
     )
     return 0

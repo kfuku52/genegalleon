@@ -215,7 +215,7 @@ species_paralog_sampling_covariance="" # Optional workspace-relative or absolute
 
 # Reconciled speciation contrast (RSC) PGLS
 rsc_responses="all" # all or comma-separated expression response names after removing the replicate suffix (for example root,leaf).
-rsc_predictors="all" # all or comma-separated species-trait columns.
+rsc_predictors="all" # Ordinary traits automatically; explicitly name GBIF observed columns with metadata, or comma-separated other columns.
 rsc_predictor_mode="separate" # separate|joint; separate fits one predictor at a time and is the recommended screening mode.
 rsc_event_source="auto" # auto|nhx|lca|species-overlap; auto uses NHX only when the selected reconciliation tree contains GeneRax D annotations.
 rsc_speciation_coverage="complete" # complete|any; complete excludes partially sampled daughter clades.

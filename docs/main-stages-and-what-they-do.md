@@ -47,8 +47,8 @@ Notable defaults:
   when `trait_databases` is unset or `auto`,
 - `trait_profile=gbif_distribution` is available as a no-login GBIF occurrence
   preset: sets `run_generate_species_trait=1`, uses `trait_databases=gbif`
-  when `trait_databases` is unset or `auto`, and writes built-in distribution
-  traits such as northern latitude limit, breadth, and occupied grid area,
+  when `trait_databases` is unset or `auto`, and writes observed-record summaries
+  with separate quality/provenance sidecars; see [GBIF observation traits](gbif-observation-traits.md),
 - each run appends a TSV record to `workspace/output/input_generation/gg_input_generation_runs.tsv`
   (configurable via `summary_output` or `GG_INPUT_SUMMARY_OUTPUT`).
 

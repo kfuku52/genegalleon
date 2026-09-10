@@ -318,13 +318,19 @@ Input generation uses the shorter `GG_INPUT_` prefix. Common overrides include:
 - `GG_INPUT_SPECIES_GENOME_DIR`
 - `GG_INPUT_SUMMARY_OUTPUT`
 
-Example (no-login GBIF distribution traits):
+Example (no-login GBIF observation traits):
 
 ```bash
 GG_INPUT_DOWNLOAD_MANIFEST="$PWD/workspace/input/input_generation/download_plan.xlsx" \
 GG_INPUT_TRAIT_PROFILE=gbif_distribution \
 bash workflow/gg_input_generation_entrypoint.sh
 ```
+
+These are summaries of retained observations, not estimates of the true species
+range. Keep the generated metadata and quality sidecars. See
+[GBIF observation traits](gbif-observation-traits.md) for local downloads, filters,
+explicit analysis selection, sensitivity replay and migration from older columns.
+
 
 ### Shared runtime paths
 

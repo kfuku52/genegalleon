@@ -939,6 +939,8 @@ def is_foreground_trait_value(value):
     text = str(value).strip()
     if text == "" or text.lower() in {"na", "nan", "none", "null"}:
         return False
+    if text.lower() in {"true", "false"}:
+        return text.lower() == "true"
     try:
         return float(text) != 0
     except ValueError:
@@ -1820,7 +1822,8 @@ if __name__ == "__main__":
         )
         column_names[table] = columns["name"].tolist()
         print(f"Column names of {table}: {' '.join(column_names[table])}")
-    df_trait = pandas.read_csv(args.file_trait, sep="\t", header=0, index_col=None)
+    from species_trait_contract import select_foreground_traits
+    df_trait, trait_input_audit = select_foreground_traits(args.file_trait, args.trait)
     trait_names = [t.strip() for t in args.trait.split(",") if t.strip()]
     no_trait_name = False
     if (len(trait_names) == 1) and (trait_names[0] == "all"):
@@ -1834,7 +1837,7 @@ if __name__ == "__main__":
                 if len(detected_trait_names) > 0:
                     break
         if len(detected_trait_names) > 0:
-            trait_names = detected_trait_names
+            trait_names = [name for name in detected_trait_names if name in df_trait.columns[1:]]
             no_trait_name = False
         else:
             # Fallback when cb* tables are not generated yet.

@@ -869,6 +869,8 @@ run_csubst_site_convergence_summary_for_source() {
     --parameter "max_per_K=${csubst_site_max_candidates_per_arity}"
     --parameter "nonsyn_recode=${csubst_site_nonsyn_recode}"
   )
+  gg_artifact_add_input_if_present csubst_site_provenance_args "species_trait_metadata" "${resolved_trait_file}.metadata.json"
+  csubst_site_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
   gg_artifact_prepare_stage csubst_site_needs_update run_csubst_site_convergence_summary "${csubst_site_provenance_args[@]}" || return $?
   if [[ ${run_csubst_site_convergence_summary} -ne 1 ]]; then
     echo "Skipping convergent-site summary because run_csubst_site_convergence_summary=0."

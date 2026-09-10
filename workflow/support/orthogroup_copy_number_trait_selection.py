@@ -23,10 +23,12 @@ from nwkit.output_transaction import output_transaction
 from nwkit.rooting_state import require_rooted
 from nwkit.util import read_tree
 
-SUPPORT_DIR = Path(__file__).resolve().parent
-if str(SUPPORT_DIR) not in sys.path:
-    sys.path.insert(0, str(SUPPORT_DIR))
-from species_trait_schema import schema_path, select_traits
+SUPPORT = Path(__file__).resolve().parent
+if str(SUPPORT) not in sys.path:
+    sys.path.insert(0, str(SUPPORT))
+
+from species_trait_contract import metadata_path, select_analysis_traits, write_derived_contract
+from species_trait_schema import schema_path
 
 FAMILIES = {"gaussian", "binomial", "poisson", "negative-binomial"}
 
@@ -59,8 +61,9 @@ def read_table(path):
     return pd.read_csv(path, sep="\t", keep_default_na=False, dtype=str)
 
 
-def load_species_table(path):
-    table = read_table(path)
+def load_species_table(path, table=None):
+    if table is None:
+        table = read_table(path)
     if "leaf_name" in table.columns[1:]:
         raise ValueError(f"Species key conflicts with a leaf_name data column: {path}")
     table = table.rename(columns={table.columns[0]: "leaf_name"})
@@ -136,9 +139,11 @@ def run(args):
         raise ValueError("Predictor copy numbers must be finite non-negative integers.")
     # A fixed transform uses no held-out statistics; NWKIT standardizes within folds.
     copy_matrix = np.log1p(copy_matrix)
-    trait_table, folds = load_species_table(args.traits), load_species_table(args.folds)
-    trait_selection = select_traits(args.traits, args.trait)
-    traits = [row["trait"] for row in trait_selection if row["status"] == "selected"]
+    selected_traits, trait_audit = select_analysis_traits(args.traits, args.trait)
+    trait_table = load_species_table(args.traits, selected_traits)
+    folds = load_species_table(args.folds)
+    traits = list(trait_table.columns)
+    trait_selection = trait_audit["type_selection"]
     if not traits or len(set(traits)) != len(traits) or not set(traits) <= set(trait_table.columns):
         raise ValueError("Trait selection must contain unique existing trait columns.")
     if "fold" not in folds or not set(leaves) <= set(folds.index):
@@ -154,6 +159,10 @@ def run(args):
         work = Path(temp)
         result = work / "results"
         result.mkdir()
+        selected_path = result / "selected_species_traits.tsv"
+        selected_traits.to_csv(selected_path, sep="\t", index=False)
+        write_derived_contract(selected_path, trait_audit)
+        (result / "species_trait_input.json").write_text(json.dumps(trait_audit, indent=2) + "\n")
         pd.DataFrame({"predictor": predictor_names, "Orthogroup": chosen, "predictor_transform": "log1p"}).to_csv(
             result / "predictors.tsv", sep="\t", index=False
         )
@@ -211,11 +220,13 @@ def run(args):
                 )
                 table["predictor_transform"] = "log1p"
                 table.to_csv(result_path, sep="\t", index=False)
-            metadata_path = result / f"{name}.metadata.json"
-            metadata = json.loads(metadata_path.read_text())
+            result_metadata_path = result / f"{name}.metadata.json"
+            metadata = json.loads(result_metadata_path.read_text())
+            metadata["trait_input_audit"] = trait_audit
+            metadata["response_trait"] = trait
             metadata["predictor_transform"] = "log1p"
             metadata["predictor_units"] = "natural_log_of_one_plus_copy_number"
-            metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+            result_metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
             manifest.append(
                 dict(
                     trait=trait,
@@ -238,6 +249,8 @@ def run(args):
         ]
         if schema_path(args.traits).exists():
             inputs.append(("trait_schema", str(schema_path(args.traits))))
+        if metadata_path(Path(args.traits)).exists():
+            inputs.append(("trait_metadata", str(metadata_path(Path(args.traits)))))
         if args.family_file:
             inputs.append(("family_file", args.family_file))
         validate_outputs_do_not_replace_inputs(inputs, [(str(i), str(path)) for i, path in enumerate(targets)])

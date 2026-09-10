@@ -30,6 +30,7 @@ script_dir <- if (length(script_path_arg) > 0) {
 }
 source_path <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
 support_dir <- if (!is.null(source_path)) dirname(normalizePath(source_path, mustWork = TRUE)) else script_dir
+if (!is.null(source_path)) script_dir <- dirname(normalizePath(source_path, mustWork = TRUE))
 
 parse_args <- function(argv) {
   out <- list()
@@ -257,7 +258,7 @@ resolve_trait_cols <- function(trait, trait_arg = "all") {
   requested <- split_tokens(trait_arg)
   if (anyDuplicated(requested)) stop("Requested traits must be unique.")
   if (!length(requested) || identical(tolower(trait_arg), "all")) {
-    return(available)
+    return(available[!startsWith(available, "gbif_")])
   }
   missing <- requested[!requested %in% available]
   if (length(missing)) {
@@ -550,7 +551,7 @@ run_orthogroup_copy_number_trait_associations <- function(copy_matrix, trait, tr
   out
 }
 
-save_summary_plot <- function(df_stat, outdir, alpha = 0.05, top_n = 50L) {
+save_summary_plot <- function(df_stat, outdir, alpha = 0.05, top_n = 50L, observation_caption = "") {
   plot_file_pdf <- file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.pdf")
   plot_file_svg <- file.path(outdir, "orthogroup_copy_number_trait_pgls.summary.svg")
   plot_df <- df_stat[df_stat$status == "ok" & is.finite(df_stat$pval), , drop = FALSE]
@@ -577,6 +578,7 @@ save_summary_plot <- function(df_stat, outdir, alpha = 0.05, top_n = 50L) {
         legend.position = "bottom"
       )
   }
+  if (nzchar(observation_caption)) p <- p + labs(caption = observation_caption)
   height <- max(4, min(14, 2 + 0.18 * max(1, nrow(plot_df))))
   ggsave(plot_file_pdf, p, width = 7.2, height = height, dpi = 300)
   ggsave(plot_file_svg, p, width = 7.2, height = height, dpi = 300)
@@ -610,10 +612,22 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
   dir.create(work)
   on.exit(unlink(work, recursive = TRUE), add = TRUE)
   tree <- load_tree_normalized(file_sptree)
-  trait <- load_trait_table(file_trait)
-  trait_selection <- resolve_trait_selection(trait, trait_arg)
-  trait_cols <- trait_selection$trait[trait_selection$status == "selected"]
-  write_tsv_base(trait_selection, file.path(work, "trait_selection.tsv"))
+  selected_trait_file <- file.path(work, "selected_species_traits.tsv")
+  selection_report <- file.path(work, "species_trait_input.json")
+  selection_status <- system2("python", shQuote(c(
+    file.path(script_dir, "species_trait_contract.py"), "--input", file_trait,
+    "--select", trait_arg, "--numeric-only", "--selection-report", file.path(work, "trait_selection.tsv"),
+    "--output", selected_trait_file, "--report", selection_report
+  )))
+  if (selection_status != 0L) stop("Species-trait input contract failed; GBIF observations require explicit selection and complete acquisition metadata.")
+  caption_flag <- system2("python", shQuote(c("-c",
+    "import json,sys; print(int('gbif' in json.load(open(sys.argv[1]))))", selection_report)), stdout = TRUE)
+  if (!is.null(attr(caption_flag, "status"))) stop("Could not read the species-trait interpretation report.")
+  observation_caption <- if (identical(caption_flag, "1")) {
+    "GBIF responses describe retained occurrence records.\nAssociations do not establish natural-range effects or adaptation."
+  } else ""
+  trait <- load_trait_table(selected_trait_file)
+  trait_cols <- resolve_trait_cols(trait, "all")
   copy_matrix <- load_orthogroup_copy_number_matrix(
     file_orthogroup_copy_number = file_orthogroup_copy_number,
     tree = tree,
@@ -637,9 +651,11 @@ run_orthogroup_copy_number_trait_pgls <- function(file_orthogroup_copy_number, f
   write_tsv_base(df_stat, file.path(work, "orthogroup_copy_number_trait_pgls.tsv"))
   df_sig <- df_stat[df_stat$status == "ok" & is.finite(df_stat$p.adj.global) & df_stat$p.adj.global < alpha, , drop = FALSE]
   write_tsv_base(df_sig, file.path(work, "orthogroup_copy_number_trait_pgls.significant.tsv"))
-  save_summary_plot(df_stat, outdir = work, alpha = alpha, top_n = plot_top_n)
+  save_summary_plot(df_stat, outdir = work, alpha = alpha, top_n = plot_top_n,
+                    observation_caption = observation_caption)
   publish_copy_number_results(work, outdir, c(file_orthogroup_copy_number, file_sptree, file_trait,
                                             if (file.exists(paste0(file_trait, ".schema.json"))) paste0(file_trait, ".schema.json"),
+                                            if (file.exists(paste0(file_trait, ".metadata.json"))) paste0(file_trait, ".metadata.json"),
                                             if (nzchar(family_file)) family_file))
   invisible(list(copy_matrix = copy_matrix, stats = df_stat, significant = df_sig))
 }
