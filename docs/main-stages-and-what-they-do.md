@@ -724,7 +724,7 @@ Main outputs in the workspace root (`workspace/`):
 Note:
 
 - this stage runs `workflow/core/gg_progress_summary_core.sh` inside the container.
-- orthogroup summary generation is skipped when the selected gene-count table is absent; AMAS inputs are optional and may be live or ZIP-backed.
+- orthogroup summary generation is skipped when the selected gene-count table is absent; alignment-statistics inputs are optional and may be live or ZIP-backed.
 - query2family summary generation is skipped when `workspace/output/query2family`
   or `workspace/input/query_gene` is absent.
 

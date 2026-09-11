@@ -121,7 +121,7 @@ Likely causes:
 Examples:
 
 - `gg_gene_summary_entrypoint.sh` skips database generation if logical `stat_tree` or `stat_branch` inputs are absent from both live files and ZIP storage,
-- `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table is absent; AMAS inputs may be live or ZIP-backed.
+- `gg_progress_summary_core.sh` skips orthogroup summary generation if the selected gene-count table is absent; alignment-statistics inputs may be live or ZIP-backed.
 
 GeneGalleon records content-based provenance manifests for generated artifacts,
 including gene-family, genome-annotation, transcriptome, species-tree,

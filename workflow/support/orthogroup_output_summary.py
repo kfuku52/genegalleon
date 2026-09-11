@@ -30,7 +30,7 @@ def build_arg_parser():
         "--updated-genecount-out",
         metavar="PATH",
         type=str,
-        help="Write the AMAS-augmented gene-count table here; the default is beside --out.",
+        help="Write the alignment-statistics-augmented gene-count table here; the default is beside --out.",
     )
     parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
@@ -163,7 +163,7 @@ def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=Non
     original_cols = df.columns[numpy.arange(idx_total + 1)].tolist()
     sorted_amas_cols = df.columns[idx_added].sort_values().tolist()
     df = df.loc[:, original_cols + sorted_amas_cols]
-    print(f"{extension}: {counter} AMAS results were appended.", flush=True)
+    print(f"{extension}: {counter} alignment-statistics results were appended.", flush=True)
     return df
 
 

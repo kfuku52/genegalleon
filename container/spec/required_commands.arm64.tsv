@@ -1,7 +1,6 @@
 # env<TAB>command
 # arm64 intentionally excludes Trinity and jellyfish.
 base	amalgkit
-base	AMAS.py
 base	astral-hybrid
 base	blastn
 base	bsdtar

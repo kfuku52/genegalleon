@@ -2954,7 +2954,7 @@ else
   gg_step_skip "${task}"
 fi
 
-task="AMAS for original alignment"
+task="cdskit stats for original alignment"
 disable_if_no_input_file "run_amas_original" "${file_og_untrimmed_aln_analysis}"
 amas_original_needs_update=0
 amas_original_provenance_args=(
@@ -2966,18 +2966,20 @@ amas_original_provenance_args=(
   --input "alignment=${file_og_untrimmed_aln_analysis}"
   --output "amas=${file_og_amas_original}"
   --parameter "data_type=${amas_data_type}"
+  --parameter "statistics_engine=cdskit-stats-alignment"
 )
 gg_artifact_prepare_stage amas_original_needs_update run_amas_original "${amas_original_provenance_args[@]}" || exit $?
 if [[ ${amas_original_needs_update} -eq 1 && ${run_amas_original} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.amas.original.input.fasta"
 
-  AMAS.py summary \
-    --in-format fasta \
-    --data-type "${amas_data_type}" \
-    --in-files "${og_id}.amas.original.input.fasta"
+  cdskit stats \
+    --mode alignment \
+    --seq_type "${amas_data_type}" \
+    --seq_file "${og_id}.amas.original.input.fasta" \
+    --out_file "${og_id}.amas.original.output.tsv"
 
-  mv_out summary.txt "${file_og_amas_original}"
+  mv_out "${og_id}.amas.original.output.tsv" "${file_og_amas_original}"
   rm -f -- "${og_id}.amas.original.input.fasta"
   gg_artifact_record "${amas_original_provenance_args[@]}"
 else
@@ -3212,7 +3214,7 @@ if [[ ${run_clipkit} -eq 1 ]]; then
   set_analysis_file trimmed_aln "${file_og_clipkit}"
 fi
 
-task="AMAS for cleaned alignment"
+task="cdskit stats for cleaned alignment"
 disable_if_no_input_file "run_amas_cleaned" "${file_og_trimmed_aln_analysis}"
 amas_cleaned_needs_update=0
 amas_cleaned_provenance_args=(
@@ -3224,25 +3226,27 @@ amas_cleaned_provenance_args=(
   --input "alignment=${file_og_trimmed_aln_analysis}"
   --output "amas=${file_og_amas_cleaned}"
   --parameter "data_type=${amas_data_type}"
+  --parameter "statistics_engine=cdskit-stats-alignment"
 )
 gg_artifact_prepare_stage amas_cleaned_needs_update run_amas_cleaned "${amas_cleaned_provenance_args[@]}" || exit $?
 if [[ ${amas_cleaned_needs_update} -eq 1 && ${run_amas_cleaned} -eq 1 ]]; then
   gg_step_start "${task}"
   seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.amas.cleaned.input.fasta"
 
-  AMAS.py summary \
-    --in-format fasta \
-    --data-type "${amas_data_type}" \
-    --in-files "${og_id}.amas.cleaned.input.fasta"
+  cdskit stats \
+    --mode alignment \
+    --seq_type "${amas_data_type}" \
+    --seq_file "${og_id}.amas.cleaned.input.fasta" \
+    --out_file "${og_id}.amas.cleaned.output.tsv"
 
-  mv_out summary.txt "${file_og_amas_cleaned}"
+  mv_out "${og_id}.amas.cleaned.output.tsv" "${file_og_amas_cleaned}"
   rm -f -- "${og_id}.amas.cleaned.input.fasta"
   gg_artifact_record "${amas_cleaned_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 if [[ ${run_maxalign} -eq 1 ]]; then
-  # This code block should be placed immediately after "AMAS for cleaned alignment".
+  # This code block should be placed immediately after "cdskit stats for cleaned alignment".
   # orthogroup_summary.tsv will not include necessary info otherwise.
   num_gene_before_maxalign=$(gg_count_fasta_records "${file_og_mafft}")
   num_gene_after_maxalign=$(gg_count_fasta_records "${file_og_maxalign}")

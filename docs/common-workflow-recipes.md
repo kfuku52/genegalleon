@@ -596,7 +596,7 @@ Outputs are written to the workspace root:
 Current scope:
 
 - orthogroup summary is generated when `workspace/output/orthogroup`
-  exists and the selected gene-count table is present; AMAS inputs are
+  exists and the selected gene-count table is present; alignment-statistics inputs are
   optional and may be live or ZIP-backed,
 - query2family summary is generated when `workspace/output/query2family`
   and `workspace/input/query_gene` exist,

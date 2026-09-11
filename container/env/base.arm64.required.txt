@@ -20,7 +20,6 @@ tqdm
 pytorch
 
 # genegalleon bioinformatics core (intended to be cross-arch)
-amas
 blast
 clipkit
 diamond

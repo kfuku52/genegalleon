@@ -123,11 +123,11 @@ run_cdskit_localize=1 # Predict targeting-peptide and peroxisome localization si
 
 # Alignment and tree workflow flags
 run_mafft=1 # In-frame nucleotide alignment using MAFFT.
-run_amas_original=1 # Alignment statistics before MaxAlign and TrimAl using AMAS.
+run_amas_original=1 # Alignment statistics before MaxAlign and TrimAl using cdskit stats (AMAS-compatible TSV).
 run_maxalign=0 # Remove anomalous sequences by cdskit maxalign.
 run_trimal=0 # Remove less-alignable codon sites.
 run_clipkit=1 # Remove less-alignable codon sites.
-run_amas_cleaned=1 # Alignment statistics after MaxAlign and TrimAl using AMAS.
+run_amas_cleaned=1 # Alignment statistics after MaxAlign and TrimAl using cdskit stats (AMAS-compatible TSV).
 run_iqtree=1 # Maximum-likelihood phylogenetic reconstruction.
 run_tree_root=1 # Root gene tree using tree_rooting_method.
 

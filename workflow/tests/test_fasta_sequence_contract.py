@@ -58,7 +58,7 @@ def test_gene_evolution_enforces_legacy_mafft_and_generax_contracts():
 def test_gene_evolution_serializes_only_mafft_iterative_refinement():
     core = (Path(__file__).resolve().parents[1] / "core" / "gg_gene_evolution_core.sh").read_text(encoding="utf-8")
     start = core.index('task="In-frame mafft alignment"')
-    end = core.index('task="AMAS for original alignment"', start)
+    end = core.index('task="cdskit stats for original alignment"', start)
     mafft_block = core[start:end]
 
     assert "mafft_threadit=0" in mafft_block

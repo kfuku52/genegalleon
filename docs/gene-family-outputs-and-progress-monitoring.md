@@ -502,7 +502,7 @@ bash workflow/gg_gene_family_archive.sh convert-storage \
 ```
 
 The command reads but never modifies `workspace/output/orthofinder/`.
-Progress-summary wrappers likewise write their AMAS-augmented copy to the
+Progress-summary wrappers likewise write their alignment-statistics-augmented copy to the
 summary output directory; `orthogroup_output_summary.py` accepts
 `--updated-genecount-out` for callers that need an explicit destination and
 otherwise writes beside `--out`, never beside the input gene-count table.
@@ -854,7 +854,7 @@ This writes:
 For orthogroup runs, `orthogroup_summary.tsv` is useful because:
 
 - it adds `GG_ARRAY_TASK_ID`, which is the row index to resubmit,
-- it appends AMAS-derived alignment statistics such as
+- it appends cdskit-derived alignment statistics such as
   `Parsimony_informative_sites_clean`,
 - it adds one `1/0` completion column per visible output subdirectory under
   `workspace/output/orthogroup/`.
@@ -878,8 +878,10 @@ Rows follow the same sorted input-file order used for query2family array
 tasks, so `GG_ARRAY_TASK_ID` can be used directly for resubmission.
 
 The summary adds one `1/0` completion column per visible output subdirectory
-under `workspace/output/query2family/`. It also appends AMAS-derived alignment
+under `workspace/output/query2family/`. It also appends cdskit-derived alignment
 statistics when `amas_original` or `amas_cleaned` outputs are present.
+See [alignment statistics](alignment-statistics.md) for the cdskit migration,
+retained output names, and DNA/protein semantics.
 
 For large query2family runs, inspect late-stage completion markers such as
 `tree_plot`, `stat_branch`, or `stat_tree`.

@@ -35,7 +35,6 @@ use the official source artifact, whose revision is recorded separately.
 | `phytools`, `phangorn`, `igraph` | rkftools imports phytools; phytools imports phangorn; phangorn imports igraph. Annotation plots also load phytools. |
 | `missMDA` | `multispecies_transcriptome_summary.r` still calls `estim_ncpPCA` and `imputePCA`. |
 | ggplot2/ggtree, cowplot, svglite and related plotting packages | The packaged `genegalleon.treevis` API and other R plotting helpers remain active despite migration of some individual figures to NWKIT. |
-| AMAS | Gene-evolution alignment summaries still invoke `AMAS.py summary`; alignment statistics are not a NWKIT tree operation. |
 | NOTUNG, GeneRax and GRAMPA | Reconciliation and polyploidy-related workflow stages remain active. NWKIT rooting and tree conversion do not replace those analyses. |
 
 ## Already removed by earlier migrations
@@ -74,3 +73,17 @@ IQ-TREE 3.1.4 and NWKIT 0.43.15:
   and workflow syntax checks also passed.
 
 Native amd64 and SIF execution were not performed in this local validation.
+
+## Alignment statistics migration
+
+AMAS is removed from both container environments and command inventories. Gene-evolution
+alignment summaries use `cdskit stats --mode alignment` (CDSKIT 0.31.0 or newer),
+with `--seq_type dna` or `aa` according to the input mode. The source build
+continues to follow the moving branch in `container/source_branches.env`.
+
+Existing `run_amas_original` / `run_amas_cleaned` switches, `amas_*` output
+paths, provenance step names, and summary columns are retained for existing
+workspaces and ZIP archives. Provenance records the new statistics engine so
+previous manifests invalidate on the next enabled stage run. Input FASTA is
+still decompressed with seqkit. Protein summaries include `GC_content=NA`,
+allowing the shared summary readers to handle both sequence types.

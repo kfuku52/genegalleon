@@ -174,7 +174,7 @@ def get_amas_stats(
         )
         df.loc[result_df.index, amas_new_cols] = result_df
 
-    print(f"{extension}: {counter} AMAS results were appended.", flush=True)
+    print(f"{extension}: {counter} alignment-statistics results were appended.", flush=True)
     return df
 
 
