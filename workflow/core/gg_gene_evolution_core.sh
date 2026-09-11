@@ -42,6 +42,8 @@ native_ou_seed="${native_ou_seed:-1}"
 native_ou_bootstrap_seed="${native_ou_bootstrap_seed:-2}"
 native_ou_convergence="${native_ou_convergence:-1}"
 native_ou_root_model="${native_ou_root_model:-OUfixedRoot}"
+native_ou_trait_covariance="${native_ou_trait_covariance:-diagonal}"
+native_ou_alpha_model="${native_ou_alpha_model:-trait-specific}"
 native_ou_estimate_measurement_error="${native_ou_estimate_measurement_error:-yes}"
 native_ou_search_strategy="${native_ou_search_strategy:-auto}"
 native_ou_replicate_separator="${native_ou_replicate_separator-_}"
@@ -5103,7 +5105,7 @@ if [[ ${run_native_ou} -eq 1 ]]; then
     --tree "${file_og_dated_tree_analysis}" --traits "${file_og_expression}"
     --output-prefix "native_ou"
   )
-  for native_ou_option in criterion max_shifts calibration_replicates calibration_level bootstrap seed bootstrap_seed root_model estimate_measurement_error search_strategy replicate_separator; do
+  for native_ou_option in criterion max_shifts calibration_replicates calibration_level bootstrap seed bootstrap_seed root_model trait_covariance alpha_model estimate_measurement_error search_strategy replicate_separator; do
     native_ou_variable="native_ou_${native_ou_option}"
     native_ou_cmd+=("--${native_ou_option//_/-}" "${!native_ou_variable}")
     native_ou_provenance_args+=(--parameter "${native_ou_option}=${!native_ou_variable}")

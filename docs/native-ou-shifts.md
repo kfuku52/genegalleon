@@ -8,10 +8,11 @@ This workflow choice does not establish statistical superiority: AICc selects a
 predictive model and does not control false shift detections. See the
 [validation record](native-ou-validation.md) for measured accuracy and limits.
 
-The model shares shift locations across traits and allows separate OU covariance
-parameters per trait. It supports sampling errors, additional estimated
-observation variance, missing coordinates and fixed/stationary roots. It does
-not estimate full cross-trait covariance. Trees must be rooted, binary,
+The model shares shift locations across traits. The default uses separate OU
+covariance parameters per trait; `native_ou_trait_covariance="full"` estimates
+evolutionary covariance across traits, shared across regimes. It supports
+sampling errors, additional estimated observation variance, missing coordinates
+and fixed/stationary roots. Trees must be rooted, binary,
 ultrametric and have positive branches; invalid trees are rejected.
 
 ## Configuration
@@ -27,6 +28,8 @@ native_ou_bootstrap=0
 native_ou_seed=1
 native_ou_bootstrap_seed=2
 native_ou_root_model="OUfixedRoot"
+native_ou_trait_covariance="diagonal"
+native_ou_alpha_model="trait-specific"
 native_ou_estimate_measurement_error="yes"
 native_ou_search_strategy="auto"
 native_ou_replicate_separator="_"
@@ -53,11 +56,59 @@ It does not search shared regimes. Both heuristic strategies are approximate;
 finite budgets and optimizer iterations can limit coverage.
 
 The convergence-capable strategies also support `BIC`, `pBIC`, and `bootstrap`.
+`pBIC` is not available for full covariance or shared-alpha joint fits.
 The last uses the experimental sequential plug-in bootstrap with
 `native_ou_calibration_replicates` draws per test; it is not a proven uniform
 error guarantee. Positive `native_ou_bootstrap` repeats the entire selected
 procedure for stability frequencies, including inner calibration when
 `native_ou_criterion="bootstrap"`.
+
+### Evolutionary covariance across traits
+
+Opt in with a current NWKIT runtime containing the joint-covariance implementation:
+
+```bash
+native_ou_trait_covariance="full"
+native_ou_alpha_model="trait-specific"
+native_ou_criterion="bootstrap"
+```
+
+`shared` estimates one alpha; `trait-specific` estimates one per trait. Full
+covariance adds p(p−1)/2 cross-trait parameters. The model JSON exports
+`joint_covariance.process_tip_covariance` and `diffusion_covariance` in original
+trait/time units. Joint likelihood is reported once, not as additive per-trait
+likelihoods. These choices are included in artifact fingerprints and resume checks.
+
+Keep `native_ou_alpha_model="trait-specific"` as the default: it allows traits
+to have different evolutionary time scales. Use `native_ou_alpha_model="shared"`
+when a common time scale is scientifically justified, or as a sensitivity
+analysis. Alpha sharing and evolutionary covariance are independent choices;
+full covariance does not require shared alpha. For a sensitivity comparison,
+keep the data, covariance structure, observation-error treatment, root model,
+selection criterion and search settings the same, and use separate output
+directories. Compare selected shifts and their stability, not just runtime.
+The small error-and-missingness benchmark compared AIC/BIC searches; it does
+not establish superiority under GeneGalleon's default AICc criterion.
+
+Complete data without known or estimated observation error permit an exact,
+fast covariance profile for shared alpha. GeneGalleon's default replicate
+sampling errors and additional observation-error estimation use the general
+joint fit. Current NWKIT selects dense GLS with analytic gradients for small
+joint inputs and tree-based computation for larger inputs, supporting both
+alpha models. Do not remove those errors merely to enable the separable
+profile. Full covariance does not automatically estimate cross-trait sampling
+errors; replicate-mean variances remain diagonal plug-in estimates.
+
+The full-covariance AICc option uses observed tip vectors as its sample-size
+convention and is a heuristic score, not a calibrated detection test. Bootstrap
+regenerates correlated data and repeats candidate screening and covariance
+fitting. Its finite-sample calibration still requires validation. See the
+[100-tip experiment and implementation proposal](benchmarks/ou-trait-covariance-100tips/README.md);
+the original simplified-model timing does not predict this workflow's runtime.
+
+NWKIT also provides `shift-simulate` to generate trait TSVs and known shift/covariance
+truth from explicit parameters or a completed native model. This is an
+unconditional simulation, distinct from posterior ancestral-state draws.
 
 Former `native_ou_candidate_pool`, `native_ou_refit_budget`,
 `native_ou_screening_budget` and `native_ou_beam_width` entrypoint settings are

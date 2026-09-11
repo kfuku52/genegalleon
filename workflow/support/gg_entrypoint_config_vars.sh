@@ -121,6 +121,8 @@ native_ou_estimate_measurement_error
 native_ou_max_shifts
 native_ou_replicate_separator
 native_ou_root_model
+native_ou_trait_covariance
+native_ou_alpha_model
 native_ou_search_strategy
 native_ou_seed
 pgls_methods

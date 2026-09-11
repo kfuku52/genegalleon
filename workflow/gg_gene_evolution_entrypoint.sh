@@ -282,6 +282,8 @@ native_ou_seed=1 # Calibration random stream.
 native_ou_bootstrap_seed=2 # Independent stability-bootstrap random stream.
 native_ou_convergence=1 # Shared regimes and nested returns; requires auto/exhaustive/lasso.
 native_ou_root_model="OUfixedRoot" # OUfixedRoot|OUrandomRoot.
+native_ou_trait_covariance="diagonal" # diagonal|full; full estimates evolutionary covariance across traits, shared across regimes.
+native_ou_alpha_model="trait-specific" # trait-specific|shared; use shared for a justified common time scale or sensitivity analysis.
 native_ou_estimate_measurement_error="yes" # yes|no; estimate extra observation variance beyond sampling SE.
 native_ou_search_strategy="auto" # auto|exhaustive|lasso|native-path; path requires convergence=0.
 native_ou_replicate_separator="_" # Final suffix delimiter for replicate groups; empty keeps columns separate.

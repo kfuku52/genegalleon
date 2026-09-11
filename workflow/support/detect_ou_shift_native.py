@@ -166,6 +166,8 @@ def main(argv=None):
     parser.add_argument("--convergence", action="store_true")
     parser.add_argument("--estimate-measurement-error", choices=["yes", "no"], default="yes")
     parser.add_argument("--root-model", choices=["OUfixedRoot", "OUrandomRoot"], default="OUfixedRoot")
+    parser.add_argument("--trait-covariance", choices=["diagonal", "full"], default="diagonal")
+    parser.add_argument("--alpha-model", choices=["trait-specific", "shared"], default="trait-specific")
     parser.add_argument("--search-strategy", choices=["auto", "exhaustive", "lasso", "native-path"], default="auto")
     for flag in ("candidate-pool", "refit-budget", "screening-budget", "beam-width"):
         parser.add_argument("--" + flag, type=int, help="Optional override; omission uses the NWKIT default.")
@@ -250,6 +252,8 @@ def main(argv=None):
             "seed",
             "bootstrap_seed",
             "root_model",
+            "trait_covariance",
+            "alpha_model",
             "search_strategy",
             "candidate_pool",
             "refit_budget",

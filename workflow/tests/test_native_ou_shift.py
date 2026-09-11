@@ -111,6 +111,27 @@ def test_failed_adapter_does_not_replace_any_previous_artifact(tmp_path):
     assert not (tmp_path / "result.pdf").exists()
 
 
+@pytest.mark.parametrize("alpha_model", ["trait-specific", "shared"])
+def test_adapter_full_covariance_with_sampling_errors_and_resume(tmp_path, alpha_model):
+    args = inputs(tmp_path)
+    args[args.index("--max-shifts") + 1] = "0"
+    args.extend(["--trait-covariance", "full", "--alpha-model", alpha_model, "--criterion", "AIC"])
+    main(args)
+    model = json.loads((tmp_path / "result.model.json").read_text())
+    assert model["trait_covariance"] == "full"
+    assert model["joint_covariance"]["engine"] == "dense_observed_gls"
+    assert len(model["joint_covariance"]["diffusion_covariance"]) == 2
+    assert model["configuration"]["alpha_model"] == alpha_model
+    assert (tmp_path / "result.pdf").read_bytes().startswith(b"%PDF")
+    resumed = [*args, "--resume-model", str(tmp_path / "result.model.json")]
+    resumed[resumed.index("--output-prefix") + 1] = str(tmp_path / "resumed-full")
+    main(resumed)
+    assert json.loads((tmp_path / "resumed-full.model.json").read_text()) == model
+    resumed[resumed.index("--trait-covariance") + 1] = "diagonal"
+    with pytest.raises(ValueError, match="configuration_sha256"):
+        main(resumed)
+
+
 @pytest.mark.parametrize("use_defaults", [False, True])
 def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(tmp_path, use_defaults):
     inputs(tmp_path)

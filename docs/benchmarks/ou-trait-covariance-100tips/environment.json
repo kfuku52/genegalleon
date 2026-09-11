@@ -1,0 +1,24 @@
+{
+  "numpy": "1.26.4",
+  "scipy": "1.17.1",
+  "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.39",
+  "processor": "aarch64",
+  "seed": 20260911,
+  "tips": 100,
+  "alpha_grid": [
+    0.1,
+    0.3,
+    1.0,
+    3.0,
+    10.0
+  ],
+  "calibration_reps": 2000,
+  "evaluation_reps": 1000,
+  "oracle_absolute_error": 8.526512829121202e-14,
+  "max_rss_kib": 80376,
+  "thread_env": {
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  }
+}
