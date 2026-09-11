@@ -320,7 +320,7 @@ def test_sif_runtime_validation_builds_current_dependency_corrected_runtime():
     sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
     validation = named_step(sif_job, "Validate exact runtime and reuse the shared SIF cache")
 
-    assert "with" not in validation
+    assert validation["with"] == {"validate-3di": "true"}
 
 
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():

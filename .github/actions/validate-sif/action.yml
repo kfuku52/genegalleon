@@ -10,6 +10,9 @@ inputs:
   security-refresh-epoch:
     description: Security epoch used to build image-ref.
     default: ""
+  validate-3di:
+    description: Run the real 3Di predictor integration tests after runtime validation.
+    default: "false"
 runs:
   using: composite
   steps:
@@ -304,6 +307,19 @@ runs:
         GG_RUNTIME_FRESHNESS: "off"
       run: |
         bash workflow/tests/run_in_sif.sh python workflow/tests/run_checks.py runtime
+
+    - name: Run real 3Di integration in SIF
+      if: inputs.validate-3di == 'true'
+      shell: bash
+      env:
+        GG_RUNTIME_FRESHNESS: "off"
+      run: |
+        bash workflow/tests/run_in_sif.sh env \
+          GG_TEST_CSUBST_3DI=1 \
+          CSUBST_CACHE_DIR="${GITHUB_WORKSPACE}/.gg-validation/csubst" \
+          HF_HOME="${GITHUB_WORKSPACE}/.gg-validation/huggingface" \
+          python -m pytest -q --gg-strict-runtime \
+          workflow/tests/test_csubst_3di_runtime.py
 
     - name: Save validated SIF by exact runtime input
       if: >-

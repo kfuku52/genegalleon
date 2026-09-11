@@ -92,5 +92,10 @@ extra-tip filtering. Search/scan outputs are
 compared with direct CSUBST calls. It also tests relocated bundle reuse, offline
 resource use, normal sites reports, candidate sites reports and the 3Di panel.
 
+The GitHub tests workflow also runs this suite inside its AMD64 SIF validation
+job. The shared SIF action enables it through `validate-3di: "true"`; other
+callers keep model downloads opt-in. The model cache is writable under the CI
+workspace and is passed explicitly through the SIF's clean environment.
+
 See the [implementation validation record](reviews/upstream-compatibility-2026-09-11/3di/README.md)
 for the tested runtime and remaining platform limits.

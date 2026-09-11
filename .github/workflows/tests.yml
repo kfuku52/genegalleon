@@ -329,3 +329,5 @@ jobs:
 
       - name: Validate exact runtime and reuse the shared SIF cache
         uses: ./.github/actions/validate-sif
+        with:
+          validate-3di: "true"
