@@ -48,8 +48,10 @@ species_label_regex='^([^_]+)'
 dir_output_active="${tmp_dir}/output"
 og_id=OG0001
 gg_workspace_dir="${tmp_dir}/workspace"
-memory_notung=1
-notung_jar=/unused/notung.jar
+gene_nwkit_identity=test-source
+reconciliation_duplication_cost=1.5
+reconciliation_loss_cost=1
+file_og_root_candidates="${tmp_dir}/candidates.nwk"
 mkdir -p "${dir_output_active}/artifact_provenance"
 
 disable_if_no_input_file() {
@@ -74,10 +76,12 @@ gg_step_start() { :; }
 gg_step_skip() { :; }
 gg_artifact_record() { :; }
 mv_out() { mv -- "$1" "$2"; }
+mv_out_bundle() { while (( $# )); do mv -- "$1" "$2"; shift 2; done; }
 
 nwkit() {
   if [[ "$1" == "root" ]]; then
     printf '%s\n' "$@" > "${nwkit_call_capture}"
+    printf '(A_g,B_g);\n' > "OG0001.root_candidates.nwk"
     printf '(A_g,B_g);\n'
     return
   fi
@@ -138,6 +142,8 @@ def test_reconciliation_rooting_passes_species_inputs_to_nwkit(tmp_path: Path):
         str(tmp_path / "unrooted.nwk"),
         "--species-tree",
         str(tmp_path / "species.nwk"),
+        "--duplication-cost", "1.5", "--loss-cost", "1",
+        "--candidates-out", "OG0001.root_candidates.nwk",
         "--species-parser",
         "taxonomic",
         "--species-regex",

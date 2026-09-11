@@ -130,8 +130,10 @@ run_busco_dupaware_mafft=0 # Align duplicate-aware BUSCO ortholog FASTA files wi
 run_busco_dupaware_trimal=0 # Trim duplicate-aware BUSCO ortholog alignments.
 run_busco_dupaware_iqtree_dna=0 # Build duplicate-aware BUSCO DNA gene trees with IQ-TREE.
 run_busco_dupaware_iqtree_pep=0 # Build duplicate-aware BUSCO protein gene trees with IQ-TREE.
-run_busco_dupaware_notung_root_dna=0 # Root duplicate-aware BUSCO DNA trees with NOTUNG.
-run_busco_dupaware_notung_root_pep=0 # Root duplicate-aware BUSCO protein trees with NOTUNG.
+reconciliation_duplication_cost=1.5 # Duplication weight for species-tree-assisted rooting.
+reconciliation_loss_cost=1 # Implied-loss weight for species-tree-assisted rooting.
+run_busco_dupaware_reconciliation_root_dna=0 # Root duplicate-aware BUSCO DNA trees with NWKIT LCA reconciliation.
+run_busco_dupaware_reconciliation_root_pep=0 # Root duplicate-aware BUSCO protein trees with NWKIT LCA reconciliation.
 run_busco_dupaware_root_dna=0 # Run standard rooting on duplicate-aware BUSCO DNA trees.
 run_busco_dupaware_root_pep=0 # Run standard rooting on duplicate-aware BUSCO protein trees.
 run_busco_dupaware_grampa_dna=0 # Run GRAMPA on rooted duplicate-aware BUSCO DNA trees.
@@ -149,7 +151,6 @@ strictly_single_copy_only=0 # Restrict marker selection to strictly single-copy 
 bootstrap_params="-bb 1000 -bnni" # Extra IQ-TREE bootstrap parameters.
 nucleotide_model="GTR+R4" # IQ-TREE nucleotide substitution model.
 protein_model="LG+R4" # IQ-TREE protein substitution model.
-notung_jar="/usr/local/bin/Notung.jar" # Path to the Notung JAR used for rooting.
 
 # Species-tree parameters
 species_tree_output_storage="${species_tree_output_storage:-${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:-zip}}" # zip|files|raw; ZIP mode archives high-file-count single-copy stage directories between uses.

@@ -1,7 +1,8 @@
 # NWKIT tree and regression integration
 
 GeneGalleon uses NWKIT for dated-tree drawing, MAD/midpoint rooting and root
-comparison, and species-tree regression. NOTUNG still generates candidate roots.
+comparison, reconciliation, and species-tree regression. NWKIT generates all
+optimal duplication/loss root candidates; see [the migration guide](notung-replacement.md).
 
 ## Dated species trees
 
@@ -17,16 +18,17 @@ branch-length scale bar instead of the former R plot's time axis.
 `workflow/support/species_tree_guided_gene_tree_rooting.py` calls `nwkit root`
 for MAD and midpoint roots. Selection keeps this priority:
 
-1. MAD if its root edge matches a NOTUNG candidate.
-2. Midpoint if its root edge matches a NOTUNG candidate.
-3. The first naturally ordered NOTUNG candidate.
-4. MAD when there are no NOTUNG candidates.
+1. MAD if its root edge matches a NWKIT reconciliation candidate.
+2. Midpoint if its root edge matches a NWKIT reconciliation candidate.
+3. The first canonically ordered NWKIT reconciliation candidate.
+
+An empty candidate collection fails explicitly.
 
 Compatibility compares the root edge independently of the position along that
-edge. Candidate tip sets must match. NOTUNG inference is unchanged. Beside the
+edge. Candidate tip sets and unrooted topology must match. Beside the
 existing `.root.txt` log, `.root.tsv` and `.root.pdf` record NWKIT's MAD/midpoint
-comparison; the log records the selected root and NOTUNG compatibility. The
-comparison figure covers MAD and midpoint, not every NOTUNG candidate.
+comparison; the log records the selected root and reconciliation compatibility. The
+comparison figure covers MAD and midpoint, not every optimal candidate.
 
 ## Regression
 
@@ -75,7 +77,7 @@ all family results in temporary directories before replacing the report/tree
 directories. Copy-number regression publishes its three TSVs and two figures as
 one bundle; species-tree PGLS likewise stages all ten outputs. Ordinary write or
 plot failures preserve the previous bundle. Output paths that alias inputs or
-other output members are rejected. A missing NOTUNG candidate directory,
+other output members are rejected. A missing or empty NWKIT reconciliation candidate collection,
 duplicate candidate tip labels, mismatched tip sets, or an unresolved candidate
 root is an error; these conditions do not silently select MAD.
 
@@ -87,11 +89,13 @@ The significant-results table (including a header-only result) and SVG summary
 are required copy-number bundle members, so deleting either invalidates the
 cached stage.
 
-## Validation
+## Historical validation before the NOTUNG replacement
+
+Current replacement coverage is described in [the migration guide](notung-replacement.md).
 
 A review after migration reproduced and fixed an unintended ML setting in the
 GeneGalleon adapter (the previous implementation used REML),
-stale dependency caches, acceptance of malformed NOTUNG candidate inputs,
+stale dependency caches, acceptance of malformed NWKIT reconciliation candidate inputs,
 input/output path collisions, and partial replacement after late failures.
 
 For complete one-row-per-species data, direct comparisons with the previous

@@ -1917,10 +1917,10 @@ def test_gene_evolution_offers_reconciliation_rooting_without_changing_default()
     core = _read_text(CORE_DIR / "gg_gene_evolution_core.sh")
 
     assert 'tree_rooting_method="${tree_rooting_method:-mad}"' in entrypoint
-    assert "mad|reconciliation|notung|midpoint|md" in entrypoint
+    assert "mad|reconciliation|midpoint|md" in entrypoint
     assert '"${tree_rooting_method}" != "reconciliation"' in core
-    assert ('"${tree_rooting_method}" == "notung" || "${tree_rooting_method}" == "reconciliation"') in core
-    assert 'nwkit_root_args+=(--species-tree "${species_tree_pruned}")' in core
+    assert '"${tree_rooting_method}" == "reconciliation"' in core
+    assert 'nwkit_root_args+=(--species-tree "${species_tree_pruned}"' in core
     assert ('"${nwkit_root_method}" == "taxonomy" || "${nwkit_root_method}" == "reconciliation"') in core
     assert ("tree_rooting_method=reconciliation requires species tree: ${species_tree_pruned}") in core
 
@@ -2360,15 +2360,12 @@ def test_orthofinder_replaces_complete_publication_to_remove_stale_outputs():
     )
 
 
-def test_gene_evolution_core_quotes_notung_zip_and_provenances_summary_outputs():
+def test_gene_evolution_core_uses_native_reconciliation_and_provenances_summary_outputs():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
-    assert "if [[ -s ${file_og_notung_reconcil} ]]; then" not in text
-    assert "unzip -qf ${file_og_notung_reconcil}" not in text
     assert "! -s ${file_og_stat_branch}" not in text
     assert "! -s ${file_og_stat_tree}" not in text
-    assert 'if [[ -s "${file_og_notung_reconcil}" ]]; then' in text
-    assert '      "${file_og_notung_reconcil}" \\\n      "${og_id}.notung_reconcile"' in text
+    assert '--reconciliation "${file_og_reconciliation}"' in text
     assert "unzip " not in text
     assert '--output "stat_branch=${file_og_stat_branch}"' in text
     assert '--output "stat_tree=${file_og_stat_tree}"' in text
@@ -2390,7 +2387,7 @@ def test_gene_evolution_summary_freshness_tracks_summary_tables_and_analysis_inp
     assert 'is_output_older_than_inputs "^file_og_" "${file_og_tree_plot}"' not in text
 
 
-def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
+def test_genome_evolution_core_quotes_native_candidates_and_rooting_temp_paths():
     script = CORE_DIR / "gg_genome_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
@@ -2413,10 +2410,6 @@ def test_genome_evolution_core_quotes_notung_unzip_and_rooting_temp_paths():
         assert token not in text, f"Found unquoted genome-evolution temp/rooting token: {token}"
 
     expected_tokens = [
-        'safe_zip_extract.py"',
-        '--archive "${indir}/${infile}"',
-        '--expected-prefix "${busco_id}.notung.root"',
-        '--notung-root-dir "${notung_root_dir}"',
         '2>&1 | tee "${busco_id}.root.txt"',
         'if [[ -s "${busco_id}.root.nwk" ]]; then',
         'run_mafft "${input_alignment_file}" &',
@@ -2485,10 +2478,10 @@ def test_genome_evolution_core_quotes_parallel_function_call_args():
         "run_iqtree_dna ${input_alignment_file} &",
         "busco_iqtree_dna ${input_alignment_file} ${dir_busco_trimal} ${dir_busco_iqtree_dna} &",
         "busco_iqtree_pep ${input_alignment_file} ${dir_busco_trimal} ${dir_busco_iqtree_pep} &",
-        'busco_notung ${infile} ${dir_busco_iqtree_dna} "${dir_busco_notung_dna}" &',
-        'busco_notung ${infile} ${dir_busco_iqtree_pep} "${dir_busco_notung_pep}" &',
-        'busco_species_tree_assisted_gene_tree_rooting ${infile} "${dir_busco_notung_dna}" ${dir_busco_iqtree_dna} "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &',
-        'busco_species_tree_assisted_gene_tree_rooting ${infile} "${dir_busco_notung_pep}" ${dir_busco_iqtree_pep} "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &',
+        'busco_reconciliation ${infile} ${dir_busco_iqtree_dna} "${dir_busco_reconciliation_dna}" &',
+        'busco_reconciliation ${infile} ${dir_busco_iqtree_pep} "${dir_busco_reconciliation_pep}" &',
+        'busco_species_tree_assisted_gene_tree_rooting ${infile} "${dir_busco_reconciliation_dna}" ${dir_busco_iqtree_dna} "${dir_busco_rooted_txt_dna}" "${dir_busco_rooted_nwk_dna}" &',
+        'busco_species_tree_assisted_gene_tree_rooting ${infile} "${dir_busco_reconciliation_pep}" ${dir_busco_iqtree_pep} "${dir_busco_rooted_txt_pep}" "${dir_busco_rooted_nwk_pep}" &',
     ]
     for token in banned_tokens:
         assert token not in text, f"Found unquoted parallel call args: {token}"
@@ -2498,10 +2491,10 @@ def test_genome_evolution_core_quotes_parallel_function_call_args():
         'run_iqtree_dna "${input_alignment_file}" &',
         'busco_iqtree_dna "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_dna}" &',
         'busco_iqtree_pep "${input_alignment_file}" "${dir_busco_trimal}" "${dir_busco_iqtree_pep}" &',
-        'busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &',
-        'busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &',
-        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &',
-        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &',
+        'busco_reconciliation "${infile}" "${dir_busco_iqtree_dna}" "${busco_candidates_stage_dir}" &',
+        'busco_reconciliation "${infile}" "${dir_busco_iqtree_pep}" "${busco_candidates_stage_dir}" &',
+        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_reconciliation_dna}" "${dir_busco_iqtree_dna}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &',
+        'busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_reconciliation_pep}" "${dir_busco_iqtree_pep}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &',
     ]
     for token in expected_tokens:
         assert token in text, f"Missing quoted parallel call args token: {token}"
@@ -2574,13 +2567,12 @@ def test_genome_evolution_core_only_uses_orthofinder_core_tree_when_species_tree
     )
 
 
-def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
+def test_gene_evolution_core_quotes_mapdnds_args():
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     banned_tokens = [
         "--prefix ${og_id} \\",
         "if [[ ! -s ${species_tree_pruned} ]]; then",
-        "java -jar -Xmx${memory_notung}g ${notung_jar} \\",
         "-s ${species_tree_pruned} \\",
         "-g ${file_og_unrooted_tree_analysis} \\",
         "-g ${og_id}.root.nwk \\",
@@ -2593,15 +2585,11 @@ def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
         "--genetic_code ${genetic_code}",
     ]
     for token in banned_tokens:
-        assert token not in text, f"Found unquoted notung/mapdNdS token: {token}"
+        assert token not in text, f"Found unquoted mapdNdS token: {token}"
 
     expected_tokens = [
         '--prefix "${og_id}" \\',
         'if [[ ! -s "${species_tree_pruned}" ]]; then',
-        'java -jar -Xmx${memory_notung}g "${notung_jar}" \\',
-        '-s "${species_tree_pruned}" \\',
-        '-g "${file_og_unrooted_tree_analysis}" \\',
-        '-g "${og_id}.root.nwk" \\',
         '--seqtype "CODON${genetic_code}" \\',
         '--prefix "${og_id}.iqtree2mapdNdS" \\',
         '--iqtree "${og_id}.iqtree2mapdNdS.iqtree" \\',
@@ -2611,7 +2599,7 @@ def test_gene_evolution_core_quotes_notung_and_mapdnds_args():
         '--genetic_code "${genetic_code}"',
     ]
     for token in expected_tokens:
-        assert token in text, f"Missing quoted notung/mapdNdS token: {token}"
+        assert token in text, f"Missing quoted mapdNdS token: {token}"
 
 
 def test_genome_evolution_core_quotes_orthofinder_cleanup_calls():
@@ -2992,7 +2980,7 @@ def test_gene_evolution_core_keeps_generax_ufboot_task_free_of_fast_flag():
     assert "Skipping IQ-TREE --fast because this stage must generate UFBoot replicate trees." in text
 
     ufboot_block_start = text.index('task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"')
-    ufboot_block_end = text.index('task="NOTUNG reconciliation"', ufboot_block_start)
+    ufboot_block_end = text.index('task="NWKIT reconciliation"', ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
     assert "--fast" not in ufboot_block.replace(
         "Skipping IQ-TREE --fast because this stage must generate UFBoot replicate trees.",
@@ -3004,7 +2992,7 @@ def test_gene_evolution_core_maps_unconstrained_bootstrap_splits_to_generax_tree
     script = CORE_DIR / "gg_gene_evolution_core.sh"
     text = _read_text(script)
     ufboot_block_start = text.index('task="Unconstrained IQ-TREE UFBOOT mapped onto GeneRax topology"')
-    ufboot_block_end = text.index('task="NOTUNG reconciliation"', ufboot_block_start)
+    ufboot_block_end = text.index('task="NWKIT reconciliation"', ufboot_block_start)
     ufboot_block = text[ufboot_block_start:ufboot_block_end]
 
     assert "other_iqtree_params=(--ufboot 1000 --bnni --boot-trees --keep-ident)" in ufboot_block

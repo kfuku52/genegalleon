@@ -93,7 +93,7 @@ def test_success_publishes_comparable_history_and_telemetry_failure_is_nonfatal(
 def test_core_parallel_limits_execute_from_current_source(tmp_path):
     source = (ROOT / "core/gg_genome_evolution_core.sh").read_text()
     start = source.index("GG_GENOME_PARALLEL_JOBS=${GG_TASK_CPUS}")
-    end = source.index("memory_notung=", start)
+    end = source.index("iqtree_full_mem_args=", start)
     block = source[start:end]
     # The budget helper is the real sourced implementation; no scientific tool
     # stand-in is used to infer any end-to-end speedup.

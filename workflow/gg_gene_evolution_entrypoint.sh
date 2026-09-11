@@ -134,7 +134,9 @@ run_tree_root=1 # Root gene tree using tree_rooting_method.
 # Reconciliation and dating workflow flags
 run_orthogroup_extraction=0 # Optional query2family refinement; extract from the pre-GeneRax rooted homolog tree, then run GeneRax on the extracted tree and FASTA when enabled.
 run_generax=0 # GeneRax off by default for local/smoke environments without MPI setup.
-run_notung_reconcil=0 # Run NOTUNG for RADTE.
+reconciliation_duplication_cost=1.5 # Duplication weight for species-tree-assisted rooting.
+reconciliation_loss_cost=1 # Implied-loss weight for species-tree-assisted rooting.
+run_reconciliation=0 # Run NWKIT LCA reconciliation for RADTE and event statistics.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with NWKIT; native or IQ-TREE sequence engine.
 
 # Trait and promoter workflow flags
@@ -182,7 +184,7 @@ cdskit_localize_no_model_download=0 # Set 1 to require the localize model to alr
 
 # Phylogeny reconstruction and reconciliation parameters
 iqtree_fast_mode_gt=2000 # Sequence-count threshold above which IQ-TREE runs with --fast and disables UFBOOT for large alignments.
-tree_rooting_method="${tree_rooting_method:-mad}" # mad|reconciliation|notung|midpoint|md; reconciliation uses the pruned species tree with NWKIT, and md maps to NWKIT method "mv".
+tree_rooting_method="${tree_rooting_method:-mad}" # mad|reconciliation|midpoint|md; reconciliation uses the pruned species tree with NWKIT, and md maps to NWKIT method "mv".
 generax_model="GTR+G4" # GeneRax substitution model.
 generax_rec_model="UndatedDL" # "UndatedDTL" or "UndatedDL"; GeneRax reconciliation model, with DL modeling duplication/loss and DTL also allowing transfer events for HGT-oriented analyses.
 radte_max_age=1000 # Upper limit of estimated divergence time in MY.

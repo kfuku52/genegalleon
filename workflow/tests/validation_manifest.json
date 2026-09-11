@@ -15,6 +15,7 @@
     "test_mcmctree_chains.py",
     "test_copy_number_quality_runtime.py",
     "test_nwkit_tree_workflows_runtime.py",
+    "test_nwkit_reconciliation_runtime.py",
     "test_asr_intron_runtime.py",
     "test_native_tree_dating.py",
     "test_native_ou_shift.py",

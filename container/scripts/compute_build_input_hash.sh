@@ -54,9 +54,6 @@ fi
 # Buildx invocation carry the same content-input identity.
 vcs_revision="${GG_BUILD_VCS_REF:-${vcs_ref:-unknown}}"
 version="${GG_BUILD_VERSION:-${gg_version:-unknown}}"
-notung_download_page="${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}"
-notung_download_host_ip="${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}"
-notung_zip_sha256="${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}"
 kfu52_repo_ref="${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}"
 amalgkit_auto="${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}"
 amalgkit_candidates="${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}"
@@ -109,9 +106,6 @@ context_digest="$(
   fi
   printf '%s\n' \
     "security_refresh_epoch=${security_refresh_epoch}" \
-    "notung_page=${notung_download_page}" \
-    "notung_host=${notung_download_host_ip}" \
-    "notung_sha256=${notung_zip_sha256}" \
     "kfu52_ref=${kfu52_repo_ref}" \
     "amalgkit_auto=${amalgkit_auto}" \
     "amalgkit_candidates=${amalgkit_candidates}" \

@@ -220,7 +220,9 @@ run_native_ou
 run_mapdnds
 run_mapdnds_parameter_estimation
 run_maxalign
-run_notung_reconcil
+run_reconciliation
+reconciliation_duplication_cost
+reconciliation_loss_cost
 run_orthogroup_extraction
 run_query_blast
 run_rps_blast
@@ -330,7 +332,6 @@ min_num_gene
 min_num_species
 min_percent_species_coverage
 n_gamma_cats_cafe
-notung_jar
 nucleotide_model
 omark_db_path
 orthogroup_copy_number_max_size_differential
@@ -398,8 +399,10 @@ run_busco_dupaware_mafft
 run_busco_dupaware_trimal
 run_busco_dupaware_iqtree_dna
 run_busco_dupaware_iqtree_pep
-run_busco_dupaware_notung_root_dna
-run_busco_dupaware_notung_root_pep
+reconciliation_duplication_cost
+reconciliation_loss_cost
+run_busco_dupaware_reconciliation_root_dna
+run_busco_dupaware_reconciliation_root_pep
 run_busco_dupaware_root_dna
 run_busco_dupaware_root_pep
 run_busco_dupaware_grampa_dna

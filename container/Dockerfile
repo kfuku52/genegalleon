@@ -21,32 +21,6 @@ COPY container/scripts/install_system_packages.sh /opt/pg/scripts/install_system
 FROM base AS system
 RUN bash /opt/pg/scripts/install_system_packages.sh development
 
-# Isolate the Notung download so Git source revisions in the runtime stage do
-# not invalidate it.
-FROM system AS notung
-
-ARG NOTUNG_DOWNLOAD_PAGE="https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip"
-ARG NOTUNG_DOWNLOAD_HOST_IP="128.2.205.60"
-ARG NOTUNG_ZIP_SHA256="81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6"
-
-COPY container/scripts/resolve_notung_latest.sh /opt/pg/scripts/resolve_notung_latest.sh
-COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
-COPY container/scripts/download_url_with_fallback.sh /opt/pg/scripts/download_url_with_fallback.sh
-COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
-COPY container/scripts/extract_notung_jar.py /opt/pg/scripts/extract_notung_jar.py
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 \
- && chmod +x /opt/pg/scripts/*.sh \
- && notung_url="$(/opt/pg/scripts/resolve_notung_latest.sh "${NOTUNG_DOWNLOAD_PAGE}")" \
- && tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)" \
- && NOTUNG_DOWNLOAD_HOST_IP="${NOTUNG_DOWNLOAD_HOST_IP}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}" \
- && /opt/pg/scripts/verify_sha256.sh "${tmp_zip}" "${NOTUNG_ZIP_SHA256}" \
- && python3 /opt/pg/scripts/extract_notung_jar.py --archive "${tmp_zip}" --destination /Notung.jar \
- && rm -f "${tmp_zip}" \
- && apt-get purge -y python3 \
- && apt-get autoremove -y \
- && rm -rf /var/lib/apt/lists/*
 
 FROM system AS dependencies
 
@@ -257,7 +231,6 @@ ARG TARGETPLATFORM
 COPY --from=dependencies /opt/conda /opt/conda
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 COPY --from=dependencies /opt/pg/logs /opt/pg/logs
-COPY --from=notung /Notung.jar /usr/local/bin/Notung.jar
 COPY container/scripts/install_source_artifacts.sh /opt/pg/scripts/install_source_artifacts.sh
 COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
 COPY container/testdata /opt/pg/testdata
@@ -319,6 +292,7 @@ RUN [[ "${SECURITY_REFRESH_EPOCH}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
 COPY container/spec /opt/pg/spec
 COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
 COPY container/scripts/check_iqtree_library.py /opt/pg/scripts/check_iqtree_library.py
+COPY container/scripts/check_nwkit_reconciliation.py /opt/pg/scripts/check_nwkit_reconciliation.py
 COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
 
 RUN chmod +x /opt/pg/scripts/validate_runtime.sh \

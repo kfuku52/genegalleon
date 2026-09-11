@@ -1,0 +1,267 @@
+{
+  "reference": "NOTUNG 2.9.1.5, --root --allopt / --reconcile, --infertransfers false --speciestag prefix --nolosses; default costs 1.5/1",
+  "seed": 117,
+  "matched": 12,
+  "results": [
+    {
+      "gene_tree": "(A_a_1:1,((A_a_3:1,A_a_0:1):1,A_a_2:1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_0"
+        ],
+        [
+          "A_a_0",
+          "A_a_3"
+        ],
+        [
+          "A_a_1"
+        ],
+        [
+          "A_a_2"
+        ],
+        [
+          "A_a_3"
+        ]
+      ],
+      "fixture": 0,
+      "tips": 4,
+      "optimal_roots": 5,
+      "duplications": 3,
+      "losses": 0
+    },
+    {
+      "gene_tree": "(((B_b_3:1,C_c_0:1):1,(A_a_2:1,C_c_4:1):1):1,D_d_1:1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_2",
+          "C_c_4"
+        ],
+        [
+          "B_b_3",
+          "C_c_0"
+        ],
+        [
+          "D_d_1"
+        ]
+      ],
+      "fixture": 1,
+      "tips": 5,
+      "optimal_roots": 3,
+      "duplications": 2,
+      "losses": 6
+    },
+    {
+      "gene_tree": "((B_b_0:1,(B_b_2:1,D_d_5:1):1):1,(D_d_4:1,(B_b_3:1,D_d_1:1):1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "B_b_0"
+        ],
+        [
+          "B_b_0",
+          "B_b_2",
+          "D_d_5"
+        ],
+        [
+          "B_b_2",
+          "D_d_5"
+        ],
+        [
+          "B_b_3",
+          "D_d_1"
+        ],
+        [
+          "D_d_4"
+        ]
+      ],
+      "fixture": 2,
+      "tips": 6,
+      "optimal_roots": 5,
+      "duplications": 3,
+      "losses": 8
+    },
+    {
+      "gene_tree": "((((C_c_1:1,C_c_3:1):1,(C_c_4:1,D_d_2:1):1):1,C_c_5:1):1,(D_d_6:1,C_c_0:1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "C_c_0",
+          "C_c_5",
+          "D_d_6"
+        ],
+        [
+          "C_c_0",
+          "D_d_6"
+        ],
+        [
+          "C_c_1",
+          "C_c_3"
+        ],
+        [
+          "C_c_4",
+          "D_d_2"
+        ],
+        [
+          "C_c_5"
+        ]
+      ],
+      "fixture": 3,
+      "tips": 7,
+      "optimal_roots": 5,
+      "duplications": 4,
+      "losses": 2
+    },
+    {
+      "gene_tree": "((A_a_0:1,C_c_1:1):1,(A_a_3:1,D_d_2:1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_0",
+          "C_c_1"
+        ]
+      ],
+      "fixture": 4,
+      "tips": 4,
+      "optimal_roots": 1,
+      "duplications": 1,
+      "losses": 4
+    },
+    {
+      "gene_tree": "(((D_d_1:1,C_c_4:1):1,(A_a_3:1,C_c_0:1):1):1,A_a_2:1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_3",
+          "C_c_0"
+        ]
+      ],
+      "fixture": 5,
+      "tips": 5,
+      "optimal_roots": 1,
+      "duplications": 2,
+      "losses": 5
+    },
+    {
+      "gene_tree": "((B_b_0:1,(((A_a_5:1,D_d_4:1):1,D_d_2:1):1,C_c_1:1):1):1,B_b_3:1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_5",
+          "D_d_2",
+          "D_d_4"
+        ],
+        [
+          "A_a_5",
+          "D_d_4"
+        ],
+        [
+          "D_d_2"
+        ]
+      ],
+      "fixture": 6,
+      "tips": 6,
+      "optimal_roots": 3,
+      "duplications": 4,
+      "losses": 10
+    },
+    {
+      "gene_tree": "(((((B_b_0:1,A_a_3:1):1,A_a_5:1):1,A_a_6:1):1,(C_c_4:1,C_c_1:1):1):1,B_b_2:1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "C_c_1",
+          "C_c_4"
+        ]
+      ],
+      "fixture": 7,
+      "tips": 7,
+      "optimal_roots": 1,
+      "duplications": 4,
+      "losses": 5
+    },
+    {
+      "gene_tree": "(D_d_3:1,((A_a_0:1,B_b_2:1):1,A_a_1:1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "D_d_3"
+        ]
+      ],
+      "fixture": 8,
+      "tips": 4,
+      "optimal_roots": 1,
+      "duplications": 1,
+      "losses": 2
+    },
+    {
+      "gene_tree": "((C_c_2:1,D_d_3:1):1,((D_d_4:1,B_b_0:1):1,D_d_1:1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "B_b_0"
+        ]
+      ],
+      "fixture": 9,
+      "tips": 5,
+      "optimal_roots": 1,
+      "duplications": 2,
+      "losses": 5
+    },
+    {
+      "gene_tree": "(C_c_0:1,((C_c_2:1,(D_d_4:1,B_b_3:1):1):1,(A_a_1:1,C_c_5:1):1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_1",
+          "C_c_0",
+          "C_c_5"
+        ],
+        [
+          "A_a_1",
+          "C_c_5"
+        ],
+        [
+          "B_b_3",
+          "D_d_4"
+        ],
+        [
+          "C_c_0"
+        ],
+        [
+          "C_c_2"
+        ]
+      ],
+      "fixture": 10,
+      "tips": 6,
+      "optimal_roots": 5,
+      "duplications": 3,
+      "losses": 8
+    },
+    {
+      "gene_tree": "(((A_a_1:1,(D_d_3:1,C_c_6:1):1):1,C_c_2:1):1,(D_d_5:1,(A_a_0:1,A_a_4:1):1):1):1;",
+      "species_tree": "((A_a:1,B_b:1):1,(C_c:1,D_d:1):1);",
+      "optimal_root_splits": [
+        [
+          "A_a_0",
+          "A_a_4",
+          "D_d_5"
+        ],
+        [
+          "A_a_1",
+          "C_c_6",
+          "D_d_3"
+        ],
+        [
+          "C_c_2"
+        ]
+      ],
+      "fixture": 11,
+      "tips": 7,
+      "optimal_roots": 3,
+      "duplications": 3,
+      "losses": 5
+    }
+  ]
+}

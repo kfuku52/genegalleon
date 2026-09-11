@@ -44,9 +44,6 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     build_target="@@BUILD_TARGET@@"
     export GG_BUILD_JOBS="@@GG_BUILD_JOBS@@"
     security_refresh_epoch="@@SECURITY_REFRESH_EPOCH@@"
-    notung_download_page="@@NOTUNG_DOWNLOAD_PAGE@@"
-    notung_download_host_ip="@@NOTUNG_DOWNLOAD_HOST_IP@@"
-    notung_zip_sha256="@@NOTUNG_ZIP_SHA256@@"
     kfu52_repo_ref="@@KFU52_REPO_REF@@"
     kfu52_amalgkit_auto_select_ref="@@KFU52_AMALGKIT_AUTO_SELECT_REF@@"
     kfu52_amalgkit_branch_candidates="@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@"
@@ -174,14 +171,6 @@ export PATH=/usr/local/bin:${PATH}
 EOF_BASHRC
     cp /home/.bashrc /root/.bashrc
 
-    notung_url="$("/opt/pg/scripts/resolve_notung_latest.sh" "${notung_download_page}")"
-    tmp_zip="$(mktemp /tmp/notung.XXXXXX.zip)"
-    NOTUNG_DOWNLOAD_HOST_IP="${notung_download_host_ip}" /opt/pg/scripts/download_url_with_fallback.sh "${notung_url}" "${tmp_zip}"
-    /opt/pg/scripts/verify_sha256.sh "${tmp_zip}" "${notung_zip_sha256}"
-    python /opt/pg/scripts/extract_notung_jar.py \
-        --archive "${tmp_zip}" \
-        --destination /usr/local/bin/Notung.jar
-    rm -f "${tmp_zip}"
 
     if [[ "${build_target}" == "runtime" ]]; then
         bash /opt/pg/scripts/install_system_packages.sh prune-development

@@ -235,15 +235,10 @@ Runtime profile highlights in the current container scaffold:
 - single conda runtime env: `base` (`biotools`/`r` split envs are obsolete),
 - `iqtree` is conda-pinned to `3.*`,
 - `pigz` is included for fast compression/decompression,
-- `Notung.jar` is installed during image build from the checksum-verified configured official Notung 2.9 ZIP,
-- `NOTUNG_DOWNLOAD_PAGE` can still point at the legacy Notung HTML download
-  page when you want build-time ZIP auto-resolution; any override must also set
-  the matching `NOTUNG_ZIP_SHA256`, and
-  `NOTUNG_DOWNLOAD_HOST_IP` can be used to override the fallback IP for the
-  official `amberjack.compbio.cs.cmu.edu` host,
+- NWKIT handles D/L rooting and reconciliation; no NOTUNG JAR is installed,
 - Git-sourced programs, including `BUSCO`, `paml`, `iqtree3`, `kftools`, and
   `rkftools`, follow their configured moving branches; the
   effective per-build revisions are recorded in
   `/opt/pg/logs/source_revisions.tsv`,
 - GitHub/GitLab source fetches prefer tarball/archive downloads and fall back to `git` retry logic when archive fetches fail,
-- downloaded `Notung`, `BioPP/testnh`, and `CAFE5` archives are SHA-256 verified before extraction.
+- downloaded `BioPP/testnh` and `CAFE5` archives are SHA-256 verified before extraction.

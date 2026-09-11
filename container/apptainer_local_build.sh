@@ -19,9 +19,6 @@ NATIVE_BUILD_KEEP_WORKDIR=${NATIVE_BUILD_KEEP_WORKDIR:-0} # 0 | 1
 BUILD_TARGET=${BUILD_TARGET:-runtime} # runtime | development
 GG_BUILD_JOBS=${GG_BUILD_JOBS:-2}
 
-NOTUNG_DOWNLOAD_PAGE=${NOTUNG_DOWNLOAD_PAGE:-https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip}
-NOTUNG_DOWNLOAD_HOST_IP=${NOTUNG_DOWNLOAD_HOST_IP:-128.2.205.60}
-NOTUNG_ZIP_SHA256=${NOTUNG_ZIP_SHA256:-81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6}
 KFU52_REPO_REF=${KFU52_REPO_REF:-${GG_SOURCE_NWKIT_REPO_REF}}
 KFU52_AMALGKIT_AUTO_SELECT_REF=${KFU52_AMALGKIT_AUTO_SELECT_REF:-0}
 KFU52_AMALGKIT_BRANCH_CANDIDATES=${KFU52_AMALGKIT_BRANCH_CANDIDATES:-master,kfdevel,devel}
@@ -112,9 +109,6 @@ render_definition() {
     -e "s|@@SECURITY_REFRESH_EPOCH@@|$(escape_sed_replacement "${SECURITY_REFRESH_EPOCH}")|g" \
     -e "s|@@LOCAL_IMAGE_REF@@|$(escape_sed_replacement "${IMAGE}")|g" \
     -e "s|@@LOCAL_IMAGE_TAG@@|$(escape_sed_replacement "${TAG}")|g" \
-    -e "s|@@NOTUNG_DOWNLOAD_PAGE@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_PAGE}")|g" \
-    -e "s|@@NOTUNG_DOWNLOAD_HOST_IP@@|$(escape_sed_replacement "${NOTUNG_DOWNLOAD_HOST_IP}")|g" \
-    -e "s|@@NOTUNG_ZIP_SHA256@@|$(escape_sed_replacement "${NOTUNG_ZIP_SHA256}")|g" \
     -e "s|@@KFU52_REPO_REF@@|$(escape_sed_replacement "${KFU52_REPO_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_AUTO_SELECT_REF@@|$(escape_sed_replacement "${KFU52_AMALGKIT_AUTO_SELECT_REF}")|g" \
     -e "s|@@KFU52_AMALGKIT_BRANCH_CANDIDATES@@|$(escape_sed_replacement "${KFU52_AMALGKIT_BRANCH_CANDIDATES}")|g" \

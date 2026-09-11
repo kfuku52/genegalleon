@@ -26,12 +26,12 @@ def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine
         "node\tlower\tupper\tlevel\tkind\tsource\nRoot\t8\t12\t0.95\tconfidence\texternal-study\n"
     )
     (tmp_path / "species_map.tsv").write_text("leaf_name\tspecies_label\nA_1\tA\nA_2\tA\nB_1\tB\nB_2\tB\n")
-    directory = tmp_path / "OG0000001.notung_reconcile"
-    directory.mkdir()
-    (directory / "OG0000001.root.nwk.reconciled").write_text(
-        "((A_1:0.12,A_2:0.15)nA:0.17,(B_1:0.13,B_2:0.11)nB:0.18)Root;"
-    )
-    (directory / "OG0000001.root.nwk.reconciled.parsable.txt").write_text("#D nA A Root\n#D nB B Root\n")
+    from nwkit.reconcile import build_reconciliation_table
+    from nwkit.util import read_tree
+    gene = read_tree(str(tmp_path / "gene.nhx"), "auto", True)
+    species = read_tree(str(tmp_path / "species.nwk"), "auto", True)
+    build_reconciliation_table(gene, species, {name: name.split("_")[0] for name in gene.leaf_names()},
+                               tree_id="OG0000001").to_csv(tmp_path / "reconciliation.tsv", sep="\t", index=False)
     q, pi = codon_matrix(model, np.ones((4, 1), dtype=np.uint64), np.ones(1), 2, 0.5, "fq")
     rng = np.random.default_rng(91)
     root = rng.choice(61, 150, p=pi)
@@ -81,7 +81,8 @@ def _fixture(tmp_path, model, route, bad_codon=False, use_defaults=False, engine
         species_tree_pruned=str(tmp_path / "species.nwk"),
         species_tree_generax=str(tmp_path / "generax.nwk"),
         file_og_generax_nhx=str(tmp_path / "gene.nhx"),
-        file_og_notung_reconcil="unused.zip",
+        file_og_reconciliation=str(tmp_path / "reconciliation.tsv"),
+        file_og_rooted_tree_analysis=str(tmp_path / "gene.nhx"),
         file_og_unrooted_tree_analysis=str(tmp_path / "gene.nhx"),
         file_og_trimmed_aln_analysis=str(tmp_path / "alignment.fa"),
         file_og_dated_tree=str(tmp_path / "out/dated_tree/OG0000001_dated.nwk"),
@@ -137,7 +138,7 @@ gg_artifact_record() { printf '%s\\n' "$@" > recorded-provenance.txt; }
     return result
 
 
-@pytest.mark.parametrize("model,route", [("gy94", "generax"), ("ecmk07", "generax"), ("ecmrest", "notung")])
+@pytest.mark.parametrize("model,route", [("gy94", "generax"), ("ecmk07", "generax"), ("ecmrest", "lca")])
 def test_native_dating_stage_publishes_complete_codon_bundle(tmp_path, model, route):
     result = _fixture(tmp_path, model, route)
     assert result.returncode == 0, result.stdout + result.stderr

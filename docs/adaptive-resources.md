@@ -44,7 +44,7 @@ additional scheduler cores by changing an environment variable.
   Search parallelism continues to use the full allocated CPU budget.
 * `genome_parallel_jobs=auto`: per-gene concurrency is bounded by both allocated
   cores and tool memory divided by `genome_parallel_memory_gb_per_job` (default 2).
-  The per-worker IQ-TREE/Notung memory budget uses this concurrency.
+  The per-worker IQ-TREE memory budget uses this concurrency.
 * Explicit values remain available and cannot exceed the allocation or the
   corresponding estimated memory cap. BUSCO retains its existing independent
   concurrency/memory controls.

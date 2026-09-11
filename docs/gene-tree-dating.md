@@ -140,7 +140,9 @@ benchmark reports do not describe this official CLI path.
 
 ## Reconciliation, results and reruns
 
-GeneRax NHX annotations or Notung parsable reconciliation identify species events.
+GeneRax NHX annotations or NWKIT LCA reconciliation TSVs identify species events.
+Without GeneRax, enable `run_reconciliation=1` before dating; the stage writes
+`reconciliation/<family>_reconciliation.tsv` from the same active rooted gene tree (after query-family extraction).
 GeneRax's species-tree node names are mapped by descendant clades onto the dated
 species tree, requiring identical rooted topology. GeneRax substitution branches
 do not supply species ages. Transfer events fail explicitly.

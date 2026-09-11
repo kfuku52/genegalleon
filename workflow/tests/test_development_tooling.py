@@ -185,7 +185,7 @@ def test_build_hash_ignores_import_and_editor_artifacts_but_tracks_copied_inputs
     imported = _run("python3", "-c", "import importlib.util, sys; sys.dont_write_bytecode=False; "
                     "s=importlib.util.spec_from_file_location('extract',sys.argv[1]); "
                     "s.loader.exec_module(importlib.util.module_from_spec(s))",
-                    str(root / "container/scripts/extract_notung_jar.py"))
+                    str(root / "container/scripts/list_build_inputs.py"))
     assert imported.returncode == 0, imported.stderr
     assert list((root / "container/scripts/__pycache__").glob("*.pyc"))
     (root / "container/env/.DS_Store").write_text("finder metadata")
@@ -660,16 +660,12 @@ def test_genome_annotation_core_can_load_helpers_without_running_the_workflow():
     assert completed.returncode == 0, completed.stderr
 
 
-def test_notung_download_and_container_license_are_verified():
+def test_container_removes_notung_and_keeps_license_metadata():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     definition = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
-    expected_sha = "81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6"
-
-    assert f'ARG NOTUNG_ZIP_SHA256="{expected_sha}"' in dockerfile
-    assert 'verify_sha256.sh "${tmp_zip}" "${NOTUNG_ZIP_SHA256}"' in dockerfile
+    assert "notung" not in dockerfile.lower()
+    assert "notung" not in definition.lower()
     assert 'org.opencontainers.image.licenses="MIT"' in dockerfile
-    assert "@@NOTUNG_ZIP_SHA256@@" in definition
-    assert 'verify_sha256.sh "${tmp_zip}" "${notung_zip_sha256}"' in definition
     assert "org.opencontainers.image.licenses MIT" in definition
 
 

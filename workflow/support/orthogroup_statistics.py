@@ -28,6 +28,29 @@ from species_labeling import extract_species_label, scientific_name_from_label, 
 from species_tree_pgls import summarize_for_stat_tree as summarize_species_pgls_for_stat_tree
 
 
+def read_reconciliation_stats(path):
+    table = pandas.read_csv(path, sep="\t")
+    required = {"gene_clade_id", "event_type", "event_source", "event_status", "mapping_status", "implied_losses"}
+    if not required.issubset(table.columns):
+        raise ValueError(f"Reconciliation table lacks columns: {sorted(required - set(table.columns))}")
+    if table.empty or table["gene_clade_id"].duplicated().any():
+        raise ValueError("Reconciliation table must contain unique gene clades.")
+    leaves = table["event_type"].eq("leaf")
+    valid_status = table["event_status"].eq("resolved") | (leaves & table["event_status"].eq("not-applicable"))
+    if (not table["event_source"].eq("lca").all() or not valid_status.all()
+            or not table["mapping_status"].eq("mapped").all()
+            or not table["event_type"].isin(["leaf", "speciation", "duplication"]).all()):
+        raise ValueError("Reconciliation statistics require resolved LCA events.")
+    losses = pandas.to_numeric(table["implied_losses"], errors="raise")
+    if losses.isna().any() or (losses < 0).any() or (losses % 1 != 0).any():
+        raise ValueError("Reconciliation losses must be nonnegative integers.")
+    return {
+        "reconciliation_num_dup": int(table["event_type"].eq("duplication").sum()),
+        "reconciliation_num_speciation": int(table["event_type"].eq("speciation").sum()),
+        "reconciliation_num_loss": int(losses.sum()),
+    }
+
+
 def read_dating_stats(path):
     """Retain the actual estimator and the interpretation of native intervals."""
     with open(path, encoding="utf-8") as handle:
@@ -358,12 +381,8 @@ def build_arg_parser():
     parser.add_argument("--rooted_tree", metavar="PATH", default="", type=str, help="Path used by --rooted_tree.")
     parser.add_argument("--rooting_log", metavar="PATH", default="", type=str, help="Path used by --rooting_log.")
     parser.add_argument("--generax_nhx", metavar="PATH", default="", type=str, help="Path used by --generax_nhx.")
-    parser.add_argument(
-        "--notung_root_log", metavar="PATH", default="", type=str, help="Path used by --notung_root_log."
-    )
-    parser.add_argument(
-        "--notung_reconcil_stats", metavar="PATH", default="", type=str, help="Path used by --notung_reconcil_stats."
-    )
+    parser.add_argument("--reconciliation", metavar="PATH", default="", type=str,
+                        help="NWKIT LCA reconciliation TSV for event/loss counts.")
     parser.add_argument("--dated_tree", metavar="PATH", default="", type=str, help="Path used by --dated_tree.")
     parser.add_argument("--dated_log", metavar="PATH", default="", type=str, help="Path used by --dated_log.")
 
@@ -1743,12 +1762,8 @@ def main():
     if os.path.exists(params["rooting_log"]):
         tree_tmp = kfog.get_root_stats(params["rooting_log"])
         tree_info.update(tree_tmp)
-    if os.path.exists(params["notung_root_log"]):
-        tree_tmp = kfog.get_notung_root_stats(params["notung_root_log"])
-        tree_info.update(tree_tmp)
-    if os.path.exists(params["notung_reconcil_stats"]):
-        tree_tmp = kfog.get_notung_reconcil_stats(params["notung_reconcil_stats"])
-        tree_info.update(tree_tmp)
+    if os.path.exists(params["reconciliation"]):
+        tree_info.update(read_reconciliation_stats(params["reconciliation"]))
     if os.path.exists(params["iqtree_model"]):
         tree_tmp = kfog.get_iqtree_model_stats(params["iqtree_model"])
         tree_info.update(tree_tmp)

@@ -183,7 +183,7 @@ the `run_busco_dupaware_*` flags exposed in
 
 - `run_busco_dupaware_extract_fasta`
 - `run_busco_dupaware_iqtree_dna`
-- `run_busco_dupaware_notung_root_pep`
+- `run_busco_dupaware_reconciliation_root_pep`
 - `run_busco_dupaware_grampa_dna`
 
 All duplicate-aware BUSCO substeps default to `0`. `run_orthogroup_grampa`
@@ -279,7 +279,7 @@ bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
 Gene-tree rooting keeps MAD as the default. The selectable
-`tree_rooting_method` values are `mad`, `reconciliation`, `notung`, `midpoint`,
+`tree_rooting_method` values are `mad`, `reconciliation`, `midpoint`,
 and `md` (`md` maps to NWKIT's `mv` method). `reconciliation` uses NWKIT's
 duplication/loss-assisted rooting with the pruned species tree and the configured
 species-label parser, regular expression, or mapping TSV. It does not invoke
@@ -533,3 +533,6 @@ The legacy `q_rate_enrichment_global` is replaced by the explicit
 
 See [integration validation](reviews/2026-09-10-csubst-scan-integration.md) for
 execution coverage and the remaining analytical-model limitations.
+
+For retired NOTUNG switches, candidate outputs, and reconciliation statistics,
+see [NOTUNG replacement](notung-replacement.md).

@@ -1,5 +1,9 @@
 # HGT Detection Research Notes for GeneGalleon
 
+> Current implementation: NOTUNG has been replaced by NWKIT duplication/loss
+> reconciliation. This still does not infer horizontal transfer; the NOTUNG
+> observations below describe the earlier configuration.
+
 Date: 2026-03-17
 
 ## Executive Summary

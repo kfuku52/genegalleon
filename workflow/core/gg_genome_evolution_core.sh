@@ -30,6 +30,8 @@ annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
 species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
+reconciliation_duplication_cost="${reconciliation_duplication_cost:-1.5}"
+reconciliation_loss_cost="${reconciliation_loss_cost:-1}"
 omark_db_path="${omark_db_path:-auto}"
 species_tree_output_storage=$(printf '%s' "${species_tree_output_storage:-${GG_COMMON_SPECIES_TREE_OUTPUT_STORAGE:-zip}}" | tr '[:upper:]' '[:lower:]')
 species_tree_zip_compression=$(printf '%s' "${species_tree_zip_compression:-${GG_COMMON_SPECIES_TREE_ZIP_COMPRESSION:-adaptive}}" | tr '[:upper:]' '[:lower:]')
@@ -57,8 +59,8 @@ run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
 run_busco_dupaware_trimal="${run_busco_dupaware_trimal:-0}"
 run_busco_dupaware_iqtree_dna="${run_busco_dupaware_iqtree_dna:-0}"
 run_busco_dupaware_iqtree_pep="${run_busco_dupaware_iqtree_pep:-0}"
-run_busco_dupaware_notung_root_dna="${run_busco_dupaware_notung_root_dna:-0}"
-run_busco_dupaware_notung_root_pep="${run_busco_dupaware_notung_root_pep:-0}"
+run_busco_dupaware_reconciliation_root_dna="${run_busco_dupaware_reconciliation_root_dna:-0}"
+run_busco_dupaware_reconciliation_root_pep="${run_busco_dupaware_reconciliation_root_pep:-0}"
 run_busco_dupaware_root_dna="${run_busco_dupaware_root_dna:-0}"
 run_busco_dupaware_root_pep="${run_busco_dupaware_root_pep:-0}"
 run_busco_dupaware_grampa_dna="${run_busco_dupaware_grampa_dna:-0}"
@@ -1999,43 +2001,24 @@ copy_root_hog_equivalent_from_orthogroups() {
   } > "${target_readme}" || return 1
 }
 
-busco_notung() {
-  infile=$1
-  indir=$2
-  outdir=$3
-  busco_id=${infile%%.*}
-  outfile="${outdir}/${busco_id}.busco.notung.root.zip"
-  if [[ -s "${outfile}" ]]; then
-    return 0
+busco_reconciliation() {
+  local infile=$1 indir=$2 outdir=$3
+  local busco_id=${infile%%.*}
+  local work
+  work=$(mktemp -d "./${busco_id}.reconciliation.XXXXXX") || return $?
+  local args=(root --method reconciliation --infile "${indir}/${infile}"
+    --species-tree "${file_dated_species_tree}" --species-parser "${species_label_parser}"
+    --duplication-cost "${reconciliation_duplication_cost}" --loss-cost "${reconciliation_loss_cost}"
+    --outfile "${work}/selected.nwk" --candidates-out "${work}/roots.nwk")
+  if [[ -n "${species_label_regex}" ]]; then
+    args+=(--species-regex "${species_label_regex}")
   fi
-  if [[ -e "./${busco_id}.notung.root" ]]; then
-    rm -rf -- "./${busco_id}.notung.root"
+  if [[ -n "${species_label_map_tsv}" ]]; then
+    args+=(--species-map-tsv "${species_label_map_tsv}")
   fi
-  java -jar -Xmx${memory_notung}g ${notung_jar} \
-    -s "${file_dated_species_tree}" \
-    -g "${indir}/${infile}" \
-    --root \
-    --infertransfers "false" \
-    --treeoutput newick \
-    --log \
-    --treestats \
-    --events \
-    --parsable \
-    --speciestag prefix \
-    --allopt \
-    --maxtrees 1000 \
-    --nolosses \
-    --outputdir "./${busco_id}.notung.root"
-  if [[ -e "${busco_id}.notung.root/${busco_id}.busco.nwk.rooting.0" ]]; then
-    rm -f -- "${busco_id}.busco.notung.root.zip"
-    zip -rq "${busco_id}.busco.notung.root.zip" "${busco_id}.notung.root"
-    python "${gg_support_dir}/atomic_zip_publish.py" \
-      --source "${busco_id}.busco.notung.root.zip" \
-      --destination "${outfile}" \
-      --expected-prefix "${busco_id}.notung.root" \
-      --remove-source
-    rm -rf -- "./${busco_id}.notung.root"
-  fi
+  nwkit "${args[@]}" || return $?
+  mv_out "${work}/roots.nwk" "${outdir}/${busco_id}.busco.roots.nwk" || return $?
+  rm -rf -- "${work}"
 }
 
 busco_species_tree_assisted_gene_tree_rooting() {
@@ -2053,18 +2036,10 @@ busco_species_tree_assisted_gene_tree_rooting() {
   if [[ -s "${outfile_txt}" && -s "${outfile_nwk}" && -s "${outfile_comparison}" && -s "${outfile_plot}" ]]; then
     return 0
   fi
-  echo "Start NWKIT root selection against NOTUNG candidates: ${busco_id}"
-  if [[ -e "./${busco_id}.notung.root" ]]; then
-    rm -rf -- "./${busco_id}.notung.root"
-  fi
-  local notung_root_dir=""
-  notung_root_dir=$(python "${gg_support_dir}/safe_zip_extract.py" \
-    --archive "${indir}/${infile}" \
-    --destination-root . \
-    --expected-prefix "${busco_id}.notung.root") || return 1
+  echo "Start NWKIT root selection against reconciliation candidates: ${busco_id}"
 
   python "${gg_support_dir}/species_tree_guided_gene_tree_rooting.py" \
-    --notung-root-dir "${notung_root_dir}" \
+    --candidate-trees "${indir}/${infile}" \
     --in-tree "${intree}" \
     --out-tree "${busco_id}.root.nwk" \
     --comparison-table "${busco_id}.root.tsv" \
@@ -2078,7 +2053,6 @@ busco_species_tree_assisted_gene_tree_rooting() {
       "${busco_id}.root.nwk" "${outfile_nwk}" \
       "${busco_id}.root.tsv" "${outfile_comparison}" \
       "${busco_id}.root.pdf" "${outfile_plot}" || return $?
-    rm -rf -- "${busco_id}.notung.root"
   fi
 }
 
@@ -2437,8 +2411,8 @@ dir_busco_mafft="${dir_genome_evolution}/busco_mafft"
 dir_busco_trimal="${dir_genome_evolution}/busco_trimal"
 dir_busco_iqtree_dna="${dir_genome_evolution}/busco_iqtree_dna"
 dir_busco_iqtree_pep="${dir_genome_evolution}/busco_iqtree_pep"
-dir_busco_notung_dna="${dir_genome_evolution}/busco_notung_dna"
-dir_busco_notung_pep="${dir_genome_evolution}/busco_notung_pep"
+dir_busco_reconciliation_dna="${dir_genome_evolution}/busco_reconciliation_dna"
+dir_busco_reconciliation_pep="${dir_genome_evolution}/busco_reconciliation_pep"
 dir_busco_rooted_txt_dna="${dir_genome_evolution}/busco_rooted_txt_dna"
 dir_busco_rooted_txt_pep="${dir_genome_evolution}/busco_rooted_txt_pep"
 dir_busco_rooted_nwk_dna="${dir_genome_evolution}/busco_rooted_nwk_dna"
@@ -2640,10 +2614,10 @@ elif [[ "${input_sequence_mode}" == "protein" ]]; then
     run_convert_tree_format=0
     run_plot_mcmctreer=0
   fi
-  if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 || ${run_busco_dupaware_notung_root_dna} -eq 1 || ${run_busco_dupaware_root_dna} -eq 1 || ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
-    echo "Disabling DNA-only duplicate-aware BUSCO genome-evolution steps in protein mode: run_busco_dupaware_iqtree_dna, run_busco_dupaware_notung_root_dna, run_busco_dupaware_root_dna, run_busco_dupaware_grampa_dna"
+  if [[ ${run_busco_dupaware_iqtree_dna} -eq 1 || ${run_busco_dupaware_reconciliation_root_dna} -eq 1 || ${run_busco_dupaware_root_dna} -eq 1 || ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
+    echo "Disabling DNA-only duplicate-aware BUSCO genome-evolution steps in protein mode: run_busco_dupaware_iqtree_dna, run_busco_dupaware_reconciliation_root_dna, run_busco_dupaware_root_dna, run_busco_dupaware_grampa_dna"
     run_busco_dupaware_iqtree_dna=0
-    run_busco_dupaware_notung_root_dna=0
+    run_busco_dupaware_reconciliation_root_dna=0
     run_busco_dupaware_root_dna=0
     run_busco_dupaware_grampa_dna=0
   fi
@@ -2678,7 +2652,6 @@ fi
 genome_parallel_memory_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${genome_parallel_memory_gb_per_job}") || exit 2
 [[ ${genome_parallel_memory_cap} -lt ${GG_GENOME_PARALLEL_JOBS} ]] && GG_GENOME_PARALLEL_JOBS=${genome_parallel_memory_cap}
 echo "Genome per-gene parallelism: jobs=${GG_GENOME_PARALLEL_JOBS}, tool_memory=${GG_MEM_TOOL_GB}G"
-memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")
 memory_iqtree_parallel=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 "${GG_GENOME_PARALLEL_JOBS}")
 iqtree_full_mem_args=(-mem "${GG_MEM_TOOL_GB}G")
 iqtree_parallel_mem_args=(-mem "${memory_iqtree_parallel}G")
@@ -4979,18 +4952,6 @@ species_tree_archive_managed_directories
 trap - EXIT
 
 # Genome evolution
-if [[ ${run_busco_dupaware_notung_root_dna} -eq 1 || ${run_busco_dupaware_notung_root_pep} -eq 1 || ${run_busco_dupaware_root_dna} -eq 1 || ${run_busco_dupaware_root_pep} -eq 1 || ${run_busco_dupaware_grampa_dna} -eq 1 || ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
-  if [[ ! -s "${notung_jar}" ]]; then
-    echo "Notung jar was not found: ${notung_jar}"
-    echo "Disabling NOTUNG-dependent duplicate-aware BUSCO tasks: run_busco_dupaware_notung_root_dna, run_busco_dupaware_notung_root_pep, run_busco_dupaware_root_dna, run_busco_dupaware_root_pep, run_busco_dupaware_grampa_dna, run_busco_dupaware_grampa_pep"
-    run_busco_dupaware_notung_root_dna=0
-    run_busco_dupaware_notung_root_pep=0
-    run_busco_dupaware_root_dna=0
-    run_busco_dupaware_root_pep=0
-    run_busco_dupaware_grampa_dna=0
-    run_busco_dupaware_grampa_pep=0
-  fi
-fi
 
 if [[ ${run_orthogroup_grampa} -eq 1 ]]; then
   if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
@@ -5427,68 +5388,76 @@ else
 fi
 
 
-task="NOTUNG rooting of duplicate-containing BUSCO DNA trees"
-disable_if_no_input_file "run_busco_dupaware_notung_root_dna" "${file_dated_species_tree}"
-busco_notung_dna_needs_update=0
-gg_artifact_contract_init busco_notung_dna_provenance_args "genome_evolution_busco_notung_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.notung_dna.json"
-busco_notung_dna_provenance_args+=(
+task="NWKIT reconciliation rooting of duplicate-containing BUSCO DNA trees"
+disable_if_no_input_file "run_busco_dupaware_reconciliation_root_dna" "${file_dated_species_tree}"
+busco_reconciliation_dna_needs_update=0
+gg_artifact_contract_init busco_reconciliation_dna_provenance_args "genome_evolution_busco_reconciliation_dna" "all_buscos" "${genome_evolution_provenance_dir}/busco.reconciliation_dna.json"
+busco_reconciliation_dna_provenance_args+=(
   --input "gene_tree_directory=${dir_busco_iqtree_dna}"
   --input "species_tree=${file_dated_species_tree}"
-  --output "notung_directory=${dir_busco_notung_dna}"
-  --parameter "infer_transfers=false"
-  --parameter "species_tag=prefix"
-  --parameter "all_opt=1"
-  --parameter "max_trees=1000"
-  --parameter "no_losses=1"
+  --output "reconciliation_directory=${dir_busco_reconciliation_dna}"
+  --parameter "engine=nwkit-lca-all-optimal-roots-v1"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
+  --parameter "duplication_cost=${reconciliation_duplication_cost}"
+  --parameter "loss_cost=${reconciliation_loss_cost}"
 )
-gg_artifact_prepare_stage busco_notung_dna_needs_update run_busco_dupaware_notung_root_dna "${busco_notung_dna_provenance_args[@]}" || exit $?
-if [[ ${busco_notung_dna_needs_update} -eq 1 && ${run_busco_dupaware_notung_root_dna} -eq 1 ]]; then
+if [[ -n "${species_label_map_tsv}" ]]; then
+  busco_reconciliation_dna_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
+gg_artifact_prepare_stage busco_reconciliation_dna_needs_update run_busco_dupaware_reconciliation_root_dna "${busco_reconciliation_dna_provenance_args[@]}" || exit $?
+if [[ ${busco_reconciliation_dna_needs_update} -eq 1 && ${run_busco_dupaware_reconciliation_root_dna} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -rf -- "${dir_busco_notung_dna}"
-  ensure_dir "${dir_busco_notung_dna}"
+  busco_candidates_stage_dir=$(mktemp -d "./tmp.busco-candidates-dna.XXXXXX") || exit $?
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_dna}")
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
-    busco_notung "${infile}" "${dir_busco_iqtree_dna}" "${dir_busco_notung_dna}" &
+    busco_reconciliation "${infile}" "${dir_busco_iqtree_dna}" "${busco_candidates_stage_dir}" &
     gg_background_register "$!"
   done
-  wait_for_background_jobs
-  gg_artifact_record "${busco_notung_dna_provenance_args[@]}"
+  wait_for_background_jobs || exit $?
+  mv_out_bundle "${busco_candidates_stage_dir}" "${dir_busco_reconciliation_dna}" || exit $?
+  gg_artifact_record "${busco_reconciliation_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
 
-task="NOTUNG rooting of duplicate-containing BUSCO protein trees"
-disable_if_no_input_file "run_busco_dupaware_notung_root_pep" "${file_dated_species_tree}"
-busco_notung_pep_needs_update=0
-gg_artifact_contract_init busco_notung_pep_provenance_args "genome_evolution_busco_notung_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.notung_pep.json"
-busco_notung_pep_provenance_args+=(
+task="NWKIT reconciliation rooting of duplicate-containing BUSCO protein trees"
+disable_if_no_input_file "run_busco_dupaware_reconciliation_root_pep" "${file_dated_species_tree}"
+busco_reconciliation_pep_needs_update=0
+gg_artifact_contract_init busco_reconciliation_pep_provenance_args "genome_evolution_busco_reconciliation_pep" "all_buscos" "${genome_evolution_provenance_dir}/busco.reconciliation_pep.json"
+busco_reconciliation_pep_provenance_args+=(
   --input "gene_tree_directory=${dir_busco_iqtree_pep}"
   --input "species_tree=${file_dated_species_tree}"
-  --output "notung_directory=${dir_busco_notung_pep}"
-  --parameter "infer_transfers=false"
-  --parameter "species_tag=prefix"
-  --parameter "all_opt=1"
-  --parameter "max_trees=1000"
-  --parameter "no_losses=1"
+  --output "reconciliation_directory=${dir_busco_reconciliation_pep}"
+  --parameter "engine=nwkit-lca-all-optimal-roots-v1"
+  --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
+  --parameter "duplication_cost=${reconciliation_duplication_cost}"
+  --parameter "loss_cost=${reconciliation_loss_cost}"
 )
-gg_artifact_prepare_stage busco_notung_pep_needs_update run_busco_dupaware_notung_root_pep "${busco_notung_pep_provenance_args[@]}" || exit $?
-if [[ ${busco_notung_pep_needs_update} -eq 1 && ${run_busco_dupaware_notung_root_pep} -eq 1 ]]; then
+if [[ -n "${species_label_map_tsv}" ]]; then
+  busco_reconciliation_pep_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
+gg_artifact_prepare_stage busco_reconciliation_pep_needs_update run_busco_dupaware_reconciliation_root_pep "${busco_reconciliation_pep_provenance_args[@]}" || exit $?
+if [[ ${busco_reconciliation_pep_needs_update} -eq 1 && ${run_busco_dupaware_reconciliation_root_pep} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -rf -- "${dir_busco_notung_pep}"
-  ensure_dir "${dir_busco_notung_pep}"
+  busco_candidates_stage_dir=$(mktemp -d "./tmp.busco-candidates-pep.XXXXXX") || exit $?
 
   infiles=()
   mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_iqtree_pep}")
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
-    busco_notung "${infile}" "${dir_busco_iqtree_pep}" "${dir_busco_notung_pep}" &
+    busco_reconciliation "${infile}" "${dir_busco_iqtree_pep}" "${busco_candidates_stage_dir}" &
     gg_background_register "$!"
   done
-  wait_for_background_jobs
-  gg_artifact_record "${busco_notung_pep_provenance_args[@]}"
+  wait_for_background_jobs || exit $?
+  mv_out_bundle "${busco_candidates_stage_dir}" "${dir_busco_reconciliation_pep}" || exit $?
+  gg_artifact_record "${busco_reconciliation_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -5502,7 +5471,7 @@ busco_root_dna_provenance_args+=(
   --input "adapter=${gg_support_dir}/species_tree_guided_gene_tree_rooting.py"
   --parameter "engine=nwkit_root_rootcompare"
   --parameter "nwkit_identity=${genome_nwkit_identity}"
-  --input "notung_directory=${dir_busco_notung_dna}"
+  --input "reconciliation_directory=${dir_busco_reconciliation_dna}"
   --input "unrooted_tree_directory=${dir_busco_iqtree_dna}"
   --input "species_tree=${file_dated_species_tree}"
   --output "rooting_report_directory=${dir_busco_rooted_txt_dna}"
@@ -5517,10 +5486,10 @@ if [[ ${busco_root_dna_needs_update} -eq 1 && ${run_busco_dupaware_root_dna} -eq
   ensure_dir "${busco_root_stage_dir}/trees"
 
   infiles=()
-  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_dna}")
+  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_reconciliation_dna}" "*.roots.nwk")
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
-    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_dna}" "${dir_busco_iqtree_dna}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &
+    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_reconciliation_dna}" "${dir_busco_iqtree_dna}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &
     gg_background_register "$!"
   done
   wait_for_background_jobs || exit $?
@@ -5541,7 +5510,7 @@ busco_root_pep_provenance_args+=(
   --input "adapter=${gg_support_dir}/species_tree_guided_gene_tree_rooting.py"
   --parameter "engine=nwkit_root_rootcompare"
   --parameter "nwkit_identity=${genome_nwkit_identity}"
-  --input "notung_directory=${dir_busco_notung_pep}"
+  --input "reconciliation_directory=${dir_busco_reconciliation_pep}"
   --input "unrooted_tree_directory=${dir_busco_iqtree_pep}"
   --input "species_tree=${file_dated_species_tree}"
   --output "rooting_report_directory=${dir_busco_rooted_txt_pep}"
@@ -5556,10 +5525,10 @@ if [[ ${busco_root_pep_needs_update} -eq 1 && ${run_busco_dupaware_root_pep} -eq
   ensure_dir "${busco_root_stage_dir}/trees"
 
   infiles=()
-  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_notung_pep}")
+  mapfile -t infiles < <(gg_find_file_basenames "${dir_busco_reconciliation_pep}" "*.roots.nwk")
   for infile in "${infiles[@]}"; do
     wait_until_jobn_le "${GG_GENOME_PARALLEL_JOBS}"
-    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_notung_pep}" "${dir_busco_iqtree_pep}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &
+    busco_species_tree_assisted_gene_tree_rooting "${infile}" "${dir_busco_reconciliation_pep}" "${dir_busco_iqtree_pep}" "${busco_root_stage_dir}/reports" "${busco_root_stage_dir}/trees" &
     gg_background_register "$!"
   done
   wait_for_background_jobs || exit $?

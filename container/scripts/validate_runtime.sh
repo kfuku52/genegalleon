@@ -110,7 +110,11 @@ printf 'tier\tenv\tcommand\tfound\n' > "${report_file}"
 
 required_failed=0
 library_required=0
+nwkit_required=0
 while IFS=$'\t' read -r env_name command_name; do
+  if [[ "${command_name}" == "nwkit" ]]; then
+    nwkit_required=1
+  fi
   if [[ "${command_name}" == "nwkit-iqtree-worker" ]]; then
     library_required=1
   fi
@@ -118,6 +122,18 @@ while IFS=$'\t' read -r env_name command_name; do
     required_failed=1
   fi
 done < <(read_tsv "${required_file}")
+
+if [[ "${nwkit_required}" -eq 1 ]]; then
+  nwkit_log="$(dirname "${report_file}")/nwkit_reconciliation_validation.txt"
+  if micromamba run -n base python "$(dirname "${BASH_SOURCE[0]}")/check_nwkit_reconciliation.py" > "${nwkit_log}" 2>&1; then
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "NWKIT reconciliation exports" "1" >> "${report_file}"
+  else
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "NWKIT reconciliation exports" "0" >> "${report_file}"
+    echo "[validate_runtime] NWKIT lacks required optimal-root or LCA-loss exports; update NWKIT."
+    cat "${nwkit_log}"
+    required_failed=1
+  fi
+fi
 
 if [[ "${library_required}" -eq 1 ]]; then
   library_log="$(dirname "${report_file}")/iqtree3_library_validation.json"

@@ -18,7 +18,6 @@ Expected manual post-build steps:
 - Populate /usr/local/db/Pfam_LE
 - Populate /usr/local/db/uniprot_sprot.pep (and DIAMOND DB if required)
 - Populate /usr/local/db/jaspar
-- Verify Notung jar exists at /usr/local/bin/Notung.jar
 - Validate key runtime commands (hyphy, iqtree, mapnh) in each architecture image
 
 Optional package installation logs:

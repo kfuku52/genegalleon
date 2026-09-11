@@ -26,7 +26,7 @@ echo "$GG_MEM_TOTAL_GB"
     assert int(result.stdout.strip()) == expected
 
 
-def test_notung_workers_share_the_memory_divisor():
+def test_genome_workers_respect_the_parallel_limit():
     core = (ROOT / 'core/gg_genome_evolution_core.sh').read_text()
     for line in core.splitlines():
         if 'wait_until_jobn_le' in line:
@@ -36,9 +36,9 @@ def test_notung_workers_share_the_memory_divisor():
     result = subprocess.run(['bash', '-c', f'''source "{ROOT}/support/gg_util.sh"
 GG_TASK_CPUS=32; GG_MEM_TOOL_GB=28; genome_parallel_jobs=2; genome_parallel_memory_gb_per_job=2
 {block}
-echo "budget=$((GG_GENOME_PARALLEL_JOBS * memory_notung))"
+echo "jobs=${{GG_GENOME_PARALLEL_JOBS}}"
 '''], text=True, capture_output=True, check=True)
-    assert 'budget=28' in result.stdout
+    assert 'jobs=2' in result.stdout
 
 
 @pytest.mark.parametrize('profile', [{}, [], {'workflow': 'gg_genome_evolution'}, None])

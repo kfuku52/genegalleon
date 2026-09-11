@@ -92,7 +92,7 @@ Default source behavior:
 - build wrappers resolve every branch once per build in parallel and pass the resulting commits into Docker; resolution fails before building if any source is unavailable
 - `/opt/pg/logs/source_revisions.tsv` records the effective source revision in both Docker and native Apptainer images
 - `BUSCO`, `paml` and official `iqtree3` follow their upstream `master` branches too
-- `Notung`, `BioPP/testnh`, and `CAFE5` release archives are verified with SHA-256 before extraction
+- `BioPP/testnh` and `CAFE5` release archives are verified with SHA-256 before extraction
 - GitHub/GitLab source fetches normally prefer archives; IQ-TREE uses recursive Git checkout so its submodules match the selected revision
 
 Override rules:
@@ -272,23 +272,11 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   - `/usr/local/db/Pfam_LE`
   - `/usr/local/db/uniprot_sprot.pep` (and derived DIAMOND DB if needed)
   - `/usr/local/db/jaspar`
-- `Notung` is downloaded at build time from the official Notung 2.9 source
-  and installed as:
-  - `/usr/local/bin/Notung.jar`
+- NWKIT handles gene-tree D/L rooting and reconciliation; NOTUNG is not installed.
 - `BUSCO`, `paml` and official `iqtree3` are fetched from the current tips of their configured branches by default.
 - `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfFractBias`, `kftools`, and `rkftools`
   install from the moving branches in `source_branches.env` by default.
-- `Notung`, `BioPP/testnh`, and `CAFE5` archives are checksum-verified during build.
-- The configured source is a checksum-verified upstream ZIP:
-  - `NOTUNG_DOWNLOAD_PAGE=https://amberjack.compbio.cs.cmu.edu/Notung/Notung-2.9.1.5.zip`
-- The corresponding default checksum is:
-  - `NOTUNG_ZIP_SHA256=81cbff670ab4d2416c01eba503f81c454aa5a724b0982373dd17510113882ae6`
-- `NOTUNG_DOWNLOAD_PAGE` may also point at the legacy download page if you
-  want the build to resolve another `Notung-2.9.*.zip`; set its matching
-  `NOTUNG_ZIP_SHA256` at the same time or verification will stop the build.
-- If the official `amberjack.compbio.cs.cmu.edu` hostname has a transient DNS
-  issue during build, override the fallback IP if needed:
-  - `NOTUNG_DOWNLOAD_HOST_IP=128.2.205.60`
+- `BioPP/testnh` and `CAFE5` archives are checksum-verified during build.
 
 ## Suggested validation per architecture
 

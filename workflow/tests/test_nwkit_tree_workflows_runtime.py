@@ -1,10 +1,9 @@
-"""Real NWKIT rendering and NOTUNG-preserving root selection in the GG runtime."""
+"""Real NWKIT rendering and reconciliation-guided root selection in the GG runtime."""
 
 import json
 import shlex
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -46,20 +45,18 @@ def test_dated_tree_plot_accepts_public_unit_nhx_and_figtree(tmp_path, text):
 
 
 @pytest.mark.parametrize("candidate_method,reason", [
-    (None, "mad_without_notung_candidates"),
-    ("mad", "mad_compatible_with_notung"),
-    ("midpoint", "midpoint_compatible_with_notung"),
-    ("outgroup", "first_notung_candidate"),
+    ("mad", "mad_compatible_with_reconciliation"),
+    ("midpoint", "midpoint_compatible_with_reconciliation"),
+    ("outgroup", "first_reconciliation_candidate"),
 ])
-def test_nwkit_root_selection_keeps_notung_priority_and_branch_lengths(tmp_path, candidate_method, reason):
+def test_nwkit_root_selection_keeps_reconciliation_priority_and_branch_lengths(tmp_path, candidate_method, reason):
     from nwkit.clade_mapping import projected_root_split
     from nwkit.util import read_tree
 
     source = tmp_path / "tree.nwk"
     source.write_text("((A:7.8,B:0.949):0.244,(C:7.8,D:1.439):2.87);")
-    candidates = tmp_path / "notung"
-    candidates.mkdir()
-    candidate = candidates / "tree.nwk.rooting.0"
+    candidates = tmp_path / "candidates.nwk"
+    candidate = candidates
     if candidate_method:
         args = ["nwkit", "root", "--method", candidate_method, "--infile", source, "--outfile", candidate]
         if candidate_method == "outgroup":
@@ -68,7 +65,7 @@ def test_nwkit_root_selection_keeps_notung_priority_and_branch_lengths(tmp_path,
         assert result.returncode == 0, result.stderr
     output, table, plot = tmp_path / "selected.nwk", tmp_path / "roots.tsv", tmp_path / "roots.pdf"
     result = run(sys.executable, SUPPORT / "species_tree_guided_gene_tree_rooting.py",
-                 "--in-tree", source, "--notung-root-dir", candidates, "--out-tree", output,
+                 "--in-tree", source, "--candidate-trees", candidates, "--out-tree", output,
                  "--comparison-table", table, "--comparison-plot", plot)
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"Selected root: {reason}" in result.stdout
@@ -98,11 +95,10 @@ def test_root_core_stage_invalidates_engine_and_preserves_previous_bundle_on_fai
     (inputs / "OG1.busco.nwk").write_text(original)
     archives = tmp_path / "archives"
     archives.mkdir()
-    archive = archives / "OG1.busco.notung.root.zip"
+    archive = archives / "OG1.busco.roots.nwk"
 
     def write_candidate(text):
-        with zipfile.ZipFile(archive, "w") as bundle:
-            bundle.writestr("OG1.notung.root/OG1.busco.nwk.rooting.0", text)
+        archive.write_text(text)
 
     write_candidate(original)
     output = tmp_path / "output"
@@ -116,7 +112,7 @@ genome_evolution_provenance_dir="${{gg_workspace_output_dir}}/provenance"
 genome_nwkit_identity="${{1:-test-engine-one}}"
 file_dated_species_tree={shlex.quote(str(inputs / "OG1.busco.nwk"))}
 dir_busco_iqtree_{mode}={shlex.quote(str(inputs))}
-dir_busco_notung_{mode}={shlex.quote(str(archives))}
+dir_busco_reconciliation_{mode}={shlex.quote(str(archives))}
 dir_busco_rooted_txt_{mode}="${{gg_workspace_output_dir}}/reports"
 dir_busco_rooted_nwk_{mode}="${{gg_workspace_output_dir}}/trees"
 run_busco_dupaware_root_{mode}=1
@@ -151,26 +147,24 @@ gg_step_skip() {{ echo skip >> stage-runs.txt; }}
     assert manifest.read_bytes() == saved_manifest
 
 
-@pytest.mark.parametrize("invalid", ["missing_directory", "file_as_directory", "duplicate_tips", "different_tips", "unresolved_root"])
+@pytest.mark.parametrize("invalid", ["missing_file", "empty_file", "duplicate_tips", "different_tips", "unresolved_root"])
 def test_root_selection_rejects_bad_candidates_and_preserves_outputs(tmp_path, invalid):
     source = tmp_path / "tree.nwk"
     source.write_text("((A:7.8,B:0.949):0.244,(C:7.8,D:1.439):2.87);")
-    candidates = tmp_path / "notung"
-    if invalid == "file_as_directory":
-        candidates.write_text("not a directory")
-    elif invalid != "missing_directory":
-        candidates.mkdir()
+    candidates = tmp_path / "candidates.nwk"
+    if invalid != "missing_file":
         texts = {
+            "empty_file": "",
             "duplicate_tips": "((A:1,A:1,B:1):1,(C:1,D:1):1);",
             "different_tips": "((A:1,B:1):1,(C:1,WrongTip:1):1);",
             "unresolved_root": "(A:1,B:1,C:1,D:1);",
         }
-        (candidates / "tree.nwk.rooting.0").write_text(texts[invalid])
+        candidates.write_text(texts[invalid])
     outputs = [tmp_path / name for name in ("selected.nwk", "roots.tsv", "roots.pdf")]
     for path in outputs:
         path.write_bytes(b"previous output")
     result = run(sys.executable, SUPPORT / "species_tree_guided_gene_tree_rooting.py",
-                 "--in-tree", source, "--notung-root-dir", candidates, "--out-tree", outputs[0],
+                 "--in-tree", source, "--candidate-trees", candidates, "--out-tree", outputs[0],
                  "--comparison-table", outputs[1], "--comparison-plot", outputs[2])
     assert result.returncode != 0, result.stdout + result.stderr
     assert all(path.read_bytes() == b"previous output" for path in outputs)
@@ -230,30 +224,20 @@ mv() {{
     assert paths[0].read_bytes() == paths[1].read_bytes()
 
 
-def test_root_adapter_consumes_real_notung_candidates(tmp_path):
-    from nwkit.util import read_tree
-
-    jar = Path("/usr/local/bin/Notung.jar")
-    assert jar.is_file(), "Run this test in the GeneGalleon container."
-    species = tmp_path / "species.nwk"
-    species.write_text("((Genus_alpha:1,Genus_beta:1):1,(Genus_gamma:1,Genus_delta:1):1);")
+def test_root_adapter_consumes_real_nwkit_candidates(tmp_path):
     source = tmp_path / "gene.nwk"
-    source.write_text("((Genus_alpha_g1:0.2,Genus_gamma_g1:0.8):0.3,((Genus_alpha_g2:0.4,Genus_beta_g1:0.1):0.4,Genus_delta_g1:0.2):0.5);")
-    candidate_dir = tmp_path / "candidates"
-    result = run("java", "-jar", "-Xmx1g", jar, "-s", species, "-g", source,
-                 "--root", "--infertransfers", "false", "--treeoutput", "newick", "--log", "--treestats",
-                 "--events", "--parsable", "--speciestag", "prefix", "--allopt", "--maxtrees", "1000",
-                 "--nolosses", "--outputdir", candidate_dir)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (candidate_dir / "gene.nwk.rooting.0").is_file()
+    source.write_text("((A_a_1:1,B_b_1:1):1,(A_a_2:1,B_b_2:1):1);")
+    species = tmp_path / "species.nwk"
+    species.write_text("(A_a:1,B_b:1);")
+    candidates = tmp_path / "candidates.nwk"
+    result = run("nwkit", "root", "--method", "reconciliation", "--infile", source,
+                 "--species-tree", species, "--outfile", tmp_path / "first.nwk",
+                 "--candidates-out", candidates)
+    assert result.returncode == 0, result.stderr
     output, table, plot = tmp_path / "selected.nwk", tmp_path / "roots.tsv", tmp_path / "roots.pdf"
     result = run(sys.executable, SUPPORT / "species_tree_guided_gene_tree_rooting.py",
-                 "--in-tree", source, "--notung-root-dir", candidate_dir, "--out-tree", output,
+                 "--in-tree", source, "--candidate-trees", candidates, "--out-tree", output,
                  "--comparison-table", table, "--comparison-plot", plot)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Selected root: mad_compatible_with_notung" in result.stdout
-    before, after = read_tree(str(source), "auto", True), read_tree(str(output), "auto", True)
-    for a in before.leaf_names():
-        for b in before.leaf_names():
-            assert before.get_distance(a, b) == pytest.approx(after.get_distance(a, b))
+    assert "Selected root: mad_compatible_with_reconciliation" in result.stdout
     assert plot.read_bytes().startswith(b"%PDF-")

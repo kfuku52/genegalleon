@@ -19,6 +19,9 @@ input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds
 species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"
 species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"
 species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"
+reconciliation_duplication_cost="${reconciliation_duplication_cost:-1.5}"
+reconciliation_loss_cost="${reconciliation_loss_cost:-1}"
+run_reconciliation="${run_reconciliation:-0}"
 cdskit_localize_model="${cdskit_localize_model:-targeting5-perox-deeploc21-et-v1}"
 cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
 cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
@@ -1379,9 +1382,9 @@ if [[ "${mode_gene_evolution}" != "orthogroup" && "${mode_gene_evolution}" != "q
   echo 'mode_gene_evolution must be either "orthogroup" or "query2family". Exiting.'
   exit 1
 fi
-if [[ "${tree_rooting_method}" != "notung" && "${tree_rooting_method}" != "midpoint" && "${tree_rooting_method}" != "mad" && "${tree_rooting_method}" != "md" && "${tree_rooting_method}" != "reconciliation" ]]; then
+if [[ "${tree_rooting_method}" != "midpoint" && "${tree_rooting_method}" != "mad" && "${tree_rooting_method}" != "md" && "${tree_rooting_method}" != "reconciliation" ]]; then
   echo "Invalid tree_rooting_method: ${tree_rooting_method}"
-  echo "tree_rooting_method must be one of mad, reconciliation, notung, midpoint, md. Exiting."
+  echo "tree_rooting_method must be one of mad, reconciliation, midpoint, md. Exiting."
   exit 1
 fi
 if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
@@ -1718,7 +1721,6 @@ ensure_dir "${file_og_parameters_dir}"
 if [[ -n "${radte_species_intervals_tsv}" && "${radte_species_intervals_tsv}" != /* ]]; then
   radte_species_intervals_tsv="${gg_workspace_dir}/${radte_species_intervals_tsv}"
 fi
-notung_jar="/usr/local/bin/Notung.jar"
 dir_rpsblastdb="/usr/local/db/Pfam_LE"
 
 # Directory PATHs
@@ -1751,7 +1753,8 @@ file_og_generax_nwk="${dir_output_active}/generax_nwk/${og_id}_generax.nwk"
 file_og_generax_xml="${dir_output_active}/generax_xml/${og_id}_generax.xml"
 file_og_rooted_tree="${dir_output_active}/rooted_tree/${og_id}_root.nwk"
 file_og_rooted_log="${dir_output_active}/rooted_tree_log/${og_id}_root.txt"
-file_og_notung_reconcil="${dir_output_active}/notung_reconcile/${og_id}_notung_reconcile.zip"
+file_og_reconciliation="${dir_output_active}/reconciliation/${og_id}_reconciliation.tsv"
+file_og_root_candidates="${dir_output_active}/root_candidates/${og_id}_roots.nwk"
 file_og_dated_tree="${dir_output_active}/dated_tree/${og_id}_dated.nwk"
 file_og_radte_prefix="${dir_output_active}/dated_tree_native/${og_id}_radte"
 file_og_dated_tree_log="${dir_output_active}/dated_tree_log/${og_id}_dated.log.txt"
@@ -1863,7 +1866,6 @@ fi
 prepare_species_tree_pruned || true
 set_default_analysis_files
 
-memory_notung=$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 1 4)
 
 echo "Checking parameter conflicts..."
 if [[ ${run_trimal} -eq 1 && ${run_clipkit} -eq 1 ]]; then
@@ -3335,6 +3337,33 @@ else
   gg_step_skip "${task}"
 fi
 
+gene_nwkit_identity=$(python - <<'PY_NWKIT_IDENTITY'
+import hashlib
+import importlib.metadata
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.find_spec("nwkit")
+if spec is None or spec.origin is None:
+    print("unavailable")
+else:
+    try:
+        version = importlib.metadata.version("nwkit")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unpackaged"
+    root = Path(spec.origin).parent
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(str(path.relative_to(root)).encode() + b"\0")
+        digest.update(path.read_bytes())
+    print(f"nwkit {version} source_sha256={digest.hexdigest()}")
+PY_NWKIT_IDENTITY
+) || exit $?
+if [[ -s /opt/pg/logs/source_revisions.tsv ]]; then
+  gene_nwkit_revision=$(awk -F '\t' '$1 == "nwkit" { print $2; exit }' /opt/pg/logs/source_revisions.tsv)
+  gene_nwkit_identity+=" ${gene_nwkit_revision}"
+fi
+
 task="Gene tree rooting"
 disable_if_no_input_file "run_tree_root" "${file_og_unrooted_tree_analysis}"
 # gg-cache-guard: audited - required input validation, not artifact reuse.
@@ -3353,12 +3382,18 @@ tree_root_provenance_args=(
   --output "rooted_tree=${file_og_rooted_tree}"
   --output "rooting_log=${file_og_rooted_log}"
   --parameter "method=${tree_rooting_method}"
+  --parameter "nwkit_identity=${gene_nwkit_identity}"
   --parameter "species_parser=${species_label_parser}"
   --parameter "species_regex=${species_label_regex}"
   --parameter "species_map_present=$([[ -n "${species_label_map_tsv}" ]] && echo 1 || echo 0)"
 )
-if [[ "${tree_rooting_method}" == "notung" || "${tree_rooting_method}" == "reconciliation" ]]; then
-  tree_root_provenance_args+=(--input "species_tree=${species_tree_pruned}")
+if [[ "${tree_rooting_method}" == "reconciliation" ]]; then
+  tree_root_provenance_args+=(
+    --input "species_tree=${species_tree_pruned}"
+    --output "root_candidates=${file_og_root_candidates}"
+    --parameter "duplication_cost=${reconciliation_duplication_cost}"
+    --parameter "loss_cost=${reconciliation_loss_cost}"
+  )
 fi
 if [[ -n "${species_label_map_tsv}" ]]; then
   tree_root_provenance_args+=(--input "species_map=${species_label_map_tsv}")
@@ -3367,80 +3402,38 @@ gg_artifact_prepare_stage tree_root_needs_update run_tree_root "${tree_root_prov
 if [[ ${tree_root_needs_update} -eq 1 && ${run_tree_root} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if [[ "${tree_rooting_method}" == "notung" ]]; then
-    if [[ ! -s "${species_tree_pruned}" ]]; then
-      echo "tree_rooting_method=notung requires species tree: ${species_tree_pruned}"
-      exit 1
-    fi
-    if [[ -e "./${og_id}.notung.root" ]]; then
-      rm -rf -- "./${og_id}.notung.root"
-    fi
-
-    echo "memory_notung: ${memory_notung}"
-    java -jar -Xmx${memory_notung}g "${notung_jar}" \
-      -s "${species_tree_pruned}" \
-      -g "${file_og_unrooted_tree_analysis}" \
-      --root \
-      --infertransfers "false" \
-      --treeoutput newick \
-      --log \
-      --treestats \
-      --events \
-      --parsable \
-      --speciestag prefix \
-      --allopt \
-      --maxtrees 1000 \
-      --nolosses \
-      --outputdir "./${og_id}.notung.root"
-
-    rooted_candidates=()
-    mapfile -t rooted_candidates < <(find "./${og_id}.notung.root" -maxdepth 1 -type f -name "${og_id}.iqtree.nwk.rooting.*" | sort -V)
-    selected_rooted_tree=""
-    for candidate in "${rooted_candidates[@]}"; do
-      if [[ "${candidate}" =~ \.rooting\.[0-9]+$ ]]; then
-        selected_rooted_tree="${candidate}"
-        break
-      fi
-    done
-    if [[ -z "${selected_rooted_tree}" ]]; then
-      echo "NOTUNG did not generate rooted-tree candidates in ./${og_id}.notung.root"
-      exit 1
-    fi
-
-    nwkit label --target intnode --force yes --infile "${selected_rooted_tree}" --outfile "${og_id}.root.tmp.nwk"
-    mv_out "${og_id}.root.tmp.nwk" "${file_og_rooted_tree}"
-    {
-      echo "tree_rooting_method=notung"
-      echo "selected_rooting=${selected_rooted_tree}"
-    } > "${og_id}.root.txt"
-    mv_out "${og_id}.root.txt" "${file_og_rooted_log}"
-  else
-    nwkit_root_method="${tree_rooting_method}"
-    if [[ "${nwkit_root_method}" == "md" ]]; then
-      nwkit_root_method="mv"
-    fi
-    nwkit_root_args=(root --method "${nwkit_root_method}" --infile "${file_og_unrooted_tree_analysis}")
-    if [[ "${nwkit_root_method}" == "reconciliation" ]]; then
-      nwkit_root_args+=(--species-tree "${species_tree_pruned}")
-    fi
-    if [[ "${nwkit_root_method}" == "taxonomy" || "${nwkit_root_method}" == "reconciliation" ]]; then
-      nwkit_root_args+=(--species-parser "${species_label_parser}")
-      if [[ -n "${species_label_regex}" ]]; then
-        nwkit_root_args+=(--species-regex "${species_label_regex}")
-      fi
-      if [[ -n "${species_label_map_tsv}" ]]; then
-        nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")
-      fi
-    fi
-    nwkit "${nwkit_root_args[@]}" |
-      nwkit label --target intnode --force yes --outfile "${og_id}.root.tmp.nwk"
-    mv_out "${og_id}.root.tmp.nwk" "${file_og_rooted_tree}"
-    {
-      echo "tree_rooting_method=${tree_rooting_method}"
-      echo "nwkit_method=${nwkit_root_method}"
-    } > "${og_id}.root.txt"
-    mv_out "${og_id}.root.txt" "${file_og_rooted_log}"
+  nwkit_root_method="${tree_rooting_method}"
+  if [[ "${nwkit_root_method}" == "md" ]]; then
+    nwkit_root_method="mv"
   fi
+  nwkit_root_args=(root --method "${nwkit_root_method}" --infile "${file_og_unrooted_tree_analysis}")
+  if [[ "${nwkit_root_method}" == "reconciliation" ]]; then
+    nwkit_root_args+=(--species-tree "${species_tree_pruned}"
+      --duplication-cost "${reconciliation_duplication_cost}" --loss-cost "${reconciliation_loss_cost}"
+      --candidates-out "${og_id}.root_candidates.nwk")
+  fi
+  if [[ "${nwkit_root_method}" == "taxonomy" || "${nwkit_root_method}" == "reconciliation" ]]; then
+    nwkit_root_args+=(--species-parser "${species_label_parser}")
+    if [[ -n "${species_label_regex}" ]]; then
+      nwkit_root_args+=(--species-regex "${species_label_regex}")
+    fi
+    if [[ -n "${species_label_map_tsv}" ]]; then
+      nwkit_root_args+=(--species-map-tsv "${species_label_map_tsv}")
+    fi
+  fi
+  nwkit "${nwkit_root_args[@]}" |
+    nwkit label --target intnode --force yes --outfile "${og_id}.root.tmp.nwk"
+  if [[ "${tree_rooting_method}" == "reconciliation" ]]; then
+    mv_out_bundle "${og_id}.root.tmp.nwk" "${file_og_rooted_tree}" \
+      "${og_id}.root_candidates.nwk" "${file_og_root_candidates}" || exit $?
+  else
+    mv_out "${og_id}.root.tmp.nwk" "${file_og_rooted_tree}"
+  fi
+  {
+    echo "tree_rooting_method=${tree_rooting_method}"
+    echo "nwkit_method=${nwkit_root_method}"
+  } > "${og_id}.root.txt"
+  mv_out "${og_id}.root.txt" "${file_og_rooted_log}"
   gg_artifact_record "${tree_root_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -3475,6 +3468,9 @@ orthogroup_extraction_provenance_args=(
 if [[ -s "${file_og_query_blast}" ]]; then
   orthogroup_extraction_provenance_args+=(--input "query_blast=${file_og_query_blast}")
 fi
+if [[ "${tree_rooting_method}" == "reconciliation" ]]; then
+  orthogroup_extraction_provenance_args+=(--input "root_candidates=${file_og_root_candidates}")
+fi
 gg_artifact_prepare_stage orthogroup_extraction_needs_update run_orthogroup_extraction "${orthogroup_extraction_provenance_args[@]}" || exit $?
 if [[ ${run_orthogroup_extraction} -eq 1 ]]; then
   run_orthogroup_extraction_original=1
@@ -3501,12 +3497,24 @@ if [[ "${mode_gene_evolution}" == "query2family" && ${orthogroup_extraction_need
   }
 
   subtree_infiles=()
-  if [[ "${tree_rooting_method}" == "notung" && -d "./${og_id}.notung.root" ]]; then
-    mapfile -t subtree_infiles < <(
-      find "./${og_id}.notung.root" -maxdepth 1 -type f |
-        awk -v og="${og_id}" '$0 ~ (og "\\.iqtree\\.nwk\\.rooting\\.[0-9]+$") {print}' |
-        sort -V
-    )
+  if [[ "${tree_rooting_method}" == "reconciliation" ]]; then
+    if [[ ! -s "${file_og_root_candidates}" ]]; then
+      echo "Reconciliation root candidates are required for query2family extraction: ${file_og_root_candidates}" >&2
+      exit 1
+    fi
+    rm -rf -- "${og_id}.root_candidates"
+    mkdir -p "${og_id}.root_candidates"
+    python - "${file_og_root_candidates}" "${og_id}.root_candidates" <<'PYROOTS'
+import sys
+from pathlib import Path
+from nwkit.util import read_tree_strings
+trees = read_tree_strings(sys.argv[1])
+if not trees:
+    raise ValueError("Reconciliation root candidate collection is empty.")
+for index, tree in enumerate(trees):
+    (Path(sys.argv[2]) / f"root.{index:08d}.nwk").write_text(tree + "\n")
+PYROOTS
+    mapfile -t subtree_infiles < <(find "${og_id}.root_candidates" -maxdepth 1 -name 'root.*.nwk' -type f | sort)
   fi
   if [[ ${#subtree_infiles[@]} -eq 0 ]]; then
     if [[ -s "${orthogroup_extraction_input_rooted_tree}" ]]; then
@@ -4007,61 +4015,41 @@ if [[ ${run_generax} -eq 1 && -s "${file_og_iqtree_generax_ufboot}" ]]; then
   set_analysis_file unrooted_tree "${file_og_iqtree_generax_ufboot}"
 fi
 
-task="NOTUNG reconciliation"
-disable_if_no_input_file "run_notung_reconcil" "${file_og_rooted_tree}" "${species_tree_pruned}"
-notung_reconcil_needs_update=0
-notung_reconcil_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.notung_reconciliation.json"
-  --step "notung_reconciliation"
+task="NWKIT reconciliation"
+disable_if_no_input_file "run_reconciliation" "${file_og_rooted_tree_analysis}" "${species_tree_pruned}"
+reconciliation_needs_update=0
+reconciliation_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.reconciliation.json"
+  --step "reconciliation"
   --family-id "${og_id}"
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
-  --input "rooted_tree=${file_og_rooted_tree}"
+  --input "rooted_tree=${file_og_rooted_tree_analysis}"
   --input "species_tree=${species_tree_pruned}"
-  --output "notung_reconciliation=${file_og_notung_reconcil}"
+  --output "reconciliation=${file_og_reconciliation}"
+  --parameter "engine=nwkit-lca-losses-v1"
+  --parameter "nwkit_identity=${gene_nwkit_identity}"
   --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
 )
-gg_artifact_prepare_stage notung_reconcil_needs_update run_notung_reconcil "${notung_reconcil_provenance_args[@]}" || exit $?
-if [[ ${notung_reconcil_needs_update} -eq 1 && ${run_notung_reconcil} -eq 1 ]]; then
+if [[ -n "${species_label_map_tsv}" ]]; then
+  reconciliation_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
+gg_artifact_prepare_stage reconciliation_needs_update run_reconciliation "${reconciliation_provenance_args[@]}" || exit $?
+if [[ ${reconciliation_needs_update} -eq 1 && ${run_reconciliation} -eq 1 ]]; then
   gg_step_start "${task}"
-
-  echo "memory_notung: ${memory_notung}"
-
-  if [[ -s "./${og_id}.root.nwk" ]]; then
-    rm -f -- "${og_id}.root.nwk"
+  reconciliation_args=(--infile "${file_og_rooted_tree_analysis}" --species-tree "${species_tree_pruned}"
+    --event-source lca --unmatched error --tree-id "${og_id}" --species-parser "${species_label_parser}"
+    --outfile "${og_id}.reconciliation.tsv")
+  if [[ -n "${species_label_regex}" ]]; then
+    reconciliation_args+=(--species-regex "${species_label_regex}")
   fi
-  if [[ -e "./${og_id}.notung_reconcile" ]]; then
-    rm -rf -- "${og_id}.notung_reconcile"
+  if [[ -n "${species_label_map_tsv}" ]]; then
+    reconciliation_args+=(--species-map-tsv "${species_label_map_tsv}")
   fi
-
-  nwkit drop --target intnode --support yes --name yes \
-    --infile "${file_og_rooted_tree}" \
-    --outfile "${og_id}.root.nwk"
-
-  java -jar -Xmx${memory_notung}g "${notung_jar}" \
-    -s "${species_tree_pruned}" \
-    -g "${og_id}.root.nwk" \
-    --reconcile \
-    --infertransfers "false" \
-    --treeoutput newick \
-    --log \
-    --treestats \
-    --events \
-    --parsable \
-    --speciestag prefix \
-    --maxtrees 1 \
-    --nolosses \
-    --outputdir ./${og_id}.notung_reconcile
-
-  if [[ -s "${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt" || -s "${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.0.parsable.txt" ]]; then
-    rm -f -- "${og_id}.notung_reconcile.zip"
-    zip -rq "${og_id}.notung_reconcile.zip" "${og_id}.notung_reconcile"
-    python "${gg_support_dir}/atomic_zip_publish.py" \
-      --source "${og_id}.notung_reconcile.zip" \
-      --destination "${file_og_notung_reconcil}" \
-      --expected-prefix "${og_id}.notung_reconcile"
-  fi
-  gg_artifact_record "${notung_reconcil_provenance_args[@]}"
+  nwkit reconcile "${reconciliation_args[@]}" || exit $?
+  mv_out "${og_id}.reconciliation.tsv" "${file_og_reconciliation}"
+  gg_artifact_record "${reconciliation_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -4148,7 +4136,8 @@ if [[ ${run_generax} -eq 1 ]]; then
     --input "generax_nhx=${file_og_generax_nhx}"
   )
 else
-  tree_dating_provenance_args+=(--input "notung_reconciliation=${file_og_notung_reconcil}")
+  tree_dating_provenance_args+=(--input "reconciliation=${file_og_reconciliation}"
+    --input "rooted_gene_tree=${file_og_rooted_tree_analysis}")
 fi
 if [[ -n "${species_label_map_tsv}" ]]; then
   tree_dating_provenance_args+=(--input "species_map=${species_label_map_tsv}")
@@ -4171,15 +4160,8 @@ if [[ ${tree_dating_needs_update} -eq 1 && ${run_tree_dating} -eq 1 ]]; then
     radte_args+=("--reconciliation-species-tree=${species_tree_generax}")
     radte_args+=("--generax-nhx=${file_og_generax_nhx}")
   else
-    gg_extract_expected_zip_prefix \
-      "${file_og_notung_reconcil}" \
-      "${og_id}.notung_reconcile"
-    if [[ -s ./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.0 ]]; then
-      cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0 ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled
-      cp_out ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.0.parsable.txt ./"${og_id}".notung_reconcile/"${og_id}".root.nwk.reconciled.parsable.txt
-    fi
-    radte_args+=("--gene-tree=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled")
-    radte_args+=("--notung-parsable=./${og_id}.notung_reconcile/${og_id}.root.nwk.reconciled.parsable.txt")
+    radte_args+=("--gene-tree=${file_og_rooted_tree_analysis}")
+    radte_args+=("--reconciliation=${file_og_reconciliation}")
   fi
   radte_args+=("--species-parser=${species_label_parser}")
   if [[ -n "${species_label_regex}" ]]; then
@@ -6179,7 +6161,8 @@ summary_input_files=(
   "${file_og_unrooted_tree_analysis}"
   "${file_og_rooted_tree_analysis}"
   "${file_og_rooted_log}"
-  "${file_og_notung_reconcil}"
+  "${file_og_reconciliation}"
+  "${file_og_root_candidates}"
   "${file_og_dated_tree_analysis}"
   "${file_og_dated_tree_log}"
   "${file_og_generax_nhx}"
@@ -6329,27 +6312,6 @@ disable_if_no_input_file "run_summary" "${file_og_rooted_tree_analysis}"
 if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
   gg_step_start "${task}"
 
-  if [[ -s "${file_og_notung_reconcil}" ]]; then
-    gg_extract_expected_zip_prefix \
-      "${file_og_notung_reconcil}" \
-      "${og_id}.notung_reconcile"
-  fi
-  notung_root_log_for_summary="PLACEHOLDER"
-  if [[ -d "./${og_id}.notung.root" ]]; then
-    notung_log_candidates=()
-    mapfile -t notung_log_candidates < <(find "./${og_id}.notung.root" -maxdepth 1 -type f -name "*.ntglog" | sort)
-    if [[ ${#notung_log_candidates[@]} -gt 0 ]]; then
-      notung_root_log_for_summary="${notung_log_candidates[0]}"
-    fi
-  fi
-  notung_reconcil_stats_for_summary="PLACEHOLDER"
-  if [[ -d "./${og_id}.notung_reconcile" ]]; then
-    reconcil_stats_candidates=()
-    mapfile -t reconcil_stats_candidates < <(find "./${og_id}.notung_reconcile" -maxdepth 1 -type f -name "*.reconciled*.parsable.txt" | sort)
-    if [[ ${#reconcil_stats_candidates[@]} -gt 0 ]]; then
-      notung_reconcil_stats_for_summary="${reconcil_stats_candidates[0]}"
-    fi
-  fi
   if [[ ${run_tree_pruning} -eq 1 ]]; then
     generax2orthogroup_statistics="PLACEHOLDER" # generax nhx should be pruned to get used here.
   else
@@ -6390,8 +6352,7 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -eq 1 ]]; then
     --generax_ufboot_tree "${generax_ufboot_for_summary}" \
     --rooted_tree "${file_og_rooted_tree_analysis}" \
     --rooting_log "${file_og_rooted_log}" \
-    --notung_root_log "${notung_root_log_for_summary}" \
-    --notung_reconcil_stats "${notung_reconcil_stats_for_summary}" \
+    --reconciliation "${file_og_reconciliation}" \
     --dated_tree "${file_og_dated_tree_analysis}" \
     --dated_log "${file_og_dated_tree_log}" \
     --generax_nhx "${generax2orthogroup_statistics}" \
