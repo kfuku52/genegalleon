@@ -6,6 +6,7 @@ numpy<2
 pandas
 biopython
 csubst @ git+https://github.com/kfuku52/csubst.git@master
+nwkit @ git+https://github.com/kfuku52/nwkit.git@master
 ete4
 sqlalchemy
 tenacity

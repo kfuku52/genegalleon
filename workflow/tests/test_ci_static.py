@@ -587,6 +587,7 @@ def test_parallel_python_lanes_install_the_same_prebuilt_offline_wheels():
     assert artifact["retention-days"] == "1"
     key = named_step(wheel_job, "Restore test wheels by resolved source and constraints")["with"]
     assert "steps.source.outputs.csubst_sha" in key["key"]
+    assert "steps.source.outputs.nwkit_sha" in key["key"]
     assert "requirements.lock.txt" in key["key"]
     assert "restore-keys" not in key
     save = named_step(wheel_job, "Save trusted test wheels")

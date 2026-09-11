@@ -93,7 +93,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Resolve moving test dependency once
+      - name: Resolve moving test dependencies once
         id: source
         shell: bash
         run: |
@@ -102,23 +102,27 @@ jobs:
           csubst_sha="$(bash container/scripts/resolve_git_branch_sha.sh https://github.com/kfuku52/csubst.git "${GG_SOURCE_CSUBST_REPO_REF}")"
           [[ "${csubst_sha}" =~ ^[0-9a-f]{40}$ ]]
           echo "csubst_sha=${csubst_sha}" >> "${GITHUB_OUTPUT}"
+          nwkit_sha="$(bash container/scripts/resolve_git_branch_sha.sh https://github.com/kfuku52/nwkit.git "${GG_SOURCE_NWKIT_REPO_REF}")"
+          [[ "${nwkit_sha}" =~ ^[0-9a-f]{40}$ ]]
+          echo "nwkit_sha=${nwkit_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore test wheels by resolved source and constraints
         id: wheels-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/gg-test-wheels
-          key: test-wheels-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('workflow/tests/requirements.txt', 'workflow/tests/requirements.lock.txt', 'workflow/tests/prepare_test_wheels.py') }}-${{ steps.source.outputs.csubst_sha }}
+          key: test-wheels-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('workflow/tests/requirements.txt', 'workflow/tests/requirements.lock.txt', 'workflow/tests/prepare_test_wheels.py') }}-${{ steps.source.outputs.csubst_sha }}-${{ steps.source.outputs.nwkit_sha }}
 
       - name: Build missing test wheels
         if: steps.wheels-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           CSUBST_SHA: ${{ steps.source.outputs.csubst_sha }}
+          NWKIT_SHA: ${{ steps.source.outputs.nwkit_sha }}
         run: |
           set -euo pipefail
           python workflow/tests/prepare_test_wheels.py \
-            --directory "${RUNNER_TEMP}/gg-test-wheels" --csubst-sha "${CSUBST_SHA}"
+            --directory "${RUNNER_TEMP}/gg-test-wheels" --csubst-sha "${CSUBST_SHA}" --nwkit-sha "${NWKIT_SHA}"
           python -m pip wheel \
             --constraint workflow/tests/requirements.lock.txt \
             --requirement "${RUNNER_TEMP}/gg-test-wheels/build-requirements.txt" \
