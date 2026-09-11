@@ -1,0 +1,24 @@
+Date: 2026-09-10
+Runtime: local/genegalleon:trait-selection-pilot-20260910-precision (Docker)
+Repository mount: /review, read-only
+
+Selected existing tests:
+workflow/tests/test_asr_intron_evolution.py
+workflow/tests/test_plot_csubst_aa_change_summary.py
+workflow/tests/test_reconciled_speciation_contrast.py
+workflow/tests/test_generate_species_trait.py
+
+...............................................................          [100%]
+63 passed in 11.37s
+
+Saved GO reproduction (all events have GO annotations):
+     go_ids     p_value p_value_adjusted
+1 GO:target 0.008224876       0.01644975
+2 GO:common 1.000000000       1.00000000
+Number of eligible GO terms: 10
+Number retained for BH: 2
+BH with all 10 tested terms: 0.08224876
+Number declared significant by current implementation: 1
+
+These checks do not measure workflow-wide Type I error or interval coverage.
+No full biological workflow, full test suite, or SIF validation was run.
