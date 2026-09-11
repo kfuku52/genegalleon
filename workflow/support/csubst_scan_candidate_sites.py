@@ -378,6 +378,12 @@ def candidate_identity(row):
 
 
 def assign_candidate_ids(frame, csubst_nonsyn_recode, pdb):
+    if csubst_nonsyn_recode == "3di20" and not frame.empty and "nonsyn_recode" not in frame.columns:
+        raise ValueError("3Di candidates require a nonsyn_recode column identifying the source scan alphabet.")
+    if "nonsyn_recode" in frame.columns:
+        source_modes = set(frame["nonsyn_recode"].fillna("").astype(str).str.strip().str.lower())
+        if not frame.empty and source_modes != {csubst_nonsyn_recode}:
+            raise ValueError(f"Candidate state alphabet {sorted(source_modes)} differs from requested {csubst_nonsyn_recode}.")
     candidate_ids = []
     analysis_keys = []
     cache_names = []
@@ -681,6 +687,7 @@ def analyze_candidate(record, cache_root, effective_dir_orthogroup, trait_color_
             iqtree_anc_dir=iqtree_anc_dir,
             branch_id_str=record["_canonical_support_branch_ids"],
             ncpu=1,
+            genetic_code=site_wrapper.resolve_csubst_genetic_code(iqtree_anc_dir),
             csubst_nonsyn_recode=nonsyn_recode,
             pdb=pdb,
         )

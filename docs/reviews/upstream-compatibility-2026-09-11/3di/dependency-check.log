@@ -1,0 +1,1 @@
+{"csubst": "1.16.0", "default_backend": "esm3di-35m", "dependencies": {"huggingface-hub": "1.31.0", "peft": "0.20.0", "protobuf": "5.29.6", "sentencepiece": "0.2.2", "torch": "2.13.0", "transformers": "5.17.0"}, "model_download": false}

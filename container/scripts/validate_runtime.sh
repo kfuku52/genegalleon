@@ -147,6 +147,12 @@ if [[ "${library_required}" -eq 1 ]]; then
 fi
 
 if micromamba run -n base bash -lc "command -v csubst >/dev/null 2>&1"; then
+  if micromamba run -n base python "$(dirname "${BASH_SOURCE[0]}")/check_csubst_3di.py"; then
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "CSUBST 3Di dependencies" "1" >> "${report_file}"
+  else
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "CSUBST 3Di dependencies" "0" >> "${report_file}"
+    required_failed=1
+  fi
   if micromamba run -n base csubst scan -h >/dev/null 2>&1; then
     printf '%s\t%s\t%s\t%s\n' "required" "base" "csubst scan" "1" >> "${report_file}"
   else

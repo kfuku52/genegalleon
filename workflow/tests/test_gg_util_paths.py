@@ -2313,3 +2313,22 @@ def test_forward_config_vars_includes_go_branch_flag_options(tmp_path):
     completed = run_bash(command, cwd=tmp_path)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip().splitlines() == ["cafe_branch_flags", "0.025"]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_runtime_shares_csubst_and_huggingface_resources(tmp_path, explicit):
+    project = tmp_path / "project"
+    project.mkdir()
+    prefix = "unset CSUBST_CACHE_DIR HF_HOME; "
+    if explicit:
+        prefix = "export CSUBST_CACHE_DIR=/custom/csubst HF_HOME=/custom/hf; "
+    command = (
+        prefix + f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f'gg_prepare_cmd_runtime {shlex.quote(str(project))} "" 0 0; '
+        'bash -c \'printf "%s\\n%s\\n" "$CSUBST_CACHE_DIR" "$HF_HOME"\''
+    )
+    result = run_bash(command, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    expected = ["/custom/csubst", "/custom/hf"] if explicit else [
+        str(project / "downloads/csubst"), str(project / "downloads/huggingface")]
+    assert result.stdout.strip().splitlines() == expected

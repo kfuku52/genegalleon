@@ -1,9 +1,9 @@
 """Consume actual standard CAFE output without a custom optimizer or CAFE patch."""
 import csv
 import hashlib
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 

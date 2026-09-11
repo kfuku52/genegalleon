@@ -1284,7 +1284,7 @@ add_symbol_site_column <- function(g, args, tidy_site, selected_sites, qname, xl
   if (is.null(wrap_xlab)) {
     wrap_xlab <- treevis_should_wrap_site_axis_label(xlab, selected_sites)
   }
-  axis_label <- if (isTRUE(wrap_xlab)) treevis_wrap_axis_label(xlab, width = 14) else treevis_axis_label(xlab)
+  axis_label <- if (isTRUE(wrap_xlab)) treevis_wrap_axis_label(xlab, width = 8) else treevis_axis_label(xlab)
   axis_title_size <- args[["font_size"]]
   axis_title_lineheight <- if (isTRUE(wrap_xlab)) 0.78 else 0.9
   plot_margins <- args[["margins"]] / 4

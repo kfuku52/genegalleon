@@ -1,0 +1,11 @@
+........................................................................ [ 31%]
+........................................................................ [ 62%]
+........................................................................ [ 93%]
+................                                                         [100%]
+=============================== warnings summary ===============================
+../opt/conda/lib/python3.12/site-packages/_pytest/cacheprovider.py:469
+  /opt/conda/lib/python3.12/site-packages/_pytest/cacheprovider.py:469: PytestCacheWarning: cache could not write path /review/.pytest_cache/v/cache/nodeids: [Errno 30] Read-only file system: '/review/.pytest_cache/v/cache/nodeids'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+232 passed, 1 warning in 42.04s

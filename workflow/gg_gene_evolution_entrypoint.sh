@@ -301,9 +301,7 @@ csubst_scan_unit_mode="${csubst_scan_unit_mode:-clade}" # lineage|stem|clade def
 csubst_scan_match="${csubst_scan_match:-any2spe}" # CSUBST scan recurrent substitution pattern classes: any2spe by default, or comma-separated classes/all.
 csubst_scan_min_event_pp="${csubst_scan_min_event_pp:-0.5}" # Posterior probability threshold for candidate discovery and support calls.
 csubst_scan_min_support="${csubst_scan_min_support:-2}" # Minimum foreground-unit support; "1" means one unit, fractional values such as "0.5" are proportions, and "1.0" means 100%.
-csubst_scan_rate_event_mode="${csubst_scan_rate_event_mode:-posterior_sum}" # posterior_sum|called; event mass used for scan rate tests.
-csubst_scan_rate_length="${csubst_scan_rate_length:-n_rescaled}" # raw|sn_rescaled|n_rescaled branch-length scale for scan rate tests.
-csubst_scan_rate_exposure="${csubst_scan_rate_exposure:-q_weighted}" # q_weighted|state_aware|raw_branch_length exposure model for scan rate tests.
+# Scan event mass, branch-length scale and exposure follow CSUBST defaults.
 csubst_scan_other_scope="${csubst_scan_other_scope:-all}" # all|sister control branch set for scan rate tests.
 csubst_scan_site_plot="${csubst_scan_site_plot:-yes}" # Generate csubst scan tree + detected-site summary plot.
 csubst_scan_tree_site_plot_format="${csubst_scan_tree_site_plot_format:-pdf}" # pdf|png|svg format for csubst scan site plot.

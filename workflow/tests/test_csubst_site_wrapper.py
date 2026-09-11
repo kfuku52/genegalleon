@@ -1,5 +1,6 @@
 import ast
 import gzip
+import json
 import os
 import re
 import subprocess
@@ -530,9 +531,11 @@ def test_csubst_nonsyn_recode_output_suffix_preserves_default_name():
 def test_build_csubst_sites_command_passes_nondefault_nonsyn_recode_only():
     mod = load_module()
 
-    default_cmd = mod.build_csubst_sites_command("OG0001.iqtree.anc", "/tmp/OG0001.iqtree.anc", "1,2", 2, "no")
-    recoded_cmd = mod.build_csubst_sites_command("OG0001.iqtree.anc", "/tmp/OG0001.iqtree.anc", "1,2", 2, "dayhoff6")
+    default_cmd = mod.build_csubst_sites_command("OG0001.iqtree.anc", "/tmp/OG0001.iqtree.anc", "1,2", 2, "no", genetic_code=1)
+    recoded_cmd = mod.build_csubst_sites_command("OG0001.iqtree.anc", "/tmp/OG0001.iqtree.anc", "1,2", 2, "dayhoff6", genetic_code=2)
 
+    assert default_cmd[default_cmd.index("--genetic_code") + 1] == "1"
+    assert recoded_cmd[recoded_cmd.index("--genetic_code") + 1] == "2"
     assert "--nonsyn_recode" not in default_cmd
     assert recoded_cmd[recoded_cmd.index("--nonsyn_recode") + 1] == "dayhoff6"
     assert default_cmd[default_cmd.index("--outdir") + 1] == "csubst_sites"
@@ -549,6 +552,7 @@ def test_build_csubst_sites_command_can_disable_pdb_search():
         "1,2",
         2,
         "no",
+        genetic_code=1,
         pdb="none",
     )
 
@@ -577,6 +581,7 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
         lambda **kwargs: {"site_table_tsv": str(site_table), "site_dir": str(tmp_path)},
     )
     monkeypatch.setattr(mod, "prepare_recoded_site_alignment", lambda **kwargs: None)
+    monkeypatch.setattr(mod, "resolve_csubst_genetic_code", lambda directory: 2)
     monkeypatch.setattr(
         mod,
         "validate_csubst_stat_branch_identity",
@@ -602,8 +607,8 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
     )
 
     assert output.read_bytes() == b"focused"
-    assert "--panel10=amino_acid_site,1,5," + str(iqtree_dir / "csubst.fasta") in commands[0]
-    assert not any("amino_acid_site,1,2:5," in token for token in commands[0])
+    assert "--panel10=amino_acid_site,2,5," + str(iqtree_dir / "csubst.fasta") in commands[0]
+    assert not any("amino_acid_site,2,2:5," in token for token in commands[0])
 
     site_table.write_text(
         "codon_site_alignment\tOCNany2spe\n2\t0.0\n5\t0.0\n",
@@ -924,3 +929,60 @@ def test_raise_on_processing_failures_accepts_success():
     mod = load_module()
 
     assert mod.raise_on_processing_failures([]) is None
+
+
+@pytest.mark.parametrize("code", [1, 2])
+@pytest.mark.parametrize("metadata", [True, False])
+def test_resolve_genetic_code_from_new_and_legacy_bundles(tmp_path, code, metadata):
+    mod = load_module()
+    if metadata:
+        (tmp_path / "csubst.input.json").write_text(
+            json.dumps({"schema": "genegalleon-csubst-input-v1", "genetic_code": code})
+        )
+    (tmp_path / "csubst.log").write_text(f"Converting to codon sequences with genetic code {code} ...\n")
+    assert mod.resolve_csubst_genetic_code(tmp_path) == code
+
+
+@pytest.mark.parametrize("log", ["", "genetic code 1\ngenetic code 2\n"])
+def test_resolve_genetic_code_rejects_ambiguous_legacy_bundle(tmp_path, log):
+    mod = load_module()
+    (tmp_path / "csubst.log").write_text(log)
+    with pytest.raises(ValueError, match="Cannot resolve one genetic code"):
+        mod.resolve_csubst_genetic_code(tmp_path)
+
+
+def test_resolve_genetic_code_rejects_metadata_log_conflict(tmp_path):
+    mod = load_module()
+    (tmp_path / "csubst.input.json").write_text(
+        json.dumps({"schema": "genegalleon-csubst-input-v1", "genetic_code": 2})
+    )
+    (tmp_path / "csubst.log").write_text("Command: iqtree --seqtype CODON1\n")
+    with pytest.raises(ValueError, match="Cannot resolve one genetic code"):
+        mod.resolve_csubst_genetic_code(tmp_path)
+
+
+def test_process_index_resolves_each_family_code_after_extraction(tmp_path, monkeypatch):
+    mod = load_module()
+    original_cwd = Path.cwd()
+    observed = []
+
+    def capture(command, check):
+        observed.append(command[command.index("--genetic_code") + 1])
+        raise RuntimeError("Captured sites command")
+
+    monkeypatch.setattr(mod.subprocess, "run", capture)
+    for code in (1, 2):
+        og = f"OG{code}"
+        archive = tmp_path / f"{og}.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr(
+                f"{og}.iqtree.anc/csubst.input.json",
+                json.dumps({"schema": "genegalleon-csubst-input-v1", "genetic_code": code}),
+            )
+        monkeypatch.setattr(mod, "get_iqtree_anc_zip_path", lambda archive=archive, **kwargs: str(archive))
+        result_og, error = mod.process_index(og, "1,2", str(tmp_path / "out"), str(tmp_path), "", 1, "no", "")
+        assert result_og == og
+        assert isinstance(error, RuntimeError)
+        assert str(error) == "Captured sites command"
+        assert Path.cwd() == original_cwd
+    assert observed == ["1", "2"]

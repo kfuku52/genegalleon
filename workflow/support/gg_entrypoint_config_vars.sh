@@ -83,9 +83,6 @@ csubst_scan_match
 csubst_scan_min_event_pp
 csubst_scan_min_support
 csubst_scan_other_scope
-csubst_scan_rate_event_mode
-csubst_scan_rate_exposure
-csubst_scan_rate_length
 csubst_scan_site_plot
 csubst_scan_tree_site_plot_format
 csubst_scan_tree_site_plot_max_sites

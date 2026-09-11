@@ -14,3 +14,10 @@ defusedxml==0.7.1
 # longer requires norns while remaining compatible with mysql-connector 9.x.
 setuptools<83
 pypdf>=6.16.1
+
+# CSUBST structural-alphabet predictors (csubst[3di]); PyTorch is supplied by conda
+# and protobuf is installed above. Keep model weights out of the image.
+huggingface-hub
+transformers
+peft
+sentencepiece

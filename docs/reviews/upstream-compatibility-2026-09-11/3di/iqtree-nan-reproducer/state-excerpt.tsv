@@ -1,0 +1,10 @@
+# Ancestral state reconstruction for all nodes in csubst.3di/csubst.treefile
+# This file can be read in MS Excel or in R with command:
+#   tab=read.table('csubst.3di/csubst.state',header=TRUE)
+# Columns are tab-separated with following meaning:
+#   Node:  Node name in the tree
+#   Site:  Alignment site ID
+#   State: Most likely state assignment
+#   p_X:   Posterior probability for state X (empirical Bayesian method)
+Node	Site	State	p_AAA	p_AAC	p_AAG	p_AAT	p_ACA	p_ACC	p_ACG	p_ACT	p_AGC	p_AGT	p_ATA	p_ATC	p_ATG	p_ATT	p_CAA	p_CAC	p_CAG	p_CAT	p_CCA	p_CCC	p_CCG	p_CCT	p_CGA	p_CGC	p_CGG	p_CGT	p_CTA	p_CTC	p_CTG	p_CTT	p_GAA	p_GAC	p_GAG	p_GAT	p_GCA	p_GCC	p_GCG	p_GCT	p_GGA	p_GGC	p_GGG	p_GGT	p_GTA	p_GTC	p_GTG	p_GTT	p_TAC	p_TAT	p_TCA	p_TCC	p_TCG	p_TCT	p_TGA	p_TGC	p_TGG	p_TGT	p_TTA	p_TTC	p_TTG	p_TTT
+Node3	1	AAA	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan	nan

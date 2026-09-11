@@ -394,6 +394,8 @@ analyses. Stage-specific `csubst_nonsyn_recode` or
 `csubst_site_nonsyn_recode` overrides still take priority
 when supplied for a single entrypoint run.
 
+For `3di20`, see [full-CDS inputs, model resources and report coordinates](csubst-3di.md).
+
 ## CSUBST binary foreground resolution
 
 Set the following opt-in option when a `species_trait.tsv` column uses only
@@ -431,8 +433,10 @@ csubst_scan_site_plot="yes"
 
 `csubst_scan_min_support` preserves CSUBST's spelling: `"1"` means one unit,
 `"0.5"` is a proportion, and `"1.0"` means 100%. `lineage`, `stem` and `clade`
-unit modes, event threshold/mass, exposure, branch-length scale, control scope
-and nonsynonymous recoding remain configurable. The scan consumes the existing
+unit modes, event threshold, control scope and nonsynonymous recoding remain
+configurable. Event mass, exposure and branch-length scale use CSUBST's defaults;
+the former `csubst_scan_rate_event_mode`, `csubst_scan_rate_exposure` and
+`csubst_scan_rate_length` settings are no longer forwarded. The scan consumes the existing
 IQ-TREE ancestral-reconstruction archive and foreground table.
 
 ### Analytical P and global BH-FDR
@@ -536,3 +540,16 @@ execution coverage and the remaining analytical-model limitations.
 
 For retired NOTUNG switches, candidate outputs, and reconciliation statistics,
 see [NOTUNG replacement](notung-replacement.md).
+
+## Genetic code in CSUBST sites
+
+New IQ-TREE ancestral-state bundles contain `csubst.input.json` with the integer
+`genetic_code` used by ASR. Ordinary bundles use schema
+`genegalleon-csubst-input-v1`; full-CDS 3Di bundles use
+`genegalleon-csubst-input-v2` and additionally record their structural inputs.
+Both convergent-sites reports and scan-candidate sites resolve the code for each
+family and pass it as `csubst sites --genetic_code`. For older bundles, the
+resolver reads explicit genetic-code statements or `--seqtype CODONn`/`-st CODONn`
+from `csubst.log` and `csubst.iqtree`. Conflicting or absent evidence is an error;
+regenerate the ASR bundle rather than assuming code 1. Existing complete reports
+are retained under the existing artifact reuse rules.

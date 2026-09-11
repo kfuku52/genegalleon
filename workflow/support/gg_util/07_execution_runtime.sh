@@ -183,6 +183,9 @@ gg_prepare_cmd_runtime() {
 	gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir_local}")
 	gg_workspace_downloads_dir=$(workspace_downloads_root "${gg_workspace_dir_local}")
 	export gg_workspace_layout_resolved gg_workspace_input_dir gg_workspace_output_dir gg_workspace_downloads_dir
+	: "${CSUBST_CACHE_DIR:=${gg_workspace_downloads_dir}/csubst}"
+	: "${HF_HOME:=${gg_workspace_downloads_dir}/huggingface}"
+	export CSUBST_CACHE_DIR HF_HOME
 
 	if [[ -n "${conda_env}" ]]; then
 		gg_activate_conda_env "${conda_env}"

@@ -1,0 +1,328 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="252" time="268.384" timestamp="2026-09-11T07:42:43.501423+00:00" hostname="0ab44983db11"><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_matches_exact_enumeration_and_preserves_counts[values0-100]" time="3.449" /><testcase classname="workflow.tests.test_aster_ortools_runtime" name="test_aster_and_ortools_scip_load_in_the_same_runtime" time="0.163" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_alignment_stats_stage_and_summary_readers[dna-original]" time="0.322" /><testcase classname="workflow.tests.test_cafe_branch_flags_runtime" name="test_standard_cafe_outputs_support_gain_loss_flags_and_replay[Base]" time="11.796" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_alignment_stats_stage_and_summary_readers[dna-cleaned]" time="0.284" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_alignment_stats_stage_and_summary_readers[aa-original]" time="0.169" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_alignment_stats_stage_and_summary_readers[aa-cleaned]" time="0.183" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-underscore-False-orthogroup]" time="1.498" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-underscore-False-query2family]" time="1.394" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_matches_exact_enumeration_and_preserves_counts[values1-100]" time="3.737" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-underscore-True-orthogroup]" time="1.620" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-underscore-True-query2family]" time="1.576" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-dot-False-orthogroup]" time="1.260" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_matches_exact_enumeration_and_preserves_counts[values2-1000]" time="3.635" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-dot-False-query2family]" time="1.248" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-dot-True-orthogroup]" time="1.493" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_matches_exact_enumeration_and_preserves_counts[values3-1000]" time="3.490" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[dna-dot-True-query2family]" time="1.413" /><testcase classname="workflow.tests.test_cafe_branch_flags_runtime" name="test_standard_cafe_outputs_support_gain_loss_flags_and_replay[Gamma]" time="11.816" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-underscore-False-orthogroup]" time="1.088" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-underscore-False-query2family]" time="1.138" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_matches_exact_enumeration_and_preserves_counts[values4-100]" time="3.445" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-underscore-True-orthogroup]" time="1.326" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-underscore-True-query2family]" time="1.374" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-dot-False-orthogroup]" time="1.070" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_matches_exact_enumeration_and_preserves_counts[values5-100]" time="3.339" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-dot-False-query2family]" time="1.077" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-dot-True-orthogroup]" time="1.310" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_one_time_statistics_migration[aa-dot-True-query2family]" time="1.326" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_handles_absent_gff_rows_and_internal_gene_name_collision" time="3.420" /><testcase classname="workflow.tests.test_alignment_stats_runtime" name="test_migration_preserves_legacy_outputs_when_alignment_is_invalid" time="0.376" /><testcase classname="workflow.tests.test_fractionation_bias_integration" name="test_fractionation_bias_pair_example_has_required_columns" time="0.005" /><testcase classname="workflow.tests.test_fractionation_bias_integration" name="test_self_mode_is_array_executed_and_genome_evolution_aggregated" time="0.002" /><testcase classname="workflow.tests.test_fractionation_bias_integration" name="test_fractionation_bias_core_runs_self_mode_into_genome_evolution" time="8.754" /><testcase classname="workflow.tests.test_copy_number_quality_runtime" name="test_matrix_only_cli_includes_busco_and_pairwise_n" time="1.936" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_failed_intron_asr_does_not_publish_outputs" time="0.907" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_preserves_zero_short_and_non_ultrametric_lengths" time="3.519" /><testcase classname="workflow.tests.test_copy_number_quality_runtime" name="test_core_stage_calls_real_diagnostics_and_records_all_inputs" time="2.571" /><testcase classname="workflow.tests.test_copy_number_quality_runtime" name="test_declared_numeric_codes_and_observation_metadata_are_respected" time="4.640" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_flows_into_real_branch_statistics_and_parent_deltas" time="5.484" /><testcase classname="workflow.tests.test_gbif_runtime_integration" name="test_local_gbif_alias_preserves_meaning_through_copy_number_and_rsc" time="6.358" /><testcase classname="workflow.tests.test_copy_number_quality_runtime" name="test_explicit_gbif_selection_survives_and_masks_incomplete_observations" time="2.000" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_core_stage_caches_and_rebuilds_model_tree_and_plot" time="29.610" /><testcase classname="workflow.tests.test_copy_number_selection_runtime" name="test_missing_species_preserves_original_brownian_covariance" time="0.030" /><testcase classname="workflow.tests.test_copy_number_selection_runtime" name="test_malformed_species_table_is_rejected[species\tx\na\t1\t2\n]" time="0.005" /><testcase classname="workflow.tests.test_copy_number_selection_runtime" name="test_malformed_species_table_is_rejected[species\t\na\t1\n]" time="0.005" /><testcase classname="workflow.tests.test_copy_number_selection_runtime" name="test_malformed_species_table_is_rejected[species\tleaf_name\na\t1\n]" time="0.007" /><testcase classname="workflow.tests.test_copy_number_selection_runtime" name="test_copy_selection_mixed_families_and_rollback" time="12.233" /><testcase classname="workflow.tests.test_gbif_runtime_integration" name="test_copy_number_selection_explicit_observation_masks_partial_and_carries_audit" time="3.454" /><testcase classname="workflow.tests.test_get_promoter_fasta_runtime" name="test_promoter_cli_preserves_chromosome_identifiers[+-1]" time="0.341" /><testcase classname="workflow.tests.test_get_promoter_fasta_runtime" name="test_promoter_cli_preserves_chromosome_identifiers[+-01]" time="0.387" /><testcase classname="workflow.tests.test_get_promoter_fasta_runtime" name="test_promoter_cli_preserves_chromosome_identifiers[+-NA]" time="0.379" /><testcase classname="workflow.tests.test_get_promoter_fasta_runtime" name="test_promoter_cli_preserves_chromosome_identifiers[--1]" time="0.379" /><testcase classname="workflow.tests.test_get_promoter_fasta_runtime" name="test_promoter_cli_preserves_chromosome_identifiers[--01]" time="0.356" /><testcase classname="workflow.tests.test_get_promoter_fasta_runtime" name="test_promoter_cli_preserves_chromosome_identifiers[--NA]" time="0.328" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_cache_reuses_only_validated_exact_requests" time="0.048" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_error_responses_are_never_cached_as_empty[payload0]" time="0.011" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_error_responses_are_never_cached_as_empty[payload1]" time="0.010" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_error_responses_are_never_cached_as_empty[payload2]" time="0.017" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_error_responses_are_never_cached_as_empty[payload3]" time="0.011" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_refresh_offline_and_version_discovery" time="0.043" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_only_transient_errors_are_retried" time="0.022" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_interrupted_pages_resume_and_match_a_clean_run" time="0.175" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_page_cap_cannot_publish_an_incomplete_trait" time="0.047" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_reviewed_taxa_override_old_synonyms_without_merging_broader_taxa" time="0.020" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_ambiguous_hits_are_not_ranked_and_duplicate_labels_are_retained" time="0.020" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_mapping_file_validation_and_relative_resolution" time="0.057" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_missing_binary_and_categorical_sentinels_remain_missing" time="0.031" /><testcase classname="workflow.tests.test_gift_retrieval" name="test_workflow_output_cache_tracks_custom_mapping_contents" time="15.479" /><testcase classname="workflow.tests.test_copy_number_selection_runtime" name="test_core_selection_only_uses_imported_artifacts_and_mixed_run_requires_sequences" time="18.450" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_refresh_resume_never_combines_new_and_old_pages" time="0.038" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_existing_reader_pins_its_cache_generation_during_refresh" time="0.044" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_bad_cache_container_is_a_recoverable_cache_miss[bad0]" time="0.024" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_bad_cache_container_is_a_recoverable_cache_miss[None]" time="0.029" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_bad_cache_container_is_a_recoverable_cache_miss[not a record]" time="0.030" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_numeric_values_cannot_silently_disappear[-inf]" time="0.022" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_numeric_values_cannot_silently_disappear[broken]" time="0.020" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_text_traits_keep_all_distinct_values" time="0.020" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_numeric_output_preserves_double_precision" time="0.019" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_output_and_stats_cannot_overwrite_an_input_or_each_other" time="1.372" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_mapping_duplicate_headers_are_rejected" time="0.005" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_publication_failure_restores_both_previous_outputs" time="0.031" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_qualified_taxa_are_not_silently_broadened" time="0.020" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_numeric_aggregation_overflow_is_rejected" time="0.016" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_cli_named_and_id_aliases_share_observations" time="0.137" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_truncated_http_body_is_retried" time="0.011" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_text_csv_reader_preserves_literal_missing_words" time="0.020" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_legacy_inventory_is_additive_idempotent_and_never_infers_sources" time="0.031" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_reviewed_selection_uses_exact_clades_preserves_inputs_and_soft_tails" time="0.038" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_current_status_does_not_apply_review_to_changed_calibrations" time="0.051" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[reviewer-]" time="0.024" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[interval_kind-unknown]" time="0.028" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[time_unit-years]" time="0.033" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[dependency_groups-[]]" time="0.027" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[calibration-B(10,10,0.025,0.025)]" time="0.024" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[calibration-B(10,20,0.8,0.8)]" time="0.024" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[calibration-@10]" time="0.024" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_bad_review_does_not_replace_output[calibration-B(nan,20,0.025,0.025)]" time="0.023" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_shared_group_omission_does_not_run_without_any_anchor" time="0.026" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_archive_preserves_old_public_and_raw_outputs" time="0.014" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_diagnostics_distinguishes_stationary_shifted_and_constant_chains" time="0.130"><failure message="subprocess.CalledProcessError: Command '['Rscript', '/review/workflow/support/mcmctree_calibration_diagnostics.R', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/diagnostics.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain0.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain1.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain2.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain3.tsv']' returned non-zero exit status 1.">tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0')
+
+&gt;   ???
+
+/work/workflow/tests/test_mcmctree_calibration_runtime.py:131:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True
+popenargs = (['Rscript', '/review/workflow/support/mcmctree_calibration_diagnostics.R', '/audit/pytest-runtime/popen-gw0/test_diag...ostics_distinguishes0/chain1.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain2.tsv', ...],)
+kwargs = {'stdout': -1, 'stderr': -1}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output &amp; stderr attributes if those streams
+        were captured.
+
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+&gt;               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['Rscript', '/review/workflow/support/mcmctree_calibration_diagnostics.R', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/diagnostics.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain0.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain1.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain2.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain3.tsv']' returned non-zero exit status 1.
+
+/opt/conda/lib/python3.12/subprocess.py:571: CalledProcessError</failure></testcase><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache[1]" time="0.164"><failure message="subprocess.CalledProcessError: Command '['Rscript', '-e', &quot;stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))&quot;]' returned non-zero exit status 1.">tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_real_iq2mc_prior_and_post0')
+time_scale = '1'
+
+&gt;   ???
+
+/work/workflow/tests/test_mcmctree_calibration_runtime.py:179:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+workflow/support/mcmctree_calibration_experiments.py:208: in run_experiments
+    r_version = subprocess.run(["Rscript", "-e", "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True
+popenargs = (['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],)
+kwargs = {'text': True, 'stdout': -1, 'stderr': -1}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output &amp; stderr attributes if those streams
+        were captured.
+
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+&gt;               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"]' returned non-zero exit status 1.
+
+/opt/conda/lib/python3.12/subprocess.py:571: CalledProcessError</failure></testcase><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache[100]" time="0.166"><failure message="subprocess.CalledProcessError: Command '['Rscript', '-e', &quot;stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))&quot;]' returned non-zero exit status 1.">tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_real_iq2mc_prior_and_post1')
+time_scale = '100'
+
+&gt;   ???
+
+/work/workflow/tests/test_mcmctree_calibration_runtime.py:179:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+workflow/support/mcmctree_calibration_experiments.py:208: in run_experiments
+    r_version = subprocess.run(["Rscript", "-e", "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True
+popenargs = (['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],)
+kwargs = {'text': True, 'stdout': -1, 'stderr': -1}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output &amp; stderr attributes if those streams
+        were captured.
+
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+&gt;               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"]' returned non-zero exit status 1.
+
+/opt/conda/lib/python3.12/subprocess.py:571: CalledProcessError</failure></testcase><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_cached_legacy_core_stage_adds_inventory_without_running_nwkit_or_replacing_tree" time="0.871" /><testcase classname="workflow.tests.test_mcmctree_calibration_runtime" name="test_legacy_configuration_contract_does_not_gain_required_audit_input" time="0.005" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_samples_reject_corruption" time="0.008" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_ctl_replaces_duplicate_values" time="0.003" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_parallel_paml_pools_samples_and_resumes_completed_chains" time="0.944" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_diagnostics_detect_shift_and_constant" time="0.208"><failure message="AssertionError: Error: R package posterior is required&#10;  Execution halted&#10;  &#10;assert 'diagnostic_failed' == 'unconverged'&#10;  &#10;  - unconverged&#10;  + diagnostic_failed">tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_diagnostics_detect_shift_0')
+
+    def test_diagnostics_detect_shift_and_constant(tmp_path):
+        import numpy as np
+        rng = np.random.default_rng(871)
+        paths = []
+        for i in range(4):
+            path = tmp_path / f'chain{i}.txt'
+            with path.open('w') as out:
+                out.write('Gen stable shifted\n')
+                for j in range(1500):
+                    out.write(f'{j+1} {rng.normal()} {rng.normal()+i*4}\n')
+            paths.append(path)
+        report = chains.diagnose(paths, tmp_path)
+&gt;       assert report['state'] == 'unconverged', (tmp_path / 'diagnostics.log').read_text()
+E       AssertionError: Error: R package posterior is required
+E         Execution halted
+E
+E       assert 'diagnostic_failed' == 'unconverged'
+E
+E         - unconverged
+E         + diagnostic_failed
+
+workflow/tests/test_mcmctree_chains.py:111: AssertionError</failure></testcase><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_rejects_output_alias_of_input[direct]" time="0.378" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_four_processes_overlap_and_partial_failure_only_warns[False]" time="0.430" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_rejects_output_alias_of_input[symlink]" time="0.381" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_four_processes_overlap_and_partial_failure_only_warns[True]" time="0.423" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_rejects_output_alias_of_input[hardlink]" time="0.361" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_tree_status_rejects_replaced_tree_and_warns_without_failure" time="0.139" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_corrupt_receipt_cannot_reuse_an_attempt[not json]" time="0.005" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_corrupt_receipt_cannot_reuse_an_attempt[{}]" time="0.005" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_rejects_invalid_output_before_replacing_previous_results" time="0.380" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_corrupt_receipt_cannot_reuse_an_attempt[{&quot;attempt&quot;:&quot;../../escape&quot;,&quot;hashes&quot;:{}}]" time="0.009" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_corrupt_receipt_cannot_reuse_an_attempt[{&quot;attempt&quot;:&quot;attempt-old&quot;,&quot;state&quot;:&quot;completed&quot;,&quot;seed&quot;:1729,&quot;chain&quot;:1,&quot;hashes&quot;:{}}]" time="0.008" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_control_integer_rejects_missing_ambiguous_or_invalid_values[nsample=1.5]" time="0.004" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_control_integer_rejects_missing_ambiguous_or_invalid_values[nsample=-1]" time="0.005" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_control_integer_rejects_missing_ambiguous_or_invalid_values[nsample=0]" time="0.006" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_control_integer_rejects_missing_ambiguous_or_invalid_values[nsample=1\nnsample=2]" time="0.005" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_control_integer_rejects_missing_ambiguous_or_invalid_values[]" time="0.006" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_summary_failure_cannot_leave_passed_state_or_replace_output" time="0.233" /><testcase classname="workflow.tests.test_mcmctree_chains" name="test_termination_stops_children_and_retains_interrupted_state" time="3.394" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_rolls_back_failed_output_installation" time="3.301" /><testcase classname="workflow.tests.test_csubst_scan_runtime_integration" name="test_current_csubst_cli_supports_genegalleon_options[search]" time="0.040" /><testcase classname="workflow.tests.test_csubst_scan_runtime_integration" name="test_current_csubst_cli_supports_genegalleon_options[scan]" time="0.035" /><testcase classname="workflow.tests.test_csubst_scan_runtime_integration" name="test_current_csubst_cli_supports_genegalleon_options[sites]" time="0.051" /><testcase classname="workflow.tests.test_csubst_scan_runtime_integration" name="test_current_csubst_scan_output_imports_into_gene_family_database[none-False]" time="0.876" /><testcase classname="workflow.tests.test_csubst_scan_runtime_integration" name="test_current_csubst_scan_output_imports_into_gene_family_database[none-True]" time="0.597" /><testcase classname="workflow.tests.test_csubst_scan_runtime_integration" name="test_scan_core_command_is_analytical_only_and_preserves_audit" time="3.168"><failure message="AssertionError: CSUBST start: 2026-09-11 07:43:53.978506+00:00&#10;  csubst scan start: 2026-09-11 07:43:53.979110+00:00&#10;  OS: Linux-6.12.76-linuxkit-aarch64-with-glibc2.39&#10;  Python version: 3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]&#10;  CSUBST version: 1.16.0&#10;  CSUBST dependency versions: ete4=4.4.0, requests=2.34.2, numpy=1.26.4, scipy=1.17.1, pandas=3.0.5, cython=3.3.0, matplotlib=3.10.9&#10;  CSUBST missing dependency packages: none&#10;  CSUBST command: /opt/conda/bin/csubst scan --genetic_code 1 --alignment_file ./input.fasta --rooted_tree_file ./input.nwk --iqtree_treefile ./input.treefile --iqtree_state ./input.state --iqtree_rate ./input.rate --iqtree_iqtree ./input.iqtree --iqtree_log ./input.log --iqtree_model GY+FQ --iqtree_outdir csubst_scan/iqtree --foreground foreground.tsv --fg_format 2 --scan_unit_mode clade --scan_match any2spe --scan_min_event_pp 0.5 --scan_min_support 2 --scan_rate_event_mode posterior_sum --scan_rate_length n_rescaled --scan_rate_exposure q_weighted --scan_other_scope all --scan_pvalue_calibration none --scan_n_permutations 0 --scan_site_plot no --tree_site_plot_format pdf --tree_site_plot_max_sites 30 --nonsyn_recode no --threads 1 --outdir csubst_scan --output_prefix csubst&#10;  CSUBST working directory: /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0&#10;  CSUBST bug report: https://github.com/kfuku52/csubst/issues&#10;  Joint/bridge observations require --scan_rate_exposure endpoint.&#10;  &#10;assert 2 == 0&#10; +  where 2 = CompletedProcess(args=['bash', '-euo', 'pipefail', '-c', '  csubst_scan_dir=&quot;csubst_scan&quot;\n\n  csubst scan \\\n    --g...tps://github.com/kfuku52/csubst/issues\n', stderr='Joint/bridge observations require --scan_rate_exposure endpoint.\n').returncode">tmp_path = PosixPath('/audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0')
+
+    def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
+        """Execute the actual analytical core command and audit publication."""
+        fixtures = REPO_ROOT / "workflow/tests/data/csubst_scan_inference"
+        shutil.copyfile(fixtures / "input.fa", tmp_path / "input.fasta")
+        shutil.copyfile(fixtures / "tree.nwk", tmp_path / "input.nwk")
+        (tmp_path / "foreground.tsv").write_text(
+            "name\ttrait\n" + "".join(f"{name}\t{1 if name == 'a' else 2 if name == 'e' else 0}\n" for name in "abcdefgh")
+        )
+        # Prepare the same intermediate files supplied by GeneGalleon's ASR stage.
+        fitted = subprocess.run([
+            "csubst", "scan", "--alignment_file", "input.fasta", "--rooted_tree_file", "input.nwk",
+            "--foreground", "foreground.tsv", "--fg_format", "2", "--iqtree_model", "GY+FQ",
+            "--scan_pvalue_calibration", "none", "--scan_n_permutations", "0", "--scan_site_plot", "no",
+            "--iqtree_outdir", "fit", "--outdir", "prepare", "--threads", "1",
+        ], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+        assert fitted.returncode == 0, fitted.stdout + fitted.stderr
+        for suffix in ("treefile", "state", "rate", "iqtree", "log"):
+            paths = list((tmp_path / "fit").glob(f"*.{suffix}"))
+            assert len(paths) == 1
+            shutil.copyfile(paths[0], tmp_path / f"input.{suffix}")
+        core = CSUBST_CORE_SCRIPT.read_text()
+        command_start = core.index('  csubst_scan_dir="csubst_scan"')
+        command_end = core.index('\n  if [[ -s "${csubst_scan_dir}/csubst_scan.tsv"', command_start)
+        archive_start = core.index('    if [[ ! -s "${csubst_scan_dir}/csubst_scan_calibration.json"', command_end)
+        archive_end = core.index('    echo "CSUBST scan was successful."', archive_start)
+        shell = core[command_start:command_end] + "\n" + core[archive_start:archive_end]
+        environment = dict(os.environ, csubst_input_base="./input", genetic_code="1", codon_model="GY+FQ",
+                           csubst_scan_unit_mode="clade", csubst_scan_match="any2spe",
+                           csubst_scan_min_event_pp="0.5", csubst_scan_min_support="2",
+                           csubst_scan_rate_event_mode="posterior_sum", csubst_scan_rate_length="n_rescaled",
+                           csubst_scan_rate_exposure="q_weighted", csubst_scan_other_scope="all",
+                           csubst_scan_site_plot="no",
+                           csubst_scan_tree_site_plot_format="pdf", csubst_scan_tree_site_plot_max_sites="30",
+                           csubst_nonsyn_recode="no", GG_TASK_CPUS="1", og_id="OGTEST",
+                           gg_support_dir=str(REPO_ROOT / "workflow/support"),
+                           file_og_csubst_scan_audit=str(tmp_path / "published" / "OGTEST_csubst_scan_audit.zip"))
+        result = subprocess.run(["bash", "-euo", "pipefail", "-c", shell], cwd=tmp_path,
+                                env=environment, capture_output=True, text=True, timeout=180)
+&gt;       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: CSUBST start: 2026-09-11 07:43:53.978506+00:00
+E         csubst scan start: 2026-09-11 07:43:53.979110+00:00
+E         OS: Linux-6.12.76-linuxkit-aarch64-with-glibc2.39
+E         Python version: 3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]
+E         CSUBST version: 1.16.0
+E         CSUBST dependency versions: ete4=4.4.0, requests=2.34.2, numpy=1.26.4, scipy=1.17.1, pandas=3.0.5, cython=3.3.0, matplotlib=3.10.9
+E         CSUBST missing dependency packages: none
+E         CSUBST command: /opt/conda/bin/csubst scan --genetic_code 1 --alignment_file ./input.fasta --rooted_tree_file ./input.nwk --iqtree_treefile ./input.treefile --iqtree_state ./input.state --iqtree_rate ./input.rate --iqtree_iqtree ./input.iqtree --iqtree_log ./input.log --iqtree_model GY+FQ --iqtree_outdir csubst_scan/iqtree --foreground foreground.tsv --fg_format 2 --scan_unit_mode clade --scan_match any2spe --scan_min_event_pp 0.5 --scan_min_support 2 --scan_rate_event_mode posterior_sum --scan_rate_length n_rescaled --scan_rate_exposure q_weighted --scan_other_scope all --scan_pvalue_calibration none --scan_n_permutations 0 --scan_site_plot no --tree_site_plot_format pdf --tree_site_plot_max_sites 30 --nonsyn_recode no --threads 1 --outdir csubst_scan --output_prefix csubst
+E         CSUBST working directory: /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0
+E         CSUBST bug report: https://github.com/kfuku52/csubst/issues
+E         Joint/bridge observations require --scan_rate_exposure endpoint.
+E
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '-euo', 'pipefail', '-c', '  csubst_scan_dir="csubst_scan"\n\n  csubst scan \\\n    --g...tps://github.com/kfuku52/csubst/issues\n', stderr='Joint/bridge observations require --scan_rate_exposure endpoint.\n').returncode
+
+workflow/tests/test_csubst_scan_runtime_integration.py:320: AssertionError</failure></testcase><testcase classname="workflow.tests.test_mcmctree_chains" name="test_cached_conversion_refreshes_advisory_state_without_rewriting_tree" time="0.146" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_zero_rate_boundary[0-0-values0-0.5]" time="3.873" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_replicate_means_error_of_mean_and_missing_coordinates" time="0.009" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_real_native_search_artifacts_resume_and_topology_safe_summary" time="1.268" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_failed_adapter_does_not_replace_any_previous_artifact" time="0.029" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_full_covariance_with_sampling_errors_and_resume[trait-specific]" time="0.641" /><testcase classname="workflow.tests.test_fractionation_bias_integration" name="test_fractionation_bias_core_runs_pair_and_publishes_bundle[False]" time="10.041" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_full_covariance_with_sampling_errors_and_resume[shared]" time="0.717" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle[False]" time="6.174" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_zero_rate_boundary[0-0-values1-0.0]" time="3.481" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_zero_rate_boundary[0-0-values2-1.0]" time="3.202" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle[True]" time="3.318" /><testcase classname="workflow.tests.test_asr_intron_runtime" name="test_intron_asr_zero_rate_boundary[0-0-values3-None]" time="1.021" /><testcase classname="workflow.tests.test_aster_ortools_runtime" name="test_aster_does_not_install_loader_path_activation_hooks" time="0.003" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_default_cds_model_estimates_nuisance_parameters" time="5.162" /><testcase classname="workflow.tests.test_fractionation_bias_integration" name="test_fractionation_bias_core_runs_pair_and_publishes_bundle[True]" time="10.950" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_preserves_numeric_internal_names_for_summary_alignment" time="0.273" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_alternative_selection_modes[bootstrap-auto-True]" time="0.428" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_alternative_selection_modes[BIC-lasso-False]" time="0.369" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_empty_traits_fail_without_publishing_model" time="0.015" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_omits_budget_flags_unless_explicitly_requested[False]" time="0.278" /><testcase classname="workflow.tests.test_native_ou_shift" name="test_adapter_omits_budget_flags_unless_explicitly_requested[True]" time="0.253" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_native_dating_stage_publishes_complete_codon_bundle[gy94-generax]" time="8.431" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_iqtree_stage_retains_profile_and_species_age_contract[]" time="5.618" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_native_dating_stage_publishes_complete_codon_bundle[ecmk07-generax]" time="7.675" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_iqtree_stage_retains_profile_and_species_age_contract[GY+F3X4+R4]" time="114.730" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_bad_cache_container_is_a_recoverable_cache_miss[bad3]" time="0.016" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_api_rows_never_become_cached_data[row0]" time="0.004" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_api_rows_never_become_cached_data[row1]" time="0.008" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_api_rows_never_become_cached_data[row2]" time="0.006" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_api_rows_never_become_cached_data[row3]" time="0.006" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_http_date_retry_after_is_respected" time="0.005" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_ambiguous_trait_group_cannot_choose_the_most_common_trait" time="0.091" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_multiple_tokens_for_one_trait_are_not_double_counted" time="0.023" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_explicitly_unresolved_name_cannot_become_an_exact_match" time="0.011" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_malformed_plans_fail_before_retrieval[gift\tvalue\theight\tnumric\tmean]" time="0.013" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_malformed_plans_fail_before_retrieval[gift\tvalue\theight\tnumeric\tmen]" time="0.013" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_malformed_plans_fail_before_retrieval[gift\tvalue\tspecies\tnumeric\tmean]" time="0.012" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_malformed_plans_fail_before_retrieval[gift\tvalue\theight\tnumeric\tmean\textra]" time="0.015" /><testcase classname="workflow.tests.test_gift_retrieval_audit" name="test_invalid_numeric_values_cannot_silently_disappear[inf]" time="0.013" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[4]" time="0.018" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[5]" time="0.006" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[6]" time="0.006" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[7]" time="0.008" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[8]" time="0.007" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[9]" time="0.007" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[10]" time="0.006" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[11]" time="0.006" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_query_extraction_reuses_all_roots_and_reconciles_extracted_tree[None]" time="6.680" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_query_extraction_reuses_all_roots_and_reconciles_extracted_tree[]" time="6.665" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_native_dating_stage_publishes_complete_codon_bundle[ecmrest-lca]" time="7.626" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_query_extraction_reuses_all_roots_and_reconciles_extracted_tree[ \n]" time="7.270" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_failed_codon_dating_keeps_previous_results" time="1.663" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[(A:1,B:1);(C:1,D:1);]" time="0.638" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[();]" time="0.513" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[(A:1,B:1));]" time="0.526" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[#NEXUS\nBEGIN TREES;\nEND;]" time="0.531" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[(A:-1,B:1);]" time="0.525" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_accepts_public_unit_nhx_and_figtree[(A:10,B:10);]" time="1.754" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[(A:1,B:1)]" time="0.522" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_accepts_public_unit_nhx_and_figtree[((A:10,B:10)named:20[&amp;&amp;NHX:age=10:age_ci_low=8:age_ci_high=12:age_ci_kind=HPD:age_ci_level=0.95],C:30);]" time="1.732" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_rejects_invalid_inputs_without_replacing_plot[(A:1,B:1);garbage]" time="0.464" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_nwkit_root_selection_keeps_reconciliation_priority_and_branch_lengths[mad-mad_compatible_with_reconciliation]" time="4.138" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_plot_accepts_public_unit_nhx_and_figtree[#NEXUS\nBEGIN TREES;\nTREE dated = [&amp;R] (A:10,B:10)[&amp;95%HPD={8,12}];\nEND;]" time="1.698" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_selection_rejects_bad_candidates_and_preserves_outputs[empty_file]" time="0.489" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_selection_rejects_bad_candidates_and_preserves_outputs[duplicate_tips]" time="1.774" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_nwkit_root_selection_keeps_reconciliation_priority_and_branch_lengths[midpoint-midpoint_compatible_with_reconciliation]" time="4.222" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_selection_rejects_bad_candidates_and_preserves_outputs[different_tips]" time="1.845" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_selection_rejects_bad_candidates_and_preserves_outputs[unresolved_root]" time="1.725" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_nwkit_root_selection_keeps_reconciliation_priority_and_branch_lengths[outgroup-first_reconciliation_candidate]" time="4.155" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_dated_tree_stage_keeps_pdf_pair_on_failed_install_and_tracks_engine" time="6.307" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_core_stage_invalidates_engine_and_preserves_previous_bundle_on_failure[dna]" time="10.922" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_adapter_consumes_real_nwkit_candidates" time="4.155" /><testcase classname="workflow.tests.test_owned_runtime_contracts" name="test_runtime_records_exact_revisions_for_every_moving_source" time="0.002" /><testcase classname="workflow.tests.test_owned_runtime_contracts" name="test_genegalleon_core_species_selection_executes_real_nwkit_sample" time="0.684" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_pairs_pool_methods_and_keep_family_adjustments" time="0.020" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_duplicate_identity_and_missing_schema_are_errors" time="0.004" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_intercepts_invalid_values_and_empty" time="0.013" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_database_rebuild_from_comparison_only" time="0.178" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_summary_database_cli_live_and_zip[False]" time="0.433" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_summary_database_cli_live_and_zip[True]" time="0.701" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_bh_matches_r_reference" time="0.090" /><testcase classname="workflow.tests.test_pgls_multiplicity" name="test_predictors_are_separate_but_levels_and_omnibus_share_a_pair" time="0.009" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_reconciled_speciation_contrast_end_to_end_with_nwkit" time="13.170" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_core_stage_invalidates_engine_and_preserves_previous_bundle_on_failure[pep]" time="11.222" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_species_tree_comparators_use_matched_species_inputs[brownian-auto]" time="0.846" /><testcase classname="workflow.tests.test_nwkit_tree_workflows_runtime" name="test_root_selection_rejects_bad_candidates_and_preserves_outputs[missing_file]" time="0.501" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_species_tree_comparators_use_matched_species_inputs[eb--0.1]" time="0.881" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_species_tree_comparators_use_matched_species_inputs[lambda-0.6]" time="0.873" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_species_pgls_cli_preserves_inputs_and_complete_previous_bundle[input_alias]" time="0.315" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_rsc_only_method_does_not_require_species_aggregation_inputs" time="0.788" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_species_pgls_cli_preserves_inputs_and_complete_previous_bundle[duplicate_output]" time="0.677" /><testcase classname="workflow.tests.test_rsc_runtime_integration" name="test_species_pgls_cli_preserves_inputs_and_complete_previous_bundle[late_destination_error]" time="0.669" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_declared_categories_are_excluded_even_when_numeric" time="0.004" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_numeric_corruption_is_never_auto_excluded[Inf]" time="0.006" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_numeric_corruption_is_never_auto_excluded[-Inf]" time="0.007" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_numeric_corruption_is_never_auto_excluded[TRUE]" time="0.007" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_malformed_table_rejected[species\tx\tx\na\t1\t2\n]" time="0.002" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_malformed_table_rejected[species\tx\na\t1\t2\n]" time="0.005" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_malformed_table_rejected[species\t x\na\t1\n]" time="0.003" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_legacy_numeric_table_and_aggregated_binary_keep_numeric_values" time="0.003" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_generator_schema_and_r_analysis_connection" time="3.406" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_numeric_corruption_is_never_auto_excluded[bad]" time="0.003" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_selection_report_cannot_replace_input[hardlink]" time="0.030" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_selection_report_cannot_replace_input[symlink]" time="0.029" /><testcase classname="workflow.tests.test_synteny_search_integration" name="test_search_windows_strands_boundaries_and_cache[cds]" time="1.172" /><testcase classname="workflow.tests.test_synteny_search_integration" name="test_search_windows_strands_boundaries_and_cache[protein]" time="1.151" /><testcase classname="workflow.tests.test_synteny_search_integration" name="test_checked_in_real_aha_neighborhoods_and_promoters" time="10.755" /><testcase classname="workflow.tests.test_species_trait_schema" name="test_selection_report_cannot_replace_input[direct]" time="0.036" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_external_iqtree_library_stage_preserves_outputs_and_provenance[]" time="4.684" /><testcase classname="workflow.tests.test_native_tree_dating" name="test_external_iqtree_library_stage_preserves_outputs_and_provenance[GY+F3X4+R4]" time="51.375" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_gene_root_reconciliation_and_statistics_use_native_outputs" time="1.793" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_busco_candidate_stage_preserves_all_ties_and_previous_results_on_failure[dna]" time="1.611" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_busco_candidate_stage_preserves_all_ties_and_previous_results_on_failure[pep]" time="1.644" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[0]" time="0.009" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[1]" time="0.004" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[2]" time="0.004" /><testcase classname="workflow.tests.test_nwkit_reconciliation_runtime" name="test_native_results_match_recorded_notung_reference[3]" time="0.004" /></testsuite></testsuites>

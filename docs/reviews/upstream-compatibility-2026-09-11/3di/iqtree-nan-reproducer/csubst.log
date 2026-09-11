@@ -1,0 +1,93 @@
+IQ-TREE version 3.1.4 for Linux ARM 64-bit built Sep  9 2026
+Developed by Bui Quang Minh, Thomas Wong, Nhan Ly-Trong, Huaiyan Ren
+Contributed by Lam-Tung Nguyen, Dominik Schrempf, Chris Bielow,
+Olga Chernomor, Michael Woodhams, Diep Thi Hoang, Heiko Schmidt
+
+Host:    971c3f316506 (SSE4.2, 7 GB RAM)
+Command: iqtree -s csubst.3di/csubst.fasta -te csubst.3di/csubst.nwk -m GY+F+R4 -T AUTO --threads-max 2 --seqtype CODON2 --prefix csubst.3di/csubst --ancestral --rate --seed 12345 --redo
+Seed:    12345 (Using SPRNG - Scalable Parallel Random Number Generator)
+Time:    Fri Sep 11 10:19:28 2026
+Kernel:  SSE2 - auto-detect threads (12 CPU cores detected)
+
+Reading alignment file csubst.3di/csubst.fasta ... Fasta format detected
+Reading fasta file: done in 6.41346e-05 secs using 48.34% CPU
+Alignment most likely contains DNA/RNA sequences
+Converting to codon sequences with genetic code 2 ...
+Constructing alignment: done in 8.4877e-05 secs using 709.3% CPU
+Alignment has 8 sequences with 100 columns, 100 distinct patterns
+50 parsimony-informative, 47 singleton sites, 3 constant sites
+   Gap/Ambiguity  Composition  p-value
+Analyzing sequences: done in 1.71661e-05 secs using 605.8% CPU
+   1  a    0.00%    passed     92.20%
+   2  b    1.00%    passed     91.26%
+   3  c    1.00%    passed     99.80%
+   4  d    0.00%    passed     99.89%
+   5  e    0.00%    passed     96.72%
+   6  f    0.00%    passed     99.53%
+   7  g    0.00%    passed     79.69%
+   8  h    0.00%    passed     92.78%
+****  TOTAL    0.25%  0 sequences failed composition chi2 test (p-value<5%; df=59)
+WARNING: State(s) TGG rarely appear in alignment and may cause numerical problems
+Reading input tree file csubst.3di/csubst.nwk ... rooted tree
+
+NOTE: 2 MB RAM (0 GB) is required!
+Measuring multi-threading efficiency up to 2 CPU cores
+Increase to 10 rounds for branch lengths
+13 trees examined
+Threads: 1 / Time: 2.006 sec / Speedup: 1.000 / Efficiency: 100% / LogL: -1951
+Threads: 2 / Time: 0.991 sec / Speedup: 2.026 / Efficiency: 101% / LogL: -1951
+Determining AUTO threadcount: done in 2.99757 secs using 185.8% CPU
+BEST NUMBER OF THREADS: 2
+
+Estimate model parameters (epsilon = 0.010)
+1. Initial log-likelihood: -1862.238
+2. Current log-likelihood: -1825.473
+3. Current log-likelihood: -1825.283
+4. Current log-likelihood: -1825.253
+5. Current log-likelihood: -1825.234
+6. Current log-likelihood: -1825.219
+7. Current log-likelihood: -1825.205
+8. Current log-likelihood: -1825.191
+9. Current log-likelihood: -1825.176
+10. Current log-likelihood: -1825.160
+11. Current log-likelihood: -1825.143
+12. Current log-likelihood: -1825.125
+13. Current log-likelihood: -1825.104
+14. Current log-likelihood: -1825.084
+15. Current log-likelihood: -1825.062
+16. Current log-likelihood: -1825.042
+17. Current log-likelihood: -1825.025
+18. Current log-likelihood: -1825.010
+19. Current log-likelihood: -1824.998
+Optimal log-likelihood: -1824.990
+Nonsynonymous/synonymous ratio (omega): 0.975
+Transition/transversion ratio (kappa): 1.261
+Site proportion and rates:  (0.361,0.617) (0.125,0.617) (0.239,1.325) (0.275,1.397)
+Parameters optimization took 19 rounds (4.091 sec)
+Wrote distance file to...
+BEST SCORE FOUND : -1824.990
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+Ancestral state probabilities printed to csubst.3di/csubst.state
+Empirical proportions for each category: 0.570 0.000 0.000 0.430
+Site rates printed to csubst.3di/csubst.rate
+Total tree length: 4.083
+
+Total number of iterations: 0
+CPU time used for tree search: 0.000 sec (0h:0m:0s)
+Wall-clock time used for tree search: 0.000 sec (0h:0m:0s)
+Total CPU time used: 13.790 sec (0h:0m:13s)
+Total wall-clock time used: 7.168 sec (0h:0m:7s)
+
+Analysis results written to:
+  IQ-TREE report:                csubst.3di/csubst.iqtree
+  Maximum-likelihood tree:       csubst.3di/csubst.treefile
+  Site-specific rates:           csubst.3di/csubst.rate
+  Ancestral state:               csubst.3di/csubst.state
+  Screen log file:               csubst.3di/csubst.log
+
+Date and Time: Fri Sep 11 10:19:35 2026

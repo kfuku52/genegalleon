@@ -1,0 +1,44 @@
+{
+  "date": "2026-09-11",
+  "genegalleon_commit": "10fc03bd9c40c51cc635c5254e6b099c5ad75323",
+  "branch": "main",
+  "upstreams": {
+    "csubst": {
+      "version": "1.16.0",
+      "commit": "cde05f34e5ea51c3f0f1bae721ccd45243e46f38"
+    },
+    "nwkit": {
+      "version": "0.43.16",
+      "commit": "1996588e561d10aebc47c4daf90be836bbebd315"
+    },
+    "cdskit": {
+      "version": "0.31.0",
+      "commit": "20328e15c544b01481e29b998956127416480467"
+    },
+    "amalgkit": {
+      "version": "0.16.88",
+      "commit": "21ce1417410ec05aea409370d496ce01896671d0"
+    }
+  },
+  "runtime": {
+    "platform": "linux/arm64",
+    "base_image": "local/genegalleon:nwkit-shift-covariance-dev",
+    "base_image_id": "sha256:c8c69075b5d591499bf3195ec912ef5b5e1aa1cd163f03864639ed6a669e9429",
+    "overlay": "four upstream wheels built from git archive of fetched origin/master, no dependency resolution",
+    "numpy": "1.26.4",
+    "scikit-learn": "1.9.0",
+    "torch": "2.13.0",
+    "ete4": "4.4.0",
+    "additional_setup": "gcc, g++, make installed for source compilation; R posterior and its required dependencies installed to match current repository R manifest"
+  },
+  "localization_model": {
+    "alias": "targeting5-perox-deeploc21-et-v1",
+    "sha256": "d0998df8819d975b4392342ab78dccc0dd95cf301e4d2df8f38c73d0b5aab445",
+    "matches_current_upstream_registry": true
+  },
+  "limits": [
+    "not a clean full standard image rebuild",
+    "no native amd64 or Apptainer/Singularity execution",
+    "no full production dataset or large model inference"
+  ]
+}

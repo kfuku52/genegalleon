@@ -1,0 +1,1333 @@
+{
+  "shell_calls": [
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1401,
+      "tool": "nwkit",
+      "command": "root",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1436,
+      "tool": "nwkit",
+      "command": "transfer",
+      "options": [
+        "--infile",
+        "--infile2",
+        "--length",
+        "--name",
+        "--outfile",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1506,
+      "tool": "nwkit",
+      "command": "root",
+      "options": [
+        "--infile",
+        "--infile2",
+        "--method",
+        "--outfile"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1600,
+      "tool": "nwkit",
+      "command": "convert",
+      "options": [
+        "--from",
+        "--infile",
+        "--outfile",
+        "--time-factor",
+        "--to"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1605,
+      "tool": "nwkit",
+      "command": "validate",
+      "options": [
+        "--fail-on-issue",
+        "--infile",
+        "--require-all-lengths"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1609,
+      "tool": "nwkit",
+      "command": "convert",
+      "options": [
+        "--infile",
+        "--outfile",
+        "--to"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1610,
+      "tool": "nwkit",
+      "command": "convert",
+      "options": [
+        "--age-ci",
+        "--infile",
+        "--outfile",
+        "--to"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 1898,
+      "tool": "nwkit",
+      "command": "transfer",
+      "options": [
+        "--infile",
+        "--infile2",
+        "--length",
+        "--name",
+        "--outfile",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 2075,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 2801,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 2868,
+      "tool": "cdskit",
+      "command": "mask",
+      "options": [
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 2882,
+      "tool": "cdskit",
+      "command": "backalign",
+      "options": [
+        "--aa_aln",
+        "--codon_table",
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 3580,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 3581,
+      "tool": "nwkit",
+      "command": "label",
+      "options": [
+        "--force",
+        "--outfile",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 3756,
+      "tool": "nwkit",
+      "command": "mcmctree",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 4159,
+      "tool": "nwkit",
+      "command": "label",
+      "options": [
+        "--force",
+        "--infile",
+        "--outfile",
+        "--outformat",
+        "--prefix",
+        "--start",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 5154,
+      "tool": "cdskit",
+      "command": "mask",
+      "options": [
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_evolution_core.sh",
+      "line": 5181,
+      "tool": "cdskit",
+      "command": "backalign",
+      "options": [
+        "--aa_aln",
+        "--codon_table",
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 928,
+      "tool": "amalgkit",
+      "command": "metadata",
+      "options": [
+        "--out_dir"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 1950,
+      "tool": "amalgkit",
+      "command": "getfastq",
+      "options": [
+        "--out_dir"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 3523,
+      "tool": "amalgkit",
+      "command": "integrate",
+      "options": [
+        "--download_dir",
+        "--fastq_dir",
+        "--out_dir",
+        "--remove_tmp",
+        "--threads"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 4130,
+      "tool": "cdskit",
+      "command": "longestorf",
+      "options": [
+        "--annotate_seq_name",
+        "--codon_table",
+        "--out_file",
+        "--seq_file",
+        "--threads"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 4146,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [
+        "--codon_table"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 4148,
+      "tool": "cdskit",
+      "command": "aggregate",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 4670,
+      "tool": "amalgkit",
+      "command": "quant",
+      "options": [
+        "--out_dir"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_transcriptome_generation_core.sh",
+      "line": 4751,
+      "tool": "amalgkit",
+      "command": "merge",
+      "options": [
+        "--metadata",
+        "--out_dir"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 847,
+      "tool": "nwkit",
+      "command": "prune",
+      "options": [
+        "--infile",
+        "--invert-match",
+        "--outfile",
+        "--pattern"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 1002,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 1003,
+      "tool": "nwkit",
+      "command": "mark",
+      "options": [
+        "--insert-text",
+        "--outformat",
+        "--pattern",
+        "--target",
+        "--target-only-clade"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 1004,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 2537,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [
+        "--codon_table"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 2918,
+      "tool": "cdskit",
+      "command": "mask",
+      "options": [
+        "--codon_table",
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 2936,
+      "tool": "cdskit",
+      "command": "backalign",
+      "options": [
+        "--aa_aln",
+        "--codon_table",
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 2970,
+      "tool": "cdskit",
+      "command": "stats",
+      "options": [
+        "--mode",
+        "--out_file",
+        "--seq_file",
+        "--seq_type"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3053,
+      "tool": "cdskit",
+      "command": "maxalign",
+      "options": [
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3116,
+      "tool": "cdskit",
+      "command": "rmseq",
+      "options": [
+        "--problematic_percent",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3119,
+      "tool": "cdskit",
+      "command": "hammer",
+      "options": [
+        "--codon_table",
+        "--nail",
+        "--out_file",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3183,
+      "tool": "cdskit",
+      "command": "hammer",
+      "options": [
+        "--codon_table",
+        "--nail",
+        "--seq_file"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3187,
+      "tool": "cdskit",
+      "command": "rmseq",
+      "options": [
+        "--out_file",
+        "--problematic_percent"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3230,
+      "tool": "cdskit",
+      "command": "stats",
+      "options": [
+        "--mode",
+        "--out_file",
+        "--seq_file",
+        "--seq_type"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3427,
+      "tool": "nwkit",
+      "command": "label",
+      "options": [
+        "--force",
+        "--outfile",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3719,
+      "tool": "nwkit",
+      "command": "subtree",
+      "options": [
+        "--dup-conf-score-threshold",
+        "--infile",
+        "--leaves",
+        "--orthogroup",
+        "--outfile"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3723,
+      "tool": "nwkit",
+      "command": "intersection",
+      "options": [
+        "--infile",
+        "--match",
+        "--outfile",
+        "--seqin",
+        "--seqout"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3732,
+      "tool": "nwkit",
+      "command": "intersection",
+      "options": [
+        "--infile",
+        "--match",
+        "--outfile",
+        "--seqin",
+        "--seqout"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3745,
+      "tool": "cdskit",
+      "command": "hammer",
+      "options": [
+        "--nail"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3819,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--outfile",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3892,
+      "tool": "nwkit",
+      "command": "nhx2nwk",
+      "options": [
+        "--infile",
+        "--outfile"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 3940,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--outfile",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4052,
+      "tool": "nwkit",
+      "command": "reconcile",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4218,
+      "tool": "nwkit",
+      "command": "radte",
+      "options": [
+        "--alignment",
+        "--backend",
+        "--figure-out",
+        "--inference",
+        "--interval-level",
+        "--likelihood",
+        "--max-age",
+        "--maxiter",
+        "--out-prefix",
+        "--seed",
+        "--substitution-model",
+        "--uncertainty"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4470,
+      "tool": "nwkit",
+      "command": "prune",
+      "options": [
+        "--infile",
+        "--invert-match",
+        "--pattern"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4475,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--length",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4476,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4485,
+      "tool": "nwkit",
+      "command": "prune",
+      "options": [
+        "--infile",
+        "--invert-match",
+        "--pattern",
+        "--preserve-properties"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4491,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--length",
+        "--preserve-properties",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4492,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--preserve-properties",
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4501,
+      "tool": "nwkit",
+      "command": "prune",
+      "options": [
+        "--infile",
+        "--invert-match",
+        "--pattern"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4506,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--length",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4507,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4659,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4661,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4800,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4805,
+      "tool": "nwkit",
+      "command": "mark",
+      "options": [
+        "--insert-separator",
+        "--insert-text",
+        "--outfile",
+        "--pattern",
+        "--target",
+        "--target-only-clade"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4930,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 4932,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 5764,
+      "tool": "nwkit",
+      "command": "drop",
+      "options": [
+        "--infile",
+        "--name",
+        "--support",
+        "--target"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 5765,
+      "tool": "nwkit",
+      "command": "intersection",
+      "options": [
+        "--seqin",
+        "--seqout"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 5766,
+      "tool": "nwkit",
+      "command": "sanitize",
+      "options": [
+        "--remove-singleton",
+        "--resolve-polytomy"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 5925,
+      "tool": "csubst",
+      "command": "search",
+      "options": [
+        "--alignment_file",
+        "--cutoff_stat",
+        "--exhaustive_until",
+        "--expectation_method",
+        "--fg_exclude_wg",
+        "--fg_stem_only",
+        "--genetic_code",
+        "--iqtree_iqtree",
+        "--iqtree_log",
+        "--iqtree_model",
+        "--iqtree_rate",
+        "--iqtree_state",
+        "--iqtree_treefile",
+        "--max_arity",
+        "--max_combination",
+        "--nonsyn_recode",
+        "--rooted_tree_file",
+        "--threads"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 6052,
+      "tool": "csubst",
+      "command": "scan",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_gene_evolution_core.sh",
+      "line": 6072,
+      "tool": "csubst",
+      "command": "scan",
+      "options": [
+        "--alignment_file",
+        "--fg_format",
+        "--foreground",
+        "--genetic_code",
+        "--iqtree_iqtree",
+        "--iqtree_log",
+        "--iqtree_model",
+        "--iqtree_outdir",
+        "--iqtree_rate",
+        "--iqtree_state",
+        "--iqtree_treefile",
+        "--nonsyn_recode",
+        "--outdir",
+        "--output_prefix",
+        "--rooted_tree_file",
+        "--scan_match",
+        "--scan_min_event_pp",
+        "--scan_min_support",
+        "--scan_n_permutations",
+        "--scan_other_scope",
+        "--scan_pvalue_calibration",
+        "--scan_rate_event_mode",
+        "--scan_rate_exposure",
+        "--scan_rate_length",
+        "--scan_site_plot",
+        "--scan_unit_mode",
+        "--threads",
+        "--tree_site_plot_format",
+        "--tree_site_plot_max_sites"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_annotation_core.sh",
+      "line": 388,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [
+        "--codon_table"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_annotation_core.sh",
+      "line": 389,
+      "tool": "cdskit",
+      "command": "mask",
+      "options": [
+        "--ambiguous_codon",
+        "--codon_table",
+        "--mask_char",
+        "--stop_codon"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "core/gg_genome_annotation_core.sh",
+      "line": 709,
+      "tool": "cdskit",
+      "command": "mask",
+      "options": [
+        "--ambiguous_codon",
+        "--codon_table",
+        "--mask_char",
+        "--stop_codon"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "support/gg_versions.sh",
+      "line": 84,
+      "tool": "cdskit",
+      "command": "maxalign",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "support/gg_util/04_busco_runtime.sh",
+      "line": 447,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [
+        "--codon_table"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "support/gg_util/04_busco_runtime.sh",
+      "line": 451,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "support/gg_util/04_busco_runtime.sh",
+      "line": 463,
+      "tool": "cdskit",
+      "command": "pad",
+      "options": [
+        "--codon_table"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "support/gg_util/04_busco_runtime.sh",
+      "line": 464,
+      "tool": "cdskit",
+      "command": "mask",
+      "options": [
+        "--ambiguous_codon",
+        "--codon_table",
+        "--mask_char",
+        "--stop_codon"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    },
+    {
+      "file": "support/gg_util/04_busco_runtime.sh",
+      "line": 491,
+      "tool": "cdskit",
+      "command": "localize",
+      "options": [
+        "--codon_table",
+        "--in_seq_format",
+        "--include_features",
+        "--model",
+        "--model_download",
+        "--organism_group",
+        "--report",
+        "--seq_file",
+        "--seq_type",
+        "--threads"
+      ],
+      "help_exit": 0,
+      "unknown_options": []
+    }
+  ],
+  "imports": [
+    {
+      "file": "plot_dated_tree.py",
+      "line": 11,
+      "module": "nwkit.file_paths",
+      "missing": []
+    },
+    {
+      "file": "plot_dated_tree.py",
+      "line": 12,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_audit.py",
+      "line": 38,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_audit.py",
+      "line": 54,
+      "module": "nwkit.time_tree",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_audit.py",
+      "line": 66,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_audit.py",
+      "line": 96,
+      "module": "nwkit.time_tree",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_audit.py",
+      "line": 148,
+      "module": "nwkit.time_tree",
+      "missing": []
+    },
+    {
+      "file": "detect_ou_shift_native.py",
+      "line": 177,
+      "module": "nwkit.cli",
+      "missing": []
+    },
+    {
+      "file": "detect_ou_shift_native.py",
+      "line": 178,
+      "module": "nwkit.file_paths",
+      "missing": []
+    },
+    {
+      "file": "detect_ou_shift_native.py",
+      "line": 179,
+      "module": "nwkit.output_transaction",
+      "missing": []
+    },
+    {
+      "file": "orthogroup_copy_number_trait_selection.py",
+      "line": 21,
+      "module": "nwkit.file_paths",
+      "missing": []
+    },
+    {
+      "file": "orthogroup_copy_number_trait_selection.py",
+      "line": 22,
+      "module": "nwkit.output_transaction",
+      "missing": []
+    },
+    {
+      "file": "orthogroup_copy_number_trait_selection.py",
+      "line": 23,
+      "module": "nwkit.rooting_state",
+      "missing": []
+    },
+    {
+      "file": "orthogroup_copy_number_trait_selection.py",
+      "line": 24,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 429,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 646,
+      "module": "nwkit.conventions",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 680,
+      "module": "nwkit.contrast",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 681,
+      "module": "nwkit.ordinary_regression",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 682,
+      "module": "nwkit.replicates",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 726,
+      "module": "nwkit.ordinary_regression",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 1003,
+      "module": "nwkit.file_paths",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 1004,
+      "module": "nwkit.output_transaction",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 1034,
+      "module": "nwkit.ordinary_regression",
+      "missing": []
+    },
+    {
+      "file": "species_tree_pgls.py",
+      "line": 1035,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "reconciled_speciation_contrast.py",
+      "line": 1033,
+      "module": "nwkit.contrast",
+      "missing": []
+    },
+    {
+      "file": "reconciled_speciation_contrast.py",
+      "line": 1039,
+      "module": "nwkit.reconcile",
+      "missing": []
+    },
+    {
+      "file": "reconciled_speciation_contrast.py",
+      "line": 1040,
+      "module": "nwkit.regress",
+      "missing": []
+    },
+    {
+      "file": "reconciled_speciation_contrast.py",
+      "line": 1041,
+      "module": "nwkit.replicates",
+      "missing": []
+    },
+    {
+      "file": "reconciled_speciation_contrast.py",
+      "line": 1042,
+      "module": "nwkit.rsc_diagnostics",
+      "missing": []
+    },
+    {
+      "file": "asr_intron_evolution.py",
+      "line": 45,
+      "module": "nwkit.file_paths",
+      "missing": []
+    },
+    {
+      "file": "asr_intron_evolution.py",
+      "line": 46,
+      "module": "nwkit.output_transaction",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_experiments.py",
+      "line": 53,
+      "module": "nwkit.time_tree",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_experiments.py",
+      "line": 96,
+      "module": "nwkit.time_tree",
+      "missing": []
+    },
+    {
+      "file": "mcmctree_calibration_experiments.py",
+      "line": 115,
+      "module": "nwkit.time_tree",
+      "missing": []
+    },
+    {
+      "file": "species_tree_guided_gene_tree_rooting.py",
+      "line": 16,
+      "module": "nwkit.clade_mapping",
+      "missing": []
+    },
+    {
+      "file": "species_tree_guided_gene_tree_rooting.py",
+      "line": 17,
+      "module": "nwkit.file_paths",
+      "missing": []
+    },
+    {
+      "file": "species_tree_guided_gene_tree_rooting.py",
+      "line": 18,
+      "module": "nwkit.output_transaction",
+      "missing": []
+    },
+    {
+      "file": "species_tree_guided_gene_tree_rooting.py",
+      "line": 19,
+      "module": "nwkit.util",
+      "missing": []
+    },
+    {
+      "file": "csubst_site_wrapper.py",
+      "line": 1060,
+      "module": "csubst",
+      "missing": []
+    },
+    {
+      "file": "csubst_site_wrapper.py",
+      "line": 1061,
+      "module": "csubst",
+      "missing": []
+    },
+    {
+      "file": "csubst_site_wrapper.py",
+      "line": 1062,
+      "module": "csubst",
+      "missing": []
+    }
+  ]
+}

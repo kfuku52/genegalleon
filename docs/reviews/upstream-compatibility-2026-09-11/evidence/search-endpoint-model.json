@@ -1,0 +1,55 @@
+{
+  "codon": {
+    "observed_storage": "projections",
+    "retained_branches": null,
+    "direct_projection": true,
+    "block_size": 64,
+    "rates": [
+      0.464,
+      0.4652,
+      1.5785,
+      1.6232
+    ],
+    "weights": [
+      0.18348165183481652,
+      0.34656534346565343,
+      0.20607939206079393,
+      0.26387361263873615
+    ],
+    "branch_lengths": [
+      0.659937301,
+      0.3345894171,
+      0.2473022653,
+      0.2810945774,
+      0.3969083512,
+      0.2744660623,
+      0.2184779869,
+      0.4446713052,
+      0.338518635,
+      0.1882826349,
+      0.3073544153,
+      0.4385596243,
+      0.3122269094,
+      0.2184779869,
+      0.0
+    ],
+    "parameter_source": {
+      "precision": "reported_parameters",
+      "model": "ECMK07+F+R4",
+      "generator_sha256": "bca244f2828a670638f49604938aa317cd2bb66bd925b1401cf4358d5d39abb6"
+    },
+    "missing_events": "excluded_from_reporting; latent_states_integrated"
+  },
+  "schema_version": 2,
+  "input_sha256": "71dcbe920f5e804d9872f04f20324d127c8c600f03df2787f76ca031f78a3828",
+  "substitution_posterior": "joint",
+  "quantity": "endpoint_state_difference",
+  "expectation": "fitted_parent_and_rate_posterior_predictive",
+  "branch_combinations": "factorized_edge_scores",
+  "block_size": 64,
+  "codon_parameter_precision": {
+    "precision": "reported_parameters",
+    "model": "ECMK07+F+R4",
+    "generator_sha256": "bca244f2828a670638f49604938aa317cd2bb66bd925b1401cf4358d5d39abb6"
+  }
+}

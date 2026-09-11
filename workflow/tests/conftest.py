@@ -10,6 +10,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 INTEGRATION_DOWNLOAD_FILES = {
+    "test_csubst_3di_runtime.py",
     "test_format_species_inputs_download.py",
     "test_format_species_inputs_download_runtime.py",
     "test_format_species_inputs_provider_pages.py",

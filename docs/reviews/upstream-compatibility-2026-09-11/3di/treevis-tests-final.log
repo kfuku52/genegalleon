@@ -1,0 +1,62 @@
+Width of folloowing columns will be updated according to --rel_widths: tree tiplabel
+2026-09-11 10:01:53.193358 Adding site-state column: site_state_dayhoff6
+2026-09-11 10:01:53.235172 Adding amino acid site column: amino_acid_site
+Negative trait values will be replaced with 0.
+Trait data are not transformed.
+Relative trait values (x/(max(xs_leaf))) will be displayed.
+Negative trait values will be replaced with 0.
+Trait data are transformed by log2(x).
+Non-finite trait values will be treated as missing.
+Absolute trait values will be displayed.
+Detected universal overlap (motifs will be merged): M1 M2
+2026-09-11 10:01:53.278398 Adding point plot column.
+2026-09-11 10:01:53.306961 Adding fimo column.
+No FIMO records are available. FIMO plot will not be displayed.
+2026-09-11 10:01:53.307836 Adding fimo column.
+No FIMO records passed the qvalue cutoff. FIMO plot will not be displayed.
+2026-09-11 10:01:53.308548 Adding fimo column.
+2026-09-11 10:01:53.344124 Adding amino acid site column: amino_acid_site
+Amino acid site list is empty. amino_acid_site column will not be added.
+2026-09-11 10:01:53.344234 Adding amino acid site column: amino_acid_site
+Amino acid site list is empty. amino_acid_site column will not be added.
+2026-09-11 10:01:53.344793 Adding heatmap column.
+2026-09-11 10:01:53.371025 Adding heatmap column.
+2026-09-11 10:01:53.395416 Adding heatmap column.
+2026-09-11 10:01:53.420172 Adding text column.
+2026-09-11 10:01:53.429338 Adding categorical column.
+2026-09-11 10:01:53.452305 Adding meme column.
+2026-09-11 10:01:53.483987 Adding fimo column.
+2026-09-11 10:01:53.520896 Adding fimo column.
+2026-09-11 10:01:53.576229 Adding fimo column.
+2026-09-11 10:01:53.611119 Adding point plot column.
+All pointplot values are NA/NaN/Inf. Pointplot panel will not be added.
+2026-09-11 10:01:53.612354 Adding heatmap column.
+All heatmap values are NA/NaN/Inf. Heatmap panel will not be added.
+so_event_parent will be used to define branch events.
+Nodes will be categorized into: S, D
+detected node categories: D
+Warning: support_unrooted : support value at root node is not NA ( 100 ). Masking.
+Non-NA root support is no problem if this is a pruned tree. If not, check the data carefully.
+Splitting nested clade orthologs. Row numbers 1 and 2
+Number of motifs with displayed connections: 1
+Number of motifs with displayed connections: 0
+Number of motifs with displayed connections: 1
+Detected universal overlap (motifs will be merged): X1 X2 Y1 Y2
+Detected universal overlap (motifs will be merged): X1 X2 Y1 Y2
+Number of motifs with displayed connections: 1
+Number of motifs with displayed connections: 2
+Number of motifs with displayed connections: 2
+Long-branch display compression applied. num_long = 1 detect_threshold = 0.5 max_original = 10 max_display = 0.445
+2026-09-11 10:01:57.783476 Adding alignment column.
+2026-09-11 10:01:57.827544 Adding alignment column.
+Untrimmed alignment was not provided. Domain coloring in the alignment panel will be disabled.
+2026-09-11 10:01:57.937364 Adding alignment column.
+2026-09-11 10:01:57.974666 Adding alignment column.
+genegalleon.treevis package tests passed.
+2026-09-11 10:01:58.010488 Adding tip label column.
+2026-09-11 10:01:58.041391 Adding tip label column.
+2026-09-11 10:01:58.054955 Adding tip label column.
+2026-09-11 10:01:58.064793 Adding tip label column.
+2026-09-11 10:01:58.075074 Adding tip label column.
+2026-09-11 10:01:58.08462 Adding tip label column.
+2026-09-11 10:01:58.093897 Adding integer column.

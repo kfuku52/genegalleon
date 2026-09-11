@@ -17,7 +17,7 @@ sqlalchemy
 statsmodels
 tenacity
 tqdm
-pytorch
+pytorch>=2.6
 
 # genegalleon bioinformatics core (intended to be cross-arch)
 blast

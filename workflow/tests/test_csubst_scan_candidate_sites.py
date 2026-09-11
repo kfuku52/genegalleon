@@ -985,7 +985,7 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
                 "csubst.state": "placeholder\n",
                 "csubst.rate": "placeholder\n",
                 "csubst.iqtree": "placeholder\n",
-                "csubst.log": "placeholder\n",
+                "csubst.log": f"Converting to codon sequences with genetic code {1 if og == 'OG0001' else 2} ...\n",
             }.items():
                 archive.writestr(f"{og}.iqtree.anc/{filename}", content)
         (family_dir / "clipkit" / f"{og}_cds.clipkit.fa").write_text(
@@ -1089,11 +1089,13 @@ with open(os.environ["FAKE_RSCRIPT_LOG"], "a", encoding="utf-8") as handle:
     assert "candidates packaged" in combined_stdout
     assert "existing ZIP retained" in combined_stdout
     assert len(csubst_log.read_text(encoding="utf-8").splitlines()) == 2
+    assert "--genetic_code 1" in csubst_log.read_text(encoding="utf-8")
+    assert "--genetic_code 2" in csubst_log.read_text(encoding="utf-8")
     assert "--pdb" not in csubst_log.read_text(encoding="utf-8")
     rscript_lines = rscript_log.read_text(encoding="utf-8").splitlines()
     assert len(rscript_lines) == 2
     assert any("amino_acid_site,1,2," in line for line in rscript_lines)
-    assert any("amino_acid_site,1,3," in line for line in rscript_lines)
+    assert any("amino_acid_site,2,3," in line for line in rscript_lines)
     run_manifest = pd.read_csv(next(output_dir.glob("*_manifest.tsv")), sep="\t")
     assert run_manifest["min_support"].tolist() == [6, 5]
     assert run_manifest["status"].tolist() == ["existing", "existing"]
@@ -1165,3 +1167,21 @@ def test_empirical_probability_columns_are_not_accepted(tmp_path):
     write_summary(source)
     with pytest.raises(ValueError, match="Unsupported scan probability column"):
         mod.load_threshold_candidates(source, 5, "p_rate_enrichment_empirical_maxT", 0.05, 0, "no", "none")
+
+
+def test_candidate_alphabet_must_match_requested_3di_mode():
+    mod = load_module()
+    frame = candidate_rows()
+    with pytest.raises(ValueError, match="source scan alphabet"):
+        mod.assign_candidate_ids(frame, "3di20", "none")
+    frame["nonsyn_recode"] = "no"
+    with pytest.raises(ValueError, match="differs from requested"):
+        mod.assign_candidate_ids(frame, "3di20", "none")
+
+
+def test_missing_3di_source_alphabet_is_not_treated_as_a_match():
+    mod = load_module()
+    frame = candidate_rows()
+    frame["nonsyn_recode"] = None
+    with pytest.raises(ValueError, match="differs from requested"):
+        mod.assign_candidate_ids(frame, "3di20", "none")

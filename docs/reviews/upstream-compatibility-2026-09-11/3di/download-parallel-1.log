@@ -1,0 +1,24 @@
+CSUBST start: 2026-09-11 09:44:24.702378+00:00
+csubst download start: 2026-09-11 09:44:24.703102+00:00
+[2026-09-11 09:44:26,102] HTTP Request: GET https://huggingface.co/api/agent-harnesses "HTTP/1.1 200 OK"
+[2026-09-11 09:44:26,306] HTTP Request: HEAD https://huggingface.co/cactuskid13/esm2small_3di/resolve/2227cb08ffa533bc1a7f2b968fd6316f287134d1/epoch_3.pt "HTTP/1.1 302 Found"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[2026-09-11 09:44:26,307] Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[2026-09-11 09:44:26,498] HTTP Request: GET https://huggingface.co/api/models/cactuskid13/esm2small_3di/xet-read-token/2227cb08ffa533bc1a7f2b968fd6316f287134d1 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:33,310] HTTP Request: HEAD https://huggingface.co/facebook/esm2_t12_35M_UR50D/resolve/6fbf070e65b0b7291e7bbcd451118c216cff79d8/config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-11 09:44:33,329] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/config.json?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Fconfig.json=&etag=%223f64131bb610ed1ce482c4b5421fc358c785278f%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:33,352] HTTP Request: GET https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/config.json?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Fconfig.json=&etag=%223f64131bb610ed1ce482c4b5421fc358c785278f%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:33,543] HTTP Request: HEAD https://huggingface.co/facebook/esm2_t12_35M_UR50D/resolve/6fbf070e65b0b7291e7bbcd451118c216cff79d8/special_tokens_map.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-11 09:44:33,565] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/special_tokens_map.json?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Fspecial_tokens_map.json=&etag=%22ba0f9b53dbbf27934f7555e5d31e37bdea9317f1%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:33,586] HTTP Request: GET https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/special_tokens_map.json?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Fspecial_tokens_map.json=&etag=%22ba0f9b53dbbf27934f7555e5d31e37bdea9317f1%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:33,780] HTTP Request: HEAD https://huggingface.co/facebook/esm2_t12_35M_UR50D/resolve/6fbf070e65b0b7291e7bbcd451118c216cff79d8/tokenizer_config.json "HTTP/1.1 307 Temporary Redirect"
+[2026-09-11 09:44:33,799] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/tokenizer_config.json?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Ftokenizer_config.json=&etag=%223f0d47e841e1cb75257aeaf76d156802899a217e%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:33,820] HTTP Request: GET https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/tokenizer_config.json?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Ftokenizer_config.json=&etag=%223f0d47e841e1cb75257aeaf76d156802899a217e%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:34,013] HTTP Request: HEAD https://huggingface.co/facebook/esm2_t12_35M_UR50D/resolve/6fbf070e65b0b7291e7bbcd451118c216cff79d8/vocab.txt "HTTP/1.1 307 Temporary Redirect"
+[2026-09-11 09:44:34,033] HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/vocab.txt?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Fvocab.txt=&etag=%226b946952cc35537226f07fd70957ee2f848880d2%22 "HTTP/1.1 200 OK"
+[2026-09-11 09:44:34,053] HTTP Request: GET https://huggingface.co/api/resolve-cache/models/facebook/esm2_t12_35M_UR50D/6fbf070e65b0b7291e7bbcd451118c216cff79d8/vocab.txt?%2Ffacebook%2Fesm2_t12_35M_UR50D%2Fresolve%2F6fbf070e65b0b7291e7bbcd451118c216cff79d8%2Fvocab.txt=&etag=%226b946952cc35537226f07fd70957ee2f848880d2%22 "HTTP/1.1 200 OK"
+esm3di-35m model files are ready: /audit/downloads-parallel/models/3di/esm3di-35m/v1
+csubst download: Time elapsed: 12 sec
+csubst download end: 2026-09-11 09:44:37.317148+00:00
+
+CSUBST end: 2026-09-11 09:44:37.320470+00:00, Elapsed time = 12.0 sec

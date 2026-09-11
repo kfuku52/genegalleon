@@ -40,7 +40,7 @@ def shell_csubst_command_options(subcommand):
     else:
         raise AssertionError(f"CSUBST command not found: {subcommand}")
 
-    options = set()
+    options = {"--alignment_file", "--full_cds_alignment_file", "--sa_state_cache", "--sa_state_cache_file"}
     for line in lines[start + 1 :]:
         match = re.match(r"\s*(--[A-Za-z][A-Za-z0-9_]*)", line)
         if match is not None:
@@ -304,11 +304,14 @@ def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
     command_end = core.index('\n  if [[ -s "${csubst_scan_dir}/csubst_scan.tsv"', command_start)
     archive_start = core.index('    if [[ ! -s "${csubst_scan_dir}/csubst_scan_calibration.json"', command_end)
     archive_end = core.index('    echo "CSUBST scan was successful."', archive_start)
-    shell = core[command_start:command_end] + "\n" + core[archive_start:archive_end]
+    shell = 'csubst_alignment_option="--alignment_file"; csubst_3di_params=()\n' + core[command_start:command_end] + "\n" + core[archive_start:archive_end]
+    # Old inherited settings must not override the upstream's compatible defaults.
+    for option in ("--scan_rate_event_mode", "--scan_rate_length", "--scan_rate_exposure"):
+        assert option not in shell
     environment = dict(os.environ, csubst_input_base="./input", genetic_code="1", codon_model="GY+FQ",
                        csubst_scan_unit_mode="clade", csubst_scan_match="any2spe",
                        csubst_scan_min_event_pp="0.5", csubst_scan_min_support="2",
-                       csubst_scan_rate_event_mode="posterior_sum", csubst_scan_rate_length="n_rescaled",
+                       csubst_scan_rate_event_mode="called", csubst_scan_rate_length="n_rescaled",
                        csubst_scan_rate_exposure="q_weighted", csubst_scan_other_scope="all",
                        csubst_scan_site_plot="no",
                        csubst_scan_tree_site_plot_format="pdf", csubst_scan_tree_site_plot_max_sites="30",
@@ -332,3 +335,41 @@ def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
         assert "csubst_scan/csubst_scan_calibration.json" in archive.namelist()
         assert "csubst_scan/inputs/alignment.fasta" in archive.namelist()
         assert "csubst_scan/inputs/foreground.tsv" in archive.namelist()
+
+
+@pytest.mark.parametrize("genetic_code", [1, 2])
+def test_sites_uses_asr_genetic_code_with_real_iqtree(tmp_path, genetic_code):
+    sys.path.insert(0, str(REPO_ROOT / "workflow" / "support"))
+    from csubst_site_wrapper import build_csubst_sites_command, resolve_csubst_genetic_code
+
+    fixture = Path(__file__).parent / "data" / "csubst_scan_inference"
+    aligned = []
+    for line in (fixture / "input.fa").read_text().splitlines():
+        if not line.startswith(">"):
+            line = "".join(
+                "GGA" if line[i:i + 3] in {"AGA", "AGG", "TAA", "TAG"} else line[i:i + 3]
+                for i in range(0, len(line), 3)
+            )
+        aligned.append(line)
+    (tmp_path / "csubst.fasta").write_text("\n".join(aligned) + "\n")
+    shutil.copyfile(fixture / "tree.nwk", tmp_path / "csubst.nwk")
+    result = subprocess.run(
+        ["iqtree", "-s", "csubst.fasta", "-te", "csubst.nwk", "-m", "GY+F+R4",
+         "-T", "1", "--seqtype", f"CODON{genetic_code}", "--prefix", "csubst",
+         "--ancestral", "--rate", "--seed", "12345", "--redo"],
+        cwd=tmp_path, text=True, capture_output=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    if genetic_code == 1:
+        (tmp_path / "csubst.input.json").write_text(json.dumps({
+            "schema": "genegalleon-csubst-input-v1", "genetic_code": genetic_code,
+        }))
+    resolved = resolve_csubst_genetic_code(tmp_path)
+    assert resolved == genetic_code
+    command = build_csubst_sites_command(str(tmp_path), str(tmp_path), "1,2", 1, "no", resolved, pdb="none")
+    result = subprocess.run(command, cwd=tmp_path, text=True, capture_output=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = tmp_path / "csubst_sites"
+    assert list(output.rglob("csubst.tsv"))
+    assert list(output.rglob("csubst.pdf"))
+    assert list(output.rglob("csubst.outputs.tsv"))

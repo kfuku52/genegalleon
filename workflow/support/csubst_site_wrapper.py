@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import glob
 import gzip
+import json
 import os
 import re
 import shlex
@@ -27,6 +28,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from csubst_input_bundle import structural_directory, write_structural_tip_alignment
 from gene_family_output_store import GeneFamilyOutputStore
 from safe_zip_extract import extract_expected_prefix
 
@@ -331,19 +333,65 @@ def csubst_nonsyn_recode_output_suffix(value):
     return f"_nonsynRecode-{recode}"
 
 
+def resolve_csubst_genetic_code(iqtree_anc_dir):
+    """Read the ASR code, including explicit IQ-TREE evidence in older bundles."""
+    directory = Path(iqtree_anc_dir)
+    evidence = {}
+    metadata_path = directory / "csubst.input.json"
+    if metadata_path.is_file():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("schema") not in ("genegalleon-csubst-input-v1", "genegalleon-csubst-input-v2"):
+            raise ValueError(f"Unsupported CSUBST input metadata: {metadata_path}")
+        code = metadata.get("genetic_code")
+        if isinstance(code, bool) or not isinstance(code, int) or code < 1:
+            raise ValueError(f"Invalid genetic_code in {metadata_path}: {code!r}")
+        evidence[str(metadata_path)] = {code}
+    for filename in ("csubst.iqtree", "csubst.log"):
+        path = directory / filename
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        codes = {int(value) for value in re.findall(r"\bgenetic code\s*[:=]?\s*(\d+)\b", text, re.IGNORECASE)}
+        codes.update(int(value) for value in re.findall(r"(?:--seqtype|-st)(?:=|\s+)CODON(\d+)\b", text, re.IGNORECASE))
+        if codes:
+            evidence[str(path)] = codes
+    codes = set().union(*evidence.values()) if evidence else set()
+    if len(codes) != 1 or min(codes) < 1:
+        raise ValueError(
+            f"Cannot resolve one genetic code for CSUBST ASR bundle {directory}: {evidence}. "
+            "Regenerate the IQ-TREE ASR bundle with explicit genetic-code metadata."
+        )
+    return codes.pop()
+
+
 def build_csubst_sites_command(
     iqtree_anc_rel_dir,
     iqtree_anc_dir,
     branch_id_str,
     ncpu,
     csubst_nonsyn_recode,
+    genetic_code,
     pdb="besthit",
 ):
     recode = normalize_csubst_nonsyn_recode(csubst_nonsyn_recode)
+    alignment_option = "--alignment_file"
+    if recode == "3di20":
+        directory = structural_directory(iqtree_anc_dir)
+        iqtree_anc_rel_dir = str(directory.resolve())
+        iqtree_anc_dir = str(directory.resolve())
+        alignment_option = "--full_cds_alignment_file"
     cmd = ["csubst", "sites"]
+    cmd += ["--genetic_code", str(genetic_code)]
     cmd += ["--outdir", CSUBST_SITES_OUTDIR]
     cmd += ["--output_prefix", CSUBST_SITES_OUTPUT_PREFIX]
-    cmd += ["--alignment_file", os.path.join(iqtree_anc_rel_dir, "csubst.fasta")]
+    cmd += [alignment_option, os.path.join(iqtree_anc_rel_dir, "csubst.fasta")]
+    if recode == "3di20":
+        cmd += ["--sa_state_cache", "yes", "--sa_state_cache_file", os.path.join(iqtree_anc_dir, "csubst_3di_state_cache.npz")]
+        report = Path(iqtree_anc_dir, "csubst.iqtree").read_text()
+        models = re.findall(r"^Model of substitution:\s*(\S+)\s*$", report, re.MULTILINE)
+        if len(set(models)) != 1:
+            raise ValueError(f"Cannot resolve full-CDS fitted model: {iqtree_anc_dir}")
+        cmd += ["--iqtree_model", models[0]]
     cmd += ["--rooted_tree_file", os.path.join(iqtree_anc_rel_dir, "csubst.nwk")]
     cmd += ["--branch_id", branch_id_str]
     cmd += ["--threads", str(max(1, int(ncpu)))]
@@ -754,13 +802,6 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
     os.chdir(dir_out_og)
     iqtree_anc_dir = get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og)
     iqtree_anc_rel_dir = os.path.basename(iqtree_anc_dir)
-    csubst_sites_cmd = build_csubst_sites_command(
-        iqtree_anc_rel_dir=iqtree_anc_rel_dir,
-        iqtree_anc_dir=iqtree_anc_dir,
-        branch_id_str=branch_id_str,
-        ncpu=ncpu,
-        csubst_nonsyn_recode=csubst_nonsyn_recode,
-    )
     iqtree_tree_file = os.path.join(iqtree_anc_dir, "csubst.treefile")
     iqtree_state_file = os.path.join(iqtree_anc_dir, "csubst.state")
     iqtree_rate_file = os.path.join(iqtree_anc_dir, "csubst.rate")
@@ -787,21 +828,24 @@ def process_index(og, branch_id_str, dir_out, dir_og, file_trait_color, ncpu, cs
                 og=og,
                 destination_root=effective_dir_og,
             )
+        path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=effective_dir_og, og=og)
+        extract_expected_prefix(path_iqtree_zip, dir_out_og, f"{og}.iqtree.anc")
+        csubst_sites_cmd = build_csubst_sites_command(
+            iqtree_anc_rel_dir=iqtree_anc_rel_dir,
+            iqtree_anc_dir=iqtree_anc_dir,
+            branch_id_str=branch_id_str,
+            ncpu=ncpu,
+            csubst_nonsyn_recode=csubst_nonsyn_recode,
+            genetic_code=resolve_csubst_genetic_code(iqtree_anc_dir),
+        )
         artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
         file_csubst_out = artifacts["site_table_tsv"]
         if file_csubst_out is not None and os.path.exists(file_csubst_out):
             print(f"Skipped csubst sites. Outfile already exists: {file_csubst_out}", flush=True)
         else:
             print(f"Running csubst sites. Output file not found: {file_csubst_out}", flush=True)
-            path_iqtree_zip = get_iqtree_anc_zip_path(dir_og=effective_dir_og, og=og)
-            extract_expected_prefix(
-                path_iqtree_zip,
-                dir_out_og,
-                f"{og}.iqtree.anc",
-            )
-            cmd = csubst_sites_cmd
-            print("COMMAND: {}".format(" ".join(cmd)), flush=True)
-            subprocess.run(cmd, check=True)
+            print("COMMAND: {}".format(" ".join(csubst_sites_cmd)), flush=True)
+            subprocess.run(csubst_sites_cmd, check=True)
         print(f"{datetime.datetime.now()}: csubst sites done: {og}", flush=True)
         file_tree_plot = os.path.join(dir_out_og, og + ".tree_plot.pdf")
         if os.path.exists(file_tree_plot):
@@ -1331,8 +1375,8 @@ def prepare_recoded_site_alignment(dir_out_og, og, site_dir, codon_alignment_pat
     if recode == "no":
         return None
     if recode == "3di20":
-        print("Recoded site panel skipped: 3di20 states cannot be derived from the 20-aa CDS alignment.", flush=True)
-        return None
+        output_path = os.path.join(dir_out_og, f"{og}_csubst_sites.3di20.plot.fasta")
+        return write_structural_tip_alignment(codon_alignment_path, output_path)
     recoding_table_path = resolve_nonsyn_recoding_table(dir_out_og=dir_out_og, site_dir=site_dir)
     if recoding_table_path is None:
         print(
@@ -1422,6 +1466,7 @@ def build_tree_plot_panel_args(
     file_og_untrimmed_alignment=None,
     recoded_site_alignment=None,
     csubst_nonsyn_recode="no",
+    genetic_code=1,
 ):
     panel_args = [
         "--panel1=tree,bl_rooted,support_unrooted,species,L",
@@ -1432,7 +1477,7 @@ def build_tree_plot_panel_args(
         "--panel7=transmembrane_domain",
         "--panel8=intron_number",
         "--panel9=domain," + file_og_rpsblast,
-        f"--panel10=amino_acid_site,1,{convergent_site_str},{file_csubst_input_fasta}",
+        f"--panel10=amino_acid_site,{genetic_code},{convergent_site_str},{file_csubst_input_fasta}",
     ]
     panel_index = 11
     if recoded_site_alignment is not None:
@@ -1470,7 +1515,8 @@ def run_stat_branch2tree_plot(
     file_og_alignment = get_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
     file_og_untrimmed_alignment = get_untrimmed_alignment_for_tree_plot(dir_og=dir_og, og=og, dir_out_og=dir_out_og)
     iqtree_anc_dir = get_iqtree_anc_dir(dir_out_og=dir_out_og, og=og)
-    file_csubst_input_fasta = os.path.join(iqtree_anc_dir, "csubst.fasta")
+    input_dir = structural_directory(iqtree_anc_dir) if normalize_csubst_nonsyn_recode(csubst_nonsyn_recode) == "3di20" else Path(iqtree_anc_dir)
+    file_csubst_input_fasta = str(input_dir / "csubst.fasta")
     artifacts = resolve_site_artifacts(dir_out_og=dir_out_og, branch_id_str=branch_id_str)
     file_csubst_site_tsv = artifacts["site_table_tsv"]
     if file_csubst_site_tsv is None:
@@ -1497,7 +1543,7 @@ def run_stat_branch2tree_plot(
     validate_csubst_stat_branch_identity(
         branch_id_str=branch_id_str,
         file_stat_branch=file_stat_branch,
-        iqtree_anc_dir=iqtree_anc_dir,
+        iqtree_anc_dir=str(input_dir),
     )
     # gg-cache-guard: audited - the outer csubst_site artifact contract removes this directory on rebuild.
     if os.path.exists(file_tree_plot_out):
@@ -1516,6 +1562,7 @@ def run_stat_branch2tree_plot(
             file_og_untrimmed_alignment=file_og_untrimmed_alignment,
             recoded_site_alignment=recoded_site_alignment,
             csubst_nonsyn_recode=csubst_nonsyn_recode,
+            genetic_code=resolve_csubst_genetic_code(iqtree_anc_dir),
         )
     )
     cmd.append("--show_branch_id=yes")

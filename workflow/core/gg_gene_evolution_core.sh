@@ -1195,9 +1195,6 @@ csubst_scan_unit_mode=$(echo "${csubst_scan_unit_mode:-clade}" | tr '[:upper:]' 
 csubst_scan_match=$(echo "${csubst_scan_match:-any2spe}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_min_event_pp="${csubst_scan_min_event_pp:-0.5}"
 csubst_scan_min_support="${csubst_scan_min_support:-2}"
-csubst_scan_rate_event_mode=$(echo "${csubst_scan_rate_event_mode:-posterior_sum}" | tr '[:upper:]' '[:lower:]')
-csubst_scan_rate_length=$(echo "${csubst_scan_rate_length:-n_rescaled}" | tr '[:upper:]' '[:lower:]')
-csubst_scan_rate_exposure=$(echo "${csubst_scan_rate_exposure:-q_weighted}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_other_scope=$(echo "${csubst_scan_other_scope:-all}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_site_plot=$(echo "${csubst_scan_site_plot:-yes}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_tree_site_plot_format=$(echo "${csubst_scan_tree_site_plot_format:-pdf}" | tr '[:upper:]' '[:lower:]')
@@ -1394,6 +1391,10 @@ if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method
   echo 'uniprot_annotation_method must be either "blastp" or "mmseqs2". Exiting.'
   exit 1
 fi
+if [[ "${csubst_nonsyn_recode}" == "3di20" && "${input_sequence_mode}" == "protein" ]]; then
+  echo 'csubst_nonsyn_recode=3di20 requires full CDS input; protein-only input is unsupported.' >&2
+  exit 1
+fi
 case "${csubst_nonsyn_recode}" in
   no|3di20|dayhoff6|sr6|kgb6|sr4|dayhoff9|dayhoff12|dayhoff15|dayhoff18|srchisq6|kgbauto6)
     ;;
@@ -1418,33 +1419,6 @@ case "${csubst_scan_unit_mode}" in
   *)
     echo "Invalid csubst_scan_unit_mode: ${csubst_scan_unit_mode}"
     echo 'csubst_scan_unit_mode must be one of lineage, stem, clade. Exiting.'
-    exit 1
-    ;;
-esac
-case "${csubst_scan_rate_event_mode}" in
-  posterior_sum|called)
-    ;;
-  *)
-    echo "Invalid csubst_scan_rate_event_mode: ${csubst_scan_rate_event_mode}"
-    echo 'csubst_scan_rate_event_mode must be either "posterior_sum" or "called". Exiting.'
-    exit 1
-    ;;
-esac
-case "${csubst_scan_rate_length}" in
-  raw|sn_rescaled|n_rescaled)
-    ;;
-  *)
-    echo "Invalid csubst_scan_rate_length: ${csubst_scan_rate_length}"
-    echo 'csubst_scan_rate_length must be one of raw, sn_rescaled, n_rescaled. Exiting.'
-    exit 1
-    ;;
-esac
-case "${csubst_scan_rate_exposure}" in
-  q_weighted|state_aware|raw_branch_length)
-    ;;
-  *)
-    echo "Invalid csubst_scan_rate_exposure: ${csubst_scan_rate_exposure}"
-    echo 'csubst_scan_rate_exposure must be one of q_weighted, state_aware, raw_branch_length. Exiting.'
     exit 1
     ;;
 esac
@@ -5749,6 +5723,12 @@ iqtree_anc_provenance_args=(
   --parameter "codon_model=${codon_model}"
   --parameter "genetic_code=${genetic_code}"
 )
+if [[ "${csubst_nonsyn_recode}" == "3di20" ]]; then
+  iqtree_anc_provenance_args+=(
+    --input "full_cds_alignment=${file_og_untrimmed_aln_analysis}"
+    --parameter "structural_input=full_cds_3di20_v1"
+  )
+fi
 gg_artifact_prepare_stage iqtree_anc_needs_update run_iqtree_anc "${iqtree_anc_provenance_args[@]}" || exit $?
 if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5784,6 +5764,26 @@ if [[ ${iqtree_anc_needs_update} -eq 1 && ${run_iqtree_anc} -eq 1 ]]; then
     --redo
 
   if [[ -s csubst.rate && -s csubst.state && -s csubst.treefile ]]; then
+    printf '{"schema":"genegalleon-csubst-input-v1","genetic_code":%s}\n' "${genetic_code}" > csubst.input.json
+    if [[ "${csubst_nonsyn_recode}" == "3di20" ]]; then
+      python "${gg_support_dir}/csubst_input_bundle.py" prepare \
+        --source "${file_og_untrimmed_aln_analysis}" --tree csubst.nwk \
+        --destination csubst.3di/csubst.fasta
+      cp csubst.nwk csubst.3di/csubst.nwk
+      iqtree -s csubst.3di/csubst.fasta -te csubst.3di/csubst.nwk \
+        -m "${codon_model}" -T AUTO --threads-max "${GG_TASK_CPUS}" \
+        --seqtype "CODON${genetic_code}" --prefix csubst.3di/csubst \
+        --ancestral --rate "${IQTREE_MEM_ARGS[@]}" --seed 12345 --redo
+      (
+        cd csubst.3di
+        csubst inspect --full_cds_alignment_file csubst.fasta --rooted_tree_file csubst.nwk \
+          --iqtree_treefile csubst.treefile --iqtree_state csubst.state --iqtree_rate csubst.rate \
+          --iqtree_iqtree csubst.iqtree --iqtree_log csubst.log --iqtree_model "${codon_model}" \
+          --genetic_code "${genetic_code}" --nonsyn_recode 3di20 --threads "${GG_TASK_CPUS}" \
+          --sa_state_cache auto --sa_state_cache_file csubst_3di_state_cache.npz --outdir inspect
+      )
+      python "${gg_support_dir}/csubst_input_bundle.py" finalize --bundle . --genetic-code "${genetic_code}"
+    fi
     if [[ -e "${og_id}.iqtree.anc" ]]; then
       rm -rf -- "${og_id}.iqtree.anc"
     fi
@@ -5920,11 +5920,20 @@ if [[ ${csubst_needs_update} -eq 1 && ${run_csubst} -eq 1 ]]; then
     "${file_og_iqtree_anc}" \
     "${og_id}.iqtree.anc"
   csubst_input_base="./${og_id}.iqtree.anc/csubst"
+  csubst_alignment_option="--alignment_file"
+  csubst_3di_params=()
+  if [[ "${csubst_nonsyn_recode}" == "3di20" ]]; then
+    python "${gg_support_dir}/csubst_input_bundle.py" validate --bundle "./${og_id}.iqtree.anc"
+    csubst_input_base="./${og_id}.iqtree.anc/csubst.3di/csubst"
+    csubst_alignment_option="--full_cds_alignment_file"
+    csubst_3di_params=(--sa_state_cache yes --sa_state_cache_file "./${og_id}.iqtree.anc/csubst.3di/csubst_3di_state_cache.npz")
+  fi
   csubst_search_dir="csubst_search"
 
   csubst search \
     --genetic_code "${genetic_code}" \
-    --alignment_file "${csubst_input_base}.fasta" \
+    "${csubst_alignment_option}" "${csubst_input_base}.fasta" \
+    "${csubst_3di_params[@]}" \
     --rooted_tree_file "${csubst_input_base}.nwk" \
     --iqtree_treefile "${csubst_input_base}.treefile" \
     --iqtree_state "${csubst_input_base}.state" \
@@ -6019,9 +6028,6 @@ csubst_scan_provenance_args=(
   --parameter "scan_match=${csubst_scan_match}"
   --parameter "scan_min_event_pp=${csubst_scan_min_event_pp}"
   --parameter "scan_min_support=${csubst_scan_min_support}"
-  --parameter "scan_rate_event_mode=${csubst_scan_rate_event_mode}"
-  --parameter "scan_rate_length=${csubst_scan_rate_length}"
-  --parameter "scan_rate_exposure=${csubst_scan_rate_exposure}"
   --parameter "scan_other_scope=${csubst_scan_other_scope}"
   --parameter "scan_pvalue_calibration=none"
   --parameter "scan_n_permutations=0"
@@ -6067,11 +6073,20 @@ if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
     "${file_og_iqtree_anc}" \
     "${og_id}.iqtree.anc"
   csubst_input_base="./${og_id}.iqtree.anc/csubst"
+  csubst_alignment_option="--alignment_file"
+  csubst_3di_params=()
+  if [[ "${csubst_nonsyn_recode}" == "3di20" ]]; then
+    python "${gg_support_dir}/csubst_input_bundle.py" validate --bundle "./${og_id}.iqtree.anc"
+    csubst_input_base="./${og_id}.iqtree.anc/csubst.3di/csubst"
+    csubst_alignment_option="--full_cds_alignment_file"
+    csubst_3di_params=(--sa_state_cache yes --sa_state_cache_file "./${og_id}.iqtree.anc/csubst.3di/csubst_3di_state_cache.npz")
+  fi
   csubst_scan_dir="csubst_scan"
 
   csubst scan \
     --genetic_code "${genetic_code}" \
-    --alignment_file "${csubst_input_base}.fasta" \
+    "${csubst_alignment_option}" "${csubst_input_base}.fasta" \
+    "${csubst_3di_params[@]}" \
     --rooted_tree_file "${csubst_input_base}.nwk" \
     --iqtree_treefile "${csubst_input_base}.treefile" \
     --iqtree_state "${csubst_input_base}.state" \
@@ -6086,9 +6101,6 @@ if [[ ${csubst_scan_needs_update} -eq 1 && ${run_csubst_scan} -eq 1 ]]; then
     --scan_match "${csubst_scan_match}" \
     --scan_min_event_pp "${csubst_scan_min_event_pp}" \
     --scan_min_support "${csubst_scan_min_support}" \
-    --scan_rate_event_mode "${csubst_scan_rate_event_mode}" \
-    --scan_rate_length "${csubst_scan_rate_length}" \
-    --scan_rate_exposure "${csubst_scan_rate_exposure}" \
     --scan_other_scope "${csubst_scan_other_scope}" \
     --scan_pvalue_calibration none \
     --scan_n_permutations 0 \
