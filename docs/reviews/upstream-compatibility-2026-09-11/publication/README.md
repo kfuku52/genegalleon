@@ -61,3 +61,38 @@ container filesystem.
 
 Native SIF execution is unavailable on this macOS host. The publication's
 GitHub tests run supplies the separate AMD64/SIF execution evidence.
+
+## Python CI dependency correction
+
+The first publication run, [34595419636](https://github.com/kfuku52/genegalleon/actions/runs/34595419636),
+exposed a missing NWKIT dependency in the ordinary Python test environment.
+The production container already included NWKIT, but the test wheel requirements
+listed only CSUBST. Imports of `nwkit.file_paths` consequently failed in both
+the fast and workflow-integration lanes.
+
+Version 0.7.107 adds NWKIT's moving master branch to the test requirements and
+resolves both owned dependencies once per run. Temporary wheel-build inputs and
+the cache identity include both resolved commits; repository defaults still
+follow moving branches. Test coverage and runtime code are unchanged.
+
+The affected tests and CI contracts passed 232 cases in the final GeneGalleon
+ARM64 image with the corrected source (`python-ci-regression.log`). Ruff and
+Actionlint also passed for the changed files.
+
+The complete test wheel set also built successfully in a separate container
+from the same GeneGalleon image with build-essential installed for this check.
+A fresh Python virtual environment installed the set with `--no-index`, passed
+`pip check`, and imported `nwkit.file_paths` (`python-ci-wheels.log`). The
+production image was unchanged. This local wheel check used ARM64; hosted CI
+provides the separate AMD64 wheel and test-lane verification.
+
+
+## AMD64 build correction
+
+The first SIF job stopped before conversion: IQ-TREE compiled, but NWKIT's
+external worker did not link the system zlib selected by CMake, causing
+undefined `gzread`/`gzopen` symbols. NWKIT's own build code is corrected in
+0.43.17; GeneGalleon continues to consume its moving source branch. Details and
+the original errors are recorded in the
+[NWKIT review](https://github.com/kfuku52/nwkit/tree/master/reviews/system-zlib-worker-2026-09-11).
+The initial failed job is not SIF execution evidence.

@@ -1,0 +1,283 @@
+Collecting csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09 (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Cloning https://github.com/kfuku52/csubst.git (to revision 7c5c3c28d21382d773b25257ebb9546335fecf09) to ./pip-wheel-j5vui2hn/csubst_eeb3c818bba248cd99b49d74879a92bf
+  Running command git clone --filter=blob:none --quiet https://github.com/kfuku52/csubst.git /tmp/pip-wheel-j5vui2hn/csubst_eeb3c818bba248cd99b49d74879a92bf
+  Running command git rev-parse -q --verify '7c5c3c28d21382d773b25257ebb9546335fecf09^{commit}'
+  7c5c3c28d21382d773b25257ebb9546335fecf09
+  Resolved https://github.com/kfuku52/csubst.git to commit 7c5c3c28d21382d773b25257ebb9546335fecf09
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting nwkit @ git+https://github.com/kfuku52/nwkit.git@1996588e561d10aebc47c4daf90be836bbebd315 (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 9))
+  Cloning https://github.com/kfuku52/nwkit.git (to revision 1996588e561d10aebc47c4daf90be836bbebd315) to ./pip-wheel-j5vui2hn/nwkit_17e4de82c88444a7837a833ac0f94c05
+  Running command git clone --filter=blob:none --quiet https://github.com/kfuku52/nwkit.git /tmp/pip-wheel-j5vui2hn/nwkit_17e4de82c88444a7837a833ac0f94c05
+  Running command git rev-parse -q --verify '1996588e561d10aebc47c4daf90be836bbebd315^{commit}'
+  1996588e561d10aebc47c4daf90be836bbebd315
+  Resolved https://github.com/kfuku52/nwkit.git to commit 1996588e561d10aebc47c4daf90be836bbebd315
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting pytest (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 1))
+  Downloading pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+Collecting pytest-xdist (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 2))
+  Downloading pytest_xdist-3.8.0-py3-none-any.whl.metadata (3.0 kB)
+Collecting PyYAML (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 3))
+  Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (2.4 kB)
+Collecting ruff (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 4))
+  Downloading ruff-0.16.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl.metadata (26 kB)
+Collecting numpy<2 (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 5))
+  Downloading numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl.metadata (62 kB)
+Collecting pandas (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 6))
+  Downloading pandas-3.0.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl.metadata (79 kB)
+Collecting biopython (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 7))
+  Downloading biopython-1.88-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (13 kB)
+Collecting ete4 (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 10))
+  Downloading ete4-4.4.0.tar.gz (1.4 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 23.8 MB/s  0:00:00
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Collecting sqlalchemy (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 11))
+  Downloading sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (9.6 kB)
+Collecting tenacity (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 12))
+  Downloading tenacity-9.1.4-py3-none-any.whl.metadata (1.2 kB)
+Collecting tqdm (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 13))
+  Downloading tqdm-4.70.0-py3-none-any.whl.metadata (57 kB)
+Collecting openpyxl (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 14))
+  Downloading openpyxl-3.1.5-py2.py3-none-any.whl.metadata (2.5 kB)
+Collecting matplotlib<3.11 (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading matplotlib-3.10.9-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (52 kB)
+Collecting pypdf>=6.16.1 (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 16))
+  Downloading pypdf-6.16.1-py3-none-any.whl.metadata (7.5 kB)
+Collecting reportlab (from -r /tmp/gg-ci-wheels/build-requirements.txt (line 17))
+  Downloading reportlab-5.0.0-py3-none-any.whl.metadata (1.6 kB)
+Collecting scipy (from csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09->-r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Downloading scipy-1.18.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (62 kB)
+Collecting defusedxml (from csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09->-r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Downloading defusedxml-0.7.1-py2.py3-none-any.whl.metadata (32 kB)
+Collecting requests (from csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09->-r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Downloading requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+Collecting urllib3>=2 (from nwkit @ git+https://github.com/kfuku52/nwkit.git@1996588e561d10aebc47c4daf90be836bbebd315->-r /tmp/gg-ci-wheels/build-requirements.txt (line 9))
+  Downloading urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+Collecting Pillow (from nwkit @ git+https://github.com/kfuku52/nwkit.git@1996588e561d10aebc47c4daf90be836bbebd315->-r /tmp/gg-ci-wheels/build-requirements.txt (line 9))
+  Downloading pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (9.1 kB)
+Collecting contourpy>=1.0.1 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading contourpy-1.3.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl.metadata (5.5 kB)
+Collecting cycler>=0.10 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading cycler-0.12.1-py3-none-any.whl.metadata (3.8 kB)
+Collecting fonttools>=4.22.0 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading fonttools-4.65.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (125 kB)
+Collecting kiwisolver>=1.3.1 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl.metadata (5.2 kB)
+Collecting packaging>=20.0 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting pyparsing>=3 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading pyparsing-3.3.2-py3-none-any.whl.metadata (5.8 kB)
+Collecting python-dateutil>=2.7 (from matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+Collecting iniconfig>=1.0.1 (from pytest->-r /tmp/gg-ci-wheels/build-requirements.txt (line 1))
+  Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting pluggy<2,>=1.5 (from pytest->-r /tmp/gg-ci-wheels/build-requirements.txt (line 1))
+  Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting pygments>=2.7.2 (from pytest->-r /tmp/gg-ci-wheels/build-requirements.txt (line 1))
+  Downloading pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting execnet>=2.1 (from pytest-xdist->-r /tmp/gg-ci-wheels/build-requirements.txt (line 2))
+  Downloading execnet-2.1.2-py3-none-any.whl.metadata (2.9 kB)
+Collecting bottle (from ete4->-r /tmp/gg-ci-wheels/build-requirements.txt (line 10))
+  Downloading bottle-0.13.4-py2.py3-none-any.whl.metadata (1.6 kB)
+Collecting cheroot (from ete4->-r /tmp/gg-ci-wheels/build-requirements.txt (line 10))
+  Downloading cheroot-11.1.2-py3-none-any.whl.metadata (7.0 kB)
+Collecting brotli (from ete4->-r /tmp/gg-ci-wheels/build-requirements.txt (line 10))
+  Downloading brotli-1.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (6.1 kB)
+Collecting greenlet>=1 (from sqlalchemy->-r /tmp/gg-ci-wheels/build-requirements.txt (line 11))
+  Downloading greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl.metadata (3.8 kB)
+Collecting typing-extensions>=4.6.0 (from sqlalchemy->-r /tmp/gg-ci-wheels/build-requirements.txt (line 11))
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting et-xmlfile (from openpyxl->-r /tmp/gg-ci-wheels/build-requirements.txt (line 14))
+  Downloading et_xmlfile-2.0.0-py3-none-any.whl.metadata (2.7 kB)
+Collecting charset-normalizer (from reportlab->-r /tmp/gg-ci-wheels/build-requirements.txt (line 17))
+  Downloading charset_normalizer-3.5.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (45 kB)
+Collecting six>=1.5 (from python-dateutil>=2.7->matplotlib<3.11->-r /tmp/gg-ci-wheels/build-requirements.txt (line 15))
+  Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+Collecting idna<4,>=2.5 (from requests->csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09->-r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Downloading idna-3.19-py3-none-any.whl.metadata (9.2 kB)
+Collecting certifi>=2023.5.7 (from requests->csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09->-r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Downloading certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+Collecting more-itertools>=2.6 (from cheroot->ete4->-r /tmp/gg-ci-wheels/build-requirements.txt (line 10))
+  Downloading more_itertools-11.1.0-py3-none-any.whl.metadata (41 kB)
+Collecting jaraco.functools (from cheroot->ete4->-r /tmp/gg-ci-wheels/build-requirements.txt (line 10))
+  Downloading jaraco_functools-4.6.0-py3-none-any.whl.metadata (2.9 kB)
+INFO: pip is looking at multiple versions of scipy to determine which version is compatible with other requirements. This could take a while.
+Collecting scipy (from csubst @ git+https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09->-r /tmp/gg-ci-wheels/build-requirements.txt (line 8))
+  Downloading scipy-1.18.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (62 kB)
+  Downloading scipy-1.17.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (62 kB)
+Downloading numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (13.9 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.9/13.9 MB 26.4 MB/s  0:00:00
+Downloading matplotlib-3.10.9-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (9.6 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.6/9.6 MB 25.1 MB/s  0:00:00
+Downloading pytest-9.1.1-py3-none-any.whl (386 kB)
+Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Downloading pytest_xdist-3.8.0-py3-none-any.whl (46 kB)
+Downloading pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (775 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 775.1/775.1 kB 24.2 MB/s  0:00:00
+Downloading ruff-0.16.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (10.7 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.7/10.7 MB 24.4 MB/s  0:00:00
+Downloading pandas-3.0.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (10.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.5/10.5 MB 25.0 MB/s  0:00:00
+Downloading biopython-1.88-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (3.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.2/3.2 MB 22.9 MB/s  0:00:00
+Downloading sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (3.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.4/3.4 MB 25.9 MB/s  0:00:00
+Downloading tenacity-9.1.4-py3-none-any.whl (28 kB)
+Downloading tqdm-4.70.0-py3-none-any.whl (80 kB)
+Downloading openpyxl-3.1.5-py2.py3-none-any.whl (250 kB)
+Downloading pypdf-6.16.1-py3-none-any.whl (382 kB)
+Downloading reportlab-5.0.0-py3-none-any.whl (2.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.0/2.0 MB 27.5 MB/s  0:00:00
+Downloading contourpy-1.3.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl (332 kB)
+Downloading cycler-0.12.1-py3-none-any.whl (8.3 kB)
+Downloading defusedxml-0.7.1-py2.py3-none-any.whl (25 kB)
+Downloading execnet-2.1.2-py3-none-any.whl (40 kB)
+Downloading fonttools-4.65.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (5.4 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.4/5.4 MB 26.9 MB/s  0:00:00
+Downloading greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (611 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 611.9/611.9 kB 24.3 MB/s  0:00:00
+Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Downloading kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 23.7 MB/s  0:00:00
+Using cached packaging-26.3-py3-none-any.whl (129 kB)
+Downloading pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (6.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.3/6.3 MB 25.5 MB/s  0:00:00
+Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 26.0 MB/s  0:00:00
+Downloading pyparsing-3.3.2-py3-none-any.whl (122 kB)
+Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Downloading requests-2.34.2-py3-none-any.whl (73 kB)
+Downloading charset_normalizer-3.5.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (238 kB)
+Downloading idna-3.19-py3-none-any.whl (68 kB)
+Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
+Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Downloading bottle-0.13.4-py2.py3-none-any.whl (103 kB)
+Downloading brotli-1.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (1.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.5/1.5 MB 26.6 MB/s  0:00:00
+Downloading cheroot-11.1.2-py3-none-any.whl (109 kB)
+Downloading more_itertools-11.1.0-py3-none-any.whl (72 kB)
+Downloading et_xmlfile-2.0.0-py3-none-any.whl (18 kB)
+Downloading jaraco_functools-4.6.0-py3-none-any.whl (11 kB)
+Downloading scipy-1.17.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (32.9 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 32.9/32.9 MB 18.9 MB/s  0:00:01
+Saved ./gg-ci-wheels/numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+Saved ./gg-ci-wheels/matplotlib-3.10.9-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/pytest-9.1.1-py3-none-any.whl
+Saved ./gg-ci-wheels/pluggy-1.6.0-py3-none-any.whl
+Saved ./gg-ci-wheels/pytest_xdist-3.8.0-py3-none-any.whl
+Saved ./gg-ci-wheels/pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/ruff-0.16.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+Saved ./gg-ci-wheels/pandas-3.0.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/biopython-1.88-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/tenacity-9.1.4-py3-none-any.whl
+Saved ./gg-ci-wheels/tqdm-4.70.0-py3-none-any.whl
+Saved ./gg-ci-wheels/openpyxl-3.1.5-py2.py3-none-any.whl
+Saved ./gg-ci-wheels/pypdf-6.16.1-py3-none-any.whl
+Saved ./gg-ci-wheels/reportlab-5.0.0-py3-none-any.whl
+Saved ./gg-ci-wheels/contourpy-1.3.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/cycler-0.12.1-py3-none-any.whl
+Saved ./gg-ci-wheels/defusedxml-0.7.1-py2.py3-none-any.whl
+Saved ./gg-ci-wheels/execnet-2.1.2-py3-none-any.whl
+Saved ./gg-ci-wheels/fonttools-4.65.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/iniconfig-2.3.0-py3-none-any.whl
+Saved ./gg-ci-wheels/kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/packaging-26.3-py3-none-any.whl
+Saved ./gg-ci-wheels/pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/pygments-2.21.0-py3-none-any.whl
+Saved ./gg-ci-wheels/pyparsing-3.3.2-py3-none-any.whl
+Saved ./gg-ci-wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl
+Saved ./gg-ci-wheels/requests-2.34.2-py3-none-any.whl
+Saved ./gg-ci-wheels/charset_normalizer-3.5.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/idna-3.19-py3-none-any.whl
+Saved ./gg-ci-wheels/urllib3-2.7.0-py3-none-any.whl
+Saved ./gg-ci-wheels/certifi-2026.7.22-py3-none-any.whl
+Saved ./gg-ci-wheels/six-1.17.0-py2.py3-none-any.whl
+Saved ./gg-ci-wheels/typing_extensions-4.16.0-py3-none-any.whl
+Saved ./gg-ci-wheels/bottle-0.13.4-py2.py3-none-any.whl
+Saved ./gg-ci-wheels/brotli-1.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
+Saved ./gg-ci-wheels/cheroot-11.1.2-py3-none-any.whl
+Saved ./gg-ci-wheels/more_itertools-11.1.0-py3-none-any.whl
+Saved ./gg-ci-wheels/et_xmlfile-2.0.0-py3-none-any.whl
+Saved ./gg-ci-wheels/jaraco_functools-4.6.0-py3-none-any.whl
+Saved ./gg-ci-wheels/scipy-1.17.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl
+Building wheels for collected packages: csubst, nwkit, ete4
+  Building wheel for csubst (pyproject.toml): started
+  Building wheel for csubst (pyproject.toml): finished with status 'done'
+  Created wheel for csubst: filename=csubst-1.16.3-cp312-cp312-linux_aarch64.whl size=3880436 sha256=3daa8e0f58fba6bf29110dda0c0c06c19c3b2c8f6a49d631371a5252188066fe
+  Stored in directory: /root/.cache/pip/wheels/47/b8/00/238a84563170b5f283ac5ccb85b796ee2dbf8b733fb45fb7cc
+  Building wheel for nwkit (pyproject.toml): started
+  Building wheel for nwkit (pyproject.toml): finished with status 'done'
+  Created wheel for nwkit: filename=nwkit-0.43.16-py3-none-any.whl size=1030185 sha256=c43f43b82ab608026856535ba156b7ddb9716c24e202ba814fc5c2a8e92150ed
+  Stored in directory: /root/.cache/pip/wheels/34/ef/36/0dc73c530203d4d2eee702187f4ae8859e938cc6ec8d871496
+  Building wheel for ete4 (pyproject.toml): started
+  Building wheel for ete4 (pyproject.toml): finished with status 'done'
+  Created wheel for ete4: filename=ete4-4.4.0-cp312-cp312-linux_aarch64.whl size=2473268 sha256=7817123652297a81d9325b1971c13df6132cf8e4a996adcfde4dffc0b60267f9
+  Stored in directory: /root/.cache/pip/wheels/f9/c5/25/ed5df30af43067468d68864781cb528f9a92e88636f22f8574
+Successfully built csubst nwkit ete4
+Looking in links: /tmp/gg-ci-wheels
+Processing ./gg-ci-wheels/pytest-9.1.1-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 1))
+Processing ./gg-ci-wheels/pytest_xdist-3.8.0-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 2))
+Processing ./gg-ci-wheels/pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 3))
+Processing ./gg-ci-wheels/ruff-0.16.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 4))
+Processing ./gg-ci-wheels/numpy-1.26.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 5))
+Processing ./gg-ci-wheels/pandas-3.0.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 6))
+Processing ./gg-ci-wheels/biopython-1.88-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 7))
+Processing ./gg-ci-wheels/csubst-1.16.3-cp312-cp312-linux_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 8))
+Processing ./gg-ci-wheels/nwkit-0.43.16-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 9))
+Processing ./gg-ci-wheels/ete4-4.4.0-cp312-cp312-linux_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 10))
+Processing ./gg-ci-wheels/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 11))
+Processing ./gg-ci-wheels/tenacity-9.1.4-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 12))
+Processing ./gg-ci-wheels/tqdm-4.70.0-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 13))
+Processing ./gg-ci-wheels/openpyxl-3.1.5-py2.py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 14))
+Processing ./gg-ci-wheels/matplotlib-3.10.9-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 15))
+Processing ./gg-ci-wheels/pypdf-6.16.1-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 16))
+Processing ./gg-ci-wheels/reportlab-5.0.0-py3-none-any.whl (from -r /tmp/gg-ci-wheels/install-requirements.txt (line 17))
+Processing ./gg-ci-wheels/iniconfig-2.3.0-py3-none-any.whl (from pytest->-r /tmp/gg-ci-wheels/install-requirements.txt (line 1))
+Processing ./gg-ci-wheels/packaging-26.3-py3-none-any.whl (from pytest->-r /tmp/gg-ci-wheels/install-requirements.txt (line 1))
+Processing ./gg-ci-wheels/pluggy-1.6.0-py3-none-any.whl (from pytest->-r /tmp/gg-ci-wheels/install-requirements.txt (line 1))
+Processing ./gg-ci-wheels/pygments-2.21.0-py3-none-any.whl (from pytest->-r /tmp/gg-ci-wheels/install-requirements.txt (line 1))
+Processing ./gg-ci-wheels/execnet-2.1.2-py3-none-any.whl (from pytest-xdist->-r /tmp/gg-ci-wheels/install-requirements.txt (line 2))
+Processing ./gg-ci-wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl (from pandas->-r /tmp/gg-ci-wheels/install-requirements.txt (line 6))
+Processing ./gg-ci-wheels/scipy-1.17.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (from csubst->-r /tmp/gg-ci-wheels/install-requirements.txt (line 8))
+Processing ./gg-ci-wheels/defusedxml-0.7.1-py2.py3-none-any.whl (from csubst->-r /tmp/gg-ci-wheels/install-requirements.txt (line 8))
+Processing ./gg-ci-wheels/requests-2.34.2-py3-none-any.whl (from csubst->-r /tmp/gg-ci-wheels/install-requirements.txt (line 8))
+Processing ./gg-ci-wheels/urllib3-2.7.0-py3-none-any.whl (from nwkit->-r /tmp/gg-ci-wheels/install-requirements.txt (line 9))
+Processing ./gg-ci-wheels/pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (from nwkit->-r /tmp/gg-ci-wheels/install-requirements.txt (line 9))
+Processing ./gg-ci-wheels/bottle-0.13.4-py2.py3-none-any.whl (from ete4->-r /tmp/gg-ci-wheels/install-requirements.txt (line 10))
+Processing ./gg-ci-wheels/cheroot-11.1.2-py3-none-any.whl (from ete4->-r /tmp/gg-ci-wheels/install-requirements.txt (line 10))
+Processing ./gg-ci-wheels/brotli-1.2.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from ete4->-r /tmp/gg-ci-wheels/install-requirements.txt (line 10))
+Processing ./gg-ci-wheels/greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (from sqlalchemy->-r /tmp/gg-ci-wheels/install-requirements.txt (line 11))
+Processing ./gg-ci-wheels/typing_extensions-4.16.0-py3-none-any.whl (from sqlalchemy->-r /tmp/gg-ci-wheels/install-requirements.txt (line 11))
+Processing ./gg-ci-wheels/et_xmlfile-2.0.0-py3-none-any.whl (from openpyxl->-r /tmp/gg-ci-wheels/install-requirements.txt (line 14))
+Processing ./gg-ci-wheels/contourpy-1.3.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl (from matplotlib<3.11->-r /tmp/gg-ci-wheels/install-requirements.txt (line 15))
+Processing ./gg-ci-wheels/cycler-0.12.1-py3-none-any.whl (from matplotlib<3.11->-r /tmp/gg-ci-wheels/install-requirements.txt (line 15))
+Processing ./gg-ci-wheels/fonttools-4.65.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from matplotlib<3.11->-r /tmp/gg-ci-wheels/install-requirements.txt (line 15))
+Processing ./gg-ci-wheels/kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl (from matplotlib<3.11->-r /tmp/gg-ci-wheels/install-requirements.txt (line 15))
+Processing ./gg-ci-wheels/pyparsing-3.3.2-py3-none-any.whl (from matplotlib<3.11->-r /tmp/gg-ci-wheels/install-requirements.txt (line 15))
+Processing ./gg-ci-wheels/charset_normalizer-3.5.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (from reportlab->-r /tmp/gg-ci-wheels/install-requirements.txt (line 17))
+Processing ./gg-ci-wheels/six-1.17.0-py2.py3-none-any.whl (from python-dateutil>=2.8.2->pandas->-r /tmp/gg-ci-wheels/install-requirements.txt (line 6))
+Processing ./gg-ci-wheels/idna-3.19-py3-none-any.whl (from requests->csubst->-r /tmp/gg-ci-wheels/install-requirements.txt (line 8))
+Processing ./gg-ci-wheels/certifi-2026.7.22-py3-none-any.whl (from requests->csubst->-r /tmp/gg-ci-wheels/install-requirements.txt (line 8))
+Processing ./gg-ci-wheels/more_itertools-11.1.0-py3-none-any.whl (from cheroot->ete4->-r /tmp/gg-ci-wheels/install-requirements.txt (line 10))
+Processing ./gg-ci-wheels/jaraco_functools-4.6.0-py3-none-any.whl (from cheroot->ete4->-r /tmp/gg-ci-wheels/install-requirements.txt (line 10))
+Installing collected packages: brotli, bottle, urllib3, typing-extensions, tqdm, tenacity, six, ruff, PyYAML, pypdf, pyparsing, pygments, pluggy, Pillow, packaging, numpy, more-itertools, kiwisolver, iniconfig, idna, greenlet, fonttools, execnet, et-xmlfile, defusedxml, cycler, charset-normalizer, certifi, sqlalchemy, scipy, requests, reportlab, python-dateutil, pytest, openpyxl, jaraco.functools, contourpy, biopython, pytest-xdist, pandas, matplotlib, cheroot, ete4, nwkit, csubst
+Successfully installed Pillow-12.3.0 PyYAML-6.0.3 biopython-1.88 bottle-0.13.4 brotli-1.2.0 certifi-2026.7.22 charset-normalizer-3.5.1 cheroot-11.1.2 contourpy-1.3.3 csubst-1.16.3 cycler-0.12.1 defusedxml-0.7.1 et-xmlfile-2.0.0 ete4-4.4.0 execnet-2.1.2 fonttools-4.65.0 greenlet-3.5.5 idna-3.19 iniconfig-2.3.0 jaraco.functools-4.6.0 kiwisolver-1.5.1 matplotlib-3.10.9 more-itertools-11.1.0 numpy-1.26.4 nwkit-0.43.16 openpyxl-3.1.5 packaging-26.3 pandas-3.0.5 pluggy-1.6.0 pygments-2.21.0 pyparsing-3.3.2 pypdf-6.16.1 pytest-9.1.1 pytest-xdist-3.8.0 python-dateutil-2.9.0.post0 reportlab-5.0.0 requests-2.34.2 ruff-0.16.3 scipy-1.17.1 six-1.17.0 sqlalchemy-2.0.52 tenacity-9.1.4 tqdm-4.70.0 typing-extensions-4.16.0 urllib3-2.7.0
+No broken requirements found.
