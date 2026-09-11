@@ -1,0 +1,373 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 28%]
+..........................FFF......F.............................F...... [ 57%]
+........................................................................ [ 85%]
+....................................                                     [100%]
+=================================== FAILURES ===================================
+____ test_diagnostics_distinguishes_stationary_shifted_and_constant_chains _____
+[gw0] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0')
+
+>   ???
+
+/work/workflow/tests/test_mcmctree_calibration_runtime.py:131:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True
+popenargs = (['Rscript', '/review/workflow/support/mcmctree_calibration_diagnostics.R', '/audit/pytest-runtime/popen-gw0/test_diag...ostics_distinguishes0/chain1.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain2.tsv', ...],)
+kwargs = {'stdout': -1, 'stderr': -1}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['Rscript', '/review/workflow/support/mcmctree_calibration_diagnostics.R', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/diagnostics.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain0.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain1.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain2.tsv', '/audit/pytest-runtime/popen-gw0/test_diagnostics_distinguishes0/chain3.tsv']' returned non-zero exit status 1.
+
+/opt/conda/lib/python3.12/subprocess.py:571: CalledProcessError
+_ test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache[1] _
+[gw0] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_real_iq2mc_prior_and_post0')
+time_scale = '1'
+
+>   ???
+
+/work/workflow/tests/test_mcmctree_calibration_runtime.py:179:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+workflow/support/mcmctree_calibration_experiments.py:208: in run_experiments
+    r_version = subprocess.run(["Rscript", "-e", "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True
+popenargs = (['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],)
+kwargs = {'text': True, 'stdout': -1, 'stderr': -1}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"]' returned non-zero exit status 1.
+
+/opt/conda/lib/python3.12/subprocess.py:571: CalledProcessError
+_ test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache[100] _
+[gw0] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_real_iq2mc_prior_and_post1')
+time_scale = '100'
+
+>   ???
+
+/work/workflow/tests/test_mcmctree_calibration_runtime.py:179:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+workflow/support/mcmctree_calibration_experiments.py:208: in run_experiments
+    r_version = subprocess.run(["Rscript", "-e", "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = True, timeout = None, check = True
+popenargs = (['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"],)
+kwargs = {'text': True, 'stdout': -1, 'stderr': -1}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['Rscript', '-e', "stopifnot(requireNamespace('posterior', quietly=TRUE)); cat(as.character(packageVersion('posterior')))"]' returned non-zero exit status 1.
+
+/opt/conda/lib/python3.12/subprocess.py:571: CalledProcessError
+__________________ test_diagnostics_detect_shift_and_constant __________________
+[gw0] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/audit/pytest-runtime/popen-gw0/test_diagnostics_detect_shift_0')
+
+    def test_diagnostics_detect_shift_and_constant(tmp_path):
+        import numpy as np
+        rng = np.random.default_rng(871)
+        paths = []
+        for i in range(4):
+            path = tmp_path / f'chain{i}.txt'
+            with path.open('w') as out:
+                out.write('Gen stable shifted\n')
+                for j in range(1500):
+                    out.write(f'{j+1} {rng.normal()} {rng.normal()+i*4}\n')
+            paths.append(path)
+        report = chains.diagnose(paths, tmp_path)
+>       assert report['state'] == 'unconverged', (tmp_path / 'diagnostics.log').read_text()
+E       AssertionError: Error: R package posterior is required
+E         Execution halted
+E
+E       assert 'diagnostic_failed' == 'unconverged'
+E
+E         - unconverged
+E         + diagnostic_failed
+
+workflow/tests/test_mcmctree_chains.py:111: AssertionError
+________ test_scan_core_command_is_analytical_only_and_preserves_audit _________
+[gw2] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0')
+
+    def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):
+        """Execute the actual analytical core command and audit publication."""
+        fixtures = REPO_ROOT / "workflow/tests/data/csubst_scan_inference"
+        shutil.copyfile(fixtures / "input.fa", tmp_path / "input.fasta")
+        shutil.copyfile(fixtures / "tree.nwk", tmp_path / "input.nwk")
+        (tmp_path / "foreground.tsv").write_text(
+            "name\ttrait\n" + "".join(f"{name}\t{1 if name == 'a' else 2 if name == 'e' else 0}\n" for name in "abcdefgh")
+        )
+        # Prepare the same intermediate files supplied by GeneGalleon's ASR stage.
+        fitted = subprocess.run([
+            "csubst", "scan", "--alignment_file", "input.fasta", "--rooted_tree_file", "input.nwk",
+            "--foreground", "foreground.tsv", "--fg_format", "2", "--iqtree_model", "GY+FQ",
+            "--scan_pvalue_calibration", "none", "--scan_n_permutations", "0", "--scan_site_plot", "no",
+            "--iqtree_outdir", "fit", "--outdir", "prepare", "--threads", "1",
+        ], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+        assert fitted.returncode == 0, fitted.stdout + fitted.stderr
+        for suffix in ("treefile", "state", "rate", "iqtree", "log"):
+            paths = list((tmp_path / "fit").glob(f"*.{suffix}"))
+            assert len(paths) == 1
+            shutil.copyfile(paths[0], tmp_path / f"input.{suffix}")
+        core = CSUBST_CORE_SCRIPT.read_text()
+        command_start = core.index('  csubst_scan_dir="csubst_scan"')
+        command_end = core.index('\n  if [[ -s "${csubst_scan_dir}/csubst_scan.tsv"', command_start)
+        archive_start = core.index('    if [[ ! -s "${csubst_scan_dir}/csubst_scan_calibration.json"', command_end)
+        archive_end = core.index('    echo "CSUBST scan was successful."', archive_start)
+        shell = core[command_start:command_end] + "\n" + core[archive_start:archive_end]
+        environment = dict(os.environ, csubst_input_base="./input", genetic_code="1", codon_model="GY+FQ",
+                           csubst_scan_unit_mode="clade", csubst_scan_match="any2spe",
+                           csubst_scan_min_event_pp="0.5", csubst_scan_min_support="2",
+                           csubst_scan_rate_event_mode="posterior_sum", csubst_scan_rate_length="n_rescaled",
+                           csubst_scan_rate_exposure="q_weighted", csubst_scan_other_scope="all",
+                           csubst_scan_site_plot="no",
+                           csubst_scan_tree_site_plot_format="pdf", csubst_scan_tree_site_plot_max_sites="30",
+                           csubst_nonsyn_recode="no", GG_TASK_CPUS="1", og_id="OGTEST",
+                           gg_support_dir=str(REPO_ROOT / "workflow/support"),
+                           file_og_csubst_scan_audit=str(tmp_path / "published" / "OGTEST_csubst_scan_audit.zip"))
+        result = subprocess.run(["bash", "-euo", "pipefail", "-c", shell], cwd=tmp_path,
+                                env=environment, capture_output=True, text=True, timeout=180)
+>       assert result.returncode == 0, result.stdout + result.stderr
+E       AssertionError: CSUBST start: 2026-09-11 07:43:53.978506+00:00
+E         csubst scan start: 2026-09-11 07:43:53.979110+00:00
+E         OS: Linux-6.12.76-linuxkit-aarch64-with-glibc2.39
+E         Python version: 3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]
+E         CSUBST version: 1.16.0
+E         CSUBST dependency versions: ete4=4.4.0, requests=2.34.2, numpy=1.26.4, scipy=1.17.1, pandas=3.0.5, cython=3.3.0, matplotlib=3.10.9
+E         CSUBST missing dependency packages: none
+E         CSUBST command: /opt/conda/bin/csubst scan --genetic_code 1 --alignment_file ./input.fasta --rooted_tree_file ./input.nwk --iqtree_treefile ./input.treefile --iqtree_state ./input.state --iqtree_rate ./input.rate --iqtree_iqtree ./input.iqtree --iqtree_log ./input.log --iqtree_model GY+FQ --iqtree_outdir csubst_scan/iqtree --foreground foreground.tsv --fg_format 2 --scan_unit_mode clade --scan_match any2spe --scan_min_event_pp 0.5 --scan_min_support 2 --scan_rate_event_mode posterior_sum --scan_rate_length n_rescaled --scan_rate_exposure q_weighted --scan_other_scope all --scan_pvalue_calibration none --scan_n_permutations 0 --scan_site_plot no --tree_site_plot_format pdf --tree_site_plot_max_sites 30 --nonsyn_recode no --threads 1 --outdir csubst_scan --output_prefix csubst
+E         CSUBST working directory: /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0
+E         CSUBST bug report: https://github.com/kfuku52/csubst/issues
+E         Joint/bridge observations require --scan_rate_exposure endpoint.
+E
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '-euo', 'pipefail', '-c', '  csubst_scan_dir="csubst_scan"\n\n  csubst scan \\\n    --g...tps://github.com/kfuku52/csubst/issues\n', stderr='Joint/bridge observations require --scan_rate_exposure endpoint.\n').returncode
+
+workflow/tests/test_csubst_scan_runtime_integration.py:320: AssertionError
+=============================== warnings summary ===============================
+workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED workflow/tests/test_mcmctree_calibration_runtime.py::test_diagnostics_distinguishes_stationary_shifted_and_constant_chains
+FAILED workflow/tests/test_mcmctree_calibration_runtime.py::test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache[1]
+FAILED workflow/tests/test_mcmctree_calibration_runtime.py::test_real_iq2mc_prior_and_posterior_keep_inputs_and_detect_tampered_cache[100]
+FAILED workflow/tests/test_mcmctree_chains.py::test_diagnostics_detect_shift_and_constant
+FAILED workflow/tests/test_csubst_scan_runtime_integration.py::test_scan_core_command_is_analytical_only_and_preserves_audit
+5 failed, 247 passed, 3 warnings in 268.45s (0:04:28)

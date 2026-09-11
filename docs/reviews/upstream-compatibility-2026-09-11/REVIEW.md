@@ -25,7 +25,7 @@ GeneGalleonの対象は `main` の `10fc03bd9c40c51cc635c5254e6b099c5ad75323`。
 
 ## 1. [P1] 既定の局在モデルを現行scikit-learnでロードできない
 
-場所: [モデル既定値](/Users/kf/repos/genegalleon/workflow/gg_gene_evolution_entrypoint.sh:180)、[共通実行ヘルパー](/Users/kf/repos/genegalleon/workflow/support/gg_util/04_busco_runtime.sh:491)、[コンテナのscikit-learn指定](/Users/kf/repos/genegalleon/container/env/base.required.txt:14)。
+場所: [モデル既定値](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/gg_gene_evolution_entrypoint.sh#L180)、[共通実行ヘルパー](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/support/gg_util/04_busco_runtime.sh#L491)、[コンテナのscikit-learn指定](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/container/env/base.required.txt#L14)。
 
 `run_cdskit_localize=1` は既定で有効。GeneGalleonが指定する `targeting5-perox-deeploc21-et-v1` を、最新版CDSKITとコンテナのscikit-learn 1.9.0で読むと失敗する。実際の `gg_run_cdskit_localize` を合成タンパク質2配列で実行し、以下を再現した。
 
@@ -42,7 +42,7 @@ on <module 'sklearn._loss._loss' ...>
 
 ## 2. [P1] CSUBST scanの既定設定がjoint推論と矛盾する
 
-場所: [既定値](/Users/kf/repos/genegalleon/workflow/gg_gene_evolution_entrypoint.sh:305)、[exposureの許容値](/Users/kf/repos/genegalleon/workflow/core/gg_gene_evolution_core.sh:1442)、[実際のCLI](/Users/kf/repos/genegalleon/workflow/core/gg_gene_evolution_core.sh:6090)。
+場所: [既定値](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/gg_gene_evolution_entrypoint.sh#L305)、[exposureの許容値](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/core/gg_gene_evolution_core.sh#L1442)、[実際のCLI](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/core/gg_gene_evolution_core.sh#L6090)。
 
 CSUBST 1.16.0ではjoint endpoint posteriorが既定になった。GeneGalleonは推論方式を指定せず、旧marginal用の `--scan_rate_length n_rescaled --scan_rate_exposure q_weighted` を明示する。その結果、既存の実coreコマンドを実行する統合テストが終了コード2で失敗した。
 
@@ -58,7 +58,7 @@ Joint/bridge observations require --scan_rate_exposure endpoint.
 
 ## 3. [P2] 公開設定の3di20に必要な入力と依存が渡らない
 
-場所: [公開設定](/Users/kf/repos/genegalleon/workflow/gg_gene_evolution_entrypoint.sh:299)、[search入力](/Users/kf/repos/genegalleon/workflow/core/gg_gene_evolution_core.sh:5927)、[sitesラッパー](/Users/kf/repos/genegalleon/workflow/support/csubst_site_wrapper.py:346)、[wheel導入](/Users/kf/repos/genegalleon/container/scripts/install_source_artifacts.sh:23)。
+場所: [公開設定](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/gg_gene_evolution_entrypoint.sh#L299)、[search入力](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/core/gg_gene_evolution_core.sh#L5927)、[sitesラッパー](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/support/csubst_site_wrapper.py#L346)、[wheel導入](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/container/scripts/install_source_artifacts.sh#L23)。
 
 GeneGalleonは `3di20` を有効な設定として案内するが、search/scan/sitesへ従来の `--alignment_file` とIQ-TREE bundleを渡し、`--full_cds_alignment_file` を渡していない。最新版で実行すると `--nonsyn_recode 3di20 requires --full_cds_alignment_file.` で失敗する。[再現ログ](evidence/3di.log)
 
@@ -68,7 +68,7 @@ GeneGalleonは `3di20` を有効な設定として案内するが、search/scan/
 
 ## 4. [P2] 非標準遺伝暗号がCSUBST sitesへ伝わらない
 
-場所: [sitesコマンド構築](/Users/kf/repos/genegalleon/workflow/support/csubst_site_wrapper.py:334)。
+場所: [sitesコマンド構築](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/support/csubst_site_wrapper.py#L334)。
 
 gene evolutionのsearch/scanは `--genetic_code` を渡すが、sitesラッパーは引数も転送先も持たない。そのため遺伝暗号2で正常に作ったIQ-TREE bundleを後段で扱うと、sitesだけが遺伝暗号1を用いる。
 
@@ -85,7 +85,7 @@ gene evolutionのsearch/scanは `--genetic_code` を渡すが、sitesラッパ�
 
 ## 5. [P2] CSUBSTの推論方式変更が結果の再利用条件に反映されない
 
-場所: [search provenance](/Users/kf/repos/genegalleon/workflow/core/gg_gene_evolution_core.sh:5830)、[versionの記録方法](/Users/kf/repos/genegalleon/workflow/core/gg_gene_evolution_core.sh:5980)、[比較対象](/Users/kf/repos/genegalleon/workflow/support/artifact_provenance.py:668)、[sites ZIPの再利用](/Users/kf/repos/genegalleon/workflow/support/csubst_site_wrapper.py:1917)。
+場所: [search provenance](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/core/gg_gene_evolution_core.sh#L5830)、[versionの記録方法](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/core/gg_gene_evolution_core.sh#L5980)、[比較対象](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/support/artifact_provenance.py#L668)、[sites ZIPの再利用](https://github.com/kfuku52/genegalleon/blob/10fc03bd9c40c51cc635c5254e6b099c5ad75323/workflow/support/csubst_site_wrapper.py#L1917)。
 
 新しいjoint推論は旧marginal推論と数値的に等価な高速化ではなく、置換数・候補順位・root近傍の適格性が変わる。ところがsearchの出力パラメータに推論方式がなく、`csubst_version` は比較対象外のdiagnosticsにのみ入る。IQ-TREE bundleと明示済みパラメータが同じなら、古いmarginal結果は再利用可能のままで、新規familyはjointで生成される。sitesも旧形式と同じarchive完了マーカーを用い、推論方式を確認しない。
 

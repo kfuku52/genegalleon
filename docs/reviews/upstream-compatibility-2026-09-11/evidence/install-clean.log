@@ -1,0 +1,50 @@
+Processing ./src/csubst
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Processing ./src/nwkit
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Processing ./src/cdskit
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Processing ./src/amalgkit
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: csubst, nwkit, cdskit, amalgkit
+  Building wheel for csubst (pyproject.toml): started
+  Building wheel for csubst (pyproject.toml): finished with status 'done'
+  Created wheel for csubst: filename=csubst-1.16.0-cp312-cp312-linux_aarch64.whl size=3880701 sha256=77beb17f51ae40a8a2c662c1c0cd1897c24b7d4ea1fbbd39e8711719108dca14
+  Stored in directory: /tmp/pip-ephem-wheel-cache-rirz5coo/wheels/e1/0c/24/93ec07587145be48e4653f80cb20f13594f48e349511e39709
+  Building wheel for nwkit (pyproject.toml): started
+  Building wheel for nwkit (pyproject.toml): finished with status 'done'
+  Created wheel for nwkit: filename=nwkit-0.43.16-py3-none-any.whl size=1030182 sha256=4a2c47fd7d7557cc89cdeeef398e86dc289e6ef773f4a1052af03768cd4c9055
+  Stored in directory: /tmp/pip-ephem-wheel-cache-rirz5coo/wheels/4f/2b/d2/a81a3bd5fa1ff0a838f5e5b39cf88563ed0527e32f8e0986bc
+  Building wheel for cdskit (pyproject.toml): started
+  Building wheel for cdskit (pyproject.toml): finished with status 'done'
+  Created wheel for cdskit: filename=cdskit-0.31.0-py3-none-any.whl size=364769 sha256=936f36ad1317f46bd81cfbd94a5741f52c9fd578fbbc364474573c323de2d334
+  Stored in directory: /tmp/pip-ephem-wheel-cache-rirz5coo/wheels/94/fc/d1/26c9c10b8df048a3ad86ac476729adf55410d8e190ba30e27c
+  Building wheel for amalgkit (pyproject.toml): started
+  Building wheel for amalgkit (pyproject.toml): finished with status 'done'
+  Created wheel for amalgkit: filename=amalgkit-0.16.88-py3-none-any.whl size=3144114 sha256=c5233d094a2f77ed8a944f5eb8aec23334fa0dbdbd872b64eb41b4c03ae0a68a
+  Stored in directory: /tmp/pip-ephem-wheel-cache-rirz5coo/wheels/c2/53/b9/aaae4adc6695f2ba733538e187ad65a5a89d02b7d17d17b390
+Successfully built csubst nwkit cdskit amalgkit
+Installing collected packages: nwkit, csubst, cdskit, amalgkit
+  Attempting uninstall: nwkit
+    Found existing installation: nwkit 0.43.15
+    Uninstalling nwkit-0.43.15:
+      Successfully uninstalled nwkit-0.43.15
+  Attempting uninstall: csubst
+    Found existing installation: csubst 1.15.0
+    Uninstalling csubst-1.15.0:
+      Successfully uninstalled csubst-1.15.0
+  Attempting uninstall: cdskit
+    Found existing installation: cdskit 0.29.2
+    Uninstalling cdskit-0.29.2:
+      Successfully uninstalled cdskit-0.29.2
+  Attempting uninstall: amalgkit
+    Found existing installation: amalgkit 0.16.80
+    Uninstalling amalgkit-0.16.80:
+      Successfully uninstalled amalgkit-0.16.80
+
+Successfully installed amalgkit-0.16.88 cdskit-0.31.0 csubst-1.16.0 nwkit-0.43.16
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.

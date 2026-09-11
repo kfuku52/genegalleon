@@ -1,0 +1,364 @@
+[gg_container_build] repo_root=/private/tmp/gg-3di-publish-20260911
+[gg_container_build] image=local/genegalleon:3di-clean-20260911
+[gg_container_build] image_source=local
+[gg_container_build] platforms=linux/arm64 mode=load build_target=runtime
+[gg_container_build] step 1/2: docker buildx build
+[buildx] MODE=load exports a local image tarball and is typically slower than MODE=push.
+Conda environment coverage matches between pipeline scripts and container/Dockerfile.
+[buildx] Resolved KFU52_AMALGKIT_REPO_SHA: 21ce1417410ec05aea409370d496ce01896671d0
+[buildx] Resolved KFU52_CDSKIT_REPO_SHA: f7ee05ea43451929da1db4d32e4f6cb5c02719ec
+[buildx] Resolved KFU52_CSUBST_REPO_SHA: 7c5c3c28d21382d773b25257ebb9546335fecf09
+[buildx] Resolved KFU52_NWKIT_REPO_SHA: 1996588e561d10aebc47c4daf90be836bbebd315
+[buildx] Resolved BUSCO_REPO_SHA: cd071053c38c5060f75d0b370cb66c4edc8e59a1
+[buildx] Resolved PAML_REPO_SHA: 8daeead6b55523f375d9ac56dcfac38373ef8a2e
+[buildx] Resolved IQTREE_REPO_SHA: 63c330d90dd02241dbbbaf1e9f9e9cc6dadbd1de
+[buildx] Resolved KFFRACTBIAS_REPO_SHA: d19e658042e88f3c344a110f90f0981e10b11ff3
+[buildx] Resolved KFTOOLS_REPO_SHA: 715ecaa37c7c0662780785c36657770afd4f0ca2
+[buildx] Resolved RKFTOOLS_REPO_SHA: e4a0456c6651914b299d5b96404d399a21077658
+#0 building with "gg-3di-clean-20260911" instance using docker-container driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 16.93kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+#2 DONE 0.0s
+
+#3 docker-image://docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+#3 resolve docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e done
+#3 CACHED
+
+#4 [internal] load metadata for docker.io/mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
+#4 DONE 0.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 274B done
+#5 DONE 0.0s
+
+#6 [base 1/3] FROM docker.io/mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
+#6 resolve docker.io/mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca done
+#6 DONE 0.0s
+
+#7 [internal] load build context
+#7 transferring context: 3.84kB 0.0s done
+#7 DONE 0.0s
+
+#8 [base 2/3] COPY container/apt /opt/pg/apt
+#8 CACHED
+
+#9 [dependencies  1/13] COPY container/env /opt/pg/env
+#9 CACHED
+
+#10 [dependencies  9/13] COPY container/scripts/fetch_git_repo.sh /opt/pg/scripts/fetch_git_repo.sh
+#10 CACHED
+
+#11 [dependencies 13/13] RUN --mount=type=cache,target=/root/.cache/pip  chmod +x /opt/pg/scripts/install_nonconda_fallbacks.sh  && TESTNH_TARBALL_SHA256="598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2"  CAFE5_TARBALL_SHA256="71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8"  /opt/pg/scripts/install_nonconda_fallbacks.sh cafe5 mapnh astral r-cran verify-r
+#11 CACHED
+
+#12 [dependencies 10/13] COPY container/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
+#12 CACHED
+
+#13 [dependencies  6/13] RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked  --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked  chmod +x /opt/pg/scripts/ensure_generax_stable.sh  && /opt/pg/scripts/ensure_generax_stable.sh base
+#13 CACHED
+
+#14 [dependencies  2/13] COPY container/scripts/install_env.sh /opt/pg/scripts/install_env.sh
+#14 CACHED
+
+#15 [dependencies  8/13] COPY container/scripts/verify_sha256.sh /opt/pg/scripts/verify_sha256.sh
+#15 CACHED
+
+#16 [base 3/3] COPY container/scripts/install_system_packages.sh /opt/pg/scripts/install_system_packages.sh
+#16 CACHED
+
+#17 [dependencies  5/13] COPY container/scripts/ensure_generax_stable.sh /opt/pg/scripts/ensure_generax_stable.sh
+#17 CACHED
+
+#18 [system 1/1] RUN bash /opt/pg/scripts/install_system_packages.sh development
+#18 CACHED
+
+#19 [dependencies 12/13] COPY container/scripts/install_nonconda_fallbacks.sh /opt/pg/scripts/install_nonconda_fallbacks.sh
+#19 CACHED
+
+#20 [source-builder 1/3] COPY container/source_branches.env /opt/pg/source_branches.env
+#20 CACHED
+
+#21 [dependencies  4/13] COPY container/testdata /opt/pg/testdata
+#21 CACHED
+
+#22 [dependencies  7/13] COPY container/scripts/download_url.sh /opt/pg/scripts/download_url.sh
+#22 CACHED
+
+#23 [dependencies 11/13] RUN --mount=type=cache,target=/root/.cache/pip  micromamba run -n base pip install       -r /opt/pg/pip-compatibility.requirements.txt  && micromamba run -n base python -c "import ete4, genomepy, lxml, ortools, PIL"  && micromamba run -n base python -m pip check
+#23 CACHED
+
+#24 [source-builder 2/3] COPY container/scripts/resolve_git_branch_sha.sh /opt/pg/scripts/resolve_git_branch_sha.sh
+#24 CACHED
+
+#25 [dependencies  3/13] RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked  --mount=type=cache,target=/root/.mamba/pkgs,sharing=locked  chmod +x /opt/pg/scripts/install_env.sh  && export USE_DEFAULTS_CHANNEL=0 STRICT_CHANNEL_PRIORITY=1 MAMBA_NO_LOW_SPEED_LIMIT=1  && base_required="/opt/pg/env/base.required.txt"  && optional_file="/opt/pg/env/base.arm64.optional.txt"  && reconciled_required="/tmp/pg.base.required.txt"  && if [[ -f "/opt/pg/env/base.arm64.required.txt" ]]; then base_required="/opt/pg/env/base.arm64.required.txt"; fi  && if [[ ! -f "${optional_file}" ]]; then optional_file="/dev/null"; fi  && sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "${base_required}" /opt/pg/env/base.r.required.txt | awk '!seen[$0]++' > "${reconciled_required}"  && /opt/pg/scripts/install_env.sh base "${reconciled_required}" "${optional_file}" python=3.12  && rm -f "${reconciled_required}"
+#25 CACHED
+
+#26 [source-builder 3/3] COPY container/scripts/build_source_artifact.sh /opt/pg/scripts/build_source_artifact.sh
+#26 CACHED
+
+#27 [csubst-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python csubst       "https://github.com/kfuku52/csubst.git"       "7c5c3c28d21382d773b25257ebb9546335fecf09"       /opt/pg/artifact
+#27 0.096   % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+#27 0.096                                  Dload  Upload  Total   Spent   Left   Speed
+#27 0.096
+  0      0   0      0   0      0      0      0                              0
+100  2.27M   0  2.27M   0      0  2.10M      0           00:01          2.10M
+100 18.65M   0 18.65M   0      0  8.96M      0           00:02          8.97M
+100 36.51M   0 36.51M   0      0 11.85M      0           00:03         11.85M
+100 36.54M   0 36.54M   0      0 11.85M      0           00:03         11.85M
+100 36.54M   0 36.54M   0      0 11.85M      0           00:03         11.85M
+100 36.54M   0 36.54M   0      0 11.85M      0           00:03         11.85M
+#27 3.675 [fetch_git_repo] Fetched https://github.com/kfuku52/csubst.git@7c5c3c28d21382d773b25257ebb9546335fecf09 via archive
+#27 3.697 [source artifact] Building csubst at 7c5c3c28d21382d773b25257ebb9546335fecf09 (python)
+#27 5.000 Processing ./tmp.JzPJYa9oAp/source
+#27 5.001   Preparing metadata (pyproject.toml): started
+#27 8.645   Preparing metadata (pyproject.toml): finished with status 'done'
+#27 8.647 Building wheels for collected packages: csubst
+#27 8.648   Building wheel for csubst (pyproject.toml): started
+#27 34.25   Building wheel for csubst (pyproject.toml): finished with status 'done'
+#27 34.26   Created wheel for csubst: filename=csubst-1.16.3-cp312-cp312-linux_aarch64.whl size=3881987 sha256=c2da76a0ea97f11553cb03cf6cf029a2eb0d2708d85c589df2f89e3af4266c5e
+#27 34.26   Stored in directory: /tmp/pip-ephem-wheel-cache-v3qtaptw/wheels/90/b3/da/8de86d09e65cc69af3ca5d286d9288e04f98d1fbb989945d29
+#27 34.26 Successfully built csubst
+#27 DONE 34.3s
+
+#28 [runtime-system 1/1] RUN bash /opt/pg/scripts/install_system_packages.sh runtime
+#28 CACHED
+
+#29 [runtime-content  5/18] COPY container/scripts/install_helvetica_compat_font.sh /opt/pg/scripts/install_helvetica_compat_font.sh
+#29 CACHED
+
+#30 [runtime-content  3/18] COPY --from=dependencies /opt/pg/logs /opt/pg/logs
+#30 CACHED
+
+#31 [runtime-content  2/18] COPY --from=dependencies /usr/local/bin /usr/local/bin
+#31 CACHED
+
+#32 [runtime-content  4/18] COPY container/scripts/install_source_artifacts.sh /opt/pg/scripts/install_source_artifacts.sh
+#32 CACHED
+
+#33 [runtime-content  1/18] COPY --from=dependencies /opt/conda /opt/conda
+#33 CACHED
+
+#34 [rkftools-build 1/1] RUN source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh r rkftools       "https://github.com/kfuku52/rkftools.git"       "e4a0456c6651914b299d5b96404d399a21077658"       /opt/pg/artifact
+#34 CACHED
+
+#35 [iqtree-build 1/2] COPY container/scripts/build_iqtree_artifact.sh /opt/pg/scripts/build_iqtree_artifact.sh
+#35 CACHED
+
+#36 [iqtree-build 2/2] RUN source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_iqtree_artifact.sh library       "https://github.com/iqtree/iqtree3.git"       "63c330d90dd02241dbbbaf1e9f9e9cc6dadbd1de"       /opt/pg/artifact
+#36 CACHED
+
+#37 [cdskit-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python cdskit       "https://github.com/kfuku52/cdskit.git"       "f7ee05ea43451929da1db4d32e4f6cb5c02719ec"       /opt/pg/artifact
+#37 CACHED
+
+#38 [paml-build 1/1] RUN source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh paml paml       "https://github.com/iqtree/paml.git"       "8daeead6b55523f375d9ac56dcfac38373ef8a2e"       /opt/pg/artifact
+#38 CACHED
+
+#39 [busco-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python BUSCO       "https://gitlab.com/ezlab/busco.git"       "cd071053c38c5060f75d0b370cb66c4edc8e59a1"       /opt/pg/artifact ""
+#39 CACHED
+
+#40 [kffractbias-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python kfFractBias       "https://github.com/kfuku52/kfFractBias.git"       "d19e658042e88f3c344a110f90f0981e10b11ff3"       /opt/pg/artifact
+#40 CACHED
+
+#41 [amalgkit-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python amalgkit       "https://github.com/kfuku52/amalgkit.git"       "21ce1417410ec05aea409370d496ce01896671d0"       /opt/pg/artifact
+#41 CACHED
+
+#42 [nwkit-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python nwkit       "https://github.com/kfuku52/nwkit.git"       "1996588e561d10aebc47c4daf90be836bbebd315"       /opt/pg/artifact
+#42 CACHED
+
+#43 [iqtree-worker-build 1/1] RUN --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/nwkit-artifact  bash /opt/pg/scripts/build_iqtree_artifact.sh worker /opt/pg/artifact /tmp/nwkit-artifact
+#43 CACHED
+
+#44 [runtime-content  6/18] COPY container/testdata /opt/pg/testdata
+#44 CACHED
+
+#45 [kftools-build 1/1] RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env  && bash /opt/pg/scripts/build_source_artifact.sh python kftools       "https://github.com/kfuku52/kftools.git"       "715ecaa37c7c0662780785c36657770afd4f0ca2"       /opt/pg/artifact
+#45 CACHED
+
+#46 [runtime-content  7/18] RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/amalgkit  --mount=from=cdskit-build,source=/opt/pg/artifact,target=/tmp/artifacts/cdskit  --mount=from=csubst-build,source=/opt/pg/artifact,target=/tmp/artifacts/csubst  --mount=from=nwkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/nwkit  --mount=from=busco-build,source=/opt/pg/artifact,target=/tmp/artifacts/BUSCO  --mount=from=paml-build,source=/opt/pg/artifact,target=/tmp/artifacts/paml  --mount=from=iqtree-worker-build,source=/opt/pg/artifact,target=/tmp/artifacts/iqtree  --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools  bash /opt/pg/scripts/install_source_artifacts.sh /tmp/artifacts  && bash /opt/pg/scripts/install_helvetica_compat_font.sh base
+#46 1.284 Processing ./artifacts/amalgkit/wheels/amalgkit-0.16.88-py3-none-any.whl
+#46 1.288 Processing ./artifacts/cdskit/wheels/cdskit-0.31.1-py3-none-any.whl
+#46 1.291 Processing ./artifacts/csubst/wheels/csubst-1.16.3-cp312-cp312-linux_aarch64.whl
+#46 1.295 Processing ./artifacts/nwkit/wheels/nwkit-0.43.16-py3-none-any.whl
+#46 1.298 Processing ./artifacts/BUSCO/wheels/busco-6.1.0-py3-none-any.whl
+#46 1.300 Processing ./artifacts/kfFractBias/wheels/kffractbias-0.2.0.dev0-py3-none-any.whl
+#46 1.301 Processing ./artifacts/kftools/wheels/kftools-0.6.3-py3-none-any.whl
+#46 1.314 Installing collected packages: busco, nwkit, kftools, kffractbias, csubst, cdskit, amalgkit
+#46 2.512
+#46 2.518 Successfully installed amalgkit-0.16.88 busco-6.1.0 cdskit-0.31.1 csubst-1.16.3 kffractbias-0.2.0.dev0 kftools-0.6.3 nwkit-0.43.16
+#46 2.518 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#46 4.524 No broken requirements found.
+#46 6.528 Installed /opt/conda/lib/python3.12/site-packages/matplotlib/mpl-data/fonts/ttf/Helvetica.ttf
+#46 7.659 Matplotlib Helvetica path: /opt/conda/lib/python3.12/site-packages/matplotlib/mpl-data/fonts/ttf/Helvetica.ttf
+#46 7.682 [install_helvetica_compat_font] Helvetica compatibility font installed for Matplotlib.
+#46 DONE 8.1s
+
+#47 [runtime-content  8/18] RUN mkdir -p /home /usr/local/db/Pfam_LE /usr/local/db/jaspar /opt/pg/logs /opt/conda/envs  && ln -sfn /opt/conda /opt/conda/envs/base  && printf '%s\n'    'export MAMBA_ROOT_PREFIX=/opt/conda'    'eval "$(micromamba shell hook --shell bash)"'    'conda() { micromamba "$@"; }'    'export PATH=/usr/local/bin:${PATH}'    > /home/.bashrc  && cp /home/.bashrc /root/.bashrc
+#47 DONE 0.1s
+
+#48 [runtime-content  9/18] COPY workflow/support/treevis /opt/pg/src/genegalleon.treevis
+#48 DONE 0.0s
+
+#49 [runtime-content 10/18] RUN micromamba run -n base R CMD INSTALL /opt/pg/src/genegalleon.treevis  && micromamba run -n base Rscript -e       "stopifnot(requireNamespace('genegalleon.treevis', quietly = TRUE))"
+#49 0.926 * installing to library ‘/opt/conda/lib/R/library’
+#49 0.936 * installing *source* package ‘genegalleon.treevis’ ...
+#49 0.936 ** using staged installation
+#49 0.944 ** R
+#49 0.961 ** byte-compile and prepare package for lazy loading
+#49 3.009 ** help
+#49 3.015 *** installing help indices
+#49 3.021 ** building package indices
+#49 3.115 ** testing if installed package can be loaded from temporary location
+#49 3.768 ** testing if installed package can be loaded from final location
+#49 4.384 ** testing if installed package keeps a record of temporary installation path
+#49 4.386 * DONE (genegalleon.treevis)
+#49 DONE 5.9s
+
+#50 [runtime-content 11/18] RUN [[ "2026-09-11" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]  || { echo "SECURITY_REFRESH_EPOCH must use YYYY-MM-DD format" >&2; exit 1; }  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/*  && apt-get update  && apt-get install -y --no-install-recommends unzip  && apt-get upgrade --with-new-pkgs -y  && apt-get --simulate dist-upgrade > /tmp/gg-apt-upgrade-simulation.txt  && if awk '/^Inst / { found = 1 } END { exit found ? 0 : 1 }' /tmp/gg-apt-upgrade-simulation.txt; then       echo "Upgradeable system packages remain after the security refresh." >&2;       exit 1;     fi  && rm -f /tmp/gg-apt-upgrade-simulation.txt  && apt-get clean  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /var/cache/apt/archives/partial/*  && printf '%s\n' "2026-09-11" > /opt/pg/logs/security_refresh_epoch.txt
+#50 0.626 Get:1 http://ports.ubuntu.com/ubuntu-ports noble InRelease [256 kB]
+#50 2.097 Get:2 http://ports.ubuntu.com/ubuntu-ports noble-updates InRelease [126 kB]
+#50 2.434 Get:3 http://ports.ubuntu.com/ubuntu-ports noble-backports InRelease [126 kB]
+#50 2.770 Get:4 http://ports.ubuntu.com/ubuntu-ports noble-security InRelease [126 kB]
+#50 3.119 Get:5 http://ports.ubuntu.com/ubuntu-ports noble/multiverse arm64 Packages [274 kB]
+#50 3.339 Get:6 http://ports.ubuntu.com/ubuntu-ports noble/main arm64 Packages [1776 kB]
+#50 3.953 Get:7 http://ports.ubuntu.com/ubuntu-ports noble/restricted arm64 Packages [113 kB]
+#50 3.963 Get:8 http://ports.ubuntu.com/ubuntu-ports noble/universe arm64 Packages [19.0 MB]
+#50 5.306 Get:9 http://ports.ubuntu.com/ubuntu-ports noble-updates/restricted arm64 Packages [2831 kB]
+#50 5.431 Get:10 http://ports.ubuntu.com/ubuntu-ports noble-updates/multiverse arm64 Packages [92.2 kB]
+#50 5.438 Get:11 http://ports.ubuntu.com/ubuntu-ports noble-updates/main arm64 Packages [1627 kB]
+#50 5.564 Get:12 http://ports.ubuntu.com/ubuntu-ports noble-updates/universe arm64 Packages [2195 kB]
+#50 5.660 Get:13 http://ports.ubuntu.com/ubuntu-ports noble-backports/main arm64 Packages [48.9 kB]
+#50 5.661 Get:14 http://ports.ubuntu.com/ubuntu-ports noble-backports/universe arm64 Packages [36.3 kB]
+#50 5.664 Get:15 http://ports.ubuntu.com/ubuntu-ports noble-backports/multiverse arm64 Packages [671 B]
+#50 5.664 Get:16 http://ports.ubuntu.com/ubuntu-ports noble-security/main arm64 Packages [1312 kB]
+#50 5.765 Get:17 http://ports.ubuntu.com/ubuntu-ports noble-security/universe arm64 Packages [1616 kB]
+#50 5.878 Get:18 http://ports.ubuntu.com/ubuntu-ports noble-security/restricted arm64 Packages [2707 kB]
+#50 6.037 Get:19 http://ports.ubuntu.com/ubuntu-ports noble-security/multiverse arm64 Packages [87.7 kB]
+#50 6.164 Fetched 34.4 MB in 6s (5651 kB/s)
+#50 6.164 Reading package lists...
+#50 6.735 Reading package lists...
+#50 7.289 Building dependency tree...
+#50 7.418 Reading state information...
+#50 7.586 unzip is already the newest version (6.0-28ubuntu4.1).
+#50 7.586 0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+#50 7.590 Reading package lists...
+#50 8.086 Building dependency tree...
+#50 8.203 Reading state information...
+#50 8.233 Calculating upgrade...
+#50 8.379 0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+#50 DONE 9.3s
+
+#51 [runtime-content 12/18] COPY container/spec /opt/pg/spec
+#51 DONE 0.0s
+
+#52 [runtime-content 13/18] COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
+#52 DONE 0.0s
+
+#53 [runtime-content 14/18] COPY container/scripts/check_iqtree_library.py /opt/pg/scripts/check_iqtree_library.py
+#53 DONE 0.0s
+
+#54 [runtime-content 15/18] COPY container/scripts/check_nwkit_reconciliation.py /opt/pg/scripts/check_nwkit_reconciliation.py
+#54 DONE 0.0s
+
+#55 [runtime-content 16/18] COPY container/scripts/check_csubst_3di.py /opt/pg/scripts/check_csubst_3di.py
+#55 DONE 0.0s
+
+#56 [runtime-content 17/18] COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
+#56 DONE 0.0s
+
+#57 [runtime-content 18/18] RUN chmod +x /opt/pg/scripts/validate_runtime.sh  && runtime_required="/opt/pg/spec/required_commands.tsv"  && runtime_optional="/opt/pg/spec/optional_commands.arm64.tsv"  && if [[ -f "/opt/pg/spec/required_commands.arm64.tsv" ]]; then runtime_required="/opt/pg/spec/required_commands.arm64.tsv"; fi  && /opt/pg/scripts/validate_runtime.sh       --required "${runtime_required}"       --optional "${runtime_optional}"       --report /opt/pg/logs/runtime_validation_arm64.tsv  && micromamba run -n base python -m pip check  && micromamba clean -i -l -y  && bash /opt/pg/scripts/post_install_notes.sh "arm64"
+#57 52.55 {"csubst": "1.16.3", "default_backend": "esm3di-35m", "dependencies": {"huggingface-hub": "1.31.0", "peft": "0.20.0", "protobuf": "5.29.6", "sentencepiece": "0.2.2", "torch": "2.13.0", "transformers": "5.17.0"}, "model_download": false}
+#57 54.64 [validate_runtime] Required checks passed. Report: /opt/pg/logs/runtime_validation_arm64.tsv
+#57 55.58 No broken requirements found.
+#57 55.60 Collect information..
+#57 55.60 Cleaning index cache..
+#57 55.60 Cleaning lock files..
+#57 55.60 [post_install_notes] Wrote /opt/pg/logs/BUILD_NOTES.txt
+#57 DONE 55.7s
+
+#58 [runtime 1/2] RUN [[ "runtime" == "runtime" ]]  && [[ "ab7599114ee072561e0d1ec94046b1e6f4ba78106892c7aa74403eb5274c3296" =~ ^[0-9a-f]{64}$ ]]  && [[ "bedc0d8a717cee69674782faff4ed29cfae4a28fa2534424869a9e562e694f06" =~ ^[0-9a-f]{64}$ ]]  || { echo "BUILD_TARGET must be runtime, and input hashes must be lowercase SHA-256 digests" >&2; exit 1; }
+#58 DONE 0.0s
+
+#59 [runtime 2/2] WORKDIR /workspace
+#59 DONE 0.0s
+
+#60 exporting to docker image format
+#60 exporting layers
+#60 exporting layers 5.8s done
+#60 exporting manifest sha256:b468f5fe3bc7cd3e9c7d51fe2cdcf8aeaf304a59950964df5d1ca93a04bdda01 done
+#60 exporting config sha256:b459e6f6b707e64874a88b59b81a485ea89a72f116e54d06f32f91759e5cb51c done
+#60 sending tarball
+#60 ...
+
+#61 importing to docker
+#61 loading layer fcbf091e9994 495B / 495B
+#61 loading layer b4bf3432c168 784B / 784B
+#61 loading layer 8004b9471e63 557.06kB / 191.72MB
+#61 loading layer 8004b9471e63 154.30MB / 191.72MB 2.1s
+#61 loading layer dfbd7e779c33 557.06kB / 2.78GB
+#61 loading layer dfbd7e779c33 155.98MB / 2.78GB 2.1s
+#61 loading layer dfbd7e779c33 391.61MB / 2.78GB 4.1s
+#61 loading layer dfbd7e779c33 686.29MB / 2.78GB 9.6s
+#61 loading layer dfbd7e779c33 760.94MB / 2.78GB 16.4s
+#61 loading layer dfbd7e779c33 911.90MB / 2.78GB 18.5s
+#61 loading layer dfbd7e779c33 1.20GB / 2.78GB 23.0s
+#61 loading layer dfbd7e779c33 1.41GB / 2.78GB 31.4s
+#61 loading layer dfbd7e779c33 1.59GB / 2.78GB 33.5s
+#61 loading layer dfbd7e779c33 1.80GB / 2.78GB 35.6s
+#61 loading layer dfbd7e779c33 2.02GB / 2.78GB 41.1s
+#61 loading layer dfbd7e779c33 2.12GB / 2.78GB 47.6s
+#61 loading layer dfbd7e779c33 2.29GB / 2.78GB 52.9s
+#61 loading layer dfbd7e779c33 2.48GB / 2.78GB 59.4s
+#61 loading layer dfbd7e779c33 2.71GB / 2.78GB 64.7s
+#61 loading layer 8a28775cc257 32.77kB / 546.89kB
+#61 loading layer cf0ade3c9ed6 180B / 180B
+#61 loading layer bce2d41fdd03 1.03kB / 1.03kB
+#61 loading layer fa0fc230472a 864B / 864B
+#61 loading layer d6a68ad99e5f 7.04kB / 7.04kB
+#61 loading layer 37265857ae8b 557.06kB / 108.78MB
+#61 loading layer 98e3cfffdbb2 457B / 457B
+#61 loading layer b1100a206cf5 32.77kB / 57.11kB
+#61 loading layer a64b0bca49e6 32.77kB / 379.80kB
+#61 loading layer a6ec0d58458e 201B / 201B
+#61 loading layer b17016ca0c5a 677B / 677B
+#61 loading layer 9728a331d408 1.74kB / 1.74kB
+#61 loading layer c0fac815694d 1.30kB / 1.30kB
+#61 loading layer 9b6682923754 979B / 979B
+#61 loading layer 1e6e31b88a1b 1.04kB / 1.04kB
+#61 loading layer a8537ab85100 730B / 730B
+#61 loading layer 70d5c27eae94 98.30kB / 9.66MB
+#61 loading layer 5f70bf18a086 32B / 32B
+#61 loading layer fcbf091e9994 495B / 495B 77.9s done
+#61 loading layer b4bf3432c168 784B / 784B 77.5s done
+#61 loading layer 8004b9471e63 191.72MB / 191.72MB 77.5s done
+#61 loading layer dfbd7e779c33 2.78GB / 2.78GB 72.0s done
+#61 loading layer 8a28775cc257 546.89kB / 546.89kB 2.9s done
+#61 loading layer cf0ade3c9ed6 180B / 180B 2.9s done
+#61 loading layer bce2d41fdd03 1.03kB / 1.03kB 2.9s done
+#61 loading layer fa0fc230472a 864B / 864B 2.9s done
+#61 loading layer d6a68ad99e5f 7.04kB / 7.04kB 2.8s done
+#61 loading layer 37265857ae8b 108.78MB / 108.78MB 2.8s done
+#61 loading layer 98e3cfffdbb2 457B / 457B 0.4s done
+#61 loading layer b1100a206cf5 57.11kB / 57.11kB 0.4s done
+#61 loading layer a64b0bca49e6 379.80kB / 379.80kB 0.4s done
+#61 loading layer a6ec0d58458e 201B / 201B 0.4s done
+#61 loading layer b17016ca0c5a 677B / 677B 0.4s done
+#61 loading layer 9728a331d408 1.74kB / 1.74kB 0.4s done
+#61 loading layer c0fac815694d 1.30kB / 1.30kB 0.4s done
+#61 loading layer 9b6682923754 979B / 979B 0.4s done
+#61 loading layer 1e6e31b88a1b 1.04kB / 1.04kB 0.4s done
+#61 loading layer a8537ab85100 730B / 730B 0.4s done
+#61 loading layer 70d5c27eae94 9.66MB / 9.66MB 0.4s done
+#61 loading layer 5f70bf18a086 32B / 32B 0.1s done
+#61 loading layer ea0a64ebb39b 99B / 99B 0.1s done
+#61 DONE 77.9s
+
+#60 exporting to docker image format
+#60 sending tarball 116.0s done
+#60 DONE 121.8s
+Built local/genegalleon:3di-clean-20260911 for linux/arm64
+[gg_container_build] resolved_image_source=local
+[gg_container_build] BUILD_SIF=0, skipped SIF conversion.

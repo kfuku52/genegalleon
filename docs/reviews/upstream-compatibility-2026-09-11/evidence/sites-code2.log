@@ -1,0 +1,83 @@
+IQ-TREE version 3.1.4 for Linux ARM 64-bit built Sep  9 2026
+Developed by Bui Quang Minh, Thomas Wong, Nhan Ly-Trong, Huaiyan Ren
+Contributed by Lam-Tung Nguyen, Dominik Schrempf, Chris Bielow,
+Olga Chernomor, Michael Woodhams, Diep Thi Hoang, Heiko Schmidt
+
+Host:    0ab44983db11 (SSE4.2, 7 GB RAM)
+Command: iqtree -s csubst.fasta -te csubst.nwk -m GY+F+R4 -T 1 --seqtype CODON2 --prefix csubst --ancestral --rate --seed 12345 --redo
+Seed:    12345 (Using SPRNG - Scalable Parallel Random Number Generator)
+Time:    Fri Sep 11 07:50:49 2026
+Kernel:  SSE2 - 1 threads (12 CPU cores detected)
+
+HINT: Use -nt option to specify number of threads because your CPU has 12 cores!
+HINT: -nt AUTO will automatically determine the best number of threads to use.
+
+Reading alignment file csubst.fasta ... Fasta format detected
+Reading fasta file: done in 3.69549e-05 secs using 32.47% CPU
+Alignment most likely contains DNA/RNA sequences
+Converting to codon sequences with genetic code 2 ...
+Constructing alignment: done in 6.00815e-05 secs using 33.29% CPU
+Alignment has 8 sequences with 100 columns, 100 distinct patterns
+50 parsimony-informative, 47 singleton sites, 3 constant sites
+   Gap/Ambiguity  Composition  p-value
+Analyzing sequences: done in 3.09944e-06 secs using 32.26% CPU
+   1  a    0.00%    passed     82.65%
+   2  b    0.00%    passed     90.14%
+   3  c    0.00%    passed     99.61%
+   4  d    0.00%    passed     99.85%
+   5  e    0.00%    passed     96.23%
+   6  f    0.00%    passed     99.36%
+   7  g    0.00%    passed     76.79%
+   8  h    0.00%    passed     91.56%
+****  TOTAL    0.00%  0 sequences failed composition chi2 test (p-value<5%; df=58)
+WARNING: 1 states (see below) not observed in alignment
+WARNING: State(s) TGA not present in alignment and may cause numerical problems
+Reading input tree file csubst.nwk ... rooted tree
+
+NOTE: 2 MB RAM (0 GB) is required!
+Estimate model parameters (epsilon = 0.010)
+1. Initial log-likelihood: -1860.777
+2. Current log-likelihood: -1826.875
+3. Current log-likelihood: -1826.580
+4. Current log-likelihood: -1826.509
+5. Current log-likelihood: -1826.463
+6. Current log-likelihood: -1826.426
+7. Current log-likelihood: -1826.396
+8. Current log-likelihood: -1826.369
+9. Current log-likelihood: -1826.347
+10. Current log-likelihood: -1826.329
+11. Current log-likelihood: -1826.316
+Optimal log-likelihood: -1826.306
+Nonsynonymous/synonymous ratio (omega): 0.994
+Transition/transversion ratio (kappa): 1.405
+Site proportion and rates:  (0.117,0.558) (0.313,0.559) (0.303,1.294) (0.266,1.379)
+Parameters optimization took 11 rounds (4.073 sec)
+Wrote distance file to...
+BEST SCORE FOUND : -1826.306
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+WARNING: Numerical underflow for non-rev lh-branch Noname
+Ancestral state probabilities printed to csubst.state
+Empirical proportions for each category: 0.000 0.500 0.410 0.090
+Site rates printed to csubst.rate
+Total tree length: 4.142
+
+Total number of iterations: 0
+CPU time used for tree search: 0.000 sec (0h:0m:0s)
+Wall-clock time used for tree search: 0.000 sec (0h:0m:0s)
+Total CPU time used: 4.126 sec (0h:0m:4s)
+Total wall-clock time used: 4.135 sec (0h:0m:4s)
+
+Analysis results written to:
+  IQ-TREE report:                csubst.iqtree
+  Maximum-likelihood tree:       csubst.treefile
+  Site-specific rates:           csubst.rate
+  Ancestral state:               csubst.state
+  Screen log file:               csubst.log
+
+Date and Time: Fri Sep 11 07:50:54 2026
+current 2
+explicit-code2 0

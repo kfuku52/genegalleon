@@ -1,0 +1,23 @@
+CSUBST start: 2026-09-11 07:50:54.504439+00:00
+csubst sites start: 2026-09-11 07:50:54.505055+00:00
+OS: Linux-6.12.76-linuxkit-aarch64-with-glibc2.39
+Python version: 3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]
+CSUBST version: 1.16.0
+CSUBST dependency versions: ete4=4.4.0, requests=2.34.2, numpy=1.26.4, scipy=1.17.1, pandas=3.0.5, cython=3.3.0, matplotlib=3.10.9
+CSUBST missing dependency packages: none
+CSUBST command: /opt/conda/bin/csubst sites --outdir csubst_sites --output_prefix csubst --alignment_file /tmp/gg-csubst-code2/csubst.fasta --rooted_tree_file /tmp/gg-csubst-code2/csubst.nwk --branch_id 1,2 --threads 1 --iqtree_treefile /tmp/gg-csubst-code2/csubst.treefile --iqtree_state /tmp/gg-csubst-code2/csubst.state --iqtree_rate /tmp/gg-csubst-code2/csubst.rate --iqtree_iqtree /tmp/gg-csubst-code2/csubst.iqtree --iqtree_log /tmp/gg-csubst-code2/csubst.log
+CSUBST working directory: /tmp/gg-csubst-code2/current
+CSUBST bug report: https://github.com/kfuku52/csubst/issues
+Reading and parsing input files.
+Using internal node names and branch lengths in --iqtree_treefile and the root position in --rooted_tree_file.
+All IQ-TREE intermediate files were explicitly specified. A provenance manifest is not required.
+Using the model in the explicitly supplied IQ-TREE fit: GY+F+R4. Use --iqtree_redo to refit.
+Total branch length of --rooted_tree_file: 3.6000
+Total branch length of --iqtree_treefile: 4.1416
+
+Reading the state file: /tmp/gg-csubst-code2/csubst.state
+
+Could not parse codon frequencies from IQ-TREE 3 output. Estimating empirical codon frequencies from alignment: /tmp/gg-csubst-code2/csubst.fasta
+Sum of rates did not match. Check if --codon_table ([['K', 'AAA'], ['N', 'AAC'], ['K', 'AAG'], ['N', 'AAT'], ['T', 'ACA'], ['T', 'ACC'], ['T', 'ACG'], ['T', 'ACT'], ['R', 'AGA'], ['S', 'AGC'], ['R', 'AGG'], ['S', 'AGT'], ['I', 'ATA'], ['I', 'ATC'], ['M', 'ATG'], ['I', 'ATT'], ['Q', 'CAA'], ['H', 'CAC'], ['Q', 'CAG'], ['H', 'CAT'], ['P', 'CCA'], ['P', 'CCC'], ['P', 'CCG'], ['P', 'CCT'], ['R', 'CGA'], ['R', 'CGC'], ['R', 'CGG'], ['R', 'CGT'], ['L', 'CTA'], ['L', 'CTC'], ['L', 'CTG'], ['L', 'CTT'], ['E', 'GAA'], ['D', 'GAC'], ['E', 'GAG'], ['D', 'GAT'], ['A', 'GCA'], ['A', 'GCC'], ['A', 'GCG'], ['A', 'GCT'], ['G', 'GGA'], ['G', 'GGC'], ['G', 'GGG'], ['G', 'GGT'], ['V', 'GTA'], ['V', 'GTC'], ['V', 'GTG'], ['V', 'GTT'], ['*', 'TAA'], ['Y', 'TAC'], ['*', 'TAG'], ['Y', 'TAT'], ['S', 'TCA'], ['S', 'TCC'], ['S', 'TCG'], ['S', 'TCT'], ['*', 'TGA'], ['C', 'TGC'], ['W', 'TGG'], ['C', 'TGT'], ['L', 'TTA'], ['F', 'TTC'], ['L', 'TTG'], ['F', 'TTT']]) matches to that used in the ancestral state reconstruction (2).
+Instantaneous substitution rate matrix will be generated using the base model: GY+F
+Transition matrix will be generated using the model in the ancestral state reconstruction: GY+F+R4

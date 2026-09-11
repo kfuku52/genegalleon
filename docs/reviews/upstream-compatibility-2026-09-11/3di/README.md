@@ -2,8 +2,9 @@
 
 The implementation connects GeneGalleon's search, scan, normal sites and scan
 candidate sites to one full-CDS family bundle. The existing statistical options
-are preserved. The required owning-dependency changes are local edits in
-CSUBST; neither repository has been pushed for this implementation.
+are preserved. This initial validation used local CSUBST changes. Subsequent
+published revisions and clean-image checks are recorded in the
+[publication validation](../publication/README.md).
 
 ## Runtime
 
@@ -31,8 +32,9 @@ ASR and the uniform GTR structural model.
 This was a source-wheel update of an existing GeneGalleon Docker image, not a
 clean complete multi-platform image build. Native Apptainer definition/staging
 was tested, but Apptainer/Singularity is unavailable on this macOS host, so SIF
-execution and AMD64 execution were not tested. The default remote-source build
-must receive the CSUBST changes before this feature can pass its runtime check.
+execution and AMD64 execution were not tested in this initial run. The default
+remote-source build required publication of the CSUBST changes before this
+feature could pass its runtime check.
 No dependency-side fallback was added to GeneGalleon.
 
 ## Owning CSUBST fixes

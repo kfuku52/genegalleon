@@ -1,0 +1,21 @@
+{
+  "Id": "sha256:b459e6f6b707e64874a88b59b81a485ea89a72f116e54d06f32f91759e5cb51c",
+  "Architecture": "arm64",
+  "Os": "linux",
+  "Size": 8943672861,
+  "labels": {
+    "io.genegalleon.build-input": "ab7599114ee072561e0d1ec94046b1e6f4ba78106892c7aa74403eb5274c3296",
+    "io.genegalleon.build-target": "runtime",
+    "io.genegalleon.runtime-input": "bedc0d8a717cee69674782faff4ed29cfae4a28fa2534424869a9e562e694f06",
+    "io.genegalleon.security-refresh-epoch": "2026-09-11",
+    "org.opencontainers.image.created": "2026-09-11T11:24:17Z",
+    "org.opencontainers.image.description": "Reproducible multi-architecture runtime for GeneGalleon (amd64 + arm64)",
+    "org.opencontainers.image.licenses": "MIT",
+    "org.opencontainers.image.ref.name": "ubuntu",
+    "org.opencontainers.image.revision": "8383ecc",
+    "org.opencontainers.image.source": "https://github.com/kfuku52/genegalleon",
+    "org.opencontainers.image.title": "GeneGalleon workflow container",
+    "org.opencontainers.image.url": "https://github.com/mamba-org/micromamba-docker",
+    "org.opencontainers.image.version": "0.7.106"
+  }
+}

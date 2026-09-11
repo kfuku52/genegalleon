@@ -1,0 +1,23 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 40%]
+........................................................................ [ 80%]
+...F................................                                     [100%]
+=================================== FAILURES ===================================
+_______ test_locked_materialization_directory_preserves_concurrent_runs ________
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/audit/pytest-adapters/popen-gw1/test_locked_materialization_di1')
+
+>   ???
+E   AssertionError: assert False
+E    +  where False = is_dir()
+E    +    where is_dir = PosixPath('/audit/pytest-adapters/popen-gw1/test_locked_materialization_di1/out/.gg_materialized/OG0001.iu2sttbt').is_dir
+E    +      where PosixPath('/audit/pytest-adapters/popen-gw1/test_locked_materialization_di1/out/.gg_materialized/OG0001.iu2sttbt') = Path('/audit/pytest-adapters/popen-gw1/test_locked_materialization_di1/out/.gg_materialized/OG0001.iu2sttbt')
+E    +        where '/audit/pytest-adapters/popen-gw1/test_locked_materialization_di1/out/.gg_materialized/OG0001.iu2sttbt' = <csubst_site_wrapper.LockedMaterializationDirectory object at 0xffff67962ea0>.name
+
+/Users/kf/repos/genegalleon/workflow/tests/test_csubst_site_wrapper.py:868: AssertionError
+=========================== short test summary info ============================
+FAILED workflow/tests/test_csubst_site_wrapper.py::test_locked_materialization_directory_preserves_concurrent_runs
+1 failed, 179 passed in 10.00s

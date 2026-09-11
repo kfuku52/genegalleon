@@ -1,0 +1,11 @@
+CSUBST start: 2026-09-11 07:45:05.600111+00:00
+csubst search start: 2026-09-11 07:45:05.603578+00:00
+OS: Linux-6.12.76-linuxkit-aarch64-with-glibc2.39
+Python version: 3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]
+CSUBST version: 1.16.0
+CSUBST dependency versions: ete4=4.4.0, requests=2.34.2, numpy=1.26.4, scipy=1.17.1, pandas=3.0.5, cython=3.3.0, matplotlib=3.10.9
+CSUBST missing dependency packages: none
+CSUBST command: /opt/conda/bin/csubst search --alignment_file /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0/input.fasta --rooted_tree_file /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0/input.nwk --iqtree_model GY+FQ --nonsyn_recode 3di20 --threads 1 --max_arity 2
+CSUBST working directory: /audit/3di-check
+CSUBST bug report: https://github.com/kfuku52/csubst/issues
+--nonsyn_recode 3di20 requires --full_cds_alignment_file.

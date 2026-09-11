@@ -1,0 +1,174 @@
+CSUBST start: 2026-09-11 07:47:31.284896+00:00
+csubst search start: 2026-09-11 07:47:31.285488+00:00
+OS: Linux-6.12.76-linuxkit-aarch64-with-glibc2.39
+Python version: 3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]
+CSUBST version: 1.16.0
+CSUBST dependency versions: ete4=4.4.0, requests=2.34.2, numpy=1.26.4, scipy=1.17.1, pandas=3.0.5, cython=3.3.0, matplotlib=3.10.9
+CSUBST missing dependency packages: none
+CSUBST command: /opt/conda/bin/csubst search --full_cds_alignment_file /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0/input.fasta --rooted_tree_file /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0/input.nwk --iqtree_model GY+FQ --nonsyn_recode 3di20 --threads 1 --max_arity 2
+CSUBST working directory: /audit/3di-full-check
+CSUBST bug report: https://github.com/kfuku52/csubst/issues
+Reading and parsing input files.
+Using internal node names and branch lengths in --iqtree_treefile and the root position in --rooted_tree_file.
+Intermediate file is missing: /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.iqtree
+Intermediate file is missing: /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.log
+Intermediate file is missing: /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.rate
+Intermediate file is missing: /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.state
+Intermediate file is missing: /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.treefile
+Starting IQ-TREE to estimate parameters and ancestral states.
+IQ-TREE's version: 3.1.4, PATH: iqtree
+IQ-TREE version 3.1.4 for Linux ARM 64-bit built Sep  9 2026
+Developed by Bui Quang Minh, Thomas Wong, Nhan Ly-Trong, Huaiyan Ren
+Contributed by Lam-Tung Nguyen, Dominik Schrempf, Chris Bielow,
+Olga Chernomor, Michael Woodhams, Diep Thi Hoang, Heiko Schmidt
+
+Host:    0ab44983db11 (SSE4.2, 7 GB RAM)
+Command: iqtree -s /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0/input.fasta -te /tmp/.csubst_tmp_oo48urio/tmp.csubst.nwk -m GY+FQ --seqtype CODON1 --threads-max 1 -T AUTO --ancestral --rate --redo --prefix /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c -seed 1 -v
+Seed:    1 (Using SPRNG - Scalable Parallel Random Number Generator)
+
+64 bit Linear Congruential Generator with Prime Addend
+
+	seed = 1, stream_number = 0	parameter = 0
+
+Time:    Fri Sep 11 07:47:31 2026
+Kernel:  SSE2 - auto-detect threads (12 CPU cores detected)
+
+Reading alignment file /audit/pytest-runtime/popen-gw2/test_scan_core_command_is_anal0/input.fasta ... Fasta format detected
+Reading fasta file: done in 0.000104904 secs using 28.6% CPU
+Name shortening took 0.000003 seconds.
+Duplicate sequence name check took 0.000002 seconds.
+Sequence Type detection took 0.000032 seconds.
+Alignment most likely contains DNA/RNA sequences
+Converting to codon sequences with genetic code 1 ...
+Constructing alignment: done in 7.67708e-05 secs using 46.89% CPU
+Time to read input file was 0.001340 sec.
+Time to count constant sites was 0.000002 sec.
+Alignment has 8 sequences with 100 columns, 100 distinct patterns
+50 parsimony-informative, 47 singleton sites, 3 constant sites
+Alignment state count time was 0.000003 seconds.
+Empirical state frequencies: 0.0037500000 0.0037500000 0.0175000000 0.0312500000 0.0187500000 0.0137500000 0.0125000000 0.0100000000 0.0050000000 0.0025000000 0.0300000000 0.0175000000 0.0150000000 0.0075000000 0.0212500000 0.0050000000 0.0175000000 0.0100000000 0.0112500000 0.0075000000 0.0137500000 0.0125000000 0.0200000000 0.0212500000 0.0100000000 0.0200000000 0.0100000000 0.0162500000 0.0125000000 0.0225000000 0.0212500000 0.0425000000 0.0050000000 0.0137500000 0.0087500000 0.0150000000 0.0125000000 0.0162500000 0.0125000000 0.0325000000 0.0225000000 0.0125000000 0.0162500000 0.0062500000 0.0137500000 0.0375000000 0.0075000000 0.0212500000 0.0275000000 0.0337500000 0.0275000000 0.0237500000 0.0162500000 0.0137500000 0.0125000000 0.0175000000 0.0212500000 0.0100000000 0.0200000000 0.0250000000 0.0137500000
+   Gap/Ambiguity  Composition  p-value
+Analyzing sequences: done in 1.50204e-05 secs using 39.95% CPU
+   1  a    0.00%    passed     86.66%
+   2  b    0.00%    passed     84.70%
+   3  c    0.00%    passed     99.75%
+   4  d    0.00%    passed     99.84%
+   5  e    0.00%    passed     96.84%
+   6  f    0.00%    passed     99.38%
+   7  g    0.00%    passed     79.42%
+   8  h    0.00%    passed     92.78%
+****  TOTAL    0.00%  0 sequences failed composition chi2 test (p-value<5%; df=60)
+Alignment state count time was 0.000 seconds.
+Empirical state frequencies: 0.0037500000 0.0037500000 0.0175000000 0.0312500000 0.0187500000 0.0137500000 0.0125000000 0.0100000000 0.0050000000 0.0025000000 0.0300000000 0.0175000000 0.0150000000 0.0075000000 0.0212500000 0.0050000000 0.0175000000 0.0100000000 0.0112500000 0.0075000000 0.0137500000 0.0125000000 0.0200000000 0.0212500000 0.0100000000 0.0200000000 0.0100000000 0.0162500000 0.0125000000 0.0225000000 0.0212500000 0.0425000000 0.0050000000 0.0137500000 0.0087500000 0.0150000000 0.0125000000 0.0162500000 0.0125000000 0.0325000000 0.0225000000 0.0125000000 0.0162500000 0.0062500000 0.0137500000 0.0375000000 0.0075000000 0.0212500000 0.0275000000 0.0337500000 0.0275000000 0.0237500000 0.0162500000 0.0137500000 0.0125000000 0.0175000000 0.0212500000 0.0100000000 0.0200000000 0.0250000000 0.0137500000
+Reading input tree file /tmp/.csubst_tmp_oo48urio/tmp.csubst.nwk ...Tree contains 8 taxa and 14 branches (rooted)
+ rooted tree
+Converting rooted to unrooted tree...
+
+ML-TREE SEARCH START WITH THE FOLLOWING PARAMETERS:
+Model of evolution: GY+FQ with equal frequencies (15 free parameters)
+Fixed branch lengths: No
+Phylogenetic likelihood library: No
+Branch length optimization method: Newton
+Number of Newton-Raphson steps in NNI evaluation and branch length optimization: 10 / 10
+SSE instructions: Yes
+
+NOTE: 0 MB RAM (0 GB) is required!
+Measuring multi-threading efficiency up to 1 CPU cores
+Increase to 10 rounds for branch lengths
+28 trees examined
+Threads: 1 / Time: 1.0036699772 sec / Speedup: 1.0000000000 / Efficiency: 100% / LogL: -1965
+Determining AUTO threadcount: done in 1.00393 secs using 99.96% CPU
+BEST NUMBER OF THREADS: 1
+
+Estimate model parameters (epsilon = 0.0100000000)
+1. Initial log-likelihood: -1842.5256168979 (took 0.0027670860 wall-clock sec)
+Nonsynonymous/synonymous ratio (omega): 0.8745688298
+Transition/transversion ratio (kappa): 1.2798605772
+2. Current log-likelihood: -1828.3827618459 (after 0.0746819973 wall-clock sec)
+Nonsynonymous/synonymous ratio (omega): 0.8742454812
+Transition/transversion ratio (kappa): 1.2801724837
+Optimal log-likelihood: -1828.3782279695
+Parameters optimization took 2 rounds (0.1079010963 sec)
+Best tree printed to /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.treefile
+Wrote distance file to...
+BEST SCORE FOUND : -1828.3782279695
+Ancestral state probabilities printed to /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.state
+Site rates printed to /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.rate
+Total tree length: 3.7640292631
+
+Total number of iterations: 0
+CPU time used for tree search: 0.0000050000 sec (0h:0m:0s)
+Wall-clock time used for tree search: 0.0000050068 sec (0h:0m:0s)
+Total CPU time used: 1.1395360000 sec (0h:0m:1s)
+Total wall-clock time used: 1.1621489525 sec (0h:0m:1s)
+Best tree printed to /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.treefile
+
+Analysis results written to:
+  IQ-TREE report:                /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.iqtree
+  Maximum-likelihood tree:       /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.treefile
+  Ancestral state:               /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.state
+  Screen log file:               /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.log
+
+Date and Time: Fri Sep 11 07:47:33 2026
+Total branch length of --rooted_tree_file: 3.6000
+Total branch length of --iqtree_treefile: 3.7640
+
+Reading the state file: /audit/3di-full-check/csubst_iqtree/input.fasta.9a5893b3f21e561c.state
+
+Instantaneous substitution rate matrix will be generated using the base model: GY+FQ
+Transition matrix will be generated using the model in the ancestral state reconstruction: GY+FQ
+Applying nonsynonymous recoding scheme: 3di20
+3Di mode: --sa_asr_mode=direct, predictor=esm3di-35m-v1:cactuskid13/esm2small_3di@2227cb08ffa533bc1a7f2b968fd6316f287134d1:base@6fbf070e65b0b7291e7bbcd451118c216cff79d8, direct IQ-TREE model=GTR (--seqtype MORPH)
+3Di state cache was not used (--sa_state_cache auto): cache file not found: /audit/3di-full-check/csubst_3di_state_cache.npz
+Traceback (most recent call last):
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_prediction.py", line 80, in populate
+    from huggingface_hub import hf_hub_download
+ModuleNotFoundError: No module named 'huggingface_hub'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/conda/bin/csubst", line 6, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/cli.py", line 1500, in main
+    return _main(argv=normalized_argv, parsed_args=preflight_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/cli.py", line 1453, in _main
+    args.handler(args)
+  File "/opt/conda/lib/python3.12/site-packages/csubst/cli.py", line 290, in command_search
+    main_analyze(g)
+  File "/opt/conda/lib/python3.12/site-packages/csubst/main_analyze.py", line 689, in main_analyze
+    g = parser_misc.prep_state(g, apply_site_filtering=False)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/parser_misc.py", line 1262, in prep_state
+    state_nsy = _resolve_state_nsy(state_cdn_local=state_cdn, state_pep_local=state_pep)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/parser_misc.py", line 1230, in _resolve_state_nsy
+    state_nsy_local, state_orders = _compute_3di_state()
+                                    ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/parser_misc.py", line 1186, in _compute_3di_state
+    state_nsy_local, state_orders, tip_3di = structural_alphabet.build_3di_state_direct(
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_alphabet.py", line 1189, in build_3di_state_direct
+    tip_3di_by_name_full = build_tip_3di_alignment_from_full_cds(
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_alphabet.py", line 869, in build_tip_3di_alignment_from_full_cds
+    pred_ungapped = predictor(aa_ungapped, g)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_alphabet.py", line 494, in predict_3di
+    return structural_prediction.predict_3di(aa_sequences, g)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_prediction.py", line 263, in predict_3di
+    predictor = load_encoder_predictor(g)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_prediction.py", line 180, in load_encoder_predictor
+    root = ensure_encoder_resource(g)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_prediction.py", line 92, in ensure_encoder_resource
+    resource_cache.ensure_directory_resource(
+  File "/opt/conda/lib/python3.12/site-packages/csubst/resource_cache.py", line 512, in ensure_directory_resource
+    populate(stage_dir)
+  File "/opt/conda/lib/python3.12/site-packages/csubst/structural_prediction.py", line 82, in populate
+    raise ImportError("3Di model downloads require huggingface-hub. Install csubst[3di].") from exc
+ImportError: 3Di model downloads require huggingface-hub. Install csubst[3di].

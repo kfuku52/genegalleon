@@ -1,0 +1,182 @@
+RUN ['amalgkit', 'getfastq', '--out_dir', '/tmp/gg-amalgkit-flow', '--metadata', '/tmp/gg-amalgkit-flow/metadata_private_fastq.tsv', '--threads', '1', '--rrna_filter', 'no', '--contam_filter', 'no', '--read_name', 'trinity', '--remove_sra', 'yes', '--remove_tmp', 'yes', '--dump_print', 'yes']
+AMALGKIT version: 0.16.88
+AMALGKIT command: /opt/conda/bin/amalgkit getfastq --out_dir /tmp/gg-amalgkit-flow --metadata /tmp/gg-amalgkit-flow/metadata_private_fastq.tsv --threads 1 --rrna_filter no --contam_filter no --read_name trinity --remove_sra yes --remove_tmp yes --dump_print yes
+AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues
+AMALGKIT os: Linux 6.12.76-linuxkit #1 SMP Tue Jul 21 14:38:37 UTC 2026 aarch64 (os.name=posix)
+AMALGKIT python: 3.12.14
+AMALGKIT dependency numpy: 1.26.4
+AMALGKIT dependency pandas: 3.0.5
+AMALGKIT dependency scipy: 1.17.1
+AMALGKIT dependency matplotlib: 3.10.9
+AMALGKIT dependency statsmodels: 0.15.0
+AMALGKIT dependency scikit-learn: 1.9.0
+AMALGKIT dependency biopython: 1.88
+AMALGKIT dependency defusedxml: 0.7.1
+AMALGKIT dependency inmoose: MISSING
+AMALGKIT tool cat: FOUND (/usr/bin/cat)
+AMALGKIT tool seqkit: FOUND (/opt/conda/bin/seqkit)
+AMALGKIT tool fasterq-dump: FOUND (/opt/conda/bin/fasterq-dump)
+AMALGKIT tool fastp: FOUND (/usr/bin/fastp)
+AMALGKIT tool mmseqs: FOUND (/opt/conda/bin/mmseqs)
+amalgkit getfastq: start
+2026-09-11 07:47:47.742563: Loading metadata from: /tmp/gg-amalgkit-flow/metadata_private_fastq.tsv
+getfastq: effective parallelism: 1 x 1 = 1 core(s) max.
+Individual SRA size of R1: 200,000 bp
+Number of SRAs to be processed: 1
+Total target size (--max_bp): 999,999,999,999,999 bp
+The sum of SRA sizes: 200,000 bp
+Target size per SRA: 999,999,999,999,999 bp
+Removed stale getfastq completion manifest: /tmp/gg-amalgkit-flow/getfastq/getfastq_completion.json
+
+Processing SRA ID: R1
+Validated resumable output detected. Skipping the completed phase for R1 (phase=complete).
+All getfastq runs have validated complete outputs. Skipping the 2nd round.
+Wrote validated getfastq completion manifest: /tmp/gg-amalgkit-flow/getfastq/getfastq_completion.json
+Starting SRA file removal.
+SRA file not found. Pattern searched: /tmp/gg-amalgkit-flow/getfastq/R1/R1.sra*
+
+Time elapsed: 0 sec
+amalgkit getfastq: end
+EXIT 0
+RUN ['python', '-', '/tmp/gg-amalgkit-flow/getfastq/getfastq_completion.json', '/tmp/gg-amalgkit-flow/metadata_private_fastq.tsv']
+EXIT 0
+RUN ['amalgkit', 'quant', '--out_dir', '/tmp/gg-amalgkit-flow', '--metadata', '/tmp/gg-amalgkit-flow/metadata_private_fastq.tsv', '--threads', '1', '--clean_fastq', 'no', '--fasta_dir', '/tmp/gg-amalgkit-flow/fasta', '--build_index', 'yes', '--quant_backend', 'auto', '--oarfish_seq_tech', 'auto']
+AMALGKIT version: 0.16.88
+AMALGKIT command: /opt/conda/bin/amalgkit quant --out_dir /tmp/gg-amalgkit-flow --metadata /tmp/gg-amalgkit-flow/metadata_private_fastq.tsv --threads 1 --clean_fastq no --fasta_dir /tmp/gg-amalgkit-flow/fasta --build_index yes --quant_backend auto --oarfish_seq_tech auto
+AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues
+AMALGKIT os: Linux 6.12.76-linuxkit #1 SMP Tue Jul 21 14:38:37 UTC 2026 aarch64 (os.name=posix)
+AMALGKIT python: 3.12.14
+AMALGKIT dependency numpy: 1.26.4
+AMALGKIT dependency pandas: 3.0.5
+AMALGKIT dependency scipy: 1.17.1
+AMALGKIT dependency matplotlib: 3.10.9
+AMALGKIT dependency statsmodels: 0.15.0
+AMALGKIT dependency scikit-learn: 1.9.0
+AMALGKIT dependency biopython: 1.88
+AMALGKIT dependency defusedxml: 0.7.1
+AMALGKIT dependency inmoose: MISSING
+AMALGKIT tool kallisto: FOUND (/opt/conda/bin/kallisto)
+AMALGKIT tool oarfish: FOUND (/opt/conda/bin/oarfish)
+amalgkit quant: start
+quant: effective parallelism: 1 x 1 = 1 core(s) max.
+2026-09-11 07:47:48.139590: Loading metadata from: /tmp/gg-amalgkit-flow/metadata_private_fastq.tsv
+Resolving quant indices for 1 target(s).
+Pre-resolving index for Test_species (kallisto)
+--build_index set. Building index for Test_species
+Reference fasta file found: /tmp/gg-amalgkit-flow/fasta/Test_species.fa
+Building index: /tmp/gg-amalgkit-flow/index/Test_species.idx
+Using isolated kallisto index work directory: /tmp/gg-amalgkit-flow/index/amalgkit_kallisto_index_s8p06l21
+Command: kallisto index -i /tmp/gg-amalgkit-flow/index/amalgkit_kallisto_index_s8p06l21/Test_species.idx /tmp/gg-amalgkit-flow/fasta/Test_species.fa
+kallisto index stdout:
+KmerStream::KmerStream(): Start computing k-mer cardinality estimations (1/2)
+KmerStream::KmerStream(): Start computing k-mer cardinality estimations (1/2)
+KmerStream::KmerStream(): Finished
+CompactedDBG::build(): Estimated number of k-mers occurring at least once: 1000
+CompactedDBG::build(): Estimated number of minimizer occurring at least once: 230
+CompactedDBG::filter(): Processed 970 k-mers in 1 reads
+CompactedDBG::filter(): Found 970 unique k-mers
+CompactedDBG::filter(): Number of blocks in Bloom filter is 8
+CompactedDBG::construct(): Extract approximate unitigs (1/2)
+CompactedDBG::construct(): Extract approximate unitigs (2/2)
+CompactedDBG::construct(): Closed all input files
+
+CompactedDBG::construct(): Splitting unitigs (1/2)
+
+CompactedDBG::construct(): Splitting unitigs (2/2)
+CompactedDBG::construct(): Before split: 1 unitigs
+CompactedDBG::construct(): After split (1/1): 1 unitigs
+CompactedDBG::construct(): Unitigs split: 0
+CompactedDBG::construct(): Unitigs deleted: 0
+
+CompactedDBG::construct(): Joining unitigs
+CompactedDBG::construct(): After join: 1 unitigs
+CompactedDBG::construct(): Joined 0 unitigs
+
+kallisto index stderr:
+
+[build] loading fasta file /tmp/gg-amalgkit-flow/fasta/Test_species.fa
+[build] k-mer length: 31
+[build] building MPHF
+[build] creating equivalence classes ...
+[build] target de Bruijn graph has k-mer length 31 and minimizer length 23
+[build] target de Bruijn graph has 1 contigs and contains 970 k-mers
+
+
+Index file found: /tmp/gg-amalgkit-flow/index/Test_species.idx
+WARNING: Run R1: assuming fragment length mean=200 bp, sd=20 bp; not measured. Supply run-specific values or use --fragment_length_policy error.
+
+Species: Test species
+SRA Run ID: R1
+Using pre-resolved index: /tmp/gg-amalgkit-flow/index/Test_species.idx
+Missing or empty quant abundance table: /tmp/gg-amalgkit-flow/quant/R1/R1_abundance.tsv
+Input fastq detected: /tmp/gg-amalgkit-flow/getfastq/R1/R1.amalgkit.fastq.gz
+Quant backend selected for R1: kallisto
+Single end reads detected. Proceeding in single mode
+Command: kallisto quant --threads 1 --index /tmp/gg-amalgkit-flow/index/Test_species.idx -o /tmp/gg-amalgkit-flow/quant/amalgkit_quant_stage_0dmiztlk --single -l 200 -s 20 /tmp/gg-amalgkit-flow/getfastq/R1/R1.amalgkit.fastq.gz
+kallisto quant stdout:
+
+kallisto quant stderr:
+
+[quant] fragment length distribution is truncated gaussian with mean = 200, sd = 20
+[index] k-mer length: 31
+[index] number of targets: 1
+[index] number of k-mers: 970
+[quant] running in single-end mode
+[quant] will process file 1: /tmp/gg-amalgkit-flow/getfastq/R1/R1.amalgkit.fastq.gz
+[quant] finding pseudoalignments for the reads ... done
+[quant] processed 2,000 reads, 1,892 reads pseudoaligned
+[   em] quantifying the abundances ... done
+[   em] the Expectation-Maximization algorithm ran for 52 rounds
+
+
+Skipping the deletion of getfastq files.
+Time elapsed: 0 sec
+amalgkit quant: end
+EXIT 0
+RUN ['python', '/review/workflow/support/validate_transcriptome_quant_outputs.py', '--metadata', '/tmp/gg-amalgkit-flow/metadata_private_fastq.tsv', '--quant-root', '/tmp/gg-amalgkit-flow/quant']
+{"run_count":1,"runs":["R1"],"status":"valid"}
+EXIT 0
+RUN ['amalgkit', 'merge', '--out_dir', '/tmp/gg-amalgkit-flow', '--metadata', '/tmp/gg-amalgkit-flow/metadata_private_fastq.tsv']
+AMALGKIT version: 0.16.88
+AMALGKIT command: /opt/conda/bin/amalgkit merge --out_dir /tmp/gg-amalgkit-flow --metadata /tmp/gg-amalgkit-flow/metadata_private_fastq.tsv
+AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues
+AMALGKIT os: Linux 6.12.76-linuxkit #1 SMP Tue Jul 21 14:38:37 UTC 2026 aarch64 (os.name=posix)
+AMALGKIT python: 3.12.14
+AMALGKIT dependency numpy: 1.26.4
+AMALGKIT dependency pandas: 3.0.5
+AMALGKIT dependency scipy: 1.17.1
+AMALGKIT dependency matplotlib: 3.10.9
+AMALGKIT dependency statsmodels: 0.15.0
+AMALGKIT dependency scikit-learn: 1.9.0
+AMALGKIT dependency biopython: 1.88
+AMALGKIT dependency defusedxml: 0.7.1
+AMALGKIT dependency inmoose: MISSING
+amalgkit merge: start
+merge: effective parallel workers: 12 (total core budget 12).
+merge postprocess: effective parallel workers: 12 (total core budget 12).
+2026-09-11 07:47:48.765549: Loading metadata from: /tmp/gg-amalgkit-flow/metadata_private_fastq.tsv
+Detected 1 quant abundance files across all runs.
+processing: Test species
+1 quant outfiles were detected.
+Writing output file: /tmp/gg-amalgkit-flow/amalgkit_merge_stage_bte0w0gq/Test_species/Test_species_eff_length.tsv
+Writing output file: /tmp/gg-amalgkit-flow/amalgkit_merge_stage_bte0w0gq/Test_species/Test_species_est_counts.tsv
+Writing output file: /tmp/gg-amalgkit-flow/amalgkit_merge_stage_bte0w0gq/Test_species/Test_species_tpm.tsv
+Writing output file: /tmp/gg-amalgkit-flow/amalgkit_merge_stage_bte0w0gq/Test_species/Test_species_quant_model.tsv
+Getting mapping rate from quant output and write new metadata file into merge directory.
+1 getfastq stats files were detected and merged into metadata.
+quant directory found: /tmp/gg-amalgkit-flow/quant
+Number of quant sub-directories that matched to metadata: 1
+Writing per-species metadata containing mapping rate: /tmp/gg-amalgkit-flow/amalgkit_merge_stage_bte0w0gq/metadata.tsv
+Number of SRA samples for mapping_rate plotting: 1
+Number of SRA samples for total_spots plotting: 1
+Number of SRA samples for total_bases plotting: 1
+Number of SRA samples for mean_expression plotting: 1
+Number of SRA samples for fastp_duplication_rate plotting: 0
+No data available for fastp_duplication_rate. Skipping plot generation.
+Number of SRA samples for fastp_insert_size_peak plotting: 0
+No data available for fastp_insert_size_peak. Skipping plot generation.
+Number of SRA samples for exclusion plotting: 1
+Time elapsed: 0 sec
+amalgkit merge: end
+EXIT 0
+AMALGKIT flow succeeded

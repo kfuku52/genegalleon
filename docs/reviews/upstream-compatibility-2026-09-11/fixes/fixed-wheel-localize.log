@@ -1,0 +1,17 @@
+cdskit localize: started at 2026-09-11 08:17:24.732989
+Number of input sequences: 32
+/opt/conda/lib/python3.12/site-packages/cdskit/localize_model.py:3359: RuntimeWarning: Loading a trusted legacy model with pickle deserialization enabled.
+  model = _read_localize_payload(stream, allow_unsafe=allow_unsafe)
+/opt/conda/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator _BinMapper from version 1.5.2 when using version 1.9.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/opt/conda/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator HistGradientBoostingClassifier from version 1.5.2 when using version 1.9.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/opt/conda/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator ExtraTreeClassifier from version 1.5.2 when using version 1.9.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/opt/conda/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator ExtraTreesClassifier from version 1.5.2 when using version 1.9.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+cdskit localize: ended at 2026-09-11 08:17:26.401468

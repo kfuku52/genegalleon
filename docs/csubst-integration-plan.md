@@ -150,4 +150,5 @@ CSUBSTの再利用可能な3Di状態cacheは同一入力の後続処理へ接続
 3. コンテナ依存・cacheと3Diレポートの接続。
 4. 実backendの一連の実行、通常経路の回帰確認、使用手順の更新。
 
-この計画の承認後に実装・Docker実backend検証・モデル取得を実施。pushは実施していない。
+この計画の承認後に実装・Docker実backend検証・モデル取得を実施。
+その後の公開準備と追加検証は[公開検証記録](reviews/upstream-compatibility-2026-09-11/publication/README.md)を参照。

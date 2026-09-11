@@ -1,0 +1,11 @@
+cdskit localize: started at 2026-09-11 07:48:57.961455
+Number of input sequences: 2
+/opt/conda/lib/python3.12/site-packages/cdskit/localize_model.py:3359: RuntimeWarning: Loading a trusted legacy model with pickle deserialization enabled.
+  model = _read_localize_payload(stream, allow_unsafe=allow_unsafe)
+/opt/conda/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator _BinMapper from version 1.5.2 when using version 1.9.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+/opt/conda/lib/python3.12/site-packages/sklearn/base.py:525: InconsistentVersionWarning: Trying to unpickle estimator HistGradientBoostingClassifier from version 1.5.2 when using version 1.9.0. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+Failed to load model from /tmp/gg-localize-review/models/localize/targeting5-perox-deeploc21-et-v1/v1/cdskit-localize-targeting5-perox-deeploc21-et-v1.pt. json_error='utf-8' codec can't decode byte 0x80 in position 128: invalid start byte, torch_error=Can't get attribute '__pyx_unpickle_CyHalfBinomialLoss' on <module 'sklearn._loss._loss' from '/opt/conda/lib/python3.12/site-packages/sklearn/_loss/_loss.cpython-312-aarch64-linux-gnu.so'>

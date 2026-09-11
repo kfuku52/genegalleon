@@ -1,0 +1,267 @@
+[validation] /opt/conda/bin/python -m pytest -q --gg-suite=runtime --gg-strict-runtime -p no:cacheprovider --basetemp=/tmp/gg-final-runtime
+........................................................................ [ 28%]
+........................................................................ [ 56%]
+........................................................................ [ 85%]
+......................................                                   [100%]
+=============================== warnings summary ===============================
+workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+254 passed, 3 warnings in 519.22s (0:08:39)
+[validation] /opt/conda/bin/python -m pytest -q --gg-strict-runtime workflow/tests/test_hgt_end_to_end.py workflow/tests/test_format_species_inputs_provider_pages.py::test_download_manifest_figshare_extracts_rar_member_from_extensionless_url -p no:cacheprovider --basetemp=/tmp/gg-final-runtime
+..                                                                       [100%]
+2 passed in 12.29s
+[validation] Rscript workflow/tests/test_cafe_go_enrichment.R
+CAFE GO native-output selection and legacy numerical regressions passed
+CAFE GO default CLI equivalence passed
+CAFE GO failed-input publication regression passed
+CAFE GO empty-report and internal-target CLI regressions passed
+[validation] bash workflow/tests/check_treevis_package.sh
+* checking for file ‘/tmp/gg-3di-publish-20260911/workflow/support/treevis/DESCRIPTION’ ... OK
+* preparing ‘genegalleon.treevis’:
+* checking DESCRIPTION meta-information ... OK
+* checking for LF line-endings in source and make files and shell scripts
+* checking for empty or unneeded directories
+* building ‘genegalleon.treevis_0.1.0.tar.gz’
+
+* using log directory ‘/tmp/tmp.I1NVX4fQma/genegalleon.treevis.Rcheck’
+* using R version 4.4.3 (2025-02-28)
+* using platform: aarch64-conda-linux-gnu
+* R was compiled by
+    aarch64-conda-linux-gnu-cc (conda-forge gcc 10.4.0-19) 10.4.0
+    GNU Fortran (conda-forge gcc 10.4.0-19) 10.4.0
+* running under: Ubuntu 24.04.5 LTS
+* using session charset: UTF-8
+* using options ‘--no-manual --no-build-vignettes’
+* checking for file ‘genegalleon.treevis/DESCRIPTION’ ... OK
+* this is package ‘genegalleon.treevis’ version ‘0.1.0’
+* package encoding: UTF-8
+* checking package namespace information ... OK
+* checking package dependencies ... OK
+* checking if this is a source package ... OK
+* checking if there is a namespace ... OK
+* checking for .dll and .exe files ... OK
+* checking for hidden files and directories ... OK
+* checking for portable file names ... OK
+* checking for sufficient/correct file permissions ... OK
+* checking whether package ‘genegalleon.treevis’ can be installed ... OK
+* checking installed package size ... OK
+* checking package directory ... OK
+* checking DESCRIPTION meta-information ... OK
+* checking top-level files ... OK
+* checking for left-over files ... OK
+* checking index information ... OK
+* checking package subdirectories ... OK
+* checking code files for non-ASCII characters ... OK
+* checking R files for syntax errors ... OK
+* checking whether the package can be loaded ... OK
+* checking whether the package can be loaded with stated dependencies ... OK
+* checking whether the package can be unloaded cleanly ... OK
+* checking whether the namespace can be loaded with stated dependencies ... OK
+* checking whether the namespace can be unloaded cleanly ... OK
+* checking dependencies in R code ... OK
+* checking S3 generic/method consistency ... OK
+* checking replacement functions ... OK
+* checking foreign function calls ... OK
+* checking R code for possible problems ... OK
+* checking Rd files ... OK
+* checking Rd metadata ... OK
+* checking Rd cross-references ... OK
+* checking for missing documentation entries ... OK
+* checking for code/documentation mismatches ... OK
+* checking Rd \usage sections ... OK
+* checking Rd contents ... OK
+* checking for unstated dependencies in examples ... OK
+* checking examples ... NONE
+* DONE
+
+Status: OK
+
+[validation] Rscript workflow/tests/test_r_scripts_parse.R
+Parsed 28 R scripts successfully.
+[validation] Rscript workflow/tests/test_r_species_label_utils.R
+[validation] Rscript workflow/tests/test_dated_tree_intervals.R
+dated-tree interval input regression passed
+NHX node-age mapping regression passed
+[validation] Rscript workflow/tests/test_orthogroup_copy_number_trait_pgls.R
+2026-09-11 11:39:04.545189 Starting orthogroup_copy_number_trait_pgls.r
+[1] TRUE
+Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+  File "/opt/conda/lib/python3.12/site-packages/nwkit/file_paths.py", line 90, in validate_outputs_do_not_replace_inputs
+    raise ValueError(
+ValueError: Output '4' must not overwrite input 0 '/tmp/RtmpRqtFnR/gg_orthogroup_copy_number_trait_pgls_74df34b36abd/alias output/orthogroup_copy_number_trait_pgls.tsv'.
+Traceback (most recent call last):
+  File "<string>", line 8, in <module>
+  File "/opt/conda/lib/python3.12/contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/nwkit/output_transaction.py", line 260, in output_transaction
+    targets = validate_output_targets(paths, follow_symlinks=follow_symlinks)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/conda/lib/python3.12/site-packages/nwkit/output_transaction.py", line 55, in validate_output_targets
+    regular_output_mode(target)
+  File "/opt/conda/lib/python3.12/site-packages/nwkit/output_transaction.py", line 26, in regular_output_mode
+    raise ValueError(f"Existing output target must be a regular file: '{path}'.")
+ValueError: Existing output target must be a regular file: '/tmp/RtmpRqtFnR/gg_orthogroup_copy_number_trait_pgls_74df34b36abd/out/orthogroup_copy_number_trait_pgls.summary.svg'.
+test_orthogroup_copy_number_trait_pgls.R: OK
+mixed-family regression: OK
+[validation] Rscript workflow/tests/test_copy_number_quality_diagnostics.R
+2026-09-11 11:39:13.651023 Starting orthogroup_copy_number_trait_pgls.r
+Fontconfig warning: using without calling FcInit()
+BUSCO quality diagnostics tests passed.
+[validation] Rscript workflow/tests/test_treevis_main.R
+Width of folloowing columns will be updated according to --rel_widths: tree tiplabel
+2026-09-11 11:39:24.911445 Adding site-state column: site_state_dayhoff6
+2026-09-11 11:39:24.955026 Adding amino acid site column: amino_acid_site
+Negative trait values will be replaced with 0.
+Trait data are not transformed.
+Relative trait values (x/(max(xs_leaf))) will be displayed.
+Negative trait values will be replaced with 0.
+Trait data are transformed by log2(x).
+Non-finite trait values will be treated as missing.
+Absolute trait values will be displayed.
+Detected universal overlap (motifs will be merged): M1 M2
+2026-09-11 11:39:24.996912 Adding point plot column.
+2026-09-11 11:39:25.029423 Adding fimo column.
+No FIMO records are available. FIMO plot will not be displayed.
+2026-09-11 11:39:25.030566 Adding fimo column.
+No FIMO records passed the qvalue cutoff. FIMO plot will not be displayed.
+2026-09-11 11:39:25.031605 Adding fimo column.
+2026-09-11 11:39:25.067716 Adding amino acid site column: amino_acid_site
+Amino acid site list is empty. amino_acid_site column will not be added.
+2026-09-11 11:39:25.068169 Adding amino acid site column: amino_acid_site
+Amino acid site list is empty. amino_acid_site column will not be added.
+2026-09-11 11:39:25.068967 Adding heatmap column.
+2026-09-11 11:39:25.094412 Adding heatmap column.
+2026-09-11 11:39:25.125301 Adding heatmap column.
+2026-09-11 11:39:25.152131 Adding text column.
+2026-09-11 11:39:25.161805 Adding categorical column.
+2026-09-11 11:39:25.186047 Adding meme column.
+2026-09-11 11:39:25.220077 Adding fimo column.
+2026-09-11 11:39:25.25751 Adding fimo column.
+2026-09-11 11:39:25.311652 Adding fimo column.
+2026-09-11 11:39:25.350337 Adding point plot column.
+All pointplot values are NA/NaN/Inf. Pointplot panel will not be added.
+2026-09-11 11:39:25.351758 Adding heatmap column.
+All heatmap values are NA/NaN/Inf. Heatmap panel will not be added.
+so_event_parent will be used to define branch events.
+Nodes will be categorized into: S, D
+detected node categories: D
+Warning: support_unrooted : support value at root node is not NA ( 100 ). Masking.
+Non-NA root support is no problem if this is a pruned tree. If not, check the data carefully.
+Splitting nested clade orthologs. Row numbers 1 and 2
+Number of motifs with displayed connections: 1
+Number of motifs with displayed connections: 0
+Number of motifs with displayed connections: 1
+Detected universal overlap (motifs will be merged): X1 X2 Y1 Y2
+Detected universal overlap (motifs will be merged): X1 X2 Y1 Y2
+Number of motifs with displayed connections: 1
+Number of motifs with displayed connections: 2
+Number of motifs with displayed connections: 2
+Long-branch display compression applied. num_long = 1 detect_threshold = 0.5 max_original = 10 max_display = 0.445
+2026-09-11 11:39:29.072348 Adding alignment column.
+2026-09-11 11:39:29.114617 Adding alignment column.
+Untrimmed alignment was not provided. Domain coloring in the alignment panel will be disabled.
+2026-09-11 11:39:29.209043 Adding alignment column.
+2026-09-11 11:39:29.234748 Adding alignment column.
+genegalleon.treevis package tests passed.
+2026-09-11 11:39:29.2664 Adding tip label column.
+2026-09-11 11:39:29.294953 Adding tip label column.
+2026-09-11 11:39:29.307213 Adding tip label column.
+2026-09-11 11:39:29.317512 Adding tip label column.
+2026-09-11 11:39:29.328389 Adding tip label column.
+2026-09-11 11:39:29.338044 Adding tip label column.
+2026-09-11 11:39:29.346761 Adding integer column.
+[validation] Rscript workflow/tests/test_treevis_peroxisome.R
+cdskit localize peroxisome probability was not found. Peroxisome column will not be shown.
+Peroxisome panel tests passed.
+2026-09-11 11:39:30.155735 Adding signal peptide column.
+2026-09-11 11:39:30.44258 Adding signal peptide column.
+Square localization bar layout tests passed.
+Combined localization probabilities and missing-data tests passed.
+[validation] Rscript workflow/tests/test_treevis_layout.R
+null device
+          1
+Physical layout tests passed. Output: /tmp/Rtmp3mi4UQ/treevis-layout-75f41a48a523/layout.pdf
+test legend: 6 of 30 entries fit; omitted 24 lower-frequency keys.
+domain legend: 6 of 30 entries fit; omitted 24 lower-frequency keys.
+fimo legend: 6 of 30 entries fit; omitted 24 lower-frequency keys.
+domain legend: 18 of 30 entries fit; omitted 12 lower-frequency keys.
+fimo legend: 18 of 30 entries fit; omitted 12 lower-frequency keys.
+2026-09-11 11:39:34.55345 Adding categorical column.
+null device
+          1
+Compact panels, query squares, and frequency-limited legends passed.
+[validation] Rscript workflow/tests/test_treevis_gene_structure.R
+Gene structure coordinates, missing data, compression and shared tip colors passed.
+CDS/UTR encoding, phase-specific correspondence and ambiguous junctions passed.
+Intron correspondence excluded tips: missing:missing_GFF
+Explicit trans-splicing order, coordinates and symbolic junctions passed.
+[validation] Rscript workflow/tests/test_treevis_synteny_palette.R
+2026-09-11 11:39:36.44311 Adding synteny column.
+2026-09-11 11:39:36.543269 Adding synteny column.
+Hidden synteny families do not consume palette colors.
+[validation] Rscript workflow/tests/test_treevis_synteny_similarity.R
+Synteny similarity values, missing data, window and geometry passed.
+Workflow PDF generation, absent input, and physical width passed.
+Width of folloowing columns will be updated according to --rel_widths: tree domain
+Width of folloowing columns will be updated according to --rel_widths: tree domain
+Width of folloowing columns will be updated according to --rel_widths: tree domain
+Fixed-width isolation and exact synteny group IDs passed.
+[validation] Rscript workflow/tests/test_treevis_sequence_cis_similarity.R
+Sequence identity and promoter cis similarity tests passed.
+Shared triangle suffix labels and missing-first-panel tests passed.
+Exact motif IDs and invalid q-value/FASTA checks passed.
+Real FIMO output integration passed.
+[validation] Rscript workflow/tests/test_treevis_synteny.R
+2026-09-11 11:39:44.689667 Adding synteny column.
+Fontconfig warning: using without calling FcInit()
+2026-09-11 11:39:45.214861 Adding synteny column.
+2026-09-11 11:39:45.252246 Adding synteny column.
+Synteny legend tests passed. Example: /tmp/Rtmp1O8YMA/synteny-legend-76ab3529890f
+2026-09-11 11:39:45.261703 Adding synteny column.
+2026-09-11 11:39:45.296266 Adding synteny column.
+2026-09-11 11:39:45.336496 Adding synteny column.
+2026-09-11 11:39:45.37652 Adding synteny column.
+2026-09-11 11:39:45.377524 Adding synteny column.
+2026-09-11 11:39:45.378251 Adding synteny column.
+2026-09-11 11:39:45.379071 Adding synteny column.
+2026-09-11 11:39:45.379728 Adding synteny column.
+Synteny table not found. Synteny column will not be added.
+2026-09-11 11:39:45.38356 Adding synteny column.
+Synteny table is empty. Synteny column will not be added.
+2026-09-11 11:39:45.384199 Adding synteny column.
+No synteny entries matched tree tip labels. Synteny column will not be added.
+2026-09-11 11:39:45.385352 Adding synteny column.
+No multi-tip synteny groups were detected. Synteny column will not be added.
+2026-09-11 11:39:45.386999 Adding synteny column.
+No synteny entries are within the requested window. Synteny column will not be added.
+2026-09-11 11:39:45.388087 Adding synteny column.
+2026-09-11 11:39:45.539209 Adding synteny column.
+Workflow tree plot with synteny legend passed.
+null device
+          1
+[validation] Rscript workflow/tests/test_treevis_legends.R
+2026-09-11 11:39:47.99171 Adding categorical column.
+2026-09-11 11:39:48.069317 Adding categorical column.
+2026-09-11 11:39:48.091649 Adding categorical column.
+2026-09-11 11:39:48.166793 Adding categorical column.
+2026-09-11 11:39:48.193054 Adding categorical column.
+2026-09-11 11:39:48.270577 Adding categorical column.
+2026-09-11 11:39:48.293236 Adding categorical column.
+Width of folloowing columns will be updated according to --rel_widths: categorical
+null device
+          1
+Treevis event, query, species-label, and domain-overflow tests passed.
+2026-09-11 11:39:50.110396 Adding protein domain column.
+2026-09-11 11:39:50.149406 Adding protein domain column.
+Intron position info is detected. Adding it to the protein domain column.
+NWKIT named-regime tree rendering passed.
