@@ -16,7 +16,7 @@ def load_module():
     return module
 
 
-def _write_amas(path: Path, no_of_taxa: int):
+def _write_alignment_stats(path: Path, no_of_taxa: int):
     pandas.DataFrame(
         [
             {
@@ -36,7 +36,7 @@ def _write_amas(path: Path, no_of_taxa: int):
 def test_extract_orthogroup_id_accepts_prefixed_filenames():
     mod = load_module()
     assert mod._extract_orthogroup_id("HOG0000010_cds.fa.gz") == "HOG0000010"
-    assert mod._extract_orthogroup_id("OG0001234_amas.original.tsv") == "OG0001234"
+    assert mod._extract_orthogroup_id("OG0001234_alignment_stats.original.tsv") == "OG0001234"
     assert mod._extract_orthogroup_id("SP0000001.treefile") == "SP0000001"
     assert mod._extract_orthogroup_id("README.txt") is None
 
@@ -48,15 +48,15 @@ def test_extract_orthogroup_id_requires_boundary_after_numeric_id():
     assert mod._extract_orthogroup_id("SP1-extra.tsv") == "SP1"
 
 
-def test_get_amas_stats_uses_index_ids_without_creating_extra_rows(tmp_path):
+def test_get_alignment_stats_uses_index_ids_without_creating_extra_rows(tmp_path):
     mod = load_module()
     df = pandas.DataFrame({"Total": [1, 2]}, index=["HOG0000010", "HOG0000011"])
-    amas_dir = tmp_path / "amas_original"
-    amas_dir.mkdir()
-    _write_amas(amas_dir / "HOG0000010_amas.original.tsv", 7)
-    _write_amas(amas_dir / "HOG9999999_amas.original.tsv", 9)
+    alignment_stats_dir = tmp_path / "alignment_stats_original"
+    alignment_stats_dir.mkdir()
+    _write_alignment_stats(alignment_stats_dir / "HOG0000010_alignment_stats.original.tsv", 7)
+    _write_alignment_stats(alignment_stats_dir / "HOG9999999_alignment_stats.original.tsv", 9)
 
-    out = mod.get_amas_stats(df.copy(), str(amas_dir), "original", ncpu=1)
+    out = mod.get_alignment_stats(df.copy(), str(alignment_stats_dir), "original", ncpu=1)
 
     assert set(out.index.tolist()) == {"HOG0000010", "HOG0000011"}
     assert out.loc["HOG0000010", "No_of_taxa_original"] == 7
@@ -108,10 +108,10 @@ def test_run_keeps_augmented_genecount_outside_orthofinder_by_default(tmp_path):
     pandas.DataFrame(
         [{"Orthogroup": "HOG0000010", "Total": 1}]
     ).to_csv(genecount, sep="\t", index=False)
-    historical_output = orthofinder_dir / "Orthogroups.GeneCount.selected.amas.tsv"
+    historical_output = orthofinder_dir / "Orthogroups.GeneCount.selected.alignment_stats.tsv"
     historical_output.write_text("do-not-rewrite\n", encoding="utf-8")
     out_tsv = tmp_path / "orthogroup_summary.tsv"
-    updated_output = tmp_path / "orthogroup_summary.genecount.amas.tsv"
+    updated_output = tmp_path / "orthogroup_summary.genecount.alignment_stats.tsv"
 
     mod.run(
         SimpleNamespace(
@@ -126,7 +126,7 @@ def test_run_keeps_augmented_genecount_outside_orthofinder_by_default(tmp_path):
     assert updated_output.is_file()
 
 
-def test_run_realigns_existing_amas_table_to_original_index(tmp_path):
+def test_run_realigns_existing_alignment_stats_table_to_original_index(tmp_path):
     mod = load_module()
     dir_og = tmp_path / "orthogroup"
     dir_og.mkdir()
@@ -139,7 +139,7 @@ def test_run_realigns_existing_amas_table_to_original_index(tmp_path):
         ]
     ).to_csv(genecount, sep="\t", index=False)
 
-    existing = tmp_path / "Orthogroups.GeneCount.selected.amas.tsv"
+    existing = tmp_path / "Orthogroups.GeneCount.selected.alignment_stats.tsv"
     pandas.DataFrame(
         [
             {"Orthogroup": "HOG0000010", "Total": 1, "No_of_taxa_original": 7},
@@ -147,6 +147,10 @@ def test_run_realigns_existing_amas_table_to_original_index(tmp_path):
             {"Orthogroup": "HOG9999999_cds", "Total": 1, "No_of_taxa_original": 9},
         ]
     ).to_csv(existing, sep="\t", index=False)
+
+    statistics = dir_og / "alignment_stats_original" / "HOG0000010_alignment_stats.original.tsv"
+    statistics.parent.mkdir()
+    _write_alignment_stats(statistics, 12)
 
     out_tsv = tmp_path / "orthogroup_summary.tsv"
     mod.run(
@@ -161,6 +165,8 @@ def test_run_realigns_existing_amas_table_to_original_index(tmp_path):
 
     out = pandas.read_csv(out_tsv, sep="\t", index_col=0)
     assert set(out.index.tolist()) == {"HOG0000010", "HOG0000011"}
+    assert out.loc["HOG0000010", "No_of_taxa_original"] == 12
+    assert pandas.isna(out.loc["HOG0000011", "No_of_taxa_original"])
 
 
 def test_run_ignores_hidden_dirs_and_hidden_files(tmp_path):
@@ -197,15 +203,15 @@ def test_run_ignores_hidden_dirs_and_hidden_files(tmp_path):
     assert out.loc["HOG0000010", "cds_fasta"] == 1
 
 
-def test_get_amas_stats_ignores_non_file_entries_in_amas_dir(tmp_path):
+def test_get_alignment_stats_ignores_non_file_entries_in_alignment_stats_dir(tmp_path):
     mod = load_module()
     df = pandas.DataFrame({"Total": [1]}, index=["HOG0000010"])
-    amas_dir = tmp_path / "amas_original"
-    amas_dir.mkdir()
-    _write_amas(amas_dir / "HOG0000010_amas.original.tsv", 7)
-    (amas_dir / "HOG0000011_placeholder").mkdir()
+    alignment_stats_dir = tmp_path / "alignment_stats_original"
+    alignment_stats_dir.mkdir()
+    _write_alignment_stats(alignment_stats_dir / "HOG0000010_alignment_stats.original.tsv", 7)
+    (alignment_stats_dir / "HOG0000011_placeholder").mkdir()
 
-    out = mod.get_amas_stats(df.copy(), str(amas_dir), "original", ncpu=1)
+    out = mod.get_alignment_stats(df.copy(), str(alignment_stats_dir), "original", ncpu=1)
     assert out.loc["HOG0000010", "No_of_taxa_original"] == 7
 
 
@@ -226,9 +232,9 @@ def test_run_reads_orthogroup_artifacts_from_zip_shards(tmp_path):
         path = dir_og / subdir / f"{family_id}{suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{subdir}\n", encoding="utf-8")
-    amas_path = dir_og / "amas_original" / f"{family_id}_amas.original.tsv"
-    amas_path.parent.mkdir(parents=True)
-    _write_amas(amas_path, 13)
+    alignment_stats_path = dir_og / "alignment_stats_original" / f"{family_id}_alignment_stats.original.tsv"
+    alignment_stats_path.parent.mkdir(parents=True)
+    _write_alignment_stats(alignment_stats_path, 13)
     family_ids, family_from_name = family_context("orthogroup", genecount=genecount)
     archive_completed_outputs(dir_og, "orthogroup", family_ids, family_from_name)
 
@@ -248,7 +254,7 @@ def test_run_reads_orthogroup_artifacts_from_zip_shards(tmp_path):
     assert out.loc[family_id, "No_of_taxa_original"] == 13
 
 
-def test_run_reads_legacy_dot_named_amas_members_from_zip(tmp_path):
+def test_run_reads_current_statistics_with_legacy_other_members_from_zip(tmp_path):
     mod = load_module()
     dir_og = tmp_path / "orthogroup"
     family_id = "HOG0000010"
@@ -264,9 +270,9 @@ def test_run_reads_legacy_dot_named_amas_members_from_zip(tmp_path):
         path = dir_og / subdir / f"{family_id}{suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{subdir}\n", encoding="utf-8")
-    amas_path = dir_og / "amas.original" / f"{family_id}.amas.original.tsv"
-    amas_path.parent.mkdir(parents=True)
-    _write_amas(amas_path, 17)
+    alignment_stats_path = dir_og / "alignment_stats_original" / f"{family_id}_alignment_stats.original.tsv"
+    alignment_stats_path.parent.mkdir(parents=True)
+    _write_alignment_stats(alignment_stats_path, 17)
     family_ids, family_from_name = family_context(
         "orthogroup",
         genecount=genecount,

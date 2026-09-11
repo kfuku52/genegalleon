@@ -74,16 +74,11 @@ IQ-TREE 3.1.4 and NWKIT 0.43.15:
 
 Native amd64 and SIF execution were not performed in this local validation.
 
-## Alignment statistics migration
+## Alignment statistics
 
-AMAS is removed from both container environments and command inventories. Gene-evolution
-alignment summaries use `cdskit stats --mode alignment` (CDSKIT 0.31.0 or newer),
-with `--seq_type dna` or `aa` according to the input mode. The source build
-continues to follow the moving branch in `container/source_branches.env`.
-
-Existing `run_amas_original` / `run_amas_cleaned` switches, `amas_*` output
-paths, provenance step names, and summary columns are retained for existing
-workspaces and ZIP archives. Provenance records the new statistics engine so
-previous manifests invalidate on the next enabled stage run. Input FASTA is
-still decompressed with seqkit. Protein summaries include `GC_content=NA`,
-allowing the shared summary readers to handle both sequence types.
+Gene-evolution alignment summaries use `cdskit stats --mode alignment`
+(CDSKIT 0.31.0 or newer) for DNA and protein input. No separate alignment-summary
+package is required in either container environment. Source builds continue
+to follow `container/source_branches.env`. Settings, output paths, and provenance
+use `alignment_stats_*`; see [migration instructions](alignment-statistics.md)
+for existing live or ZIP-backed outputs.

@@ -16,7 +16,7 @@ def load_module():
     return module
 
 
-def _write_amas(path: Path, no_of_taxa: int):
+def _write_alignment_stats(path: Path, no_of_taxa: int):
     pandas.DataFrame(
         [
             {
@@ -87,17 +87,17 @@ def test_run_writes_query_completion_summary_from_input_order(tmp_path: Path):
     assert out.loc["AHA", "stat_branch"] == 1
 
 
-def test_run_appends_optional_amas_stats_without_extra_rows(tmp_path: Path):
+def test_run_appends_optional_alignment_stats_stats_without_extra_rows(tmp_path: Path):
     mod = load_module()
     query_gene = tmp_path / "input" / "query_gene"
     query2family = tmp_path / "output" / "query2family"
     query_gene.mkdir(parents=True)
     (query_gene / "AHA").write_text("gene1\n", encoding="utf-8")
     (query_gene / "WOX").write_text("gene2\n", encoding="utf-8")
-    amas_original = query2family / "amas_original"
-    amas_original.mkdir(parents=True)
-    _write_amas(amas_original / "AHA_amas.original.tsv", 7)
-    _write_amas(amas_original / "UNKNOWN_amas.original.tsv", 9)
+    alignment_stats_original = query2family / "alignment_stats_original"
+    alignment_stats_original.mkdir(parents=True)
+    _write_alignment_stats(alignment_stats_original / "AHA_alignment_stats.original.tsv", 7)
+    _write_alignment_stats(alignment_stats_original / "UNKNOWN_alignment_stats.original.tsv", 9)
 
     out_tsv = tmp_path / "query2family_summary.tsv"
     mod.run(
@@ -113,10 +113,10 @@ def test_run_appends_optional_amas_stats_without_extra_rows(tmp_path: Path):
     assert set(out.index.tolist()) == {"AHA", "WOX"}
     assert out.loc["AHA", "No_of_taxa_original"] == 7
     assert pandas.isna(out.loc["WOX", "No_of_taxa_original"])
-    assert out.loc["AHA", "amas_original"] == 1
+    assert out.loc["AHA", "alignment_stats_original"] == 1
 
 
-def test_run_reads_completion_and_amas_members_from_zip_shards(tmp_path: Path):
+def test_run_reads_completion_and_alignment_stats_members_from_zip_shards(tmp_path: Path):
     mod = load_module()
     query_gene = tmp_path / "input" / "query_gene"
     query2family = tmp_path / "output" / "query2family"
@@ -130,9 +130,9 @@ def test_run_reads_completion_and_amas_members_from_zip_shards(tmp_path: Path):
         path = query2family / subdir / f"AHA{suffix}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{subdir}\n", encoding="utf-8")
-    amas_path = query2family / "amas_original" / "AHA_amas.original.tsv"
-    amas_path.parent.mkdir(parents=True)
-    _write_amas(amas_path, 11)
+    alignment_stats_path = query2family / "alignment_stats_original" / "AHA_alignment_stats.original.tsv"
+    alignment_stats_path.parent.mkdir(parents=True)
+    _write_alignment_stats(alignment_stats_path, 11)
     family_ids, family_from_name = family_context("query2family", query_dir=query_gene)
     archive_completed_outputs(query2family, "query2family", family_ids, family_from_name)
 
@@ -150,4 +150,4 @@ def test_run_reads_completion_and_amas_members_from_zip_shards(tmp_path: Path):
     assert out.loc["AHA", "tree_plot"] == 1
     assert out.loc["AHA", "stat_branch"] == 1
     assert out.loc["AHA", "No_of_taxa_original"] == 11
-    assert not (query2family / "amas_original").exists()
+    assert not (query2family / "alignment_stats_original").exists()

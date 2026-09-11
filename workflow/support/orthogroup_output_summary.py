@@ -36,7 +36,7 @@ def build_arg_parser():
     return parser
 
 
-def _amas_columns():
+def _alignment_stats_columns():
     return [
         "No_of_taxa",
         "Alignment_length",
@@ -60,47 +60,42 @@ def _visible_entries(path):
     return [entry for entry in os.listdir(path) if not entry.startswith(".")]
 
 
-def _read_amas_file(file_path, og_id, amas_cols):
-    tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=amas_cols, nrows=1, low_memory=False)
+def _read_alignment_stats_file(file_path, og_id, alignment_stats_cols):
+    tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
     return og_id, tmp.iloc[0].to_list()
 
 
-def _read_amas_store_file(store, subdir, file_name, og_id, amas_cols):
+def _read_alignment_stats_store_file(store, subdir, file_name, og_id, alignment_stats_cols):
     with store.open_binary(subdir, file_name) as handle:
-        tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=amas_cols, nrows=1, low_memory=False)
+        tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
     return og_id, tmp.iloc[0].to_list()
 
 
-def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=None):
-    amas_cols = _amas_columns()
-    amas_new_cols = [f"{col}_{extension}" for col in amas_cols]
-    for ncol in amas_new_cols:
-        if ncol not in df.columns:
-            df.loc[:, ncol] = numpy.nan
+def get_alignment_stats(df, dir_alignment_stats, extension, ncpu, store=None, logical_subdir=None):
+    alignment_stats_cols = _alignment_stats_columns()
+    alignment_stats_new_cols = [f"{col}_{extension}" for col in alignment_stats_cols]
+    for ncol in alignment_stats_new_cols:
+        df[ncol] = numpy.nan
 
-    if store is None and not os.path.isdir(dir_amas):
-        print(f"{extension}: {dir_amas} was not found. Skipping.", flush=True)
+    if store is None and not os.path.isdir(dir_alignment_stats):
+        print(f"{extension}: {dir_alignment_stats} was not found. Skipping.", flush=True)
         return df
     if store is not None and logical_subdir not in store.logical_subdirs():
         print(f"{extension}: logical subdirectory {logical_subdir} was not found. Skipping.", flush=True)
         return df
 
-    is_prefilled = ~df[f"No_of_taxa_{extension}"].isna()
-    prefilled_ogs = set(df.index[is_prefilled])
-    files = sorted(_visible_entries(dir_amas)) if store is None else store.file_names(logical_subdir)
+    files = sorted(_visible_entries(dir_alignment_stats)) if store is None else store.file_names(logical_subdir)
     queued = []
     seen_ogs = set()
     valid_ogs = set(df.index.astype(str))
     for file in files:
-        file_path = os.path.join(dir_amas, file)
+        file_path = os.path.join(dir_alignment_stats, file)
         if store is None and not os.path.isfile(file_path):
             continue
         og_id = _extract_orthogroup_id(file)
         if og_id is None:
             continue
         if og_id in seen_ogs:
-            continue
-        if og_id in prefilled_ogs:
             continue
         if og_id not in valid_ogs:
             continue
@@ -114,19 +109,19 @@ def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=Non
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(
-                    _read_amas_file,
-                    os.path.join(dir_amas, file),
+                    _read_alignment_stats_file,
+                    os.path.join(dir_alignment_stats, file),
                     og_id,
-                    amas_cols,
+                    alignment_stats_cols,
                 )
                 if store is None
                 else executor.submit(
-                    _read_amas_store_file,
+                    _read_alignment_stats_store_file,
                     store,
                     logical_subdir,
                     file,
                     og_id,
-                    amas_cols,
+                    alignment_stats_cols,
                 )
                 for file, og_id in queued
             ]
@@ -137,15 +132,15 @@ def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=Non
     else:
         for file, og_id in queued:
             if store is None:
-                file_path = os.path.join(dir_amas, file)
-                og_id, values = _read_amas_file(file_path, og_id, amas_cols)
+                file_path = os.path.join(dir_alignment_stats, file)
+                og_id, values = _read_alignment_stats_file(file_path, og_id, alignment_stats_cols)
             else:
-                og_id, values = _read_amas_store_file(
+                og_id, values = _read_alignment_stats_store_file(
                     store,
                     logical_subdir,
                     file,
                     og_id,
-                    amas_cols,
+                    alignment_stats_cols,
                 )
             result_rows.append((og_id, values))
             counter += 1
@@ -154,15 +149,15 @@ def get_amas_stats(df, dir_amas, extension, ncpu, store=None, logical_subdir=Non
         result_df = pandas.DataFrame.from_records(
             [values for _, values in result_rows],
             index=[og_id for og_id, _ in result_rows],
-            columns=amas_new_cols,
+            columns=alignment_stats_new_cols,
         )
-        df.loc[result_df.index, amas_new_cols] = result_df
+        df.loc[result_df.index, alignment_stats_new_cols] = result_df
 
     idx_total = numpy.where(df.columns == "Total")[0][0]
     idx_added = numpy.arange(idx_total + 1, df.columns.shape[0])
     original_cols = df.columns[numpy.arange(idx_total + 1)].tolist()
-    sorted_amas_cols = df.columns[idx_added].sort_values().tolist()
-    df = df.loc[:, original_cols + sorted_amas_cols]
+    sorted_alignment_stats_cols = df.columns[idx_added].sort_values().tolist()
+    df = df.loc[:, original_cols + sorted_alignment_stats_cols]
     print(f"{extension}: {counter} alignment-statistics results were appended.", flush=True)
     return df
 
@@ -174,7 +169,7 @@ def run(args):
     updated_genecount = getattr(args, "updated_genecount_out", None)
     if updated_genecount is None:
         out_path = Path(args.out)
-        updated_genecount = str(out_path.with_name(f"{out_path.stem}.genecount.amas.tsv"))
+        updated_genecount = str(out_path.with_name(f"{out_path.stem}.genecount.alignment_stats.tsv"))
     df_original = pandas.read_csv(args.genecount, sep="\t", index_col=0, header=0)
     df_original.index = df_original.index.astype(str)
     if os.path.exists(updated_genecount):
@@ -190,23 +185,23 @@ def run(args):
         df = df_original
 
     store = GeneFamilyOutputStore(args.dir_og)
-    dir_amas = os.path.join(args.dir_og, "amas_original")
-    df = get_amas_stats(
+    dir_alignment_stats = os.path.join(args.dir_og, "alignment_stats_original")
+    df = get_alignment_stats(
         df,
-        dir_amas,
+        dir_alignment_stats,
         "original",
         args.ncpu,
         store=store,
-        logical_subdir="amas_original",
+        logical_subdir="alignment_stats_original",
     )
-    dir_amas = os.path.join(args.dir_og, "amas_cleaned")
-    df = get_amas_stats(
+    dir_alignment_stats = os.path.join(args.dir_og, "alignment_stats_cleaned")
+    df = get_alignment_stats(
         df,
-        dir_amas,
+        dir_alignment_stats,
         "clean",
         args.ncpu,
         store=store,
-        logical_subdir="amas_cleaned",
+        logical_subdir="alignment_stats_cleaned",
     )
     df.to_csv(updated_genecount, index=True, sep="\t")
 

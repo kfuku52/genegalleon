@@ -1403,7 +1403,6 @@ def test_gene_family_zip_reruns_adopt_pre_underscore_output_paths():
         "mapdNdS.dN.tree/${og_id}.mapdNdS.dN.nwk",
         "stat.branch/${og_id}.stat.branch.tsv",
         "stat.tree/${og_id}.stat.tree.tsv",
-        "amas.cleaned/${og_id}.amas.cleaned.tsv",
         "tree_plot/${og_id}.tree_plot.pdf",
     ):
         assert historical_path in adoption_body
@@ -1416,8 +1415,8 @@ def test_orthogroup_summaries_do_not_write_augmented_tables_into_orthofinder():
     progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")
     gene_summary = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
 
-    assert "--updated-genecount-out orthogroup_genecount.amas.tsv" in progress
-    assert '--updated-genecount-out "${summary_output_dir}/orthogroup_genecount.amas.tsv"' in gene_summary
+    assert "--updated-genecount-out orthogroup_genecount.alignment_stats.tsv" in progress
+    assert '--updated-genecount-out "${summary_output_dir}/orthogroup_genecount.alignment_stats.tsv"' in gene_summary
 
 
 def test_gene_family_zip_stale_tmp_cleanup_uses_family_exclusion_and_caps():

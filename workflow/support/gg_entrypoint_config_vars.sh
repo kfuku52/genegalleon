@@ -196,8 +196,8 @@ rsc_species_evolution_parameter
 rsc_technical_aggregation
 rsc_unmatched
 rsc_within_variance
-run_amas_cleaned
-run_amas_original
+run_alignment_stats_cleaned
+run_alignment_stats_original
 run_cdskit_localize
 run_clipkit
 run_codeml_two_ratio

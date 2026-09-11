@@ -285,7 +285,6 @@ def test_legacy_dot_layout_is_exposed_and_materialized_as_current_paths(
         encoding="utf-8",
     )
     legacy_outputs = {
-        "amas.cleaned": (".amas.cleaned.tsv", b"amas\n"),
         "cds.fasta": (".cds.fasta", b">a\nATG\n"),
         "stat.branch": (".stat.branch.tsv", b"branch\n"),
         "stat.tree": (".stat.tree.tsv", b"tree\n"),
@@ -307,11 +306,6 @@ def test_legacy_dot_layout_is_exposed_and_materialized_as_current_paths(
     )
     store = GeneFamilyOutputStore(root)
 
-    assert "amas_cleaned" in store.logical_subdirs()
-    assert "amas.cleaned" not in store.logical_subdirs()
-    assert store.file_names("amas_cleaned") == [
-        f"{family_id}_amas.cleaned.tsv"
-    ]
     with store.open_binary(
         "cds_fasta",
         f"{family_id}_cds.fasta",
@@ -342,8 +336,6 @@ def test_legacy_dot_layout_is_exposed_and_materialized_as_current_paths(
 @pytest.mark.parametrize(
     ("legacy_path", "current_path"),
     [
-        ("amas.cleaned/HOG0000010.amas.cleaned.tsv", "amas_cleaned/HOG0000010_amas.cleaned.tsv"),
-        ("amas.original/HOG0000010.amas.original.tsv", "amas_original/HOG0000010_amas.original.tsv"),
         ("cds.fasta/HOG0000010.cds.fasta", "cds_fasta/HOG0000010_cds.fasta"),
         ("character.gff/HOG0000010.gff.tsv", "character_gff_info/HOG0000010_gff.tsv"),
         ("clipkit.log/HOG0000010.cds.clipkit.log", "clipkit_log/HOG0000010_cds.clipkit.log"),

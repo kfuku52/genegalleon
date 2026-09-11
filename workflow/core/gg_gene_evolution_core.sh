@@ -693,12 +693,6 @@ adopt_historical_gene_family_outputs() {
   adopt_existing_output_path file_og_stat_tree \
     "${dir_output_active}/stat_tree/${og_id}_stat.tree.tsv" \
     "${dir_output_active}/stat.tree/${og_id}.stat.tree.tsv"
-  adopt_existing_output_path file_og_amas_original \
-    "${dir_output_active}/amas_original/${og_id}_amas.original.tsv" \
-    "${dir_output_active}/amas.original/${og_id}.amas.original.tsv"
-  adopt_existing_output_path file_og_amas_cleaned \
-    "${dir_output_active}/amas_cleaned/${og_id}_amas.cleaned.tsv" \
-    "${dir_output_active}/amas.cleaned/${og_id}.amas.cleaned.tsv"
   adopt_existing_output_path file_og_tree_plot \
     "${dir_output_active}/tree_plot/${og_id}_tree_plot.pdf" \
     "${dir_output_active}/tree_plot/${og_id}.tree_plot.pdf"
@@ -1833,8 +1827,8 @@ file_og_expression_trait_pgls_provenance="${dir_output_active}/artifact_provenan
 # Summary
 file_og_stat_branch="${dir_output_active}/stat_branch/${og_id}_stat.branch.tsv"
 file_og_stat_tree="${dir_output_active}/stat_tree/${og_id}_stat.tree.tsv"
-file_og_amas_original="${dir_output_active}/amas_original/${og_id}_amas.original.tsv"
-file_og_amas_cleaned="${dir_output_active}/amas_cleaned/${og_id}_amas.cleaned.tsv"
+file_og_alignment_stats_original="${dir_output_active}/alignment_stats_original/${og_id}_alignment_stats.original.tsv"
+file_og_alignment_stats_cleaned="${dir_output_active}/alignment_stats_cleaned/${og_id}_alignment_stats.cleaned.tsv"
 file_og_tree_plot="${dir_output_active}/tree_plot/${og_id}_tree_plot.pdf"
 file_og_synteny="${dir_output_active}/synteny/${og_id}_synteny.tsv"
 # Pruned datasets
@@ -1844,10 +1838,10 @@ file_og_unrooted_tree_pruned="${dir_output_active}/pruned_unrooted_tree/${og_id}
 file_og_rooted_tree_pruned="${dir_output_active}/pruned_rooted_tree/${og_id}_rooted.pruned.nwk"
 file_og_dated_tree_pruned="${dir_output_active}/pruned_dated_tree/${og_id}_dated.pruned.nwk"
 file_og_primary_fasta="${file_og_cds_fasta}"
-amas_data_type="dna"
+alignment_stats_data_type="dna"
 if [[ "${input_sequence_mode}" == "protein" ]]; then
   file_og_primary_fasta="${file_og_pep_fasta}"
-  amas_data_type="aa"
+  alignment_stats_data_type="aa"
 fi
 
 # Include declared destinations even when a tool publishes directly (for
@@ -2951,33 +2945,33 @@ else
 fi
 
 task="cdskit stats for original alignment"
-disable_if_no_input_file "run_amas_original" "${file_og_untrimmed_aln_analysis}"
-amas_original_needs_update=0
-amas_original_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.amas_original.json"
-  --step "amas_original"
+disable_if_no_input_file "run_alignment_stats_original" "${file_og_untrimmed_aln_analysis}"
+alignment_stats_original_needs_update=0
+alignment_stats_original_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.alignment_stats_original.json"
+  --step "alignment_stats_original"
   --family-id "${og_id}"
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "alignment=${file_og_untrimmed_aln_analysis}"
-  --output "amas=${file_og_amas_original}"
-  --parameter "data_type=${amas_data_type}"
+  --output "alignment_stats=${file_og_alignment_stats_original}"
+  --parameter "data_type=${alignment_stats_data_type}"
   --parameter "statistics_engine=cdskit-stats-alignment"
 )
-gg_artifact_prepare_stage amas_original_needs_update run_amas_original "${amas_original_provenance_args[@]}" || exit $?
-if [[ ${amas_original_needs_update} -eq 1 && ${run_amas_original} -eq 1 ]]; then
+gg_artifact_prepare_stage alignment_stats_original_needs_update run_alignment_stats_original "${alignment_stats_original_provenance_args[@]}" || exit $?
+if [[ ${alignment_stats_original_needs_update} -eq 1 && ${run_alignment_stats_original} -eq 1 ]]; then
   gg_step_start "${task}"
-  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.amas.original.input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_untrimmed_aln_analysis}" --out-file "${og_id}.alignment_stats.original.input.fasta"
 
   cdskit stats \
     --mode alignment \
-    --seq_type "${amas_data_type}" \
-    --seq_file "${og_id}.amas.original.input.fasta" \
-    --out_file "${og_id}.amas.original.output.tsv"
+    --seq_type "${alignment_stats_data_type}" \
+    --seq_file "${og_id}.alignment_stats.original.input.fasta" \
+    --out_file "${og_id}.alignment_stats.original.output.tsv"
 
-  mv_out "${og_id}.amas.original.output.tsv" "${file_og_amas_original}"
-  rm -f -- "${og_id}.amas.original.input.fasta"
-  gg_artifact_record "${amas_original_provenance_args[@]}"
+  mv_out "${og_id}.alignment_stats.original.output.tsv" "${file_og_alignment_stats_original}"
+  rm -f -- "${og_id}.alignment_stats.original.input.fasta"
+  gg_artifact_record "${alignment_stats_original_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi
@@ -3211,33 +3205,33 @@ if [[ ${run_clipkit} -eq 1 ]]; then
 fi
 
 task="cdskit stats for cleaned alignment"
-disable_if_no_input_file "run_amas_cleaned" "${file_og_trimmed_aln_analysis}"
-amas_cleaned_needs_update=0
-amas_cleaned_provenance_args=(
-  --manifest "${dir_output_active}/artifact_provenance/${og_id}.amas_cleaned.json"
-  --step "amas_cleaned"
+disable_if_no_input_file "run_alignment_stats_cleaned" "${file_og_trimmed_aln_analysis}"
+alignment_stats_cleaned_needs_update=0
+alignment_stats_cleaned_provenance_args=(
+  --manifest "${dir_output_active}/artifact_provenance/${og_id}.alignment_stats_cleaned.json"
+  --step "alignment_stats_cleaned"
   --family-id "${og_id}"
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --input "alignment=${file_og_trimmed_aln_analysis}"
-  --output "amas=${file_og_amas_cleaned}"
-  --parameter "data_type=${amas_data_type}"
+  --output "alignment_stats=${file_og_alignment_stats_cleaned}"
+  --parameter "data_type=${alignment_stats_data_type}"
   --parameter "statistics_engine=cdskit-stats-alignment"
 )
-gg_artifact_prepare_stage amas_cleaned_needs_update run_amas_cleaned "${amas_cleaned_provenance_args[@]}" || exit $?
-if [[ ${amas_cleaned_needs_update} -eq 1 && ${run_amas_cleaned} -eq 1 ]]; then
+gg_artifact_prepare_stage alignment_stats_cleaned_needs_update run_alignment_stats_cleaned "${alignment_stats_cleaned_provenance_args[@]}" || exit $?
+if [[ ${alignment_stats_cleaned_needs_update} -eq 1 && ${run_alignment_stats_cleaned} -eq 1 ]]; then
   gg_step_start "${task}"
-  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.amas.cleaned.input.fasta"
+  seqkit seq --threads "${GG_TASK_CPUS}" "${file_og_trimmed_aln_analysis}" --out-file "${og_id}.alignment_stats.cleaned.input.fasta"
 
   cdskit stats \
     --mode alignment \
-    --seq_type "${amas_data_type}" \
-    --seq_file "${og_id}.amas.cleaned.input.fasta" \
-    --out_file "${og_id}.amas.cleaned.output.tsv"
+    --seq_type "${alignment_stats_data_type}" \
+    --seq_file "${og_id}.alignment_stats.cleaned.input.fasta" \
+    --out_file "${og_id}.alignment_stats.cleaned.output.tsv"
 
-  mv_out "${og_id}.amas.cleaned.output.tsv" "${file_og_amas_cleaned}"
-  rm -f -- "${og_id}.amas.cleaned.input.fasta"
-  gg_artifact_record "${amas_cleaned_provenance_args[@]}"
+  mv_out "${og_id}.alignment_stats.cleaned.output.tsv" "${file_og_alignment_stats_cleaned}"
+  rm -f -- "${og_id}.alignment_stats.cleaned.input.fasta"
+  gg_artifact_record "${alignment_stats_cleaned_provenance_args[@]}"
 else
   gg_step_skip "${task}"
 fi

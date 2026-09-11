@@ -179,7 +179,7 @@ partial artifacts. After an abrupt kill, any remaining live files override the
 older ZIP members and are consumed on the next rerun.
 
 Workspaces from releases that used dot-separated subdirectories and filenames
-(for example `amas.cleaned/HOG0000010.amas.cleaned.tsv`) are exposed through
+(for example `stat.branch/HOG0000010.stat.branch.tsv`) are exposed through
 the current underscore-based logical names. On rerun, only the selected
 family is materialized under the corresponding current directory, and the
 workflow accepts the historical uncompressed FASTA names as valid stage
@@ -879,9 +879,9 @@ tasks, so `GG_ARRAY_TASK_ID` can be used directly for resubmission.
 
 The summary adds one `1/0` completion column per visible output subdirectory
 under `workspace/output/query2family/`. It also appends cdskit-derived alignment
-statistics when `amas_original` or `amas_cleaned` outputs are present.
+statistics when `alignment_stats_original` or `alignment_stats_cleaned` outputs are present.
 See [alignment statistics](alignment-statistics.md) for the cdskit migration,
-retained output names, and DNA/protein semantics.
+updated output names, and DNA/protein semantics.
 
 For large query2family runs, inspect late-stage completion markers such as
 `tree_plot`, `stat_branch`, or `stat_tree`.

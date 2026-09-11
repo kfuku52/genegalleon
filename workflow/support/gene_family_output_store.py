@@ -96,8 +96,6 @@ ArchivedSourceSignature = Tuple[int, int, int, int, int, str]
 # without rewriting every ZIP up front.  Newly materialized/produced files use
 # the current names and therefore migrate incrementally during normal reruns.
 LEGACY_OUTPUT_PATH_RULES: Tuple[Tuple[str, str, str, str], ...] = (
-    ("amas.cleaned", ".amas.cleaned.tsv", "amas_cleaned", "_amas.cleaned.tsv"),
-    ("amas.original", ".amas.original.tsv", "amas_original", "_amas.original.tsv"),
     ("cds.fasta", ".cds.fasta", "cds_fasta", "_cds.fasta"),
     ("character.gff", ".gff.tsv", "character_gff_info", "_gff.tsv"),
     ("clipkit.log", ".cds.clipkit.log", "clipkit_log", "_cds.clipkit.log"),
@@ -2603,12 +2601,14 @@ class GeneFamilyOutputStore:
         logical_path: str,
         remove_live: bool = True,
         family_id: Optional[str] = None,
+        *,
+        _family_locked: bool = False,
     ) -> None:
         subdir, name = logical_path.split("/", 1)
         _safe_logical_path(subdir, name)
         equivalent_live_paths = [self.root / path for path in sorted(_equivalent_output_logical_paths(subdir, name))]
         family_id = self._managed_family_id(logical_path, family_id, "deletion")
-        family_context = family_bucket_lock(
+        family_context = contextlib.nullcontext(True) if _family_locked else family_bucket_lock(
             self.archive_root,
             family_id,
             exclusive=True,
