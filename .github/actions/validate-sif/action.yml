@@ -11,7 +11,7 @@ inputs:
     description: Security epoch used to build image-ref.
     default: ""
   validate-3di:
-    description: Run the real 3Di predictor integration tests after runtime validation.
+    description: Run independent real 3Di predictor integration tests in the verified SIF.
     default: "false"
 runs:
   using: composite
@@ -275,6 +275,7 @@ runs:
         } >> "${GITHUB_STEP_SUMMARY}"
 
     - name: Verify exact validation SIF identity
+      id: sif-identity
       shell: bash
       run: |
         GG_RUNTIME_FRESHNESS=off \
@@ -309,7 +310,9 @@ runs:
         bash workflow/tests/run_in_sif.sh python workflow/tests/run_checks.py runtime
 
     - name: Run real 3Di integration in SIF
-      if: inputs.validate-3di == 'true'
+      # A different runtime test must not hide this independent integration result.
+      # Preserve the earlier failure and never run against an unverified SIF.
+      if: ${{ !cancelled() && inputs.validate-3di == 'true' && steps.sif-identity.outcome == 'success' }}
       shell: bash
       env:
         GG_RUNTIME_FRESHNESS: "off"

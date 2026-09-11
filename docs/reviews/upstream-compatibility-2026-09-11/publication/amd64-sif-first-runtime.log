@@ -1,0 +1,57 @@
+Run: https://github.com/kfuku52/genegalleon/actions/runs/34600385282
+Job: 103266401156
+Selected build, identity-check, and runtime-test evidence; environment metadata omitted.
+
+2026-09-11T13:54:59.2891149Z #63 exporting manifest sha256:209def3657a6d95979efbf80f4705602ccc1534602217afc3c62719bf33ab838 done
+2026-09-11T13:54:59.2899450Z #63 exporting config sha256:af7b0474094c966e2c88102f02b66c53163a82198be7b87d128b3629a577130e done
+2026-09-11T14:17:32.6498667Z #65 DONE 1242.0s
+2026-09-11T14:31:58.6413858Z INFO:    Build complete: /home/runner/work/genegalleon/genegalleon/.gg-sif-build.01q26u/genegalleon.sif
+2026-09-11T14:31:58.8116202Z ##[end-action id=__self.__run_5;outcome=success;conclusion=success;duration_ms=156]
+2026-09-11T14:32:01.4037053Z [validation] /opt/conda/bin/python -m pytest -q --gg-suite=runtime --gg-strict-runtime
+2026-09-11T14:37:18.2784006Z ........................................................................ [ 28%]
+2026-09-11T14:37:53.8646872Z ........................................................................ [ 56%]
+2026-09-11T14:42:26.8255178Z .................................F...................................... [ 85%]
+2026-09-11T14:43:56.1842544Z ......................................                                   [100%]
+2026-09-11T14:43:56.1843531Z =================================== FAILURES ===================================
+2026-09-11T14:43:56.1844548Z ____ test_iqtree_stage_retains_profile_and_species_age_contract[GY+F3X4+R4] ____
+2026-09-11T14:43:56.1845080Z 
+2026-09-11T14:43:56.1845470Z tmp_path = PosixPath('/tmp/pytest-of-runner/pytest-0/test_iqtree_stage_retains_prof1')
+2026-09-11T14:43:56.1846215Z iqtree_model = 'GY+F3X4+R4'
+2026-09-11T14:43:56.1846462Z 
+2026-09-11T14:43:56.1846708Z     @pytest.mark.parametrize("iqtree_model", ["", "GY+F3X4+R4"])
+2026-09-11T14:43:56.1847508Z     def test_iqtree_stage_retains_profile_and_species_age_contract(tmp_path, iqtree_model):
+2026-09-11T14:43:56.1848703Z         result = _fixture(tmp_path, "gy94", "generax", engine="iqtree", iqtree_model=iqtree_model, use_defaults=not iqtree_model, iqtree_interface="cli")
+2026-09-11T14:43:56.1849775Z >       assert result.returncode == 0, result.stdout + result.stderr
+2026-09-11T14:43:56.1850465Z E       AssertionError: Number of leaves in input tree = 4, Input tree format = 1
+2026-09-11T14:43:56.1851143Z E         Number of leaves in input tree = 2, Input tree format = 1
+2026-09-11T14:43:56.1852074Z E         Number of leaves in input tree = 2, Input tree format = 1
+2026-09-11T14:43:56.1854410Z E         nwkit: error: Nonfinite IQ-TREE gradient export at lengths [5.81273e-13, 1.90681e-14, 0.00403528, 5.6041e-13, 1.81488e-12]; tree (T0:0.00000000000058127313847873863941600879454415303112,T1:0.00000000000001906806182439665919151209004897287340,(T2:0.00000000000056040981194927524984087643505657238879,T3:0.00000000000181488185356592381589487028952753137163):0.0040352757276513806158901864762356126448139548301697);.
+2026-09-11T14:43:56.1856883Z E         Number of leaves in input tree = 2, Input tree format = 1
+2026-09-11T14:43:56.1857364Z E         
+2026-09-11T14:43:56.1857627Z E       assert 2 == 0
+2026-09-11T14:43:56.1859117Z E        +  where 2 = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nsource /home/runner/work/genegalleon/genegalleon/workflow/sup...276513806158901864762356126448139548301697);.\n', stderr='Number of leaves in input tree = 2, Input tree format = 1\n').returncode
+2026-09-11T14:43:56.1860565Z 
+2026-09-11T14:43:56.1860813Z workflow/tests/test_native_tree_dating.py:208: AssertionError
+2026-09-11T14:43:56.1861675Z ----------------------------- Captured stderr call -----------------------------
+2026-09-11T14:43:56.1862805Z Number of leaves in input tree = 4, Input tree format = 1
+2026-09-11T14:43:56.1863366Z Number of leaves in input tree = 2, Input tree format = 1
+2026-09-11T14:43:56.1863928Z =============================== warnings summary ===============================
+2026-09-11T14:43:56.1864752Z workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+2026-09-11T14:43:56.1865826Z   <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+2026-09-11T14:43:56.1866491Z 
+2026-09-11T14:43:56.1866931Z workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+2026-09-11T14:43:56.1868004Z   <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+2026-09-11T14:43:56.1868665Z 
+2026-09-11T14:43:56.1869094Z workflow/tests/test_aster_ortools_runtime.py::test_aster_and_ortools_scip_load_in_the_same_runtime
+2026-09-11T14:43:56.1870167Z   <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-09-11T14:43:56.1871098Z 
+2026-09-11T14:43:56.1871591Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2026-09-11T14:43:56.1872261Z =========================== short test summary info ============================
+2026-09-11T14:43:56.1873171Z FAILED workflow/tests/test_native_tree_dating.py::test_iqtree_stage_retains_profile_and_species_age_contract[GY+F3X4+R4]
+2026-09-11T14:43:56.1874037Z 1 failed, 253 passed, 3 warnings in 713.90s (0:11:53)
+2026-09-11T14:43:56.6658424Z ##[error]Process completed with exit code 1.
+2026-09-11T14:43:56.6666648Z ##[end-action id=__self.__run_7;outcome=failure;conclusion=failure;duration_ms=717724]
+2026-09-11T14:43:56.6671185Z ##[start-action display=Run real 3Di integration in SIF;id=__self.__run_8]
+2026-09-11T14:43:56.6679389Z ##[end-action id=__self.__run_8;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-11T14:43:56.6682437Z ##[start-action display=Save validated SIF by exact runtime input;id=__self.__actions_cache]
+2026-09-11T14:43:56.6688597Z ##[end-action id=__self.__actions_cache;outcome=skipped;conclusion=skipped;duration_ms=0]

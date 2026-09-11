@@ -86,6 +86,10 @@ A fresh Python virtual environment installed the set with `--no-index`, passed
 production image was unchanged. This local wheel check used ARM64; hosted CI
 provides the separate AMD64 wheel and test-lane verification.
 
+The corrected [hosted run](https://github.com/kfuku52/genegalleon/actions/runs/34600385282)
+passed all ordinary CI lanes. Its fast Python lane passed 1,791 cases (5 skipped),
+the download/traits lane passed 85 (3 skipped), and the workflow-integration
+lane passed 53 (1 skipped).
 
 ## AMD64 build correction
 
@@ -94,5 +98,40 @@ external worker did not link the system zlib selected by CMake, causing
 undefined `gzread`/`gzopen` symbols. NWKIT's own build code is corrected in
 0.43.17; GeneGalleon continues to consume its moving source branch. Details and
 the original errors are recorded in the
-[NWKIT review](https://github.com/kfuku52/nwkit/tree/master/reviews/system-zlib-worker-2026-09-11).
+[NWKIT review](https://github.com/kfuku52/nwkit/tree/0032a7da1e895b15a054742c281fe6eb90400119/reviews/system-zlib-worker-2026-09-11).
 The initial failed job is not SIF execution evidence.
+
+NWKIT's [publication CI](https://github.com/kfuku52/nwkit/actions/runs/34600381463)
+passed both macOS jobs, but its full CI remains red on pre-existing failures:
+the archived shift-null audit fails on Linux (4,143 other tests passed) and in
+the quality lane (4,144 other tests passed), and Windows cannot collect a test
+that imports the Unix-only `resource` module. These failures also occurred
+before the zlib fix; the linked review records that comparison. They were not
+changed as part of this build correction.
+
+## First AMD64/SIF runtime execution
+
+Run [34600385282](https://github.com/kfuku52/genegalleon/actions/runs/34600385282)
+successfully built the corrected AMD64 runtime, converted it with SingularityCE
+4.5.0 and verified its exact runtime identity. Its OCI manifest digest was
+`sha256:209def3657a6d95979efbf80f4705602ccc1534602217afc3c62719bf33ab838`,
+and its runtime-input hash was
+`2da06a36a4fcb5cca38fe56857e475dbc0769cd411c0b3098bb5fbce5a23d8bb`.
+These are validation evidence, not source defaults.
+
+Inside the SIF, 253 runtime Python cases passed and one failed:
+`test_iqtree_stage_retains_profile_and_species_age_contract[GY+F3X4+R4]`.
+The standard IQ-TREE CLI exported a nonfinite gradient while the dating test
+evaluated branches near zero. NWKIT rejected the invalid derivative, as
+required. This is a dating/derivative failure, not a failure in a 3Di test;
+the evidence does not establish that it shares the cause of the previously
+documented ancestral-state NaNs. The same fixture passed in the ARM64 runtime.
+Selected build and runtime output is in `amd64-sif-first-runtime.log`.
+
+That failure stopped the remaining canonical validation commands, so the extra
+Python integration cases and R suite did not run in this SIF job. GitHub also
+skipped the subsequent dedicated real-predictor 3Di step. Version 0.7.108 makes
+that dedicated step independent of other test failures once the exact SIF
+identity has passed. Cancellation and identity failures still prevent it from
+running. The original failure remains fatal, and a failed validation does not
+save a validated-SIF cache. No numerical test was weakened or skipped.

@@ -646,3 +646,22 @@ def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():
     assert steps.index(identity) < steps.index(validate)
     assert "--expected-hash" in identity["run"]
     assert validate["env"]["GG_RUNTIME_FRESHNESS"] == "off"
+
+
+def test_real_3di_sif_check_remains_independent_of_other_runtime_failures():
+    job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    identity = named_step(job, "Verify exact validation SIF identity")
+    runtime = named_step(job, "Run SIF validation checks")
+    integration = named_step(job, "Run real 3Di integration in SIF")
+    save = named_step(job, "Save validated SIF by exact runtime input")
+    assert identity["id"] == "sif-identity"
+    assert integration["if"] == (
+        "${{ !cancelled() && inputs.validate-3di == 'true' "
+        "&& steps.sif-identity.outcome == 'success' }}"
+    )
+    assert "GG_TEST_CSUBST_3DI=1" in integration["run"]
+    assert "--gg-strict-runtime" in integration["run"]
+    # Independent execution must not make a failed suite or unvalidated cache green.
+    assert "continue-on-error" not in runtime
+    assert "continue-on-error" not in integration
+    assert not any(status in save["if"] for status in ("always()", "failure()", "cancelled()"))
