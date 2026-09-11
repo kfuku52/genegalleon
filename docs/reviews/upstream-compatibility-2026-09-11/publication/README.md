@@ -135,3 +135,23 @@ that dedicated step independent of other test failures once the exact SIF
 identity has passed. Cancellation and identity failures still prevent it from
 running. The original failure remains fatal, and a failed validation does not
 save a validated-SIF cache. No numerical test was weakened or skipped.
+
+## Independent AMD64/SIF 3Di result
+
+The subsequent [run 34612333698](https://github.com/kfuku52/genegalleon/actions/runs/34612333698)
+on GeneGalleon 0.7.108 verified the same exact runtime-input hash and then
+**passed both dedicated real-predictor 3Di integration cases** in the AMD64 SIF
+(136.63 seconds). These cover genetic codes 1 and 2, the full workflow bundle,
+direct search/scan parity, both sites routes, reports, relocation and offline
+cache reuse. Selected identity and test results are in `amd64-sif-3di.log`.
+
+All ordinary CI lanes also passed. The canonical SIF runtime suite again
+reported 253 passed and the same single nonfinite-gradient dating failure.
+The dedicated 3Di step ran successfully after that failure, demonstrating the
+independent execution condition in hosted CI. The overall SIF job remained
+failed and did not save a validated-SIF cache. The remaining canonical extra
+Python and R commands were still not reached in SIF; their ARM64 results above
+remain separate evidence. Neither the ancestral-state NaN limitation nor this
+distinct derivative failure was repaired or hidden by the publication work.
+
+Version 0.7.109 publishes this final evidence without further runtime changes.

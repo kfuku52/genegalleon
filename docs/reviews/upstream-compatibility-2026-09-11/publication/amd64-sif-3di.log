@@ -1,0 +1,13 @@
+Run: https://github.com/kfuku52/genegalleon/actions/runs/34612333698
+Source: c4428aa33439abf9ec2e91ba1bdfc61b41660564
+Selected identity and test outcome evidence; environment metadata omitted.
+
+2026-09-11T15:10:54.6555839Z [runtime freshness] /home/runner/work/genegalleon/genegalleon/genegalleon.sif has exact runtime input 2da06a36a4fcb5cca38fe56857e475dbc0769cd411c0b3098bb5fbce5a23d8bb.
+2026-09-11T15:10:54.6566669Z ##[end-action id=__self.sif-identity;outcome=success;conclusion=success;duration_ms=127]
+2026-09-11T15:23:33.3284874Z E         nwkit: error: Nonfinite IQ-TREE gradient export at lengths [5.81273e-13, 1.90681e-14, 0.00403528, 5.6041e-13, 1.81488e-12]; tree (T0:0.00000000000058127313847873863941600879454415303112,T1:0.00000000000001906806182439665919151209004897287340,(T2:0.00000000000056040981194927524984087643505657238879,T3:0.00000000000181488185356592381589487028952753137163):0.0040352757276513806158901864762356126448139548301697);.
+2026-09-11T15:23:33.3296648Z 1 failed, 253 passed, 3 warnings in 754.75s (0:12:34)
+2026-09-11T15:23:34.0428012Z ##[start-action display=Run real 3Di integration in SIF;id=__self.__run_7]
+2026-09-11T15:25:51.7860338Z 2 passed in 136.63s (0:02:16)
+2026-09-11T15:25:52.4860659Z ##[end-action id=__self.__run_7;outcome=success;conclusion=success;duration_ms=138443]
+2026-09-11T15:25:52.4863422Z ##[start-action display=Save validated SIF by exact runtime input;id=__self.__actions_cache]
+2026-09-11T15:25:52.4874027Z ##[end-action id=__self.__actions_cache;outcome=skipped;conclusion=skipped;duration_ms=0]
