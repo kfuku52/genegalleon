@@ -1,0 +1,44 @@
+{
+  "purpose": "development tuning of default budgets, not an adoption or speedup claim",
+  "tree": "balanced 1000 tips",
+  "true_shifts": 100,
+  "true_nonbaseline_regimes": 5,
+  "traits": [
+    1,
+    2
+  ],
+  "seed": 32101,
+  "alpha_height": [
+    3,
+    1.5
+  ],
+  "true_process_tip_variance": 1,
+  "true_measurement_variance": 0.2,
+  "known_sampling_variance": 0,
+  "estimate_alpha": true,
+  "estimate_process_variance": true,
+  "estimate_measurement_error": true,
+  "criterion": "AICc",
+  "convergence": true,
+  "max_shifts": "auto",
+  "baseline": {
+    "candidate_pool": 24,
+    "refit_budget": 48,
+    "screening_budget": 2000
+  },
+  "initial_expanded_proposal": {
+    "candidate_pool": 128,
+    "refit_budget": 256,
+    "screening_budget": 100000
+  },
+  "shared": {
+    "beam_width": 2,
+    "lasso_iterations": 150,
+    "search_memory_mb": 512
+  },
+  "limit_seconds": 3600,
+  "threads": 1,
+  "measurement": "sequential fresh processes; wall/CPU/peak RSS; no competing tests; failures/timeouts retained",
+  "warmup": "No explicit warmup; fresh-process startup is included. Repeat if timing is near the one-hour decision boundary.",
+  "adaptation": "Budget proposal may be adjusted after pilot measurements; retain every pilot and record rationale. No general accuracy superiority claim."
+}

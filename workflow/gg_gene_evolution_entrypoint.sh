@@ -282,10 +282,6 @@ native_ou_convergence=1 # Shared regimes and nested returns; requires auto/exhau
 native_ou_root_model="OUfixedRoot" # OUfixedRoot|OUrandomRoot.
 native_ou_estimate_measurement_error="yes" # yes|no; estimate extra observation variance beyond sampling SE.
 native_ou_search_strategy="auto" # auto|exhaustive|lasso|native-path; path requires convergence=0.
-native_ou_candidate_pool=24 # Maximum candidate branches retained by screening.
-native_ou_refit_budget=48 # Maximum unpenalized covariance/model refits per search.
-native_ou_screening_budget=2000 # Maximum cheap candidate-profile evaluations per search.
-native_ou_beam_width=2 # Retained forward-search layouts and refinement refits per seed.
 native_ou_replicate_separator="_" # Final suffix delimiter for replicate groups; empty keeps columns separate.
 
 # CSUBST options

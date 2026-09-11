@@ -557,6 +557,8 @@ def test_gene_evolution_core_uses_nwkit_ou_adapter():
     assert 'native_ou_convergence="${native_ou_convergence:-1}"' in text
     assert "kfl1ou" not in text
     assert "run_l1ou" not in text
+    for name in ("candidate_pool", "refit_budget", "screening_budget", "beam_width"):
+        assert "native_ou_" + name not in text
 
 
 def test_expression_matrix_allows_a_valid_no_data_result():

@@ -1,0 +1,4 @@
+{"elapsed": 43.959006812016014, "refits": 10, "last_shifts": 6, "last_groups": 4}
+{"elapsed": 91.1619722500327, "refits": 20, "last_shifts": 11, "last_groups": 4}
+{"elapsed": 134.80143485299777, "refits": 30, "last_shifts": 1, "last_groups": 2}
+{"complete": true, "seconds": 138.97119035501964, "selected_shifts": 13, "largest_fitted_shifts": 13, "refits": 31, "quick_evaluations": 2000}

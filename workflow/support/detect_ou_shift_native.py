@@ -167,8 +167,8 @@ def main(argv=None):
     parser.add_argument("--estimate-measurement-error", choices=["yes", "no"], default="yes")
     parser.add_argument("--root-model", choices=["OUfixedRoot", "OUrandomRoot"], default="OUfixedRoot")
     parser.add_argument("--search-strategy", choices=["auto", "exhaustive", "lasso", "native-path"], default="auto")
-    for flag, default in [("candidate-pool", 24), ("refit-budget", 48), ("screening-budget", 2000), ("beam-width", 2)]:
-        parser.add_argument("--" + flag, type=int, default=default)
+    for flag in ("candidate-pool", "refit-budget", "screening-budget", "beam-width"):
+        parser.add_argument("--" + flag, type=int, help="Optional override; omission uses the NWKIT default.")
     parser.add_argument("--alpha")
     parser.add_argument("--process-tip-variance")
     args = parser.parse_args(argv)

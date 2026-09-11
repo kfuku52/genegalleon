@@ -1,0 +1,12 @@
+{
+  "host_cpu": "Apple M2 Max",
+  "host_architecture": "arm64",
+  "container_image": "local/genegalleon:nwkit-ou-auto-dev",
+  "container_image_id": "sha256:40c8c0c545ca39445a57faac6ba8879e6e1075553426c9ee6d7a8205381b56f8",
+  "python": "3.12.14",
+  "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.39",
+  "machine": "aarch64",
+  "packages": {"numpy": "1.26.4", "scipy": "1.17.1", "pandas": "3.0.5", "ete4": "4.4.0"},
+  "threads": {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
+  "runtime_note": "GeneGalleon Docker runtime with frozen NWKIT Python source overlaid via PYTHONPATH; not SIF execution"
+}

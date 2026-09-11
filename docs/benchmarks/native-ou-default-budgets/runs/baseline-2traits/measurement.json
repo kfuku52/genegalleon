@@ -1,0 +1,20 @@
+{
+  "wall_seconds": 139.61465439700987,
+  "peak_rss_mib": 258.703125,
+  "user_seconds": 139.422879,
+  "system_seconds": 0.08391799999999999,
+  "timed_out": false,
+  "exit_code": 0,
+  "command": [
+    "/opt/conda/bin/python",
+    "/bench/native-ou-default-budgets/run_search.py",
+    "/bench/native-ou-default-budgets/data/1000tips-2traits",
+    "/bench/native-ou-default-budgets/runs/baseline-2traits/model.json",
+    "--candidate-pool",
+    "24",
+    "--refit-budget",
+    "48",
+    "--screening-budget",
+    "2000"
+  ]
+}

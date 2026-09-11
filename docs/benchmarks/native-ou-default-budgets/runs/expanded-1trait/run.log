@@ -1,0 +1,11 @@
+{"elapsed": 27.228242429031525, "refits": 10, "last_shifts": 6, "last_groups": 4}
+{"elapsed": 59.63273656903766, "refits": 20, "last_shifts": 11, "last_groups": 4}
+{"elapsed": 99.73621087899664, "refits": 30, "last_shifts": 16, "last_groups": 4}
+{"elapsed": 145.13089177501388, "refits": 40, "last_shifts": 21, "last_groups": 4}
+{"elapsed": 199.456921591016, "refits": 50, "last_shifts": 26, "last_groups": 4}
+{"elapsed": 260.40010370203527, "refits": 60, "last_shifts": 31, "last_groups": 4}
+{"elapsed": 331.14673431700794, "refits": 70, "last_shifts": 36, "last_groups": 4}
+{"elapsed": 406.7311674770317, "refits": 80, "last_shifts": 41, "last_groups": 41}
+{"elapsed": 429.4409041550243, "refits": 90, "last_shifts": 20, "last_groups": 4}
+{"elapsed": 451.9356728310231, "refits": 100, "last_shifts": 1, "last_groups": 2}
+{"complete": true, "seconds": 451.97242799802916, "selected_shifts": 41, "largest_fitted_shifts": 41, "refits": 100, "quick_evaluations": 100000}

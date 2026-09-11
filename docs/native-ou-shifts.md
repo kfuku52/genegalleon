@@ -29,10 +29,6 @@ native_ou_bootstrap_seed=2
 native_ou_root_model="OUfixedRoot"
 native_ou_estimate_measurement_error="yes"
 native_ou_search_strategy="auto"
-native_ou_candidate_pool=24
-native_ou_refit_budget=48
-native_ou_screening_budget=2000
-native_ou_beam_width=2
 native_ou_replicate_separator="_"
 treevis_branch_color="ou_native_regime"
 ```
@@ -41,9 +37,10 @@ treevis_branch_color="ou_native_regime"
 5,000-candidate exhaustive budget, otherwise using beam/local search with
 shared regimes and nested returns. `native_ou_max_shifts="auto"` starts at the
 structural limit of N−2 for N tips. For beam search it is capped further by
-`native_ou_candidate_pool` and `native_ou_refit_budget−1`. With default budgets,
-a 1,000-tip tree therefore permits at most 24 shifts. Raise these budgets when
-more coverage is needed, or set an explicit integer cap. AICc chooses the final
+NWKIT's candidate pool and refit budget minus one. GeneGalleon omits candidate,
+refit, screening and beam-width options so the installed NWKIT version supplies
+their defaults. These budgets are recorded in the NWKIT model configuration.
+An explicit `native_ou_max_shifts` integer still sets the requested shift cap. AICc chooses the final
 model among evaluated candidates; the automatic cap is not an estimate of the
 true number of shifts. The model JSON records the requested and resolved limits
 and whether a computational budget reduced the cap.
@@ -61,6 +58,15 @@ The last uses the experimental sequential plug-in bootstrap with
 error guarantee. Positive `native_ou_bootstrap` repeats the entire selected
 procedure for stability frequencies, including inner calibration when
 `native_ou_criterion="bootstrap"`.
+
+Former `native_ou_candidate_pool`, `native_ou_refit_budget`,
+`native_ou_screening_budget` and `native_ou_beam_width` entrypoint settings are
+removed. For a standalone reproduction, the Python adapter still accepts explicit
+`--candidate-pool`, `--refit-budget`, `--screening-budget` and `--beam-width`
+overrides; omitted options inherit NWKIT defaults. Computational budgets are
+not wall-clock deadlines: larger trees, more traits and resampling add cost.
+See the [budget measurements](benchmarks/native-ou-default-budgets/README.md)
+for the paired 1,000-tip runs used to tune NWKIT defaults.
 
 ## Migration from kfl1ou
 

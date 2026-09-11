@@ -1,0 +1,12 @@
+[
+  {
+    "traits": 1,
+    "shared_layouts": 27,
+    "max_log_likelihood_difference": 0.0
+  },
+  {
+    "traits": 2,
+    "shared_layouts": 20,
+    "max_log_likelihood_difference": 0.0
+  }
+]

@@ -133,6 +133,14 @@ def test_native_core_stage_executes_real_adapter_and_publishes_complete_bundle(t
         "og_id": "family",
     }
     if use_defaults:
+        # A small complete space checks default dispatch/publication; the large
+        # convergence workload is measured separately in the budget benchmark.
+        (tmp_path / "tree.nwk").write_text("((a:1,b:1):1,(c:1,d:1):1);")
+        # One observation per trait avoids known replicate variance overwhelming
+        # the residual process variance in this four-tip smoke fixture.
+        table = pd.DataFrame(np.random.default_rng(78).normal(size=(4, 2)), columns=["root", "leaf"])
+        table.insert(0, "gene", list("abcd"))
+        table.to_csv(tmp_path / "traits.tsv", sep="\t", index=False)
         variables.pop("native_ou_max_shifts")
         variables.pop("native_ou_convergence")
     script = "set -euo pipefail\n" + "\n".join(f"{name}={shlex.quote(value)}" for name, value in variables.items())
@@ -149,12 +157,13 @@ mv_out_bundle() {
 task="native test"
 """
     script += stage
-    subprocess.run(["bash", "-c", script], cwd=tmp_path, check=True, capture_output=True, text=True)
+    completed = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
     model = json.loads((tmp_path / "published" / "family.model.json").read_text())
     if use_defaults:
         assert model["configuration"]["max_shifts"] == "auto"
         assert model["configuration"]["convergence"]
-        assert model["search"]["shift_limit"]["resolved"] == 6
+        assert model["search"]["shift_limit"]["resolved"] == 2
         assert any(len(row["groups"]) < len(row["shift_branch_ids"]) + 1 for row in model["candidates"])
     else:
         assert model["shift_branch_ids"] == []
@@ -200,3 +209,30 @@ def test_empty_traits_fail_without_publishing_model(tmp_path):
     with pytest.raises(ValueError, match="at least one trait"):
         main(args)
     assert not (tmp_path / "result.model.json").exists()
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_adapter_omits_budget_flags_unless_explicitly_requested(tmp_path, monkeypatch, override):
+    import nwkit.cli
+    from nwkit.shift_native_heuristic import NativeSearchOptions
+
+    captured = []
+    original = nwkit.cli.main
+
+    def recording_main(command):
+        captured.extend(command)
+        return original(command)
+
+    monkeypatch.setattr(nwkit.cli, "main", recording_main)
+    args = inputs(tmp_path)
+    args[args.index("--max-shifts") + 1] = "0"
+    overrides = {"candidate_pool": 3, "refit_budget": 8, "screening_budget": 20, "beam_width": 1}
+    if override:
+        for name, value in overrides.items():
+            args.extend(["--" + name.replace("_", "-"), str(value)])
+    main(args)
+    model = json.loads((tmp_path / "result.model.json").read_text())
+    defaults = NativeSearchOptions()
+    for name, value in overrides.items():
+        assert (("--" + name.replace("_", "-")) in captured) == override
+        assert model["configuration"][name] == (value if override else getattr(defaults, name))
