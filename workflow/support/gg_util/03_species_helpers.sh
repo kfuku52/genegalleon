@@ -288,7 +288,7 @@ gg_find_species_files_by_label() {
     if gg_species_file_matches_label "${file}" "${species_name}"; then
       printf '%s\n' "${file}"
     fi
-  done < <(find "${search_dir}" -maxdepth 1 -type f ! -name '.*' | sort)
+  done < <(find -H "${search_dir}" -maxdepth 1 -type f ! -name '.*' | sort)
 }
 
 gg_orthogroup_file_matches_id() {

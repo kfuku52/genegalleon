@@ -197,7 +197,8 @@ def test_transcriptome_core_can_recover_public_original_fastqs_after_getfastq_fa
     assert "response.read(DOWNLOAD_CHUNK_BYTES)" in body
     assert "return response.read()" not in body
     assert "is_valid_fastq_gzip(part)" in body
-    assert 'dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)' in body
+    assert 'source_layout = public_fastq_layout(run, fastq_files)' in body
+    assert 'dest = run_dir / destination_name' in body
     assert 'print("Reusing validated fallback FASTQ for {}: {}".format(run, dest))' in body
     assert '".{}.download.part".format(dest.name)' in body
     assert '"Range": "bytes={}-".format(resume_offset)' in body

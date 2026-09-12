@@ -2038,6 +2038,16 @@ detect_transcriptome_read_technology_from_metadata() {
   source "${summary_sh}"
 }
 
+find_paired_companion_fastqs() {
+  local left_fastq companion
+  for left_fastq in "$@"; do
+    companion="${left_fastq%_1.amalgkit.fastq.gz}.amalgkit.fastq.gz"
+    if [[ -f "${companion}" && ! -L "${companion}" ]]; then
+      printf '%s\n' "${companion}"
+    fi
+  done
+}
+
 load_classified_getfastq_files() {
   local classification_tsv="$1"
   local run=""
@@ -2097,7 +2107,8 @@ load_classified_getfastq_files() {
         if [[ -n "${left_fastq}" && -n "${right_fastq}" ]]; then
           classified_short_left_fastq_files+=( "${left_fastq}" )
           classified_short_right_fastq_files+=( "${right_fastq}" )
-        elif [[ -n "${single_fastq}" ]]; then
+        fi
+        if [[ -n "${single_fastq}" ]]; then
           classified_short_single_fastq_files+=( "${single_fastq}" )
         fi
         ;;
@@ -2288,6 +2299,26 @@ def sort_key(item):
     return (2, name)
 
 
+def public_fastq_layout(run: str, files):
+    """Return source/destination pairs without guessing roles in ENA triplets."""
+    if len(files) == 3:
+        by_name = {item[0]: item for item in files}
+        names = [run + "_1.fastq.gz", run + "_2.fastq.gz", run + ".fastq.gz"]
+        if len(by_name) != 3 or set(by_name) != set(names):
+            raise SystemExit("Ambiguous public FASTQ triplet for run: {}".format(run))
+        return [
+            (by_name[name], name.replace(".fastq.gz", ".amalgkit.fastq.gz"))
+            for name in names
+        ]
+    if len(files) not in {1, 2}:
+        raise SystemExit("Unexpected number of public FASTQ files for run {}: {}".format(run, len(files)))
+    return [
+        (item, "{}.amalgkit.fastq.gz".format(run) if len(files) == 1
+         else "{}_{}.amalgkit.fastq.gz".format(run, index))
+        for index, item in enumerate(sorted(files, key=sort_key), start=1)
+    ]
+
+
 def fastq_metrics(path: Path) -> tuple[int, int]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         raise ValueError("FASTQ is missing, empty, or a symbolic link: {}".format(path))
@@ -2381,6 +2412,14 @@ def manifest_file_contract(path: Path) -> dict:
 
 
 def write_quant_stats(run: str, fastq_paths: list[Path]) -> dict:
+    # Amalgkit quant uses the mates for a paired run. Keep its statistics
+    # aligned with that input; the companion singleton is retained for assembly.
+    if len(fastq_paths) == 3:
+        by_name = {path.name: path for path in fastq_paths}
+        names = [run + "_1.amalgkit.fastq.gz", run + "_2.amalgkit.fastq.gz"]
+        if set(by_name) != set(names + [run + ".amalgkit.fastq.gz"]):
+            raise SystemExit("Fallback FASTQ layout is unsupported for run: {}".format(run))
+        fastq_paths = [by_name[name] for name in names]
     metrics = [fastq_metrics(path) for path in fastq_paths]
     if len(metrics) not in {1, 2}:
         raise SystemExit("Fallback FASTQ layout is unsupported for run: {}".format(run))
@@ -2978,6 +3017,8 @@ if recovery_mode == "reuse-only":
                 "{}_2.amalgkit.fastq.gz".format(run),
             ]
         )
+        if len(names) == 3:
+            expected_names.append("{}.amalgkit.fastq.gz".format(run))
         if sorted(names) != sorted(expected_names):
             raise SystemExit("The public-original FASTQ layout is ambiguous for offline migration: {}".format(run))
         previous_runs.append(run)
@@ -3009,13 +3050,20 @@ for run in runs:
         run_dir / "{}_2.amalgkit.fastq.gz".format(run),
     ]
     present_paired = [path for path in existing_paired if path.exists() or path.is_symlink()]
-    if (existing_single.exists() or existing_single.is_symlink()) and present_paired:
-        raise SystemExit("Existing fallback FASTQ set mixes single and paired layouts for run: {}".format(run))
+    has_single = existing_single.exists() or existing_single.is_symlink()
+    fastq_files = metadata_fastq_files(rows_by_run[run])
+    if has_single and present_paired and fastq_files and len(fastq_files) != 3:
+        raise SystemExit("Existing fallback FASTQ set conflicts with the public layout for run: {}".format(run))
     existing_fastqs = []
-    if existing_single.exists() or existing_single.is_symlink():
+    if fastq_files:
+        # Metadata may advertise a third file even when both mates are cached.
+        expected_paths = [run_dir / name for _, name in public_fastq_layout(run, fastq_files)]
+        if all(path.exists() or path.is_symlink() for path in expected_paths):
+            existing_fastqs = expected_paths
+    elif has_single and not present_paired:
         existing_fastqs = [existing_single]
     elif len(present_paired) == 2:
-        existing_fastqs = existing_paired
+        existing_fastqs = existing_paired + ([existing_single] if has_single else [])
     if existing_fastqs:
         invalid_fastqs = [path for path in existing_fastqs if not is_valid_fastq_gzip(path)]
         if invalid_fastqs:
@@ -3037,7 +3085,6 @@ for run in runs:
             })
             continue
 
-    fastq_files = metadata_fastq_files(rows_by_run[run])
     if not fastq_files:
         if recovery_mode == "reuse-only":
             raise SystemExit("Offline migration cannot retrieve a missing FASTQ for run: {}".format(run))
@@ -3046,17 +3093,13 @@ for run in runs:
         fastq_files = ena_fastq_files(run)
     if not fastq_files:
         raise SystemExit("No supported public FASTQ URLs were found for run: {}".format(run))
-    if len(fastq_files) > 2:
-        raise SystemExit("Unexpected number of public FASTQ files for run {}: {}".format(run, len(fastq_files)))
-
-    fastq_files.sort(key=sort_key)
+    source_layout = public_fastq_layout(run, fastq_files)
+    if has_single and present_paired and len(source_layout) != 3:
+        raise SystemExit("Existing fallback FASTQ set conflicts with the public layout for run: {}".format(run))
     completed_files = []
 
-    for idx, (filename, url, expected_md5, provider) in enumerate(fastq_files, start=1):
-        if len(fastq_files) == 1:
-            dest = run_dir / "{}.amalgkit.fastq.gz".format(run)
-        else:
-            dest = run_dir / "{}_{}.amalgkit.fastq.gz".format(run, idx)
+    for (filename, url, expected_md5, provider), destination_name in source_layout:
+        dest = run_dir / destination_name
         if dest.exists() or dest.is_symlink():
             if not is_valid_fastq_gzip(dest):
                 raise SystemExit("Existing fallback FASTQ is invalid; refusing to replace it: {}".format(dest))
@@ -3753,7 +3796,7 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
       echo "Paired-end samples were not detected. SE reads will be used for transcriptome assembly."
       lib_layout='single'
     else
-      echo "Paired-end samples were detected. PE reads will be used for transcriptome assembly and SE reads, if any, will not be used."
+      echo "Paired-end samples were detected. PE reads and their same-run unpaired companions will be used; independent SE libraries will not be used."
       lib_layout='paired'
     fi
 
@@ -3787,6 +3830,10 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
             echo "${file1}"
             cp_out "${file2}" "${selected_fastq_dir}"
             echo "${file2}"
+            while IFS= read -r companion; do
+              cp_out "${companion}" "${selected_fastq_dir}"
+              echo "${companion}"
+            done < <(find_paired_companion_fastqs "${file1}")
           done
         fi
       else
@@ -3803,7 +3850,10 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
     elif [[ ${lib_layout} == 'paired' ]]; then
       total_fastq_len1=$(get_total_fastq_len "${selected_fastq_dir}" "*_1.amalgkit.fastq.gz")
       total_fastq_len2=$(get_total_fastq_len "${selected_fastq_dir}" "*_2.amalgkit.fastq.gz")
-      total_fastq_len=$((${total_fastq_len1} + ${total_fastq_len2}))
+      mapfile -t selected_left < <(find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
+      mapfile -t selected_companions < <(find_paired_companion_fastqs "${selected_left[@]}")
+      total_fastq_len_unpaired=$(get_total_fastq_len_from_files "${selected_companions[@]}")
+      total_fastq_len=$((${total_fastq_len1} + ${total_fastq_len2} + ${total_fastq_len_unpaired}))
     fi
     max_assembly_input_fastq_size="${max_assembly_input_fastq_size//,/}"
     if [[ ${total_fastq_len} -gt ${max_assembly_input_fastq_size} ]]; then
@@ -3822,7 +3872,7 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
       elif [[ ${lib_layout} == 'paired' ]]; then
         mapfile -t files1 < <(find "${selected_fastq_dir}" -type f -name "*_1.amalgkit.fastq.gz" | sort)
         mapfile -t files2 < <(find "${selected_fastq_dir}" -type f -name "*_2.amalgkit.fastq.gz" | sort)
-        files=("${files1[@]}" "${files2[@]}")
+        files=("${files1[@]}" "${files2[@]}" "${selected_companions[@]}")
       fi
       for file in "${files[@]}"; do
         seqkit sample --proportion "${proportion}" --rand-seed 11 --out-file "${assembly_input_fastq_dir}/$(basename "${file}")" "${file}"
@@ -3853,6 +3903,18 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
       if ! filter_valid_paired_fastq_files "${dir_tmp}/paired_fastq_validation.tsv"; then
         exit 1
       fi
+      mapfile -t files_unpaired < <(find_paired_companion_fastqs "${files_left[@]}")
+      files_single=()
+      for file in "${files_unpaired[@]}"; do
+        if ! companion_count=$(fastq_num_seqs_from_file "${file}"); then
+          exit 1
+        fi
+        if [[ ${companion_count} -gt 0 ]]; then
+          files_single+=("${file}")
+        else
+          echo "Unpaired companion has no reads after sampling: ${file}"
+        fi
+      done
     fi
 
     if [[ "${effective_assembly_method}" == 'trinity' ]]; then
@@ -3864,7 +3926,10 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
       elif [[ ${lib_layout} == 'paired' ]]; then
         in_left="$(
           IFS=","
-          echo "${files_left[*]}"
+          # Trinity's non-stranded mixed-input contract puts unpaired reads
+          # alongside the left reads; it does not accept --single with --left.
+          trinity_left=("${files_left[@]}" "${files_single[@]}")
+          echo "${trinity_left[*]}"
         )"
         in_right="$(
           IFS=","
@@ -3916,6 +3981,9 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
           for i in "${!files_left[@]}"; do
             rnaspades_input_args+=(--pe1-1 "${files_left[i]}" --pe1-2 "${files_right[i]}")
           done
+          for file in "${files_single[@]}"; do
+            rnaspades_input_args+=(--pe1-s "${file}")
+          done
         fi
       elif [[ ${protocol_rna_seq} == "mixed" ]]; then
         if [[ ${lib_layout} == 'single' ]]; then
@@ -3927,6 +3995,12 @@ if [[ ${assembly_needs_update} -eq 1 && ${run_assembly} -eq 1 ]]; then
           for i in "${!files_left[@]}"; do
             j=$((i + 1))
             rnaspades_input_args+=("--pe${j}-1" "${files_left[i]}" "--pe${j}-2" "${files_right[i]}")
+            companion="${files_left[i]%_1.amalgkit.fastq.gz}.amalgkit.fastq.gz"
+            for file in "${files_single[@]}"; do
+              if [[ "${file}" == "${companion}" ]]; then
+                rnaspades_input_args+=("--pe${j}-s" "${file}")
+              fi
+            done
           done
         fi
       else

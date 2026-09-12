@@ -343,6 +343,34 @@ publishes the completed file. A server that ignores Range is handled as a full
 restart; a checksum mismatch or non-FASTQ response is never appended to the
 saved partial file.
 
+### ENA returns three FASTQ files for one run
+
+The public-original fallback accepts ENA's `RUN_1.fastq.gz`,
+`RUN_2.fastq.gz`, and `RUN.fastq.gz` layout: two mates and their unpaired
+companion. It identifies these roles by filename, independent of URL order,
+and retains all three in the completion manifest. An incomplete cached set
+is completed from the metadata URLs; arbitrary three-file layouts remain an
+error rather than being assigned guessed mate roles.
+
+Short-read assembly includes the companion with its selected paired library,
+including the input-base limit, subsampling, and rnaSPAdes's nine-library
+selection. rnaSPAdes receives it through `--peN-s`; the non-stranded Trinity
+invocation includes it with the left inputs. Independent single-end libraries
+remain excluded when paired libraries are selected. Amalgkit quant continues
+to consume the mates of a paired run, so its fallback statistics describe
+those mates rather than adding companion bases to the inferred read length.
+
+See the [ENA file layout](https://ena-docs.readthedocs.io/en/latest/retrieval/file-download/archive-generated-files.html),
+[SPAdes input options](https://ablab.github.io/spades/running.html), and
+[Trinity mixed-input guidance](https://github.com/trinityrnaseq/trinityrnaseq/wiki/Running-Trinity).
+
+### A species reference exists behind an input-directory link
+
+Species-file lookup follows the starting input directory when it is a symbolic
+link, as with generated `species_cds` inputs. It still searches only immediate
+regular files, excludes hidden files and child symbolic links, and applies the
+same species-label matching rules. It does not recursively search the target.
+
 ### `gg_genome_evolution` protein mode does not behave as expected
 
 Symptoms:
