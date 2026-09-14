@@ -2,3 +2,7 @@ database	acquisition_mode	uri	species_column	delimiter	response_format	archive_m
 austraits	bulk	https://zenodo.org/api/records/15718081/files/austraits-7.0.0.zip/content	taxon_name	csv		austraits-7.0.0/traits.csv	trait_name											""
 eltontraits	bulk	https://ndownloader.figshare.com/files/5631081,https://ndownloader.figshare.com/files/5631084	Scientific	tab														""
 gift	gift_api	https://gift.uni-goettingen.de/api/extended/	species	tsv				latest		10000		1	1	0.66		reuse	2	""
+bien	public_plant_traits		species				trait_key											""
+brot	public_plant_traits		species				trait_key											""
+cpt	public_plant_traits		species				trait_key											""
+algaetraits	public_plant_traits		species				trait_key											""

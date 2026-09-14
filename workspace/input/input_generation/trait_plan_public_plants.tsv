@@ -1,0 +1,7 @@
+database	source_column	output_trait	value_type	aggregation	positive_values	trait_key	trait_key_column
+brot	value	brot_height_m	numeric	median		Height|quantitative|m	trait_key
+brot	value	brot_growth_form	categorical	mode		GrowthForm|categorical|[13]	trait_key
+cpt	value	cpt_life_form	categorical	mode		functional:Life form	trait_key
+cpt	value	cpt_photosynthesis_pathway	categorical	mode		pathway:Photo_Path	trait_key
+algaetraits	value	algaetraits_life_cycle	text	unique		84|Life cycle	trait_key
+bien	value	bien_stem_wood_density_g_cm3	numeric	median		stem wood density|g.cm-3	trait_key

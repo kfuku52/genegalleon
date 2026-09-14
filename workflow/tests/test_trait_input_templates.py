@@ -34,7 +34,7 @@ def test_trait_database_sources_template_has_required_columns():
     required = {"database", "acquisition_mode"}
     assert required.issubset(set(fieldnames))
     assert len(rows) > 0
-    allowed_modes = {"bulk", "species_api", "gift_api"}
+    allowed_modes = {"bulk", "species_api", "gift_api", "public_plant_traits"}
     for row in rows:
         mode = str(row.get("acquisition_mode", "")).strip()
         assert mode in allowed_modes

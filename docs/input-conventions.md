@@ -661,7 +661,8 @@ Latest template distribution:
   the per-record grouping audit records `excluded_anonymous_unmapped`, while
   named, ambiguous, and wrong-file mismatches remain errors,
 - can optionally generate `workspace/input/species_trait/species_trait.tsv`
-  from configured trait databases.
+  from configured trait databases. See [public plant trait sources](public-plant-traits.md)
+  for BROT, CPT, AlgaeTraits and BIEN acquisition and source-specific limits.
 
 Configuration:
 

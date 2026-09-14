@@ -30,6 +30,7 @@ from gbif_observations import effective_config as gbif_effective_config
 from gbif_observations import fetch_gbif_distribution_table as _fetch_gbif_distribution_table
 from gbif_observations import input_identity as gbif_input_identity
 from gift_retrieval import GiftRetrieval, load_reviewed_mappings
+from public_plant_traits import load_public_traits
 from species_labeling import base_species_label, species_label_from_taxonomic_text
 from species_trait_contract import sidecar_paths, trait_bundle_payloads
 from species_trait_schema import schema_path, schema_payload
@@ -57,10 +58,13 @@ SUPPORTED_DATABASES = {
         "notes": "Resolve species in the GBIF backbone and summarize no-login occurrence-search coordinates.",
     },
     "bien": {
-        "acquisition_mode": "species_api",
+        "acquisition_mode": "public_plant_traits",
         "scope": "target_species_only",
-        "notes": "Species-level retrieval via API/package layer is expected.",
+        "notes": "Anonymous BIEN CSV species download; unit-qualified trait keys.",
     },
+    **{name: {"acquisition_mode": "public_plant_traits", "scope": "target_species_only",
+              "notes": "Anonymous acquisition; normalized observations and source receipts."}
+       for name in ("brot", "cpt", "algaetraits")},
     "eol_traitbank": {
         "acquisition_mode": "species_api",
         "scope": "target_species_only",
@@ -1187,6 +1191,8 @@ def load_database_table(
         raise ValueError("GBIF occurrence acquisition must use database=gbif so observation roles and quality cannot be lost")
     if database == "gbif" and acquisition_mode != "gbif_distribution":
         raise ValueError("GBIF observations require acquisition_mode=gbif_distribution; use gbif_occurrence_file for local exports")
+    if acquisition_mode == "public_plant_traits":
+        return load_public_traits(database, config, species, downloads_dir, timeout, dry_run)
     if acquisition_mode == "bulk":
         return load_bulk_database(
             database=database,
@@ -1662,7 +1668,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     input_paths = [manifest_path, trait_plan_path, db_sources_path, Path(__file__),
                    SCRIPT_DIR / "gift_retrieval.py", SCRIPT_DIR / "gift_species_mappings.tsv",
-                   SCRIPT_DIR / "species_trait_schema.py"]
+                   SCRIPT_DIR / "species_trait_schema.py", SCRIPT_DIR / "public_plant_traits.py"]
     for config in source_rows.values():
         if config.get("gift_species_mapping_file"):
             input_paths.append(Path(config["gift_species_mapping_file"]))
@@ -1673,7 +1679,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     gbif_config = apply_gbif_cli_overrides(source_rows.get("gbif", {}), args)
     input_paths.extend(Path(gbif_config[key]).expanduser() for key in ("gbif_occurrence_file", "gbif_taxon_map", "gbif_download_metadata") if gbif_config.get(key))
     input_paths.extend([SCRIPT_DIR / "gbif_observations.py", SCRIPT_DIR / "species_trait_contract.py"])
-    protected_directories = [downloads_dir / "gift", downloads_dir / "gbif"]
+    protected_directories = [downloads_dir / name for name in ("gift", "gbif", "bien", "brot", "cpt", "algaetraits")]
     if args.species_source == "species_cds":
         protected_directories.append(species_cds_dir)
     try:
