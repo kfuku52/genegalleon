@@ -737,11 +737,10 @@ def _ensure_branch_ids(tree):
                 node_mask |= node_label_sum[child]
             node_label_sum[node] = node_mask
     branch_ids = [node_label_sum[node] for node in nodes]
-    argsort_labels = numpy.argsort(branch_ids)
-    label_ranks = numpy.empty_like(argsort_labels)
-    label_ranks[argsort_labels] = numpy.arange(len(argsort_labels))
-    for i, node in enumerate(nodes):
-        _set_node_prop(node, "branch_id", int(label_ranks[i]))
+    sorted_node_indices = sorted(range(len(nodes)), key=lambda idx: branch_ids[idx])
+    rank_by_node_index = {node_index: rank for rank, node_index in enumerate(sorted_node_indices)}
+    for node_index, node in enumerate(nodes):
+        _set_node_prop(node, "branch_id", rank_by_node_index[node_index])
     return tree
 
 
@@ -916,11 +915,10 @@ def main():
                     node_mask |= node_label_sum[child]
                 node_label_sum[node] = node_mask
         branch_ids = [node_label_sum[node] for node in nodes]
-        argsort_labels = numpy.argsort(branch_ids)
-        label_ranks = numpy.empty_like(argsort_labels)
-        label_ranks[argsort_labels] = numpy.arange(len(argsort_labels))
-        for i, node in enumerate(nodes):
-            set_node_prop(node, "branch_id", int(label_ranks[i]))
+        sorted_node_indices = sorted(range(len(nodes)), key=lambda idx: branch_ids[idx])
+        rank_by_node_index = {node_index: rank for rank, node_index in enumerate(sorted_node_indices)}
+        for node_index, node in enumerate(nodes):
+            set_node_prop(node, "branch_id", rank_by_node_index[node_index])
         return tree
 
     def get_leaf_names_compat(node):
