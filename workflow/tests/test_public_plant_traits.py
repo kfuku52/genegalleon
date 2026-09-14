@@ -1,11 +1,12 @@
 import io
 import json
+import sys
 from pathlib import Path
 from urllib.error import HTTPError
 
 import pandas as pd
 import pytest
-import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 import public_plant_traits as p
 
@@ -119,8 +120,8 @@ def test_generator_dispatches_and_publishes_schema(tmp_path):
     source.write_text('ID,Taxon,Trait,Data,Units,DataType,SourceID\n1,Quercus robur,Height,4,m,quantitative,paper\n')
     # Exercise anonymous HTTP acquisition through the complete generator CLI.
     import threading
-    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
     from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
