@@ -62,7 +62,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 9
+CDS_GFF_GROUPING_AUDIT_VERSION = 10
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -588,7 +588,10 @@ def build_formatted_cds_id(task, header):
 def prepare_cds_identifier_task(task):
     prepared = dict(task)
     if task.get("cds_path") is not None and task.get("gff_path") is not None:
-        prepared["_gff_cds_grouping_index"] = build_gff_cds_grouping_index(task)
+        grouping_index = build_gff_cds_grouping_index(task)
+        prepared["_gff_cds_grouping_index"] = grouping_index
+        prepared["_organelle_seqids"] = grouping_index.get("organelle_seqids", ())
+        prepared["_organelle_aliases"] = grouping_index.get("organelle_aliases", ())
     if task.get("provider") == "coge" and task.get("gff_path") is not None:
         prepared["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
     return prepared
@@ -662,7 +665,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     }
     raw_gff_tokens_by_gene_id = defaultdict(set)
     audit_rows = []
-    for header, sequence in iter_task_cds_records(task):
+    for header, sequence in iter_task_cds_records(cds_task):
         before_count += 1
         transcript_id = build_formatted_cds_id(cds_task, header)
         gene_id, gff_match = resolve_gene_aggregate_id(cds_task, header, transcript_id)

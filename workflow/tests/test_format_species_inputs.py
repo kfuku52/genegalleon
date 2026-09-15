@@ -1339,7 +1339,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 9
+    assert audit["version"] == 10
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -2608,7 +2608,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 9
+    assert audit["version"] == 10
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -2651,7 +2651,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 9
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 10
     assert skipped["status"] == "skip"
 
 

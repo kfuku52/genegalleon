@@ -281,6 +281,7 @@ def build_gff_cds_grouping_index(task):
     cds_features_by_transcript = defaultdict(list)
     organelle_seqids = gff_organelle_seqids(gff_path)
     organelle_cds_features = 0
+    organelle_aliases = set()
 
     with open_text(gff_path, "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
@@ -292,6 +293,13 @@ def build_gff_cds_grouping_index(task):
                 continue
             seqid, _source, feature_type, start_text, end_text, _score, strand, _phase, attr_text = parts[:9]
             if str(seqid or "").strip() in organelle_seqids:
+                organelle_attrs = parse_gff_attributes(attr_text)
+                for alias_key in ("ID", "Parent", "transcript_id", "protein_id", "orig_transcript_id", "orig_protein_id"):
+                    organelle_aliases.update(
+                        str(value).strip()
+                        for value in organelle_attrs.get(alias_key, ())
+                        if str(value).strip() != ""
+                    )
                 if str(feature_type or "").strip().lower() == "cds":
                     organelle_cds_features += 1
                 continue
@@ -557,6 +565,7 @@ def build_gff_cds_grouping_index(task):
         ),
         "organelle_seqids": tuple(sorted(organelle_seqids)),
         "organelle_cds_features": organelle_cds_features,
+        "organelle_aliases": tuple(sorted(organelle_aliases)),
     }
 
 

@@ -140,12 +140,16 @@ def build_derived_genome_output_basename(task):
 def iter_task_cds_records(task):
     cds_path = task.get("cds_path")
     if cds_path is not None:
-        organelle_seqids = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
-        organelle_aliases = (
-            gff_organelle_aliases(task["gff_path"], organelle_seqids)
-            if task.get("gff_path") is not None
-            else ()
-        )
+        organelle_seqids = task.get("_organelle_seqids")
+        organelle_aliases = task.get("_organelle_aliases")
+        if organelle_seqids is None:
+            organelle_seqids = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
+        if organelle_aliases is None:
+            organelle_aliases = (
+                gff_organelle_aliases(task["gff_path"], organelle_seqids)
+                if task.get("gff_path") is not None
+                else ()
+            )
         for header, sequence in iter_fasta_records(cds_path):
             if fasta_header_is_organelle(header, organelle_seqids, organelle_aliases):
                 continue
