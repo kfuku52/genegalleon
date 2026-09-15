@@ -21,11 +21,49 @@ CONTEXT_COLUMNS = [f"host_scaffold_{background}{rank}_{metric}"
 GENE_COLUMNS = ["host_scaffold_status", "host_scaffold_id", "host_scaffold_locus_id",
                 "host_scaffold_count_unit", *CONTEXT_COLUMNS]
 BRANCH_COLUMNS = ["host_scaffold_status", "host_scaffold_recipient_gene_count",
+                  "host_scaffold_unresolved_taxon_gene_count",
                   "host_scaffold_mapped_gene_count", "host_scaffold_count", *CONTEXT_COLUMNS]
 
 
 def species_key(value):
-    return str(value).strip().replace(" ", "_")
+    return "" if value is None or pd.isna(value) else str(value).strip().replace(" ", "_")
+
+
+def validate_gene_table(data):
+    """Reject partial/corrupt rank rows instead of silently shrinking denominators."""
+    required = {"species", "gene_id", "scaffold", "locus_id", "count_unit", "rank", "label", "host_taxid"}
+    if not required.issubset(data.columns):
+        raise ValueError("Invalid scaffold gene taxonomy schema")
+    data["species"] = data.species.map(species_key)
+    for field in required - {"host_taxid"}:
+        if data[field].isna().any() or data[field].astype(str).str.strip().eq("").any():
+            raise ValueError(f"Empty scaffold taxonomy field: {field}")
+    if not set(data["rank"]).issubset(RANKS):
+        raise ValueError("Invalid scaffold taxonomy rank")
+    if not set(data.label).issubset({"compatible", "incompatible", "unresolved"}):
+        raise ValueError("Invalid scaffold taxonomy label")
+    if not set(data.count_unit).issubset({"gff_locus", "cds_id"}):
+        raise ValueError("Invalid scaffold taxonomy counting unit")
+    if data.duplicated(["species", "gene_id", "rank"]).any():
+        raise ValueError("Duplicate species/gene/rank scaffold taxonomy rows")
+    groups = data.groupby(["species", "gene_id"])
+    if groups.size().ne(len(RANKS)).any():
+        raise ValueError("Incomplete ranks for scaffold taxonomy gene")
+    if groups[["scaffold", "locus_id", "count_unit"]].nunique().gt(1).any().any():
+        raise ValueError("Inconsistent gene identity across scaffold taxonomy ranks")
+    host_ids = pd.to_numeric(data.host_taxid, errors="coerce")
+    missing_host = data.host_taxid.isna() | data.host_taxid.astype(str).str.strip().eq("")
+    if (~missing_host & (host_ids.isna() | host_ids.le(0) | host_ids.mod(1).ne(0))).any():
+        raise ValueError("Invalid host taxid")
+    if ((host_ids.isna() | host_ids.le(0)) & data.label.ne("unresolved")).any():
+        raise ValueError("Resolved label without a host taxid")
+    if data.groupby(["species", "rank"]).host_taxid.nunique(dropna=False).gt(1).any():
+        raise ValueError("Inconsistent host taxid within species/rank")
+    loci = data.groupby(["species", "count_unit", "locus_id"])
+    if loci.scaffold.nunique().gt(1).any():
+        raise ValueError("Locus maps to multiple scaffolds")
+    if data.groupby(["species", "count_unit", "locus_id", "rank"]).label.nunique().gt(1).any():
+        raise ValueError("Conflicting isoform labels in scaffold taxonomy input")
 
 
 def composition(labels, count_units):
@@ -118,12 +156,17 @@ def build_tables(gff_info, taxonomy, species, host_taxid, resolver, loci=None):
     if not required.issubset(gff_info.columns):
         raise ValueError("GFF info requires gene_id and chromosome")
     gff_info = gff_info.fillna("").drop_duplicates()
+    if not species_key(species) or gff_info.gene_id.astype(str).str.strip().eq("").any():
+        raise ValueError("Species and gene IDs must be nonempty")
+    taxids = pd.to_numeric(taxonomy.lca_taxid, errors="raise")
+    if (taxids.isna() | taxids.lt(0) | taxids.mod(1).ne(0)).any():
+        raise ValueError("CDS taxonomy taxids must be nonnegative integers")
     if gff_info.gene_id.duplicated().any() or taxonomy.gene_id.duplicated().any():
         raise ValueError("Duplicate gene IDs in GFF info or CDS taxonomy")
     host = resolver.ranks(int(host_taxid))
     if not host:
         raise ValueError("Host taxid could not be resolved")
-    assigned = taxonomy.set_index("gene_id").lca_taxid.to_dict()
+    assigned = dict(zip(taxonomy.gene_id, taxids.astype("int64"), strict=True))
     rows = []
     for row in gff_info.to_dict("records"):
         if not row["chromosome"] or row.get("splice_mode") == "trans-splicing":
@@ -142,14 +185,14 @@ def build_tables(gff_info, taxonomy, species, host_taxid, resolver, loci=None):
     if genes.empty:
         return genes, pd.DataFrame(columns=["species", "scaffold", "rank", "host_taxid", *METRICS])
     # A locus on multiple scaffolds cannot be treated as single-scaffold evidence.
-    if (genes.groupby("locus_id").scaffold.nunique() > 1).any():
+    if (genes.groupby(["count_unit", "locus_id"]).scaffold.nunique() > 1).any():
         raise ValueError("GFF locus maps to multiple scaffolds")
-    for _, group in genes.groupby(["scaffold", "locus_id", "rank"]):
+    for _, group in genes.groupby(["scaffold", "count_unit", "locus_id", "rank"]):
         if group.label.nunique() != 1:
             genes.loc[group.index, "label"] = "unresolved"
     summaries = []
     for (scaffold, rank), group in genes.groupby(["scaffold", "rank"], sort=True):
-        loci_group = group.drop_duplicates("locus_id")
+        loci_group = group.drop_duplicates(["count_unit", "locus_id"])
         summaries.append(dict(species=species_key(species), scaffold=scaffold, rank=rank,
                               host_taxid=host.get(rank), **composition(loci_group.label, loci_group.count_unit)))
     return genes, pd.DataFrame(summaries)
@@ -158,14 +201,14 @@ def build_tables(gff_info, taxonomy, species, host_taxid, resolver, loci=None):
 def recipient_species(tree_path):
     if not tree_path or not Path(tree_path).is_file():
         return {}
-    from Bio import Phylo
-    tree = Phylo.read(tree_path, "newick")
+    if __package__:
+        from .hgt_species_tree import read_species_tree
+    else:
+        from hgt_species_tree import read_species_tree
+    tree = read_species_tree(tree_path)
     result = {}
     for node in tree.find_clades():
-        # Bio.Phylo parses numeric internal labels as confidence values.
         label = node.name
-        if label is None and node.confidence is not None:
-            label = format(node.confidence, "g")
         if label is None:
             continue
         key = species_key(label)
@@ -190,38 +233,34 @@ def attach_context(branches, genes, directory, tree_path):
     files = sorted(Path(directory).glob("*_gene_taxonomy.tsv")) if directory else []
     if not files:
         return branches, genes
-    required = {"species", "gene_id", "scaffold", "locus_id", "count_unit", "rank", "label", "host_taxid"}
     candidate_keys = {(species_key(g.gene_taxon), str(g.gene_id)) for g in genes.itertuples()}
     lookup, scaffold_metrics, seen_species = {}, {}, set()
     # Genome outputs are per species: never retain all species' full gene tables
     # together. Only candidate identities and candidate-scaffold totals survive.
     for path in files:
         data = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
-        if not required.issubset(data.columns):
-            raise ValueError("Invalid scaffold gene taxonomy schema")
-        data["species"] = data.species.map(species_key)
+        validate_gene_table(data)
         species = set(data.species)
-        if species & seen_species or data.duplicated(["species", "gene_id", "rank"]).any():
-            raise ValueError("Duplicate species or species/gene/rank scaffold taxonomy rows")
+        if species & seen_species:
+            raise ValueError("Duplicate species in scaffold taxonomy files")
         seen_species.update(species)
-        if not set(data.label).issubset({"compatible", "incompatible", "unresolved"}):
-            raise ValueError("Invalid scaffold taxonomy label")
         identities = data.drop_duplicates(["species", "gene_id"])
         matched = {(r.species, r.gene_id): r for r in identities.itertuples()
                    if (r.species, r.gene_id) in candidate_keys}
         lookup.update(matched)
-        excluded = {(r.species, r.locus_id) for r in matched.values()}
+        excluded = {(r.species, r.count_unit, r.locus_id) for r in matched.values()}
         target_scaffolds = {(r.species, r.scaffold) for r in matched.values()}
         for key, group in data.groupby(["species", "scaffold"]):
             if key not in target_scaffolds:
                 continue
             metrics = {}
             for rank in RANKS:
-                ranked = group.loc[group["rank"].eq(rank)].drop_duplicates("locus_id")
+                ranked = group.loc[group["rank"].eq(rank)].drop_duplicates(["count_unit", "locus_id"])
                 if ranked.empty:
                     raise ValueError(f"Missing rank {rank} for scaffold {key}")
                 for background in (False, True):
-                    selected = ranked.loc[[(key[0], locus) not in excluded for locus in ranked.locus_id]] if background else ranked
+                    selected = ranked.loc[[(key[0], r.count_unit, r.locus_id) not in excluded
+                                           for r in ranked.itertuples()]] if background else ranked
                     prefix = f"host_scaffold_{'background_' if background else ''}{rank}_"
                     metrics.update({prefix + k: v for k, v in composition(selected.label, selected.count_unit).items()})
             scaffold_metrics[key] = metrics
@@ -236,6 +275,7 @@ def attach_context(branches, genes, directory, tree_path):
                            "count_unit": record.count_unit}.items():
             genes.at[index, "host_scaffold_" + key] = value
     recipients = recipient_species(tree_path)
+    tree_species = set().union(*recipients.values())
     gene_groups = {key: group for key, group in genes.groupby("orthogroup")}
     for index, branch in branches.iterrows():
         transfer = str(branch.generax_transfer).split("@")
@@ -245,14 +285,18 @@ def attach_context(branches, genes, directory, tree_path):
             continue
         group = gene_groups.get(branch.orthogroup, genes.iloc[:0])
         ids = {g.strip() for g in str(branch.candidate_genes).split(";")}
-        selected = group.loc[group.gene_id.isin(ids) & group.gene_taxon.map(species_key).isin(taxa)]
+        candidates = group.loc[group.gene_id.isin(ids)]
+        unknown_taxa = int((~candidates.gene_taxon.map(species_key).isin(tree_species)).sum())
+        selected = candidates.loc[candidates.gene_taxon.map(species_key).isin(taxa)]
         mapped = [lookup[(species_key(g.gene_taxon), str(g.gene_id))] for g in selected.itertuples()
                   if (species_key(g.gene_taxon), str(g.gene_id)) in lookup]
         keys = {(r.species, r.scaffold) for r in mapped}
         branches.at[index, "host_scaffold_recipient_gene_count"] = len(selected)
+        branches.at[index, "host_scaffold_unresolved_taxon_gene_count"] = unknown_taxa
         branches.at[index, "host_scaffold_mapped_gene_count"] = len(mapped)
         branches.at[index, "host_scaffold_count"] = len(keys)
-        branches.at[index, "host_scaffold_status"] = ("measured" if len(mapped) == len(selected) else "partial") if keys else "no_recipient_scaffold"
+        complete = len(mapped) == len(selected) and unknown_taxa == 0
+        branches.at[index, "host_scaffold_status"] = ("measured" if complete else "partial") if keys else "no_recipient_scaffold"
         if not keys:
             continue
         for background in ("", "background_"):
@@ -295,7 +339,6 @@ def main():
     if taxonomy.shape[1] != 9:
         raise ValueError("Expected 9-column MMseqs2 CDS taxonomy output")
     taxonomy = taxonomy.iloc[:, :2].set_axis(["gene_id", "lca_taxid"], axis=1)
-    taxonomy.lca_taxid = pd.to_numeric(taxonomy.lca_taxid, errors="raise").astype("int64")
     genes, scaffolds = build_tables(pd.read_csv(args.gff_info, sep="\t", dtype=str, keep_default_na=False),
                                     taxonomy, args.species, taxid, RankResolver(ncbi), gff_loci(args.gff))
     for frame, path in ((genes, args.gene_out), (scaffolds, args.scaffold_out)):

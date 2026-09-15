@@ -83,9 +83,21 @@ not reconstructed ancestral scaffold structure. Unresolved recipient labels do
 not fall back to mixing donor and recipient descendants.
 
 `host_scaffold_status=measured` means data were joined, **not** that they passed
-any quality threshold. Empty backgrounds have zero counts and blank fractions;
+any quality threshold. Candidates whose species cannot be mapped to a tree tip
+are counted in `host_scaffold_unresolved_taxon_gene_count`; a branch with such
+candidates is `partial` even when its known recipient genes all have coordinates.
+Empty backgrounds have zero counts and blank fractions;
 missing tables or missing recipient mapping retain explicit status and blank
 measurements. Orthogroup summary is unchanged; it does not sum repeated scaffold
 context across independent event rows. `output/hgt/README.md` documents every
 new branch/gene column automatically. Artifact provenance includes the taxonomy
 database, GFF, raw taxonomy, helper code, and species tree at their consuming stages.
+
+Input gene-taxonomy tables must have every rank exactly once per gene, a
+consistent scaffold/locus/counting unit across ranks, consistent host taxids,
+and reconciled isoform labels. Corrupt or incomplete tables raise an error;
+missing rank rows are not silently omitted from the denominator. Explicit
+GFF loci and fallback CDS IDs use separate counting namespaces.
+Numeric internal species-tree names are retained verbatim (including leading
+zeros and long identifiers). Duplicate names or space/underscore alias
+collisions are rejected rather than assigned to an arbitrary branch.

@@ -25,6 +25,48 @@ def test_transfer_tree_preserves_numeric_internal_branch_labels(tmp_path):
     assert measured.iloc[0].phylogenetic_distance == 3
 
 
+@pytest.mark.parametrize("label", ["0042", "1234567890123456789", "1.23456789", "1e3"])
+def test_numeric_branch_names_are_exact_identifiers(tmp_path, label):
+    from scaffold_taxonomy import recipient_species
+    path = tmp_path / "tree.nwk"
+    path.write_text(f"((A:1,B:1){label}:1,C:2)root;")
+    tree, _, _, labels = plotter.load_species_tree_layout(str(path))
+    assert labels[label] == label
+    assert recipient_species(path)[label] == {"A", "B"}
+    edges = plotter.build_transfer_edge_table(pandas.DataFrame({"generax_transfer": [f"Y@C@{label}"]}), labels)
+    assert plotter.add_transfer_distances(edges, tree, labels, 0).iloc[0].mapped_to_species_tree == 1
+
+
+@pytest.mark.parametrize("newick", ["(A,A)root;", "(A,(B,C)A)root;", "('A B',A_B)root;"])
+def test_ambiguous_species_tree_labels_are_rejected(tmp_path, newick):
+    path = tmp_path / "tree.nwk"
+    path.write_text(newick)
+    with pytest.raises(ValueError, match="Ambiguous species-tree label"):
+        plotter.load_species_tree_layout(str(path))
+
+
+def test_self_transfer_has_visible_loop_and_one_arrow(tmp_path, monkeypatch):
+    import numpy
+    from matplotlib.patches import FancyArrowPatch
+    captured = []
+    original = FancyArrowPatch.__init__
+
+    def record(self, *args, **kwargs):
+        if "path" in kwargs:
+            captured.append(kwargs)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(FancyArrowPatch, "__init__", record)
+    path = tmp_path / "tree.nwk"
+    path.write_text("(A:1,B:1)root;")
+    edges = tmp_path / "edges.tsv"
+    plotter.plot_transfer_tree(pandas.DataFrame({"generax_transfer": ["Y@A@A"]}),
+                              str(tmp_path / "plot.pdf"), str(path), str(edges))
+    assert [item["arrowstyle"] for item in captured] == ["-", "-|>"]
+    assert all(numpy.ptp(item["path"].vertices[:, 0]) > 0 for item in captured)
+    assert pandas.read_csv(edges, sep="\t").iloc[0].hgt_event_count == 1
+
+
 def test_plot_hgt_summary_generates_overview_and_taxonomy_flow_pdfs(tmp_path: Path):
     branch_tsv = tmp_path / "hgt_branch_candidates.tsv"
     gene_tsv = tmp_path / "hgt_gene_candidates.tsv"

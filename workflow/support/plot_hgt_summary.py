@@ -290,18 +290,8 @@ def load_species_tree_layout(tree_path: str):
     """Read a Newick tree and return tree, normalized x/y coordinates, and label aliases."""
     if not tree_path or not os.path.isfile(tree_path):
         return None, {}, {}, {}
-    try:
-        from Bio import Phylo
-
-        tree = Phylo.read(tree_path, "newick")
-    except (ImportError, OSError, ValueError):
-        return None, {}, {}, {}
-
-    # Numeric Newick internal names are parsed as confidence by Bio.Phylo.
-    # In the GeneRax species tree these are branch identifiers, not support.
-    for clade in tree.find_clades():
-        if clade.name is None and clade.confidence is not None:
-            clade.name = format(clade.confidence, "g")
+    from hgt_species_tree import read_species_tree
+    tree = read_species_tree(tree_path)
 
     terminals = tree.get_terminals()
     if len(terminals) == 0:
@@ -633,11 +623,19 @@ def transfer_half_paths(ax, start, end):
     from matplotlib.path import Path
 
     a, b = ax.transData.transform([start, end])
+    inverse = ax.transData.inverted()
+    if numpy.allclose(a, b, rtol=0, atol=1e-8):
+        # Same-branch transfers (or coincident zero-length branch anchors) must
+        # remain visible. The loop is a display convention, not a time estimate.
+        radius = 12 * ax.figure.dpi / 72
+        middle = a + [2 * radius, 0]
+        codes = [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4]
+        return (Path(inverse.transform([middle, middle + [0, radius], a + [0, radius], a]), codes),
+                Path(inverse.transform([middle, middle - [0, radius], b - [0, radius], b]), codes))
     delta = b - a
     control = (a + b) / 2 + 0.10 * numpy.array([delta[1], -delta[0]])
     left, right = (a + control) / 2, (control + b) / 2
     middle = (left + right) / 2
-    inverse = ax.transData.inverted()
     codes = [Path.MOVETO, Path.CURVE3, Path.CURVE3]
     return (Path(inverse.transform([middle, left, a]), codes),
             Path(inverse.transform([middle, right, b]), codes))
@@ -667,6 +665,8 @@ def read_transfer_traits(path):
         raise ValueError("Species traits require unique nonempty species IDs (including space/underscore aliases)")
     values = frame.iloc[:, 1:].replace({"": numpy.nan, "NA": numpy.nan, "NaN": numpy.nan, "nan": numpy.nan})
     values = values.apply(pandas.to_numeric, errors="raise")
+    if numpy.isinf(values.to_numpy(dtype=float)).any():
+        raise ValueError("Species traits must be finite or missing")
     values.index = identifiers
     return values
 
@@ -782,8 +782,8 @@ def plot_transfer_tree(
             b_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(b, tree_label_map)])]
             halves = transfer_half_paths(ax, a_point, b_point)
             by_target = {str(r.recipient_node): r for r in rows}
-            for target, path in zip((a, b), halves, strict=True):
-                row = by_target.get(target)
+            for half_index, (target, path) in enumerate(zip((a, b), halves, strict=True)):
+                row = None if a == b and half_index == 0 else by_target.get(target)
                 # One-way connections keep a thin source half without an arrow.
                 width = max(0.35, 5.0 * int(row.hgt_event_count) / max_count) if row else 0.35
                 ax.add_patch(FancyArrowPatch(

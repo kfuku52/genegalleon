@@ -390,7 +390,7 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     scaffold_dir.mkdir()
     pandas.DataFrame([
         dict(species="Arabidopsis_thaliana", gene_id=gene, scaffold="chr1", locus_id=gene,
-             count_unit="cds_id", rank=rank, host_taxid="", label=label)
+             count_unit="cds_id", rank=rank, host_taxid="3", label=label)
         for gene, label in [("Arabidopsis_thaliana_geneA", "incompatible"),
                             ("Arabidopsis_thaliana_geneB", "incompatible"),
                             ("Arabidopsis_thaliana_background", "compatible")]

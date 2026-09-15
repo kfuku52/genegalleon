@@ -214,8 +214,8 @@ GENE_SPECS: Dict[str, ColumnSpec] = {
         "0 / 1 / 空欄（比較不能）",
     ),
     "intron_supported": (
-        "観測イントロン状態がイントロンありを支持するか。観測イントロン数が0より大きければ`True`、それ以外は`False`。imputed状態は使いません。イントロン入力がない場合も`False`になるため、枝単位の測定数と併読してください。",
-        "`True` / `False`",
+        "観測イントロン状態がイントロンありを支持するか。観測イントロン数が0より大きければ`True`、観測数0なら`False`。未測定またはimputed状態のみなら空欄。",
+        "`True` / `False` / 空欄（未測定）",
     ),
     "expression_measured": (
         "この遺伝子について少なくとも1つの数値expression値が測定されたかどうか。expression入力自体がない場合も`False`です。",
@@ -296,7 +296,7 @@ for _rank in TAXONOMIC_RANKS:
     )
 
 _host_common = {
-    "host_scaffold_status": ("scaffold分類組成の取得状態。measuredは取得済みであり高確度HGTを意味しません。partial=recipientの一部のみ対応、missing_scaffold_taxonomy=入力なし、gene_not_mapped=座標対応なし、recipient_unresolved=transfer/tree対応不明、no_recipient_scaffold=recipient側座標なし。", "状態ラベル"),
+    "host_scaffold_status": ("scaffold分類組成の取得状態。measuredは取得済みであり高確度HGTを意味しません。partial=recipientの一部のみ対応、または所属種不明の候補あり。missing_scaffold_taxonomy=入力なし、gene_not_mapped=座標対応なし、recipient_unresolved=transfer/tree対応不明、no_recipient_scaffold=recipient側座標なし。", "状態ラベル"),
 }
 GENE_SPECS.update(_host_common)
 BRANCH_SPECS.update(_host_common)
@@ -307,6 +307,7 @@ GENE_SPECS.update({
 })
 BRANCH_SPECS.update({
     "host_scaffold_recipient_gene_count": ("候補遺伝子のうち、GeneRax recipient枝配下の現生種に属する数。", "整数 / 空欄"),
+    "host_scaffold_unresolved_taxon_gene_count": ("候補遺伝子のうちspecies-treeの現生種に対応できずrecipient側か判定できない数。これが正の場合、対応したscaffoldがあってもstatusはpartialです。", "整数 / 空欄"),
     "host_scaffold_mapped_gene_count": ("recipient側候補のうちscaffold分類表に対応した遺伝子数。", "整数 / 空欄"),
     "host_scaffold_count": ("対応したspecies+scaffoldの重複なしの数。複数候補が同じscaffoldにあっても1件。", "整数 / 空欄"),
 })
@@ -475,7 +476,7 @@ def build_readme(paths: Dict[str, str]) -> str:
             "",
             "- best-hitの分類が名前ヒューリスティックだけで行われた場合、superkingdomの比較はできないため、`besthit_same_superkingdom` 系の値が空欄になることがあります。",
             "- イントロンは観測値を優先し、祖先状態のimputationだけではsupportに数えません。入力`stat_branch`に認識可能なイントロン列がない場合は未測定扱いです。",
-            "- gene表の`intron_supported=False`は、観測イントロンがない場合だけでなく入力が未測定の場合にも現れます。枝表の`intron_measured_gene_count`で測定の有無を確認してください。",
+            "- gene表の`intron_supported=False`は観測されたイントロンなしを意味します。未測定・imputedのみの場合は空欄で、heatmapにも0として表示しません。",
             "- expressionの`True`は少なくとも1つの数値測定があることだけを示し、発現量の大きさを表しません。`False`は入力がない場合も含みます。",
             "- `hgt_` evidence heatmapのPDF表示では、各列をleaf内の最大値で割ってcolorbarを0--1に正規化しています。TSVのカウント値自体は変更されません。",
             "- 欠測値を0として扱って候補を否定しないでください。まず対応する`*_measured_*`列または入力データの有無を確認してください。",

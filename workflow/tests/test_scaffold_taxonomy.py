@@ -148,7 +148,8 @@ def test_per_species_files_and_duplicate_rejection(tmp_path):
         scaffold.attach_context(branches, genes, tmp_path, tree)
 
 
-def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path):
+@pytest.mark.parametrize("raw_gff_present", [True, False])
+def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path, raw_gff_present):
     # A small real ETE-compatible SQLite taxonomy DB; no network/stub resolver.
     import sqlite3
 
@@ -204,9 +205,10 @@ def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path):
         ">Host_species_x\nATGAAATAA\n>Host_species_h\nATGCCCTAA\n")
     raw_gff_dir = workspace / "input/species_gff"
     raw_gff_dir.mkdir()
-    (raw_gff_dir / "Host_species.gff").write_text(
-        "s\ttest\tgene\t1\t9\t.\t+\t.\tID=Host_species_x\n"
-        "s\ttest\tgene\t20\t28\t.\t+\t.\tID=Host_species_h\n")
+    if raw_gff_present:
+        (raw_gff_dir / "Host_species.gff").write_text(
+            "s\ttest\tgene\t1\t9\t.\t+\t.\tID=Host_species_x\n"
+            "s\ttest\tgene\t20\t28\t.\t+\t.\tID=Host_species_h\n")
     info_dir = workspace / "output/species_gff_info"
     info_dir.mkdir(parents=True)
     pd.DataFrame({"gene_id": ["Host_species_x", "Host_species_h"], "chromosome": ["s", "s"]}).to_csv(
@@ -251,3 +253,67 @@ def test_workflow_wiring_and_provenance():
     hgt = (root / "workflow/core/gg_hgt_core.sh").read_text()
     assert '--dir_scaffold_taxonomy "${gg_workspace_output_dir}/species_scaffold_taxonomy"' in hgt
     assert 'hgt_eval_provenance_args "species_tree" "${hgt_species_tree_path}"' in hgt
+    assert '--input "plotter=${gg_support_dir}/plot_hgt_summary.py"' in hgt
+    assert '--input "table_schema=${gg_support_dir}/score_hgt_candidates.py"' in hgt
+    assert '--input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"' in hgt
+
+
+@pytest.mark.parametrize("damage, message", [
+    ("missing_rank", "Incomplete ranks"),
+    ("different_scaffold", "Inconsistent gene identity"),
+    ("different_locus", "Inconsistent gene identity"),
+    ("different_host", "Inconsistent host taxid"),
+    ("bad_unit", "counting unit"),
+    ("bad_label", "label"),
+    ("empty_id", "Empty scaffold"),
+    ("unknown_rank", "rank"),
+    ("bad_host", "host taxid"),
+    ("isoform_conflict", "Conflicting isoform"),
+])
+def test_corrupt_gene_tables_fail_instead_of_biasing_fractions(tmp_path, damage, message):
+    branches, genes, tree = fixture_context(tmp_path)
+    path = tmp_path / "all_gene_taxonomy.tsv"
+    data = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+    index = data.index[data.gene_id.eq("x1") & data["rank"].eq("phylum")][0]
+    changes = {"different_scaffold": ("scaffold", "s999"), "different_locus": ("locus_id", "L999"),
+               "different_host": ("host_taxid", "999"), "bad_unit": ("count_unit", "typo"),
+               "bad_label": ("label", "typo"), "empty_id": ("gene_id", ""),
+               "unknown_rank": ("rank", "typo"), "bad_host": ("host_taxid", "1.5"),
+               "isoform_conflict": ("label", "compatible")}
+    if damage == "missing_rank":
+        data = data.drop(index)
+    else:
+        column, value = changes[damage]
+        data.loc[index, column] = value
+    data.to_csv(path, sep="\t", index=False)
+    with pytest.raises(ValueError, match=message):
+        scaffold.attach_context(branches, genes, tmp_path, tree)
+
+
+def test_fallback_ids_do_not_merge_with_explicit_loci(tmp_path):
+    branches, genes, tree = fixture_context(tmp_path)
+    path = tmp_path / "all_gene_taxonomy.tsv"
+    data = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+    data.loc[data.gene_id.eq("h"), "locus_id"] = "locus_x"
+    data.to_csv(path, sep="\t", index=False)
+    measured, _ = scaffold.attach_context(branches, genes, tmp_path, tree)
+    assert measured.iloc[0].host_scaffold_phylum_total_count == 4
+    assert measured.iloc[0].host_scaffold_background_phylum_compatible_count == 1
+
+
+def test_unknown_candidate_species_are_reported_as_partial(tmp_path):
+    branches, genes, tree = fixture_context(tmp_path)
+    genes.loc[len(genes)] = ["OG1", "unknown", ""]
+    branches.loc[0, "candidate_genes"] += "; unknown"
+    measured, _ = scaffold.attach_context(branches, genes, tmp_path, tree)
+    assert measured.iloc[0].host_scaffold_status == "partial"
+    assert measured.iloc[0].host_scaffold_unresolved_taxon_gene_count == 1
+    assert measured.iloc[0].host_scaffold_recipient_gene_count == 2
+
+
+@pytest.mark.parametrize("taxid", [-1, 2.5, float("inf"), None])
+def test_invalid_mmseqs_taxids_never_get_truncated(taxid):
+    gff = pd.DataFrame({"gene_id": ["a"], "chromosome": ["s"]})
+    tax = pd.DataFrame({"gene_id": ["a"], "lca_taxid": [taxid]})
+    with pytest.raises(ValueError, match="nonnegative integers"):
+        scaffold.build_tables(gff, tax, "Host_species", 3, scaffold.RankResolver(Ncbi()))

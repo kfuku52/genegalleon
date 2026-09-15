@@ -209,12 +209,12 @@ disable_if_no_input_file "run_collect_gff_info" "${file_sp_gff}"
 gff_info_needs_update=0
 gg_artifact_contract_init gff_info_provenance_args "genome_annotation_gff_info" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.gff_info.json"
 gff_info_provenance_args+=(
-  --input "gff=${file_sp_gff}"
   --input "cds=${file_sp_cds}"
   --output "gff_info=${file_sp_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
 )
+gg_artifact_add_input_if_present gff_info_provenance_args "gff" "${file_sp_gff}"
 gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
 if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"

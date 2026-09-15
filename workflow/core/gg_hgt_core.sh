@@ -313,11 +313,12 @@ hgt_eval_provenance_args+=(
   --input "gene_family_database=${file_orthogroup_db}"
   --input "hgt_candidate_scorer=${gg_support_dir}/score_hgt_candidates.py"
   --input "scaffold_taxonomy_helper=${gg_support_dir}/scaffold_taxonomy.py"
+  --input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"
   --output "branch_candidates=${file_hgt_branch}"
   --output "gene_candidates=${file_hgt_gene}"
   --output "gene_family_summary=${file_hgt_orthogroup}"
   --parameter "use_taxonomy_db=${hgt_use_taxonomy_db}"
-  --parameter "schema_version=3"
+  --parameter "schema_version=4"
 )
 gg_artifact_add_input_if_present hgt_eval_provenance_args "scaffold_taxonomy" "${gg_workspace_output_dir}/species_scaffold_taxonomy"
 gg_artifact_add_input_if_present hgt_eval_provenance_args "species_tree" "${hgt_species_tree_path}"
@@ -364,6 +365,8 @@ hgt_output_readme_provenance_args+=(
   --input "gene_candidates=${file_hgt_gene}"
   --input "orthogroup_summary=${file_hgt_orthogroup}"
   --input "readme_generator=${gg_support_dir}/write_hgt_output_readme.py"
+  --input "table_schema=${gg_support_dir}/score_hgt_candidates.py"
+  --input "scaffold_schema=${gg_support_dir}/scaffold_taxonomy.py"
   --output "readme=${file_hgt_readme}"
   --parameter "schema_version=2"
 )
@@ -399,6 +402,9 @@ gg_artifact_contract_init \
   "all_candidates" \
   "${dir_hgt_provenance}/hgt_summary_plot.json"
 hgt_summary_plot_provenance_args+=(
+  --input "plotter=${gg_support_dir}/plot_hgt_summary.py"
+  --input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"
+  --input "taxonomy_resolver=${gg_support_dir}/score_hgt_candidates.py"
   --input "branch_candidates=${file_hgt_branch}"
   --input "gene_candidates=${file_hgt_gene}"
   --output "branch_overview=${file_hgt_overview_pdf}"

@@ -722,6 +722,13 @@ This is a visualization normalization, not a probability or composite HGT
 score. In particular, `Cand` remains the candidate-branch count in the TSV;
 only its PDF color is shown relative to that orthogroup's maximum.
 
+Missing intron observations (including imputed-only states) remain blank in
+`intron_supported` and the tip heatmap, not `False`/0. Missing best-hit annotations
+are not counted as annotated genes. Domain comparisons require usable domain
+assignments on both sides; an unresolved domain is NA, not a mismatch. Ambiguous
+taxonomy-name matches are left unresolved rather than choosing the first taxid.
+Serialized lineage fields retain repeated named ranks, including nested clades.
+
 The HGT output directory also contains `README.md`, generated from the output
 schema. It documents every column in `hgt_branch_candidates.tsv`,
 `hgt_gene_candidates.tsv`, and `hgt_orthogroup_summary.tsv`, including the
@@ -798,6 +805,13 @@ the other quantity and then endpoint names. `display_rank` records selection
 order (zero when hidden). Width is `max(0.35, 5 * count / maximum_count)` points,
 using all parsed pairs for the maximum. The visibility floor keeps rare distant
 events visible; counts below that floor share a width. The legend gives actual counts.
+
+Numeric internal branch names are preserved exactly, including leading zeros;
+duplicate species-tree labels (also space/underscore aliases) are errors.
+Transfers with coincident branch anchors use a small display-only loop instead
+of an invisible zero-length connection. Self-transfers retain one directional
+arrow and one event count; no ancestor/descendant or self-transfer filtering is
+applied. Plot provenance includes the plotting code and shared tree reader.
 
 For an HGT output directory made by an older run, the same fields can be added
 without rerunning candidate scoring with

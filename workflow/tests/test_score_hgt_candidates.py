@@ -156,7 +156,7 @@ def test_score_hgt_candidates_excludes_imputed_introns_from_sqlite_evidence(tmp_
     assert branch.intron_measured_gene_count == 1
     assert branch.intron_supported_gene_count == 1
     assert bool(genes.loc["geneA", "intron_supported"])
-    assert not bool(genes.loc["geneB", "intron_supported"])
+    assert pandas.isna(genes.loc["geneB", "intron_supported"])
 
 
 def test_score_hgt_candidates_emits_branch_gene_and_orthogroup_outputs(tmp_path):

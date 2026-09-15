@@ -345,10 +345,14 @@ def parse_boolish(value):
 
 
 def normalize_sci_name(name: str) -> str:
+    if name is None or pandas.isna(name):
+        return ""
     text = str(name).strip().replace("_", " ")
     text = re.sub(r"\([^)]*\)", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     if text == "":
+        return ""
+    if text.lower() in {"nan", "<na>", "none"}:
         return ""
     parts = text.split()
     if len(parts) >= 2 and re.match(r"^[A-Z][a-zA-Z-]+$", parts[0]):
@@ -464,7 +468,7 @@ def resolve_taxonomy_annotation(
             if value:
                 annotation[rank] = value
                 break
-    annotation["taxonomy"] = serialize_taxonomy_ranks(lineage_names)
+    annotation["taxonomy"] = resolver.complete_lineage_cache.get(taxid, "")
     return annotation
 
 
@@ -586,6 +590,7 @@ class TaxonomyResolver:
         self.rank_cache: Dict[int, str] = {}
         self.rank_name_cache: Dict[Tuple[int, str], str] = {}
         self.lineage_rank_names_cache: Dict[int, Dict[str, str]] = {}
+        self.complete_lineage_cache: Dict[int, str] = {}
         if NCBITaxa is None or self.dbfile == "":
             return
         try:
@@ -612,8 +617,13 @@ class TaxonomyResolver:
                     translated = self.ncbi.get_name_translator([candidate])
                 except Exception:
                     translated = {}
-                if candidate in translated and len(translated[candidate]) > 0:
-                    taxid = int(translated[candidate][0])
+                identifiers = set(translated.get(candidate, []))
+                if len(identifiers) > 1:
+                    # A homonym is not a resolved lineage. Do not pick the
+                    # first ID or turn this ambiguity into a genus fallback.
+                    break
+                if len(identifiers) == 1:
+                    taxid = int(next(iter(identifiers)))
                     break
         self.name_cache[normalized] = taxid
         return taxid
@@ -655,6 +665,7 @@ class TaxonomyResolver:
             name_map = {}
 
         result: Dict[str, str] = {}
+        complete = []
         for lineage_taxid in lineage:
             rank_name = normalize_taxonomy_rank(rank_map.get(lineage_taxid, ""))
             taxon_name = str(name_map.get(lineage_taxid, "")).strip()
@@ -663,7 +674,9 @@ class TaxonomyResolver:
             # A lineage can contain more than one node with an unusual rank.
             # Keep the first root-to-tip occurrence deterministically.
             result.setdefault(rank_name, taxon_name)
+            complete.append(f"{rank_name}:{taxon_name}")
         self.lineage_rank_names_cache[taxid] = result
+        self.complete_lineage_cache[taxid] = "; ".join(complete)
         return result
 
     def rank(self, taxid: int) -> str:
@@ -706,19 +719,19 @@ class TaxonomyResolver:
             return None
         hit_lineage_set = set(hit_lineage)
         common = [taxid for taxid in query_lineage if taxid in hit_lineage_set]
+        query_super = self.rank_taxid_from_lineage(query_lineage, ["superkingdom", "domain"])
+        hit_super = self.rank_taxid_from_lineage(hit_lineage, ["superkingdom", "domain"])
+        same_superkingdom = int(query_super == hit_super) if query_super > 0 and hit_super > 0 else pandas.NA
         if len(common) == 0:
             return {
                 "method": "taxonomy_db",
                 "query_taxid": query_taxid,
                 "hit_taxid": hit_taxid_val,
                 "lca_rank": "none",
-                "same_superkingdom": 0,
+                "same_superkingdom": same_superkingdom,
             }
         lca_taxid = int(common[-1])
         lca_rank = self.rank(lca_taxid).strip().lower() or "no_rank"
-        query_super = self.rank_taxid_from_lineage(query_lineage, ["superkingdom", "domain"])
-        hit_super = self.rank_taxid_from_lineage(hit_lineage, ["superkingdom", "domain"])
-        same_superkingdom = int(query_super > 0 and query_super == hit_super)
         return {
             "method": "taxonomy_db",
             "query_taxid": query_taxid,
@@ -908,10 +921,10 @@ def besthit_support_from_leaf_rows(
     for row in leaf_rows.itertuples(index=False):
         row_dict = row._asdict()
         gene_id = str(row_dict.get("node_name", "")).strip()
-        hit_org = str(row_dict.get(hit_org_col, "")).strip() if hit_org_col else ""
-        hit_acc = str(row_dict.get(hit_acc_col, "")).strip() if hit_acc_col else ""
+        hit_org = _representative_text(row_dict.get(hit_org_col, "")) if hit_org_col else ""
+        hit_acc = _representative_text(row_dict.get(hit_acc_col, "")) if hit_acc_col else ""
         hit_taxid = row_dict.get(hit_taxid_col, "") if hit_taxid_col else ""
-        query_name = str(row_dict.get(taxon_col, "")).strip() if taxon_col else ""
+        query_name = _representative_text(row_dict.get(taxon_col, "")) if taxon_col else ""
         has_hit = (hit_acc != "") or (hit_org != "") or (not pandas.isna(hit_taxid) and str(hit_taxid).strip() != "")
         if not has_hit:
             continue
@@ -1083,8 +1096,9 @@ def summarize_candidate_branch(
     contamination_per_gene = evidence["contamination"]["per_gene"]
     intron_supported = {}
     if not matched_leaf_rows.empty:
-        _, supported_mask = intron_observation_masks(matched_leaf_rows)
-        intron_supported = dict(zip(matched_leaf_rows["node_name"], supported_mask, strict=True))
+        observed_mask, supported_mask = intron_observation_masks(matched_leaf_rows)
+        intron_supported = dict(zip(matched_leaf_rows["node_name"],
+                                    supported_mask.astype(object).where(observed_mask, pandas.NA), strict=True))
     expression_measured = {}
     if not matched_leaf_rows.empty and len(expression_cols) > 0:
         expr_df = matched_leaf_rows.loc[:, ["node_name"] + list(expression_cols)].copy()
@@ -1120,7 +1134,7 @@ def summarize_candidate_branch(
             "besthit_taxonomy_method": besthit_info.get("besthit_taxonomy_method", ""),
             "besthit_lca_rank": besthit_info.get("besthit_lca_rank", ""),
             "besthit_same_superkingdom": besthit_info.get("besthit_same_superkingdom", pandas.NA),
-            "intron_supported": bool(intron_supported.get(gene_id, False)),
+            "intron_supported": intron_supported.get(gene_id, pandas.NA),
             "expression_measured": bool(expression_measured.get(gene_id, False)),
             "synteny_support_score": synteny_by_gene.get(gene_id, numpy.nan),
             "contamination_lca_taxid": contamination_info.get("contamination_lca_taxid", pandas.NA),
@@ -1177,7 +1191,7 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
                 "besthit_taxonomy_method": top.get("besthit_taxonomy_method", ""),
                 "besthit_lca_rank": top.get("besthit_lca_rank", ""),
                 "besthit_same_superkingdom": top.get("besthit_same_superkingdom", pandas.NA),
-                "intron_supported": top.get("intron_supported", False),
+                "intron_supported": top.get("intron_supported", pandas.NA),
                 "expression_measured": top.get("expression_measured", False),
                 "synteny_support_score": top.get("synteny_support_score", numpy.nan),
                 "contamination_lca_taxid": top.get("contamination_lca_taxid", pandas.NA),
