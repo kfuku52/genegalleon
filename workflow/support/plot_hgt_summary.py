@@ -4,7 +4,8 @@ import argparse
 import math
 import os
 import textwrap
-from typing import Dict, List, Tuple
+from collections import Counter, defaultdict
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy
 import pandas
@@ -56,10 +57,25 @@ OVERVIEW_TEXT_COLUMNS: List[Tuple[str, str, int, str]] = [
 
 FLOW_FALLBACK_LABEL = "Unresolved"
 FLOW_OTHER_LABEL = "Other"
+TRANSFER_EDGE_COLUMNS = [
+    "donor_node",
+    "recipient_node",
+    "hgt_event_count",
+    "orthogroup_count",
+    "event_fraction",
+    "mapped_to_species_tree",
+    "display_rank",
+    "displayed",
+    "phylogenetic_distance",
+    "distance_metric",
+    "selection_reason",
+]
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Plot overview and taxonomy-flow summaries for gg_hgt outputs.")
+    parser = argparse.ArgumentParser(
+        description="Plot overview, taxonomy-flow, and transfer-tree summaries for gg_hgt outputs."
+    )
     parser.add_argument("--branch_tsv", metavar="PATH", required=True, type=str)
     parser.add_argument("--gene_tsv", metavar="PATH", required=True, type=str)
     parser.add_argument("--overview_pdf", metavar="PATH", required=True, type=str)
@@ -67,6 +83,35 @@ def build_arg_parser():
     parser.add_argument("--taxonomy_dbfile", metavar="PATH", default="", type=str)
     parser.add_argument("--flow_rank", metavar="TEXT", default="phylum", type=str)
     parser.add_argument("--flow_max_categories", metavar="INT", default=12, type=int)
+    parser.add_argument("--species_trait", default="", help="Optional species_trait TSV; numeric/binary traits appear beside species-tree tips.")
+    parser.add_argument(
+        "--transfer_tree_pdf",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Optional PDF path for directed HGT links over the species tree.",
+    )
+    parser.add_argument(
+        "--transfer_edges_tsv",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Optional TSV path for all parsed donor-to-recipient edge counts.",
+    )
+    parser.add_argument(
+        "--species_tree",
+        metavar="PATH",
+        default="",
+        type=str,
+        help="Species-tree Newick file used by the transfer-tree plot.",
+    )
+    parser.add_argument(
+        "--transfer_tree_max_edges",
+        metavar="INT",
+        default=200,
+        type=int,
+        help="Initial mapped-direction selection limit; reverse directions are then included on shared curves. 0 selects all.",
+    )
     return parser
 
 
@@ -117,6 +162,17 @@ def write_overview_readme(out_pdf: str) -> None:
             "## Row Labels",
             "",
             "- `OGXXXX:branch_id`: orthogroup ID and the branch ID carried through `stat_branch` / `gg_orthogroup.db`.",
+            "",
+            "## Directed Transfer Tree",
+            "",
+            "`hgt_transfer_tree.pdf` overlays directed donor/source-to-recipient/target links on the species tree.",
+            "Optional species_trait columns show observed numeric/binary tip traits, with all text at 8 pt. The workflow automatically reads input/species_trait/species_trait.tsv; hgt_summary_species_trait accepts a path or none. Binary 1 is orange and 0 gray; numeric colors are scaled independently per column and values are printed. Missing or unmatched values show NA, never zero. Shared schema/metadata contracts apply. No ancestral states are reconstructed.",
+            "Links attach to the midpoint of the horizontal branch entering each labelled node. These positions are display conventions, not estimated transfer times. Root endpoints use a dashed display-only stem; zero-length branches coincide with their nodes. Color and ranking retain endpoint-node path distance as a lineage-separation proxy, not distance between inferred transfer locations.",
+            "Link width is max(0.35, 5 * count / maximum_count) points, using the maximum across all parsed pairs. The visibility floor preserves rare distant events; counts below the floor share a width. It is not a probability score.",
+            "Arrowheads point to the recipient/target. `hgt_transfer_edges.tsv` contains every parseable pair, including edges not drawn in the PDF.",
+            "Both directions share one curve: each arrow-end half encodes the count toward that endpoint. A one-way link has a thin source half with no source arrow. Existing reverse directions are added after initial selection (`selection_reason=reciprocal`), so displayed direction counts can exceed the limit without adding more connections. TSV rows remain directional. All internal branch names are drawn above their incoming branch midpoints, regardless of HGT participation. Species names are to the right of terminal branches. All transfer-tree text is 8 pt, including title, legend and colorbar.",
+            "The PDF selects up to 200 mapped pairs by alternating event-count and distance rankings (0 selects all). Darker blue means greater tree distance; width scales with event count with the visibility floor above. Distant links are drawn last.",
+            "`phylogenetic_distance` is the path length between labelled endpoint nodes, not transfer time. `distance_metric` is branch_length when every non-root branch has a finite nonnegative length and at least one is positive; otherwise the entire tree uses topology_edges. `selection_reason` records count, distance, all, or reciprocal; unselected pairs are not_displayed. Unmapped distances are missing. Rankings break ties by count, distance, and endpoint labels deterministically. The color scale uses all mapped pairs, including hidden pairs.",
         ]
     )
     with open(readme_path, "w", encoding="utf-8") as handle:
@@ -183,14 +239,200 @@ def normalize_numeric_frame(df: pandas.DataFrame) -> pandas.DataFrame:
     return out
 
 
-def blank_pdf(path: str, title: str, message: str) -> None:
+def parse_generax_transfer(value) -> Optional[Tuple[str, str]]:
+    """Return (donor/source, recipient/target) from GeneRax's Y@donor@recipient field."""
+    if value is None or pandas.isna(value):
+        return None
+    text = str(value).strip()
+    if text == "" or text.lower() in {"nan", "none", "na"}:
+        return None
+    parts = text.split("@", 2)
+    if len(parts) != 3 or parts[0].strip().upper() != "Y":
+        return None
+    donor = parts[1].strip()
+    recipient = parts[2].strip()
+    if donor == "" or recipient == "":
+        return None
+    return donor, recipient
+
+
+def normalize_tree_label(value) -> str:
+    if value is None or pandas.isna(value):
+        return ""
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1].strip()
+    return text
+
+
+def build_species_tree_label_map(tree) -> Dict[str, str]:
+    """Map exact and underscore/space aliases to unique labels in a Bio.Phylo tree."""
+    label_to_canonical: Dict[str, str] = {}
+    ambiguous: Set[str] = set()
+    for clade in tree.find_clades(order="preorder"):
+        label = normalize_tree_label(getattr(clade, "name", ""))
+        if label == "":
+            continue
+        canonical_aliases = {label, label.replace("_", " "), label.replace(" ", "_")}
+        for alias in canonical_aliases:
+            if alias in ambiguous:
+                continue
+            previous = label_to_canonical.get(alias)
+            if previous is not None and previous != label:
+                label_to_canonical.pop(alias, None)
+                ambiguous.add(alias)
+            else:
+                label_to_canonical[alias] = label
+    return label_to_canonical
+
+
+def load_species_tree_layout(tree_path: str):
+    """Read a Newick tree and return tree, normalized x/y coordinates, and label aliases."""
+    if not tree_path or not os.path.isfile(tree_path):
+        return None, {}, {}, {}
+    try:
+        from Bio import Phylo
+
+        tree = Phylo.read(tree_path, "newick")
+    except (ImportError, OSError, ValueError):
+        return None, {}, {}, {}
+
+    # Numeric Newick internal names are parsed as confidence by Bio.Phylo.
+    # In the GeneRax species tree these are branch identifiers, not support.
+    for clade in tree.find_clades():
+        if clade.name is None and clade.confidence is not None:
+            clade.name = format(clade.confidence, "g")
+
+    terminals = tree.get_terminals()
+    if len(terminals) == 0:
+        return None, {}, {}, {}
+
+    y_by_id: Dict[int, float] = {}
+    for index, clade in enumerate(terminals):
+        y_by_id[id(clade)] = float(len(terminals) - index - 1)
+
+    def assign_internal_y(clade) -> float:
+        if clade.is_terminal():
+            return y_by_id[id(clade)]
+        child_y = [assign_internal_y(child) for child in clade.clades]
+        y_by_id[id(clade)] = float(sum(child_y) / len(child_y))
+        return y_by_id[id(clade)]
+
+    assign_internal_y(tree.root)
+
+    length_x_by_id: Dict[int, float] = {}
+    depth_x_by_id: Dict[int, float] = {}
+
+    def assign_x(clade, length_x: float, depth_x: float) -> None:
+        length_x_by_id[id(clade)] = length_x
+        depth_x_by_id[id(clade)] = depth_x
+        for child in clade.clades:
+            branch_length = child.branch_length
+            try:
+                branch_length = float(branch_length)
+            except (TypeError, ValueError):
+                branch_length = 0.0
+            if not math.isfinite(branch_length) or branch_length < 0:
+                branch_length = 0.0
+            assign_x(child, length_x + branch_length, depth_x + 1.0)
+
+    assign_x(tree.root, 0.0, 0.0)
+    max_length_x = max(length_x_by_id.values())
+    source_x = length_x_by_id if max_length_x > 0 else depth_x_by_id
+    max_x = max(source_x.values())
+    if max_x <= 0:
+        max_x = 1.0
+    x_by_id = {clade_id: 0.04 + 0.46 * (value / max_x) for clade_id, value in source_x.items()}
+    return tree, x_by_id, y_by_id, build_species_tree_label_map(tree)
+
+
+def resolve_tree_endpoint(endpoint: str, tree_labels) -> str:
+    if isinstance(tree_labels, dict):
+        return str(tree_labels.get(endpoint, ""))
+    if tree_labels is not None and endpoint in tree_labels:
+        return endpoint
+    return ""
+
+
+def empty_transfer_edge_table() -> pandas.DataFrame:
+    return pandas.DataFrame(columns=TRANSFER_EDGE_COLUMNS)
+
+
+def build_transfer_edge_table(
+    branch_df: pandas.DataFrame, tree_labels=None, max_edges: int = 200
+) -> pandas.DataFrame:
+    """Aggregate branch-level GeneRax HGT transfers into directed donor/recipient edges."""
+    if branch_df.empty or "generax_transfer" not in branch_df.columns:
+        return empty_transfer_edge_table()
+
+    pair_counts: Counter = Counter()
+    pair_orthogroups = defaultdict(set)
+    total_events = 0
+    orthogroup_values = branch_df["orthogroup"] if "orthogroup" in branch_df.columns else pandas.Series(
+        [""] * len(branch_df), index=branch_df.index
+    )
+    for transfer, orthogroup in zip(
+        branch_df["generax_transfer"].tolist(), orthogroup_values.tolist(), strict=True
+    ):
+        parsed = parse_generax_transfer(transfer)
+        if parsed is None:
+            continue
+        donor, recipient = parsed
+        pair_counts[(donor, recipient)] += 1
+        total_events += 1
+        if orthogroup is not None and not pandas.isna(orthogroup):
+            orthogroup_text = str(orthogroup).strip()
+            if orthogroup_text and orthogroup_text.lower() != "nan":
+                pair_orthogroups[(donor, recipient)].add(orthogroup_text)
+
+    if not pair_counts:
+        return empty_transfer_edge_table()
+
+    max_edges = max(0, int(max_edges))
+    records = []
+    mapped_rank = 0
+    for donor_recipient, event_count in sorted(
+        pair_counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+    ):
+        donor, recipient = donor_recipient
+        donor_tree_label = resolve_tree_endpoint(donor, tree_labels)
+        recipient_tree_label = resolve_tree_endpoint(recipient, tree_labels)
+        mapped = int(donor_tree_label != "" and recipient_tree_label != "")
+        if mapped:
+            mapped_rank += 1
+            displayed = int(max_edges == 0 or mapped_rank <= max_edges)
+            display_rank = mapped_rank
+        else:
+            displayed = 0
+            display_rank = 0
+        records.append(
+            {
+                "donor_node": donor,
+                "recipient_node": recipient,
+                "hgt_event_count": int(event_count),
+                "orthogroup_count": len(pair_orthogroups[donor_recipient]),
+                "event_fraction": float(event_count) / float(total_events),
+                "mapped_to_species_tree": mapped,
+                "display_rank": display_rank,
+                "displayed": displayed,
+            }
+        )
+    return pandas.DataFrame.from_records(records, columns=TRANSFER_EDGE_COLUMNS)
+
+
+def write_transfer_edges_tsv(edge_df: pandas.DataFrame, out_tsv: str) -> None:
+    ensure_parent_dir(out_tsv)
+    edge_df.to_csv(out_tsv, sep="\t", index=False, float_format="%.6f")
+
+
+def blank_pdf(path: str, title: str, message: str, fontsize: int = 8) -> None:
     plt, PdfPages, _, _, _ = get_pyplot()
     ensure_parent_dir(path)
     with PdfPages(path) as pdf:
         fig, ax = plt.subplots(figsize=(8, 3))
         ax.axis("off")
-        ax.text(0.5, 0.65, title, ha="center", va="center", fontsize=12, fontweight="bold")
-        ax.text(0.5, 0.40, message, ha="center", va="center", fontsize=9)
+        ax.text(0.5, 0.65, title, ha="center", va="center", fontsize=fontsize, fontweight="bold")
+        ax.text(0.5, 0.40, message, ha="center", va="center", fontsize=fontsize)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
 
@@ -269,6 +511,351 @@ def plot_overview(branch_df: pandas.DataFrame, out_pdf: str) -> None:
             fig.tight_layout()
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
+
+
+def draw_species_tree(ax, tree, x_by_id: Dict[int, float], y_by_id: Dict[int, float], referenced_labels: Set[str]) -> None:
+    """Draw a compact rectangular species tree in the left part of an axes."""
+    for parent in tree.find_clades(order="preorder"):
+        children = list(parent.clades)
+        if not children:
+            continue
+        parent_x = x_by_id[id(parent)]
+        child_y = [y_by_id[id(child)] for child in children]
+        ax.plot(
+            [parent_x, parent_x],
+            [min(child_y), max(child_y)],
+            color="#777777",
+            linewidth=0.65,
+            solid_capstyle="round",
+            zorder=3,
+        )
+        for child in children:
+            child_x = x_by_id[id(child)]
+            y_value = y_by_id[id(child)]
+            ax.plot(
+                [parent_x, child_x],
+                [y_value, y_value],
+                color="#777777",
+                linewidth=0.65,
+                solid_capstyle="round",
+                zorder=3,
+            )
+
+    anchors = species_branch_anchors(tree, x_by_id, y_by_id)
+    for clade in tree.find_clades(order="preorder"):
+        label = normalize_tree_label(getattr(clade, "name", ""))
+        if label == "":
+            continue
+        terminal = clade.is_terminal()
+        ax.annotate(
+            label,
+            xy=(x_by_id[id(clade)], y_by_id[id(clade)]) if terminal else anchors[id(clade)],
+            xytext=(4, 0) if terminal else (0, 3),
+            textcoords="offset points",
+            ha="left" if terminal else "center",
+            va="center" if terminal else "bottom",
+            fontsize=8,
+            color="#555555",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 0.2},
+            zorder=7,
+        )
+
+
+def add_transfer_distances(edge_df, tree, label_map, max_edges):
+    """Measure node-to-node paths and interleave count/distance priority lists."""
+    edges = edge_df.copy()
+    nodes = {normalize_tree_label(c.name): c for c in tree.find_clades() if c.name}
+    branches = [c for c in tree.find_clades() if c is not tree.root]
+    lengths = [c.branch_length for c in branches]
+    use_lengths = (all(v is not None and math.isfinite(v) and v >= 0 for v in lengths)
+                   and any(v > 0 for v in lengths if v is not None))
+    metric = "branch_length" if use_lengths else "topology_edges"
+    paths = {id(c): tree.get_path(c) for c in tree.find_clades()}
+    distances = []
+    for row in edges.itertuples():
+        if not row.mapped_to_species_tree:
+            distances.append(float("nan"))
+            continue
+        a = nodes[resolve_tree_endpoint(row.donor_node, label_map)]
+        b = nodes[resolve_tree_endpoint(row.recipient_node, label_map)]
+        unique = {id(c): c for c in paths[id(a)]}
+        for c in paths[id(b)]:
+            if id(c) in unique:
+                del unique[id(c)]
+            else:
+                unique[id(c)] = c
+        distances.append(sum(c.branch_length if use_lengths else 1 for c in unique.values()))
+    edges["phylogenetic_distance"] = distances
+    edges["distance_metric"] = metric
+    edges["selection_reason"] = "not_displayed"
+    edges["displayed"] = 0
+    edges["display_rank"] = 0
+    mapped = edges.loc[edges.mapped_to_species_tree.eq(1)]
+    count_order = mapped.sort_values(
+        ["hgt_event_count", "phylogenetic_distance", "donor_node", "recipient_node"],
+        ascending=[False, False, True, True]).index.tolist()
+    distance_order = mapped.sort_values(
+        ["phylogenetic_distance", "hgt_event_count", "donor_node", "recipient_node"],
+        ascending=[False, False, True, True]).index.tolist()
+    limit = len(mapped) if max_edges <= 0 else min(max_edges, len(mapped))
+    chosen = set()
+    for count_idx, distance_idx in zip(count_order, distance_order, strict=True):
+        for idx, reason in ((count_idx, "count"), (distance_idx, "distance")):
+            if idx in chosen or len(chosen) >= limit:
+                continue
+            chosen.add(idx)
+            edges.loc[idx, ["displayed", "display_rank", "selection_reason"]] = [
+                1, len(chosen), "all" if max_edges <= 0 else reason]
+    # Complete the reverse direction of every selected connection so that a
+    # bidirectional link never looks unidirectional because of the display cap.
+    pair_indices = {(r.donor_node, r.recipient_node): r.Index for r in mapped.itertuples()}
+    for idx in sorted(chosen):
+        row = edges.loc[idx]
+        reverse = pair_indices.get((row.recipient_node, row.donor_node))
+        if reverse is not None and not edges.at[reverse, "displayed"]:
+            edges.loc[reverse, ["displayed", "display_rank", "selection_reason"]] = [
+                1, int(edges.display_rank.max()) + 1, "reciprocal"]
+    return edges
+
+
+def transfer_connections(display_df):
+    """Group displayed directions by their unordered endpoint pair."""
+    groups = {}
+    for row in display_df.itertuples(index=False):
+        key = tuple(sorted((str(row.donor_node), str(row.recipient_node))))
+        groups.setdefault(key, []).append(row)
+    return sorted(groups.items(), key=lambda item: (
+        max(r.phylogenetic_distance for r in item[1]), item[0]))
+
+
+def transfer_half_paths(ax, start, end):
+    """Split one shallow quadratic in display space, returning midpoint-to-tip paths."""
+    from matplotlib.path import Path
+
+    a, b = ax.transData.transform([start, end])
+    delta = b - a
+    control = (a + b) / 2 + 0.10 * numpy.array([delta[1], -delta[0]])
+    left, right = (a + control) / 2, (control + b) / 2
+    middle = (left + right) / 2
+    inverse = ax.transData.inverted()
+    codes = [Path.MOVETO, Path.CURVE3, Path.CURVE3]
+    return (Path(inverse.transform([middle, left, a]), codes),
+            Path(inverse.transform([middle, right, b]), codes))
+
+
+def species_branch_anchors(tree, x_by_id, y_by_id):
+    """Midpoints of incoming horizontal branches; root uses a display-only stem."""
+    anchors = {id(tree.root): (x_by_id[id(tree.root)] / 2, y_by_id[id(tree.root)])}
+    for parent in tree.find_clades():
+        for child in parent.clades:
+            anchors[id(child)] = (
+                (x_by_id[id(parent)] + x_by_id[id(child)]) / 2,
+                y_by_id[id(child)],
+            )
+    return anchors
+
+
+def read_transfer_traits(path):
+    """Use the shared trait contract; preserve unknown values and reject ambiguous IDs."""
+    if not path:
+        return pandas.DataFrame()
+    from species_trait_contract import select_analysis_traits
+
+    frame, _ = select_analysis_traits(path)
+    identifiers = frame.iloc[:, 0].map(lambda s: normalize_tree_label(s).replace(" ", "_"))
+    if identifiers.eq("").any() or identifiers.duplicated().any():
+        raise ValueError("Species traits require unique nonempty species IDs (including space/underscore aliases)")
+    values = frame.iloc[:, 1:].replace({"": numpy.nan, "NA": numpy.nan, "NaN": numpy.nan, "nan": numpy.nan})
+    values = values.apply(pandas.to_numeric, errors="raise")
+    values.index = identifiers
+    return values
+
+
+def draw_transfer_traits(ax, tree, y_by_id, traits):
+    """Draw observed tip traits only; no ancestral reconstruction or missing-to-zero conversion."""
+    from matplotlib import colormaps
+    from matplotlib.colors import Normalize
+    from matplotlib.patches import Rectangle
+
+    for column_index, column in enumerate(traits.columns):
+        series = traits[column]
+        observed = series.dropna()
+        binary = set(observed.unique()) <= {0, 1}
+        low, high = (0, 1) if binary or observed.empty else (float(observed.min()), float(observed.max()))
+        scale = Normalize(low, high if high > low else low + 1)
+        x = 0.81 + column_index * 0.11
+        ax.text(x + 0.025, len(tree.get_terminals()) + 0.2, column,
+                rotation=45, ha="left", va="bottom", fontsize=8)
+        for tip in tree.get_terminals():
+            key = normalize_tree_label(tip.name).replace(" ", "_")
+            value = series.get(key, numpy.nan)
+            missing = pandas.isna(value)
+            color = "#ffffff" if missing else ("#e69f00" if value == 1 else "#eeeeee") if binary else colormaps["YlOrBr"](scale(value))
+            ax.add_patch(Rectangle((x, y_by_id[id(tip)] - 0.4), 0.05, 0.8,
+                                   facecolor=color, edgecolor="#aaaaaa", linewidth=0.3, zorder=5))
+            ax.text(x + 0.025, y_by_id[id(tip)], "NA" if missing else f"{value:g}",
+                    ha="center", va="center", fontsize=8, zorder=6)
+    ax.text(0.81, -0.9, "Tip traits; NA = missing", fontsize=8, ha="left", va="top")
+
+
+def plot_transfer_tree(
+    branch_df: pandas.DataFrame,
+    out_pdf: str,
+    species_tree_path: str = "",
+    edges_tsv: str = "",
+    max_edges: int = 200,
+    species_trait_path: str = "",
+) -> None:
+    """Plot directed GeneRax HGT event counts over a species tree."""
+    tree, x_by_id, y_by_id, tree_label_map = load_species_tree_layout(species_tree_path)
+    traits = read_transfer_traits(species_trait_path)
+    edge_df = build_transfer_edge_table(branch_df, tree_labels=tree_label_map, max_edges=max_edges)
+    if tree is not None and not edge_df.empty:
+        edge_df = add_transfer_distances(edge_df, tree, tree_label_map, max_edges)
+    if edges_tsv:
+        write_transfer_edges_tsv(edge_df, edges_tsv)
+    if not out_pdf:
+        return
+
+    if tree is None:
+        message = "Species tree was not found or could not be parsed."
+        if species_tree_path:
+            message += f"\nRequested path: {species_tree_path}"
+        blank_pdf(out_pdf, "HGT Transfer Tree", message)
+        return
+    if edge_df.empty:
+        blank_pdf(out_pdf, "HGT Transfer Tree", "No parseable Y@donor@recipient transfers were found.")
+        return
+
+    display_df = edge_df.loc[edge_df["displayed"].astype(int).eq(1)].copy()
+    if display_df.empty:
+        blank_pdf(
+            out_pdf,
+            "HGT Transfer Tree",
+            "Transfer records were found, but no donor/recipient pair matched the species-tree labels.",
+        )
+        return
+
+    plt, PdfPages, _, _, _ = get_pyplot()
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import FancyArrowPatch
+
+    terminal_count = len(tree.get_terminals())
+    branch_anchors = species_branch_anchors(tree, x_by_id, y_by_id)
+    fig_height = max(8.0, min(28.0, 0.16 * terminal_count + 2.8))
+    edge_color = "#2b6ca3"
+    cmap = LinearSegmentedColormap.from_list("hgt_distance", ["#c6dbef", "#08306b"])
+    max_distance = float(edge_df["phylogenetic_distance"].max())
+    norm = Normalize(0, max_distance if max_distance > 0 else 1)
+    referenced_labels = set()
+    for row in display_df.itertuples(index=False):
+        donor_label = resolve_tree_endpoint(str(row.donor_node), tree_label_map)
+        recipient_label = resolve_tree_endpoint(str(row.recipient_node), tree_label_map)
+        if donor_label:
+            referenced_labels.add(donor_label)
+        if recipient_label:
+            referenced_labels.add(recipient_label)
+    clade_by_label = {}
+    for clade in tree.find_clades(order="preorder"):
+        label = normalize_tree_label(getattr(clade, "name", ""))
+        if label:
+            clade_by_label[label] = clade
+
+    ensure_parent_dir(out_pdf)
+    with PdfPages(out_pdf) as pdf:
+        fig, ax = plt.subplots(figsize=(14.0, fig_height))
+        ax.set_xlim(0.0, max(1.04, 0.92 + 0.11 * len(traits.columns)))
+        ax.set_ylim(-1.2, float(terminal_count) + 2.0)
+        ax.axis("off")
+
+        display_df = display_df.sort_values(
+            ["phylogenetic_distance", "hgt_event_count", "donor_node", "recipient_node"],
+            ascending=[True, True, True, True],
+            kind="mergesort",
+        )
+        max_count = max(1, int(edge_df["hgt_event_count"].max()))
+        connections = transfer_connections(display_df)
+        for (a, b), rows in connections:
+            a_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(a, tree_label_map)])]
+            b_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(b, tree_label_map)])]
+            halves = transfer_half_paths(ax, a_point, b_point)
+            by_target = {str(r.recipient_node): r for r in rows}
+            for target, path in zip((a, b), halves, strict=True):
+                row = by_target.get(target)
+                # One-way connections keep a thin source half without an arrow.
+                width = max(0.35, 5.0 * int(row.hgt_event_count) / max_count) if row else 0.35
+                ax.add_patch(FancyArrowPatch(
+                    path=path, arrowstyle="-|>" if row else "-",
+                    mutation_scale=7.0, linewidth=width,
+                    color=cmap(norm(rows[0].phylogenetic_distance)),
+                    capstyle="butt", zorder=2,
+                ))
+
+        draw_species_tree(ax, tree, x_by_id, y_by_id, referenced_labels)
+        if len(traits.columns):
+            draw_transfer_traits(ax, tree, y_by_id, traits)
+        if normalize_tree_label(tree.root.name):
+            ax.plot([0, x_by_id[id(tree.root)]], [y_by_id[id(tree.root)]] * 2,
+                    color="#777777", linewidth=0.65, linestyle="--")
+
+        mapped_events = int(edge_df.loc[edge_df["mapped_to_species_tree"].astype(int).eq(1), "hgt_event_count"].sum())
+        displayed_events = int(display_df["hgt_event_count"].sum())
+        total_events = int(edge_df["hgt_event_count"].sum())
+        handles = [
+            Line2D([0], [0], color="#777777", linewidth=0.65, label="Species-tree branch"),
+        ]
+        for count in sorted({1, max(1, max_count // 10), max_count}):
+            handles.append(Line2D([0], [0], color=edge_color,
+                                  linewidth=max(0.35, 5.0 * count / max_count), label=f"{count} HGT events"))
+        color_ax = ax.inset_axes([0.63, 0.12, 0.025, 0.40])
+        colorbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=color_ax)
+        colorbar.set_label(f"Endpoint-node distance ({edge_df['distance_metric'].iloc[0]})")
+        ax.legend(
+            handles=handles,
+            loc="upper left",
+            bbox_to_anchor=(0.01, 1.01),
+            frameon=False,
+            fontsize=8,
+            ncol=2,
+            handlelength=2.5,
+            columnspacing=1.0,
+        )
+        ax.text(
+            0.5,
+            float(terminal_count) + 1.8,
+            "HGT events mapped on the species tree",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
+        )
+        ax.text(
+            0.5,
+            float(terminal_count) + 0.88,
+            "Arrow-end half width: directional count (0.35 pt floor) | darker: greater distance | shared curve for both directions",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color="#444444",
+        )
+        ax.text(
+            0.5,
+            -0.04,
+            f"Parsed events: {total_events:,} | mapped events: {mapped_events:,} | displayed events: {displayed_events:,} | directions: {len(display_df):,} | connections: {len(connections):,}",
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=8,
+            color="#444444",
+        )
+        from matplotlib.text import Text
+        for text in fig.findobj(match=Text):
+            text.set_fontsize(8)
+        fig.tight_layout()
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
 
 
 def resolve_rank_label(
@@ -388,16 +975,36 @@ def plot_taxonomy_flow(
         return
 
     plot_df = gene_df.copy()
-    plot_df["recipient_label"] = plot_df.apply(
-        lambda row: resolve_rank_label(row.get("gene_taxon", ""), numpy.nan, resolver, preferred_rank),
-        axis=1,
+    preferred_rank_normalized = str(preferred_rank).strip().lower()
+    precomputed_phylum_columns = {"recipient_phylum", "donor_phylum"}.issubset(plot_df.columns)
+    precomputed_phylum_values = pandas.DataFrame(index=plot_df.index)
+    if precomputed_phylum_columns:
+        for column in ["recipient_phylum", "donor_phylum"]:
+            precomputed_phylum_values[column] = plot_df[column].map(
+                lambda value: "" if pandas.isna(value) else str(value).strip()
+            )
+    use_precomputed_phylum = (
+        preferred_rank_normalized == "phylum"
+        and precomputed_phylum_columns
+        and (
+            precomputed_phylum_values["recipient_phylum"].ne("").any()
+            or precomputed_phylum_values["donor_phylum"].ne("").any()
+        )
     )
-    plot_df["besthit_label"] = plot_df.apply(
-        lambda row: resolve_rank_label(
-            row.get("besthit_organism", ""), row.get("besthit_taxid", numpy.nan), resolver, preferred_rank
-        ),
-        axis=1,
-    )
+    if use_precomputed_phylum:
+        plot_df["recipient_label"] = precomputed_phylum_values["recipient_phylum"]
+        plot_df["besthit_label"] = precomputed_phylum_values["donor_phylum"]
+    else:
+        plot_df["recipient_label"] = plot_df.apply(
+            lambda row: resolve_rank_label(row.get("gene_taxon", ""), numpy.nan, resolver, preferred_rank),
+            axis=1,
+        )
+        plot_df["besthit_label"] = plot_df.apply(
+            lambda row: resolve_rank_label(
+                row.get("besthit_organism", ""), row.get("besthit_taxid", numpy.nan), resolver, preferred_rank
+            ),
+            axis=1,
+        )
     plot_df["recipient_label"] = plot_df["recipient_label"].replace("", FLOW_FALLBACK_LABEL).fillna(FLOW_FALLBACK_LABEL)
     plot_df["besthit_label"] = plot_df["besthit_label"].replace("", FLOW_FALLBACK_LABEL).fillna(FLOW_FALLBACK_LABEL)
 
@@ -522,6 +1129,19 @@ def main():
         preferred_rank=args.flow_rank,
         max_categories=max(1, int(args.flow_max_categories)),
     )
+    if args.transfer_tree_pdf or args.transfer_edges_tsv:
+        if not args.transfer_tree_pdf:
+            transfer_pdf = os.path.join(os.path.dirname(args.transfer_edges_tsv), "hgt_transfer_tree.pdf")
+        else:
+            transfer_pdf = args.transfer_tree_pdf
+        plot_transfer_tree(
+            branch_df=branch_df,
+            out_pdf=transfer_pdf,
+            species_tree_path=args.species_tree,
+            edges_tsv=args.transfer_edges_tsv,
+            max_edges=max(0, int(args.transfer_tree_max_edges)),
+            species_trait_path=args.species_trait,
+        )
 
 
 if __name__ == "__main__":

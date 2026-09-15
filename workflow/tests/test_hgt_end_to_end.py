@@ -107,7 +107,7 @@ def _write_branch_db(db_path: Path) -> None:
                 "taxon": "",
                 "spnode_coverage": "Arabidopsis_thaliana",
                 "generax_event": "H",
-                "generax_transfer": "Y",
+                "generax_transfer": "Y@Escherichia_coli@Arabidopsis_thaliana",
                 "generax_event_parent": "S",
                 "clade_min_expression_pearsoncor": 0.75,
                 "num_intron": pandas.NA,
@@ -186,7 +186,7 @@ def _write_stat_branch(path: Path) -> None:
                 "taxon": "",
                 "spnode_coverage": "Arabidopsis_thaliana",
                 "generax_event": "H",
-                "generax_transfer": "Y",
+                "generax_transfer": "Y@Escherichia_coli@Arabidopsis_thaliana",
                 "generax_event_parent": "S",
                 "bl_rooted": 0.25,
                 "support_unrooted": 100,
@@ -297,9 +297,17 @@ def _write_stat_branch(path: Path) -> None:
 
 
 def _write_workspace_fixture(workspace: Path) -> None:
+    trait_dir = workspace / "input" / "species_trait"
+    trait_dir.mkdir(parents=True, exist_ok=True)
+    (trait_dir / "species_trait.tsv").write_text("species\ttest_trait\nArabidopsis_thaliana\t1\nEscherichia_coli\t0\n")
     output_root = workspace / "output" / "orthogroup"
     _write_branch_db(output_root / "gg_orthogroup.db")
     _write_stat_branch(output_root / "stat_branch" / "OG0001_stat.branch.tsv")
+    (output_root / "parameters").mkdir(parents=True, exist_ok=True)
+    (output_root / "parameters" / "undated_species_tree.nwk").write_text(
+        "(Arabidopsis_thaliana:1,Escherichia_coli:1)n0;\n",
+        encoding="utf-8",
+    )
 
     synteny_df = pandas.DataFrame(
         [
@@ -377,6 +385,17 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
 
     workspace = tmp_path / "workspace"
     _write_workspace_fixture(workspace)
+    from workflow.support.scaffold_taxonomy import RANKS
+    scaffold_dir = workspace / "output" / "species_scaffold_taxonomy"
+    scaffold_dir.mkdir()
+    pandas.DataFrame([
+        dict(species="Arabidopsis_thaliana", gene_id=gene, scaffold="chr1", locus_id=gene,
+             count_unit="cds_id", rank=rank, host_taxid="", label=label)
+        for gene, label in [("Arabidopsis_thaliana_geneA", "incompatible"),
+                            ("Arabidopsis_thaliana_geneB", "incompatible"),
+                            ("Arabidopsis_thaliana_background", "compatible")]
+        for rank in RANKS
+    ]).to_csv(scaffold_dir / "Arabidopsis_thaliana_gene_taxonomy.tsv", sep="\t", index=False)
     stub_lib = _install_stub_ggimage(tmp_path)
     fake_conda_bin = _install_fake_conda(tmp_path)
 
@@ -411,13 +430,38 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     branch_tsv = hgt_root / "hgt_branch_candidates.tsv"
     gene_tsv = hgt_root / "hgt_gene_candidates.tsv"
     orthogroup_tsv = hgt_root / "hgt_orthogroup_summary.tsv"
+    readme_md = hgt_root / "README.md"
     overview_pdf = hgt_root / "plots" / "hgt_branch_overview.pdf"
     taxonomy_flow_pdf = hgt_root / "plots" / "hgt_taxonomy_flow.pdf"
+    transfer_tree_pdf = hgt_root / "plots" / "hgt_transfer_tree.pdf"
+    transfer_edges_tsv = hgt_root / "plots" / "hgt_transfer_edges.tsv"
     tree_plot_pdf = hgt_root / "tree_plot" / "OG0001_hgt_tree_plot.pdf"
 
-    for path in [branch_tsv, gene_tsv, orthogroup_tsv, overview_pdf, taxonomy_flow_pdf, tree_plot_pdf]:
+    for path in [
+        branch_tsv,
+        gene_tsv,
+        orthogroup_tsv,
+        readme_md,
+        overview_pdf,
+        taxonomy_flow_pdf,
+        transfer_tree_pdf,
+        transfer_edges_tsv,
+        tree_plot_pdf,
+    ]:
         assert path.exists(), f"Expected output not found: {path}"
         assert path.stat().st_size > 0, f"Output was empty: {path}"
+
+    readme_text = readme_md.read_text(encoding="utf-8")
+    assert "`hgt_branch_candidates.tsv`" in readme_text
+    assert "`contamination_is_compatible_lineage`" in readme_text
+    assert "`recipient_phylum`" in readme_text
+    assert "`donor_phylum`" in readme_text
+    assert "`recipient_species`" in readme_text
+    assert "`donor_taxonomy`" in readme_text
+    assert "`representative_besthit_organism`" in readme_text
+    plot_readme = (hgt_root / "plots" / "README.md").read_text(encoding="utf-8")
+    assert "`hgt_transfer_tree.pdf`" in plot_readme
+    assert "`hgt_transfer_edges.tsv`" in plot_readme
 
     branch_df = pandas.read_csv(branch_tsv, sep="\t")
     gene_df = pandas.read_csv(gene_tsv, sep="\t")
@@ -426,5 +470,37 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert branch_df.shape[0] == 1
     assert branch_df.loc[0, "orthogroup"] == "OG0001"
     assert branch_df.loc[0, "candidate_gene_count"] == 2
+    assert branch_df.loc[0, "host_scaffold_count"] == 1
+    assert branch_df.loc[0, "host_scaffold_phylum_total_count"] == 3
+    assert branch_df.loc[0, "host_scaffold_background_phylum_total_count"] == 1
+    assert branch_df.loc[0, "host_scaffold_background_phylum_compatible_fraction"] == 1
+    assert {
+        "recipient_phyla",
+        "donor_phyla",
+        "recipient_classes",
+        "donor_families",
+        "recipient_taxonomies",
+    }.issubset(branch_df.columns)
+    assert "representative_gene_id" in branch_df.columns
     assert gene_df["gene_id"].tolist() == ["Arabidopsis_thaliana_geneA", "Arabidopsis_thaliana_geneB"]
+    assert {
+        "recipient_phylum",
+        "donor_phylum",
+        "recipient_domain",
+        "recipient_species",
+        "donor_family",
+        "donor_taxonomy",
+    }.issubset(gene_df.columns)
     assert orthogroup_df.loc[0, "hgt_branch_count"] == 1
+    assert {
+        "recipient_phyla",
+        "donor_phyla",
+        "recipient_classes",
+        "donor_families",
+        "donor_taxonomies",
+    }.issubset(orthogroup_df.columns)
+    transfer_edges = pandas.read_csv(transfer_edges_tsv, sep="\t")
+    assert transfer_edges.loc[0, "donor_node"] == "Escherichia_coli"
+    assert transfer_edges.loc[0, "recipient_node"] == "Arabidopsis_thaliana"
+    assert transfer_edges.loc[0, "hgt_event_count"] == 1
+    assert transfer_edges.loc[0, "mapped_to_species_tree"] == 1

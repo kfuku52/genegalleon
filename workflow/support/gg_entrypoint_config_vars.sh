@@ -37,8 +37,11 @@ hgt_summary_contamination_dir
 hgt_summary_fimo_qvalue
 hgt_summary_output_dir
 hgt_summary_promoter_bp
+hgt_summary_species_tree
+hgt_summary_species_trait
 hgt_summary_taxonomy_flow_max_categories
 hgt_summary_taxonomy_flow_rank
+hgt_summary_transfer_tree_max_edges
 hgt_summary_tree_width_mm
 hgt_summary_use_taxonomy_db
 presence_absence_busco_table
@@ -284,6 +287,7 @@ run_busco_genome
 run_cds_contamination_removal
 run_cds_fx2tab
 run_cds_mmseqs2taxonomy
+run_scaffold_taxonomy
 run_genome_contamination_removal
 run_genome_fx2tab
 run_genome_mmseqs2taxonomy

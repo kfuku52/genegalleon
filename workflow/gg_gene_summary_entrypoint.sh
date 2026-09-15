@@ -101,7 +101,7 @@ run_gene_family_database_build="${run_gene_family_database_build:-0}" # Prepare 
 run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}" # Generate CSUBST scan AA-change summary tables and plots from gg_orthogroup.db.
 run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}" # Package scan candidates and focused csubst sites reports by min_support.
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}" # Summarize GeneRax-first HGT candidate evidence from gg_orthogroup.db.
-run_hgt_summary_plots="${run_hgt_summary_plots:-0}" # Generate HGT overview, taxonomy-flow, and per-family HGT tree plots.
+run_hgt_summary_plots="${run_hgt_summary_plots:-0}" # Generate HGT overview, taxonomy-flow, transfer-tree, and per-family HGT tree plots.
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}" # Run site-level convergence screening for the selected source.
 
 # Output and shared summary parameters
@@ -133,6 +133,9 @@ hgt_summary_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" # Resolve UniPro
 hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}" # Optional directory containing species_cds_contamination_removal_tsv files; empty auto-detects the workspace default.
 hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" # Taxonomic rank used to collapse recipient/best-hit lineages in the flow plot.
 hgt_summary_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" # Maximum recipient and best-hit categories retained before collapsing to Other.
+hgt_summary_species_tree="${hgt_summary_species_tree:-auto}" # Species-tree Newick path for the directed HGT transfer plot; auto searches standard workspace outputs.
+hgt_summary_species_trait="${hgt_summary_species_trait:-auto}" # auto uses input/species_trait/species_trait.tsv; none disables tip traits.
+hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" # Maximum mapped donor-recipient edges drawn in the transfer plot; 0 draws all.
 hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}" # Minimum tree data-panel width in mm; PDF width is automatic.
 hgt_summary_promoter_bp="${hgt_summary_promoter_bp:-2000}" # Promoter length used when re-rendering FIMO panels in HGT tree plots.
 hgt_summary_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" # FIMO q-value threshold used when re-rendering HGT tree plots.

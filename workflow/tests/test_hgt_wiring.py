@@ -56,24 +56,44 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert 'run_hgt_summary_plots="${run_hgt_summary_plots:-0}"' in entrypoint_text
     assert 'hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}"' in entrypoint_text
     assert 'hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}"' in entrypoint_text
+    assert 'hgt_summary_species_tree="${hgt_summary_species_tree:-auto}"' in entrypoint_text
+    assert 'hgt_summary_species_trait="${hgt_summary_species_trait:-auto}"' in entrypoint_text
+    assert '--species_trait "${hgt_species_trait_path}"' in core_text
+    assert 'species_trait.tsv' in core_text
+    assert 'hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}"' in entrypoint_text
     assert 'hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}"' in entrypoint_text
     assert "hgt_min_branch_score" not in entrypoint_text
     assert 'bash "${gg_core_dir}/gg_hgt_core.sh"' in summary_core_text
     assert 'run_hgt_eval="${run_hgt_candidate_summary}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_summary_plots}"' in summary_core_text
     assert 'hgt_contamination_dir="${hgt_summary_contamination_dir:-}"' in summary_core_text
+    assert 'hgt_species_tree="${hgt_summary_species_tree:-auto}"' in summary_core_text
+    assert 'hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
     assert 'hgt_tree_width_mm="${hgt_tree_width_mm:-60}"' in core_text
+    assert 'hgt_species_tree="${hgt_species_tree:-auto}"' in core_text
+    assert 'hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text
     assert 'default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contamination_removal_tsv"' in core_text
+    assert 'file_hgt_readme="${dir_hgt}/README.md"' in core_text
+    assert 'file_hgt_transfer_tree_pdf="${dir_hgt_plot}/hgt_transfer_tree.pdf"' in core_text
+    assert 'file_hgt_transfer_edges="${dir_hgt_plot}/hgt_transfer_edges.tsv"' in core_text
+    assert '--input "hgt_candidate_scorer=${gg_support_dir}/score_hgt_candidates.py"' in core_text
+    assert '--parameter "schema_version=2"' in core_text
     assert 'if [[ -n "${hgt_contamination_dir}" ]]; then' in core_text
     assert '--dir_contamination_tsv "${contamination_arg}"' in core_text
     assert "--min_branch_score" not in core_text
     assert 'python "${gg_support_dir}/plot_hgt_summary.py"' in core_text
+    assert '--transfer_tree_pdf "${file_hgt_transfer_tree_pdf}"' in core_text
+    assert '--transfer_edges_tsv "${file_hgt_transfer_edges}"' in core_text
+    assert '--species_tree "${hgt_species_tree_path}"' in core_text
+    assert '--transfer_tree_max_edges "${hgt_transfer_tree_max_edges}"' in core_text
+    assert 'python "${gg_support_dir}/write_hgt_output_readme.py"' in core_text
+    assert '--output "${file_hgt_readme}"' in core_text
     assert 'python "${gg_support_dir}/annotate_hgt_tree_plot.py"' in core_text
     assert "mapfile -t hgt_orthogroups" not in core_text
     assert 'while IFS= read -r og_id; do' in core_text
-    assert '--panel4="heatmap,no,abs,_,hgt_,HGT evidence"' in core_text
+    assert '--panel4="heatmap,no,colrel,_,hgt_,HGT evidence (column max=1)"' in core_text
     assert '--panel15="meme,${file_og_meme}"' in core_text
     assert '--panel8="categorical,besthit_lca_rank_display,Hit LCA,-"' in core_text
     assert '--panel9="signal_peptide"' in core_text

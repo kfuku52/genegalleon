@@ -23,6 +23,9 @@ hgt_use_taxonomy_db="${hgt_use_taxonomy_db:-1}"
 hgt_contamination_dir="${hgt_contamination_dir:-}"
 hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}"
 hgt_taxonomy_flow_max_categories="${hgt_taxonomy_flow_max_categories:-12}"
+hgt_species_tree="${hgt_species_tree:-auto}"
+hgt_species_trait="${hgt_species_trait:-auto}"
+hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
 hgt_promoter_bp="${hgt_promoter_bp:-2000}"
 hgt_fimo_qvalue="${hgt_fimo_qvalue:-0.05}"
@@ -34,6 +37,7 @@ default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contaminat
 file_hgt_branch="${dir_hgt}/hgt_branch_candidates.tsv"
 file_hgt_gene="${dir_hgt}/hgt_gene_candidates.tsv"
 file_hgt_orthogroup="${dir_hgt}/hgt_orthogroup_summary.tsv"
+file_hgt_readme="${dir_hgt}/README.md"
 dir_hgt_plot="${dir_hgt}/plots"
 dir_hgt_tree_plot="${dir_hgt}/tree_plot"
 dir_hgt_tree_input="${dir_hgt}/tree_plot_input"
@@ -41,6 +45,8 @@ dir_hgt_tmp="${dir_hgt}/tmp"
 dir_hgt_provenance="${dir_hgt}/artifact_provenance"
 file_hgt_overview_pdf="${dir_hgt_plot}/hgt_branch_overview.pdf"
 file_hgt_taxonomy_flow_pdf="${dir_hgt_plot}/hgt_taxonomy_flow.pdf"
+file_hgt_transfer_tree_pdf="${dir_hgt_plot}/hgt_transfer_tree.pdf"
+file_hgt_transfer_edges="${dir_hgt_plot}/hgt_transfer_edges.tsv"
 
 enable_all_run_flags_for_debug_mode
 
@@ -60,6 +66,10 @@ if ! [[ "${hgt_taxonomy_flow_max_categories}" =~ ^[0-9]+$ ]]; then
   echo "Invalid hgt_taxonomy_flow_max_categories: ${hgt_taxonomy_flow_max_categories}"
   exit 1
 fi
+if ! [[ "${hgt_transfer_tree_max_edges}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid hgt_transfer_tree_max_edges: ${hgt_transfer_tree_max_edges}"
+  exit 1
+fi
 if ! [[ "${hgt_tree_width_mm}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid hgt_tree_width_mm: ${hgt_tree_width_mm}"
   exit 1
@@ -73,6 +83,46 @@ if ! [[ "${hgt_fimo_qvalue}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   exit 1
 fi
 mkdir -p "${dir_hgt}"
+
+resolve_hgt_species_tree() {
+  local candidate
+  if [[ "${hgt_species_tree}" == "none" ]]; then
+    return 1
+  fi
+  if [[ "${hgt_species_tree}" != "auto" ]]; then
+    if [[ -s "${hgt_species_tree}" ]]; then
+      printf '%s\n' "${hgt_species_tree}"
+      return 0
+    fi
+    return 1
+  fi
+  local candidates=(
+    "${dir_orthogroup}/parameters/dated_species_tree.pruned.nwk"
+    "${dir_orthogroup}/parameters/undated_species_tree.pruned.nwk"
+    "${dir_orthogroup}/parameters/dated_species_tree.nwk"
+    "${dir_orthogroup}/parameters/undated_species_tree.nwk"
+    "${dir_orthogroup}/species_tree.nwk"
+    "${gg_workspace_output_dir}/species_tree/species_tree_summary/dated_species_tree.nwk"
+    "${gg_workspace_output_dir}/species_tree/species_tree_summary/undated_species_tree.nwk"
+    "${gg_workspace_output_dir}/species_tree/mcmctree_main/dated_species_tree.nwk"
+  )
+  for candidate in "${candidates[@]}"; do
+    if [[ -s "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+hgt_species_tree_path=""
+if ! hgt_species_tree_path=$(resolve_hgt_species_tree); then
+  if [[ "${hgt_species_tree}" != "auto" && "${hgt_species_tree}" != "none" ]]; then
+    echo "Warning: HGT transfer-tree species tree was not found: ${hgt_species_tree}" >&2
+  elif [[ "${hgt_species_tree}" == "auto" ]]; then
+    echo "Warning: No species tree was found for the HGT transfer-tree plot; the edge TSV will still be written." >&2
+  fi
+fi
 
 hgt_majority_ortholog_prefix() {
   local orthogroup_id=$1
@@ -261,11 +311,16 @@ gg_artifact_contract_init \
   "${dir_hgt_provenance}/hgt_evaluation.json"
 hgt_eval_provenance_args+=(
   --input "gene_family_database=${file_orthogroup_db}"
+  --input "hgt_candidate_scorer=${gg_support_dir}/score_hgt_candidates.py"
+  --input "scaffold_taxonomy_helper=${gg_support_dir}/scaffold_taxonomy.py"
   --output "branch_candidates=${file_hgt_branch}"
   --output "gene_candidates=${file_hgt_gene}"
   --output "gene_family_summary=${file_hgt_orthogroup}"
   --parameter "use_taxonomy_db=${hgt_use_taxonomy_db}"
+  --parameter "schema_version=3"
 )
+gg_artifact_add_input_if_present hgt_eval_provenance_args "scaffold_taxonomy" "${gg_workspace_output_dir}/species_scaffold_taxonomy"
+gg_artifact_add_input_if_present hgt_eval_provenance_args "species_tree" "${hgt_species_tree_path}"
 gg_artifact_add_input_if_present hgt_eval_provenance_args "contamination_tables" "${contamination_arg}"
 gg_artifact_add_input_if_present hgt_eval_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
 gg_artifact_prepare_stage hgt_eval_needs_update run_hgt_eval "${hgt_eval_provenance_args[@]}" || exit $?
@@ -290,12 +345,54 @@ if [[ ${run_hgt_eval} -eq 1 && ${hgt_eval_needs_update} -eq 1 ]]; then
       --gene_out "${file_hgt_gene}" \
       --orthogroup_out "${file_hgt_orthogroup}" \
       --dir_contamination_tsv "${contamination_arg}" \
+      --dir_scaffold_taxonomy "${gg_workspace_output_dir}/species_scaffold_taxonomy" \
+      --species_tree "${hgt_species_tree_path}" \
       --taxonomy_dbfile "${hgt_taxonomy_dbfile}"
     gg_artifact_record "${hgt_eval_provenance_args[@]}"
   fi
 fi
 
+hgt_output_readme_run=1
+hgt_output_readme_provenance_args=()
+gg_artifact_contract_init \
+  hgt_output_readme_provenance_args \
+  "hgt_output_readme" \
+  "all_candidates" \
+  "${dir_hgt_provenance}/hgt_output_readme.json"
+hgt_output_readme_provenance_args+=(
+  --input "branch_candidates=${file_hgt_branch}"
+  --input "gene_candidates=${file_hgt_gene}"
+  --input "orthogroup_summary=${file_hgt_orthogroup}"
+  --input "readme_generator=${gg_support_dir}/write_hgt_output_readme.py"
+  --output "readme=${file_hgt_readme}"
+  --parameter "schema_version=2"
+)
+gg_artifact_prepare_stage \
+  hgt_output_readme_needs_update \
+  hgt_output_readme_run \
+  "${hgt_output_readme_provenance_args[@]}" || exit $?
+if [[ ${hgt_output_readme_run} -eq 1 && ${hgt_output_readme_needs_update} -eq 1 ]]; then
+  python "${gg_support_dir}/write_hgt_output_readme.py" \
+    --output "${file_hgt_readme}" \
+    --branch_tsv "${file_hgt_branch}" \
+    --gene_tsv "${file_hgt_gene}" \
+    --orthogroup_tsv "${file_hgt_orthogroup}"
+  gg_artifact_record "${hgt_output_readme_provenance_args[@]}"
+fi
+
 hgt_summary_plot_provenance_args=()
+hgt_species_trait_path=""
+if [[ "${hgt_species_trait}" == "auto" ]]; then
+  if [[ -s "${gg_workspace_input_dir}/species_trait/species_trait.tsv" ]]; then
+    hgt_species_trait_path="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
+  fi
+elif [[ "${hgt_species_trait}" != "none" ]]; then
+  if [[ ! -s "${hgt_species_trait}" ]]; then
+    echo "Species trait file not found: ${hgt_species_trait}" >&2
+    exit 1
+  fi
+  hgt_species_trait_path="${hgt_species_trait}"
+fi
 gg_artifact_contract_init \
   hgt_summary_plot_provenance_args \
   "hgt_summary_plot" \
@@ -306,11 +403,21 @@ hgt_summary_plot_provenance_args+=(
   --input "gene_candidates=${file_hgt_gene}"
   --output "branch_overview=${file_hgt_overview_pdf}"
   --output "taxonomy_flow=${file_hgt_taxonomy_flow_pdf}"
+  --output "transfer_tree=${file_hgt_transfer_tree_pdf}"
+  --output "transfer_edges=${file_hgt_transfer_edges}"
   --parameter "use_taxonomy_db=${hgt_use_taxonomy_db}"
   --parameter "taxonomy_flow_rank=${hgt_taxonomy_flow_rank}"
   --parameter "taxonomy_flow_max_categories=${hgt_taxonomy_flow_max_categories}"
+  --parameter "transfer_tree_max_edges=${hgt_transfer_tree_max_edges}"
 )
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
+gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_tree" "${hgt_species_tree_path}"
+gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait" "${hgt_species_trait_path}"
+if [[ -n "${hgt_species_trait_path}" ]]; then
+  gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_schema" "${hgt_species_trait_path}.schema.json"
+  gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_metadata" "${hgt_species_trait_path}.metadata.json"
+  hgt_summary_plot_provenance_args+=(--input "trait_contract=${gg_support_dir}/species_trait_contract.py" --input "trait_schema=${gg_support_dir}/species_trait_schema.py")
+fi
 gg_artifact_prepare_stage hgt_summary_plot_needs_update run_hgt_plot "${hgt_summary_plot_provenance_args[@]}" || exit $?
 
 if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
@@ -330,7 +437,12 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       --taxonomy_flow_pdf "${file_hgt_taxonomy_flow_pdf}" \
       --taxonomy_dbfile "${hgt_taxonomy_dbfile}" \
       --flow_rank "${hgt_taxonomy_flow_rank}" \
-      --flow_max_categories "${hgt_taxonomy_flow_max_categories}"
+      --flow_max_categories "${hgt_taxonomy_flow_max_categories}" \
+      --transfer_tree_pdf "${file_hgt_transfer_tree_pdf}" \
+      --transfer_edges_tsv "${file_hgt_transfer_edges}" \
+      --species_tree "${hgt_species_tree_path}" \
+      --species_trait "${hgt_species_trait_path}" \
+      --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}"
     gg_artifact_record "${hgt_summary_plot_provenance_args[@]}"
   fi
 fi
@@ -521,7 +633,7 @@ if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
         --panel1="tree,bl_rooted,support_unrooted,species,L" \
         --panel2="heatmap,no,abs,_,expression_,Expression" \
         --panel3="pointplot,no,rel,_,expression_" \
-        --panel4="heatmap,no,abs,_,hgt_,HGT evidence" \
+        --panel4="heatmap,no,colrel,_,hgt_,HGT evidence (column max=1)" \
         --panel5="cluster_membership,100000" \
         --panel6="synteny,${file_og_synteny},5" \
         --panel7="tiplabel" \

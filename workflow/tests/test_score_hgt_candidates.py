@@ -173,15 +173,28 @@ def test_score_hgt_candidates_emits_branch_gene_and_orthogroup_outputs(tmp_path)
     assert "hgt_score" not in branch_out.columns
     assert "hgt_confidence" not in branch_out.columns
     assert "hgt_reason" not in branch_out.columns
+    assert {"recipient_phyla", "donor_phyla"}.issubset(branch_out.columns)
+    assert pandas.isna(branch_out.loc[0, "recipient_phyla"])
+    assert pandas.isna(branch_out.loc[0, "donor_phyla"])
+    assert branch_out.loc[0, "representative_gene_id"] == "geneA"
+    assert branch_out.loc[0, "representative_gene_taxon"] == "Arabidopsis thaliana"
+    assert branch_out.loc[0, "representative_besthit_accession"] == "P00001"
+    assert branch_out.loc[0, "representative_besthit_organism"] == "Escherichia coli"
 
     assert set(gene_out["gene_id"].tolist()) == {"geneA", "geneB"}
     assert gene_out["candidate_branch_count"].eq(1).all()
     assert set(gene_out["candidate_branch_ids"].astype(str).tolist()) == {"3"}
+    assert {"recipient_phylum", "donor_phylum"}.issubset(gene_out.columns)
+    assert gene_out["recipient_phylum"].fillna("").eq("").all()
+    assert gene_out["donor_phylum"].fillna("").eq("").all()
     assert "besthit_conflict_score" not in gene_out.columns
     assert orthogroup_out.loc[0, "orthogroup"] == "OG0001"
     assert orthogroup_out.loc[0, "hgt_branch_count"] == 1
     assert orthogroup_out.loc[0, "hgt_gene_count"] == 2
     assert str(orthogroup_out.loc[0, "candidate_branch_ids"]) == "3"
+    assert {"recipient_phyla", "donor_phyla"}.issubset(orthogroup_out.columns)
+    assert pandas.isna(orthogroup_out.loc[0, "recipient_phyla"])
+    assert pandas.isna(orthogroup_out.loc[0, "donor_phyla"])
     assert "top_hgt_score" not in orthogroup_out.columns
     assert "top_hgt_confidence" not in orthogroup_out.columns
 

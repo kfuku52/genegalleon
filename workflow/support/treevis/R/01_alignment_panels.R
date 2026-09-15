@@ -279,6 +279,24 @@ get_df_trait = function(b, transform, scale, trait_prefix, negative2zero=TRUE) {
         df_trait = df_trait / row_max
         is_all_na = apply(is.na(df_trait), 1, sum)==apply(df_trait, 1, length)
         df_trait[is_all_na,] = 0
+    } else if (scale=='colrel') {
+        cat('Column-relative trait values (x/(max(x_leaf))) will be displayed.\n')
+        column_max = vapply(seq_len(ncol(df_trait)), function(i) {
+            finite_values = df_trait[[i]][is.finite(df_trait[[i]])]
+            if (length(finite_values) == 0) {
+                return(1)
+            }
+            max_value = max(finite_values)
+            if (!is.finite(max_value) || max_value == 0) {
+                return(1)
+            }
+            max_value
+        }, numeric(1))
+        df_trait = as.data.frame(
+            sweep(as.matrix(df_trait), 2, column_max, '/'),
+            check.names = FALSE,
+            stringsAsFactors = FALSE
+        )
     }
     return(df_trait)
 }

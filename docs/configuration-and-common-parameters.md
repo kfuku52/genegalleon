@@ -376,6 +376,36 @@ Use the following split in practice:
 
 That keeps routine runs reproducible without forcing edits in the core implementation files.
 
+## HGT summary and transfer-tree visualization
+
+Genome annotation's `run_scaffold_taxonomy=1` reuses available raw CDS taxonomy
+and GFF info to generate host-scaffold composition; it does not enable either
+upstream step. HGT evaluation consumes this context automatically. See
+[host-scaffold taxonomy](host-scaffold-taxonomy.md) for rank-specific fractions,
+candidate-free background, missing-data semantics, and counting units.
+
+`workflow/gg_gene_summary_entrypoint.sh` exposes the HGT summary settings below:
+
+- `hgt_summary_species_tree` (default `auto`): Newick species tree used to map
+  directed HGT links; `auto` searches the standard workspace species-tree
+  outputs.
+- `hgt_summary_species_trait` (default `auto`): display numeric/binary tip traits
+  from `workspace/input/species_trait/species_trait.tsv` when present. An explicit
+  path selects another table; `none` disables the panel. Shared schema/metadata
+  contracts apply. Missing observations remain NA; no ancestral states are inferred.
+- `hgt_summary_transfer_tree_max_edges` (default `200`): number of mapped
+  donor-to-recipient edges drawn in `plots/hgt_transfer_tree.pdf`, selected by
+  alternating event-count and tree-distance rankings. Existing reverse
+  directions are then added to the same curves, so the directional count can
+  exceed this initial limit; `0` draws
+  all mapped edges. `plots/hgt_transfer_edges.tsv` always retains all parsed
+  directed pairs.
+
+The transfer plot counts branch-level GeneRax `Y@donor@recipient` records and
+changes link width in proportion to that event count. Arrowheads point to the
+recipient/target. This is a count visualization, not a probability or HGT
+confidence score.
+
 ## CSUBST nonsynonymous-state recoding
 
 `workflow/gg_gene_evolution_entrypoint.sh` exposes `csubst_nonsyn_recode` for

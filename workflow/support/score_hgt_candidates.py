@@ -10,11 +10,136 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy
 import pandas
+from scaffold_taxonomy import BRANCH_COLUMNS as HOST_SCAFFOLD_BRANCH_COLUMNS
+from scaffold_taxonomy import GENE_COLUMNS as HOST_SCAFFOLD_GENE_COLUMNS
+from scaffold_taxonomy import attach_context
 
 try:
     from ete4 import NCBITaxa
 except Exception:  # pragma: no cover - optional runtime dependency
     NCBITaxa = None
+
+
+TAXONOMIC_RANKS: Tuple[str, ...] = (
+    "domain",
+    "superkingdom",
+    "kingdom",
+    "subkingdom",
+    "phylum",
+    "subphylum",
+    "class",
+    "subclass",
+    "infraclass",
+    "superorder",
+    "order",
+    "suborder",
+    "infraorder",
+    "parvorder",
+    "family",
+    "subfamily",
+    "tribe",
+    "subtribe",
+    "genus",
+    "subgenus",
+    "species",
+    "species_group",
+    "species_subgroup",
+    "subspecies",
+    "variety",
+    "varietas",
+    "forma",
+    "section",
+    "subsection",
+    "series",
+    "subseries",
+    "strain",
+    "isolate",
+    "cultivar",
+    "pathovar",
+    "serotype",
+    "biotype",
+)
+
+TAXONOMIC_RANK_ALIASES: Dict[str, Tuple[str, ...]] = {
+    # NCBI uses both labels for the broadest cellular rank.  Keep both
+    # columns useful without changing the original rank in the lineage field.
+    "domain": ("domain", "superkingdom"),
+    "superkingdom": ("superkingdom", "domain"),
+}
+
+TAXONOMIC_RANK_PLURALS: Dict[str, str] = {
+    "domain": "domains",
+    "superkingdom": "superkingdoms",
+    "kingdom": "kingdoms",
+    "subkingdom": "subkingdoms",
+    "phylum": "phyla",
+    "subphylum": "subphyla",
+    "class": "classes",
+    "subclass": "subclasses",
+    "infraclass": "infraclasses",
+    "superorder": "superorders",
+    "order": "orders",
+    "suborder": "suborders",
+    "infraorder": "infraorders",
+    "parvorder": "parvorders",
+    "family": "families",
+    "subfamily": "subfamilies",
+    "tribe": "tribes",
+    "subtribe": "subtribes",
+    "genus": "genera",
+    "subgenus": "subgenera",
+    "species": "species",
+    "species_group": "species_groups",
+    "species_subgroup": "species_subgroups",
+    "subspecies": "subspecies",
+    "variety": "varieties",
+    "varietas": "varietates",
+    "forma": "formae",
+    "section": "sections",
+    "subsection": "subsections",
+    "series": "series",
+    "subseries": "subseries",
+    "strain": "strains",
+    "isolate": "isolates",
+    "cultivar": "cultivars",
+    "pathovar": "pathovars",
+    "serotype": "serotypes",
+    "biotype": "biotypes",
+}
+
+
+def taxonomy_rank_column(side: str, rank: str) -> str:
+    return f"{side}_{rank}"
+
+
+def taxonomy_rank_list_column(side: str, rank: str) -> str:
+    plural = TAXONOMIC_RANK_PLURALS.get(rank, f"{rank}s")
+    return f"{side}_{plural}"
+
+
+def taxonomy_lineage_column(side: str, plural: bool = False) -> str:
+    return f"{side}_taxonomies" if plural else f"{side}_taxonomy"
+
+
+GENE_TAXONOMY_COLUMNS = (
+    [taxonomy_rank_column("recipient", rank) for rank in TAXONOMIC_RANKS]
+    + [taxonomy_rank_column("donor", rank) for rank in TAXONOMIC_RANKS]
+    + [taxonomy_lineage_column("recipient"), taxonomy_lineage_column("donor")]
+)
+BRANCH_TAXONOMY_COLUMNS = (
+    [taxonomy_rank_list_column("recipient", rank) for rank in TAXONOMIC_RANKS]
+    + [taxonomy_rank_list_column("donor", rank) for rank in TAXONOMIC_RANKS]
+    + [taxonomy_lineage_column("recipient", plural=True), taxonomy_lineage_column("donor", plural=True)]
+)
+ORTHOGROUP_TAXONOMY_COLUMNS = list(BRANCH_TAXONOMY_COLUMNS)
+REPRESENTATIVE_TAXONOMY_COLUMNS = (
+    [f"representative_{taxonomy_rank_column('recipient', rank)}" for rank in TAXONOMIC_RANKS]
+    + [f"representative_{taxonomy_rank_column('donor', rank)}" for rank in TAXONOMIC_RANKS]
+    + [
+        f"representative_{taxonomy_lineage_column('recipient')}",
+        f"representative_{taxonomy_lineage_column('donor')}",
+    ]
+)
 
 
 BRANCH_OUTPUT_COLUMNS = [
@@ -50,6 +175,7 @@ BRANCH_OUTPUT_COLUMNS = [
     "contamination_top_lca_taxid",
     "contamination_top_lca_sciname",
     "contamination_top_lca_fraction",
+    *BRANCH_TAXONOMY_COLUMNS,
 ]
 
 GENE_OUTPUT_COLUMNS = [
@@ -70,6 +196,7 @@ GENE_OUTPUT_COLUMNS = [
     "contamination_lca_taxid",
     "contamination_lca_sciname",
     "contamination_is_compatible_lineage",
+    *GENE_TAXONOMY_COLUMNS,
 ]
 
 ORTHOGROUP_OUTPUT_COLUMNS = [
@@ -77,7 +204,24 @@ ORTHOGROUP_OUTPUT_COLUMNS = [
     "hgt_branch_count",
     "hgt_gene_count",
     "candidate_branch_ids",
+    *ORTHOGROUP_TAXONOMY_COLUMNS,
 ]
+
+REPRESENTATIVE_BRANCH_COLUMNS = [
+    "representative_gene_id",
+    "representative_gene_taxon",
+    "representative_besthit_accession",
+    "representative_besthit_organism",
+    "representative_besthit_taxid",
+    "representative_besthit_taxonomy_method",
+    "representative_besthit_lca_rank",
+    "representative_besthit_same_superkingdom",
+    *REPRESENTATIVE_TAXONOMY_COLUMNS,
+]
+
+BRANCH_OUTPUT_COLUMNS.extend(REPRESENTATIVE_BRANCH_COLUMNS)
+BRANCH_OUTPUT_COLUMNS.extend(HOST_SCAFFOLD_BRANCH_COLUMNS)
+GENE_OUTPUT_COLUMNS.extend(HOST_SCAFFOLD_GENE_COLUMNS)
 
 
 def build_arg_parser():
@@ -90,6 +234,8 @@ def build_arg_parser():
     parser.add_argument("--orthogroup_out", metavar="PATH", required=True, type=str)
     parser.add_argument("--dir_contamination_tsv", metavar="PATH", default="", type=str)
     parser.add_argument("--taxonomy_dbfile", metavar="PATH", default=None, type=str)
+    parser.add_argument("--dir_scaffold_taxonomy", metavar="PATH", default="", type=str)
+    parser.add_argument("--species_tree", metavar="PATH", default="", type=str)
     return parser
 
 
@@ -222,6 +368,214 @@ def safe_float(value, default=numpy.nan):
         return default
 
 
+def normalize_taxonomy_rank(rank_name: object) -> str:
+    """Return a stable column-safe spelling for an NCBI taxonomy rank."""
+    text = str(rank_name).strip().lower()
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def serialize_taxonomy_ranks(rank_names: Dict[str, str]) -> str:
+    """Serialize every named rank returned by the taxonomy database."""
+    return "; ".join(f"{rank}:{name}" for rank, name in rank_names.items() if rank and name)
+
+
+def resolve_taxonomy_rank_name(
+    tax_name: str,
+    taxid_value,
+    resolver: "TaxonomyResolver",
+    rank_name: str = "phylum",
+) -> str:
+    """Resolve an exact taxonomy rank without falling back to a species label.
+
+    The taxonomy-flow plot has a presentation fallback for incomplete lineages.
+    Output columns used for filtering should instead be empty when the requested
+    rank cannot be resolved, so a name from another rank is never mislabeled as
+    the requested rank.
+    """
+    if resolver is None or not resolver.enabled or resolver.ncbi is None:
+        return ""
+    taxid = 0
+    if taxid_value not in ("", None):
+        try:
+            if not pandas.isna(taxid_value):
+                taxid = int(safe_float(taxid_value, default=0))
+        except (TypeError, ValueError):
+            taxid = 0
+    if taxid <= 0:
+        taxid = resolver.resolve_name_taxid(tax_name)
+    if taxid <= 0:
+        return ""
+    lineage = resolver.lineage(taxid)
+    if len(lineage) == 0:
+        return ""
+    normalized_rank_name = normalize_taxonomy_rank(rank_name)
+    target_ranks = TAXONOMIC_RANK_ALIASES.get(normalized_rank_name, (normalized_rank_name,))
+    chosen_taxid = resolver.rank_taxid_from_lineage(lineage, target_ranks)
+    if chosen_taxid <= 0:
+        return ""
+    cache = getattr(resolver, "rank_name_cache", None)
+    cache_key = (chosen_taxid, normalized_rank_name)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    try:
+        names = resolver.ncbi.get_taxid_translator([chosen_taxid])
+    except Exception:
+        return ""
+    resolved_name = str(names.get(chosen_taxid, "")).strip()
+    if cache is not None:
+        cache[cache_key] = resolved_name
+    return resolved_name
+
+
+def resolve_taxonomy_annotation(
+    tax_name: str,
+    taxid_value,
+    resolver: "TaxonomyResolver",
+) -> Dict[str, str]:
+    """Resolve standard rank columns and preserve the complete named lineage.
+
+    The per-rank fields provide stable columns for filtering.  ``taxonomy``
+    additionally retains every named rank returned by NCBI, including ranks
+    that are not part of the stable column set (for example ``clade`` or a
+    database-specific intermediate rank).
+    """
+    annotation = {rank: "" for rank in TAXONOMIC_RANKS}
+    annotation["taxonomy"] = ""
+    if resolver is None or not resolver.enabled or resolver.ncbi is None:
+        return annotation
+
+    taxid = 0
+    try:
+        is_missing = taxid_value is None or bool(pandas.isna(taxid_value))
+    except (TypeError, ValueError):
+        is_missing = taxid_value is None
+    if not is_missing and taxid_value != "":
+        taxid = int(safe_float(taxid_value, default=0))
+    if taxid <= 0:
+        taxid = resolver.resolve_name_taxid(tax_name)
+    if taxid <= 0:
+        return annotation
+
+    lineage_names = resolver.lineage_rank_names(taxid)
+    for rank in TAXONOMIC_RANKS:
+        target_ranks = TAXONOMIC_RANK_ALIASES.get(rank, (rank,))
+        for target_rank in target_ranks:
+            value = lineage_names.get(target_rank, "")
+            if value:
+                annotation[rank] = value
+                break
+    annotation["taxonomy"] = serialize_taxonomy_ranks(lineage_names)
+    return annotation
+
+
+def join_unique_nonempty(values: Iterable[object]) -> str:
+    """Join non-empty labels once, retaining their first-seen order."""
+    labels = []
+    seen = set()
+    for value in values:
+        if value is None:
+            continue
+        try:
+            if pandas.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        label = str(value).strip()
+        if label == "" or label.lower() in {"nan", "<na>"} or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return "; ".join(labels)
+
+
+REPRESENTATIVE_COLUMN_SOURCES = {
+    "representative_gene_id": "gene_id",
+    "representative_gene_taxon": "gene_taxon",
+    "representative_besthit_accession": "besthit_accession",
+    "representative_besthit_organism": "besthit_organism",
+    "representative_besthit_taxid": "besthit_taxid",
+    "representative_besthit_taxonomy_method": "besthit_taxonomy_method",
+    "representative_besthit_lca_rank": "besthit_lca_rank",
+    "representative_besthit_same_superkingdom": "besthit_same_superkingdom",
+}
+for _rank in TAXONOMIC_RANKS:
+    REPRESENTATIVE_COLUMN_SOURCES[f"representative_{taxonomy_rank_column('recipient', _rank)}"] = taxonomy_rank_column(
+        "recipient", _rank
+    )
+    REPRESENTATIVE_COLUMN_SOURCES[f"representative_{taxonomy_rank_column('donor', _rank)}"] = taxonomy_rank_column(
+        "donor", _rank
+    )
+REPRESENTATIVE_COLUMN_SOURCES["representative_recipient_taxonomy"] = "recipient_taxonomy"
+REPRESENTATIVE_COLUMN_SOURCES["representative_donor_taxonomy"] = "donor_taxonomy"
+
+
+def _representative_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pandas.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if text.lower() in {"nan", "<na>"}:
+        return ""
+    return text
+
+
+def representative_gene_record(gene_records: Sequence[Dict[str, object]]) -> Dict[str, object]:
+    """Choose one reproducible best-hit annotation record for a candidate branch.
+
+    Records are grouped by the exact best-hit accession/organism/taxid tuple.
+    The most frequent tuple wins; ties prefer the most complete tuple and then
+    the lexicographically smallest gene ID.  If no record has a best hit, the
+    lexicographically smallest gene ID is used so the branch remains traceable.
+    """
+    records = list(gene_records)
+    if len(records) == 0:
+        return {}
+    signature_fields = ("besthit_accession", "besthit_organism", "besthit_taxid")
+    signature_counts: Counter = Counter()
+    signature_completeness: Dict[Tuple[str, str, str], int] = {}
+    signatures_by_record = {}
+    for record in records:
+        signature = tuple(_representative_text(record.get(field, "")) for field in signature_fields)
+        signatures_by_record[id(record)] = signature
+        if not any(signature):
+            continue
+        signature_counts[signature] += 1
+        signature_completeness[signature] = max(
+            signature_completeness.get(signature, 0),
+            sum(bool(value) for value in signature),
+        )
+    if not signature_counts:
+        return min(records, key=lambda record: _representative_text(record.get("gene_id", "")))
+    max_count = max(signature_counts.values())
+    max_completeness = max(
+        completeness
+        for signature, completeness in signature_completeness.items()
+        if signature_counts[signature] == max_count
+    )
+    selected_signatures = {
+        signature
+        for signature, count in signature_counts.items()
+        if count == max_count and signature_completeness[signature] == max_completeness
+    }
+    matching_records = [record for record in records if signatures_by_record[id(record)] in selected_signatures]
+    return min(
+        matching_records,
+        key=lambda record: (_representative_text(record.get("gene_id", "")), signatures_by_record[id(record)]),
+    )
+
+
+def representative_branch_annotation(gene_records: Sequence[Dict[str, object]]) -> Dict[str, object]:
+    representative = representative_gene_record(gene_records)
+    return {
+        column: representative.get(source, "") if representative else ""
+        for column, source in REPRESENTATIVE_COLUMN_SOURCES.items()
+    }
+
+
 class TaxonomyResolver:
     def __init__(self, dbfile: str = ""):
         self.dbfile = str(dbfile).strip()
@@ -230,6 +584,8 @@ class TaxonomyResolver:
         self.name_cache: Dict[str, int] = {}
         self.lineage_cache: Dict[int, List[int]] = {}
         self.rank_cache: Dict[int, str] = {}
+        self.rank_name_cache: Dict[Tuple[int, str], str] = {}
+        self.lineage_rank_names_cache: Dict[int, Dict[str, str]] = {}
         if NCBITaxa is None or self.dbfile == "":
             return
         try:
@@ -276,6 +632,39 @@ class TaxonomyResolver:
                 lineage = []
         self.lineage_cache[taxid] = lineage
         return lineage
+
+    def lineage_rank_names(self, taxid: int) -> Dict[str, str]:
+        """Return all named ranks in a lineage, in root-to-tip order."""
+        taxid = int(taxid)
+        if taxid <= 0:
+            return {}
+        if taxid in self.lineage_rank_names_cache:
+            return self.lineage_rank_names_cache[taxid]
+        lineage = self.lineage(taxid)
+        if not self.enabled or self.ncbi is None or len(lineage) == 0:
+            self.lineage_rank_names_cache[taxid] = {}
+            return {}
+
+        try:
+            rank_map = self.ncbi.get_rank(lineage)
+        except Exception:
+            rank_map = {lineage_taxid: self.rank(lineage_taxid) for lineage_taxid in lineage}
+        try:
+            name_map = self.ncbi.get_taxid_translator(lineage)
+        except Exception:
+            name_map = {}
+
+        result: Dict[str, str] = {}
+        for lineage_taxid in lineage:
+            rank_name = normalize_taxonomy_rank(rank_map.get(lineage_taxid, ""))
+            taxon_name = str(name_map.get(lineage_taxid, "")).strip()
+            if rank_name in {"", "no_rank"} or taxon_name == "":
+                continue
+            # A lineage can contain more than one node with an unusual rank.
+            # Keep the first root-to-tip occurrence deterministically.
+            result.setdefault(rank_name, taxon_name)
+        self.lineage_rank_names_cache[taxid] = result
+        return result
 
     def rank(self, taxid: int) -> str:
         taxid = int(taxid)
@@ -686,6 +1075,7 @@ def summarize_candidate_branch(
         "contamination_top_lca_taxid": evidence["contamination"]["top_lca_taxid"],
         "contamination_top_lca_sciname": evidence["contamination"]["top_lca_sciname"],
         "contamination_top_lca_fraction": evidence["contamination"]["top_lca_fraction"],
+        **{column: "" for column in (*BRANCH_TAXONOMY_COLUMNS, *REPRESENTATIVE_BRANCH_COLUMNS)},
     }
 
     gene_records = []
@@ -713,28 +1103,52 @@ def summarize_candidate_branch(
             gene_taxon = str(leaf_match.iloc[0]["taxon"])
         besthit_info = besthit_per_gene.get(gene_id, {})
         contamination_info = contamination_per_gene.get(gene_id, {})
-        gene_records.append(
-            {
-                "orthogroup": branch_row.get("orthogroup", ""),
-                "gene_id": gene_id,
-                "gene_taxon": gene_taxon,
-                "candidate_branch_id": branch_row.get("branch_id", ""),
-                "besthit_accession": besthit_info.get("besthit_accession", ""),
-                "besthit_organism": besthit_info.get("besthit_organism", ""),
-                "besthit_taxid": besthit_info.get("besthit_taxid", ""),
-                "besthit_taxonomy_method": besthit_info.get("besthit_taxonomy_method", ""),
-                "besthit_lca_rank": besthit_info.get("besthit_lca_rank", ""),
-                "besthit_same_superkingdom": besthit_info.get("besthit_same_superkingdom", pandas.NA),
-                "intron_supported": bool(intron_supported.get(gene_id, False)),
-                "expression_measured": bool(expression_measured.get(gene_id, False)),
-                "synteny_support_score": synteny_by_gene.get(gene_id, numpy.nan),
-                "contamination_lca_taxid": contamination_info.get("contamination_lca_taxid", pandas.NA),
-                "contamination_lca_sciname": contamination_info.get("contamination_lca_sciname", ""),
-                "contamination_is_compatible_lineage": contamination_info.get(
-                    "contamination_is_compatible_lineage", pandas.NA
-                ),
-            }
+        recipient_taxonomy = resolve_taxonomy_annotation(gene_taxon, "", taxonomy_resolver)
+        donor_taxonomy = resolve_taxonomy_annotation(
+            besthit_info.get("besthit_organism", ""),
+            besthit_info.get("besthit_taxid", ""),
+            taxonomy_resolver,
         )
+        gene_record = {
+            "orthogroup": branch_row.get("orthogroup", ""),
+            "gene_id": gene_id,
+            "gene_taxon": gene_taxon,
+            "candidate_branch_id": branch_row.get("branch_id", ""),
+            "besthit_accession": besthit_info.get("besthit_accession", ""),
+            "besthit_organism": besthit_info.get("besthit_organism", ""),
+            "besthit_taxid": besthit_info.get("besthit_taxid", ""),
+            "besthit_taxonomy_method": besthit_info.get("besthit_taxonomy_method", ""),
+            "besthit_lca_rank": besthit_info.get("besthit_lca_rank", ""),
+            "besthit_same_superkingdom": besthit_info.get("besthit_same_superkingdom", pandas.NA),
+            "intron_supported": bool(intron_supported.get(gene_id, False)),
+            "expression_measured": bool(expression_measured.get(gene_id, False)),
+            "synteny_support_score": synteny_by_gene.get(gene_id, numpy.nan),
+            "contamination_lca_taxid": contamination_info.get("contamination_lca_taxid", pandas.NA),
+            "contamination_lca_sciname": contamination_info.get("contamination_lca_sciname", ""),
+            "contamination_is_compatible_lineage": contamination_info.get(
+                "contamination_is_compatible_lineage", pandas.NA
+            ),
+        }
+        for rank in TAXONOMIC_RANKS:
+            gene_record[taxonomy_rank_column("recipient", rank)] = recipient_taxonomy.get(rank, "")
+            gene_record[taxonomy_rank_column("donor", rank)] = donor_taxonomy.get(rank, "")
+        gene_record[taxonomy_lineage_column("recipient")] = recipient_taxonomy.get("taxonomy", "")
+        gene_record[taxonomy_lineage_column("donor")] = donor_taxonomy.get("taxonomy", "")
+        gene_records.append(gene_record)
+    for rank in TAXONOMIC_RANKS:
+        branch_record[taxonomy_rank_list_column("recipient", rank)] = join_unique_nonempty(
+            record.get(taxonomy_rank_column("recipient", rank), "") for record in gene_records
+        )
+        branch_record[taxonomy_rank_list_column("donor", rank)] = join_unique_nonempty(
+            record.get(taxonomy_rank_column("donor", rank), "") for record in gene_records
+        )
+    branch_record[taxonomy_lineage_column("recipient", plural=True)] = join_unique_nonempty(
+        record.get(taxonomy_lineage_column("recipient"), "") for record in gene_records
+    )
+    branch_record[taxonomy_lineage_column("donor", plural=True)] = join_unique_nonempty(
+        record.get(taxonomy_lineage_column("donor"), "") for record in gene_records
+    )
+    branch_record.update(representative_branch_annotation(gene_records))
     return branch_record, gene_records
 
 
@@ -769,6 +1183,16 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
                 "contamination_lca_taxid": top.get("contamination_lca_taxid", pandas.NA),
                 "contamination_lca_sciname": top.get("contamination_lca_sciname", ""),
                 "contamination_is_compatible_lineage": top.get("contamination_is_compatible_lineage", pandas.NA),
+                **{
+                    taxonomy_rank_column("recipient", rank): top.get(taxonomy_rank_column("recipient", rank), "")
+                    for rank in TAXONOMIC_RANKS
+                },
+                **{
+                    taxonomy_rank_column("donor", rank): top.get(taxonomy_rank_column("donor", rank), "")
+                    for rank in TAXONOMIC_RANKS
+                },
+                taxonomy_lineage_column("recipient"): top.get(taxonomy_lineage_column("recipient"), ""),
+                taxonomy_lineage_column("donor"): top.get(taxonomy_lineage_column("donor"), ""),
             }
         )
     return pandas.DataFrame(rows, columns=GENE_OUTPUT_COLUMNS)
@@ -781,6 +1205,24 @@ def aggregate_orthogroup_records(branch_records: pandas.DataFrame, gene_records:
     gene_count_by_orthogroup = {}
     if not gene_records.empty:
         gene_count_by_orthogroup = gene_records.groupby("orthogroup")["gene_id"].nunique().to_dict()
+    taxonomy_by_orthogroup = {}
+    if not gene_records.empty:
+        for orthogroup, group in gene_records.groupby("orthogroup", sort=False):
+            values = {}
+            for rank in TAXONOMIC_RANKS:
+                values[taxonomy_rank_list_column("recipient", rank)] = join_unique_nonempty(
+                    group.get(taxonomy_rank_column("recipient", rank), pandas.Series(dtype=object))
+                )
+                values[taxonomy_rank_list_column("donor", rank)] = join_unique_nonempty(
+                    group.get(taxonomy_rank_column("donor", rank), pandas.Series(dtype=object))
+                )
+            values[taxonomy_lineage_column("recipient", plural=True)] = join_unique_nonempty(
+                group.get(taxonomy_lineage_column("recipient"), pandas.Series(dtype=object))
+            )
+            values[taxonomy_lineage_column("donor", plural=True)] = join_unique_nonempty(
+                group.get(taxonomy_lineage_column("donor"), pandas.Series(dtype=object))
+            )
+            taxonomy_by_orthogroup[orthogroup] = values
     rows = []
     for orthogroup, group in sorted_branch.groupby("orthogroup", sort=False):
         rows.append(
@@ -789,6 +1231,7 @@ def aggregate_orthogroup_records(branch_records: pandas.DataFrame, gene_records:
                 "hgt_branch_count": int(group["branch_id"].nunique()),
                 "hgt_gene_count": int(gene_count_by_orthogroup.get(orthogroup, 0)),
                 "candidate_branch_ids": "; ".join(dict.fromkeys(group["branch_id"].astype(str).tolist())),
+                **taxonomy_by_orthogroup.get(orthogroup, {}),
             }
         )
     return pandas.DataFrame(rows, columns=ORTHOGROUP_OUTPUT_COLUMNS)
@@ -898,6 +1341,7 @@ def main():
         branch_out = empty_frame(BRANCH_OUTPUT_COLUMNS)
 
     gene_out = aggregate_gene_records(pandas.DataFrame(gene_records))
+    branch_out, gene_out = attach_context(branch_out, gene_out, args.dir_scaffold_taxonomy, args.species_tree)
     orthogroup_out = aggregate_orthogroup_records(branch_out, gene_out)
 
     write_tsv(branch_out, args.branch_out, BRANCH_OUTPUT_COLUMNS)

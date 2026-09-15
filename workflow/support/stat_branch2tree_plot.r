@@ -124,14 +124,14 @@ cat('long_branch_display settings:',
 
 # heatmap: trait heatmap. format = heatmap,TRANSFORM,GENEWISE_SCALE,REPLICATE_SEPARATOR,INFILE[,LABEL]
 # TRANSFORM: value transformation. "no", "log2", "log2p1", "log10", "log10p1"
-# GENEWISE_SCALE: whether trait values are scaled in each gene. "abs" for no-scaling and "rel" for scaling
+# GENEWISE_SCALE: trait scaling. "abs" for no-scaling, "rel" for per-row scaling, and "colrel" for per-column scaling to the maximum leaf value
 # REPLICATE_SEPARATOR: separator between the experiment name and the replication number in column names. e.g. "_"
 # TRAIT_PREFIX: Prefix string specifying the trait columns in the --stat_branch file.
 # LABEL: Optional legend title.
 
 # pointplot: trait point plot. format = pointplot,TRANSFORM,GENEWISE_SCALE,REPLICATE_SEPARATOR,INFILE
 # TRANSFORM: value transformation. "no", "log2", "log2p1", "log10", "log10p1"
-# GENEWISE_SCALE: whether trait values are scaled in each gene. "abs" for no-scaling and "rel" for scaling
+# GENEWISE_SCALE: trait scaling. "abs" for no-scaling, "rel" for per-row scaling, and "colrel" for per-column scaling to the maximum leaf value
 # REPLICATE_SEPARATOR: separator between the experiment name and the replication number in column names. e.g. "_"
 # TRAIT_PREFIX: Prefix string specifying the trait columns in the --stat_branch file.
 

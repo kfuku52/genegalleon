@@ -4,6 +4,9 @@ This page expands the short stage references for
 `gg_gene_evolution_entrypoint.sh`, especially for users familiar with the old
 `gfe_geneFamilyPhylogeny` workflow.
 
+HGT tables also report optional [host-scaffold taxonomy context](host-scaffold-taxonomy.md),
+including rank-specific classification coverage and candidate-free background.
+
 ## Query2family input recap
 
 In `mode_gene_evolution=query2family`:
@@ -711,6 +714,97 @@ Practical interpretation:
   predictions on the same row order as the tree tips,
 - if an upstream analysis was disabled, or the corresponding inputs were not
   available, the associated panel may be blank or minimally populated.
+
+HGT-mode tree plots add an `HGT evidence` heatmap for the `hgt_` tip columns.
+Those columns use column-relative display scaling: each column is divided by
+its maximum measured leaf value, so the displayed colorbar is fixed to 0--1.
+This is a visualization normalization, not a probability or composite HGT
+score. In particular, `Cand` remains the candidate-branch count in the TSV;
+only its PDF color is shown relative to that orthogroup's maximum.
+
+The HGT output directory also contains `README.md`, generated from the output
+schema. It documents every column in `hgt_branch_candidates.tsv`,
+`hgt_gene_candidates.tsv`, and `hgt_orthogroup_summary.tsv`, including the
+meaning of blank values and the relationship between branch-, gene-, and
+orthogroup-level rows.
+
+The HGT candidate tables also expose taxonomy-flow filtering fields. The gene
+table has one `recipient_<rank>` and `donor_<rank>` value for every standard
+NCBI rank available in the output schema (for example `domain`, `kingdom`,
+`phylum`, `class`, `order`, `family`, `genus`, and `species`). The branch and
+orthogroup tables have semicolon-separated lists for the same ranks because one
+row can contain multiple genes. `recipient_taxonomy` and `donor_taxonomy` also
+retain every named rank returned by the taxonomy database, including
+intermediate or database-specific ranks that do not have a dedicated stable
+column. A blank means that the requested rank could not be resolved, not that
+the candidate belongs to no such taxon. `donor_<rank>` is the best-hit lineage
+used as a donor proxy and is not a confirmed donor assignment.
+
+The branch table additionally contains `representative_*` columns. For each
+candidate branch, GeneGalleon selects one gene annotation by the most frequent
+exact best-hit combination (`accession`, `organism`, and `taxid`); ties are
+resolved by annotation completeness and then by gene ID. These fields are a
+traceable convenience summary for branch-level inspection, not a replacement
+for the full per-gene annotation diversity in `hgt_gene_candidates.tsv`.
+
+When `run_hgt_summary_plots=1`, the HGT `plots` directory also contains
+`hgt_transfer_tree.pdf` and `hgt_transfer_edges.tsv`. The plot parses
+GeneRax's `Y@donor@recipient` transfer annotation, aggregates candidate rows
+into directed donor/source-to-recipient/target edges, and draws arrowheads
+toward the recipient. Link width scales with the number of branch-level
+HGT events in that pair; it is an event count, not a confidence score. The TSV
+retains every parseable pair and marks whether it matched the selected species
+tree and whether it was included in the PDF. Darker blue indicates greater
+node-to-node tree distance, using a common scale across all mapped pairs.
+Shallow curves connect endpoints directly; distant links are drawn last.
+Connections attach to the midpoint of the incoming horizontal species branch,
+not the labelled node. Midpoints are display conventions, not inferred event
+times. Root endpoints use a dashed display-only stem; zero-length branches
+coincide with their nodes. Color and ranking retain endpoint-node path distance
+as a lineage-separation proxy, independent of these drawing positions.
+Reciprocal directions share a single curve, with each arrow-end half's width
+encoding the event count toward that endpoint. One-way links have a thin
+source half without an arrow. All available internal branch names appear directly above
+their incoming branch midpoints, including branches without displayed HGT.
+Species names appear to the right of terminal branches. Every text element in
+the transfer-tree PDF, including titles, legends and colorbar ticks, uses 8 pt.
+When `input/species_trait/species_trait.tsv` exists, numeric/binary traits are
+shown as aligned tip-only columns. Binary values use orange (1) and gray (0);
+numeric columns use a separate within-column color range and print their values.
+Unknown or unmatched species are NA, not zero. No ancestral states are inferred.
+The first column identifies species; space/underscore aliases are supported,
+but duplicate identifiers are rejected. The shared trait schema and observation
+metadata contract applies; declared text/category columns are not plotted.
+Use `hgt_summary_species_trait=none` to disable, or specify an explicit TSV path.
+After the initial ranked selection, existing reverse directions are included
+with `selection_reason=reciprocal`; this can exceed the directional limit but
+does not add connections. The TSV retains separate directional rows, and the
+PDF footer distinguishes directional rows from drawn connections.
+The default PDF selects up to 200 mapped edges by alternating count and distance
+rankings; set `hgt_summary_transfer_tree_max_edges=0` to draw all mapped
+edges (which may become visually dense). `hgt_summary_species_tree=auto`
+searches the standard workspace species-tree outputs, while an explicit Newick
+path can be supplied when a different tree should be used.
+
+The edge TSV adds `phylogenetic_distance`, `distance_metric`, and
+`selection_reason` (`count`, `distance`, `all`, `reciprocal`, or `not_displayed`). Distance
+uses the sum of branch lengths between labelled nodes when every non-root
+branch has a finite nonnegative length and at least one is positive. Otherwise
+the entire tree uses the number of edges (`topology_edges`). This is a tree
+distance, not elapsed transfer time or a biological importance score.
+Unmapped pairs have missing distances. Selection alternates descending event
+count and descending distance lists, skipping already selected pairs; ties use
+the other quantity and then endpoint names. `display_rank` records selection
+order (zero when hidden). Width is `max(0.35, 5 * count / maximum_count)` points,
+using all parsed pairs for the maximum. The visibility floor keeps rare distant
+events visible; counts below that floor share a width. The legend gives actual counts.
+
+For an HGT output directory made by an older run, the same fields can be added
+without rerunning candidate scoring with
+`workflow/support/add_hgt_taxonomy_columns.py`. Supply the three TSV paths and
+`--taxonomy_dbfile`; the utility prepares all three temporary files first,
+then atomically replaces each individual file. The three replacements are not
+a single filesystem transaction; retain a backup when migrating valuable outputs.
 
 The default `localization` panel combines two adjacent square bars per tip:
 targeting probabilities on the left and independent peroxisome probability on

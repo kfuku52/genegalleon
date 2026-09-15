@@ -17,6 +17,22 @@ tidy <- tidy_df_tip(df_tip, df_trait)
 if (nrow(tidy) != 4) stop("tidy_df_tip returned unexpected row count.")
 if (!all(levels(tidy$group) == c("A", "B"))) stop("tidy_df_tip group order is incorrect.")
 
+# 1b) get_df_trait: column-relative scaling gives every measured column a 0-1 maximum.
+b_trait_scale <- data.frame(
+  node_name = c("g1", "g2", "g3", "n1"),
+  so_event = c("L", "L", "L", "S"),
+  hgt_Cand = c(0, 4, 2, 99),
+  hgt_SameSK = c(0, 1, 1, 9),
+  hgt_Syn = c(NA, 0.25, 0.5, 1),
+  stringsAsFactors = FALSE
+)
+trait_colrel <- get_df_trait(b_trait_scale, "no", "colrel", "hgt_")
+if (abs(trait_colrel["g2", "Cand"] - 1) > 1e-9) stop("colrel should scale Cand to its leaf maximum.")
+if (abs(trait_colrel["g3", "Cand"] - 0.5) > 1e-9) stop("colrel should preserve relative Cand values.")
+if (abs(trait_colrel["g2", "SameSK"] - 1) > 1e-9) stop("colrel should preserve binary 0-1 columns.")
+if (abs(trait_colrel["g3", "Syn"] - 1) > 1e-9) stop("colrel should scale continuous columns to one.")
+if (!is.na(trait_colrel["g1", "Syn"])) stop("colrel should preserve missing values.")
+
 # 2) get_rel_widths: --rel_widths override string is parsed and applied.
 dummy_tip_plot <- ggplot(data.frame(label = c("a", "bb"), x = c(0, 0), y = c(1, 2))) + geom_blank(aes(x = x, y = y))
 dummy_tip_plot$data$label <- factor(dummy_tip_plot$data$label, levels = dummy_tip_plot$data$label)

@@ -104,6 +104,7 @@ run_uniprot_annotation=0 # CDS annotation against UniProt Swiss-Prot.
 run_cdskit_localize=1 # Predict targeting-peptide and peroxisome localization signals with cdskit localize.
 run_cds_fx2tab=0 # Sequence-length and composition stats for species CDS FASTA files.
 run_cds_mmseqs2taxonomy=0 # MMseqs2 taxonomy assignment for CDS sequences.
+run_scaffold_taxonomy=1 # Summarize host composition when raw CDS taxonomy and GFF info exist; does not enable their generation.
 run_cds_contamination_removal=0 # Remove CDS sequences assigned outside the expected lineage.
 run_annotation=0 # Combine GFF, UniProt, domain, taxonomy, and sequence-derived signals into per-gene annotation summaries.
 run_wgd_ksd=0 # WGD inference by dS distribution

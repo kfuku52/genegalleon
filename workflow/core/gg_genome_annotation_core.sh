@@ -21,6 +21,7 @@ cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
 cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
 cdskit_localize_no_model_download="${cdskit_localize_no_model_download:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
+run_scaffold_taxonomy="${run_scaffold_taxonomy:-1}"
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
@@ -588,6 +589,40 @@ if [[ ${cds_taxonomy_needs_update} -eq 1 && ${run_cds_mmseqs2taxonomy} -eq 1 && 
   fi
   gg_artifact_add_input_if_present cds_taxonomy_provenance_args "uniref90_db" "${dir_mmseqs2_db}/UniRef90_DB"
   gg_artifact_record "${cds_taxonomy_provenance_args[@]}"
+else
+  gg_step_skip "${task}"
+fi
+
+task="Host scaffold taxonomy composition"
+disable_if_no_input_file "run_scaffold_taxonomy" "${file_sp_gff_info}" "${file_sp_cds_mmseqs2taxonomy}"
+if [[ ${run_scaffold_taxonomy} -eq 1 ]]; then
+  ensure_ete_taxonomy_db "${gg_workspace_dir}" || exit 1
+  scaffold_taxonomy_db="$(workspace_taxonomy_dbfile "${gg_workspace_dir}")"
+  file_sp_scaffold_taxonomy="${gg_workspace_output_dir}/species_scaffold_taxonomy/${sp_ub}_scaffold_taxonomy.tsv"
+  file_sp_gene_taxonomy="${gg_workspace_output_dir}/species_scaffold_taxonomy/${sp_ub}_gene_taxonomy.tsv"
+  gg_artifact_contract_init scaffold_taxonomy_provenance_args "genome_annotation_scaffold_taxonomy" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.scaffold_taxonomy.json"
+  scaffold_taxonomy_provenance_args+=(
+    --input "gff_info=${file_sp_gff_info}"
+    --input "cds_taxonomy=${file_sp_cds_mmseqs2taxonomy}"
+    --input "taxonomy_database=${scaffold_taxonomy_db}"
+    --input "aggregator=${gg_support_dir}/scaffold_taxonomy.py"
+    --output "scaffold_taxonomy=${file_sp_scaffold_taxonomy}"
+    --output "gene_taxonomy=${file_sp_gene_taxonomy}"
+    --parameter "species=${sp_ub}"
+    --parameter "schema_version=1"
+  )
+  gg_artifact_add_input_if_present scaffold_taxonomy_provenance_args "gff" "${file_sp_gff}"
+  gg_artifact_prepare_stage scaffold_taxonomy_needs_update run_scaffold_taxonomy "${scaffold_taxonomy_provenance_args[@]}" || exit $?
+  if [[ ${scaffold_taxonomy_needs_update} -eq 1 ]]; then
+    gg_step_start "${task}"
+    python "${gg_support_dir}/scaffold_taxonomy.py" \
+      --species "${sp_ub}" --gff-info "${file_sp_gff_info}" --gff "${file_sp_gff}" \
+      --taxonomy "${file_sp_cds_mmseqs2taxonomy}" --taxonomy-dbfile "${scaffold_taxonomy_db}" \
+      --gene-out "${file_sp_gene_taxonomy}" --scaffold-out "${file_sp_scaffold_taxonomy}"
+    gg_artifact_record "${scaffold_taxonomy_provenance_args[@]}"
+  else
+    gg_step_skip "${task}"
+  fi
 else
   gg_step_skip "${task}"
 fi
