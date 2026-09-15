@@ -184,6 +184,8 @@ task="native test"
     if use_defaults:
         assert model["configuration"]["max_shifts"] == "auto"
         assert model["configuration"]["convergence"]
+        assert model["configuration"]["alpha_model"] == "trait-specific"
+        assert model["configuration"]["alpha"] is None
         assert model["search"]["shift_limit"]["resolved"] == 2
         assert any(len(row["groups"]) < len(row["shift_branch_ids"]) + 1 for row in model["candidates"])
     else:
