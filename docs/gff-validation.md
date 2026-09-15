@@ -1,0 +1,49 @@
+# GFF coordinates and coding structure
+
+`gff2genestat.py` selects a longest CDS model before calculating structure.
+For GFF3 CDS features attached directly to a gene, distinct CDS IDs are distinct
+models; repeated rows with the same CDS ID are parts of one model. Models under
+an explicit transcript remain grouped by transcript. Equal-length alternatives
+retain the existing deterministic selection and warning.
+When a root feature's structural `ID` resolves to an input gene, it takes
+precedence over display aliases such as `Name`. Aliases are consulted only when
+that structural ID cannot be resolved, preventing obsolete gene names from
+merging distinct annotated loci.
+
+`exception=ribosomal slippage` is accepted only when all parts declare it and
+share one explicit CDS ID and Parent. Overlapping parts remain intact.
+`feature_size` is the sum of distinct annotated block lengths, including reused
+bases, not their genomic union or a claim of translation correctness. The
+`start`/`end` fields are the genomic envelope. `splice_mode=ribosomal-slippage`
+distinguishes these records; `num_intron` and `cds_first_phase` are unavailable.
+Small gaps between translation parts are not inferred to be spliceosomal introns.
+Tree plots omit their conventional exon/intron structure and intron-site
+correspondence; scaffold taxonomy can still use the validated chromosome.
+Free-text notes alone do not authorize overlapping coordinates.
+
+Explicit `pseudo=true` CDS parts similarly retain their genomic location with
+`splice_mode=pseudogene` and `phase_status=pseudogene`. They must share one
+CDS ID; partial/mixed pseudogene declarations fail. Their intron count and global
+reading frame are unavailable, and tree structure/site panels omit them. This
+does not reclassify them as functional coding genes or remove their existing
+identifiers from scaffold composition.
+
+`--phase-policy strict` (default) rejects conflicting phases. With
+`--phase-policy report`, valid coordinates are retained, `phase_status` is
+`conflicting`, and `cds_first_phase` is missing. No phase is repaired or inferred
+from a length match. Intron-site correspondence excludes these records. Other
+values of `phase_status` are `consistent`, `missing`, `ribosomal-slippage`, `pseudogene`, and
+`not_evaluated` (non-CDS features). Invalid coordinates, mixed coordinate systems,
+and invalid phase values still fail. `consistent` describes internal phase
+consistency, not verification against a genome or protein sequence.
+
+Genome annotation uses report mode so scaffold evidence does not depend on a
+usable global reading frame. It also uses `--require-matches`, which rejects a
+zero-match result before publication. Partial coverage is not zero support;
+compare mapped IDs with the input CDS set when reviewing evidence. Input
+generation retains strict validation. `--validate-cds-length` remains an
+independent check and does not imply nucleotide sequence identity.
+
+Preserve existing FASTA identifiers when repairing a project with downstream
+results. Repair an exact, audited GFF identifier correspondence rather than
+enabling heuristic suffix matching. Retain original inputs and a change log.

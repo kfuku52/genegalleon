@@ -210,9 +210,13 @@ gff_info_needs_update=0
 gg_artifact_contract_init gff_info_provenance_args "genome_annotation_gff_info" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.gff_info.json"
 gff_info_provenance_args+=(
   --input "cds=${file_sp_cds}"
+  --input "parser=${gg_support_dir}/gff2genestat.py"
+  --input "feature_structure=${gg_support_dir}/gff_feature_structure.py"
   --output "gff_info=${file_sp_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
+  --parameter "phase_policy=report"
+  --parameter "require_matches=1"
 )
 gg_artifact_add_input_if_present gff_info_provenance_args "gff" "${file_sp_gff}"
 gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
@@ -231,6 +235,8 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
     --dir_gff ./input_gff \
     --feature 'CDS' \
     --multiple_hits 'longest' \
+    --phase-policy report \
+    --require-matches \
     --seqfile "${file_sp_cds}" \
     --ncpu "${GG_TASK_CPUS}" \
     --outfile gff2genestat.tsv

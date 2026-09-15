@@ -1,5 +1,8 @@
 # Host-scaffold taxonomy context for HGT
 
+See [GFF validation](gff-validation.md) for coordinate validity, phase status,
+translation exceptions, and repairing pre-existing project inputs.
+
 This measures whether the **annotated CDS background of a scaffold** matches
 the host's taxonomy. It is independent of shared-neighbor synteny and is neither
 an HGT probability nor proof that an assembly is correct. No threshold or

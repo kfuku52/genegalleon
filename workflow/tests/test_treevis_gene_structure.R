@@ -154,6 +154,21 @@ stopifnot(nrow(trans_sites$events)==0, trans_sites$diagnostics$reason=='trans_sp
 bad_sites = genegalleon.treevis:::treevis_intron_site_data(trans_tips[1,,drop=FALSE],c(rps12='AAA'))
 stopifnot(bad_sites$diagnostics$reason=='CDS_length_mismatch')
 cat('Explicit trans-splicing order, coordinates and symbolic junctions passed.\n')
+for (status in c('ribosomal-slippage','pseudogene')) {
+    special = trans_tips[1,,drop=FALSE]
+    special$splice_mode = status
+    special$phase_status = status
+    special$cds_first_phase = NA_real_
+    stopifnot(nrow(make_data(special)$boxes)==0)
+    diagnostic = genegalleon.treevis:::treevis_intron_site_data(special,
+        c(rps12=paste(rep('A',372),collapse='')))
+    stopifnot(nrow(diagnostic$events)==0, diagnostic$diagnostics$reason==status)
+}
+conflict = trans_tips[1,,drop=FALSE]
+conflict$splice_mode='cis'; conflict$phase_status='conflicting'; conflict$num_intron=1
+conflict$cds_first_phase=NA_real_
+diagnostic=genegalleon.treevis:::treevis_intron_site_data(conflict,c(rps12=paste(rep('A',372),collapse='')))
+stopifnot(nrow(diagnostic$events)==0,diagnostic$diagnostics$reason=='conflicting')
 trans_tree = ggtree::ggtree(ape::read.tree(text='(rps12:1,ndhH:1);'))
 idx = match(trans_tree$data$label,trans_tips$label)
 for (key in setdiff(names(trans_tips),c('label','y'))) trans_tree$data[[key]] = trans_tips[[key]][idx]

@@ -37,6 +37,26 @@ def ordered_annotated_blocks(rows, gene_id):
     for attr in attributes:
         decoded_exception = unquote(attr.get('exception', ''))
         declared.append(any(x.strip() == 'trans-splicing' for x in decoded_exception.split(',')))
+    slippage = [any(x.strip() == 'ribosomal slippage'
+                    for x in unquote(attr.get('exception', '')).split(','))
+                for attr in attributes]
+    pseudogene = [attr.get('pseudo', '').lower() == 'true' for attr in attributes]
+    if any(pseudogene):
+        if not all(pseudogene) or any(declared):
+            raise ValueError(f'Incomplete or mixed pseudogene annotation for {gene_id}')
+        identities = {(a.get('ID', ''), a.get('Parent', '')) for a in attributes}
+        if len(identities) != 1 or not next(iter(identities))[0]:
+            raise ValueError(f'Pseudogene parts require one explicit CDS ID for {gene_id}')
+        return ordered_feature_blocks(coordinates, gene_id, allow_overlap=True), 'pseudogene'
+    if any(slippage):
+        # NCBI represents a programmed frameshift as overlapping parts of the
+        # SAME CDS feature. A free-text Note alone is not an exception contract.
+        if not all(slippage) or any(declared):
+            raise ValueError(f'Incomplete or mixed ribosomal slippage annotation for {gene_id}')
+        identities = {(a.get('ID', ''), a.get('Parent', '')) for a in attributes}
+        if len(identities) != 1 or not next(iter(identities))[0]:
+            raise ValueError(f'Ribosomal slippage requires one explicit CDS ID for {gene_id}')
+        return ordered_feature_blocks(coordinates, gene_id, allow_overlap=True), 'ribosomal-slippage'
     if not any(declared):
         return ordered_feature_blocks(coordinates, gene_id), 'cis'
     if not all(declared):
@@ -69,7 +89,7 @@ def ordered_annotated_blocks(rows, gene_id):
     return [parts[i] for i in sorted(parts)], 'trans-splicing'
 
 
-def ordered_feature_blocks(rows, gene_id):
+def ordered_feature_blocks(rows, gene_id, allow_overlap=False):
     blocks = {(str(sequence), str(strand), int(start), int(end))
               for sequence, strand, start, end in rows}
     if len({(sequence, strand) for sequence, strand, _start, _end in blocks}) != 1:
@@ -78,6 +98,6 @@ def ordered_feature_blocks(rows, gene_id):
            for _sequence, strand, start, end in blocks):
         raise ValueError(f'Invalid GFF coordinates or strand for {gene_id}')
     blocks = sorted(blocks, key=lambda block: (block[2], block[3]))
-    if any(right[2] <= left[3] for left, right in zip(blocks, blocks[1:], strict=False)):
+    if not allow_overlap and any(right[2] <= left[3] for left, right in zip(blocks, blocks[1:], strict=False)):
         raise ValueError(f'Overlapping GFF feature blocks for {gene_id}')
     return blocks[::-1] if blocks[0][1] == '-' else blocks

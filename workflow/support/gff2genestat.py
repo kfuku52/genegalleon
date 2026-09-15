@@ -83,6 +83,10 @@ def build_arg_parser():
     parser.add_argument("--dir_gff", metavar="PATH", default="", type=str, help="Path used by --dir_gff.")
     parser.add_argument("--validate-cds-length", action="store_true",
                         help="Require each selected CDS annotation to match its nucleotide FASTA length.")
+    parser.add_argument("--phase-policy", choices=["strict", "report"], default="strict",
+                        help="Report retains validated coordinates but marks conflicting phases unusable.")
+    parser.add_argument("--require-matches", action="store_true",
+                        help="Fail instead of publishing an empty table when no input IDs map.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
     parser.add_argument(
         "--sequence-store", default="", metavar="PATH",
@@ -457,13 +461,23 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
                 continue
             match = None
             if len(parents) == 0 and len(match_values) > 0:
+                # The structural ID establishes ancestry. A display Name may
+                # be an obsolete alias that is another FASTA gene's identifier.
                 match = match_values_to_gene_id(
-                    values=match_values,
+                    values=(attr_id,),
                     lookup=lookup,
                     min_len=min_len,
                     max_len=max_len,
                     value_cache=value_cache,
                 )
+                if match is None:
+                    match = match_values_to_gene_id(
+                        values=match_values,
+                        lookup=lookup,
+                        min_len=min_len,
+                        max_len=max_len,
+                        value_cache=value_cache,
+                    )
             existing = id_info.get(attr_id)
             if existing is None:
                 id_info[attr_id] = {"parents": parents, "match": match, "values": match_values}
@@ -509,7 +523,20 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
     if out.shape[0] == 0:
         print("No match was found.")
         return out
-    return select_longest_transcripts(out) if feature == "CDS" else out
+    if feature == "CDS":
+        # A CDS may attach directly to a gene (not an mRNA). Distinct CDS IDs
+        # under that gene are alternative models; repeated IDs are CDS parts.
+        gene_features = {parse_attribute_fields(a)[0] for a in
+                         gff.loc[gff["feature"].str.lower().isin(["gene", "pseudogene"]), "attributes"]}
+        models = []
+        for gene_id, attr in zip(out["gene_id"], out["attributes"], strict=True):
+            feature_id, parents, _ = parse_attribute_fields(attr)
+            models.append((feature_id,) if feature_id and parents and all(p in gene_features for p in parents)
+                          else transcript_ids(attr, gene_id))
+        out = out.copy()
+        out["_model_ids"] = models
+        return select_longest_transcripts(out)
+    return out
 
 
 def transcript_ids(attributes, gene_id):
@@ -532,9 +559,11 @@ def transcript_blocks(frame, gene_id):
 def select_longest_transcripts(gff):
     gff = gff.reset_index(drop=True)
     by_gene = {}
+    model_ids = gff["_model_ids"].tolist() if "_model_ids" in gff else None
     for index, (gene_id, attributes) in enumerate(zip(gff["gene_id"], gff["attributes"], strict=True)):
         candidates = by_gene.setdefault(gene_id, {})
-        for transcript in transcript_ids(attributes, gene_id):
+        models = model_ids[index] if model_ids is not None else transcript_ids(attributes, gene_id)
+        for transcript in models:
             candidates.setdefault(transcript, []).append(index)
     annotated_rows = None
     selected = []
@@ -572,7 +601,7 @@ def select_longest_transcripts(gff):
 
 
 
-def attach_transcript_structure(selected_cds, gff):
+def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
     """Attach only explicit UTRs from the exact transcript selected for CDS."""
     selected_cds = selected_cds.copy()
     utr_by_transcript = {}
@@ -584,6 +613,7 @@ def attach_transcript_structure(selected_cds, gff):
                     (row.sequence, row.strand, row.start, row.end))
     annotation = {}
     first_phase = {}
+    phase_status = {}
     for gene_id, cds in selected_cds.groupby("gene_id", sort=False):
         transcript = cds["selected_transcript"].unique()
         if len(transcript) != 1:
@@ -597,6 +627,11 @@ def attach_transcript_structure(selected_cds, gff):
         if splice_mode == "trans-splicing":
             if utr_blocks:
                 raise ValueError(f"Trans-spliced UTR order is not represented for {gene_id}")
+        elif splice_mode in {"ribosomal-slippage", "pseudogene"}:
+            for utr in utr_blocks:
+                if any(utr[:2] != block[:2] or (utr[2] <= block[3] and block[2] <= utr[3])
+                       for block in cds_blocks):
+                    raise ValueError(f'Conflicting CDS/UTR annotation for {gene_id}')
         else:
             ordered_feature_blocks(cds_blocks + utr_blocks, gene_id)
         annotation[gene_id] = ";".join(f"{block[2]}-{block[3]}" for block in utr_blocks)
@@ -621,11 +656,19 @@ def attach_transcript_structure(selected_cds, gff):
                     raise ValueError(f"Invalid CDS phase for {gene_id}: {value}")
                 implied_phases.add((int(phase) + offset) % 3)
             offset += block[3] - block[2] + 1
-        if len(implied_phases) > 1:
+        if splice_mode in {"ribosomal-slippage", "pseudogene"}:
+            phase_status[gene_id] = splice_mode
+            first_phase[gene_id] = numpy.nan
+            continue
+        if len(implied_phases) > 1 and phase_policy == "strict":
             raise ValueError(f"Conflicting CDS phases for {gene_id}")
-        first_phase[gene_id] = next(iter(implied_phases)) if implied_phases else numpy.nan
+        phase_status[gene_id] = "conflicting" if len(implied_phases) > 1 else "consistent" if implied_phases else "missing"
+        first_phase[gene_id] = next(iter(implied_phases)) if len(implied_phases) == 1 else numpy.nan
+        if len(implied_phases) > 1:
+            sys.stderr.write(f"Conflicting CDS phases for {gene_id}; coordinates retained, coding frame unavailable.\n")
     selected_cds["utr_blocks"] = selected_cds["gene_id"].map(annotation)
     selected_cds["cds_first_phase"] = selected_cds["gene_id"].map(first_phase)
+    selected_cds["phase_status"] = selected_cds["gene_id"].map(phase_status)
     return selected_cds
 
 
@@ -654,7 +697,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             continue
         by_gene.setdefault(gene_id, []).append((sequence, strand, start, end, attr))
     feature_types = gff.groupby(id_col, sort=False)["feature"].first().to_dict() if "feature" in gff else {}
-    metadata_columns = [c for c in ("selected_transcript", "utr_blocks", "cds_first_phase") if c in gff]
+    metadata_columns = [c for c in ("selected_transcript", "utr_blocks", "cds_first_phase", "phase_status") if c in gff]
     metadata = gff.groupby(id_col, sort=False)[metadata_columns].first().to_dict("index") if metadata_columns else {}
     rows = []
     for gene_id, group in by_gene.items():
@@ -666,7 +709,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             length += end - start + 1
             if index + 1 < len(blocks):
                 junction_offsets.append(length)
-                if splice_mode == "trans-splicing":
+                if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene"}:
                     continue
                 following = blocks[index + 1]
                 gap = following[2] - end - 1 if strand == "+" else start - following[3] - 1
@@ -676,7 +719,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             {
                 "gene_id": gene_id,
                 "feature_size": length,
-                "num_intron": numpy.nan if splice_mode == "trans-splicing" else len(intron_offsets),
+                "num_intron": numpy.nan if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene"} else len(intron_offsets),
                 "intron_positions": ";".join(str(pos) for pos in intron_offsets),
                 "feature_blocks": ";".join(f"{block[2]}-{block[3]}" for block in blocks),
                 "feature_type": feature_types.get(gene_id, ""),
@@ -687,6 +730,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
                 "gff_transcript_id": metadata.get(gene_id, {}).get("selected_transcript", ""),
                 "utr_blocks": metadata.get(gene_id, {}).get("utr_blocks", ""),
                 "cds_first_phase": metadata.get(gene_id, {}).get("cds_first_phase", numpy.nan),
+                "phase_status": metadata.get(gene_id, {}).get("phase_status", "not_evaluated"),
                 "chromosome": blocks[0][0] if len({b[0] for b in blocks}) == 1 else "",
                 "start": min(b[2] for b in blocks) if len({b[0] for b in blocks}) == 1 else numpy.nan,
                 "end": max(b[3] for b in blocks) if len({b[0] for b in blocks}) == 1 else numpy.nan,
@@ -778,7 +822,7 @@ def read_gff_table(gff_path):
         return pandas.DataFrame(rows)
 
 
-def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols):
+def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict"):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
     if os.stat(gff_path).st_size == 0:
@@ -804,7 +848,7 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         return pandas.DataFrame(columns=out_cols)
     print("Summarizing gene features: {}".format(datetime.datetime.now()), flush=True)
     if feature == "CDS":
-        gff_id = attach_transcript_structure(gff_id, gff)
+        gff_id = attach_transcript_structure(gff_id, gff, phase_policy=phase_policy)
     return summarize_gene_features(gff=gff_id, out_cols=out_cols)
 
 
@@ -830,7 +874,7 @@ def main():
     print("gff2genestat.py started: {}".format(datetime.datetime.now()))
 
     out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase",
-                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions"]
+                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
     records = list(fasta_records(Path(args.seqfile)))
     seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)
@@ -875,6 +919,7 @@ def main():
                 multiple_hits=args.multiple_hits,
                 gff_cols=gff_cols,
                 out_cols=out_cols,
+                phase_policy=args.phase_policy,
             )
             if df_tmp.shape[0] > 0:
                 frames.append(df_tmp)
@@ -891,6 +936,7 @@ def main():
                     args.multiple_hits,
                     gff_cols,
                     out_cols,
+                    args.phase_policy,
                 ): (idx, gff_file)
                 for idx, (gff_file, seq_sp_values) in enumerate(tasks)
             }
@@ -907,6 +953,8 @@ def main():
                 if df_tmp.shape[0] > 0:
                     frames.append(df_tmp)
 
+    if args.require_matches and not frames:
+        raise ValueError(f"No GFF IDs matched {len(seq_names)} input sequences; check source pairing and identifiers")
     if len(frames) > 0:
         df_all = pandas.concat(frames, axis="index", ignore_index=True)
     else:

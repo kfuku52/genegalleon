@@ -24,6 +24,12 @@ treevis_intron_site_data = function(tips, seqs) {
             if (length(nongap) != length_cds) reason = 'CDS_length_mismatch'
         }
         if (is.na(reason) && trans) reason = 'trans_splicing'
+        if ('phase_status' %in% names(tips) && !is.na(tips[['phase_status']][i]) &&
+            tips[['phase_status']][i] %in% c('conflicting', 'ribosomal-slippage', 'pseudogene')) {
+            reason = as.character(tips[['phase_status']][i])
+        }
+        if ('splice_mode' %in% names(tips) && !is.na(tips[['splice_mode']][i]) &&
+            tips[['splice_mode']][i] %in% c('ribosomal-slippage', 'pseudogene')) reason = as.character(tips[['splice_mode']][i])
         if (!is.na(reason)) {
             diagnostics[[length(diagnostics)+1]] = data.frame(node_name=id, reason=reason)
             next
