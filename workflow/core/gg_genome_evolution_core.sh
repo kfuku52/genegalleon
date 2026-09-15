@@ -20,6 +20,19 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
+run_species_taxonomy="${run_species_taxonomy:-1}"
+taxonomy_species_tree="${taxonomy_species_tree:-auto}"
+taxonomy_ranks="${taxonomy_ranks:-all}"
+taxonomy_plot_clades="${taxonomy_plot_clades:-0}"
+taxonomy_taxid_map="${taxonomy_taxid_map:-}"
+# Resolve explicit paths before downstream stages change the working directory.
+case "${taxonomy_species_tree}" in auto|/*) ;; *) taxonomy_species_tree="${PWD}/${taxonomy_species_tree}" ;; esac
+case "${taxonomy_taxid_map}" in ""|/*) ;; *) taxonomy_taxid_map="${PWD}/${taxonomy_taxid_map}" ;; esac
+case "${run_species_taxonomy}" in
+  0|1) ;;
+  *) echo "run_species_taxonomy must be 0 or 1" >&2; exit 1 ;;
+esac
+
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
@@ -4221,6 +4234,18 @@ if [[ ${dated_tree_plot_needs_update} -eq 1 && ${run_plot_mcmctreer} -eq 1 ]]; t
   gg_artifact_record "${dated_tree_plot_provenance_args[@]}"
 else
   gg_step_skip "${task}"
+fi
+
+# Species taxonomy uses the current input set and preserves completed output on failure.
+if [[ ${run_species_taxonomy} -eq 1 ]]; then
+  ensure_ete_taxonomy_db "${gg_workspace_dir}" || exit 1
+  python "${gg_support_dir}/species_taxonomy.py" \
+    --workspace "${gg_workspace_dir}" \
+    --species-tree "${taxonomy_species_tree}" \
+    --ranks "${taxonomy_ranks}" \
+    --plot-clades "${taxonomy_plot_clades}" \
+    --taxid-map "${taxonomy_taxid_map}" \
+    --species-dir "$(effective_species_input_source_dir_path)" || exit $?
 fi
 
 remove_empty_subdirs "${dir_species_tree}"

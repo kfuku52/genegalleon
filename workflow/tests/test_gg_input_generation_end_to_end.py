@@ -412,6 +412,7 @@ def _core_env(
         "run_cds_fx2tab": "1",
         "run_species_busco": "1",
         "run_multispecies_summary": "1",
+        "run_species_taxonomy": "0",
         "run_generate_species_trait": "0",
         "busco_lineage": "eukaryota_odb12",
         "trait_profile": "none",

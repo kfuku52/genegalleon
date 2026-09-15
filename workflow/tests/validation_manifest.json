@@ -5,6 +5,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_species_taxonomy_runtime.py",
     "test_scaffold_taxonomy.py",
     "test_alignment_stats_runtime.py",
     "test_cafe_branch_flags_runtime.py",

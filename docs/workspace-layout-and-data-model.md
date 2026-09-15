@@ -93,6 +93,12 @@ ambiguous CDS counts, and coordinate-rescue counts.
 Formatted source GFF files may have neighboring `*.gff.gz.repair.json` audit files; raw downloaded GFF
 files remain unchanged.
 
+`workspace/output/species_taxonomy/` contains input-species taxonomic ranks,
+full NCBI lineages, clade mappings, annotated trees, and PDF/SVG/PNG figures.
+It uses an available species tree or constructs an NCBI taxonomy tree with
+NWKIT. See [input-species taxonomy](species-taxonomy.md) for selection rules,
+missing-species handling, and configuration.
+
 When localization prediction is enabled, per-species CDS tables are written to
 `workspace/output/species_cds_cdskit_localize/`, and per-family tables are
 written under `workspace/output/query2family/cdskit_localize/` or

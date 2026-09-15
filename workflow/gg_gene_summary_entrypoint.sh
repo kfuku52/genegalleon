@@ -95,6 +95,7 @@ gg_entrypoint_name="gg_gene_summary_entrypoint.sh"
 gene_family_source="${gene_family_source:-query2family}" # query2family|orthogroup; selects which gene-family output source to summarize.
 
 # Workflow flags
+run_species_taxonomy="${run_species_taxonomy:-1}" # Resolve NCBI taxonomic ranks and plot them on the available species tree or an NCBI taxonomy tree.
 run_family_completion_summary="${run_family_completion_summary:-1}" # Generate per-family completion/alignment summary tables.
 run_presence_absence_summary="${run_presence_absence_summary:-1}" # Generate species x gene-family presence/absence and copy-number matrices.
 run_gene_family_database_build="${run_gene_family_database_build:-0}" # Prepare or refresh gg_orthogroup.db for the selected source.
@@ -103,6 +104,12 @@ run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}" # Packag
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}" # Summarize GeneRax-first HGT candidate evidence from gg_orthogroup.db.
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}" # Generate HGT overview, taxonomy-flow, transfer-tree, and per-family HGT tree plots.
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}" # Run site-level convergence screening for the selected source.
+
+# Taxonomic annotation parameters
+taxonomy_species_tree="auto" # Species-tree Newick path, or auto to discover a selected tree before using NCBI taxonomy.
+taxonomy_ranks="all" # all includes every available NCBI lineage rank; alternatively use a comma-separated list. Per-species missing ranks remain blank.
+taxonomy_plot_clades=0 # Set to 1 to draw clade columns; tables and NHX retain clades either way.
+taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit taxonomy corrections.
 
 # Output and shared summary parameters
 summary_output_dir="${summary_output_dir:-auto}" # Output directory for source-specific gene summaries.

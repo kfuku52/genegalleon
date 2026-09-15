@@ -72,6 +72,19 @@ gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
 format_contract_version=9
 
+run_species_taxonomy="${run_species_taxonomy:-1}"
+taxonomy_species_tree="${taxonomy_species_tree:-auto}"
+taxonomy_ranks="${taxonomy_ranks:-all}"
+taxonomy_plot_clades="${taxonomy_plot_clades:-0}"
+taxonomy_taxid_map="${taxonomy_taxid_map:-}"
+# Resolve explicit paths before downstream stages change the working directory.
+case "${taxonomy_species_tree}" in auto|/*) ;; *) taxonomy_species_tree="${PWD}/${taxonomy_species_tree}" ;; esac
+case "${taxonomy_taxid_map}" in ""|/*) ;; *) taxonomy_taxid_map="${PWD}/${taxonomy_taxid_map}" ;; esac
+case "${run_species_taxonomy}" in
+  0|1) ;;
+  *) echo "run_species_taxonomy must be 0 or 1" >&2; exit 1 ;;
+esac
+
 enable_all_run_flags_for_debug_mode
 
 case "${trait_profile}" in
@@ -2198,6 +2211,7 @@ if [[ "${input_generation_mode}" == array_* ]]; then
   array_settings_cmd=(python "${gg_support_dir}/input_generation_array_state.py" configure --task-plan "${task_plan_output}")
   for array_setting in provider download_limit_dir gene_grouping_mode gff_repair_mode strict busco_lineage \
     run_validate_inputs run_cds_fx2tab run_species_busco run_generate_species_trait run_multispecies_summary \
+    run_species_taxonomy taxonomy_species_tree taxonomy_ranks taxonomy_plot_clades taxonomy_taxid_map \
     species_cds_dir species_gff_dir species_genome_dir species_cds_fx2tab_dir species_busco_full_dir species_busco_short_dir \
     species_summary_output resolved_manifest_output species_trait_output file_multispecies_summary \
     trait_profile trait_species_source trait_databases trait_plan trait_database_sources trait_download_dir trait_download_timeout \
@@ -2206,6 +2220,10 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  if [[ ${run_species_taxonomy} -eq 1 ]]; then
+    [[ -z "${taxonomy_taxid_map}" ]] || array_settings_cmd+=(--file "${taxonomy_taxid_map}")
+    [[ "${taxonomy_species_tree}" == auto ]] || array_settings_cmd+=(--file "${taxonomy_species_tree}")
+  fi
   if [[ ${run_generate_species_trait} -eq 1 ]]; then
     array_settings_cmd+=(--file "${trait_plan}" --file "${trait_database_sources}")
     gbif_input_files=$(python "${gg_support_dir}/generate_species_trait.py" \
@@ -2246,6 +2264,21 @@ case "${input_generation_mode}" in
     run_array_finalize_mode
     ;;
 esac
+
+# Species taxonomy uses the current input set and preserves completed output on failure.
+if [[ ${run_species_taxonomy} -eq 1 && ( "${input_generation_mode}" == single || "${input_generation_mode}" == array_finalize ) && ${dry_run} -ne 1 && ${download_only} -ne 1 ]]; then
+  ensure_ete_taxonomy_db "${gg_workspace_dir}" || exit 1
+  taxonomy_summary_args=()
+  [[ ! -s "${species_summary_output}" ]] || taxonomy_summary_args+=(--species-summary "${species_summary_output}")
+  python "${gg_support_dir}/species_taxonomy.py" \
+    --workspace "${gg_workspace_dir}" \
+    --species-tree "${taxonomy_species_tree}" \
+    --ranks "${taxonomy_ranks}" \
+    --plot-clades "${taxonomy_plot_clades}" \
+    --taxid-map "${taxonomy_taxid_map}" \
+    --species-dir "${species_cds_dir}" \
+    "${taxonomy_summary_args[@]}" || exit $?
+fi
 
 if [[ ${cleanup_input_generation_tmp} -eq 1 && -d "${download_tmp_root}" ]]; then
   echo "Removing temporary input_generation directory: ${download_tmp_root}"

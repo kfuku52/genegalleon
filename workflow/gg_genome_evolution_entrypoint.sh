@@ -92,6 +92,7 @@ gg_entrypoint_name="gg_genome_evolution_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Input-preparation workflow flags
+run_species_taxonomy=1 # Resolve NCBI taxonomic ranks and plot them on the available species tree or an NCBI taxonomy tree.
 run_cds_translation=1 # Internal helper for temporary protein FASTA generation when protein mode falls back to species_cds.
 
 # Species-tree workflow flags
@@ -144,6 +145,12 @@ run_orthogroup_copy_number_trait_selection=0 # Exploratory joint elastic-net sel
 run_orthogroup_copy_number_trait_pgls=0 # Test associations between orthogroup copy numbers and species traits with species-tree PGLS.
 run_copy_number_quality_diagnostics=0 # Plot traits with BUSCO and flag quality-associated families; never automatically exclude candidates.
 run_go_enrichment=0 # Run GO enrichment for branches or orthogroups selected by family-size change tests.
+
+# Taxonomic annotation parameters
+taxonomy_species_tree="auto" # Species-tree Newick path, or auto to discover a selected tree before using NCBI taxonomy.
+taxonomy_ranks="all" # all includes every available NCBI lineage rank; alternatively use a comma-separated list. Per-species missing ranks remain blank.
+taxonomy_plot_clades=0 # Set to 1 to draw clade columns; tables and NHX retain clades either way.
+taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit taxonomy corrections.
 
 # Shared parameters
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.

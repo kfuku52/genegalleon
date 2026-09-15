@@ -98,12 +98,19 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Workflow flags
+run_species_taxonomy=1 # Resolve NCBI taxonomic ranks and plot them on the available species tree or an NCBI taxonomy tree.
 run_format_inputs=1 # Format local inputs or download-manifest targets into workspace layout.
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
 run_cds_fx2tab=1 # Run seqkit fx2tab for formatted species CDS files.
 run_species_busco=1 # Run BUSCO for formatted species CDS files.
 run_multispecies_summary=1 # Generate multi-species BUSCO summary plots and tables from species BUSCO outputs.
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
+
+# Taxonomic annotation parameters
+taxonomy_species_tree="auto" # Species-tree Newick path, or auto to discover a selected tree before using NCBI taxonomy.
+taxonomy_ranks="all" # all includes every available NCBI lineage rank; alternatively use a comma-separated list. Per-species missing ranks remain blank.
+taxonomy_plot_clades=0 # Set to 1 to draw clade columns; tables and NHX retain clades either way.
+taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit taxonomy corrections.
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.

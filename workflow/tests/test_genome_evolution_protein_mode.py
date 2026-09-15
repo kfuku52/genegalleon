@@ -848,6 +848,7 @@ def _run_core(
             "run_individual_iqtree_dna": "0",
             "run_astral_dna": "0",
             "run_plot_species_trees": "0",
+            "run_species_taxonomy": "0",
             "run_constrained_tree": "0",
             "run_plot_constrained_tree": "0",
             "run_mcmctree1": "0",

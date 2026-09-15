@@ -14,6 +14,11 @@ EOF
       ;;
     gg_gene_summary_entrypoint.sh)
       cat <<'EOF'
+run_species_taxonomy
+taxonomy_species_tree
+taxonomy_ranks
+taxonomy_plot_clades
+taxonomy_taxid_map
 csubst_site_arity_range
 csubst_site_max_candidates_per_arity
 csubst_site_min_fg_stem_ratio
@@ -305,6 +310,11 @@ EOF
       ;;
     gg_genome_evolution_entrypoint.sh)
       cat <<'EOF'
+run_species_taxonomy
+taxonomy_species_tree
+taxonomy_ranks
+taxonomy_plot_clades
+taxonomy_taxid_map
 astral_min_tips
 bootstrap_params
 change_direction_go
@@ -432,6 +442,11 @@ EOF
       ;;
     gg_input_generation_entrypoint.sh)
       cat <<'EOF'
+run_species_taxonomy
+taxonomy_species_tree
+taxonomy_ranks
+taxonomy_plot_clades
+taxonomy_taxid_map
 auth_bearer_token_env
 busco_lineage
 download_dir
