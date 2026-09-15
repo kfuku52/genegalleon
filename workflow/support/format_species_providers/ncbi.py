@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -105,6 +106,41 @@ def infer_ncbi_species_key_from_doc(doc, fallback):
     return fallback
 
 
+def _ncbi_datasets_filename_prefix(accession, doc):
+    """Build a stable local filename prefix when NCBI has no FTP directory."""
+
+    assembly_name = str(doc.get("assemblyname", "") or "").strip()
+    if assembly_name != "":
+        assembly_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", assembly_name)
+        return "{}_{}".format(accession, assembly_name)
+    return accession
+
+
+def _resolve_ncbi_datasets_only_bundle(accession, doc):
+    """Return a Datasets GBFF/genome bundle for assemblies without FTP paths.
+
+    Some recent GenBank assemblies are indexed by E-utilities before their
+    ``ftppath_*`` fields are populated. The Datasets API still exposes an
+    annotated GBFF and genome FASTA for these accessions. The private URL
+    scheme is consumed by the download runtime and never sent to a network
+    client.
+    """
+
+    prefix = _ncbi_datasets_filename_prefix(accession, doc)
+    return {
+        "species_key": infer_ncbi_species_key_from_doc(doc, accession),
+        "cds_url": "",
+        "gff_url": "",
+        "gbff_url": "ncbi-datasets://{}/gbff".format(accession),
+        "genome_url": "ncbi-datasets://{}/genome".format(accession),
+        "cds_filename": "",
+        "gff_filename": "",
+        "gbff_filename": "{}_genomic.gbff.gz".format(prefix),
+        "genome_filename": "{}_genomic.fna.gz".format(prefix),
+        "ncbi_source_db": "datasets_api",
+    }
+
+
 def resolve_ncbi_download_urls_from_id(source_id, timeout, ncbi_source="auto"):
     accession = extract_ncbi_accession_from_source_id(source_id)
     if accession == "":
@@ -155,7 +191,7 @@ def resolve_ncbi_download_urls_from_id(source_id, timeout, ncbi_source="auto"):
         elif ftppath_genbank != "":
             selected_source = "genbank"
     if ftp_dir == "":
-        raise ValueError("NCBI FTP path was not found in assembly summary for id: {}".format(source_id))
+        return _resolve_ncbi_datasets_only_bundle(accession, doc)
 
     normalized_ftp_dir = normalize_ncbi_ftp_path(ftp_dir).rstrip("/")
     assembly_dir_name = Path(urlparse(ftp_dir).path.rstrip("/")).name

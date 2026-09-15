@@ -89,6 +89,42 @@ def _execute_download_target_job(
     downloaded = 0
     failed = []
 
+    # NCBI can expose a newly released assembly through E-utilities and the
+    # Datasets API before its FTP directory is published. The resolver marks
+    # that case with a private URL scheme so the target job can use the same
+    # archive extraction path as the ordinary missing-FTP fallback.
+    if url.startswith("ncbi-datasets://"):
+        try:
+            did_download = download_ncbi_datasets_file_from_id(
+                source_id=source_id,
+                label=label,
+                destination=target,
+                headers=headers,
+                timeout=timeout,
+                dry_run=False,
+                overwrite=overwrite,
+                lock_stale_seconds=lock_stale_seconds,
+                warnings=local_warnings,
+                lock_context="[download:{}] {} {} datasets".format(provider, species_key, label),
+            )
+            if did_download:
+                downloaded += 1
+                local_warnings.append(
+                    "[download:{}] {} {} fallback via NCBI Datasets API for id '{}' (no FTP path)".format(
+                        provider, species_key, label, source_id
+                    )
+                )
+        except Exception as exc:
+            failed.append(
+                {
+                    "row_id": job.get("row_id"),
+                    "message": "[download:{}] failed {} {} from NCBI Datasets API -> {} ({})".format(
+                        provider, species_key, label, target, exc
+                    ),
+                }
+            )
+        return {"warnings": local_warnings, "errors": local_errors, "downloaded": downloaded, "failed": failed}
+
     if target.exists() and target.stat().st_size > 0 and not overwrite:
         if quarantine_corrupt_gzip(
             target,

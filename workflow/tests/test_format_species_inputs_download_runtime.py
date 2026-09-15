@@ -1400,7 +1400,11 @@ def test_download_manifest_ncbi_uses_gbff_when_cds_and_gff_are_missing(tmp_path)
                         "result": {
                             "uids": ["40086895"],
                             "40086895": {
-                                "ftppath_genbank": "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/040/086/895/GCA_040086895.1_UAZ_Capgrnd_2",
+                                # This assembly is indexed before its FTP directory is
+                                # published; the Datasets-only resolver must still
+                                # provide the annotated GBFF.
+                                "ftppath_genbank": "",
+                                "assemblyname": "UAZ_Capgrnd_2",
                                 "organism": "Capsella grandiflora",
                                 "speciesname": "Capsella grandiflora",
                             },
@@ -1487,7 +1491,6 @@ def test_download_manifest_ncbi_uses_gbff_when_cds_and_gff_are_missing(tmp_path)
 
         raw_dir = download_dir / "NCBI_Genome" / "species_wise_original" / "Capsella_grandiflora"
         assert (raw_dir / "GCA_040086895.1_UAZ_Capgrnd_2_genomic.gbff.gz").exists()
-        assert (raw_dir / "GCA_040086895.1_UAZ_Capgrnd_2_genomic.fna.gz").exists()
 
         formatted_cds = out_cds / "Capsella_grandiflora_GCA_040086895.1_UAZ_Capgrnd_2_genomic.derived.cds.fa.gz"
         formatted_gff = out_gff / "Capsella_grandiflora_GCA_040086895.1_UAZ_Capgrnd_2_genomic.derived.gff.gz"

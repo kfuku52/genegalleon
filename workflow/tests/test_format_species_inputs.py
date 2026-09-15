@@ -3412,6 +3412,49 @@ def test_resolve_ncbi_download_urls_from_id_retries_transient_remote_disconnect(
     assert resolved["ncbi_source_db"] == "genbank"
 
 
+def test_resolve_ncbi_download_urls_from_id_uses_datasets_when_ftp_path_is_missing(monkeypatch):
+    mod = load_module()
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        if "esearch.fcgi" in url:
+            payload = {
+                "header": {"type": "esearch", "version": "0.3"},
+                "esearchresult": {"idlist": ["34905841"]},
+            }
+            return FakeBinaryResponse(json.dumps(payload).encode("utf-8"))
+        if "esummary.fcgi" in url:
+            payload = {
+                "header": {"type": "esummary", "version": "0.3"},
+                "result": {
+                    "uids": ["34905841"],
+                    "34905841": {
+                        "assemblyaccession": "GCA_059696495.1",
+                        "assemblyname": "Tcin_v1.0",
+                        "organism": "Tanacetum cinerariifolium (pyrethrum)",
+                        "speciesname": "Tanacetum cinerariifolium",
+                        "ftppath_refseq": "",
+                        "ftppath_genbank": "",
+                    },
+                },
+            }
+            return FakeBinaryResponse(json.dumps(payload).encode("utf-8"))
+        raise AssertionError(url)
+
+    provider_module = sys.modules[mod.resolve_ncbi_download_urls_from_id.__module__]
+    monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(provider_module, "throttle_ncbi_eutils_request", lambda: None)
+
+    resolved = mod.resolve_ncbi_download_urls_from_id("GCA_059696495.1", timeout=1.0)
+
+    assert resolved["species_key"] == "Tanacetum_cinerariifolium"
+    assert resolved["gbff_url"] == "ncbi-datasets://GCA_059696495.1/gbff"
+    assert resolved["genome_url"] == "ncbi-datasets://GCA_059696495.1/genome"
+    assert resolved["gbff_filename"] == "GCA_059696495.1_Tcin_v1.0_genomic.gbff.gz"
+    assert resolved["genome_filename"] == "GCA_059696495.1_Tcin_v1.0_genomic.fna.gz"
+    assert resolved["ncbi_source_db"] == "datasets_api"
+
+
 def test_iter_fasta_records_reads_tar_bz2_archive(tmp_path):
     mod = load_module()
     archive_path = tmp_path / "example.genome.fa.tar.bz2"
