@@ -4,8 +4,13 @@ from urllib.parse import unquote
 
 
 def has_trans_splicing_exception(text):
-    return any('trans-splicing' in [unquote(x).strip() for x in field.split('=', 1)[1].split(',')]
-               for field in str(text).split(';') if field.startswith('exception='))
+    for field in str(text).split(';'):
+        if not field.startswith('exception='):
+            continue
+        decoded = unquote(field.split('=', 1)[1])
+        if any(x.strip() == 'trans-splicing' for x in decoded.split(',')):
+            return True
+    return False
 
 
 def ordered_annotated_blocks(rows, gene_id):
@@ -28,8 +33,10 @@ def ordered_annotated_blocks(rows, gene_id):
                     raise ValueError(f'Conflicting GFF attribute {key} for {gene_id}')
                 fields[key] = value
         attributes.append(fields)
-    declared = ['trans-splicing' in [unquote(x).strip() for x in a.get('exception', '').split(',')]
-                for a in attributes]
+    declared = []
+    for attr in attributes:
+        decoded_exception = unquote(attr.get('exception', ''))
+        declared.append(any(x.strip() == 'trans-splicing' for x in decoded_exception.split(',')))
     if not any(declared):
         return ordered_feature_blocks(coordinates, gene_id), 'cis'
     if not all(declared):

@@ -200,3 +200,74 @@ def test_off_mode_preserves_source_gene_ids(tmp_path):
     assert audit["status"] == "off"
     assert audit["renamed_gene_ids"] == 0
     assert "ID=MSTRG.10121_Chr06_+;" in read_gzip_text(output_gff)
+
+
+def test_organelle_records_are_removed_from_nuclear_formatted_pair(tmp_path):
+    mod = load_format_module()
+    source_gff = tmp_path / "source.gff"
+    source_gff.write_text(
+        (
+            "##gff-version 3\n"
+            "NC_1\tsrc\tregion\t1\t9\t.\t+\t.\tID=NC_1:1..9;genome=nuclear\n"
+            "NC_1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1;Name=GENE1\n"
+            "NC_1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=tx1;Parent=gene1\n"
+            "NC_1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=tx1\n"
+            "MT_1\tsrc\tregion\t1\t9\t.\t+\t.\tID=MT_1:1..9;genome=mitochondrion\n"
+            "MT_1\tsrc\tgene\t1\t9\t.\t+\t.\tID=mtgene;Name=MTGENE\n"
+            "MT_1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=mtx;Parent=mtgene\n"
+            "MT_1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=mtcds;Parent=mtx\n"
+        ),
+        encoding="utf-8",
+    )
+    source_cds = tmp_path / "source_cds.fa.gz"
+    write_gzip_text(
+        source_cds,
+        (
+            ">lcl|NC_1_cds_PROT_1 [gene=GENE1] [protein_id=PROT_1] [location=1..9]\nATGAAATTT\n"
+            ">lcl|MT_1_cds_MTPROT_1 [gene=MTGENE] [protein_id=MTPROT_1] [location=1..9]\nATGCCCTAA\n"
+        ),
+    )
+    task = {
+        "provider": "ncbi",
+        "species_key": "Species_test",
+        "species_prefix": "Species_test",
+        "cds_path": source_cds,
+        "gff_path": source_gff,
+        "gbff_path": None,
+        "genome_path": None,
+    }
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    cds_result = mod.format_cds(task, cds_dir, overwrite=True, dry_run=False, strict=True)
+    gff_result = mod.format_gff(
+        task,
+        gff_dir,
+        overwrite=True,
+        dry_run=False,
+        formatted_cds_path=cds_result["output_path"],
+    )
+    formatted_cds = read_gzip_text(cds_result["output_path"])
+    formatted_gff = read_gzip_text(gff_result["output_path"])
+    assert "MT_1" not in formatted_cds
+    assert "MT_1" not in formatted_gff
+    assert "NC_1" in formatted_gff
+    assert gff_result["repair_status"] in {"unchanged", "repaired"}
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(VALIDATE_SCRIPT),
+            "--species-cds-dir",
+            str(cds_dir),
+            "--species-gff-dir",
+            str(gff_dir),
+            "--strict",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout

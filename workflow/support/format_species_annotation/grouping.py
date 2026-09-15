@@ -41,6 +41,7 @@ from .grouping_identity import (
     resolve_grouping_feature_gene_feature_ids,
     strip_gff_feature_prefix,
 )
+from .organelle import gff_organelle_seqids
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 
@@ -278,6 +279,8 @@ def build_gff_cds_grouping_index(task):
     gene_alias_to_gene_tokens = defaultdict(set)
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
     cds_features_by_transcript = defaultdict(list)
+    organelle_seqids = gff_organelle_seqids(gff_path)
+    organelle_cds_features = 0
 
     with open_text(gff_path, "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
@@ -288,6 +291,10 @@ def build_gff_cds_grouping_index(task):
             if len(parts) < 9:
                 continue
             seqid, _source, feature_type, start_text, end_text, _score, strand, _phase, attr_text = parts[:9]
+            if str(seqid or "").strip() in organelle_seqids:
+                if str(feature_type or "").strip().lower() == "cds":
+                    organelle_cds_features += 1
+                continue
             feature_type_lower = str(feature_type or "").strip().lower()
             attrs = parse_gff_attributes(attr_text)
             feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
@@ -548,6 +555,8 @@ def build_gff_cds_grouping_index(task):
                 if str(resolved_gene_tokens.get(transcript_id, "") or "").strip() != ""
             }
         ),
+        "organelle_seqids": tuple(sorted(organelle_seqids)),
+        "organelle_cds_features": organelle_cds_features,
     }
 
 

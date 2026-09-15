@@ -17,11 +17,13 @@ import pandas
 
 try:
     from fasta_sequence_store import fasta_records
+    from format_species_annotation.organelle import gff_organelle_seqids
     from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
     from species_labeling import extract_species_label, strip_species_label
 except ImportError:  # pragma: no cover - package import path used in tests
     from .fasta_sequence_store import fasta_records
+    from .format_species_annotation.organelle import gff_organelle_seqids
     from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
     from .species_labeling import extract_species_label, strip_species_label
@@ -793,6 +795,9 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
     if gff.shape[1] > len(gff_cols):
         gff = gff.iloc[:, : len(gff_cols)]
     gff.columns = gff_cols
+    organelle_seqids = gff_organelle_seqids(gff_path)
+    if organelle_seqids:
+        gff = gff.loc[~gff["sequence"].astype(str).isin(organelle_seqids)].copy()
     seq_sp = pandas.Series(seq_sp_values)
     gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits)
     if gff_id.shape[0] == 0:

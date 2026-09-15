@@ -21,8 +21,14 @@ from .common import (
     parse_gff_attributes,
     sanitize_identifier,
 )
+from .organelle import (
+    count_organelle_gff_features,
+    gff_data_line_is_organelle,
+    gff_organelle_seqids,
+    iter_non_organelle_gff_lines,
+)
 
-GFF_REPAIR_VERSION = 2
+GFF_REPAIR_VERSION = 3
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -118,10 +124,13 @@ def read_formatted_cds_gene_ids(cds_path, species_prefix):
 
 
 def iter_gff_feature_rows(gff_path):
+    organelle_seqids = gff_organelle_seqids(gff_path)
     with open_text(Path(gff_path), "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             line = apply_common_replacements(raw_line.rstrip("\n\r"))
             if line == "" or line.startswith("#"):
+                continue
+            if gff_data_line_is_organelle(line, organelle_seqids):
                 continue
             parts = line.split("\t")
             if len(parts) < 9:
@@ -327,32 +336,30 @@ def rewrite_gff_attributes(attr_text, feature_type, id_mapping):
 
 
 def iter_repaired_gff_lines(gff_path, id_mapping, counters):
-    with open_text(Path(gff_path), "rt", errors="replace") as handle:
-        for raw_line in handle:
-            line = apply_common_replacements(raw_line)
-            stripped = line.rstrip("\n\r")
-            newline = line[len(stripped) :]
-            if stripped == "" or stripped.startswith("#"):
-                yield line
-                continue
-            parts = stripped.split("\t")
-            if len(parts) < 9:
-                yield line
-                continue
-            feature_type = parts[2].strip().lower()
-            attributes, value_changes, reference_changes, normalized_bare = rewrite_gff_attributes(
-                parts[8],
-                feature_type,
-                id_mapping,
-            )
-            if value_changes > 0 or normalized_bare > 0:
-                parts[8] = attributes
-                counters["changed_lines"] += 1
-                counters["changed_values"] += value_changes
-                counters["changed_references"] += reference_changes
-                counters["normalized_bare_attribute_lines"] += normalized_bare
-                line = "\t".join(parts) + newline
+    for line in iter_non_organelle_gff_lines(gff_path):
+        stripped = line.rstrip("\n\r")
+        newline = line[len(stripped) :]
+        if stripped == "" or stripped.startswith("#"):
             yield line
+            continue
+        parts = stripped.split("\t")
+        if len(parts) < 9:
+            yield line
+            continue
+        feature_type = parts[2].strip().lower()
+        attributes, value_changes, reference_changes, normalized_bare = rewrite_gff_attributes(
+            parts[8],
+            feature_type,
+            id_mapping,
+        )
+        if value_changes > 0 or normalized_bare > 0:
+            parts[8] = attributes
+            counters["changed_lines"] += 1
+            counters["changed_values"] += value_changes
+            counters["changed_references"] += reference_changes
+            counters["normalized_bare_attribute_lines"] += normalized_bare
+            line = "\t".join(parts) + newline
+        yield line
 
 
 def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
@@ -360,6 +367,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
     source_fingerprint = file_fingerprint(gff_path)
     cds_fingerprint = file_fingerprint(cds_path)
     encoding_audit = inspect_invalid_utf8(gff_path)
+    organelle_seqids = gff_organelle_seqids(gff_path)
+    organelle_features_excluded = count_organelle_gff_features(gff_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     plan = choose_gene_id_repairs(gff_path, cds_gene_ids) if mode != "off" else {
         "id_mapping": {},
@@ -423,6 +432,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
         "ambiguous": plan["ambiguous"],
         "collisions": plan["collisions"],
         "missing_gene_id_lines": plan["missing_gene_id_lines"],
+        "organelle_seqids": sorted(organelle_seqids),
+        "organelle_features_excluded": organelle_features_excluded,
     }
     audit.update(encoding_audit)
     audit_path = gff_repair_audit_path(output_path)

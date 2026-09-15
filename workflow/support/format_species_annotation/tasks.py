@@ -44,6 +44,7 @@ from .genbank import (
     derive_cds_records_from_gff_and_genome,
 )
 from .grouping import resolve_cds_header_gff_gene
+from .organelle import fasta_header_is_organelle, gff_organelle_aliases, gff_organelle_seqids
 
 
 def task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path):
@@ -139,7 +140,16 @@ def build_derived_genome_output_basename(task):
 def iter_task_cds_records(task):
     cds_path = task.get("cds_path")
     if cds_path is not None:
-        yield from iter_fasta_records(cds_path)
+        organelle_seqids = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
+        organelle_aliases = (
+            gff_organelle_aliases(task["gff_path"], organelle_seqids)
+            if task.get("gff_path") is not None
+            else ()
+        )
+        for header, sequence in iter_fasta_records(cds_path):
+            if fasta_header_is_organelle(header, organelle_seqids, organelle_aliases):
+                continue
+            yield header, sequence
         return
     gff_path = task.get("gff_path")
     genome_path = task.get("genome_path")

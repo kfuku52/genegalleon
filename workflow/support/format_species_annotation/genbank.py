@@ -30,6 +30,7 @@ from .common import (
 from .grouping import (
     build_rescued_gene_tokens_for_transcripts,
 )
+from .organelle import gff_organelle_seqids
 
 
 def iter_genome_records_from_gbff(path):
@@ -295,6 +296,7 @@ def derive_cds_records_from_gff_and_genome(task):
     cds_features_by_transcript = defaultdict(list)
     utr_features_by_transcript = defaultdict(list)
     gene_cache = {}
+    organelle_seqids = gff_organelle_seqids(gff_path)
 
     with open_text(gff_path, "rt", errors="replace") as handle:
         for raw_line in handle:
@@ -309,6 +311,8 @@ def derive_cds_records_from_gff_and_genome(task):
             if len(parts) < 9:
                 continue
             seqid, _source, feature_type, start_text, end_text, _score, strand, phase_text, attr_text = parts[:9]
+            if str(seqid or "").strip() in organelle_seqids:
+                continue
             feature_type_lower = str(feature_type or "").strip().lower()
             attrs = parse_gff_attributes(attr_text)
             feature_id = choose_first_gff_attribute(attrs, ("ID", "transcript_id", "protein_id", "Name"))
