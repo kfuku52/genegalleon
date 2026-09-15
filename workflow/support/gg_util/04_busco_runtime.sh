@@ -487,6 +487,11 @@ gg_run_cdskit_localize() {
 
   export CDSKIT_MODEL_DIR="${CDSKIT_MODEL_DIR:-${gg_workspace_downloads_dir}/cdskit_models}"
   ensure_dir "${CDSKIT_MODEL_DIR}"
+  if [[ "${model}" == "latest" ]]; then
+    model=$(python "${GG_UTIL_SUPPORT_DIR}/resolve_cdskit_localize_model.py" \
+      --cache-dir "${CDSKIT_MODEL_DIR}" \
+      --model-download "${model_download_arg}") || return 1
+  fi
 
   cdskit localize \
     --seq_file "${seqfile}" \

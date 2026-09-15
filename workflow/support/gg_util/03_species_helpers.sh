@@ -342,7 +342,7 @@ gg_finalize_auto_busco_lineage_name() {
 }
 
 gg_cdskit_localize_default_model() {
-  printf '%s\n' "targeting5-perox-deeploc21-et-v1"
+  printf '%s\n' "latest"
 }
 
 gg_normalize_cdskit_localize_organism_group() {

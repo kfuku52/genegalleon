@@ -125,7 +125,7 @@ run_multispecies_summary=1 # Multi-species summary plots and tables
 
 # Annotation parameters
 uniprot_annotation_method="mmseqs2" # blastp|mmseqs2 for UniProt Swiss-Prot annotation search engine.
-cdskit_localize_model="${cdskit_localize_model:-targeting5-perox-deeploc21-et-v1}" # cdskit localize model path or alias; default includes the peroxisome head.
+cdskit_localize_model="${cdskit_localize_model:-latest}" # cdskit localize model path or alias; latest selects the newest published checkpoint on first download, then reuses it.
 cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}" # auto|unknown|plant|non_plant; auto infers from GG_COMMON_BUSCO_LINEAGE/busco_lineage.
 cdskit_localize_include_features=0 # Include internal cdskit localize sequence features in the output TSV.
 cdskit_localize_no_model_download=0 # Set 1 to require the localize model to already exist in the cdskit model cache.

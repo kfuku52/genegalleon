@@ -541,6 +541,29 @@ execution coverage and the remaining analytical-model limitations.
 For retired NOTUNG switches, candidate outputs, and reconciliation statistics,
 see [NOTUNG replacement](notung-replacement.md).
 
+## CDSKIT localization model
+
+Both genome annotation and gene evolution default to `cdskit_localize_model=latest`.
+On the first download, GeneGalleon queries the official CDSKIT GitHub releases and
+selects the most recently published non-draft, non-prerelease `localize-*` release
+with one `cdskit-localize-*.pt` checkpoint. It verifies the release asset's SHA-256
+and saves the checkpoint and `selection.json` under
+`workspace/downloads/cdskit_models/genegalleon-latest/` (or under
+`$CDSKIT_MODEL_DIR/genegalleon-latest/` when overridden).
+Subsequent runs reuse that selection without checking for newer releases, even
+if the container or CDSKIT version changes. The cache lock serializes concurrent
+first downloads. Failed downloads do not save a selection. A missing or corrupt
+selected checkpoint is an error, not a trigger to select a different model.
+
+The first automatic selection requires network access. With
+`cdskit_localize_no_model_download=1` or `CDSKIT_OFFLINE=1`, a saved selection is
+required. Explicit CDSKIT aliases or model paths remain supported and bypass
+this automatic selection. Existing alias-specific caches are kept separately;
+they do not pin the first `latest` selection. Model-specific backbone weights
+(such as ESM2) remain managed by CDSKIT and may also need an initial download.
+A newly published checkpoint must be supported by the installed CDSKIT runtime;
+GeneGalleon does not silently substitute an older model on load failure.
+
 ## Genetic code in CSUBST sites
 
 New IQ-TREE ancestral-state bundles contain `csubst.input.json` with the integer
