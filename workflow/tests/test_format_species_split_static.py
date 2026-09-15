@@ -124,6 +124,8 @@ def test_large_format_species_facades_delegate_to_bounded_components():
         assert all(len(path.read_text(encoding="utf-8").splitlines()) < 900 for path in component_paths)
 
     assert annotations.derive_cds_records_from_gbff.__module__ == "format_species_annotation.genbank"
+    from format_species_annotation.grouping import resolve_grouping_feature_gene_tokens
+    assert resolve_grouping_feature_gene_tokens.__module__ == "format_species_annotation.grouping_identity"
     assert download_runtime.download_url_to_file.__module__ == "format_species_download.locking"
     assert provider_resolvers.resolve_ncbi_download_urls_from_id.__module__ == "format_species_providers.ncbi"
     assert provider_resolvers.resolve_fernbase_download_urls_from_id.__module__ == (

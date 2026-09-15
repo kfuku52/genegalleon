@@ -39,7 +39,7 @@ from .grouping_identity import (
     reject_gff_gene_prefix_normalization_collisions,
     resolve_grouping_feature_authoritative_gene_tokens,
     resolve_grouping_feature_gene_feature_ids,
-    strip_gff_feature_prefix,
+    resolve_grouping_feature_gene_tokens,
 )
 from .organelle import gff_organelle_seqids
 
@@ -146,71 +146,6 @@ def gff_cds_location_signature(features):
         return None
     intervals = tuple(sorted((int(feature["start"]), int(feature["end"])) for feature in features))
     return (next(iter(seqids)), next(iter(strands)), intervals)
-
-
-def resolve_grouping_feature_gene_tokens(feature_id, feature_records, provider, cache):
-    feature_text = str(feature_id or "").strip()
-    if feature_text == "":
-        return ()
-    if feature_text in cache:
-        return cache[feature_text]
-
-    resolved = set()
-    pending = [feature_text]
-    visited = set()
-    while len(pending) > 0:
-        current = pending.pop()
-        if current in visited:
-            continue
-        visited.add(current)
-        if current != feature_text and current in cache:
-            resolved.update(cache[current])
-            continue
-        record = feature_records.get(current)
-        if record is None:
-            collapsed = collapse_transcript_suffix(provider, current)
-            fallback = collapsed if collapsed != "" else strip_gff_feature_prefix(current)
-            if fallback != "":
-                resolved.add(fallback)
-            continue
-
-        gene_token = str(record.get("gene_token", "") or "").strip()
-        parents = tuple(record.get("parents", ()))
-        if record.get("feature_type") == "gene" and gene_token != "":
-            resolved.add(gene_token)
-            continue
-        if len(parents) > 0:
-            for parent_id in parents:
-                parent_text = str(parent_id or "").strip()
-                if parent_text != "" and parent_text not in visited:
-                    pending.append(parent_text)
-            continue
-        if gene_token != "":
-            resolved.add(gene_token)
-        else:
-            collapsed = collapse_transcript_suffix(provider, current)
-            fallback = collapsed or strip_gff_feature_prefix(current)
-            if fallback != "":
-                resolved.add(fallback)
-
-    if len(resolved) == 0:
-        cycle_gene_tokens = set()
-        cycle_fallbacks = set()
-        for visited_id in visited:
-            record = feature_records.get(visited_id)
-            gene_token = str((record or {}).get("gene_token", "") or "").strip()
-            if gene_token != "":
-                cycle_gene_tokens.add(gene_token)
-            collapsed = collapse_transcript_suffix(provider, visited_id)
-            fallback = collapsed or strip_gff_feature_prefix(visited_id)
-            if fallback != "":
-                cycle_fallbacks.add(fallback)
-        if len(cycle_gene_tokens) > 0:
-            resolved.update(cycle_gene_tokens)
-        elif len(cycle_fallbacks) > 0:
-            resolved.add(sorted(cycle_fallbacks)[0])
-    cache[feature_text] = tuple(sorted(resolved))
-    return cache[feature_text]
 
 
 def merge_gff_grouping_feature_record(task, feature_records, feature_id, record):
