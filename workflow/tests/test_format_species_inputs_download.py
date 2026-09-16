@@ -728,6 +728,71 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert audit["after_count"] == 1
 
 
+def test_download_manifest_infers_names_for_opaque_figshare_urls(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    species_key = "Actinidia_deliciosa"
+
+    with gzip.open(source_dir / "58581835", "wt", encoding="utf-8") as handle:
+        handle.write(">gene1.t1\nATGAAATTT\n")
+    with gzip.open(source_dir / "53524346", "wt", encoding="utf-8") as handle:
+        handle.write(
+            "\n".join(
+                [
+                    "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                    "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                    "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=gene1.t1",
+                    "",
+                ]
+            )
+        )
+    with gzip.open(source_dir / "53524460", "wt", encoding="utf-8") as handle:
+        handle.write(">chr1\nATGAAATTT\n")
+
+    manifest = tmp_path / "manifest.tsv"
+    make_manifest(
+        manifest,
+        [
+            {
+                "provider": "direct",
+                "id": "https://figshare.com/articles/dataset/actinidia",
+                "species_key": species_key,
+                "cds_url": to_file_url(source_dir / "58581835"),
+                "gff_url": to_file_url(source_dir / "53524346"),
+                "genome_url": to_file_url(source_dir / "53524460"),
+            }
+        ],
+    )
+
+    download_dir = tmp_path / "download_cache"
+    out_cds = tmp_path / "out_cds"
+    out_gff = tmp_path / "out_gff"
+    out_genome = tmp_path / "out_genome"
+    completed = run_script(
+        "--provider",
+        "direct",
+        "--download-manifest",
+        str(manifest),
+        "--download-dir",
+        str(download_dir),
+        "--species-cds-dir",
+        str(out_cds),
+        "--species-gff-dir",
+        str(out_gff),
+        "--species-genome-dir",
+        str(out_genome),
+    )
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+
+    raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
+    assert (raw_dir / (species_key + ".cds.fa.gz")).exists()
+    assert (raw_dir / (species_key + ".gff3.gz")).exists()
+    assert (raw_dir / (species_key + ".fa.gz")).exists()
+    assert list(out_cds.glob("*.fa.gz"))
+    assert list(out_gff.glob("*.gff.gz"))
+    assert list(out_genome.glob("*.fa.gz"))
+
+
 def test_download_manifest_all_provider_only_scans_providers_declared_in_manifest_xlsx(tmp_path):
     source_dir = tmp_path / "source"
     source_dir.mkdir()

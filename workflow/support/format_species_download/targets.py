@@ -46,7 +46,10 @@ def default_download_filename(provider, species_key, label, url, archive_member=
     else:
         parsed = urlparse(url)
         base = Path(parsed.path).name
-    if base == "":
+    # Figshare's ``/files/<numeric-id>`` URLs and similar opaque download
+    # endpoints do not expose a usable filename.  Keep the downloaded target
+    # discoverable by deriving a semantic extension from the manifest label.
+    if base == "" or Path(base).suffix == "":
         if label in ("cds", "genome"):
             ext = ".fa.gz"
         elif label == "gbff":
