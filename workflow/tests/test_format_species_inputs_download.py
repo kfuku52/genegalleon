@@ -786,8 +786,8 @@ def test_download_manifest_infers_names_for_opaque_figshare_urls(tmp_path):
 
     raw_dir = download_dir / "Direct" / "species_wise_original" / species_key
     assert (raw_dir / (species_key + ".cds.fa.gz")).exists()
-    assert (raw_dir / (species_key + ".gff3.gz")).exists()
-    assert (raw_dir / (species_key + ".fa.gz")).exists()
+    assert (raw_dir / (species_key + ".gff.gff3.gz")).exists()
+    assert (raw_dir / (species_key + ".genome.fa.gz")).exists()
     assert list(out_cds.glob("*.fa.gz"))
     assert list(out_gff.glob("*.gff.gz"))
     assert list(out_genome.glob("*.fa.gz"))
