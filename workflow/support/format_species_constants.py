@@ -274,6 +274,9 @@ DOWNLOAD_DIAGNOSTIC_KEYS = (
     "corrupt_cache_recoveries",
     "stale_locks_recovered",
     "lock_waits",
+    "validation_cache_hits",
+    "validation_cache_misses",
+    "validation_cache_records",
 )
 
 TRANSIENT_HTTP_STATUS_CODES = frozenset((408, 425, 429, 500, 502, 503, 504))

@@ -21,6 +21,8 @@ from format_species_provider_urls import (
     is_url_like,
 )
 
+from .cache_validation import GzipValidationCache
+
 
 def is_gzip_path(path):
     return str(path).lower().endswith(".gz")
@@ -38,6 +40,32 @@ def gzip_integrity_error(path):
     return None
 
 
+def validate_gzip_with_cache(
+    path,
+    *,
+    validation_cache=None,
+    validation_key="",
+    source_url="",
+    archive_member="",
+    relative_target="",
+):
+    """Validate a gzip, reusing a matching fail-closed receipt when present."""
+    if not is_gzip_path(path):
+        return None
+    if validation_cache is None:
+        return gzip_integrity_error(path)
+    if not isinstance(validation_cache, GzipValidationCache):
+        raise TypeError("validation_cache must be a GzipValidationCache")
+    return validation_cache.validate(
+        path,
+        validation_key,
+        source_url=source_url,
+        archive_member=archive_member,
+        relative_target=relative_target,
+        validator=gzip_integrity_error,
+    )
+
+
 def quarantine_existing_file(path, warnings, context, reason):
     suffix = ".corrupt.{}.{}".format(time.strftime("%Y%m%d%H%M%S"), os.getpid())
     quarantine_path = Path(str(path) + suffix)
@@ -50,8 +78,25 @@ def quarantine_existing_file(path, warnings, context, reason):
     return quarantine_path
 
 
-def quarantine_corrupt_gzip(path, warnings, context):
-    validation_error = gzip_integrity_error(path)
+def quarantine_corrupt_gzip(
+    path,
+    warnings,
+    context,
+    *,
+    validation_cache=None,
+    validation_key="",
+    source_url="",
+    archive_member="",
+    relative_target="",
+):
+    validation_error = validate_gzip_with_cache(
+        path,
+        validation_cache=validation_cache,
+        validation_key=validation_key,
+        source_url=source_url,
+        archive_member=archive_member,
+        relative_target=relative_target,
+    )
     if validation_error is None:
         return False
     quarantine_existing_file(path, warnings, context, validation_error)

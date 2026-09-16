@@ -2,7 +2,11 @@
 
 `array_prepare` is one download/prepare job: it freezes a species task plan,
 downloads manifest inputs with database-specific parallel queues, hashes the
-local files, and prepares shared taxonomy/BUSCO resources. Each `array_worker`
+local files, and prepares shared taxonomy/BUSCO resources. Existing gzip
+downloads are checked through fail-closed validation receipts under the shared
+staged-cache parent; a matching source identity and file inode/size/mtime
+allows a retry to skip the full gzip read. A missing, malformed, or stale
+receipt always falls back to full validation. Each `array_worker`
 uses those staged files for formatting, validation, fx2tab, and BUSCO; it does
 not fetch missing reference files. `array_finalize`
 requires verified completion receipts for every planned species before publishing
@@ -105,10 +109,14 @@ Array mode retains `tmp/task_plan.json`, settings, staged downloads, and receipt
 for auditing/retry. Storage can be reclaimed after the run is no longer needed,
 with no jobs active. Shared lock/ownership sidecars must also be preserved while
 a plan remains in use. Retrying after deleting raw downloads requires a new plan;
-those raw files are part of the completion evidence. A failed prepare can resume
-partial downloads; a successful prepare rerun verifies staged files without
-contacting their original servers. Use a fresh workspace if previously frozen
-files have changed. For clusters without compute-node internet access, select a
+those raw files are part of the completion evidence. A failed prepare preserves
+task receipts for species whose complete source bundles were staged
+successfully. The next prepare retries only unresolved species and rewrites the
+pending manifest; a successful prepare rerun verifies staged files without
+contacting their original servers. The validation receipt directory is
+plan-independent so hardlinked staging directories can reuse it. Use a fresh
+workspace if previously frozen files have changed. For clusters without
+compute-node internet access, select a
 network-enabled `--prepare-partition`; workers use local references and the
 shared taxonomy/BUSCO resources prepared there.
 

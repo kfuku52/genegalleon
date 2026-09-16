@@ -42,32 +42,40 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
         return
 
     manifest = task_root / "download_manifest.tsv"
-    export_manifest(plan, manifest)
+    pending_tasks = [task for _index, task in pending]
+    export_manifest(plan, manifest, tasks=pending_tasks)
     # A dedicated immutable-plan cache avoids overwriting another plan's inputs.
     download_root = Path(plan["tasks"][0]["download_dir"]) / "staged" / plan_hash
+    validation_cache_dir = Path(plan["tasks"][0]["download_dir"]) / "staged" / ".gg-gzip-validation"
     report = fsi.download_from_manifest(
         manifest_path=manifest, download_root=download_root, provider_filter=plan["provider"],
-        overwrite=False, headers=headers or {}, timeout=timeout, dry_run=False, jobs=jobs)
+        overwrite=False, headers=headers or {}, timeout=timeout, dry_run=False, jobs=jobs,
+        validation_cache_dir=validation_cache_dir)
     for warning in report["warnings"]:
         print("Warning: " + warning, file=sys.stderr)
-    if report["errors"]:
-        raise ValueError("; ".join(report["errors"]))
     resolved_rows = {(row["provider"], row["species_key"]): row for row in report["resolved_rows"]}
     discovered = {}
+    discovery_errors = []
     for provider in sorted({task["provider"] for task in plan["tasks"]}):
         tasks, warnings, errors = fsi.discover_tasks(provider, download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider])
+        for warning in warnings:
+            print("Warning: " + warning, file=sys.stderr)
+        discovery_errors.extend(errors)
         if errors:
-            raise ValueError("; ".join(errors))
+            print("Warning: partial staged discovery for {}: {}".format(provider, "; ".join(errors)), file=sys.stderr)
         for task in tasks:
             key = (provider, task["species_prefix"])
             if key in discovered:
                 raise ValueError("Duplicate staged species: " + repr(key))
             discovered[key] = task
 
+    staged_count = 0
+    staging_errors = []
     for index, task in pending:
         key = (task["provider"], task["species_prefix"])
         if key not in discovered or key not in resolved_rows:
-            raise ValueError("Missing staged species: " + repr(key))
+            staging_errors.append("Missing staged species: " + repr(key))
+            continue
         actual = discovered[key]
         actual["input_sha256"] = {
             **task.get("input_sha256", {}),
@@ -84,7 +92,16 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
             "plan_sha256": plan_hash, "task_index": index,
             "task": {k: str(v) if isinstance(v, Path) else v for k, v in actual.items()},
         }, immutable=True)
-    print(f"Staged {len(pending)} species; downloaded {report['downloaded']} files. Workers use verified local inputs.")
+        staged_count += 1
+
+    failures = list(report["errors"]) + discovery_errors + staging_errors
+    if failures:
+        raise ValueError(
+            "Staged {} of {} pending species before failure: {}".format(
+                staged_count, len(pending), "; ".join(failures)
+            )
+        )
+    print(f"Staged {staged_count} species; downloaded {report['downloaded']} files. Workers use verified local inputs.")
 
 
 def main():

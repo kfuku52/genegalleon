@@ -47,6 +47,7 @@ from format_species_provider_urls import (
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 from input_download_limiter import Admission
 
+from .cache_validation import GzipValidationCache, gzip_validation_key_for_target
 from .local import (
     quarantine_corrupt_gzip,
     resolve_local_manifest_row,
@@ -84,6 +85,9 @@ def _execute_download_target_job(
     url = job["url"]
     target = job["target"]
     archive_member = str(job.get("archive_member") or "").strip()
+    validation_cache = job.get("validation_cache")
+    validation_key = str(job.get("validation_key") or "")
+    validation_relative_target = str(job.get("validation_relative_target") or "")
     local_warnings = []
     local_errors = []
     downloaded = 0
@@ -130,6 +134,11 @@ def _execute_download_target_job(
             target,
             local_warnings,
             "[download:{}] {} {}".format(provider, species_key, label),
+            validation_cache=validation_cache,
+            validation_key=validation_key,
+            source_url=url,
+            archive_member=archive_member,
+            relative_target=validation_relative_target,
         ):
             pass
         else:
@@ -150,6 +159,9 @@ def _execute_download_target_job(
             warnings=local_warnings,
             lock_context="[download:{}] {} {}".format(provider, species_key, label),
             archive_member=archive_member,
+            validation_cache=validation_cache,
+            validation_key=validation_key,
+            validation_relative_target=validation_relative_target,
         )
         if did_download:
             downloaded += 1
@@ -271,7 +283,14 @@ def download_from_manifest(
     dry_run,
     jobs,
     resolved_manifest_output_path=None,
+    validation_cache_dir=None,
 ):
+    download_root = Path(download_root).expanduser().resolve()
+    validation_cache = GzipValidationCache(
+        validation_cache_dir
+        if validation_cache_dir is not None
+        else download_root / ".gg-gzip-validation"
+    )
     rows = read_download_manifest(manifest_path)
     warnings = []
     errors = []
@@ -304,6 +323,7 @@ def download_from_manifest(
                 warnings,
                 len(download_jobs),
                 len(failed_downloads),
+                validation_cache.diagnostics(),
             ),
         }
     manifest_parent_dir = manifest_path.parent
@@ -324,6 +344,7 @@ def download_from_manifest(
                 warnings,
                 len(download_jobs),
                 len(failed_downloads),
+                validation_cache.diagnostics(),
             ),
         }
 
@@ -772,11 +793,21 @@ def download_from_manifest(
             "paths": {label: target for label, _url, target, _archive_member in download_targets},
         }
         for label, url, target, archive_member in download_targets:
+            validation_key = gzip_validation_key_for_target(target, download_root, url, archive_member)
+            try:
+                validation_relative_target = str(target.relative_to(download_root))
+            except ValueError:
+                validation_relative_target = os.path.relpath(str(target), str(download_root))
             if target.exists() and target.stat().st_size > 0 and not overwrite:
                 if (not dry_run) and quarantine_corrupt_gzip(
                     target,
                     warnings,
                     "[download:{}] {} {}".format(provider, species_key, label),
+                    validation_cache=validation_cache,
+                    validation_key=validation_key,
+                    source_url=url,
+                    archive_member=archive_member,
+                    relative_target=validation_relative_target,
                 ):
                     pass
                 else:
@@ -797,6 +828,9 @@ def download_from_manifest(
                     "url": url,
                     "target": target,
                     "archive_member": archive_member,
+                    "validation_cache": validation_cache,
+                    "validation_key": validation_key,
+                    "validation_relative_target": validation_relative_target,
                 }
             )
 
@@ -905,6 +939,14 @@ def download_from_manifest(
             errors.append("Failed to write resolved manifest TSV '{}': {}".format(resolved_manifest_output_path, exc))
 
     final_cache_diagnostics = scan_download_cache_diagnostics(download_root)
+    download_diagnostics = summarize_download_diagnostics(
+        preexisting_cache_diagnostics,
+        final_cache_diagnostics,
+        warnings,
+        len(download_jobs),
+        len(failed_downloads),
+        validation_cache.diagnostics(),
+    )
     return {
         "warnings": warnings,
         "errors": errors,
@@ -912,13 +954,7 @@ def download_from_manifest(
         "downloaded": downloaded,
         "planned": planned,
         "resolved_rows": resolved_rows,
-        "download_diagnostics": summarize_download_diagnostics(
-            preexisting_cache_diagnostics,
-            final_cache_diagnostics,
-            warnings,
-            len(download_jobs),
-            len(failed_downloads),
-        ),
+        "download_diagnostics": download_diagnostics,
         "resolved_manifest_output": str(resolved_manifest_output_path)
         if resolved_manifest_output_path is not None
         else "",

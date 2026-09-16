@@ -118,7 +118,8 @@ def resolve_manifest_task(task, args):
         manifest_path=manifest, download_root=download_root, provider_filter=task["provider"],
         overwrite=False, headers=fsi.parse_http_headers(args.http_header, args.auth_bearer_token_env),
         timeout=args.download_timeout, dry_run=False, jobs=int(os.environ.get("GG_TASK_CPUS", "1")),
-        resolved_manifest_output_path=root / (str(args.task_index) + ".resolved.tsv"))
+        resolved_manifest_output_path=root / (str(args.task_index) + ".resolved.tsv"),
+        validation_cache_dir=Path(task["download_dir"]) / "array" / ".gg-gzip-validation")
     if report["errors"]:
         raise ValueError("; ".join(report["errors"]))
     tasks, warnings, errors = fsi.discover_tasks(task["provider"], download_root / DEFAULT_INPUT_RELATIVE_DIRS[task["provider"]])

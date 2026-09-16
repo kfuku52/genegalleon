@@ -88,9 +88,10 @@ def frozen_input_hashes(plan_path, plan, index):
     return expected
 
 
-def export_manifest(plan, outfile):
+def export_manifest(plan, outfile, tasks=None):
+    selected_tasks = plan["tasks"] if tasks is None else list(tasks)
     rows = [dict(task.get("manifest_row") or {"provider": task["provider"],
-            "id": task["species_key"], "species_key": task["species_key"]}) for task in plan["tasks"]]
+            "id": task["species_key"], "species_key": task["species_key"]}) for task in selected_tasks]
     fields = ["provider", "id", "species_key"] + sorted({key for row in rows for key in row} - {"provider", "id", "species_key"})
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fields, delimiter="\t")

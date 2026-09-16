@@ -1,5 +1,10 @@
 """Download planning, locking, local inputs, and execution components."""
 
+from .cache_validation import (
+    GzipValidationCache,
+    build_gzip_validation_key,
+    gzip_validation_key_for_target,
+)
 from .local import (
     gzip_integrity_error,
     is_gzip_path,
@@ -9,6 +14,7 @@ from .local import (
     resolve_local_manifest_row,
     resolve_local_reference_path,
     resolve_local_source_id_with_label_fallback,
+    validate_gzip_with_cache,
 )
 from .locking import (
     acquire_download_lock,
@@ -68,6 +74,10 @@ __all__ = [
     'gzip_integrity_error',
     'quarantine_existing_file',
     'quarantine_corrupt_gzip',
+    'validate_gzip_with_cache',
+    'GzipValidationCache',
+    'build_gzip_validation_key',
+    'gzip_validation_key_for_target',
     'resolve_local_reference_path',
     'resolve_local_source_id_with_label_fallback',
     'local_reference_to_file_url',

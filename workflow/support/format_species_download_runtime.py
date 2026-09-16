@@ -1,7 +1,9 @@
 """Compatibility facade for download execution and caching."""
 
 from format_species_download import (
+    GzipValidationCache,
     acquire_download_lock,
+    build_gzip_validation_key,
     default_download_filename,
     download_from_manifest,
     download_ncbi_datasets_file_from_id,
@@ -10,6 +12,7 @@ from format_species_download import (
     execute_download_target_job,
     format_download_diagnostics_line,
     gzip_integrity_error,
+    gzip_validation_key_for_target,
     is_gzip_path,
     local_reference_to_file_url,
     parse_http_headers,
@@ -32,11 +35,15 @@ from format_species_download import (
     scan_download_cache_diagnostics,
     sleep_before_download_retry,
     summarize_download_diagnostics,
+    validate_gzip_with_cache,
     write_download_payload,
 )
 
 __all__ = [
     'default_download_filename',
+    'GzipValidationCache',
+    'build_gzip_validation_key',
+    'gzip_validation_key_for_target',
     'parse_http_headers',
     'resolve_parallel_jobs',
     'resolve_provider_download_limits',
@@ -60,6 +67,7 @@ __all__ = [
     'download_url_to_file',
     'is_gzip_path',
     'gzip_integrity_error',
+    'validate_gzip_with_cache',
     'quarantine_existing_file',
     'quarantine_corrupt_gzip',
     'resolve_local_reference_path',

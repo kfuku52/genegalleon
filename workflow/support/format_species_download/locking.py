@@ -30,9 +30,9 @@ from format_species_network import guarded_urlopen as urlopen
 from shared_lock import acquire_lock, release_lock
 
 from .local import (
-    gzip_integrity_error,
     quarantine_corrupt_gzip,
     quarantine_existing_file,
+    validate_gzip_with_cache,
 )
 
 RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
@@ -295,6 +295,8 @@ def scan_download_cache_diagnostics(download_root):
     try:
         iterator = root.rglob("*")
         for path in iterator:
+            if ".gg-gzip-validation" in path.parts:
+                continue
             try:
                 if not path.is_file():
                     continue
@@ -313,7 +315,12 @@ def scan_download_cache_diagnostics(download_root):
 
 
 def summarize_download_diagnostics(
-    preexisting_cache, final_cache, warnings, download_jobs_count, failed_downloads_count
+    preexisting_cache,
+    final_cache,
+    warnings,
+    download_jobs_count,
+    failed_downloads_count,
+    validation_diagnostics=None,
 ):
     diagnostics = empty_download_diagnostics()
     diagnostics["cache_preexisting_partial_tmp"] = int(preexisting_cache.get("partial_tmp", 0))
@@ -324,6 +331,8 @@ def summarize_download_diagnostics(
     diagnostics["cache_final_locks"] = int(final_cache.get("locks", 0))
     diagnostics["download_jobs"] = int(download_jobs_count)
     diagnostics["failed_downloads"] = int(failed_downloads_count)
+    diagnostics.update({key: int(value) for key, value in (validation_diagnostics or {}).items()
+                        if key in diagnostics})
     for warning in warnings:
         text = str(warning or "").lower()
         if "failed transiently; retrying" in text:
@@ -352,6 +361,7 @@ def format_download_diagnostics_line(diagnostics):
         "failed_downloads={failed_downloads}; "
         "retries transient={transient_retries},corrupt_gzip={corrupt_download_retries},range_resumes={range_resumes}; "
         "corrupt_cache_recoveries={corrupt_cache_recoveries}; "
+        "validation_cache hits={validation_cache_hits},misses={validation_cache_misses},records={validation_cache_records}; "
         "stale_locks recovered={stale_locks_recovered},waits={lock_waits}"
     ).format(**values)
 
@@ -410,6 +420,9 @@ def download_url_to_file(
     warnings,
     lock_context,
     archive_member="",
+    validation_cache=None,
+    validation_key="",
+    validation_relative_target="",
 ):
     if dry_run:
         return False
@@ -433,7 +446,16 @@ def download_url_to_file(
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
-            if quarantine_corrupt_gzip(destination, warnings, lock_context):
+            if quarantine_corrupt_gzip(
+                destination,
+                warnings,
+                lock_context,
+                validation_cache=validation_cache,
+                validation_key=validation_key,
+                source_url=url,
+                archive_member=archive_member_text,
+                relative_target=validation_relative_target,
+            ):
                 pass
             else:
                 return False
@@ -455,7 +477,14 @@ def download_url_to_file(
                         lock_context,
                     )
                     partial_path.replace(destination)
-                    validation_error = gzip_integrity_error(destination)
+                    validation_error = validate_gzip_with_cache(
+                        destination,
+                        validation_cache=validation_cache,
+                        validation_key=validation_key,
+                        source_url=url,
+                        archive_member=archive_member_text,
+                        relative_target=validation_relative_target,
+                    )
                     if validation_error is None:
                         last_validation_error = None
                         discard_partial_download(partial_path, partial_url_hash_path)
@@ -555,7 +584,14 @@ def download_url_to_file(
                         os.fsync(out.fileno())
             os.replace(tmp, destination)
             _fsync_directory(Path(destination).parent)
-            validation_error = gzip_integrity_error(destination)
+            validation_error = validate_gzip_with_cache(
+                destination,
+                validation_cache=validation_cache,
+                validation_key=validation_key,
+                source_url=url,
+                archive_member=archive_member_text,
+                relative_target=validation_relative_target,
+            )
             if validation_error is not None:
                 quarantine_existing_file(destination, warnings, lock_context, validation_error)
                 raise OSError("downloaded archive member gzip failed integrity check: {}".format(validation_error))
