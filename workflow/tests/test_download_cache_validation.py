@@ -213,3 +213,18 @@ def test_replacement_between_validation_and_record_is_not_certified(tmp_path, mo
     assert validate_gzip_with_cache(target, validation_cache=cache, validation_key=key) is not None
     assert not cache.is_valid(target, key)
     assert validate_gzip_with_cache(target, validation_cache=cache, validation_key=key) is not None
+
+
+def test_old_integrity_receipt_cannot_bypass_html_validation(tmp_path):
+    from format_species_download.cache_validation import _file_identity
+    target = tmp_path / 'error.gz'
+    _write_gzip(target, '<html>provider error</html>')
+    key = gzip_validation_key_for_target(target, tmp_path, 'https://example.test/error.gz')
+    cache = GzipValidationCache(tmp_path / 'receipts')
+    cache.cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache.cache_dir / (key + '.json')).write_text(json.dumps({
+        'schema_version': 1, 'validation_key': key, 'file_identity': _file_identity(target),
+    }))
+    error = validate_gzip_with_cache(target, validation_cache=cache, validation_key=key)
+    assert error is not None and 'HTML' in str(error)
+    assert cache.diagnostics()['validation_cache_hits'] == 0

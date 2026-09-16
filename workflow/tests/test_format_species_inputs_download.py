@@ -1235,6 +1235,7 @@ def test_download_manifest_resumes_partial_http_download_with_range(tmp_path):
             if type(self).attempts == 1:
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(payload)))
+                self.send_header("ETag", '"fixture-v1"')
                 self.end_headers()
                 self.wfile.write(payload[:interrupted_at])
                 self.wfile.flush()
@@ -1244,8 +1245,10 @@ def test_download_manifest_resumes_partial_http_download_with_range(tmp_path):
 
             assert range_header.startswith("bytes=") and range_header.endswith("-")
             start = int(range_header.removeprefix("bytes=").removesuffix("-"))
+            assert self.headers.get("If-Range") == '"fixture-v1"'
             response_payload = payload[start:]
             self.send_response(206)
+            self.send_header("ETag", '"fixture-v1"')
             self.send_header("Content-Length", str(len(response_payload)))
             self.send_header("Content-Range", "bytes {}-{}/{}".format(start, len(payload) - 1, len(payload)))
             self.end_headers()

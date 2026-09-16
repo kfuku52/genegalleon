@@ -1,10 +1,11 @@
-import pandas as pd
-import pytest
 import subprocess
 import sys
 from pathlib import Path
 
-from workflow.support.gff2genestat import extract_by_ids, attach_transcript_structure, summarize_gene_features
+import pandas as pd
+import pytest
+
+from workflow.support.gff2genestat import attach_transcript_structure, extract_by_ids, summarize_gene_features
 from workflow.support.gff_feature_structure import ordered_annotated_blocks
 
 

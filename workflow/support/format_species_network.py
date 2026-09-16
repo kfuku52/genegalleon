@@ -1,6 +1,7 @@
 import ipaddress
 import math
 import os
+import random
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -9,7 +10,6 @@ from functools import wraps
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import FTPHandler, HTTPHandler, HTTPRedirectHandler, HTTPSHandler, build_opener
-from urllib.request import urlopen as _urlopen
 
 from input_download_limiter import Admission, database_key, limit_directory
 
@@ -98,11 +98,12 @@ def assert_url_allowed_by_test_guard(request_or_url):
 
 def guarded_urlopen(request_or_url, *args, **kwargs):
     assert_url_allowed_by_test_guard(request_or_url)
-    if not limit_directory():
-        return _urlopen(request_or_url, *args, **kwargs)
+    attempts = kwargs.pop("retry_attempts", 4)
+    if not isinstance(attempts, int) or attempts < 1:
+        raise ValueError("retry_attempts must be a positive integer")
     # Transport handlers acquire permits for each hop. urllib closes a redirect
     # response before opening its destination, releasing the original permit.
-    for attempt in range(4):
+    for attempt in range(attempts):
         try:
             return limited_urlopen(request_or_url, *args, **kwargs)
         except HTTPError as exc:
@@ -111,11 +112,12 @@ def guarded_urlopen(request_or_url, *args, **kwargs):
                 raise
             delay = retry_after_seconds(exc.headers.get("Retry-After"), attempt)
             try:
-                permit = getattr(exc.fp, "permit", None) or Admission(exc.geturl())
-                permit.cooldown(delay)
+                if limit_directory():
+                    permit = getattr(exc.fp, "permit", None) or Admission(exc.geturl())
+                    permit.cooldown(delay)
             finally:
                 exc.close()
-            if attempt == 3:
+            if attempt == attempts - 1:
                 raise
             time.sleep(delay)
 
@@ -179,6 +181,20 @@ def retry_after_seconds(value, attempt):
             return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
         except (TypeError, ValueError, OverflowError):
             return float(2 ** attempt)
+
+
+def download_retry_delay(attempt, base_seconds, error=None):
+    """One retry budget for a file, with server hints as a minimum delay."""
+    base = float(base_seconds)
+    if not math.isfinite(base):
+        base = 5.0
+    ceiling = min(300.0, max(0.0, base) * (2 ** min(max(0, attempt - 1), 20)))
+    delay = random.uniform(ceiling / 2, ceiling)
+    if isinstance(error, HTTPError) and error.headers:
+        hint = error.headers.get("Retry-After")
+        if hint is not None:
+            delay = max(delay, retry_after_seconds(hint, 0))
+    return delay
 
 
 class LimitedResponse:

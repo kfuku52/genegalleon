@@ -81,6 +81,7 @@ Detailed guides are split by topic:
 - [Container Build and Runtime](docs/container-build-and-runtime.md)
 - [Workspace Layout and Data Model](docs/workspace-layout-and-data-model.md)
 - [Input Conventions](docs/input-conventions.md)
+- [Reliable Input Downloads](docs/download-reliability.md)
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
 - [Input-Aware Resource Planning](docs/adaptive-resources.md)

@@ -1,14 +1,13 @@
 """Download runtime implementation: targets."""
 
 import gzip
+import hashlib
 import io
 import os
 import shutil
-import time
 import zipfile
 from pathlib import Path
 from urllib.parse import quote, urlparse
-from urllib.request import Request
 
 from format_species_common import (
     parse_positive_int,
@@ -18,7 +17,6 @@ from format_species_constants import (
     NCBI_DATASETS_INCLUDE_BY_LABEL,
     PROVIDER_DEFAULT_MAX_CONCURRENT_DOWNLOADS,
 )
-from format_species_network import guarded_urlopen as urlopen
 from format_species_provider_config import (
     ENSEMBL_LIKE_PROVIDERS,
     PROVIDERS,
@@ -36,6 +34,7 @@ from .local import (
 )
 from .locking import (
     acquire_download_lock,
+    download_url_to_file,
     release_download_lock,
 )
 
@@ -156,7 +155,7 @@ def resolve_download_urls_from_templates(provider, source_id, species_key, row):
     return resolved
 
 
-def pick_ncbi_datasets_member_name(member_names, label):
+def pick_ncbi_datasets_member_name(member_names, label, source_id=""):
     if label == "CDS":
         suffixes = ("/cds_from_genomic.fna", "_cds_from_genomic.fna")
     elif label == "GFF":
@@ -169,9 +168,15 @@ def pick_ncbi_datasets_member_name(member_names, label):
         raise ValueError("Unsupported NCBI datasets label: {}".format(label))
 
     matches = [name for name in member_names if any(name.endswith(suffix) for suffix in suffixes)]
+    if source_id:
+        scoped = [name for name in matches if source_id in Path(name).parts
+                  or Path(name).name.startswith(source_id + "_")]
+        matches = scoped
     if len(matches) == 0:
         return ""
-    return sorted(matches)[0]
+    if len(matches) != 1:
+        raise ValueError("ambiguous NCBI Datasets archive members")
+    return matches[0]
 
 
 def _fsync_directory(path):
@@ -200,6 +205,9 @@ def write_download_stream(destination, source):
                 shutil.copyfileobj(source, out, length=1024 * 1024)
         with open(tmp, "rb") as handle:
             os.fsync(handle.fileno())
+        validation_error = validate_gzip_with_cache(tmp, expected_path=destination)
+        if validation_error is not None:
+            raise OSError("downloaded member failed validation: {}".format(validation_error))
         os.replace(tmp, destination)
         _fsync_directory(destination.parent)
     except Exception:
@@ -241,7 +249,6 @@ def download_ncbi_datasets_file_from_id(
 
     lock_path = Path(str(destination) + ".lock")
     ownership = acquire_download_lock(lock_path, lock_stale_seconds, warnings, lock_context)
-    tmp_zip = Path(str(destination) + ".datasets.tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
             if quarantine_corrupt_gzip(
@@ -265,76 +272,37 @@ def download_ncbi_datasets_file_from_id(
         )
 
         req_headers = dict(headers)
-        if "User-Agent" not in req_headers:
+        if not any(key.lower() == "user-agent" for key in req_headers):
             req_headers["User-Agent"] = "genegalleon-input-generation"
-        if "Accept" not in req_headers:
+        if not any(key.lower() == "accept" for key in req_headers):
             req_headers["Accept"] = "application/zip"
-        if "Accept-Encoding" not in req_headers:
+        if not any(key.lower() == "accept-encoding" for key in req_headers):
             req_headers["Accept-Encoding"] = "identity"
 
-        last_error = None
-        for attempt in range(1, 4):
-            try:
-                request = Request(datasets_url, headers=req_headers)
-                with urlopen(request, timeout=timeout) as response, open(tmp_zip, "wb") as out:
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        out.write(chunk)
-
-                with zipfile.ZipFile(tmp_zip) as archive:
-                    member_name = pick_ncbi_datasets_member_name(archive.namelist(), label)
-                    if member_name == "":
-                        raise ValueError(
-                            "datasets archive did not contain expected {} member for id {}".format(label, source_id)
-                        )
-                    with archive.open(member_name, "r") as source:
-                        write_download_stream(destination, source)
-                validation_error = validate_gzip_with_cache(
-                    destination,
-                    validation_cache=validation_cache,
-                    validation_key=validation_key,
-                    source_url=validation_source_url,
-                    relative_target=validation_relative_target,
-                )
-                if validation_error is not None:
-                    quarantine_existing_file(
-                        destination,
-                        warnings,
-                        lock_context,
-                        validation_error,
-                    )
-                    raise OSError("downloaded NCBI Datasets gzip failed integrity check: {}".format(validation_error))
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-                try:
-                    tmp_zip.unlink()
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    pass
-                if attempt < 3:
-                    time.sleep(float(attempt))
-                    continue
-        if last_error is not None:
-            raise last_error
-    except Exception:
+        archive_dir = destination.parent / ".archive_cache"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = archive_dir / (hashlib.sha256(datasets_url.encode()).hexdigest() + ".zip")
+        download_url_to_file(
+            datasets_url, archive_path, req_headers, timeout, False, overwrite,
+            lock_stale_seconds, warnings, lock_context + " archive",
+        )
         try:
-            tmp_zip.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        raise
+            with zipfile.ZipFile(archive_path) as archive:
+                member_name = pick_ncbi_datasets_member_name(archive.namelist(), label, source_id)
+                if not member_name:
+                    raise ValueError("datasets archive did not contain expected {} member for id {}".format(label, source_id))
+                with archive.open(member_name) as source:
+                    write_download_stream(destination, source)
+        except zipfile.BadZipFile as exc:
+            quarantine_existing_file(archive_path, warnings, lock_context, exc)
+            raise
+        validation_error = validate_gzip_with_cache(
+            destination, validation_cache=validation_cache, validation_key=validation_key,
+            source_url=validation_source_url, relative_target=validation_relative_target,
+        )
+        if validation_error is not None:
+            quarantine_existing_file(destination, warnings, lock_context, validation_error)
+            raise OSError("downloaded NCBI Datasets gzip failed integrity check: {}".format(validation_error))
     finally:
-        try:
-            tmp_zip.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
         release_download_lock(lock_path, ownership)
     return True

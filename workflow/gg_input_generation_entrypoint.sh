@@ -191,7 +191,7 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}"
 # environment variables for sites with different network limits.
 : "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE:=2}"
 : "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GWH:=2}"
-: "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB:=2}"
+: "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB:=1}"
 : "${GG_INPUT_MAX_CONCURRENT_DOWNLOADS_DIRECT:=2}"
 export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_COGE
 export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_GWH
@@ -202,6 +202,7 @@ export GG_INPUT_MAX_CONCURRENT_DOWNLOADS_DIRECT
 gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"
 gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_REQUEST_INTERVAL_"
 gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_DOWNLOAD_LIMIT_"
+gg_forward_env_vars_with_prefix_to_container_env "GG_DOWNLOAD_"
 
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1

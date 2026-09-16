@@ -4,6 +4,7 @@ import gzip
 import os
 import re
 import time
+import zipfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -25,14 +26,28 @@ from .cache_validation import GzipValidationCache
 
 
 def is_gzip_path(path):
-    return str(path).lower().endswith(".gz")
+    if str(path).lower().endswith(".gz"):
+        return True
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
+def looks_like_html(prefix):
+    return re.search(br"<(?:!doctype\s+html|html\b|head\b|body\b)", prefix.lower()) is not None
 
 
 def gzip_integrity_error(path):
     if not is_gzip_path(path):
         return None
     try:
+        if Path(path).stat().st_size == 0:
+            return ValueError("empty gzip download")
         with gzip.open(path, "rb") as handle:
+            if looks_like_html(handle.read(1024)):
+                return ValueError("compressed HTML page instead of a data file")
             while handle.read(1024 * 1024):
                 pass
     except Exception as exc:
@@ -48,9 +63,35 @@ def validate_gzip_with_cache(
     source_url="",
     archive_member="",
     relative_target="",
+    expected_path=None,
 ):
     """Validate a gzip, reusing a matching fail-closed receipt when present."""
+    expected_suffix = Path(expected_path or path).suffix.lower()
+    if expected_suffix == ".gz":
+        try:
+            with open(path, "rb") as handle:
+                if handle.read(2) != b"\x1f\x8b":
+                    return ValueError("expected gzip signature")
+        except OSError as exc:
+            return exc
     if not is_gzip_path(path):
+        try:
+            with open(path, "rb") as handle:
+                prefix = handle.read(1024).lstrip().lower()
+            if not prefix:
+                return ValueError("empty download")
+            if expected_suffix == ".zip" or prefix.startswith((b"pk\x03\x04", b"pk\x05\x06")):
+                try:
+                    with zipfile.ZipFile(path) as archive:
+                        bad_member = archive.testzip()
+                        if bad_member is not None:
+                            return ValueError("corrupt ZIP member: {}".format(bad_member))
+                except (OSError, ValueError, zipfile.BadZipFile) as exc:
+                    return exc
+            if looks_like_html(prefix):
+                return ValueError("HTML page instead of a data file")
+        except OSError as exc:
+            return exc
         return None
     if validation_cache is None:
         return gzip_integrity_error(path)

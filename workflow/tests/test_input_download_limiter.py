@@ -209,11 +209,13 @@ def test_provider_cdn_redirect_keeps_logical_database_and_cooldown(tmp_path, mon
         thread.join(3)
 
 
-def test_cross_origin_redirect_does_not_forward_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize("limited", [False, True])
+def test_cross_origin_redirect_does_not_forward_credentials(tmp_path, monkeypatch, limited):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.request import Request
-    monkeypatch.setenv("GG_INPUT_DOWNLOAD_LIMIT_DIR", str(tmp_path))
+    monkeypatch.setenv("GG_INPUT_DOWNLOAD_LIMIT_DIR", str(tmp_path) if limited else "")
+    monkeypatch.delenv("download_limit_dir", raising=False)
     monkeypatch.setenv("GG_INPUT_REQUEST_INTERVAL_DIRECT", "0")
     observed = []
     class Handler(BaseHTTPRequestHandler):

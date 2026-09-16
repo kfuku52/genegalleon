@@ -11,7 +11,8 @@ import threading
 import time
 from pathlib import Path
 
-GZIP_VALIDATION_CACHE_SCHEMA = 1
+# Version 2 also rejects empty files and HTML disguised as gzip.
+GZIP_VALIDATION_CACHE_SCHEMA = 2
 
 
 def build_gzip_validation_key(relative_target, source_url="", archive_member=""):

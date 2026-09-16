@@ -186,6 +186,8 @@ def test_input_generation_entrypoint_forwards_env_driven_overrides():
     assert "gg_apply_named_env_overrides \\" not in text
     assert "for gg_input_var_name in ${!GG_INPUT_@}; do" not in text
     assert 'gg_forward_env_vars_with_prefix_to_container_env "GG_INPUT_MAX_CONCURRENT_DOWNLOADS_"' in text
+    assert 'gg_forward_env_vars_with_prefix_to_container_env "GG_DOWNLOAD_"' in text
+    assert 'GG_INPUT_MAX_CONCURRENT_DOWNLOADS_CNGB:=1' in text
     assert 'export "SINGULARITYENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
     assert 'export "APPTAINERENV_${gg_input_var_name}=${!gg_input_var_name}"' not in text
 

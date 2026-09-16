@@ -5,8 +5,10 @@ import time
 from collections import defaultdict, deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
+from format_species_common import is_transient_network_error
 from format_species_constants import (
     FERNBASE_CONFIDENCE_MODE_FIELD,
     FERNBASE_CONFIDENCE_MODE_HIGH_LOW_COMBINED,
@@ -177,7 +179,8 @@ def _execute_download_target_job(
             )
     except Exception as exc:
         fallback_exc = None
-        if provider in ("ncbi", "refseq", "genbank") and source_id != "":
+        if (provider in ("ncbi", "refseq", "genbank") and source_id != ""
+                and (isinstance(exc, (HTTPError, URLError)) or is_transient_network_error(exc))):
             try:
                 did_download = download_ncbi_datasets_file_from_id(
                     source_id=source_id,
