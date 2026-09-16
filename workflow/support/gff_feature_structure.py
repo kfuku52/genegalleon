@@ -13,6 +13,21 @@ def has_trans_splicing_exception(text):
     return False
 
 
+def has_source_overlap_marker(text):
+    """Return whether a source-audited CDS block allows coordinate overlap.
+
+    ``gg_source_overlap=confirmed`` is a local provenance marker added only
+    after the source CDS and the overlapping GFF blocks have been compared.
+    It deliberately has its own mode instead of being treated as a biological
+    exception such as ribosomal slippage.
+    """
+    for field in str(text).split(';'):
+        key, separator, value = field.partition('=')
+        if separator and key.strip() == 'gg_source_overlap' and value.strip().lower() == 'confirmed':
+            return True
+    return False
+
+
 def ordered_annotated_blocks(rows, gene_id):
     """Return (sequence, strand, start, end) blocks and their splice mode.
 
@@ -40,6 +55,7 @@ def ordered_annotated_blocks(rows, gene_id):
     slippage = [any(x.strip() == 'ribosomal slippage'
                     for x in unquote(attr.get('exception', '')).split(','))
                 for attr in attributes]
+    source_overlap = [has_source_overlap_marker(text) for *_coords, text in rows]
     pseudogene = [attr.get('pseudo', '').lower() == 'true' for attr in attributes]
     if any(pseudogene):
         if not all(pseudogene) or any(declared):
@@ -57,6 +73,17 @@ def ordered_annotated_blocks(rows, gene_id):
         if len(identities) != 1 or not next(iter(identities))[0]:
             raise ValueError(f'Ribosomal slippage requires one explicit CDS ID for {gene_id}')
         return ordered_feature_blocks(coordinates, gene_id, allow_overlap=True), 'ribosomal-slippage'
+    if any(source_overlap):
+        if not all(source_overlap) or any(declared) or any(slippage) or any(pseudogene):
+            raise ValueError(f'Incomplete or mixed source-overlap annotation for {gene_id}')
+        identities = {(a.get('ID', ''), a.get('Parent', '')) for a in attributes}
+        if len(identities) != 1 or not next(iter(identities))[0]:
+            raise ValueError(f'Source-overlap parts require one explicit CDS ID for {gene_id}')
+        blocks = ordered_feature_blocks(coordinates, gene_id, allow_overlap=True)
+        genomic_blocks = sorted(blocks, key=lambda block: (block[2], block[3]))
+        if not any(right[2] <= left[3] for left, right in zip(genomic_blocks, genomic_blocks[1:], strict=False)):
+            raise ValueError(f'Source-overlap marker requires overlapping blocks for {gene_id}')
+        return blocks, 'source-overlap'
     if not any(declared):
         return ordered_feature_blocks(coordinates, gene_id), 'cis'
     if not all(declared):

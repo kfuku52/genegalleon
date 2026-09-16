@@ -435,6 +435,21 @@ def test_cds_length_validation_rejects_wrong_transcript_and_preserves_missing():
         validate_cds_lengths(traits,[('a','a','MKE')])
 
 
+@pytest.mark.parametrize('strand,attributes,expected', [
+    ('+', 'partial=true;start_range=.,10', '5prime'),
+    ('+', 'partial=true;end_range=20,.', '3prime'),
+    ('-', 'partial=true;start_range=.,10', '3prime'),
+    ('-', 'partial=true;end_range=20,.', '5prime'),
+])
+def test_summary_reports_fuzzy_cds_side(strand, attributes, expected):
+    gff = pandas.DataFrame(dict(
+        gene_id=['g'], sequence=['chr1'], strand=[strand], start=[10], end=[20],
+        attributes=[attributes], feature=['CDS'],
+    ))
+    out = summarize_gene_features(gff, ['gene_id', 'feature_size', 'cds_partial'])
+    assert out.iloc[0].cds_partial == expected
+
+
 @pytest.mark.parametrize('strands,starts,ends,junction,length', [
     (['-', '-'], [67538, 90708], [67666, 90950], '129', 372),
     (['+', '-'], [102764, 114799], [102973, 115773], '210', 1185),

@@ -21,6 +21,12 @@ Tree plots omit their conventional exon/intron structure and intron-site
 correspondence; scaffold taxonomy can still use the validated chromosome.
 Free-text notes alone do not authorize overlapping coordinates.
 
+Source-audited overlapping CDS parts may carry the local
+`gg_source_overlap=confirmed` marker. This preserves the source coordinates
+and repeated bases without misclassifying the record as ribosomal slippage or
+pseudogene. The marker is accepted only when every part of one explicit CDS
+model carries it; mixed or unmarked overlaps still fail.
+
 Explicit `pseudo=true` CDS parts similarly retain their genomic location with
 `splice_mode=pseudogene` and `phase_status=pseudogene`. They must share one
 CDS ID; partial/mixed pseudogene declarations fail. Their intron count and global
@@ -32,10 +38,14 @@ identifiers from scaffold composition.
 `--phase-policy report`, valid coordinates are retained, `phase_status` is
 `conflicting`, and `cds_first_phase` is missing. No phase is repaired or inferred
 from a length match. Intron-site correspondence excludes these records. Other
-values of `phase_status` are `consistent`, `missing`, `ribosomal-slippage`, `pseudogene`, and
+values of `phase_status` are `consistent`, `missing`, `ribosomal-slippage`, `pseudogene`, `source-overlap`, and
 `not_evaluated` (non-CDS features). Invalid coordinates, mixed coordinate systems,
 and invalid phase values still fail. `consistent` describes internal phase
 consistency, not verification against a genome or protein sequence.
+The output also reports `cds_partial` as `none`, `5prime`, `3prime`,
+`5prime+3prime`, or `unknown`. With `--validate-cds-length`, fuzzy termini are
+checked against the corresponding phase and the 0--2 bases needed to complete
+a terminal codon; non-partial records retain exact length validation.
 
 Genome annotation uses report mode so scaffold evidence does not depend on a
 usable global reading frame. It also uses `--require-matches`, which rejects a

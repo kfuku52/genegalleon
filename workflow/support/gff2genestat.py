@@ -627,7 +627,7 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
         if splice_mode == "trans-splicing":
             if utr_blocks:
                 raise ValueError(f"Trans-spliced UTR order is not represented for {gene_id}")
-        elif splice_mode in {"ribosomal-slippage", "pseudogene"}:
+        elif splice_mode in {"ribosomal-slippage", "pseudogene", "source-overlap"}:
             for utr in utr_blocks:
                 if any(utr[:2] != block[:2] or (utr[2] <= block[3] and block[2] <= utr[3])
                        for block in cds_blocks):
@@ -656,7 +656,7 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
                     raise ValueError(f"Invalid CDS phase for {gene_id}: {value}")
                 implied_phases.add((int(phase) + offset) % 3)
             offset += block[3] - block[2] + 1
-        if splice_mode in {"ribosomal-slippage", "pseudogene"}:
+        if splice_mode in {"ribosomal-slippage", "pseudogene", "source-overlap"}:
             phase_status[gene_id] = splice_mode
             first_phase[gene_id] = numpy.nan
             continue
@@ -685,6 +685,56 @@ def add_id_column(gff, seq_names, new_col="gene_id"):
     return gff
 
 
+def _parse_gff_attributes(text):
+    fields = {}
+    for raw_field in str(text).split(";"):
+        field = raw_field.strip()
+        if "=" not in field:
+            continue
+        key, value = field.split("=", 1)
+        fields.setdefault(key, []).append(value)
+    return fields
+
+
+def summarize_cds_partial_status(group):
+    """Classify fuzzy CDS termini in the selected GFF model.
+
+    GenBank-to-GFF conversion expresses a fuzzy genomic left/right boundary
+    with ``start_range``/``end_range``.  The coding 5' and 3' sides depend on
+    strand, so retain that orientation explicitly for length validation.
+    ``unknown`` keeps a bounded validation allowance for partial annotations
+    that carry only ``partial=true``.
+    """
+    sides = set()
+    has_partial = False
+    for _sequence, strand, _start, _end, text in group:
+        fields = _parse_gff_attributes(text)
+        partial = any(value.strip().lower() == "true" for value in fields.get("partial", ()))
+        start_ranges = fields.get("start_range", ())
+        end_ranges = fields.get("end_range", ())
+        if partial or start_ranges or end_ranges:
+            has_partial = True
+        for value in start_ranges:
+            if value.startswith(".,"):
+                sides.add("5prime" if str(strand) == "+" else "3prime")
+            elif value.endswith(",."):
+                sides.add("3prime" if str(strand) == "+" else "5prime")
+            else:
+                sides.add("unknown")
+        for value in end_ranges:
+            if value.startswith(".,"):
+                sides.add("5prime" if str(strand) == "+" else "3prime")
+            elif value.endswith(",."):
+                sides.add("3prime" if str(strand) == "+" else "5prime")
+            else:
+                sides.add("unknown")
+    if not has_partial:
+        return "none"
+    if "unknown" in sides or not sides:
+        return "unknown"
+    return "+".join(side for side in ("5prime", "3prime") if side in sides)
+
+
 def summarize_gene_features(gff, out_cols, id_col="gene_id"):
     if gff.empty:
         return pandas.DataFrame(columns=out_cols)
@@ -702,6 +752,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
     rows = []
     for gene_id, group in by_gene.items():
         blocks, splice_mode = ordered_annotated_blocks(group, gene_id)
+        partial_status = summarize_cds_partial_status(group) if "cds_partial" in out_cols else ""
         length = 0
         intron_offsets = []
         junction_offsets = []
@@ -709,7 +760,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             length += end - start + 1
             if index + 1 < len(blocks):
                 junction_offsets.append(length)
-                if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene"}:
+                if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene", "source-overlap"}:
                     continue
                 following = blocks[index + 1]
                 gap = following[2] - end - 1 if strand == "+" else start - following[3] - 1
@@ -719,7 +770,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             {
                 "gene_id": gene_id,
                 "feature_size": length,
-                "num_intron": numpy.nan if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene"} else len(intron_offsets),
+                "num_intron": numpy.nan if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene", "source-overlap"} else len(intron_offsets),
                 "intron_positions": ";".join(str(pos) for pos in intron_offsets),
                 "feature_blocks": ";".join(f"{block[2]}-{block[3]}" for block in blocks),
                 "feature_type": feature_types.get(gene_id, ""),
@@ -731,6 +782,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
                 "utr_blocks": metadata.get(gene_id, {}).get("utr_blocks", ""),
                 "cds_first_phase": metadata.get(gene_id, {}).get("cds_first_phase", numpy.nan),
                 "phase_status": metadata.get(gene_id, {}).get("phase_status", "not_evaluated"),
+                "cds_partial": partial_status,
                 "chromosome": blocks[0][0] if len({b[0] for b in blocks}) == 1 else "",
                 "start": min(b[2] for b in blocks) if len({b[0] for b in blocks}) == 1 else numpy.nan,
                 "end": max(b[3] for b in blocks) if len({b[0] for b in blocks}) == 1 else numpy.nan,
@@ -859,11 +911,43 @@ def validate_cds_lengths(traits, records):
         if not sequence or re.search(r"[^ACGTRYSWKMBDHVN?]", sequence):
             raise ValueError(f"CDS length validation requires ungapped nucleotide FASTA: {identifier}")
         lengths[identifier] = len(sequence)
-    mismatches = [f"{row.gene_id} (GFF={int(row.feature_size)}, CDS={lengths[row.gene_id]})"
-                  for row in traits.itertuples(index=False)
-                  if row.feature_size != lengths[row.gene_id]]
+    mismatches = []
+    for row in traits.itertuples(index=False):
+        expected = int(row.feature_size)
+        observed = lengths[row.gene_id]
+        if expected == observed:
+            continue
+        if cds_length_is_compatible_with_partial(row, observed):
+            continue
+        mismatches.append(f"{row.gene_id} (GFF={expected}, CDS={observed})")
     if mismatches:
         raise ValueError("Selected GFF transcript does not match CDS length: " + "; ".join(mismatches))
+
+
+def cds_length_is_compatible_with_partial(row, observed):
+    """Return whether a fuzzy CDS boundary explains the length difference.
+
+    A GFF interval cannot encode the bases beyond a ``<``/``>`` boundary.
+    For a fuzzy 3' end, NCBI's CDS FASTA can contain the 0--2 bases needed to
+    complete the terminal codon.  At a fuzzy 5' end, the first GFF phase can
+    remove 0--2 leading bases.  Pseudogenes have no usable frame, so their
+    fuzzy boundary is accepted within the same two-base bound on either side.
+    """
+    partial = str(getattr(row, "cds_partial", "none") or "none")
+    if partial == "none":
+        return False
+    size = int(row.feature_size)
+    mode = str(getattr(row, "splice_mode", "") or "")
+    if partial == "unknown" or mode == "pseudogene":
+        return size - 2 <= observed <= size + 2
+    try:
+        phase = int(getattr(row, "cds_first_phase", 0))
+    except (TypeError, ValueError):
+        phase = 0
+    base = size - phase if "5prime" in partial else size
+    if "3prime" in partial:
+        return base <= observed <= base + 2
+    return observed == base
 
 
 def main():
@@ -874,7 +958,7 @@ def main():
     print("gff2genestat.py started: {}".format(datetime.datetime.now()))
 
     out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase",
-                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status"]
+                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status", "cds_partial"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
     records = list(fasta_records(Path(args.seqfile)))
     seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)

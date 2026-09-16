@@ -27,6 +27,63 @@ def test_slippage_keeps_overlap_and_scaffold_but_not_global_phase(strand, except
     assert pd.isna(result.iloc[0].num_intron)
 
 
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_source_audited_overlap_keeps_reused_bases_without_biological_exception(strand):
+    attrs = 'ID=cds1;Parent=g1;gg_source_overlap=confirmed'
+    cds = pd.DataFrame([
+        ['s1', strand, 1, 10, attrs, 0],
+        ['s1', strand, 10, 20, attrs, 0],
+    ], columns=['sequence', 'strand', 'start', 'end', 'attributes', 'phase'])
+    cds = cds.assign(gene_id='Species_a_g1', selected_transcript='cds1', feature='CDS')
+    annotated = attach_transcript_structure(cds, cds)
+    result = summarize_gene_features(annotated, ['gene_id', 'feature_size', 'chromosome', 'phase_status', 'cds_first_phase', 'num_intron'])
+    assert result.iloc[0].feature_size == 21
+    assert result.iloc[0].phase_status == 'source-overlap'
+    assert pd.isna(result.iloc[0].cds_first_phase)
+    assert pd.isna(result.iloc[0].num_intron)
+
+
+def test_source_audited_overlap_requires_marker_on_every_part():
+    with pytest.raises(ValueError, match='source-overlap'):
+        ordered_annotated_blocks([
+            ('s', '+', 1, 10, 'ID=a;Parent=g;gg_source_overlap=confirmed'),
+            ('s', '+', 10, 20, 'ID=a;Parent=g'),
+        ], 'g')
+
+
+def test_source_audited_marker_cannot_bypass_overlap_validation():
+    with pytest.raises(ValueError, match='requires overlapping blocks'):
+        ordered_annotated_blocks([
+            ('s', '+', 1, 10, 'ID=a;Parent=g;gg_source_overlap=confirmed'),
+            ('s', '+', 20, 30, 'ID=a;Parent=g;gg_source_overlap=confirmed'),
+        ], 'g')
+
+
+def test_partial_cds_length_validation_uses_fuzzy_termini_and_phase():
+    from workflow.support.gff2genestat import validate_cds_lengths
+    traits = pd.DataFrame([
+        dict(gene_id='start', feature_size=242, cds_first_phase=2,
+             splice_mode='cis', cds_partial='5prime'),
+        dict(gene_id='end', feature_size=193, cds_first_phase=0,
+             splice_mode='cis', cds_partial='3prime'),
+        dict(gene_id='pseudo', feature_size=245, cds_first_phase=float('nan'),
+             splice_mode='pseudogene', cds_partial='5prime'),
+    ])
+    records = [
+        ('start', 'start', 'A' * 240),
+        ('end', 'end', 'A' * 195),
+        ('pseudo', 'pseudo', 'A' * 246),
+    ]
+    validate_cds_lengths(traits, records)
+
+
+def test_partial_cds_length_validation_does_not_relax_complete_records():
+    from workflow.support.gff2genestat import validate_cds_lengths
+    traits = pd.DataFrame([dict(gene_id='complete', feature_size=10, cds_partial='none')])
+    with pytest.raises(ValueError, match='GFF=10, CDS=11'):
+        validate_cds_lengths(traits, [('complete', 'complete', 'A' * 11)])
+
+
 @pytest.mark.parametrize('attrs', [
     ('ID=a;Parent=g', 'ID=a;Parent=g'),
     ('ID=a;Parent=g;exception=ribosomal slippage', 'ID=b;Parent=g;exception=ribosomal slippage'),

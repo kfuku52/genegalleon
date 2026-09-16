@@ -31,6 +31,12 @@ Protein-domain intron marks are hidden when the structure column is present,
 regardless of panel ordering. Without a structure column the existing marks
 remain available. The separate intron-count column is retained.
 
+Source-audited CDS models with `splice_mode=source-overlap` retain their
+coordinates for sequence and scaffold analyses but are omitted from the
+ordinary exon/intron drawing, because repeated genomic bases do not define a
+single linear genomic geometry. They are reported as excluded diagnostics
+when intron correspondence is requested.
+
 ## Intron correspondence within the structure column
 
 The default CDS-mode plot annotates introns directly inside the exon/intron

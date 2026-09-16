@@ -154,7 +154,7 @@ stopifnot(nrow(trans_sites$events)==0, trans_sites$diagnostics$reason=='trans_sp
 bad_sites = genegalleon.treevis:::treevis_intron_site_data(trans_tips[1,,drop=FALSE],c(rps12='AAA'))
 stopifnot(bad_sites$diagnostics$reason=='CDS_length_mismatch')
 cat('Explicit trans-splicing order, coordinates and symbolic junctions passed.\n')
-for (status in c('ribosomal-slippage','pseudogene')) {
+for (status in c('ribosomal-slippage','pseudogene','source-overlap')) {
     special = trans_tips[1,,drop=FALSE]
     special$splice_mode = status
     special$phase_status = status
