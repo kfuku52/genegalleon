@@ -1701,7 +1701,12 @@ run_trait_stage() {
   [[ -z "${gbif_taxon_map}" ]] || gbif_cli_args+=(--gbif-taxon-map "${gbif_taxon_map}")
   [[ -z "${gbif_download_metadata}" ]] || gbif_cli_args+=(--gbif-download-metadata "${gbif_download_metadata}")
   local gbif_source_identity
-  gbif_source_identity=$(python "${gg_support_dir}/generate_species_trait.py" --database-sources "${trait_database_sources}" --trait-plan "${trait_plan}" --databases "${trait_databases}" --output "${species_trait_output}" "${gbif_cli_args[@]}" --print-gbif-input-identity) || return $?
+  local -a gbif_identity_cmd=(python "${gg_support_dir}/generate_species_trait.py" --database-sources "${trait_database_sources}" --trait-plan "${trait_plan}" --databases "${trait_databases}" --output "${species_trait_output}")
+  if (( ${#gbif_cli_args[@]} > 0 )); then
+    gbif_identity_cmd+=("${gbif_cli_args[@]}")
+  fi
+  gbif_identity_cmd+=(--print-gbif-input-identity)
+  gbif_source_identity=$("${gbif_identity_cmd[@]}") || return $?
   gg_artifact_contract_init trait_provenance_args "input_generation_species_trait" "all_species" "${input_generation_provenance_dir}/species_trait.json"
   gg_artifact_add_input_if_present trait_provenance_args "download_manifest" "${trait_manifest_path}"
   if [[ "${trait_species_source}" == "species_cds" ]]; then
@@ -1787,7 +1792,9 @@ run_trait_stage() {
   cmd+=(--output "${species_trait_output}")
   cmd+=(--download-timeout "${trait_download_timeout}")
   cmd+=(--stats-output "${trait_stats_file}")
-  cmd+=("${gbif_cli_args[@]}")
+  if (( ${#gbif_cli_args[@]} > 0 )); then
+    cmd+=("${gbif_cli_args[@]}")
+  fi
   if [[ -n "${trait_manifest_path}" ]]; then
     cmd+=(--download-manifest "${trait_manifest_path}")
   fi

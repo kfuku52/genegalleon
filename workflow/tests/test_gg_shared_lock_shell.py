@@ -7,6 +7,8 @@ import textwrap
 import time
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GG_UTIL = REPO_ROOT / "workflow" / "support" / "gg_util.sh"
 SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
@@ -17,6 +19,14 @@ from shared_lock import FIELD_SEPARATOR, read_lock_metadata, try_create_lock  # 
 
 
 def test_heartbeat_stop_during_child_pid_assignment_reaps_sleep(tmp_path):
+    bashpid_probe = subprocess.run(
+        ["bash", "-c", 'printf "%s" "${BASHPID:-}"'],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if bashpid_probe.stdout == "":
+        pytest.skip("BASHPID is required to target the heartbeat subshell")
     lock_path = tmp_path / "heartbeat.lock"
     script = f'''
 source "{SUPPORT_DIR / 'gg_shared_lock.sh'}"

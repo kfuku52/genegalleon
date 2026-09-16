@@ -69,6 +69,21 @@ def test_gzip_validation_receipt_invalidates_on_file_change_and_corruption(tmp_p
     assert list(target.parent.glob(target.name + ".corrupt.*"))
 
 
+@pytest.mark.parametrize("malformed_receipt", ["[]", "null", "1", '"text"'])
+def test_non_object_validation_receipt_falls_back_to_full_validation(tmp_path, malformed_receipt):
+    target_root = tmp_path / "staged" / "plan-hash"
+    target = target_root / "Direct" / "species_wise_original" / "Good_species.cds.fa.gz"
+    _write_gzip(target, ">gene1\nATG\n")
+    cache = GzipValidationCache(tmp_path / "staged" / ".gg-gzip-validation")
+    key = gzip_validation_key_for_target(target, target_root, "https://example.test/good.cds.gz")
+    assert validate_gzip_with_cache(target, validation_cache=cache, validation_key=key) is None
+    receipt = tmp_path / "staged" / ".gg-gzip-validation" / (key + ".json")
+    receipt.write_text(malformed_receipt, encoding="utf-8")
+
+    assert validate_gzip_with_cache(target, validation_cache=cache, validation_key=key) is None
+    assert cache.diagnostics()["validation_cache_misses"] == 2
+
+
 def test_download_manifest_reuses_validation_receipt(tmp_path):
     source = tmp_path / "source.cds.fa.gz"
     _write_gzip(source, ">gene1\nATG\n")

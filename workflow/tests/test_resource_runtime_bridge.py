@@ -26,7 +26,7 @@ def test_bridge_preserves_failure_output_and_records_stage_boundaries(tmp_path):
     core = tmp_path / "gg_gene_evolution_core.sh"
     core.write_text(f'''source {shlex.quote(str(util))}
 gg_support_dir={shlex.quote(str(workflow / 'support'))}
-export GG_RESOURCE_OWNER_PID=$BASHPID
+export GG_RESOURCE_OWNER_PID=${{BASHPID:-$$}}
 gg_step_start first
 python -c "sum(i*i for i in range(1000000))"
 gg_step_start second

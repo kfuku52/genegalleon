@@ -14,6 +14,10 @@ if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
 from format_species_download import locking, targets  # noqa: E402
+from format_species_download.cache_validation import (  # noqa: E402
+    GzipValidationCache,
+    gzip_validation_key_for_target,
+)
 
 
 def _zip_bytes(member_name: str, payload: bytes) -> bytes:
@@ -74,6 +78,8 @@ def test_ncbi_datasets_member_download_streams_zip_payload(
     monkeypatch.setattr(targets, "release_download_lock", lambda *args, **kwargs: None)
     monkeypatch.setattr(targets, "urlopen", lambda *args, **kwargs: io.BytesIO(response_payload))
     monkeypatch.setattr(targets.zipfile.ZipFile, "read", _reject_whole_member_reads)
+    validation_cache = GzipValidationCache(tmp_path / "validation-cache")
+    validation_key = gzip_validation_key_for_target(destination, tmp_path, "ncbi-datasets://GCF_TEST/CDS")
 
     changed = targets.download_ncbi_datasets_file_from_id(
         "GCF_TEST",
@@ -86,8 +92,13 @@ def test_ncbi_datasets_member_download_streams_zip_payload(
         60,
         [],
         "streaming-test",
+        validation_cache,
+        validation_key,
+        str(destination.relative_to(tmp_path)),
+        "ncbi-datasets://GCF_TEST/CDS",
     )
 
     assert changed is True
     with gzip.open(destination, "rb") as handle:
         assert handle.read() == payload
+    assert validation_cache.diagnostics()["validation_cache_records"] == 1

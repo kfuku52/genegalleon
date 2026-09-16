@@ -29,6 +29,11 @@ from format_species_provider_urls import (
     resolve_ncbi_datasets_base_url,
 )
 
+from .local import (
+    quarantine_corrupt_gzip,
+    quarantine_existing_file,
+    validate_gzip_with_cache,
+)
 from .locking import (
     acquire_download_lock,
     release_download_lock,
@@ -223,6 +228,10 @@ def download_ncbi_datasets_file_from_id(
     lock_stale_seconds,
     warnings,
     lock_context,
+    validation_cache=None,
+    validation_key="",
+    validation_relative_target="",
+    validation_source_url="",
 ):
     include_annotation_type = NCBI_DATASETS_INCLUDE_BY_LABEL.get(label, "")
     if include_annotation_type == "":
@@ -235,7 +244,18 @@ def download_ncbi_datasets_file_from_id(
     tmp_zip = Path(str(destination) + ".datasets.tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
-            return False
+            if quarantine_corrupt_gzip(
+                destination,
+                warnings,
+                lock_context,
+                validation_cache=validation_cache,
+                validation_key=validation_key,
+                source_url=validation_source_url,
+                relative_target=validation_relative_target,
+            ):
+                pass
+            else:
+                return False
 
         base = resolve_ncbi_datasets_base_url()
         datasets_url = "{}/genome/accession/{}/download?include_annotation_type={}".format(
@@ -271,6 +291,21 @@ def download_ncbi_datasets_file_from_id(
                         )
                     with archive.open(member_name, "r") as source:
                         write_download_stream(destination, source)
+                validation_error = validate_gzip_with_cache(
+                    destination,
+                    validation_cache=validation_cache,
+                    validation_key=validation_key,
+                    source_url=validation_source_url,
+                    relative_target=validation_relative_target,
+                )
+                if validation_error is not None:
+                    quarantine_existing_file(
+                        destination,
+                        warnings,
+                        lock_context,
+                        validation_error,
+                    )
+                    raise OSError("downloaded NCBI Datasets gzip failed integrity check: {}".format(validation_error))
                 last_error = None
                 break
             except Exception as exc:

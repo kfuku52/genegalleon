@@ -103,6 +103,8 @@ class GzipValidationCache:
             return False
         try:
             payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("gzip validation receipt must be a JSON object")
             if payload.get("schema_version") != GZIP_VALIDATION_CACHE_SCHEMA:
                 raise ValueError("unsupported gzip validation receipt schema")
             if payload.get("validation_key") != str(validation_key):

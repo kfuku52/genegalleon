@@ -110,6 +110,10 @@ def _execute_download_target_job(
                 lock_stale_seconds=lock_stale_seconds,
                 warnings=local_warnings,
                 lock_context="[download:{}] {} {} datasets".format(provider, species_key, label),
+                validation_cache=validation_cache,
+                validation_key=validation_key,
+                validation_relative_target=validation_relative_target,
+                validation_source_url=url,
             )
             if did_download:
                 downloaded += 1
@@ -186,6 +190,10 @@ def _execute_download_target_job(
                     lock_stale_seconds=lock_stale_seconds,
                     warnings=local_warnings,
                     lock_context="[download:{}] {} {} datasets".format(provider, species_key, label),
+                    validation_cache=validation_cache,
+                    validation_key=validation_key,
+                    validation_relative_target=validation_relative_target,
+                    validation_source_url=url,
                 )
                 if did_download:
                     downloaded += 1
