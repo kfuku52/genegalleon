@@ -111,7 +111,10 @@ with no jobs active. Shared lock/ownership sidecars must also be preserved while
 a plan remains in use. Retrying after deleting raw downloads requires a new plan;
 those raw files are part of the completion evidence. A failed prepare preserves
 task receipts for species whose complete source bundles were staged
-successfully. The next prepare retries only unresolved species and rewrites the
+successfully. Download validation or merge errors that cannot be attributed
+to an individual species prevent new task receipts for that attempt; discovery
+errors prevent new receipts for the affected provider. Downloaded files remain
+available for retry. The next prepare retries only unresolved species and rewrites the
 pending manifest; a successful prepare rerun verifies staged files without
 contacting their original servers. The validation receipt directory is
 plan-independent so hardlinked staging directories can reuse it. Use a fresh

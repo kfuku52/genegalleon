@@ -113,7 +113,8 @@ def test_download_manifest_reuses_validation_receipt(tmp_path):
     assert second["download_diagnostics"]["download_jobs"] == 0
 
 
-def test_staging_preserves_successful_task_receipts_on_partial_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("validation_error", [False, "download", "discovery"])
+def test_staging_preserves_successful_task_receipts_on_partial_failure(tmp_path, monkeypatch, validation_error):
     import format_species_inputs as fsi
     import stage_input_generation_downloads as stage_module
 
@@ -155,7 +156,7 @@ def test_staging_preserves_successful_task_receipts_on_partial_failure(tmp_path,
     def fake_download_from_manifest(**kwargs):
         root = Path(kwargs["download_root"])
         species_dir = root / "Direct" / "species_wise_original" / "Good_species"
-        species_dir.mkdir(parents=True)
+        species_dir.mkdir(parents=True, exist_ok=True)
         paths = {
             "cds_path": species_dir / "Good_species.cds.fa",
             "gff_path": species_dir / "Good_species.gff",
@@ -165,7 +166,7 @@ def test_staging_preserves_successful_task_receipts_on_partial_failure(tmp_path,
             path.write_text(">gene1\nATG\n", encoding="utf-8")
         return {
             "warnings": [],
-            "errors": ["failed Bad_species"],
+            "errors": ["invalid source bundle"] if validation_error == "download" else [],
             "downloaded": 3,
             "resolved_rows": [{"provider": "direct", "species_key": "Good_species"}],
         }
@@ -181,12 +182,34 @@ def test_staging_preserves_successful_task_receipts_on_partial_failure(tmp_path,
                 "gff_path": species_dir / "Good_species.gff",
                 "genome_path": species_dir / "Good_species.genome.fa",
             }
-        ], [], []
+        ], [], (["invalid discovered bundle"] if validation_error == "discovery" else [])
 
     monkeypatch.setattr(fsi, "download_from_manifest", fake_download_from_manifest)
     monkeypatch.setattr(fsi, "discover_tasks", fake_discover_tasks)
-    with pytest.raises(ValueError, match=r"Staged 1 of 2 pending species"):
+    with pytest.raises(ValueError, match=r"Staged {} of 2 pending species".format(0 if validation_error else 1)):
         stage_module.stage_downloads(plan, jobs=2, headers={})
 
-    assert (Path(str(plan) + ".tasks") / "1.json").exists()
+    assert (Path(str(plan) + ".tasks") / "1.json").exists() == (not validation_error)
     assert not (Path(str(plan) + ".tasks") / "2.json").exists()
+    if validation_error:
+        with pytest.raises(ValueError):
+            stage_module.stage_downloads(plan, jobs=2, headers={})
+
+
+def test_replacement_between_validation_and_record_is_not_certified(tmp_path, monkeypatch):
+    target = tmp_path / "input.gz"
+    _write_gzip(target, ">gene1\nATG\n")
+    cache = GzipValidationCache(tmp_path / "receipts")
+    key = gzip_validation_key_for_target(target, tmp_path, "fixture")
+    original_record = cache.record
+
+    def replace_then_record(*args, **kwargs):
+        replacement = tmp_path / "replacement"
+        replacement.write_bytes(b"corrupt gzip")
+        replacement.replace(target)
+        return original_record(*args, **kwargs)
+
+    monkeypatch.setattr(cache, "record", replace_then_record)
+    assert validate_gzip_with_cache(target, validation_cache=cache, validation_key=key) is not None
+    assert not cache.is_valid(target, key)
+    assert validate_gzip_with_cache(target, validation_cache=cache, validation_key=key) is not None

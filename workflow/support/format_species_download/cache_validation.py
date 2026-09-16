@@ -118,17 +118,19 @@ class GzipValidationCache:
         self._count("_hits")
         return True
 
-    def record(self, path, validation_key, *, source_url="", archive_member="", relative_target=""):
+    def record(self, path, validation_key, *, source_url="", archive_member="", relative_target="", validated_identity=None):
         receipt_path = self._receipt_path(validation_key)
         if receipt_path is None:
             return False
         try:
             identity = _file_identity(path)
+            if validated_identity is None or identity != validated_identity:
+                return False
         except OSError:
             return False
         payload = {
             "archive_member": str(archive_member or ""),
-            "file_identity": identity,
+            "file_identity": validated_identity,
             "relative_target": str(relative_target),
             "schema_version": GZIP_VALIDATION_CACHE_SCHEMA,
             "source_url": str(source_url or ""),
@@ -173,7 +175,13 @@ class GzipValidationCache:
                 source_url=source_url,
                 archive_member=archive_member,
                 relative_target=relative_target,
+                validated_identity=after,
             )
+            try:
+                if _file_identity(path) != after:
+                    error = OSError("file changed while recording gzip validation: {}".format(path))
+            except OSError as exc:
+                error = exc
         return error
 
     def diagnostics(self):

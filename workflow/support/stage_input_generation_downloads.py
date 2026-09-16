@@ -53,15 +53,22 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
         validation_cache_dir=validation_cache_dir)
     for warning in report["warnings"]:
         print("Warning: " + warning, file=sys.stderr)
+    # Unscoped validation/merge errors cannot certify any pending species.
+    # Keep downloads for retry, but never freeze inputs that failed validation.
+    if report["errors"]:
+        raise ValueError("Staged 0 of {} pending species before failure: {}".format(
+            len(pending), "; ".join(report["errors"])))
     resolved_rows = {(row["provider"], row["species_key"]): row for row in report["resolved_rows"]}
     discovered = {}
     discovery_errors = []
+    failed_providers = set()
     for provider in sorted({task["provider"] for task in plan["tasks"]}):
         tasks, warnings, errors = fsi.discover_tasks(provider, download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider])
         for warning in warnings:
             print("Warning: " + warning, file=sys.stderr)
         discovery_errors.extend(errors)
         if errors:
+            failed_providers.add(provider)
             print("Warning: partial staged discovery for {}: {}".format(provider, "; ".join(errors)), file=sys.stderr)
         for task in tasks:
             key = (provider, task["species_prefix"])
@@ -75,6 +82,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
         key = (task["provider"], task["species_prefix"])
         if key not in discovered or key not in resolved_rows:
             staging_errors.append("Missing staged species: " + repr(key))
+            continue
+        if task["provider"] in failed_providers:
             continue
         actual = discovered[key]
         actual["input_sha256"] = {
