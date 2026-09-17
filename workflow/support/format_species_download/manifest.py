@@ -1,9 +1,6 @@
 """Download runtime implementation: manifest."""
 
 import os
-import time
-from collections import defaultdict, deque
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -20,7 +17,7 @@ from format_species_manifest import (
     resolved_manifest_fieldnames,
     write_resolved_manifest_tsv,
 )
-from format_species_network import isolated_request_provider, request_database, request_provider, set_request_provider
+from format_species_network import isolated_request_provider, request_provider, set_request_provider
 from format_species_provider_config import (
     DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS,
     ENSEMBL_LIKE_PROVIDERS,
@@ -47,10 +44,11 @@ from format_species_provider_urls import (
     extract_ncbi_accession_from_source_id,
 )
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
-from input_download_limiter import Admission
 
 from .cache_validation import GzipValidationCache, gzip_validation_key_for_target
+from .dispatch import dispatch_download_jobs
 from .local import (
+    classify_download_failures,
     quarantine_corrupt_gzip,
     resolve_local_manifest_row,
 )
@@ -64,7 +62,6 @@ from .targets import (
     default_download_filename,
     download_ncbi_datasets_file_from_id,
     resolve_download_urls_from_templates,
-    resolve_provider_download_limits,
 )
 
 
@@ -235,52 +232,10 @@ def _execute_download_target_job(
 
 
 def run_download_jobs(download_jobs, max_workers, headers, timeout, overwrite, lock_stale_seconds):
-    """Fairly dispatch database queues without parking the pool behind one DB.
-
-    Readiness is advisory: the transport still acquires the shared permit at
-    every actual request/redirect. Concurrent dispatchers may race for a slot.
-    """
-    queues = defaultdict(deque)
-    for job in download_jobs:
-        key = request_database(job["url"], job["provider"]) if urlparse(job["url"]).scheme in ("http", "https", "ftp") else "local"
-        queues[key].append(job)
-    keys = deque(queues)
-    active = defaultdict(int)
-    futures = {}
-    provider_limits = resolve_provider_download_limits(max_workers)
-    permits = {key: Admission(queue[0]["url"], database=key) for key, queue in queues.items() if key != "local"}
-    limits = {key: (max_workers if key == "local" else min(
-        provider_limits.get("direct" if key.startswith("host:") else key, 1),
-        permits[key].limit if permits[key].directory is not None else max_workers)) for key in keys}
-    wait_timeout = float(os.environ.get("GG_INPUT_DOWNLOAD_LIMIT_WAIT", "3600"))
-    last_progress = time.monotonic()
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        while keys or futures:
-            for _ in range(len(keys)):
-                key = keys.popleft()
-                queue = queues[key]
-                if len(futures) < max_workers and active[key] < limits[key] and (key == "local" or permits[key].ready()):
-                    job = queue.popleft()
-                    future = pool.submit(execute_download_target_job, job, headers, timeout, overwrite, lock_stale_seconds)
-                    futures[future] = key
-                    active[key] += 1
-                    last_progress = time.monotonic()
-                if queue:
-                    keys.append(key)
-            if futures:
-                done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
-                for future in done:
-                    key = futures.pop(future)
-                    active[key] -= 1
-                    last_progress = time.monotonic()
-                    try:
-                        yield future.result()
-                    except Exception as exc:
-                        yield {"errors": ["Unhandled download worker error: {}".format(exc)]}
-            elif keys:
-                if time.monotonic() - last_progress >= wait_timeout:
-                    raise TimeoutError("Timed out waiting for database download queues: " + ", ".join(keys))
-                time.sleep(0.05)
+    return dispatch_download_jobs(
+        download_jobs, max_workers, headers, timeout, overwrite, lock_stale_seconds,
+        execute_download_target_job,
+    )
 
 
 @isolated_request_provider
@@ -320,27 +275,9 @@ def download_from_manifest(
 
     if len(rows) == 0:
         errors.append("Download manifest is empty: {}".format(manifest_path))
-        final_cache_diagnostics = scan_download_cache_diagnostics(download_root)
-        return {
-            "warnings": warnings,
-            "errors": errors,
-            "processed": processed,
-            "downloaded": downloaded,
-            "planned": planned,
-            "resolved_rows": resolved_rows,
-            "download_diagnostics": summarize_download_diagnostics(
-                preexisting_cache_diagnostics,
-                final_cache_diagnostics,
-                warnings,
-                len(download_jobs),
-                len(failed_downloads),
-                validation_cache.diagnostics(),
-            ),
-        }
-    manifest_parent_dir = manifest_path.parent
-    header_cols = set(rows[0].keys())
-    if "provider" not in header_cols or "id" not in header_cols:
+    elif not {"provider", "id"} <= set(rows[0]):
         errors.append("Download manifest must contain required columns provider,id: {}".format(manifest_path))
+    if errors:
         final_cache_diagnostics = scan_download_cache_diagnostics(download_root)
         return {
             "warnings": warnings,
@@ -359,6 +296,7 @@ def download_from_manifest(
             ),
         }
 
+    manifest_parent_dir = manifest_path.parent
     for i, row in enumerate(rows, start=2):
         provider = (row.get("provider") or "").strip().lower()
         set_request_provider(provider)
@@ -926,19 +864,7 @@ def download_from_manifest(
             warnings.extend(result.get("warnings", []))
             errors.extend(result.get("errors", []))
 
-    for failure in failed_downloads:
-        row_info = row_target_paths.get(failure.get("row_id"), {})
-        paths = row_info.get("paths", {})
-        cds_ok = paths.get("CDS") is not None and paths["CDS"].exists() and paths["CDS"].stat().st_size > 0
-        gff_ok = paths.get("GFF") is not None and paths["GFF"].exists() and paths["GFF"].stat().st_size > 0
-        gbff_ok = paths.get("GBFF") is not None and paths["GBFF"].exists() and paths["GBFF"].stat().st_size > 0
-        genome_ok = paths.get("GENOME") is not None and paths["GENOME"].exists() and paths["GENOME"].stat().st_size > 0
-        if cds_ok or gbff_ok or (gff_ok and genome_ok):
-            warnings.append(
-                "{} ; continuing because a usable source bundle is available".format(failure.get("message", ""))
-            )
-        else:
-            errors.append(failure.get("message", "download failed"))
+    classify_download_failures(failed_downloads, row_target_paths, warnings, errors)
 
     if processed == 0:
         warnings.append("No manifest rows matched --provider {}.".format(provider_filter))

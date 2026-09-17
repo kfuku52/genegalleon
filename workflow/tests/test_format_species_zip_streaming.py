@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gzip
-import hashlib
 import io
 import sys
 import zipfile
@@ -31,6 +30,13 @@ def _reject_whole_member_reads(*args, **kwargs):
     raise AssertionError("ZIP members must be streamed with ZipFile.open, not read whole")
 
 
+def _archive_response(payload):
+    response = io.BytesIO(payload)
+    response.status = 200
+    response.headers = {"Content-Length": str(len(payload)), "Content-Type": "application/zip"}
+    return response
+
+
 def test_direct_archive_member_download_streams_zip_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -39,12 +45,8 @@ def test_direct_archive_member_download_streams_zip_payload(
     member_name = "release/genome.fasta"
     payload = b">chr1\n" + (b"ACGT" * 4096) + b"\n"
     destination = tmp_path / "download" / "genome.fasta"
-    archive_name = "archive.zip"
-    archive_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-    archive_cache = destination.parent / ".archive_cache"
-    archive_cache.mkdir(parents=True)
-    cached_archive = archive_cache / f"{archive_hash}__{archive_name}"
-    cached_archive.write_bytes(_zip_bytes(member_name, payload))
+    response_payload = _zip_bytes(member_name, payload)
+    monkeypatch.setattr(locking, "urlopen", lambda *args, **kwargs: _archive_response(response_payload))
     monkeypatch.setattr(locking, "acquire_download_lock", lambda *args, **kwargs: None)
     monkeypatch.setattr(locking, "release_download_lock", lambda *args, **kwargs: None)
     monkeypatch.setattr(locking.zipfile.ZipFile, "read", _reject_whole_member_reads)
@@ -76,7 +78,7 @@ def test_ncbi_datasets_member_download_streams_zip_payload(
     destination = tmp_path / "cds.fna.gz"
     monkeypatch.setattr(targets, "acquire_download_lock", lambda *args, **kwargs: None)
     monkeypatch.setattr(targets, "release_download_lock", lambda *args, **kwargs: None)
-    monkeypatch.setattr(targets, "urlopen", lambda *args, **kwargs: io.BytesIO(response_payload))
+    monkeypatch.setattr(locking, "urlopen", lambda *args, **kwargs: _archive_response(response_payload))
     monkeypatch.setattr(targets.zipfile.ZipFile, "read", _reject_whole_member_reads)
     validation_cache = GzipValidationCache(tmp_path / "validation-cache")
     validation_key = gzip_validation_key_for_target(destination, tmp_path, "ncbi-datasets://GCF_TEST/CDS")

@@ -298,3 +298,20 @@ def resolve_local_manifest_row(provider, source_id, species_key, row, manifest_p
         "gbff_filename": gbff_filename,
         "genome_filename": genome_filename,
     }
+
+
+def classify_download_failures(failed_downloads, row_target_paths, warnings, errors):
+    """Keep row-level failures actionable unless a usable source bundle exists."""
+    for failure in failed_downloads:
+        row_info = row_target_paths.get(failure.get("row_id"), {})
+        paths = row_info.get("paths", {})
+        cds_ok = paths.get("CDS") is not None and paths["CDS"].exists() and paths["CDS"].stat().st_size > 0
+        gff_ok = paths.get("GFF") is not None and paths["GFF"].exists() and paths["GFF"].stat().st_size > 0
+        gbff_ok = paths.get("GBFF") is not None and paths["GBFF"].exists() and paths["GBFF"].stat().st_size > 0
+        genome_ok = paths.get("GENOME") is not None and paths["GENOME"].exists() and paths["GENOME"].stat().st_size > 0
+        if cds_ok or gbff_ok or (gff_ok and genome_ok):
+            warnings.append(
+                "{} ; continuing because a usable source bundle is available".format(failure.get("message", ""))
+            )
+        else:
+            errors.append(failure.get("message", "download failed"))

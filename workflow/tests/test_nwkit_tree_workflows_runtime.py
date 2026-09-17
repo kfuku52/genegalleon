@@ -173,7 +173,7 @@ def test_root_selection_rejects_bad_candidates_and_preserves_outputs(tmp_path, i
 def test_dated_tree_stage_keeps_pdf_pair_on_failed_install_and_tracks_engine(tmp_path):
     core = (ROOT / "workflow/core/gg_genome_evolution_core.sh").read_text()
     begin = core.index('task="Dated species tree plotting"')
-    stage = core[begin:core.index('\nremove_empty_subdirs', begin)]
+    stage = core[begin:core.index('\n# Species taxonomy', begin)]
     source = tmp_path / "mcmctree_95CI.nhx"
     source.write_text("(A:10,B:10)Root[&&NHX:age=10:age_ci_low=8:age_ci_high=12:age_ci_kind=HPD:age_ci_level=0.95];")
     output = tmp_path / "output"
