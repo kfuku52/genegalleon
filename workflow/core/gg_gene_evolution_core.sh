@@ -6037,7 +6037,7 @@ csubst_scan_provenance_args=(
   --parameter "nonsyn_recode=${csubst_nonsyn_recode}"
 )
 if [[ "${csubst_scan_site_plot}" == "yes" ]]; then
-  csubst_scan_provenance_args+=(--output "csubst_scan_plot=${file_og_csubst_scan_plot}")
+  csubst_scan_provenance_args+=(--optional-output "csubst_scan_plot=${file_og_csubst_scan_plot}")
 fi
 gg_artifact_add_input_if_present csubst_scan_provenance_args "species_trait_metadata" "${file_sp_trait}.metadata.json"
 csubst_scan_provenance_args+=(--input "species_trait_contract=${gg_support_dir}/species_trait_contract.py" --input "gbif_contract=${gg_support_dir}/gbif_observations.py")
