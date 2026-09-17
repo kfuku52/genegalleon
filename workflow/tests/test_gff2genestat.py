@@ -239,6 +239,40 @@ def test_extract_by_ids_matches_cds_parent_prefix_without_regex_scan():
     assert out.iloc[0]["gene_id"] == "Arabidopsis_thaliana_gene1.1"
 
 
+def test_extract_by_ids_matches_unique_source_prefix_suffix():
+    gff = pandas.DataFrame(
+        {
+            "feature": ["CDS"],
+            "attributes": ['transcript_id "g1.t1"; gene_id "g1";'],
+        }
+    )
+    seq_names = pandas.Series(["Sternochetus_mangiferae_Sman_g1"])
+
+    out = extract_by_ids(gff=gff, seq_names=seq_names, feature="CDS", multiple_hits="longest")
+
+    assert out.shape[0] == 1
+    assert out.iloc[0]["gene_id"] == "Sternochetus_mangiferae_Sman_g1"
+
+
+def test_extract_by_ids_rejects_ambiguous_source_prefix_suffix():
+    gff = pandas.DataFrame(
+        {
+            "feature": ["CDS"],
+            "attributes": ['transcript_id "g1.t1"; gene_id "g1";'],
+        }
+    )
+    seq_names = pandas.Series(
+        [
+            "Species_a_prefix_g1",
+            "Species_a_other_g1",
+        ]
+    )
+
+    out = extract_by_ids(gff=gff, seq_names=seq_names, feature="CDS", multiple_hits="longest")
+
+    assert out.empty
+
+
 def test_extract_by_ids_resolves_ncbi_cds_via_dbxref_geneid():
     gff = pandas.DataFrame(
         {

@@ -168,9 +168,26 @@ def build_search_term_lookup(seq_names):
     else:
         seq_name_values = [str(seq_name) for seq_name in seq_names]
     lookup = {}
+    suffix_candidates = {}
+    first_order_by_seq_name = {}
     min_len = None
     max_len = 0
+
+    def register(term, seq_name, priority, order):
+        nonlocal min_len, max_len
+        term = str(term).strip()
+        if term == "":
+            return
+        current = lookup.get(term)
+        candidate = (seq_name, priority, order)
+        if current is None or priority > current[1] or (priority == current[1] and order < current[2]):
+            lookup[term] = candidate
+        term_len = len(term)
+        min_len = term_len if min_len is None else min(min_len, term_len)
+        max_len = max(max_len, term_len)
+
     for order, seq_name in enumerate(seq_name_values):
+        first_order_by_seq_name.setdefault(seq_name, order)
         gene_name = trim_species_prefix(seq_name) if seq_name != "" else ""
         ub_gene_name = gene_name.replace("-", "_")
         term_specs = (
@@ -187,13 +204,34 @@ def build_search_term_lookup(seq_names):
             if gene_id_match is not None:
                 candidate_terms.append("GeneID:{}".format(gene_id_match.group(1)))
             for candidate_term in candidate_terms:
-                current = lookup.get(candidate_term)
-                candidate = (seq_name, priority, order)
-                if current is None or priority > current[1] or (priority == current[1] and order < current[2]):
-                    lookup[candidate_term] = candidate
-                term_len = len(candidate_term)
-                min_len = term_len if min_len is None else min(min_len, term_len)
-                max_len = max(max_len, term_len)
+                register(candidate_term, seq_name, priority, order)
+
+        # Some annotation sources prepend an assembly/source token to CDS
+        # headers but omit that token from the GFF gene_id (for example
+        # ``Sman_g1`` in FASTA versus ``g1`` in GTF).  Treat a suffix as an
+        # alias only when it identifies exactly one FASTA record.  This keeps
+        # the fallback conservative and prevents a short gene ID from being
+        # assigned across multiple records.
+        suffixes = set()
+        for delimiter in ("_", "-"):
+            suffixes.update(
+                suffix
+                for suffix in gene_name.split(delimiter)[1:]
+                if suffix != ""
+            )
+        for suffix in suffixes:
+            suffix_candidates.setdefault(suffix, set()).add(seq_name)
+
+    for suffix, candidates in suffix_candidates.items():
+        if len(candidates) != 1:
+            continue
+        seq_name = next(iter(candidates))
+        order = first_order_by_seq_name[seq_name]
+        register(suffix, seq_name, -1, order)
+        gene_id_match = re.fullmatch(r"GeneID([0-9]+)", suffix)
+        if gene_id_match is not None:
+            register("GeneID:{}".format(gene_id_match.group(1)), seq_name, -1, order)
+
     if min_len is None:
         min_len = 0
     return lookup, min_len, max_len
