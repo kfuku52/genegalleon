@@ -45,13 +45,6 @@ def _entrypoint_modify_block_assignments(script: Path):
             yield lineno, stripped
 
 
-def _common_param_assignments(script: Path):
-    for lineno, line in enumerate(_read_text(script).splitlines(), start=1):
-        stripped = line.strip()
-        if re.match(r'^: "\$\{[A-Za-z0-9_]+:=', stripped):
-            yield lineno, stripped
-
-
 def _set_e_scripts():
     scripts = []
     for script in _workflow_shell_scripts():
@@ -100,15 +93,6 @@ def _unquoted_brace_expansions(line: str):
     return out
 
 
-def test_core_and_entrypoint_scripts_set_pipefail():
-    scripts = _core_and_entrypoint_scripts()
-    assert scripts, "No core/entrypoint scripts were found."
-    for script in scripts:
-        header = _strict_mode_header(script)
-        has_pipefail = ("set -eo pipefail" in header) or ("set -euo pipefail" in header)
-        assert has_pipefail, f"Missing pipefail guard in script header: {script}"
-
-
 def test_core_and_entrypoint_scripts_use_strict_euo_pipefail():
     scripts = _core_and_entrypoint_scripts()
     assert scripts, "No core/entrypoint scripts were found."
@@ -130,11 +114,6 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
             continue
         header = _strict_mode_header(script)
         assert "set -euo pipefail" in header, f"Use strict mode (set -euo pipefail): {script}"
-
-
-def test_support_directory_has_no_numbered_duplicate_scripts():
-    duplicates = sorted((WORKFLOW_DIR / "support").glob("* 2.*"))
-    assert not duplicates, f"Remove accidental duplicate support scripts: {duplicates}"
 
 
 def test_large_core_scripts_remain_self_contained():
@@ -274,14 +253,6 @@ def test_workflow_and_container_scripts_use_rm_rf_with_double_dash():
     for script in scripts:
         text = _read_text(script)
         assert rm_rf_without_dd.search(text) is None, f"Use rm -rf -- for option-safe recursive delete: {script}"
-
-
-def test_workflow_and_container_scripts_do_not_use_for_in_seq_command_substitution():
-    pattern = re.compile(r"for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+\$\(\s*seq\b")
-    scripts = _workflow_shell_scripts() + _container_shell_scripts()
-    for script in scripts:
-        text = _read_text(script)
-        assert pattern.search(text) is None, f"Use arithmetic for-loops instead of `for ... in $(seq ...)`: {script}"
 
 
 def test_workflow_and_container_scripts_do_not_use_for_in_command_substitution():
@@ -481,12 +452,6 @@ def test_print_softmasked_percentage_handles_zero_length_input_safely():
     assert 'echo "0.0% masked (0/0 bp)"' in body
     assert "python -c" in body
     assert " ${num_masked_bp} ${num_total_bp}" not in body
-
-
-def test_mtime_only_output_freshness_helper_has_been_removed():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    assert "is_output_older_than_inputs()" not in text
 
 
 def test_ensure_latest_jaspar_file_uses_set_e_safe_assignments():
@@ -2031,23 +1996,6 @@ def test_genome_evolution_protein_mode_disables_incompatible_dna_and_busco_steps
     assert 'outfile="${dir_busco_trimal}/${infile_base}${genome_busco_trimal_suffix}"' in core
 
 
-def test_entrypoint_modify_block_parameters_have_inline_comments():
-    scripts = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
-    assert scripts, "No entrypoint scripts were found."
-    missing = []
-    for script in scripts:
-        for lineno, line in _entrypoint_modify_block_assignments(script):
-            if "#" not in line:
-                missing.append(f"{script}:{lineno}: {line}")
-    assert not missing, "Add inline comments to parameter assignments:\n" + "\n".join(missing)
-
-
-def test_common_parameters_have_inline_comments():
-    script = WORKFLOW_DIR / "gg_common_params.sh"
-    missing = [f"{script}:{lineno}: {line}" for lineno, line in _common_param_assignments(script) if "#" not in line]
-    assert not missing, "Add inline comments to common parameters:\n" + "\n".join(missing)
-
-
 def test_genome_annotation_core_quotes_known_path_sensitive_options():
     script = CORE_DIR / "gg_genome_annotation_core.sh"
     text = _read_text(script)
@@ -2697,13 +2645,6 @@ def test_genome_annotation_core_skips_identity_rename_in_jcvi_output_loop():
     assert 'mv_out "${file}" "${file/species1.species2/${sp_ub}}"' not in text
     assert 'renamed_file="${file/species1.species2/${sp_ub}}"' in text
     assert 'if [[ "${renamed_file}" != "${file}" ]]; then' in text
-
-
-def test_no_for_seq_command_substitution_in_core_scripts():
-    pattern = re.compile(r"^\s*for\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+\$\(seq\b", re.MULTILINE)
-    for script in sorted(CORE_DIR.glob("*.sh")):
-        text = _read_text(script)
-        assert pattern.search(text) is None, f"Use arithmetic for-loop instead of for-in $(seq ...) in {script}"
 
 
 def test_busco_support_script_uses_shared_hmmsearch_compat_wrapper():

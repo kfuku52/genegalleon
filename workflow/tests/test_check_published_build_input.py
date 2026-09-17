@@ -53,13 +53,6 @@ def test_single_platform_image_exposes_its_common_revision():
     assert module.common_revision(image(), ["linux/amd64"]) == ("b" * 40, [])
 
 
-def test_multi_platform_mapping_remains_unchanged():
-    module = load_module()
-    payload = {"linux/amd64": image()}
-
-    assert module.platform_mapping(payload) is payload
-
-
 def test_single_platform_exact_contract_labels_are_compared():
     module = load_module()
 

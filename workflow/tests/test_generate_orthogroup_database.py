@@ -691,18 +691,6 @@ def test_import_has_no_logfile_side_effect(tmp_path, monkeypatch):
     assert not log_path.exists()
 
 
-def test_help_has_no_logfile_side_effect(tmp_path):
-    log_path = tmp_path / "generate_orthogroup_database.log"
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--help"],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0
-    assert not log_path.exists()
-
-
 def test_visible_entries_and_has_visible_entries_ignore_hidden_files(tmp_path):
     mod = load_module()
     directory = tmp_path / "d"

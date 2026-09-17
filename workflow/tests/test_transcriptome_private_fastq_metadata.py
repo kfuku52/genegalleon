@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from shell_static_helpers import read_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,95 +49,51 @@ def _read_rows(path: Path):
         return list(reader)
 
 
-def test_repair_private_fastq_metadata_fills_placeholder_from_species_label(tmp_path: Path):
-    metadata_path = tmp_path / "metadata_private_fastq.tsv"
-    output_path = tmp_path / "metadata_private_fastq.fixed.tsv"
-    metadata_path.write_text(
-        "\n".join(
+@pytest.mark.parametrize(
+    ("metadata_rows", "species_label", "expected_names"),
+    [
+        (
             [
-                "run\tscientific_name\tlib_layout",
                 "Cs1\tPlease add in format: Genus species\tpaired",
                 "Cs2\tPlease add in format: Genus species\tpaired",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    completed = _run_repair_helper(metadata_path, "Chamaegastrodia_sikokiana", output_path)
-
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    rows = _read_rows(output_path)
-    assert [row["scientific_name"] for row in rows] == [
-        "Chamaegastrodia sikokiana",
-        "Chamaegastrodia sikokiana",
-    ]
-
-
-def test_repair_private_fastq_metadata_preserves_species_label_suffixes(tmp_path: Path):
-    metadata_path = tmp_path / "metadata_private_fastq.tsv"
-    output_path = tmp_path / "metadata_private_fastq.fixed.tsv"
-    metadata_path.write_text(
-        "\n".join(
+            ],
+            "Chamaegastrodia_sikokiana",
+            ["Chamaegastrodia sikokiana", "Chamaegastrodia sikokiana"],
+        ),
+        (
+            ["Bu39-1\tPlease add in format: Genus species\tpaired"],
+            "Burmannia_cryptopetala-previous",
+            ["Burmannia cryptopetala-previous"],
+        ),
+        (
             [
-                "run\tscientific_name\tlib_layout",
-                "Bu39-1\tPlease add in format: Genus species\tpaired",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    completed = _run_repair_helper(metadata_path, "Burmannia_cryptopetala-previous", output_path)
-
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    rows = _read_rows(output_path)
-    assert rows[0]["scientific_name"] == "Burmannia cryptopetala-previous"
-
-
-def test_repair_private_fastq_metadata_preserves_existing_scientific_names(tmp_path: Path):
-    metadata_path = tmp_path / "metadata_private_fastq.tsv"
-    output_path = tmp_path / "metadata_private_fastq.fixed.tsv"
-    metadata_path.write_text(
-        "\n".join(
-            [
-                "run\tscientific_name\tlib_layout",
                 "P1\tPetrosavia sakuraii\tpaired",
                 "P2\tPlease add in format: Genus species\tpaired",
                 "P3\t\tpaired",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    completed = _run_repair_helper(metadata_path, "Petrosavia_sakuraii-previous", output_path)
-
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    rows = _read_rows(output_path)
-    assert [row["scientific_name"] for row in rows] == [
-        "Petrosavia sakuraii",
-        "Petrosavia sakuraii-previous",
-        "Petrosavia sakuraii-previous",
-    ]
-
-
-def test_repair_private_fastq_metadata_fills_dotted_rank_species_label(tmp_path: Path):
+            ],
+            "Petrosavia_sakuraii-previous",
+            ["Petrosavia sakuraii", "Petrosavia sakuraii-previous", "Petrosavia sakuraii-previous"],
+        ),
+        (
+            ["SRR1\tPlease add in format: Genus species\tpaired"],
+            "Asimitellaria_furusei_var._furusei",
+            ["Asimitellaria furusei var. furusei"],
+        ),
+    ],
+)
+def test_repair_private_fastq_metadata_normalizes_scientific_names(
+    tmp_path: Path, metadata_rows, species_label, expected_names
+):
     metadata_path = tmp_path / "metadata_private_fastq.tsv"
     output_path = tmp_path / "metadata_private_fastq.fixed.tsv"
     metadata_path.write_text(
-        "\n".join(
-            [
-                "run\tscientific_name\tlib_layout",
-                "SRR1\tPlease add in format: Genus species\tpaired",
-            ]
-        )
+        "\n".join(["run\tscientific_name\tlib_layout", *metadata_rows])
         + "\n",
         encoding="utf-8",
     )
 
-    completed = _run_repair_helper(metadata_path, "Asimitellaria_furusei_var._furusei", output_path)
+    completed = _run_repair_helper(metadata_path, species_label, output_path)
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     rows = _read_rows(output_path)
-    assert rows[0]["scientific_name"] == "Asimitellaria furusei var. furusei"
+    assert [row["scientific_name"] for row in rows] == expected_names

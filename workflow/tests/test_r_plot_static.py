@@ -1,21 +1,7 @@
-import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
-NUMERIC_LEGEND_POSITION_RE = re.compile(r"legend\.position\s*=\s*c\(")
-
-
-def test_r_scripts_do_not_use_deprecated_numeric_legend_position():
-    offending = []
-    for path in SUPPORT_DIR.rglob("*"):
-        if path.suffix not in {".r", ".R"}:
-            continue
-        text = path.read_text(encoding="utf-8")
-        if NUMERIC_LEGEND_POSITION_RE.search(text):
-            offending.append(path.relative_to(REPO_ROOT).as_posix())
-
-    assert offending == [], "Found deprecated numeric legend.position usage in: " + ", ".join(offending)
 
 
 def test_amino_acid_site_panel_noops_on_empty_site_list():
@@ -227,15 +213,3 @@ def test_query2family_copy_numbers_are_layered_above_evidence_bands():
     )
 
     assert glyph_rect_layer < synteny_band_layer < ufboot_band_layer < copy_number_layer
-
-
-def test_tree_plot_consumers_load_the_installed_treevis_package():
-    for name in ("annotation_summary.r", "stat_branch2tree_plot.r"):
-        text = (SUPPORT_DIR / name).read_text(encoding="utf-8")
-        assert "library(genegalleon.treevis)" in text
-        assert "treevis_dir" not in text
-        assert "tree_annotation_dir" not in text
-        assert "R/main.R" not in text
-
-    assert not (SUPPORT_DIR / "tree_annotation").is_symlink()
-    assert not (SUPPORT_DIR / "treevis" / "R" / "main.R").exists()

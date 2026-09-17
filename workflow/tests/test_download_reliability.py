@@ -271,9 +271,10 @@ def test_overwrite_corrupt_download_preserves_previous_file(tmp_path):
     target.write_bytes(original)
     def reply(h):
         h.send_response(200)
-        h.send_header('Content-Length', '7')
+        body = b'\x1f\x8bnot-gzip'
+        h.send_header('Content-Length', str(len(body)))
         h.end_headers()
-        h.wfile.write(b'invalid')
+        h.wfile.write(body)
     with server(reply) as url, pytest.raises(OSError):
         download_url_to_file(url, target, {}, 3, False, True, 60, [], 'test')
     assert target.read_bytes() == original

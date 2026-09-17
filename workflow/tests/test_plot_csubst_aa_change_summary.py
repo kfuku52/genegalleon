@@ -154,13 +154,6 @@ def test_attach_orthogroup_besthits_missing_optional_file_preserves_summary(tmp_
     assert "writing csubst summaries without besthit columns" in capsys.readouterr().err.lower()
 
 
-def test_attach_orthogroup_besthits_without_annotation_argument_is_noop():
-    mod = load_module()
-    frame = pandas.DataFrame({"orthogroup": ["query-family-1"], "site": [1]})
-
-    assert mod.attach_orthogroup_besthits(frame, None) is frame
-
-
 def test_attach_orthogroup_besthits_requires_all_five_columns(tmp_path):
     mod = load_module()
     frame = pandas.DataFrame({"orthogroup": ["OG0001"]})

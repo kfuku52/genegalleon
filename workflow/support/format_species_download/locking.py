@@ -363,6 +363,8 @@ def normalize_uncompressed_gzip(partial_path, warnings, lock_context):
     response is left byte-for-byte unchanged.
     """
     partial_path = Path(partial_path)
+    if partial_path.stat().st_size == 0:
+        raise OSError("downloaded file is empty")
     with open(partial_path, "rb") as source:
         if source.read(2) == b"\x1f\x8b":
             return False

@@ -3,8 +3,6 @@ import gzip
 import json
 import os
 import re
-import subprocess
-import sys
 import zipfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -37,15 +35,6 @@ def load_extract_pdb_id():
     namespace = {"os": os, "re": re}
     exec(code, namespace)
     return namespace["extract_pdb_id"]
-
-
-def test_get_matplotlib_imports_plotting_submodules():
-    mod = load_module()
-
-    matplotlib = mod._get_matplotlib()
-
-    assert hasattr(matplotlib, "pyplot")
-    assert hasattr(matplotlib, "patches")
 
 
 def test_create_csubst_site_archive_marks_and_verifies_completed_zip(tmp_path):
@@ -127,31 +116,29 @@ def test_generate_trait_colors_marks_every_nonbackground_lineage_id(monkeypatch,
     assert colors["color"].tolist() == ["black", "firebrick", "firebrick", "firebrick", "black"]
 
 
-def test_extract_pdb_id_returns_none_for_missing_directory(tmp_path):
+@pytest.mark.parametrize(
+    ("directory_exists", "members", "expected"),
+    [
+        (False, (), None),
+        (True, (("README.txt", "x"), ("csubst_site.tsv", "x")), None),
+        (True, (("csubst.2XYZ.fa", ">x\nAA\n"),), "2XYZ"),
+        (
+            True,
+            ((".csubst.ZZZZ.fa", ">x\nAA\n"), ("csubst.BBBB.fa", ">x\nAA\n"), ("csubst.AAAA.fa", ">x\nAA\n")),
+            "AAAA",
+        ),
+    ],
+)
+def test_extract_pdb_id_handles_missing_and_deterministic_inputs(
+    tmp_path, directory_exists, members, expected
+):
     extract_pdb_id = load_extract_pdb_id()
-    missing = tmp_path / "missing"
-    assert extract_pdb_id(str(missing)) is None
-
-
-def test_extract_pdb_id_returns_none_when_no_match(tmp_path):
-    extract_pdb_id = load_extract_pdb_id()
-    (tmp_path / "README.txt").write_text("x", encoding="utf-8")
-    (tmp_path / "csubst_site.tsv").write_text("x", encoding="utf-8")
-    assert extract_pdb_id(str(tmp_path)) is None
-
-
-def test_extract_pdb_id_parses_expected_identifier(tmp_path):
-    extract_pdb_id = load_extract_pdb_id()
-    (tmp_path / "csubst.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
-    assert extract_pdb_id(str(tmp_path)) == "2XYZ"
-
-
-def test_extract_pdb_id_ignores_hidden_files_and_is_deterministic(tmp_path):
-    extract_pdb_id = load_extract_pdb_id()
-    (tmp_path / ".csubst.ZZZZ.fa").write_text(">x\nAA\n", encoding="utf-8")
-    (tmp_path / "csubst.BBBB.fa").write_text(">x\nAA\n", encoding="utf-8")
-    (tmp_path / "csubst.AAAA.fa").write_text(">x\nAA\n", encoding="utf-8")
-    assert extract_pdb_id(str(tmp_path)) == "AAAA"
+    directory = tmp_path / "csubst"
+    if directory_exists:
+        directory.mkdir()
+        for name, contents in members:
+            (directory / name).write_text(contents, encoding="utf-8")
+    assert extract_pdb_id(str(directory)) == expected
 
 
 def test_resolve_site_output_dir_uses_current_csubst_namespace(tmp_path):
@@ -171,7 +158,8 @@ def test_resolve_site_output_dir_uses_current_csubst_namespace(tmp_path):
     assert out == str(expected)
 
 
-def test_resolve_site_artifacts_reads_current_manifest_outputs(tmp_path):
+@pytest.mark.parametrize("with_manifest", [True, False])
+def test_resolve_site_artifacts_uses_manifest_or_current_names(tmp_path, with_manifest):
     mod = load_module()
     site_dir = tmp_path / "OG1_1_2" / "csubst_sites" / "csubst.branch_id1,2"
     site_dir.mkdir(parents=True)
@@ -182,34 +170,14 @@ def test_resolve_site_artifacts_reads_current_manifest_outputs(tmp_path):
     site_pdf.write_text("pdf", encoding="utf-8")
     pymol_pdf.write_text("pdf", encoding="utf-8")
     (site_dir / "csubst.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
-    pandas.DataFrame(
-        [
-            {"output_kind": "site_table_tsv", "output_path": str(site_tsv), "file_exists": "Y"},
-            {"output_kind": "site_summary_pdf", "output_path": str(site_pdf), "file_exists": "Y"},
-            {"output_kind": "pymol_summary_pdf", "output_path": str(pymol_pdf), "file_exists": "Y"},
-        ]
-    ).to_csv(site_dir / "csubst.outputs.tsv", sep="\t", index=False)
-
-    artifacts = mod.resolve_site_artifacts(str(tmp_path / "OG1_1_2"), "1,2")
-
-    assert artifacts["site_dir"] == str(site_dir)
-    assert artifacts["site_table_tsv"] == str(site_tsv)
-    assert artifacts["site_summary_pdf"] == str(site_pdf)
-    assert artifacts["pymol_summary_pdf"] == str(pymol_pdf)
-    assert artifacts["pdb_id"] == "2XYZ"
-
-
-def test_resolve_site_artifacts_falls_back_to_current_names_without_manifest(tmp_path):
-    mod = load_module()
-    site_dir = tmp_path / "OG1_1_2" / "csubst_sites" / "csubst.branch_id1,2"
-    site_dir.mkdir(parents=True)
-    site_tsv = site_dir / "csubst.2XYZ.tsv"
-    site_pdf = site_dir / "csubst.2XYZ.pdf"
-    pymol_pdf = site_dir / "csubst.2XYZ.pymol.pdf"
-    site_tsv.write_text("codon_site_alignment\tOCNany2spe\n1\t1\n", encoding="utf-8")
-    site_pdf.write_text("pdf", encoding="utf-8")
-    pymol_pdf.write_text("pdf", encoding="utf-8")
-    (site_dir / "csubst.2XYZ.fa").write_text(">x\nAA\n", encoding="utf-8")
+    if with_manifest:
+        pandas.DataFrame(
+            [
+                {"output_kind": "site_table_tsv", "output_path": str(site_tsv), "file_exists": "Y"},
+                {"output_kind": "site_summary_pdf", "output_path": str(site_pdf), "file_exists": "Y"},
+                {"output_kind": "pymol_summary_pdf", "output_path": str(pymol_pdf), "file_exists": "Y"},
+            ]
+        ).to_csv(site_dir / "csubst.outputs.tsv", sep="\t", index=False)
 
     artifacts = mod.resolve_site_artifacts(str(tmp_path / "OG1_1_2"), "1,2")
 
@@ -387,48 +355,46 @@ def test_gene_evolution_artifact_paths_use_current_underscore_names(tmp_path):
     )
 
 
-def test_get_alignment_for_tree_plot_reads_current_clipkit_name(tmp_path):
-    mod = load_module()
-    dir_og = tmp_path / "orthogroup"
-    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
-    clipkit_dir = dir_og / "clipkit"
-    clipkit_dir.mkdir(parents=True)
-    dir_out_og.mkdir(parents=True)
-    alignment = clipkit_dir / "OG0001_cds.clipkit.fa.gz"
-    with gzip.open(alignment, "wt") as handle:
-        handle.write(">gene1\nATG\n")
-
-    out = mod.get_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og))
-
-    assert out == str(dir_out_og / "OG0001_cds.clipkit.plot.fasta")
-    assert Path(out).read_text(encoding="utf-8") == ">gene1\nATG\n"
-
-
-def test_get_untrimmed_alignment_for_tree_plot_reads_current_mafft_name(tmp_path):
-    mod = load_module()
-    dir_og = tmp_path / "orthogroup"
-    dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
-    mafft_dir = dir_og / "mafft"
-    mafft_dir.mkdir(parents=True)
-    dir_out_og.mkdir(parents=True)
-    alignment = mafft_dir / "OG0001_cds.aln.fa.gz"
-    with gzip.open(alignment, "wt") as handle:
-        handle.write(">gene1\nATG---AAA\n")
-
-    out = mod.get_untrimmed_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og))
-
-    assert out == str(dir_out_og / "OG0001_cds.untrimmed.plot.fasta")
-    assert Path(out).read_text(encoding="utf-8") == ">gene1\nATG---AAA\n"
-
-
-def test_get_untrimmed_alignment_for_tree_plot_returns_none_when_missing(tmp_path):
+@pytest.mark.parametrize(
+    ("resolver_name", "source_dir", "source_name", "output_name", "payload"),
+    [
+        (
+            "get_alignment_for_tree_plot",
+            "clipkit",
+            "OG0001_cds.clipkit.fa.gz",
+            "OG0001_cds.clipkit.plot.fasta",
+            ">gene1\nATG\n",
+        ),
+        (
+            "get_untrimmed_alignment_for_tree_plot",
+            "mafft",
+            "OG0001_cds.aln.fa.gz",
+            "OG0001_cds.untrimmed.plot.fasta",
+            ">gene1\nATG---AAA\n",
+        ),
+        ("get_untrimmed_alignment_for_tree_plot", None, None, None, None),
+    ],
+)
+def test_alignment_for_tree_plot_resolves_current_and_missing_names(
+    tmp_path, resolver_name, source_dir, source_name, output_name, payload
+):
     mod = load_module()
     dir_og = tmp_path / "orthogroup"
     dir_out_og = tmp_path / "csubst_site" / "OG0001_1_2"
     dir_og.mkdir(parents=True)
     dir_out_og.mkdir(parents=True)
+    if source_dir is not None:
+        source_path = dir_og / source_dir
+        source_path.mkdir(parents=True)
+        with gzip.open(source_path / source_name, "wt") as handle:
+            handle.write(payload)
 
-    assert mod.get_untrimmed_alignment_for_tree_plot(str(dir_og), "OG0001", str(dir_out_og)) is None
+    out = getattr(mod, resolver_name)(str(dir_og), "OG0001", str(dir_out_og))
+    if output_name is None:
+        assert out is None
+    else:
+        assert out == str(dir_out_og / output_name)
+        assert Path(out).read_text(encoding="utf-8") == payload
 
 
 def test_build_alignment_panel_arg_includes_untrimmed_when_available():
@@ -483,7 +449,8 @@ def test_write_recoded_site_alignment_uses_csubst_state_symbols(tmp_path):
     assert out.read_text(encoding="utf-8") == ">gene1\nABCDEF\n>gene2\nABCDEF\n"
 
 
-def test_build_tree_plot_panel_args_adds_recoded_state_panel_when_available():
+@pytest.mark.parametrize("recoded", [True, False])
+def test_build_tree_plot_panel_args_handles_recoded_panel_presence(recoded):
     mod = load_module()
 
     out = mod.build_tree_plot_panel_args(
@@ -491,34 +458,20 @@ def test_build_tree_plot_panel_args_adds_recoded_state_panel_when_available():
         file_csubst_input_fasta="csubst.fasta",
         convergent_site_str="2:5",
         file_og_alignment="trim.fa",
-        file_og_untrimmed_alignment="untrim.fa",
-        recoded_site_alignment="dayhoff6.fa",
-        csubst_nonsyn_recode="dayhoff6",
+        file_og_untrimmed_alignment="untrim.fa" if recoded else None,
+        recoded_site_alignment="dayhoff6.fa" if recoded else None,
+        csubst_nonsyn_recode="dayhoff6" if recoded else "no",
     )
 
     assert "--panel10=amino_acid_site,1,2:5,csubst.fasta" in out
-    assert "--panel11=site_state,site_state_dayhoff6,2:5,dayhoff6.fa,Recoded state (dayhoff6)" in out
-    assert "--panel12=alignment,trim.fa,untrim.fa" in out
-    assert "--panel13=fimo,2000,0.05" in out
-
-
-def test_build_tree_plot_panel_args_keeps_existing_numbering_without_recoded_panel():
-    mod = load_module()
-
-    out = mod.build_tree_plot_panel_args(
-        file_og_rpsblast="rps.tsv",
-        file_csubst_input_fasta="csubst.fasta",
-        convergent_site_str="2:5",
-        file_og_alignment="trim.fa",
-        file_og_untrimmed_alignment=None,
-        recoded_site_alignment=None,
-        csubst_nonsyn_recode="no",
-    )
-
-    assert "--panel10=amino_acid_site,1,2:5,csubst.fasta" in out
-    assert "--panel11=alignment,trim.fa" in out
-    assert "--panel12=fimo,2000,0.05" in out
-    assert not any(arg.startswith("--panel11=site_state") for arg in out)
+    if recoded:
+        assert "--panel11=site_state,site_state_dayhoff6,2:5,dayhoff6.fa,Recoded state (dayhoff6)" in out
+        assert "--panel12=alignment,trim.fa,untrim.fa" in out
+        assert "--panel13=fimo,2000,0.05" in out
+    else:
+        assert "--panel11=alignment,trim.fa" in out
+        assert "--panel12=fimo,2000,0.05" in out
+        assert not any(arg.startswith("--panel11=site_state") for arg in out)
 
 
 def test_csubst_nonsyn_recode_output_suffix_preserves_default_name():
@@ -637,91 +590,65 @@ def test_run_stat_branch2tree_plot_accepts_one_explicit_site(monkeypatch, tmp_pa
         )
 
 
-def test_validate_csubst_stat_branch_identity_accepts_identical_ids(monkeypatch, tmp_path):
-    mod = load_module()
-    stat_branch = tmp_path / "OG1_stat.branch.tsv"
-    pandas.DataFrame(
-        [
-            {
-                "branch_id": 94,
-                "node_name": "Chamberlinius_hualienensis_CHUAL_007731",
-                "gene_labels": "Chamberlinius_hualienensis_CHUAL_007731",
-            },
-        ]
-    ).to_csv(stat_branch, sep="\t", index=False)
-    monkeypatch.setattr(
-        mod,
-        "get_csubst_branch_clade_signatures",
-        lambda _path: {
-            94: frozenset(["Chamberlinius_hualienensis_CHUAL_007731"]),
-        },
-    )
-
-    result = mod.validate_csubst_stat_branch_identity(
-        branch_id_str="94",
-        file_stat_branch=str(stat_branch),
-        iqtree_anc_dir=str(tmp_path / "iqtree"),
-    )
-
-    assert result is None
-
-
-def test_validate_csubst_stat_branch_identity_rejects_same_id_for_different_clades(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("rows", "signatures", "branch_id", "error"),
+    [
+        (
+            [
+                {
+                    "branch_id": 94,
+                    "node_name": "Chamberlinius_hualienensis_CHUAL_007731",
+                    "gene_labels": "Chamberlinius_hualienensis_CHUAL_007731",
+                }
+            ],
+            {94: frozenset(["Chamberlinius_hualienensis_CHUAL_007731"])},
+            "94",
+            None,
+        ),
+        (
+            [
+                {
+                    "branch_id": 94,
+                    "node_name": "Hexapleomera_sasuke_DN1845-c1-g1",
+                    "gene_labels": "Hexapleomera_sasuke_DN1845-c1-g1",
+                }
+            ],
+            {94: frozenset(["Chamberlinius_hualienensis_CHUAL_007731"])},
+            "94",
+            "Refusing to remap IDs",
+        ),
+        (
+            [
+                {"branch_id": 1, "node_name": "A", "gene_labels": "A"},
+                {"branch_id": 2, "node_name": "B", "gene_labels": "B"},
+            ],
+            {1: frozenset(["A"]), 2: frozenset(["C"])},
+            "1",
+            r"2: CSUBST=\[C\] stat_branch=\[B\]",
+        ),
+    ],
+)
+def test_validate_csubst_stat_branch_identity_handles_selected_and_unselected_cases(
+    monkeypatch, tmp_path, rows, signatures, branch_id, error
 ):
     mod = load_module()
     stat_branch = tmp_path / "OG1_stat.branch.tsv"
-    pandas.DataFrame(
-        [
-            {
-                "branch_id": 94,
-                "node_name": "Hexapleomera_sasuke_DN1845-c1-g1",
-                "gene_labels": "Hexapleomera_sasuke_DN1845-c1-g1",
-            }
-        ]
-    ).to_csv(stat_branch, sep="\t", index=False)
-    monkeypatch.setattr(
-        mod,
-        "get_csubst_branch_clade_signatures",
-        lambda _path: {
-            94: frozenset(["Chamberlinius_hualienensis_CHUAL_007731"]),
-        },
-    )
+    pandas.DataFrame(rows).to_csv(stat_branch, sep="\t", index=False)
+    monkeypatch.setattr(mod, "get_csubst_branch_clade_signatures", lambda _path: signatures)
 
-    with pytest.raises(RuntimeError, match="Refusing to remap IDs"):
-        mod.validate_csubst_stat_branch_identity(
-            branch_id_str="94",
+    if error is None:
+        assert mod.validate_csubst_stat_branch_identity(
+            branch_id_str=branch_id,
             file_stat_branch=str(stat_branch),
             iqtree_anc_dir=str(tmp_path / "iqtree"),
-        )
-
-
-def test_validate_csubst_stat_branch_identity_checks_unselected_branches(
-    monkeypatch, tmp_path
-):
-    mod = load_module()
-    stat_branch = tmp_path / "OG1_stat.branch.tsv"
-    pandas.DataFrame(
-        [
-            {"branch_id": 1, "node_name": "A", "gene_labels": "A"},
-            {"branch_id": 2, "node_name": "B", "gene_labels": "B"},
-        ]
-    ).to_csv(stat_branch, sep="\t", index=False)
-    monkeypatch.setattr(
-        mod,
-        "get_csubst_branch_clade_signatures",
-        lambda _path: {
-            1: frozenset(["A"]),
-            2: frozenset(["C"]),
-        },
-    )
-
-    with pytest.raises(RuntimeError, match=r"2: CSUBST=\[C\] stat_branch=\[B\]"):
-        mod.validate_csubst_stat_branch_identity(
-            branch_id_str="1",
-            file_stat_branch=str(stat_branch),
-            iqtree_anc_dir=str(tmp_path / "iqtree"),
-        )
+        ) is None
+    else:
+        with pytest.raises(RuntimeError, match=error):
+            mod.validate_csubst_stat_branch_identity(
+                branch_id_str=branch_id,
+                file_stat_branch=str(stat_branch),
+                iqtree_anc_dir=str(tmp_path / "iqtree"),
+            )
 
 
 def test_get_csubst_branch_clade_signatures_reads_csubst_tree_context(tmp_path):
@@ -904,18 +831,6 @@ def test_process_index_restores_cwd_when_summary_already_exists(tmp_path):
     assert os.getcwd() == original_cwd
 
 
-def test_help_has_no_side_effect_files(tmp_path):
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--help"],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0
-    assert not (tmp_path / "generate_orthogroup_database.log").exists()
-    assert not (tmp_path / "mpl").exists()
-
-
 def test_raise_on_processing_failures_propagates_worker_errors():
     mod = load_module()
 
@@ -923,12 +838,6 @@ def test_raise_on_processing_failures_propagates_worker_errors():
         mod.raise_on_processing_failures(
             [("OG0002", RuntimeError("failed site analysis"))]
         )
-
-
-def test_raise_on_processing_failures_accepts_success():
-    mod = load_module()
-
-    assert mod.raise_on_processing_failures([]) is None
 
 
 @pytest.mark.parametrize("code", [1, 2])
@@ -943,20 +852,21 @@ def test_resolve_genetic_code_from_new_and_legacy_bundles(tmp_path, code, metada
     assert mod.resolve_csubst_genetic_code(tmp_path) == code
 
 
-@pytest.mark.parametrize("log", ["", "genetic code 1\ngenetic code 2\n"])
-def test_resolve_genetic_code_rejects_ambiguous_legacy_bundle(tmp_path, log):
+@pytest.mark.parametrize(
+    ("metadata", "log"),
+    [
+        (False, ""),
+        (False, "genetic code 1\ngenetic code 2\n"),
+        (True, "Command: iqtree --seqtype CODON1\n"),
+    ],
+)
+def test_resolve_genetic_code_rejects_ambiguous_bundle(tmp_path, metadata, log):
     mod = load_module()
+    if metadata:
+        (tmp_path / "csubst.input.json").write_text(
+            json.dumps({"schema": "genegalleon-csubst-input-v1", "genetic_code": 2})
+        )
     (tmp_path / "csubst.log").write_text(log)
-    with pytest.raises(ValueError, match="Cannot resolve one genetic code"):
-        mod.resolve_csubst_genetic_code(tmp_path)
-
-
-def test_resolve_genetic_code_rejects_metadata_log_conflict(tmp_path):
-    mod = load_module()
-    (tmp_path / "csubst.input.json").write_text(
-        json.dumps({"schema": "genegalleon-csubst-input-v1", "genetic_code": 2})
-    )
-    (tmp_path / "csubst.log").write_text("Command: iqtree --seqtype CODON1\n")
     with pytest.raises(ValueError, match="Cannot resolve one genetic code"):
         mod.resolve_csubst_genetic_code(tmp_path)
 

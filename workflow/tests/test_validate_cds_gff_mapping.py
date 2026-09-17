@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
 
 
@@ -350,76 +352,47 @@ def test_validate_cds_gff_mapping_ignores_extra_trailing_gff_columns(tmp_path):
     assert "[Japonolirion_osense] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
 
 
-def test_validate_cds_gff_mapping_accepts_nthreads_and_reports_it(tmp_path):
+@pytest.mark.parametrize(
+    ("option", "value", "species", "expected_species"),
+    [
+        ("--nthreads", "2", ("Arabidopsis_thaliana", "Oryza_sativa"), 2),
+        ("--ncpu", "3", ("Arabidopsis_thaliana",), 1),
+    ],
+)
+def test_validate_cds_gff_mapping_accepts_thread_options(
+    tmp_path, option, value, species, expected_species
+):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"
     stats_path = tmp_path / "stats.json"
     cds_dir.mkdir()
     gff_dir.mkdir()
 
-    write_gzip_text(
-        cds_dir / "Arabidopsis_thaliana_demo.fa.gz",
-        ">Arabidopsis_thaliana_gene1\nATGAAA\n",
-    )
-    write_gzip_text(
-        gff_dir / "Arabidopsis_thaliana_demo.gff.gz",
-        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
-    )
-    write_gzip_text(
-        cds_dir / "Oryza_sativa_demo.fa.gz",
-        ">Oryza_sativa_gene1\nATGAAA\n",
-    )
-    write_gzip_text(
-        gff_dir / "Oryza_sativa_demo.gff.gz",
-        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
-    )
+    for species_name in species:
+        write_gzip_text(
+            cds_dir / f"{species_name}_demo.fa.gz",
+            f">{species_name}_gene1\nATGAAA\n",
+        )
+        write_gzip_text(
+            gff_dir / f"{species_name}_demo.gff.gz",
+            "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
+        )
 
     completed = run_script(
         "--species-cds-dir",
         str(cds_dir),
         "--species-gff-dir",
         str(gff_dir),
-        "--nthreads",
-        "2",
+        option,
+        value,
         "--stats-output",
         str(stats_path),
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     stats = json.loads(stats_path.read_text(encoding="utf-8"))
-    assert stats["nthreads"] == 2
-    assert stats["species_checked"] == 2
-    assert stats["species_passed"] == 2
-
-
-def test_validate_cds_gff_mapping_keeps_legacy_ncpu_alias(tmp_path):
-    cds_dir = tmp_path / "species_cds"
-    gff_dir = tmp_path / "species_gff"
-    stats_path = tmp_path / "stats.json"
-    cds_dir.mkdir()
-    gff_dir.mkdir()
-
-    write_gzip_text(
-        cds_dir / "Arabidopsis_thaliana_demo.fa.gz",
-        ">Arabidopsis_thaliana_gene1\nATGAAA\n",
-    )
-    write_gzip_text(
-        gff_dir / "Arabidopsis_thaliana_demo.gff.gz",
-        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.CDS1;Parent=gene1;\n",
-    )
-
-    completed = run_script(
-        "--species-cds-dir",
-        str(cds_dir),
-        "--species-gff-dir",
-        str(gff_dir),
-        "--ncpu",
-        "3",
-        "--stats-output",
-        str(stats_path),
-    )
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    stats = json.loads(stats_path.read_text(encoding="utf-8"))
-    assert stats["nthreads"] == 3
+    assert stats["nthreads"] == int(value)
+    assert stats["species_checked"] == expected_species
+    assert stats["species_passed"] == expected_species
 
 
 def test_species_summary_selects_exact_gff_instead_of_rediscovery(tmp_path):
