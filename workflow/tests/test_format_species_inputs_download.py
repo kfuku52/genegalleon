@@ -733,21 +733,22 @@ def test_download_manifest_infers_names_for_opaque_figshare_urls(tmp_path):
     source_dir.mkdir()
     species_key = "Actinidia_deliciosa"
 
-    with gzip.open(source_dir / "58581835", "wt", encoding="utf-8") as handle:
-        handle.write(">gene1.t1\nATGAAATTT\n")
-    with gzip.open(source_dir / "53524346", "wt", encoding="utf-8") as handle:
-        handle.write(
-            "\n".join(
-                [
-                    "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
-                    "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
-                    "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=gene1.t1",
-                    "",
-                ]
-            )
-        )
-    with gzip.open(source_dir / "53524460", "wt", encoding="utf-8") as handle:
-        handle.write(">chr1\nATGAAATTT\n")
+    # Figshare's opaque ``/files/<id>`` endpoints may return plain files even
+    # when the normalized target receives a ``.gz`` suffix.  The downloader
+    # must normalize those bodies before validation and formatting.
+    (source_dir / "58581835").write_text(">gene1.t1\nATGAAATTT\n", encoding="utf-8")
+    (source_dir / "53524346").write_text(
+        "\n".join(
+            [
+                "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1",
+                "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=gene1.t1;Parent=gene1",
+                "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=gene1.t1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_dir / "53524460").write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
 
     manifest = tmp_path / "manifest.tsv"
     make_manifest(

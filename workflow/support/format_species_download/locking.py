@@ -1,6 +1,7 @@
 """Download runtime implementation: locking."""
 
 import errno
+import gzip
 import hashlib
 import json
 import os
@@ -352,6 +353,40 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
             return
 
 
+def normalize_uncompressed_gzip(partial_path, warnings, lock_context):
+    """Compress a complete plain-text response when the target is ``.gz``.
+
+    Public download endpoints sometimes return an uncompressed FASTA/GFF body
+    even though the manifest has no usable filename and the normalized target
+    is assigned a ``.gz`` suffix.  Keep the target contract stable by
+    normalizing only after the complete response has been downloaded; a gzip
+    response is left byte-for-byte unchanged.
+    """
+    partial_path = Path(partial_path)
+    with open(partial_path, "rb") as source:
+        if source.read(2) == b"\x1f\x8b":
+            return False
+    temporary = Path("{}.gziptmp.{}".format(partial_path, os.getpid()))
+    try:
+        with open(partial_path, "rb") as source, gzip.open(temporary, "wb") as compressed:
+            shutil.copyfileobj(source, compressed, length=1024 * 1024)
+            compressed.flush()
+        with open(temporary, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, partial_path)
+        _fsync_directory(partial_path.parent)
+    except Exception:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
+    warnings.append("{} normalized uncompressed response to gzip: {}".format(lock_context, partial_path))
+    return True
+
+
 def finalize_partial_download(partial_path, url_hash_path, destination):
     partial_path.replace(destination)
     discard_partial_download(partial_path, url_hash_path)
@@ -562,6 +597,8 @@ def _download_url_to_file(
                         warnings,
                         lock_context,
                     )
+                    if destination.name.lower().endswith(".gz"):
+                        normalize_uncompressed_gzip(partial_path, warnings, lock_context)
                     validation_error = validate_gzip_with_cache(
                         partial_path,
                         expected_path=destination,
