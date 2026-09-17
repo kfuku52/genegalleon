@@ -6,6 +6,7 @@ Never infer origin from a best hit or treat an unresolved rank as compatible.
 
 import argparse
 import gzip
+import re
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +28,51 @@ BRANCH_COLUMNS = ["host_scaffold_status", "host_scaffold_recipient_gene_count",
 
 def species_key(value):
     return "" if value is None or pd.isna(value) else str(value).strip().replace(" ", "_")
+
+
+def gff_host_taxid(path):
+    """Read explicit source taxonomy, never infer it from sequence similarity."""
+    if not path:
+        return None
+    ids = set()
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt") as stream:
+        for line in stream:
+            if line.startswith("##FASTA"):
+                break
+            if line.startswith("##species "):
+                match = re.fullmatch(
+                    r"##species https?://www\.ncbi\.nlm\.nih\.gov/Taxonomy/Browser/wwwtax\.cgi\?id=([1-9][0-9]*)\s*",
+                    line,
+                )
+                if match:
+                    ids.add(int(match[1]))
+            elif not line.startswith("#"):
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) == 9 and fields[2] == "region":
+                    for attribute in fields[8].split(";"):
+                        if attribute.startswith("Dbxref="):
+                            for value in attribute[len("Dbxref="):].split(","):
+                                if re.fullmatch(r"taxon:[1-9][0-9]*", value):
+                                    ids.add(int(value.split(":")[1]))
+    if len(ids) > 1:
+        raise ValueError("Conflicting source taxids in GFF; supply --host-taxid")
+    return next(iter(ids)) if ids else None
+
+
+def resolve_host_taxid(explicit, gff, species, ncbi):
+    if explicit is not None:
+        if explicit <= 0:
+            raise ValueError("Host taxid must be positive")
+        return explicit
+    annotated = gff_host_taxid(gff)
+    if annotated is not None:
+        return annotated
+    name = species.replace("_", " ")
+    ids = ncbi.get_name_translator([name]).get(name, [])
+    if len(ids) != 1:
+        raise ValueError(f"Host name must resolve uniquely; supply --host-taxid: {name}")
+    return ids[0]
 
 
 def validate_gene_table(data):
@@ -328,13 +374,7 @@ def main():
     if not Path(args.taxonomy_dbfile).is_file():
         raise FileNotFoundError(args.taxonomy_dbfile)
     ncbi = NCBITaxa(dbfile=args.taxonomy_dbfile)
-    taxid = args.host_taxid
-    if taxid is None:
-        name = args.species.replace("_", " ")
-        ids = ncbi.get_name_translator([name]).get(name, [])
-        if len(ids) != 1:
-            raise ValueError(f"Host name must resolve uniquely; supply --host-taxid: {name}")
-        taxid = ids[0]
+    taxid = resolve_host_taxid(args.host_taxid, args.gff, args.species, ncbi)
     taxonomy = pd.read_csv(args.taxonomy, sep="\t", header=None, dtype=str, keep_default_na=False)
     if taxonomy.shape[1] != 9:
         raise ValueError("Expected 9-column MMseqs2 CDS taxonomy output")

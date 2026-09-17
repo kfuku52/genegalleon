@@ -317,3 +317,35 @@ def test_invalid_mmseqs_taxids_never_get_truncated(taxid):
     tax = pd.DataFrame({"gene_id": ["a"], "lca_taxid": [taxid]})
     with pytest.raises(ValueError, match="nonnegative integers"):
         scaffold.build_tables(gff, tax, "Host_species", 3, scaffold.RankResolver(Ncbi()))
+
+
+def test_source_taxid_resolves_project_label_without_name_guessing(tmp_path):
+    import gzip
+    path = tmp_path / 'source.gff.gz'
+    with gzip.open(path, 'wt') as stream:
+        stream.write('##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=170446\n'
+                     'chr\tsource\tregion\t1\t20\t.\t+\t.\tDbxref=taxon:170446\n'
+                     'chr\tsource\tgene\t1\t20\t.\t+\t.\tDbxref=taxon:999\n')
+    assert scaffold.resolve_host_taxid(None, path, 'Project_label', object()) == 170446
+    assert scaffold.resolve_host_taxid(305860, path, 'Project_label', object()) == 305860
+
+
+def test_conflicting_gff_source_taxids_require_explicit_selection(tmp_path):
+    path = tmp_path / 'source.gff'
+    path.write_text('##species https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=170446\n'
+                    'chr\tsource\tregion\t1\t20\t.\t+\t.\tDbxref=taxon:305860\n')
+    with pytest.raises(ValueError, match='Conflicting source taxids'):
+        scaffold.resolve_host_taxid(None, path, 'Host', object())
+    assert scaffold.resolve_host_taxid(170446, path, 'Host', object()) == 170446
+
+
+def test_absent_source_taxid_keeps_unique_name_requirement(tmp_path):
+    class Names:
+        def get_name_translator(self, names):
+            return {'Known host': [3], 'Ambiguous host': [3, 5]}
+    path = tmp_path / 'source.gff'
+    path.write_text('##gff-version 3\n')
+    assert scaffold.resolve_host_taxid(None, path, 'Known_host', Names()) == 3
+    for name in ['Unknown_host', 'Ambiguous_host']:
+        with pytest.raises(ValueError, match='resolve uniquely'):
+            scaffold.resolve_host_taxid(None, path, name, Names())
