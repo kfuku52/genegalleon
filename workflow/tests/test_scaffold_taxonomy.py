@@ -349,3 +349,51 @@ def test_absent_source_taxid_keeps_unique_name_requirement(tmp_path):
     for name in ['Unknown_host', 'Ambiguous_host']:
         with pytest.raises(ValueError, match='resolve uniquely'):
             scaffold.resolve_host_taxid(None, path, name, Names())
+
+
+@pytest.mark.parametrize("suffix", ["\t\n", "\t\t\r\n"])
+def test_loci_accept_empty_exporter_columns(tmp_path, suffix):
+    path = tmp_path / "input.gff"
+    rows = ["s\tx\tgene\t1\t9\t.\t+\t.\tID=g",
+            "s\tx\tmRNA\t1\t9\t.\t+\t.\tID=t;Parent=g",
+            "s\tx\tCDS\t1\t9\t.\t+\t0\tID=c;Parent=t"]
+    path.write_text("\n".join(rows) + "\n")
+    expected = scaffold.gff_loci(path)
+    path.write_text(suffix.join(rows) + suffix)
+    assert scaffold.gff_loci(path) == expected == {"g": "g", "t": "g", "c": "g"}
+
+
+@pytest.mark.parametrize("record", [
+    "s\tx\tgene\t1\t9\t.\t+\t.\tID=g\textra",
+    "s\tx\tgene\t1\t9\t.\t+\t.\tID=g\t\textra",
+    "s\tx\tgene\t1\t9\t.\t+\t.",
+])
+def test_loci_reject_malformed_columns(tmp_path, record):
+    path = tmp_path / "input.gff"
+    path.write_text(record + "\n")
+    with pytest.raises(ValueError, match="Malformed GFF record"):
+        scaffold.gff_loci(path)
+
+
+def test_explicit_unknown_species_resolves_only_genus():
+    class Taxonomy:
+        def get_name_translator(self, names):
+            return {name: [3493] for name in names if name == "Ficus"}
+
+        def get_rank(self, ids):
+            return {3493: "genus"}
+
+        def get_lineage(self, taxid):
+            return [3493]
+
+    ncbi = Taxonomy()
+    assert scaffold.resolve_host_taxid(None, None, "Ficus_sp_unknown", ncbi) == 3493
+    ranks = scaffold.RankResolver(ncbi).ranks(3493)
+    assert ranks.get("genus") == 3493
+    assert "species" not in ranks
+    for name in ("Ficus_misspelled", "Ficus_sp_some_sample", "Ficus_unknown"):
+        with pytest.raises(ValueError, match="resolve uniquely"):
+            scaffold.resolve_host_taxid(None, None, name, ncbi)
+    ncbi.get_rank = lambda ids: {3493: "species"}
+    with pytest.raises(ValueError, match="resolve uniquely"):
+        scaffold.resolve_host_taxid(None, None, "Ficus_sp_unknown", ncbi)

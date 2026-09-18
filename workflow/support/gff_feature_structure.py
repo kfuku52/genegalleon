@@ -85,6 +85,30 @@ def ordered_annotated_blocks(rows, gene_id):
             raise ValueError(f'Source-overlap marker requires overlapping blocks for {gene_id}')
         return blocks, 'source-overlap'
     if not any(declared):
+        if len({block[0] for block in coordinates}) > 1:
+            # Fragmented assemblies can explicitly number a transcript's CDS
+            # across contigs. Preserve that source order without claiming
+            # trans-splicing or inventing genomic introns between contigs.
+            parents = {a.get('Parent', '') for a in attributes}
+            if len(parents) != 1 or not next(iter(parents)) or ',' in next(iter(parents)):
+                raise ValueError(f'Conflicting GFF coordinate systems for {gene_id}')
+            parts = {}
+            for block, attr in zip(coordinates, attributes, strict=True):
+                number = attr.get('number', '')
+                if not re.fullmatch(r'[1-9][0-9]*', number):
+                    raise ValueError(f'Cross-contig CDS requires explicit number order for {gene_id}')
+                index = int(number)
+                if index in parts and parts[index] != block:
+                    raise ValueError(f'Conflicting cross-contig CDS number for {gene_id}')
+                parts[index] = block
+            if set(parts) != set(range(1, len(parts) + 1)) or len(set(parts.values())) != len(parts):
+                raise ValueError(f'Incomplete cross-contig CDS number order for {gene_id}')
+            ordered = [parts[i] for i in sorted(parts)]
+            for sequence in {block[0] for block in ordered}:
+                local = [block for block in ordered if block[0] == sequence]
+                if ordered_feature_blocks(local, gene_id) != local:
+                    raise ValueError(f'Conflicting cross-contig CDS coordinate order for {gene_id}')
+            return ordered, 'ordered-fragments'
         return ordered_feature_blocks(coordinates, gene_id), 'cis'
     if not all(declared):
         raise ValueError(f'Incomplete trans-splicing annotation for {gene_id}')

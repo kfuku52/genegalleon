@@ -48,7 +48,9 @@ def gff_host_taxid(path):
                 if match:
                     ids.add(int(match[1]))
             elif not line.startswith("#"):
-                fields = line.rstrip("\n").split("\t")
+                fields = line.rstrip("\r\n").split("\t")
+                if len(fields) > 9 and not any(fields[9:]):
+                    fields = fields[:9]
                 if len(fields) == 9 and fields[2] == "region":
                     for attribute in fields[8].split(";"):
                         if attribute.startswith("Dbxref="):
@@ -70,6 +72,14 @@ def resolve_host_taxid(explicit, gff, species, ncbi):
         return annotated
     name = species.replace("_", " ")
     ids = ncbi.get_name_translator([name]).get(name, [])
+    # An explicit unidentified species label identifies only its genus. Retain
+    # that resolution: lower ranks remain unresolved in RankResolver.
+    unknown_species = re.fullmatch(r"([A-Z][a-z]+) sp\.? unknown", name)
+    if not ids and unknown_species:
+        genus = unknown_species[1]
+        genus_ids = ncbi.get_name_translator([genus]).get(genus, [])
+        if len(genus_ids) == 1 and ncbi.get_rank(genus_ids).get(genus_ids[0]) == "genus":
+            return genus_ids[0]
     if len(ids) != 1:
         raise ValueError(f"Host name must resolve uniquely; supply --host-taxid: {name}")
     return ids[0]
@@ -137,7 +147,11 @@ def gff_loci(path):
                 break
             if line.startswith("#") or not line.strip():
                 continue
-            fields = line.rstrip("\n").split("\t")
+            fields = line.rstrip("\r\n").split("\t")
+            # Some exporters append empty columns after the nine GFF fields.
+            # They carry no annotation; never discard a populated extra field.
+            if len(fields) > 9 and not any(fields[9:]):
+                fields = fields[:9]
             if len(fields) != 9:
                 raise ValueError("Malformed GFF record")
             attrs = {}

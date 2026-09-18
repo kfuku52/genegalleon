@@ -21,7 +21,9 @@ The host anchor first uses a unique NCBI taxid explicitly recorded by the input
 GFF's `##species` directive or source `region` `Dbxref=taxon:` attributes.
 Conflicting source taxids are errors. When no source taxid is recorded, the
 existing ETE/NCBI taxonomy database must resolve the species name uniquely.
-Unresolvable/ambiguous host names are errors, not a guessed classification.
+An explicit `Genus_sp_unknown` label may resolve to one verified genus taxid;
+species-level composition remains unresolved. Other unresolvable/ambiguous
+host names are errors, not a guessed classification.
 For a manual invocation, `scaffold_taxonomy.py --host-taxid` supplies an explicit
 host anchor. The pipeline intentionally does not borrow the contamination-removal
 target, which can be a broad taxon rather than the actual host.

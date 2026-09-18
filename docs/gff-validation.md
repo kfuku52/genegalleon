@@ -57,3 +57,11 @@ independent check and does not imply nucleotide sequence identity.
 Preserve existing FASTA identifiers when repairing a project with downstream
 results. Repair an exact, audited GFF identifier correspondence rather than
 enabling heuristic suffix matching. Retain original inputs and a change log.
+
+Cross-contig CDS parts with one explicit transcript Parent and complete unique
+`number=1..N` order are represented as `splice_mode=ordered-fragments`. Each
+contig's coordinates must still agree with its strand and the declared order.
+The source blocks and junction positions are retained, without assuming
+trans-splicing, a common scaffold, or a genomic intron count. Conventional
+structure and intron-site plots omit these models. Missing/contradictory part
+order and conflicting phases still follow the existing validation policy.

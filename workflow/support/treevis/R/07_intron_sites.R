@@ -25,11 +25,11 @@ treevis_intron_site_data = function(tips, seqs) {
         }
         if (is.na(reason) && trans) reason = 'trans_splicing'
         if ('phase_status' %in% names(tips) && !is.na(tips[['phase_status']][i]) &&
-            tips[['phase_status']][i] %in% c('conflicting', 'ribosomal-slippage', 'pseudogene', 'source-overlap')) {
+            tips[['phase_status']][i] %in% c('conflicting', 'ribosomal-slippage', 'pseudogene', 'source-overlap', 'ordered-fragments')) {
             reason = as.character(tips[['phase_status']][i])
         }
         if ('splice_mode' %in% names(tips) && !is.na(tips[['splice_mode']][i]) &&
-            tips[['splice_mode']][i] %in% c('ribosomal-slippage', 'pseudogene', 'source-overlap')) reason = as.character(tips[['splice_mode']][i])
+            tips[['splice_mode']][i] %in% c('ribosomal-slippage', 'pseudogene', 'source-overlap', 'ordered-fragments')) reason = as.character(tips[['splice_mode']][i])
         if (!is.na(reason)) {
             diagnostics[[length(diagnostics)+1]] = data.frame(node_name=id, reason=reason)
             next

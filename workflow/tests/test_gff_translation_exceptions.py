@@ -144,3 +144,34 @@ def test_structural_gene_id_precedes_another_genes_display_alias():
     ], columns=['sequence', 'strand', 'start', 'end', 'attributes', 'feature'])
     result=extract_by_ids(gff,pd.Series(['Species_a_a','Species_a_z']),'CDS','longest')
     assert result.gene_id.tolist()==['Species_a_z']
+
+
+def test_numbered_cross_contig_cds_preserves_source_order():
+    rows = [('b', '+', 566, 1135, 'ID=c3;Parent=t;number=3'),
+            ('a', '+', 248256, 248359, 'ID=c1;Parent=t;number=1'),
+            ('a', '+', 248577, 249072, 'ID=c2;Parent=t;number=2')]
+    blocks, mode = ordered_annotated_blocks(rows, 'g')
+    assert mode == 'ordered-fragments'
+    assert blocks == [row[:4] for row in rows[1:] + rows[:1]]
+    assert sum(b[3] - b[2] + 1 for b in blocks) == 1170
+    cds = pd.DataFrame([(*row, phase) for row, phase in zip(rows, [0, 0, 2], strict=True)],
+                       columns=['sequence', 'strand', 'start', 'end', 'attributes', 'phase'])
+    cds = cds.assign(gene_id='Species_a_g', selected_transcript='t', feature='CDS')
+    with pytest.raises(ValueError, match='Conflicting CDS phases'):
+        attach_transcript_structure(cds, cds)
+    annotated = attach_transcript_structure(cds, cds, phase_policy='report')
+    result = summarize_gene_features(annotated, ['gene_id', 'feature_size', 'chromosome', 'num_intron',
+                                                'splice_mode', 'feature_blocks', 'transcript_junction_positions'])
+    record = result.iloc[0]
+    assert record.feature_size == 1170 and record.chromosome == ''
+    assert pd.isna(record.num_intron) and record.splice_mode == 'ordered-fragments'
+    assert record.transcript_junction_positions == '104;600'
+    for damaged in [
+        [(*r[:4], r[4].replace(';number=3', '')) for r in rows],
+        [(*r[:4], r[4].replace('number=3', 'number=4')) for r in rows],
+        [(*r[:4], r[4].replace('number=3', 'number=2')) for r in rows],
+        [(*r[:4], r[4].replace('Parent=t;number=3', 'Parent=other;number=3')) for r in rows],
+        [rows[0], (*rows[1][:4], 'ID=c1;Parent=t;number=2'), (*rows[2][:4], 'ID=c2;Parent=t;number=1')],
+    ]:
+        with pytest.raises(ValueError):
+            ordered_annotated_blocks(damaged, 'g')

@@ -662,7 +662,7 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
         # Reject annotation overlap or a different contig/strand.
         if set(cds_blocks) & set(utr_blocks):
             raise ValueError(f"Overlapping CDS/UTR annotation for {gene_id}")
-        if splice_mode == "trans-splicing":
+        if splice_mode in {"trans-splicing", "ordered-fragments"}:
             if utr_blocks:
                 raise ValueError(f"Trans-spliced UTR order is not represented for {gene_id}")
         elif splice_mode in {"ribosomal-slippage", "pseudogene", "source-overlap"}:
@@ -798,7 +798,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             length += end - start + 1
             if index + 1 < len(blocks):
                 junction_offsets.append(length)
-                if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene", "source-overlap"}:
+                if splice_mode in {"trans-splicing", "ordered-fragments", "ribosomal-slippage", "pseudogene", "source-overlap"}:
                     continue
                 following = blocks[index + 1]
                 gap = following[2] - end - 1 if strand == "+" else start - following[3] - 1
@@ -808,7 +808,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             {
                 "gene_id": gene_id,
                 "feature_size": length,
-                "num_intron": numpy.nan if splice_mode in {"trans-splicing", "ribosomal-slippage", "pseudogene", "source-overlap"} else len(intron_offsets),
+                "num_intron": numpy.nan if splice_mode in {"trans-splicing", "ordered-fragments", "ribosomal-slippage", "pseudogene", "source-overlap"} else len(intron_offsets),
                 "intron_positions": ";".join(str(pos) for pos in intron_offsets),
                 "feature_blocks": ";".join(f"{block[2]}-{block[3]}" for block in blocks),
                 "feature_type": feature_types.get(gene_id, ""),
