@@ -29,6 +29,11 @@ genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
+transcriptome_getfastq_cache_dir="${transcriptome_getfastq_cache_dir:-${GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR:-}}"
+transcriptome_tmp_retention_days="${transcriptome_tmp_retention_days:-7}"
+transcriptome_tmp_max_dirs="${transcriptome_tmp_max_dirs:-100}"
+transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}"
+transcriptome_tmp_max_files="${transcriptome_tmp_max_files:-200000}"
 mode_transcriptome_assembly=$(echo "${mode_transcriptome_assembly:-sraid}" | tr '[:upper:]' '[:lower:]')
 requested_assembly_method=$(printf '%s' "${assembly_method:-auto}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 amalgkit_ncbi_metadata_max_concurrency="${amalgkit_ncbi_metadata_max_concurrency:-20}"
@@ -70,6 +75,9 @@ classified_pacbio_fastq_files=()
 classified_ont_fastq_files=()
 getfastq_content_validated=0
 getfastq_content_validation_fingerprint=""
+getfastq_cache_enabled=0
+getfastq_cache_reused=0
+transcriptome_tmp_lock_fd=""
 fi
 
 # Named stage functions for gg_transcriptome_generation_core.sh.
@@ -941,10 +949,314 @@ prepare_getfastq_outputs_for_public_fallback() {
   ensure_dir "${dir_tmp}/getfastq_public_original"
 }
 
+validate_transcriptome_tmp_limits() {
+  local variable_name=""
+  local variable_value=""
+  for variable_name in \
+    transcriptome_tmp_retention_days \
+    transcriptome_tmp_max_dirs \
+    transcriptome_tmp_max_bytes \
+    transcriptome_tmp_max_files
+  do
+    variable_value="${!variable_name:-}"
+    if [[ ! "${variable_value}" =~ ^[0-9]+$ ]]; then
+      echo "Invalid ${variable_name}=${variable_value}; expected a non-negative integer." >&2
+      return 1
+    fi
+  done
+}
+
+cleanup_transcriptome_tmp() {
+  local tmp_root=$1
+  local current_tmp_name=${2:-}
+  [[ -n "${tmp_root}" && "${tmp_root}" != "/" ]] || return 0
+  [[ -d "${tmp_root}" && ! -L "${tmp_root}" ]] || return 0
+
+  # Each task directory is protected by an active lock while its core runs.
+  # An idle run is removable only when that lock can be acquired.
+  python - "${tmp_root}" "${current_tmp_name}" \
+    "${transcriptome_tmp_retention_days}" \
+    "${transcriptome_tmp_max_dirs}" \
+    "${transcriptome_tmp_max_bytes}" \
+    "${transcriptome_tmp_max_files}" <<'PY'
+import fcntl
+import os
+import pathlib
+import re
+import shutil
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+current_name = sys.argv[2]
+retention_days, max_dirs, max_bytes, max_files = (int(value) for value in sys.argv[3:7])
+if root.is_symlink() or not root.is_dir():
+    raise SystemExit(0)
+
+pattern = re.compile(r"^[0-9]+_.+$")
+now = time.time()
+cutoff = now - retention_days * 86400 if retention_days > 0 else None
+entries = []
+
+for candidate in sorted(root.iterdir()):
+    if candidate.name == current_name or candidate.is_symlink() or not candidate.is_dir():
+        continue
+    if not pattern.fullmatch(candidate.name):
+        continue
+    lock_path = candidate / ".gg_active.lock"
+    try:
+        candidate_mtime = candidate.stat().st_mtime
+    except (FileNotFoundError, OSError):
+        continue
+    fd = None
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        if fd is not None:
+            os.close(fd)
+        continue
+    try:
+        # Creating the lock can update the directory mtime. Use the timestamp
+        # captured before locking so an old failed run does not become immortal.
+        newest = candidate_mtime
+        total_bytes = 0
+        total_files = 0
+        for path in candidate.rglob("*"):
+            if path == lock_path:
+                continue
+            if path.is_symlink():
+                continue
+            stat_result = path.stat()
+            newest = max(newest, stat_result.st_mtime)
+            if path.is_file():
+                total_files += 1
+                total_bytes += stat_result.st_size
+        entries.append((candidate, fd, newest, total_bytes, total_files))
+    except (FileNotFoundError, OSError):
+        if fd is not None:
+            os.close(fd)
+
+limited = max_dirs > 0 or max_bytes > 0 or max_files > 0
+keep = set()
+kept_bytes = 0
+kept_files = 0
+for candidate, _, _, size, files in sorted(entries, key=lambda item: (-item[2], item[0].name)):
+    if max_dirs > 0 and len(keep) >= max_dirs:
+        continue
+    if max_bytes > 0 and kept_bytes + size > max_bytes:
+        continue
+    if max_files > 0 and kept_files + files > max_files:
+        continue
+    keep.add(candidate)
+    kept_bytes += size
+    kept_files += files
+
+try:
+    for candidate, fd, newest, _, _ in entries:
+        expired = cutoff is not None and newest < cutoff
+        excess = limited and candidate not in keep
+        if expired or excess:
+            shutil.rmtree(candidate)
+            print("Removed expired transcriptome scratch: {}".format(candidate))
+        os.close(fd)
+finally:
+    for _, fd, _, _, _ in entries:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+PY
+}
+
+acquire_transcriptome_tmp_lock() {
+  local lock_path="${dir_tmp}/.gg_active.lock"
+  if [[ -e "${lock_path}" && ! -f "${lock_path}" ]] || [[ -L "${lock_path}" ]]; then
+    echo "Unsafe transcriptome scratch lock path: ${lock_path}" >&2
+    return 1
+  fi
+  ensure_dir "${dir_tmp}"
+  exec {transcriptome_tmp_lock_fd}>"${lock_path}"
+  if ! flock -n "${transcriptome_tmp_lock_fd}"; then
+    echo "Transcriptome scratch directory is already active: ${dir_tmp}" >&2
+    exec {transcriptome_tmp_lock_fd}>&-
+    transcriptome_tmp_lock_fd=""
+    return 1
+  fi
+}
+
+release_transcriptome_tmp_lock() {
+  if [[ "${transcriptome_tmp_lock_fd:-}" =~ ^[0-9]+$ ]]; then
+    flock -u "${transcriptome_tmp_lock_fd}" 2>/dev/null || true
+    eval "exec ${transcriptome_tmp_lock_fd}>&-" 2>/dev/null || true
+    transcriptome_tmp_lock_fd=""
+  fi
+}
+
+write_getfastq_cache_contract() {
+  [[ ${getfastq_cache_enabled:-0} -eq 1 ]] || return 0
+  python - "${dir_amalgkit_getfastq_sp}/.getfastq_cache_contract.json" \
+    "${sp_ub}" "${file_amalgkit_metadata}" \
+    "${getfastq_content_validation_fingerprint:-}" \
+    "${amalgkit_rrna_filter}" "${amalgkit_rrna_filter_jobs}" \
+    "${amalgkit_rrna_filter_chunk_spots}" "${amalgkit_rrna_filter_memory_limit}" \
+    "${amalgkit_contam_filter}" "${contamination_removal_rank_for_amalgkit}" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+
+contract_path = pathlib.Path(sys.argv[1])
+species = sys.argv[2]
+metadata_path = pathlib.Path(sys.argv[3])
+fingerprint = sys.argv[4]
+if metadata_path.is_symlink() or not metadata_path.is_file():
+    raise SystemExit("Cannot bind a cache contract to unsafe metadata: {}".format(metadata_path))
+digest = hashlib.sha256()
+with metadata_path.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+parameters = {
+    "rrna_filter": sys.argv[5],
+    "rrna_filter_jobs": sys.argv[6],
+    "rrna_filter_chunk_spots": sys.argv[7],
+    "rrna_filter_memory_limit": sys.argv[8],
+    "contam_filter": sys.argv[9],
+    "contam_filter_rank": sys.argv[10],
+    "read_name": "trinity",
+    "remove_sra": "yes",
+    "remove_tmp": "yes",
+    "dump_print": "yes",
+    "aws": "yes",
+    "ncbi": "yes",
+    "ena": "yes",
+    "redo": "no",
+}
+contract = {
+    "schema_version": 1,
+    "species": species,
+    "metadata_sha256": digest.hexdigest(),
+    "metadata_size_bytes": metadata_path.stat().st_size,
+    "content_stat_fingerprint": fingerprint,
+    "parameters": parameters,
+    "completion_manifest": "getfastq_completion.json",
+}
+contract_path.parent.mkdir(parents=True, exist_ok=True)
+if contract_path.is_symlink() or (contract_path.exists() and not contract_path.is_file()):
+    raise SystemExit("Unsafe getfastq cache contract path: {}".format(contract_path))
+temporary = contract_path.with_name("." + contract_path.name + ".part")
+with temporary.open("w", encoding="utf-8") as handle:
+    json.dump(contract, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary, contract_path)
+PY
+}
+
+validate_getfastq_cache_contract() {
+  [[ ${getfastq_cache_enabled:-0} -eq 1 ]] || return 1
+  python - "${dir_amalgkit_getfastq_sp}/.getfastq_cache_contract.json" \
+    "${sp_ub}" "${file_amalgkit_metadata}" \
+    "${amalgkit_rrna_filter}" "${amalgkit_rrna_filter_jobs}" \
+    "${amalgkit_rrna_filter_chunk_spots}" "${amalgkit_rrna_filter_memory_limit}" \
+    "${amalgkit_contam_filter}" "${contamination_removal_rank_for_amalgkit}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+contract_path = pathlib.Path(sys.argv[1])
+species = sys.argv[2]
+metadata_path = pathlib.Path(sys.argv[3])
+if contract_path.is_symlink() or not contract_path.is_file():
+    raise SystemExit(1)
+try:
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+if contract.get("schema_version") != 1 or contract.get("species") != species:
+    raise SystemExit(1)
+if metadata_path.is_symlink() or not metadata_path.is_file():
+    raise SystemExit(1)
+digest = hashlib.sha256()
+with metadata_path.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+if contract.get("metadata_sha256") != digest.hexdigest() or contract.get("metadata_size_bytes") != metadata_path.stat().st_size:
+    raise SystemExit(1)
+expected = {
+    "rrna_filter": sys.argv[4],
+    "rrna_filter_jobs": sys.argv[5],
+    "rrna_filter_chunk_spots": sys.argv[6],
+    "rrna_filter_memory_limit": sys.argv[7],
+    "contam_filter": sys.argv[8],
+    "contam_filter_rank": sys.argv[9],
+    "read_name": "trinity",
+    "remove_sra": "yes",
+    "remove_tmp": "yes",
+    "dump_print": "yes",
+    "aws": "yes",
+    "ncbi": "yes",
+    "ena": "yes",
+    "redo": "no",
+}
+if contract.get("parameters") != expected or contract.get("completion_manifest") != "getfastq_completion.json":
+    raise SystemExit(1)
+manifest = contract_path.parent / "getfastq_completion.json"
+if manifest.is_symlink() or not manifest.is_file() or manifest.stat().st_size <= 0:
+    raise SystemExit(1)
+PY
+}
+
+getfastq_cache_is_reusable() {
+  local stat_fingerprint=""
+  local stored_fingerprint=""
+  [[ ${getfastq_cache_enabled:-0} -eq 1 ]] || return 1
+  validate_getfastq_cache_contract || return 1
+  if ! stat_fingerprint=$(validate_amalgkit_getfastq_completion_manifest_index \
+    "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+    "${file_amalgkit_metadata}" yes)
+  then
+    return 1
+  fi
+  getfastq_content_validation_fingerprint=${stat_fingerprint}
+  getfastq_content_validated=1
+  stored_fingerprint=$(python - "${dir_amalgkit_getfastq_sp}/.getfastq_cache_contract.json" <<'PY'
+import json
+import pathlib
+import sys
+try:
+    value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")).get("content_stat_fingerprint", "")
+except (OSError, UnicodeError, json.JSONDecodeError):
+    value = ""
+print(value if isinstance(value, str) else "")
+PY
+  )
+  if [[ -n "${stored_fingerprint}" && "${stored_fingerprint}" == "${stat_fingerprint}" ]]; then
+    return 0
+  fi
+  if ! validate_amalgkit_getfastq_completion_manifest \
+    "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
+    "${file_amalgkit_metadata}"
+  then
+    return 1
+  fi
+  write_getfastq_cache_contract
+}
+
 stage_getfastq_outputs_for_resume() {
   local published_entries=()
   local published_entry=""
   local resume_entry=""
+
+  if [[ ${getfastq_cache_enabled:-0} -eq 1 ]]; then
+    # Never move a shared cache into task scratch. Rebuild into scratch and
+    # atomically replace the cache only after the new manifest validates.
+    ensure_dir "${dir_tmp}/getfastq"
+    return 0
+  fi
 
   if [[ -L "${dir_tmp}/getfastq" ]]; then
     if ! python - "${dir_tmp}/getfastq" "${dir_amalgkit_getfastq_sp}" <<'PY'
@@ -1848,6 +2160,10 @@ clear_getfastq_safely_removed_markers() {
 safe_delete_getfastq_fastq_files() {
   local fastq_files=()
   local fastq_file
+  if [[ ${getfastq_cache_enabled:-0} -eq 1 ]]; then
+    echo "Persistent getfastq cache is enabled; preserving FASTQ files: ${dir_amalgkit_getfastq_sp}"
+    return 0
+  fi
   if [[ -e "${file_amalgkit_getfastq_legacy_safely_removed_flag}" ]]; then
     rm -f -- "${file_amalgkit_getfastq_legacy_safely_removed_flag}"
   fi
@@ -2005,6 +2321,10 @@ run_amalgkit_getfastq_attempt() {
       "${file_amalgkit_metadata}"
     then
       echo "Published amalgkit getfastq output failed its completion-index check." >&2
+      return 3
+    fi
+    if ! write_getfastq_cache_contract; then
+      echo "Failed to write the persistent getfastq cache contract." >&2
       return 3
     fi
     rm -rf -- "${dir_tmp}/getfastq"
@@ -3241,6 +3561,10 @@ run_amalgkit_getfastq_or_fallback() {
       echo "Fallback direct FASTQ recovery finished without a valid all-run completion index. Exiting." >&2
       return 1
     fi
+    if ! write_getfastq_cache_contract; then
+      echo "Failed to write the persistent getfastq cache contract." >&2
+      return 1
+    fi
     rm -rf -- "${dir_tmp}/getfastq_public_original"
     echo "Fallback download of public original FASTQ files succeeded and was atomically published."
     return 0
@@ -3298,6 +3622,40 @@ dir_input_sra_list="${gg_workspace_input_dir}/query_sra_id"
 dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"
 dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"
 dir_amalgkit_quant="${dir_transcriptome_assembly_output}/amalgkit_quant"
+
+validate_transcriptome_tmp_limits || exit 1
+if [[ -n "${transcriptome_getfastq_cache_dir}" ]]; then
+  if [[ "${transcriptome_getfastq_cache_dir}" != /* || \
+    "${transcriptome_getfastq_cache_dir}" == *[:,]* || \
+    "${transcriptome_getfastq_cache_dir}" == *$'\n'* || \
+    "${transcriptome_getfastq_cache_dir}" == */.. || \
+    "${transcriptome_getfastq_cache_dir}" == */../* ]]; then
+    echo "transcriptome_getfastq_cache_dir must be an absolute path without colons, commas, newlines or parent traversal." >&2
+    exit 1
+  fi
+  if [[ "${transcriptome_getfastq_cache_dir%/}" == "" || \
+    "${transcriptome_getfastq_cache_dir%/}" == "/" ]]; then
+    echo "transcriptome_getfastq_cache_dir must not be the filesystem root." >&2
+    exit 1
+  fi
+  if [[ -e "${transcriptome_getfastq_cache_dir}" && \
+    ( ! -d "${transcriptome_getfastq_cache_dir}" || -L "${transcriptome_getfastq_cache_dir}" ) ]]; then
+    echo "transcriptome_getfastq_cache_dir is not a real directory: ${transcriptome_getfastq_cache_dir}" >&2
+    exit 1
+  fi
+  case "${transcriptome_getfastq_cache_dir%/}" in
+    "${dir_transcriptome_assembly_output}"|"${dir_transcriptome_assembly_output}"/*)
+      echo "transcriptome_getfastq_cache_dir must be outside transcriptome_assembly output: ${transcriptome_getfastq_cache_dir}" >&2
+      exit 1
+      ;;
+  esac
+  ensure_dir "${transcriptome_getfastq_cache_dir}"
+  if [[ -L "${transcriptome_getfastq_cache_dir}" || ! -d "${transcriptome_getfastq_cache_dir}" ]]; then
+    echo "Refusing an unsafe transcriptome getfastq cache directory: ${transcriptome_getfastq_cache_dir}" >&2
+    exit 1
+  fi
+  getfastq_cache_enabled=1
+fi
 
 if [[ "${mode_transcriptome_assembly}" != "auto" && "${mode_transcriptome_assembly}" != "sraid" && "${mode_transcriptome_assembly}" != "fastq" && "${mode_transcriptome_assembly}" != "metadata" ]]; then
   echo "Invalid mode_transcriptome_assembly: ${mode_transcriptome_assembly}"
@@ -3443,7 +3801,24 @@ elif [[ "${selected_transcriptome_mode}" == "metadata" ]]; then
 fi
 
 dir_tmp=$(gg_task_tmp_path "${dir_transcriptome_assembly_output}/tmp/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
-dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
+transcriptome_tmp_root=$(dirname "${dir_tmp}")
+if [[ -L "${dir_tmp}" || ( -e "${dir_tmp}" && ! -d "${dir_tmp}" ) ]]; then
+  echo "Refusing an unsafe transcriptome scratch path: ${dir_tmp}" >&2
+  exit 1
+fi
+cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "$(basename "${dir_tmp}")" || exit 1
+acquire_transcriptome_tmp_lock || exit 1
+if [[ ${getfastq_cache_enabled} -eq 1 ]]; then
+  dir_amalgkit_getfastq_sp="${transcriptome_getfastq_cache_dir}/${sp_ub}"
+  if [[ -e "${dir_amalgkit_getfastq_sp}" && \
+    ( ! -d "${dir_amalgkit_getfastq_sp}" || -L "${dir_amalgkit_getfastq_sp}" ) ]]; then
+    echo "Refusing an unsafe species getfastq cache path: ${dir_amalgkit_getfastq_sp}" >&2
+    exit 1
+  fi
+  ensure_dir "${dir_amalgkit_getfastq_sp}"
+else
+  dir_amalgkit_getfastq_sp="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}"
+fi
 dir_amalgkit_download_dir="${gg_workspace_downloads_dir}"
 dir_amalgkit_download_lock_dir="${dir_amalgkit_download_dir}/locks"
 amalgkit_rrna_filter_jobs="${amalgkit_rrna_filter_jobs:-1}"
@@ -3459,7 +3834,7 @@ else
 fi
 file_amalgkit_read_technology="${dir_transcriptome_assembly_output}/amalgkit_read_technology/${sp_ub}_read_technology.tsv"
 file_amalgkit_read_technology_summary_sh="${dir_tmp}/metadata/read_technology.summary.sh"
-file_amalgkit_getfastq_legacy_safely_removed_flag=${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt
+file_amalgkit_getfastq_legacy_safely_removed_flag="${dir_transcriptome_assembly_output}/amalgkit_getfastq/${sp_ub}_safely_removed.txt"
 file_isoform="${dir_transcriptome_assembly_output}/assembled_transcripts_with_isoforms/${sp_ub}_isoform.fa.gz"
 file_corset_clusters="${dir_transcriptome_assembly_output}/corset_clusters/${sp_ub}_corset.clusters.tsv"
 file_corset_counts="${dir_transcriptome_assembly_output}/corset_counts/${sp_ub}_corset.counts.tsv"
@@ -3607,6 +3982,7 @@ fi
 echo "Number of amalgkit getfastq fastq files: ${#amalgkit_fastq_files[@]}"
 echo "is_fastq_requiring_downstream_analysis_done: $(is_fastq_requiring_downstream_analysis_done)"
 getfastq_needs_update=0
+getfastq_cache_reused=0
 gg_artifact_contract_init getfastq_provenance_args "transcriptome_getfastq" "${sp_ub}" "${transcriptome_provenance_dir}/${sp_ub}.getfastq.json"
 getfastq_provenance_args+=(
   --input "metadata=${file_amalgkit_metadata}"
@@ -3627,7 +4003,28 @@ getfastq_provenance_args+=(
   --parameter "redo=no"
 )
 gg_artifact_add_input_if_present getfastq_provenance_args "contam_filter_db" "${dir_mmseqs2_db}/UniRef90_DB"
-gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq "${getfastq_provenance_args[@]}" || exit $?
+if [[ ${getfastq_cache_enabled} -eq 1 ]]; then
+  if getfastq_cache_is_reusable; then
+    echo "Reusing validated persistent amalgkit getfastq cache: ${dir_amalgkit_getfastq_sp}"
+    getfastq_cache_reused=1
+    getfastq_needs_update=0
+  elif [[ ${run_amalgkit_getfastq} -ne 1 ]]; then
+    echo "Persistent getfastq cache is invalid and run_amalgkit_getfastq=0; refusing to consume unverified FASTQs." >&2
+    exit 1
+  else
+    if [[ -s "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" ]]; then
+      echo "Persistent getfastq cache failed its metadata/parameter/content contract; rebuilding it." >&2
+    else
+      echo "Persistent getfastq cache has no validated completion contract; building it." >&2
+    fi
+    getfastq_needs_update=1
+  fi
+fi
+if [[ ${getfastq_cache_reused} -eq 1 ]]; then
+  gg_artifact_record "${getfastq_provenance_args[@]}"
+elif [[ ${getfastq_cache_enabled} -eq 0 ]]; then
+  gg_artifact_prepare_stage getfastq_needs_update run_amalgkit_getfastq "${getfastq_provenance_args[@]}" || exit $?
+fi
 if [[ ${run_amalgkit_getfastq} -eq 1 && ${getfastq_needs_update} -eq 0 ]] && \
   ! validate_amalgkit_getfastq_completion_manifest_index \
     "${dir_amalgkit_getfastq_sp}/getfastq_completion.json" \
@@ -4990,5 +5387,8 @@ if [[ ${delete_tmp_dir} -eq 1 ]]; then
 else
   echo "Tmp directory will not be deleted: ${dir_tmp}"
 fi
+
+release_transcriptome_tmp_lock
+cleanup_transcriptome_tmp "${transcriptome_tmp_root}" "" || true
 
 echo "$(date): Exiting Singularity environment"

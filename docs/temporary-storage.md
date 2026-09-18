@@ -62,11 +62,30 @@ recover node-local files from a different location.
 Gene evolution's existing `gene_family_tmp_retention_days`,
 `gene_family_tmp_max_dirs`, `gene_family_tmp_max_bytes` and
 `gene_family_tmp_max_files` limits also apply to idle external runs, scoped by
-workspace, workflow and gene-evolution mode at that scratch location. Cleanup
-occurs on invocation and completion, not as a background service. Other workflows retain failed runs
-until manually removed or removed by the site's policy. Never remove an active
-run. `delete_tmp_dir=0` prevents successful-run cleanup by GeneGalleon but does
-not disable retention limits or site cleanup.
+workspace, workflow and gene-evolution mode at that scratch location.
+Transcriptome generation has the corresponding `transcriptome_tmp_retention_days`
+(default 7 days), `transcriptome_tmp_max_dirs` (100),
+`transcriptome_tmp_max_bytes` (1 TiB) and `transcriptome_tmp_max_files` (200,000)
+controls for failed or interrupted task directories. A per-task
+`.gg_active.lock` prevents cleanup while a retry is running. Set a limit to `0`
+to disable that particular bound. Cleanup occurs on invocation and completion,
+not as a background service. Other workflows retain failed runs until manually
+removed or removed by the site's policy. Never remove an active run.
+`delete_tmp_dir=0` prevents successful-run cleanup by GeneGalleon but does not
+disable retention limits or site cleanup.
+
+Transcriptome getfastq files can be retained in a reusable cache by setting
+`transcriptome_getfastq_cache_dir` (or `GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR`) to
+an absolute directory outside `transcriptome_assembly`. The cache is partitioned
+by species and written only after the completion manifest, metadata SHA-256,
+getfastq parameters and FASTQ filesystem identity have been checked. A later job
+with the same metadata and parameters reuses that cache before invoking
+`amalgkit_getfastq`; `run_amalgkit_getfastq=0` fails closed if the contract is
+missing or stale. With this cache enabled, `remove_amalgkit_fastq_after_completion=1`
+preserves the cached FASTQs. The entrypoint binds the configured host directory
+at a stable container path, so it may be outside the selected workspace. It is
+intentionally outside the disposable assembly workspace and is not removed by
+`delete_tmp_dir`.
 
 The default workspace paths are:
 

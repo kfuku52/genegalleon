@@ -260,6 +260,46 @@ def test_transcriptome_core_preserves_resumable_getfastq_outputs_across_failures
     assert "mark_amalgkit_getfastq_content_validated" in attempt_body
 
 
+def test_transcriptome_core_reuses_a_contract_bound_persistent_getfastq_cache():
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+    registry = _read_text(WORKFLOW_DIR / "support" / "gg_entrypoint_config_vars.sh")
+
+    assert "getfastq_cache_enabled=0" in core
+    assert "write_getfastq_cache_contract()" in core
+    assert "validate_getfastq_cache_contract()" in core
+    assert "getfastq_cache_is_reusable()" in core
+    assert '/.getfastq_cache_contract.json' in core
+    assert '"metadata_sha256"' in core
+    assert '"content_stat_fingerprint"' in core
+    assert 'if [[ ${getfastq_cache_enabled} -eq 1 ]]; then' in core
+    assert "Reusing validated persistent amalgkit getfastq cache" in core
+    assert "Persistent getfastq cache is invalid and run_amalgkit_getfastq=0" in core
+    assert "Never move a shared cache into task scratch" in core
+    assert "Persistent getfastq cache is enabled; preserving FASTQ files" in core
+    assert 'transcriptome_getfastq_cache_dir="${transcriptome_getfastq_cache_dir:-${GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR:-}}"' in entrypoint
+    assert 'gg_add_container_bind_mount "${transcriptome_getfastq_cache_dir_host}:/gg_transcriptome_getfastq_cache"' in entrypoint
+    assert 'transcriptome_getfastq_cache_dir="/gg_transcriptome_getfastq_cache"' in entrypoint
+    assert "transcriptome_getfastq_cache_dir" in registry
+
+
+def test_transcriptome_failed_scratch_has_locked_ttl_and_size_limits():
+    core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
+    entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
+
+    assert "validate_transcriptome_tmp_limits()" in core
+    assert "cleanup_transcriptome_tmp()" in core
+    assert "acquire_transcriptome_tmp_lock()" in core
+    assert '".gg_active.lock"' in core
+    assert "LOCK_NB" in core
+    assert "shutil.rmtree(candidate)" in core
+    assert 'transcriptome_tmp_retention_days="${transcriptome_tmp_retention_days:-7}"' in entrypoint
+    assert 'transcriptome_tmp_max_dirs="${transcriptome_tmp_max_dirs:-100}"' in entrypoint
+    assert 'transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}"' in entrypoint
+    assert 'transcriptome_tmp_max_files="${transcriptome_tmp_max_files:-200000}"' in entrypoint
+    assert "cleanup_transcriptome_tmp \"${transcriptome_tmp_root}\" \"\" || true" in core
+
+
 def test_transcriptome_entrypoint_exposes_auto_assembly_and_metadata_detection():
     entrypoint = _read_text(WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh")
     core = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")

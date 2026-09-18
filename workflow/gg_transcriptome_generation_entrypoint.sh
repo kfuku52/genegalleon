@@ -133,6 +133,19 @@ amalgkit_gcp_download_max_concurrency="${amalgkit_gcp_download_max_concurrency:-
 amalgkit_sra_strategy_query="${amalgkit_sra_strategy_query:-\"RNA-seq\"[Strategy] OR \"EST\"[Strategy] OR \"CLONE\"[Strategy]}" # Entrez strategy clause appended in mode_transcriptome_assembly=sraid; include CLONE so capillary/Sanger cDNA libraries are eligible. Explicit-accession fallback automatically retries without this clause when transcriptomic runs are missed. Set empty to disable strategy filtering.
 remove_amalgkit_fastq_after_completion=1 # Delete per-species amalgkit FASTQ files after downstream completion.
 
+# Persistent getfastq cache. When set, completed FASTQ sets are kept outside
+# the per-run assembly workspace and are reused only after their metadata,
+# parameters and completion manifest have been verified.
+transcriptome_getfastq_cache_dir="${transcriptome_getfastq_cache_dir:-${GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR:-}}" # Absolute persistent getfastq cache directory; empty keeps outputs in the workspace.
+
+# Failed transcriptome scratch is disposable. The limits are applied to idle
+# task directories on workflow invocation and completion; active directories
+# are protected by a per-task flock.
+transcriptome_tmp_retention_days="${transcriptome_tmp_retention_days:-7}" # Days to retain idle failed transcriptome task scratch.
+transcriptome_tmp_max_dirs="${transcriptome_tmp_max_dirs:-100}" # Maximum idle failed transcriptome scratch directories to retain.
+transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}" # Maximum bytes across retained idle failed transcriptome scratch.
+transcriptome_tmp_max_files="${transcriptome_tmp_max_files:-200000}" # Maximum files across retained idle failed transcriptome scratch.
+
 # Assembly and quantification parameters
 max_assembly_input_fastq_size="30,000,000,000" # Maximum total FASTQ length in bp used for transcriptome assembly.
 assembly_method="auto" # {auto,Trinity,rnaSPAdes,RNA-Bloom2}; auto picks rnaSPAdes for short-read metadata and RNA-Bloom2 for detected PacBio/ONT metadata.
@@ -154,9 +167,56 @@ contamination_removal_target_taxon="${contamination_removal_target_taxon:-}" # O
 delete_tmp_dir=1 # After this run, delete tmp directory created for each job. Set 0 when debugging.
 
 source "${gg_support_dir}/gg_util.sh" # loading utility functions
+gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" \
+  "transcriptome_getfastq_cache_dir" \
+  "transcriptome_tmp_retention_days" "transcriptome_tmp_max_dirs" \
+  "transcriptome_tmp_max_bytes" "transcriptome_tmp_max_files"
+
+# The container normally binds only the selected workspace. Bind an explicitly
+# configured getfastq cache at a stable in-container path so a cache outside the
+# workspace remains visible to Apptainer/Singularity/Docker jobs.
+if [[ -n "${transcriptome_getfastq_cache_dir}" ]]; then
+  if [[ "${transcriptome_getfastq_cache_dir}" != /* || \
+    "${transcriptome_getfastq_cache_dir}" == *[:,]* || \
+    "${transcriptome_getfastq_cache_dir}" == *$'\n'* || \
+    "${transcriptome_getfastq_cache_dir}" == */.. || \
+    "${transcriptome_getfastq_cache_dir}" == */../* ]]; then
+    echo "transcriptome_getfastq_cache_dir must be an absolute path without colons, commas, newlines or parent traversal." >&2
+    exit 1
+  fi
+  transcriptome_getfastq_cache_dir_host="${transcriptome_getfastq_cache_dir%/}"
+  if [[ -z "${transcriptome_getfastq_cache_dir_host}" || \
+    "${transcriptome_getfastq_cache_dir_host}" == "/" ]]; then
+    echo "transcriptome_getfastq_cache_dir must not be the filesystem root." >&2
+    exit 1
+  fi
+  transcriptome_assembly_output_host="${gg_workspace_dir%/}/output/transcriptome_assembly"
+  case "${transcriptome_getfastq_cache_dir_host}" in
+    "${transcriptome_assembly_output_host}"|"${transcriptome_assembly_output_host}"/*)
+      echo "transcriptome_getfastq_cache_dir must be outside the host transcriptome_assembly output: ${transcriptome_getfastq_cache_dir_host}" >&2
+      exit 1
+      ;;
+  esac
+  if [[ -e "${transcriptome_getfastq_cache_dir_host}" && \
+    ( ! -d "${transcriptome_getfastq_cache_dir_host}" || -L "${transcriptome_getfastq_cache_dir_host}" ) ]]; then
+    echo "transcriptome_getfastq_cache_dir is not a real directory: ${transcriptome_getfastq_cache_dir_host}" >&2
+    exit 1
+  fi
+  mkdir -p -- "${transcriptome_getfastq_cache_dir_host}"
+  if [[ -L "${transcriptome_getfastq_cache_dir_host}" || ! -d "${transcriptome_getfastq_cache_dir_host}" ]]; then
+    echo "Refusing an unsafe transcriptome getfastq cache directory: ${transcriptome_getfastq_cache_dir_host}" >&2
+    exit 1
+  fi
+  gg_add_container_bind_mount "${transcriptome_getfastq_cache_dir_host}:/gg_transcriptome_getfastq_cache"
+  transcriptome_getfastq_cache_dir="/gg_transcriptome_getfastq_cache"
+  echo "Persistent transcriptome getfastq cache bind: ${transcriptome_getfastq_cache_dir_host} -> ${transcriptome_getfastq_cache_dir}"
+fi
+
 # Forward config variables (including external overrides) into container environment.
-gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir"
-forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
+forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" \
+  "transcriptome_getfastq_cache_dir" \
+  "transcriptome_tmp_retention_days" "transcriptome_tmp_max_dirs" \
+  "transcriptome_tmp_max_bytes" "transcriptome_tmp_max_files"
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
 fi
