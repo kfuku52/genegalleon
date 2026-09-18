@@ -148,3 +148,25 @@ def test_resolution_refuses_to_overwrite_source(tmp_path):
     with pytest.raises(ValueError, match='must not overwrite'):
         resolution.resolve(fasta, gff, ref, fasta.parent)
     assert fasta.read_bytes() == original
+
+
+def test_padding_does_not_manufacture_an_in_frame_extension():
+    selected, reason, candidates = resolution.select_candidate('ATGAAA', 'ATGAAAC', phase=0)
+    assert all(value['accepted'] for value in candidates.values())
+    assert len(candidates['gff_genome']['sequence']) == 9  # includes two artificial Ns
+    assert selected == 'supplied' and reason == 'supplied_valid_unresolved_source_disagreement'
+
+
+def test_explicit_trans_spliced_cds_does_not_depend_on_utr_order(tmp_path):
+    from format_species_annotation.genbank import derive_cds_records_from_gff_and_genome
+    gff = tmp_path / 'input.gff'
+    gff.write_text('a\ts\tgene\t1\t6\t.\t+\t.\tID=g\n'
+                   'a\ts\tmRNA\t1\t6\t.\t+\t.\tID=tx;Parent=g\n'
+                   'a\ts\tfive_prime_UTR\t1\t3\t.\t+\t.\tParent=tx\n'
+                   'a\ts\tCDS\t1\t6\t.\t+\t0\tParent=tx;exception=trans-splicing;part=1/2\n'
+                   'b\ts\tCDS\t1\t3\t.\t+\t0\tParent=tx;exception=trans-splicing;part=2/2\n')
+    genome = tmp_path / 'genome.fa'
+    genome.write_text('>a\nATGAAA\n>b\nTAA\n')
+    records = list(derive_cds_records_from_gff_and_genome(
+        {'gff_path': gff, 'genome_path': genome, 'provider': 'direct', 'species_key': 'Plant_species'}))
+    assert len(records) == 1 and records[0][1] == 'ATGAAATAA'

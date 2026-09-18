@@ -423,8 +423,6 @@ def derive_cds_records_from_gff_and_genome(task):
             blocks, _mode = ordered_annotated_blocks(
                 ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in features),
                 transcript_id)
-            if utr_features_by_transcript.get(transcript_id):
-                raise ValueError(f"Trans-spliced UTR order is not represented for {transcript_id}")
             pieces = []
             for seqid, block_strand, start, end in blocks:
                 sequence = genome_sequences[genome_seqid_map.get(seqid, seqid)]

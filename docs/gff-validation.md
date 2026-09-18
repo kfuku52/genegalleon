@@ -85,8 +85,8 @@ stop-free alternatives is unresolved. Internal ambiguous bases and
 context-dependent stop codons are also unresolved; terminal partial codons may
 retain padding. The configured genetic code is used throughout.
 
-If both candidates pass, length breaks the tie only for an exact in-frame
-extension; other disagreements retain the supplied CDS and are reported.
+If both candidates pass, biological length before padding breaks the tie only
+for an exact in-frame extension; other disagreements retain the supplied CDS and are reported.
 If neither passes, that gene is excluded, while other genes continue.
 This is an analysis admission policy, not a claim that an excluded gene is a
 pseudogene. The report retains source hashes, phase, padding, internal-stop

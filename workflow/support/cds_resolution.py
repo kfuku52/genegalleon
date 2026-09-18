@@ -114,8 +114,9 @@ def select_candidate(supplied, derived=None, code=1, phase=None):
         a, b = (candidates[name]['sequence'] for name in valid)
         if a == b:
             reason = 'sources_agree'
-        elif extension_related(a, b):
-            chosen = max(valid, key=lambda name: len(candidates[name]['sequence']))
+        elif (candidates['supplied']['frame_offset'] == candidates['gff_genome']['frame_offset']
+              and extension_related(re.sub(r'\s+', '', supplied).upper(), re.sub(r'\s+', '', derived).upper())):
+            chosen = max(valid, key=lambda name: candidates[name]['source_length'])
             reason = 'longer_in_frame_extension'
         else:
             reason = 'supplied_valid_unresolved_source_disagreement'
