@@ -1058,6 +1058,15 @@ def apply_cds_resolution(traits, records, directory):
             for column in traits.columns:
                 if column in resolved_traits.columns:
                     traits.at[indices[identifier], column] = resolved_traits.at[identifier, column]
+            # A coordinate-verified resolved CDS has no 5' padding and its
+            # accepted translation starts in frame zero. Older resolution
+            # tables may still carry a contradictory nonzero source phase.
+            index = indices[identifier]
+            if (traits.at[index, 'structure_status'] == 'sequence_verified' and
+                    traits.at[index, 'cds_first_phase'] in (1, 2)):
+                traits.at[index, 'cds_first_phase'] = numpy.nan
+                traits.at[index, 'phase_status'] = 'conflicting'
+
 
 
 def main():

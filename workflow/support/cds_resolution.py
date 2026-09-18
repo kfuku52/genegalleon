@@ -179,6 +179,10 @@ def resolve_records(records, traits, genomic, code):
                 if compatible:
                     traits.at[index, 'structure_status'] = 'sequence_verified'
                     entry['structure_status'] = 'sequence_verified'
+                    if phase is not None and phase != chosen['frame_offset']:
+                        traits.at[index, 'cds_first_phase'] = float('nan')
+                        traits.at[index, 'phase_status'] = 'conflicting'
+                        entry['phase_status'] = 'selected_frame_disagrees_with_gff'
                 else:
                     disable_structure(traits, index, 'sequence_not_coordinate_matched')
                     entry['structure_status'] = 'sequence_not_coordinate_matched'

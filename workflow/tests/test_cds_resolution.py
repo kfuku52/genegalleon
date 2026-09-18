@@ -170,3 +170,28 @@ def test_explicit_trans_spliced_cds_does_not_depend_on_utr_order(tmp_path):
     records = list(derive_cds_records_from_gff_and_genome(
         {'gff_path': gff, 'genome_path': genome, 'provider': 'direct', 'species_key': 'Plant_species'}))
     assert len(records) == 1 and records[0][1] == 'ATGAAATAA'
+
+
+def test_valid_supplied_frame_does_not_inherit_conflicting_gff_phase(tmp_path):
+    from gff2genestat import apply_cds_resolution
+    fasta, gff, ref = inputs(tmp_path, utr=False)
+    gff.write_text(gff.read_text().replace('\t+\t0\tParent=tx1', '\t+\t1\tParent=tx1'))
+    output, traits_path, report_path = resolution.resolve(fasta, gff, ref, tmp_path / 'resolved')
+    traits = pd.read_csv(traits_path, sep='\t')
+    row = traits.iloc[0]
+    assert row.structure_status == 'sequence_verified' and row.feature_size == 9
+    assert row.phase_status == 'conflicting' and pd.isna(row.cds_first_phase)
+    decision = json.loads(report_path.read_text())['decisions'][0]
+    assert decision['selected_source'] == 'supplied'
+    assert decision['phase_status'] == 'selected_frame_disagrees_with_gff'
+    # Previously generated coordinate-matched tables also lose the invalid
+    # phase when consumed by the updated downstream workflow.
+    traits.loc[0, 'cds_first_phase'] = 1
+    traits.loc[0, 'phase_status'] = 'consistent'
+    traits.to_csv(traits_path, sep='\t', index=False)
+    meta_path = Path(str(output) + '.resolution.meta.json')
+    meta = json.loads(meta_path.read_text())
+    meta['traits_sha256'] = resolution.digest(traits_path)
+    meta_path.write_text(json.dumps(meta))
+    apply_cds_resolution(traits, list(resolution.fasta_records(output)), output.parent)
+    assert pd.isna(traits.iloc[0].cds_first_phase) and traits.iloc[0].phase_status == 'conflicting'
