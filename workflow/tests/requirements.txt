@@ -5,6 +5,7 @@ ruff
 numpy<2
 pandas
 biopython
+cdskit @ git+https://github.com/kfuku52/cdskit.git@master
 csubst @ git+https://github.com/kfuku52/csubst.git@master
 nwkit @ git+https://github.com/kfuku52/nwkit.git@master
 ete4

@@ -123,18 +123,21 @@ def test_wheel_inputs_resolve_only_the_temporary_build_and_install_offline(tmp_p
     before = requirements.read_bytes()
     source = "b" * 40
     nwkit_source = "c" * 40
-    prepare_test_wheels.prepare(tmp_path, source, nwkit_source)
+    cdskit_source = "d" * 40
+    prepare_test_wheels.prepare(tmp_path, source, nwkit_source, cdskit_source)
     assert requirements.read_bytes() == before
     build = (tmp_path / "build-requirements.txt").read_text()
     install = (tmp_path / "install-requirements.txt").read_text()
     assert f"csubst.git@{source}" in build
     assert f"nwkit.git@{nwkit_source}" in build
+    assert f"cdskit.git@{cdskit_source}" in build
+    assert "cdskit" in install.splitlines()
     assert "nwkit" in install.splitlines()
     assert "git+" not in install
     assert "csubst" in install.splitlines()
     assert json.loads((tmp_path / "source-identity.json").read_text())["csubst_sha"] == source
     assert json.loads((tmp_path / "source-identity.json").read_text())["nwkit_sha"] == nwkit_source
     with pytest.raises(ValueError, match="resolved"):
-        prepare_test_wheels.prepare(tmp_path, "master", nwkit_source)
+        prepare_test_wheels.prepare(tmp_path, "master", nwkit_source, cdskit_source)
     with pytest.raises(ValueError, match="resolved"):
-        prepare_test_wheels.prepare(tmp_path, source, "master")
+        prepare_test_wheels.prepare(tmp_path, source, "master", cdskit_source)
