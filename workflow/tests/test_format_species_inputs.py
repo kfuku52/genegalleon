@@ -2655,7 +2655,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     assert skipped["status"] == "skip"
 
 
-def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):
+def test_format_species_inputs_preserves_cds_despite_overlapping_utrs(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
     species_dir.mkdir(parents=True, exist_ok=True)
@@ -2705,7 +2705,7 @@ def test_format_species_inputs_derives_cds_excluding_overlapping_utrs(tmp_path):
     assert ">Arabidopsis_thaliana_gene1" in text
     assert ">Arabidopsis_thaliana_gene2" in text
     assert "CCCGGGTTT" in text
-    assert "ATGAAACCCGGGTTT" not in text
+    assert text.count("ATGAAACCCGGGTTT") == 2
 
 
 def test_format_species_inputs_rescue_overlap_merges_misassigned_gene_ids(tmp_path):

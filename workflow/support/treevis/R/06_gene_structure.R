@@ -7,6 +7,8 @@ treevis_gene_structure_data = function(tips, mode='compressed') {
     for (i in seq_len(nrow(tips))) {
         # Overlapping translation parts do not have an ordinary exon/intron
         # geometry. Keep their genomic coordinates for scaffold consumers.
+        if ('structure_status' %in% names(tips) && !is.na(tips[['structure_status']][i]) &&
+            tips[['structure_status']][i] %in% c('excluded_cds', 'sequence_not_coordinate_matched', 'cds_length_mismatch')) next
         if ('splice_mode' %in% names(tips) && !is.na(tips[['splice_mode']][i]) &&
             tips[['splice_mode']][i] %in% c('ribosomal-slippage', 'pseudogene', 'source-overlap', 'ordered-fragments')) next
         value = as.character(tips[['feature_blocks']][i])

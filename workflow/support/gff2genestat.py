@@ -4,6 +4,8 @@ import argparse
 import csv
 import datetime
 import gzip
+import hashlib
+import json
 import os
 import re
 import sys
@@ -16,12 +18,14 @@ import numpy
 import pandas
 
 try:
+    from content_digest_cache import cached_sha256_file
     from fasta_sequence_store import fasta_records
     from format_species_annotation.organelle import gff_organelle_seqids
     from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
     from species_labeling import extract_species_label, strip_species_label
 except ImportError:  # pragma: no cover - package import path used in tests
+    from .content_digest_cache import cached_sha256_file
     from .fasta_sequence_store import fasta_records
     from .format_species_annotation.organelle import gff_organelle_seqids
     from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
@@ -85,6 +89,9 @@ def build_arg_parser():
                         help="Require each selected CDS annotation to match its nucleotide FASTA length.")
     parser.add_argument("--phase-policy", choices=["strict", "report"], default="strict",
                         help="Report retains validated coordinates but marks conflicting phases unusable.")
+    parser.add_argument("--cds-resolution-dir", default="", help="Verified CDS resolution reports and coordinate traits.")
+    parser.add_argument("--structure-policy", choices=["strict", "report"], default="strict",
+                        help="Report conflicting UTRs and length-incompatible CDS structure as unavailable.")
     parser.add_argument("--require-matches", action="store_true",
                         help="Fail instead of publishing an empty table when no input IDs map.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
@@ -639,7 +646,7 @@ def select_longest_transcripts(gff):
 
 
 
-def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
+def attach_transcript_structure(selected_cds, gff, phase_policy="strict", structure_policy="strict"):
     """Attach only explicit UTRs from the exact transcript selected for CDS."""
     selected_cds = selected_cds.copy()
     utr_by_transcript = {}
@@ -652,26 +659,34 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
     annotation = {}
     first_phase = {}
     phase_status = {}
+    utr_status = {}
     for gene_id, cds in selected_cds.groupby("gene_id", sort=False):
         transcript = cds["selected_transcript"].unique()
         if len(transcript) != 1:
             raise ValueError(f"Multiple selected transcripts for {gene_id}")
         cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
         utr_rows = utr_by_transcript.get(transcript[0], [])
-        utr_blocks = ordered_feature_blocks(utr_rows, gene_id) if utr_rows else []
-        # Reject annotation overlap or a different contig/strand.
-        if set(cds_blocks) & set(utr_blocks):
-            raise ValueError(f"Overlapping CDS/UTR annotation for {gene_id}")
-        if splice_mode in {"trans-splicing", "ordered-fragments"}:
-            if utr_blocks:
-                raise ValueError(f"Trans-spliced UTR order is not represented for {gene_id}")
-        elif splice_mode in {"ribosomal-slippage", "pseudogene", "source-overlap"}:
-            for utr in utr_blocks:
-                if any(utr[:2] != block[:2] or (utr[2] <= block[3] and block[2] <= utr[3])
-                       for block in cds_blocks):
-                    raise ValueError(f'Conflicting CDS/UTR annotation for {gene_id}')
-        else:
-            ordered_feature_blocks(cds_blocks + utr_blocks, gene_id)
+        utr_status[gene_id] = "available"
+        try:
+            utr_blocks = ordered_feature_blocks(utr_rows, gene_id) if utr_rows else []
+            # Reject annotation overlap or a different contig/strand.
+            if set(cds_blocks) & set(utr_blocks):
+                raise ValueError(f"Overlapping CDS/UTR annotation for {gene_id}")
+            if splice_mode in {"trans-splicing", "ordered-fragments"}:
+                if utr_blocks:
+                    raise ValueError(f"Trans-spliced UTR order is not represented for {gene_id}")
+            elif splice_mode in {"ribosomal-slippage", "pseudogene", "source-overlap"}:
+                for utr in utr_blocks:
+                    if any(utr[:2] != block[:2] or (utr[2] <= block[3] and block[2] <= utr[3])
+                           for block in cds_blocks):
+                        raise ValueError(f'Conflicting CDS/UTR annotation for {gene_id}')
+            else:
+                ordered_feature_blocks(cds_blocks + utr_blocks, gene_id)
+        except ValueError as exc:
+            if structure_policy != "report":
+                raise
+            utr_blocks = []
+            utr_status[gene_id] = "conflicting:" + str(exc)
         annotation[gene_id] = ";".join(f"{block[2]}-{block[3]}" for block in utr_blocks)
         # Every known block phase must imply the same initial coding frame.
         # Deduplicated coordinates contribute length once, but all phase records
@@ -704,6 +719,7 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict"):
         first_phase[gene_id] = next(iter(implied_phases)) if len(implied_phases) == 1 else numpy.nan
         if len(implied_phases) > 1:
             sys.stderr.write(f"Conflicting CDS phases for {gene_id}; coordinates retained, coding frame unavailable.\n")
+    selected_cds["utr_status"] = selected_cds["gene_id"].map(utr_status)
     selected_cds["utr_blocks"] = selected_cds["gene_id"].map(annotation)
     selected_cds["cds_first_phase"] = selected_cds["gene_id"].map(first_phase)
     selected_cds["phase_status"] = selected_cds["gene_id"].map(phase_status)
@@ -785,7 +801,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
             continue
         by_gene.setdefault(gene_id, []).append((sequence, strand, start, end, attr))
     feature_types = gff.groupby(id_col, sort=False)["feature"].first().to_dict() if "feature" in gff else {}
-    metadata_columns = [c for c in ("selected_transcript", "utr_blocks", "cds_first_phase", "phase_status") if c in gff]
+    metadata_columns = [c for c in ("selected_transcript", "utr_blocks", "cds_first_phase", "phase_status", "utr_status") if c in gff]
     metadata = gff.groupby(id_col, sort=False)[metadata_columns].first().to_dict("index") if metadata_columns else {}
     rows = []
     for gene_id, group in by_gene.items():
@@ -807,6 +823,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
         rows.append(
             {
                 "gene_id": gene_id,
+                "structure_status": "not_evaluated",
                 "feature_size": length,
                 "num_intron": numpy.nan if splice_mode in {"trans-splicing", "ordered-fragments", "ribosomal-slippage", "pseudogene", "source-overlap"} else len(intron_offsets),
                 "intron_positions": ";".join(str(pos) for pos in intron_offsets),
@@ -817,6 +834,7 @@ def summarize_gene_features(gff, out_cols, id_col="gene_id"):
                 "feature_block_strands": ";".join(b[1] for b in blocks),
                 "transcript_junction_positions": ";".join(map(str, junction_offsets)),
                 "gff_transcript_id": metadata.get(gene_id, {}).get("selected_transcript", ""),
+                "utr_status": metadata.get(gene_id, {}).get("utr_status", "not_evaluated"),
                 "utr_blocks": metadata.get(gene_id, {}).get("utr_blocks", ""),
                 "cds_first_phase": metadata.get(gene_id, {}).get("cds_first_phase", numpy.nan),
                 "phase_status": metadata.get(gene_id, {}).get("phase_status", "not_evaluated"),
@@ -912,7 +930,7 @@ def read_gff_table(gff_path):
         return pandas.DataFrame(rows)
 
 
-def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict"):
+def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict"):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
     if os.stat(gff_path).st_size == 0:
@@ -938,7 +956,7 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         return pandas.DataFrame(columns=out_cols)
     print("Summarizing gene features: {}".format(datetime.datetime.now()), flush=True)
     if feature == "CDS":
-        gff_id = attach_transcript_structure(gff_id, gff, phase_policy=phase_policy)
+        gff_id = attach_transcript_structure(gff_id, gff, phase_policy=phase_policy, structure_policy=structure_policy)
     return summarize_gene_features(gff=gff_id, out_cols=out_cols)
 
 
@@ -988,6 +1006,60 @@ def cds_length_is_compatible_with_partial(row, observed):
     return observed == base
 
 
+def mark_incompatible_structures(traits, records):
+    """Keep sequence evidence separate from unsupported coordinate assignments."""
+    sequences = {identifier: sequence for identifier, _header, sequence in records}
+    for index, row in traits.iterrows():
+        sequence = sequences[row.gene_id]
+        size = int(row.feature_size)
+        tail = sequence[size:]
+        compatible = len(sequence) == size or (0 < len(tail) <= 2 and set(tail.upper()) <= {"N"})
+        if compatible:
+            traits.loc[index, "structure_status"] = "length_compatible"
+            continue
+        disable_structure(traits, index, "cds_length_mismatch")
+
+
+def disable_structure(traits, index, reason):
+    if "structure_status" not in traits or pandas.api.types.is_numeric_dtype(traits["structure_status"]):
+        traits["structure_status"] = traits.get("structure_status", pandas.Series(index=traits.index, dtype=object)).astype(object)
+    traits.loc[index, "structure_status"] = reason
+    for column in ("feature_size", "num_intron", "cds_first_phase", "start", "end"):
+        if column in traits:
+            traits.loc[index, column] = numpy.nan
+    for column in ("intron_positions", "feature_blocks", "utr_blocks", "chromosome", "strand",
+                   "feature_block_sequences", "feature_block_strands", "transcript_junction_positions"):
+        if column in traits:
+            if pandas.api.types.is_numeric_dtype(traits[column]):
+                traits[column] = traits[column].astype(object)
+            traits.loc[index, column] = ""
+
+
+def apply_cds_resolution(traits, records, directory):
+    sequences = {identifier: sequence for identifier, _header, sequence in records}
+    indices = {row.gene_id: index for index, row in traits.iterrows()}
+    species = {extract_species_label(identifier) for identifier in sequences}
+    for path in sorted(directory.glob('*.resolution.meta.json')):
+        if extract_species_label(path.name) not in species:
+            continue
+        report = json.loads(path.read_text())
+        traits_path = path.with_name(path.name.removesuffix('.resolution.meta.json') + '.traits.tsv')
+        if cached_sha256_file(traits_path)[0] != report['traits_sha256']:
+            raise ValueError(f'Changed CDS resolution traits: {traits_path.name}')
+        for source in report['contract']['sources'].values():
+            if cached_sha256_file(Path(source['path']))[0] != source['sha256']:
+                raise ValueError(f'Stale CDS resolution source: {Path(source["path"]).name}')
+        resolved_traits = pandas.read_csv(traits_path, sep="\t").set_index('gene_id')
+        for identifier in set(indices) & set(resolved_traits.index):
+            selected_hash = resolved_traits.at[identifier, 'cds_sequence_sha256']
+            if selected_hash != hashlib.sha256(sequences[identifier].encode('ascii')).hexdigest():
+                disable_structure(traits, indices[identifier], 'sequence_not_coordinate_matched')
+                continue
+            for column in traits.columns:
+                if column in resolved_traits.columns:
+                    traits.at[indices[identifier], column] = resolved_traits.at[identifier, column]
+
+
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -996,7 +1068,7 @@ def main():
     print("gff2genestat.py started: {}".format(datetime.datetime.now()))
 
     out_cols = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type", "gff_transcript_id", "utr_blocks", "cds_first_phase",
-                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status", "cds_partial"]
+                "splice_mode", "feature_block_sequences", "feature_block_strands", "transcript_junction_positions", "phase_status", "cds_partial", "utr_status", "structure_status"]
     gff_cols = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
     records = list(fasta_records(Path(args.seqfile)))
     seq_names = pandas.Series([identifier for identifier, _header, _sequence in records], dtype=str)
@@ -1042,6 +1114,7 @@ def main():
                 gff_cols=gff_cols,
                 out_cols=out_cols,
                 phase_policy=args.phase_policy,
+                structure_policy=args.structure_policy,
             )
             if df_tmp.shape[0] > 0:
                 frames.append(df_tmp)
@@ -1059,6 +1132,7 @@ def main():
                     gff_cols,
                     out_cols,
                     args.phase_policy,
+                    args.structure_policy,
                 ): (idx, gff_file)
                 for idx, (gff_file, seq_sp_values) in enumerate(tasks)
             }
@@ -1091,7 +1165,12 @@ def main():
     if args.validate_cds_length:
         if args.feature != "CDS":
             raise ValueError("--validate-cds-length requires --feature CDS")
-        validate_cds_lengths(df_all, records)
+        if args.structure_policy == "report":
+            mark_incompatible_structures(df_all, records)
+        else:
+            validate_cds_lengths(df_all, records)
+    if args.cds_resolution_dir:
+        apply_cds_resolution(df_all, records, Path(args.cds_resolution_dir))
     num_input = len(seq_names)
     num_output = df_all.shape[0]
     print("Number of input genes: {}".format(num_input), flush=True)

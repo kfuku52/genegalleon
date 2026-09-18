@@ -1645,6 +1645,12 @@ dir_sp_genome="${gg_workspace_input_dir}/species_genome"
 dir_sp_gff="${gg_workspace_input_dir}/species_gff"
 dir_sp_expression="${gg_workspace_input_dir}/species_expression"
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+if [[ -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
+  dir_sp_cds=$(python "${gg_support_dir}/cds_resolution.py" \
+    --source-dir "${dir_sp_cds}" \
+    --output-dir "${gg_workspace_output_dir}/species_cds_resolved" \
+    --view-dir "${gg_workspace_output_dir}/species_cds_resolved_views")
+fi
 dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"
 dir_sp_blastdb="${gg_workspace_output_dir}/species_cds_blastdb"
 dir_fasta_sequence_store="${gg_workspace_output_dir}/.gg_cache/fasta_sequence_store"
@@ -2670,7 +2676,8 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
 
   gff_cds_validation_args=()
   if [[ "${input_sequence_mode}" == "cds" ]]; then
-    gff_cds_validation_args+=(--validate-cds-length)
+    gff_cds_validation_args+=(--validate-cds-length --structure-policy report --phase-policy report
+      --cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved")
   fi
   python "${gg_support_dir}/gff2genestat.py" \
     "${gff_cds_validation_args[@]}" \

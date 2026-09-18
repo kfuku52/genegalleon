@@ -448,42 +448,11 @@ def derive_cds_records_from_gff_and_genome(task):
                 )
             )
             continue
-        utr_features = utr_features_by_transcript.get(transcript_id, ())
         strand = strands[0]
         transcript_gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
-        trimmed_features = []
-        for feature in features:
-            segments = [(feature["start"], feature["end"])]
-            for utr in utr_features:
-                if (
-                    utr["seqid"] != feature["seqid"]
-                    or utr["strand"] != feature["strand"]
-                    or utr["end"] < feature["start"]
-                    or feature["end"] < utr["start"]
-                ):
-                    continue
-                next_segments = []
-                for seg_start, seg_end in segments:
-                    if utr["end"] < seg_start or seg_end < utr["start"]:
-                        next_segments.append((seg_start, seg_end))
-                        continue
-                    if seg_start < utr["start"]:
-                        next_segments.append((seg_start, utr["start"] - 1))
-                    if utr["end"] < seg_end:
-                        next_segments.append((utr["end"] + 1, seg_end))
-                segments = [(seg_start, seg_end) for seg_start, seg_end in next_segments if seg_start <= seg_end]
-                if len(segments) == 0:
-                    break
-            for seg_start, seg_end in segments:
-                trimmed_features.append(
-                    {
-                        "seqid": feature["seqid"],
-                        "start": seg_start,
-                        "end": seg_end,
-                        "strand": feature["strand"],
-                        "gene_token": transcript_gene_token,
-                    }
-                )
+        # CDS coordinates define the candidate sequence. Contradictory UTR
+        # annotations must never silently delete coding bases.
+        trimmed_features = features
         if len(trimmed_features) == 0:
             continue
         trimmed_strands = sorted({feature["strand"] for feature in trimmed_features})
@@ -496,7 +465,11 @@ def derive_cds_records_from_gff_and_genome(task):
                 )
             )
             continue
-        ordered = sorted(trimmed_features, key=lambda item: item["start"], reverse=(strand == "-"))
+        blocks, _mode = ordered_annotated_blocks(
+            ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in trimmed_features),
+            transcript_id)
+        ordered = [{"seqid": seqid, "strand": block_strand, "start": start, "end": end,
+                    "gene_token": transcript_gene_token} for seqid, block_strand, start, end in blocks]
         pieces = []
         gene_token = ""
         for feature in ordered:

@@ -204,6 +204,20 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
   ) || exit 1
 fi
 
+# Preserve previous manifest-bound results before an explicitly requested rebuild.
+if [[ "${artifact_stale_policy:-stop}" == "rebuild" ]]; then
+  python "${gg_support_dir}/cds_resolution.py" --backup-family "${sp_ub}" --workspace "${gg_workspace_dir}"
+fi
+# Publish a separate, provenance-bound analysis input; retain original inputs.
+cds_resolution_dir="${gg_workspace_output_dir}/species_cds_resolved"
+cds_resolution_args=(--cds "${file_sp_cds}" --output-dir "${cds_resolution_dir}" --genetic-code "${genetic_code}")
+if [[ -s "${file_sp_gff}" ]]; then cds_resolution_args+=(--gff "${file_sp_gff}"); fi
+if [[ -s "${file_sp_genome}" ]]; then cds_resolution_args+=(--genome "${file_sp_genome}"); fi
+python "${gg_support_dir}/cds_resolution.py" "${cds_resolution_args[@]}"
+file_sp_cds="${cds_resolution_dir}/$(basename "${file_sp_cds}")"
+file_sp_cds_resolution_report="${file_sp_cds}.resolution.json"
+file_sp_cds_resolution_traits="${file_sp_cds}.traits.tsv"
+
 task="Gene trait extraction from gff files"
 disable_if_no_input_file "run_collect_gff_info" "${file_sp_gff}"
 gff_info_needs_update=0
@@ -212,6 +226,7 @@ gff_info_provenance_args+=(
   --input "cds=${file_sp_cds}"
   --input "parser=${gg_support_dir}/gff2genestat.py"
   --input "feature_structure=${gg_support_dir}/gff_feature_structure.py"
+  --input "cds_resolution=${file_sp_cds_resolution_report}"
   --output "gff_info=${file_sp_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
@@ -231,15 +246,7 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   mkdir -p input_gff
   cp_out "${file_sp_gff}" ./input_gff/
 
-  python "${gg_support_dir}/gff2genestat.py" \
-    --dir_gff ./input_gff \
-    --feature 'CDS' \
-    --multiple_hits 'longest' \
-    --phase-policy report \
-    --require-matches \
-    --seqfile "${file_sp_cds}" \
-    --ncpu "${GG_TASK_CPUS}" \
-    --outfile gff2genestat.tsv
+  cp_out "${file_sp_cds_resolution_traits}" gff2genestat.tsv
 
   if [[ -s gff2genestat.tsv ]]; then
     mv_out gff2genestat.tsv "${file_sp_gff_info}"

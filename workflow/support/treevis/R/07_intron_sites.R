@@ -24,6 +24,10 @@ treevis_intron_site_data = function(tips, seqs) {
             if (length(nongap) != length_cds) reason = 'CDS_length_mismatch'
         }
         if (is.na(reason) && trans) reason = 'trans_splicing'
+        if ('structure_status' %in% names(tips) && !is.na(tips[['structure_status']][i]) &&
+            tips[['structure_status']][i] %in% c('excluded_cds', 'sequence_not_coordinate_matched', 'cds_length_mismatch')) {
+            reason = as.character(tips[['structure_status']][i])
+        }
         if ('phase_status' %in% names(tips) && !is.na(tips[['phase_status']][i]) &&
             tips[['phase_status']][i] %in% c('conflicting', 'ribosomal-slippage', 'pseudogene', 'source-overlap', 'ordered-fragments')) {
             reason = as.character(tips[['phase_status']][i])

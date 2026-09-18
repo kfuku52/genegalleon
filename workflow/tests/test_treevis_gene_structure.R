@@ -178,3 +178,13 @@ stopifnot(any(vapply(trans_plot$layers,function(layer) identical(layer$aes_param
 if (nzchar(Sys.getenv('GG_TRANS_SPLICING_PLOT'))) {
     ggsave(Sys.getenv('GG_TRANS_SPLICING_PLOT'), trans_plot, width=5, height=3, dpi=180, bg="white")
 }
+
+unavailable = tips
+unavailable$structure_status = c('sequence_not_coordinate_matched','sequence_verified','sequence_verified',NA)
+resolved_structure = make_data(unavailable,'linear')
+stopifnot(!('plus' %in% resolved_structure$boxes$label), 'minus' %in% resolved_structure$boxes$label)
+unavailable_sites = site_tips
+unavailable_sites$structure_status = c('cds_length_mismatch',rep('sequence_verified',nrow(site_tips)-1))
+resolved_sites = genegalleon.treevis:::treevis_intron_site_data(unavailable_sites,seqs)
+stopifnot(!('a' %in% resolved_sites$events$node_name),
+          any(resolved_sites$diagnostics$node_name=='a' & resolved_sites$diagnostics$reason=='cds_length_mismatch'))

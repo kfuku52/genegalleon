@@ -2258,6 +2258,12 @@ species_tree_rooting_value=""
 
 # Directories
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+if [[ -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
+  dir_sp_cds=$(python "${gg_support_dir}/cds_resolution.py" \
+    --source-dir "${dir_sp_cds}" \
+    --output-dir "${gg_workspace_output_dir}/species_cds_resolved" \
+    --view-dir "${gg_workspace_output_dir}/species_cds_resolved_views")
+fi
 dir_sp_protein_input="$(species_protein_input_dir_path)"
 file_species_genetic_code="$(species_genetic_code_table_path)"
 file_species_genetic_code_resolved="${gg_workspace_downloads_dir}/tmp/species_genetic_code.resolved.tsv"

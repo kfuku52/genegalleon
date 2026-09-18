@@ -65,3 +65,38 @@ The source blocks and junction positions are retained, without assuming
 trans-splicing, a common scaffold, or a genomic intron count. Conventional
 structure and intron-site plots omit these models. Missing/contradictory part
 order and conflicting phases still follow the existing validation policy.
+
+## Automatic CDS resolution
+
+Genome annotation now validates CDS candidates before sequence analyses. It
+retains the original input FASTA/GFF and writes the selected CDS, coordinate
+traits and per-gene decisions under `workspace/output/species_cds_resolved`.
+Genome/gene evolution use a content-bound view of these resolved inputs when
+available. Run genome annotation before those analyses to resolve new inputs;
+a stale resolution is an error and must be regenerated, never silently reused.
+
+A supplied CDS is preferred if its translation passes. When a reference genome
+is available, exact GFF CDS blocks provide a second candidate. Explicit fragment
+order and strand are retained; overlapping UTRs never subtract coding bases.
+GFF phase constrains the reference candidate. Otherwise CDSKit selects padding,
+and GeneGalleon checks the resulting reading frame independently. Padding is
+recorded, never used to mask internal stops. A shifted frame with multiple
+stop-free alternatives is unresolved. Internal ambiguous bases and
+context-dependent stop codons are also unresolved; terminal partial codons may
+retain padding. The configured genetic code is used throughout.
+
+If both candidates pass, length breaks the tie only for an exact in-frame
+extension; other disagreements retain the supplied CDS and are reported.
+If neither passes, that gene is excluded, while other genes continue.
+This is an analysis admission policy, not a claim that an excluded gene is a
+pseudogene. The report retains source hashes, phase, padding, internal-stop
+counts, selection reason and coordinate usability. A CDS without exact
+coordinate correspondence remains usable for sequence analyses, but its
+intron/exon structure is unavailable. Conflicting UTRs alone disable UTR
+information, not an independently validated CDS.
+
+The standalone `cds_resolution.py --cds FASTA --gff GFF --genome FASTA
+--output-dir DIR --genetic-code 1` command uses the same policy. GFF and genome
+arguments are optional; they are required for coordinate-derived rescue.
+Existing artifact-provenance checks remain active: adopting a new resolution
+may require the explicit workflow `artifact_stale_policy=rebuild` setting.
