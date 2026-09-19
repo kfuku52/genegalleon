@@ -1,15 +1,17 @@
 # Temporary computation storage
 
 `GG_COMMON_TMP_ROOT` selects disposable workflow scratch storage. The default is
-`workspace` on every site, including NIG, Shirokane and audrey1. No hostname-based
-scratch override is applied. With the default repository workspace, paths are
-below `<repository>/workspace/output`; an explicit `gg_workspace_dir` changes
-that workspace root.
+`/tmp` on every site, including NIG, Shirokane and audrey1. No hostname-based
+scratch override is applied. This keeps large intermediate computation off the
+repository workspace and its quota. Set `GG_COMMON_TMP_ROOT=workspace` when a
+run must retain its intermediate files after the compute node is released. With
+workspace storage, paths are below `<repository>/workspace/output`; an explicit
+`gg_workspace_dir` changes that workspace root.
 
 | Value | Location |
 | --- | --- |
-| `workspace` (default) | Existing workflow-specific output `tmp` directories |
-| `/tmp` | Private GeneGalleon directories inside host `/tmp` |
+| `/tmp` (default) | Private GeneGalleon directories inside host `/tmp` |
+| `workspace` | Existing workflow-specific output `tmp` directories |
 | `/scratch/user` | Private GeneGalleon directories inside that existing directory |
 | `env` | Execution host's `TMPDIR`, resolved immediately before container launch |
 
