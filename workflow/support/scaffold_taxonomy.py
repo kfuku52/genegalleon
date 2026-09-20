@@ -75,7 +75,7 @@ def resolve_host_taxid(explicit, gff, species, ncbi):
     # An explicit unidentified species label identifies only its genus. Retain
     # that resolution: lower ranks remain unresolved in RankResolver.
     unknown_species = re.fullmatch(r"([A-Z][a-z]+) sp\.? unknown", name)
-    if not ids and unknown_species:
+    if unknown_species:
         genus = unknown_species[1]
         genus_ids = ncbi.get_name_translator([genus]).get(genus, [])
         if len(genus_ids) == 1 and ncbi.get_rank(genus_ids).get(genus_ids[0]) == "genus":

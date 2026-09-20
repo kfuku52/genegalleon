@@ -44,6 +44,19 @@ def test_dated_tree_plot_accepts_public_unit_nhx_and_figtree(tmp_path, text):
     assert source.read_text() == text
 
 
+def test_dated_tree_plot_drops_ci_when_rounded_tree_is_slightly_non_ultrametric(tmp_path):
+    source, plot = tmp_path / "rounded.nhx", tmp_path / "rounded.pdf"
+    source.write_text(
+        "((A:10.000000,B:9.999000)named:20.000000[&&NHX:age=10:age_ci_low=8:"
+        "age_ci_high=12:age_ci_kind=HPD:age_ci_level=0.95],C:30.000000);"
+    )
+    result = run(sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", source, "--outfile", plot)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "slightly non-ultrametric" in result.stderr
+    assert plot.read_bytes().startswith(b"%PDF-")
+    assert source.read_text().startswith("((A:10.000000")
+
+
 @pytest.mark.parametrize("candidate_method,reason", [
     ("mad", "mad_compatible_with_reconciliation"),
     ("midpoint", "midpoint_compatible_with_reconciliation"),

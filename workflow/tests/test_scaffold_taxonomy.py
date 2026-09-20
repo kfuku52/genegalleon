@@ -397,3 +397,15 @@ def test_explicit_unknown_species_resolves_only_genus():
     ncbi.get_rank = lambda ids: {3493: "species"}
     with pytest.raises(ValueError, match="resolve uniquely"):
         scaffold.resolve_host_taxid(None, None, "Ficus_sp_unknown", ncbi)
+
+
+def test_ambiguous_unknown_species_label_still_resolves_unique_genus():
+    class Taxonomy:
+        def get_name_translator(self, names):
+            mapping = {"Ficus sp unknown": [101, 102], "Ficus": [3493]}
+            return {name: mapping.get(name, []) for name in names}
+
+        def get_rank(self, ids):
+            return {3493: "genus"}
+
+    assert scaffold.resolve_host_taxid(None, None, "Ficus_sp_unknown", Taxonomy()) == 3493
