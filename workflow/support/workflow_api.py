@@ -296,6 +296,11 @@ def relocate_contract(args, workspace_root):
 
 
 def preflight_step(argv, workspace_root=None, stale_policy=None):
+    with provenance.runtime_support_root(Path(__file__).resolve().parent):
+        return _preflight_step(argv, workspace_root, stale_policy)
+
+
+def _preflight_step(argv, workspace_root=None, stale_policy=None):
     if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
         raise ValueError("each contract must be a list of provenance needs-run arguments")
     if any(value.split("=", 1)[0] in {"--dry-run", "--help", "-h"} for value in argv):

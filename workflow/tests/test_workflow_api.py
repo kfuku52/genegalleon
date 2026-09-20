@@ -111,6 +111,35 @@ def test_proposed_parameter_changes_and_explicit_rebuild_policy(project):
         assert cli(PROVENANCE, "needs-run", *changed, "--stale-policy", policy).returncode == row["runtime_exit_code"]
 
 
+def test_preflight_maps_container_support_inputs_to_the_active_runtime(tmp_path):
+    workspace = tmp_path / "workspace"
+    root = workspace / "output" / "orthogroup"
+    source = root / "rooted_tree" / "OG0001_root.nwk"
+    output = root / "stat_branch" / "OG0001_stat.branch.tsv"
+    manifest = root / "artifact_provenance" / "OG0001.summary_statistics.json"
+    source.parent.mkdir(parents=True)
+    output.parent.mkdir(parents=True)
+    source.write_text("(A,B);\n")
+    output.write_text("branch_id\tnode_name\n0\tA\n")
+    parser = SUPPORT / "gff2genestat.py"
+    argv = ["--workspace-root", str(workspace), "--logical-root", str(root),
+            "--manifest", str(manifest), "--step", "summary_statistics",
+            "--family-id", "OG0001", "--input", f"tree={source}",
+            "--input", f"parser={parser}", "--output", f"table={output}",
+            "--parameter", "mode=a"]
+    assert cli(PROVENANCE, "record", *argv).returncode == 0
+    payload = json.loads(manifest.read_text())
+    parser_entry = next(item for item in payload["inputs"] if item["label"] == "parser")
+    parser_entry["path"] = "/script/support/gff2genestat.py"
+    manifest.write_text(json.dumps(payload))
+    container_argv = [value.replace(str(parser), "/script/support/gff2genestat.py") for value in argv]
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"schema": "genegalleon-preflight-plan-v1", "contracts": [container_argv]}))
+    row = query("preflight", "--plan", plan)["contracts"][0]
+    assert row["state"] == "verified_current"
+    assert not query("preflight", "--plan", plan)["blocked"]
+
+
 def test_adoption_is_not_relabelled_as_historical_generation_proof(project):
     _, _, _, _, _, argv, plan = project
     assert cli(PROVENANCE, "needs-run", *argv).returncode == 1

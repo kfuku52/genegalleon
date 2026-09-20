@@ -53,6 +53,7 @@ STALE_STOP = 3
 CHUNK_SIZE = 1024 * 1024
 MANIFEST_SUBDIR = "artifact_provenance"
 _LOGICAL_OBSERVATION_STORE = contextvars.ContextVar("genegalleon_logical_observation_store", default=None)
+_RUNTIME_SUPPORT_ROOT = contextvars.ContextVar("genegalleon_runtime_support_root", default=None)
 DEFAULT_REQUIRED_STEP_SUBDIRS = {
     "iqtree_anc": "iqtree_anc",
     "csubst": "csubst_b",
@@ -68,6 +69,35 @@ class ProvenanceError(RuntimeError):
 
 class RecoveryNotApplicable(ProvenanceError):
     """A derived candidate does not match the recorded artifact contract."""
+
+
+@contextlib.contextmanager
+def runtime_support_root(path: Path):
+    """Resolve container support paths against the active host runtime.
+
+    Runtime provenance records intentionally retain the container path
+    ``/script/support``.  The read-only API runs beside the container, so it
+    needs an explicit, scoped mapping to the immutable runtime support tree
+    when auditing those records.
+    """
+    root = Path(path).resolve(strict=True)
+    token = _RUNTIME_SUPPORT_ROOT.set(root)
+    try:
+        yield
+    finally:
+        _RUNTIME_SUPPORT_ROOT.reset(token)
+
+
+def _runtime_path(path: Path) -> Path:
+    root = _RUNTIME_SUPPORT_ROOT.get()
+    if root is None:
+        return path
+    container_root = Path("/script/support")
+    try:
+        relative = path.absolute().relative_to(container_root)
+    except ValueError:
+        return path
+    return root.joinpath(*relative.parts)
 
 
 @contextlib.contextmanager
@@ -96,12 +126,14 @@ def observation_artifact(path):
 
 
 def declared_path_exists(path):
+    path = _runtime_path(Path(path))
     observe_path(path)
     return os.path.lexists(path) or observation_artifact(path) is not None
 
 
 @contextlib.contextmanager
 def open_declared_binary(path):
+    path = _runtime_path(Path(path))
     observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked declared paths are unsupported: {path}")
@@ -188,6 +220,7 @@ def sha256_stream(handle: BinaryIO) -> tuple[str, int]:
 
 
 def sha256_path(path: Path) -> tuple[str, int, str]:
+    path = _runtime_path(path)
     observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
@@ -261,7 +294,7 @@ def resolve_reference(reference: dict[str, str], logical_root: Path, workspace_r
         path = Path(raw_path)
         if not path.is_absolute():
             raise ProvenanceError(f"Expected an absolute provenance path: {raw_path!r}")
-        return path
+        return _runtime_path(path)
     raise ProvenanceError(f"Unsupported provenance path scope: {scope!r}")
 
 
