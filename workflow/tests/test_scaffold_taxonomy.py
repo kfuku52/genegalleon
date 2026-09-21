@@ -208,7 +208,9 @@ def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path, raw_gff_present):
     if raw_gff_present:
         (raw_gff_dir / "Host_species.gff").write_text(
             "s\ttest\tgene\t1\t9\t.\t+\t.\tID=Host_species_x\n"
-            "s\ttest\tgene\t20\t28\t.\t+\t.\tID=Host_species_h\n")
+            "s\ttest\tgene\t20\t28\t.\t+\t.\tID=Host_species_h\n"
+            "s\ttest\tCDS\t1\t9\t.\t+\t0\tID=cds_x;Parent=Host_species_x\n"
+            "s\ttest\tCDS\t20\t28\t.\t+\t0\tID=cds_h;Parent=Host_species_h\n")
     info_dir = workspace / "output/species_gff_info"
     info_dir.mkdir(parents=True)
     pd.DataFrame({"gene_id": ["Host_species_x", "Host_species_h"], "chromosome": ["s", "s"]}).to_csv(
@@ -224,7 +226,8 @@ def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path, raw_gff_present):
     core = root / "workflow/core/gg_genome_annotation_core.sh"
     env = {key: value for key, value in os.environ.items() if not key.startswith(("CONDA", "MAMBA"))}
     env.update({flag: "0" for flag in set(re.findall(r"\brun_[a-z0-9_]+\b", core.read_text()))})
-    env.update(gg_workspace_dir=str(workspace), GG_ARRAY_TASK_ID="1", run_scaffold_taxonomy="1", delete_tmp_dir="0",
+    # This fixture launches the core directly, without the scratch supervisor.
+    env.update(GG_COMMON_TMP_ROOT="workspace", gg_workspace_dir=str(workspace), GG_ARRAY_TASK_ID="1", run_scaffold_taxonomy="1", delete_tmp_dir="0",
                gg_support_dir=str(root / "workflow/support"))
     env["PATH"] = f"{_install_fake_conda(tmp_path)}{os.pathsep}{env['PATH']}"
     scaffold_output = workspace / "output/species_scaffold_taxonomy/Host_species_scaffold_taxonomy.tsv"

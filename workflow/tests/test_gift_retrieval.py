@@ -314,6 +314,8 @@ def test_workflow_output_cache_tracks_custom_mapping_contents(tmp_path):
     env = fixture._core_env(workspace, input_dir, fake_bin, "single")
     env.update({key: "0" for key in env if key.startswith("run_")})
     env.update(
+        # This fixture launches the core directly, without the scratch supervisor.
+        GG_COMMON_TMP_ROOT="workspace",
         run_generate_species_trait="1",
         overwrite="0",
         download_manifest=str(manifest),

@@ -81,6 +81,8 @@ def test_fractionation_bias_core_runs_pair_and_publishes_bundle(tmp_path: Path, 
     env = os.environ.copy()
     env.update(
         {
+            # Direct core execution uses workspace scratch; external mode adds its supervisor below.
+            "GG_COMMON_TMP_ROOT": "workspace",
             "gg_workspace_dir": str(workspace),
             "GG_ARRAY_TASK_ID": "1",
             "GG_JOB_ID": "test",
@@ -195,6 +197,8 @@ def test_fractionation_bias_core_runs_self_mode_into_genome_evolution(tmp_path: 
     env = os.environ.copy()
     env.update(
         {
+            # This fixture launches the core directly, without the scratch supervisor.
+            "GG_COMMON_TMP_ROOT": "workspace",
             "gg_workspace_dir": str(workspace),
             "GG_ARRAY_TASK_ID": "1",
             "GG_JOB_ID": "test",
