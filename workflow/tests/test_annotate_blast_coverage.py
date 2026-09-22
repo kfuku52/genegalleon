@@ -258,7 +258,7 @@ def test_cli_writes_expected_columns(tmp_path):
     df.to_csv(infile, sep="\t", index=False)
 
     completed = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--in", str(infile), "--out", str(outfile)],
+        [sys.executable, str(SCRIPT_PATH), "--in", str(infile), "--out", str(outfile), "--ncpu", "2"],
         capture_output=True,
         text=True,
         check=False,
@@ -269,54 +269,6 @@ def test_cli_writes_expected_columns(tmp_path):
     for col in ("qhitcov", "shitcov", "qjointcov", "num_hits", "min_evalue"):
         assert col in out.columns
     assert out["qjointcov"].iloc[0] == 0.1
-    assert out["num_hits"].iloc[0] == 1
-
-
-def test_cli_accepts_ncpu(tmp_path):
-    infile = tmp_path / "in.tsv"
-    outfile = tmp_path / "out.tsv"
-
-    df = pandas.DataFrame(
-        [
-            {
-                "qacc": "q1",
-                "sacc": "s1",
-                "pident": "80.0",
-                "length": 10,
-                "mismatch": 1,
-                "gapopen": 0,
-                "qstart": 1,
-                "qend": 10,
-                "sstart": 1,
-                "send": 10,
-                "evalue": "1e-6",
-                "bitscore": "50",
-                "frames": "0/1",
-                "qlen": 100,
-                "slen": 400,
-            }
-        ]
-    )
-    df.to_csv(infile, sep="\t", index=False)
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT_PATH),
-            "--in",
-            str(infile),
-            "--out",
-            str(outfile),
-            "--ncpu",
-            "2",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-    out = pandas.read_csv(outfile, sep="\t")
-    assert len(out) == 1
     assert out["num_hits"].iloc[0] == 1
 
 

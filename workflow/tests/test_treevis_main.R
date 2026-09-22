@@ -777,22 +777,6 @@ if (!all(c("x", "y", "polygon_id", "motif_altid", "alpha_value") %in% colnames(p
   stop("get_df_polygon NA-y handling returned unexpected schema.")
 }
 
-# 22) merge_overlap_group: start/end reversal should be normalized safely.
-df_merge_rev <- data.frame(
-  label = c("g1", "g1"),
-  motif_altid = c("M1", "M1"),
-  start = c(10, 6),
-  end = c(5, 12),
-  strand = c("+", "-"),
-  y = c(1, 1),
-  stringsAsFactors = FALSE
-)
-mg_rev <- merge_overlap_group(df_merge_rev, merge_level = "TF")
-if (nrow(mg_rev) != 1) stop("merge_overlap_group should merge overlapping reversed-coordinate intervals.")
-if (!(mg_rev$start[1] == 5 && mg_rev$end[1] == 12)) {
-  stop("merge_overlap_group did not normalize reversed start/end correctly.")
-}
-
 # 23) add_motif_colors: NA-only motif IDs should be handled without size mismatch errors.
 df_color_na <- data.frame(motif_altid = NA_character_, stringsAsFactors = FALSE)
 colored_na <- add_motif_colors(df_color_na, min_count = 2)
@@ -827,12 +811,13 @@ df_merge_bridge <- data.frame(
   motif_altid = c("M1", "M1", "M1"),
   start = c(10, 12, 100),
   end = c(11, 13, 1),
-  strand = c("+", "+", "+"),
+  strand = c("+", "+", "-"),
   y = c(1, 1, 1),
   stringsAsFactors = FALSE
 )
 mg_bridge <- merge_overlap_group(df_merge_bridge, merge_level = "TF")
 if (nrow(mg_bridge) != 1) stop("merge_overlap_group should merge intervals connected by a reversed wide interval.")
+stopifnot(mg_bridge$start[1] == 1, mg_bridge$end[1] == 100)
 
 # 26) add_complete_overlap_groups: ncpu path should match serial output.
 df_overlap_parallel <- data.frame(

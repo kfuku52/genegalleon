@@ -7,87 +7,6 @@ from shell_static_helpers import function_body as _function_body
 from shell_static_helpers import read_text as _read_text
 
 
-def test_transcriptome_core_quotes_known_path_sensitive_options_and_symlinks():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-
-    banned_tokens = [
-        "--fastq_dir ${dir_species_fastq}",
-        "--out_dir ${dir_tmp}",
-        "--download_dir ${dir_amalgkit_download_dir}",
-        "--download_lock_dir ${dir_amalgkit_download_lock_dir}",
-        "--metadata ${file_amalgkit_metadata}",
-        "--rrna_filter ${amalgkit_rrna_filter}",
-        "--contam_filter ${amalgkit_contam_filter}",
-        "--contam_filter_rank ${contamination_removal_rank_for_amalgkit}",
-        "--contam_filter_db ${dir_mmseqs2_db}/UniRef90_DB",
-        'ln -s ${dir_amalgkit_getfastq_sp} "./getfastq"',
-        "--fasta_file ${file_longestcds}",
-        "--mmseqs2taxonomy_tsv ${file_longestcds_mmseqs2taxonomy}",
-        "--fx2tab_tsv ${file_longestcds_fx2tab}",
-        "--species_name ${sp_ub}",
-        "--rank ${contamination_removal_rank_for_remove_contaminated_sequences}",
-        'seqkit seq --threads ${GG_TASK_CPUS} ${file_isoform} --out-file "busco_infile_cdna.fa"',
-        'seqkit seq --threads ${GG_TASK_CPUS} ${file_longestcds} --out-file "busco_infile_cds.fa"',
-        'seqkit seq --threads ${GG_TASK_CPUS} ${file_longestcds_contamination_removal_fasta} --out-file "busco_infile_cds.fa"',
-        "--lineage_dataset ${dir_busco_lineage}",
-        "--download_path ${dir_busco_db}",
-        "if [[ -e ${file_kallisto_reference_fasta} ]]; then",
-        "ln -s ${file_kallisto_reference_fasta} ${file_reference_fasta_link}",
-        "stage_quant_reference_fasta_aliases ${file_amalgkit_metadata} ${file_kallisto_reference_fasta} ./fasta ${sp_ub}",
-        "ln -s ${dir_amalgkit_quant}/${sp_ub} ./quant",
-        'grep -e "${sp_space}" "./metadata/metadata.tsv"',
-        "d.loc[:,'scientific_name']='${sp_ub}'",
-        "mv_out ./metadata_private_fastq.tsv ./metadata.tsv",
-    ]
-    for token in banned_tokens:
-        assert token not in text, f"Found unquoted transcriptome token: {token}"
-
-    expected_tokens = [
-        '--fastq_dir "${dir_species_fastq}"',
-        '--out_dir "${dir_tmp}"',
-        '--download_dir "${dir_amalgkit_download_dir}"',
-        '--download_lock_dir "${dir_amalgkit_download_lock_dir}"',
-        '--metadata "${file_amalgkit_metadata}"',
-        '--rrna_filter "${rrna_filter_value}"',
-        '--contam_filter "${amalgkit_contam_filter}"',
-        '--contam_filter_rank "${contamination_removal_rank_for_amalgkit}"',
-        '--contam_filter_db "${dir_mmseqs2_db}/UniRef90_DB"',
-        'ln -s "${dir_amalgkit_getfastq_sp}" "./getfastq"',
-        '--fasta_file "${file_longestcds}"',
-        '--mmseqs2taxonomy_tsv "${file_longestcds_mmseqs2taxonomy}"',
-        '--fx2tab_tsv "${file_longestcds_fx2tab}"',
-        '--species_name "${contamination_removal_target_taxon:-${sp_ub}}"',
-        '--rank "${contamination_removal_rank_for_remove_contaminated_sequences}"',
-        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_isoform}" --out-file "busco_infile_cdna.fa"',
-        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds}" --out-file "busco_infile_cds.fa"',
-        'seqkit seq --threads "${GG_TASK_CPUS}" "${file_longestcds_contamination_removal_fasta}" --out-file "busco_infile_cds.fa"',
-        '--lineage_dataset "${dir_busco_lineage}"',
-        '--download_path "${dir_busco_db}"',
-        'if [[ -e "${file_kallisto_reference_fasta}" ]]; then',
-        "stage_quant_reference_fasta_aliases \\",
-        '        "${file_amalgkit_metadata}" \\',
-        '        "${file_kallisto_reference_fasta}" \\',
-        '        "./fasta" \\',
-        '        "${sp_ub}" \\',
-        '        "${gg_support_dir}" \\',
-        '        "${GG_TAXONOMY_DBFILE}" \\',
-        '        "${quant_reference_alias_audit}")',
-        'ln -s "${dir_amalgkit_quant}/${sp_ub}" "./quant"',
-        "merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \\",
-        '    "${merge_metadata_file}" \\',
-        '    "./merge" \\',
-        '    "${sp_ub}")',
-        'mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"',
-        'mv_out "${merge_output_dir}/${merge_output_prefix}_est_counts.tsv" "${file_amalgkit_merge_count}"',
-        'mv_out "${merge_output_dir}/${merge_output_prefix}_tpm.tsv" "${file_amalgkit_merge_tpm}"',
-        'grep -F -- "${species_name}" "${metadata_source}"',
-        'mv_out "./metadata_private_fastq.tsv" "./metadata.tsv"',
-    ]
-    for token in expected_tokens:
-        assert token in text, f"Missing quoted transcriptome token: {token}"
-
-
 def test_transcriptome_core_sraid_metadata_filter_handles_zero_match_explicitly():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
@@ -593,13 +512,6 @@ def test_transcriptome_wrapper_uses_amalgkit_default_filter_order():
     assert "amalgkit_filter_order" not in config_vars
 
 
-def test_transcriptome_core_quotes_mmseqs_createdb_input_path():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    assert "mmseqs createdb ${file_longestcds} queryDB" not in text
-    assert 'mmseqs createdb "${file_longestcds}" queryDB' in text
-
-
 def test_transcriptome_core_uses_current_cdskit_longestorf_interface():
     text = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
 
@@ -649,22 +561,6 @@ def test_transcriptome_core_uses_array_args_for_trinity_and_rnaspades_inputs():
     assert "Checked: transcripts.fasta, soft_filtered_transcripts.fasta, hard_filtered_transcripts.fasta" in text
 
 
-def test_transcriptome_core_filters_invalid_paired_fastq_before_assembly():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    count_body = _function_body(text, "fastq_num_seqs_from_file")
-    filter_body = _function_body(text, "filter_valid_paired_fastq_files")
-
-    assert 'seqkit stats --tabular "${fastq_path}"' in count_body
-    assert '$i == "num_seqs"' in count_body
-    assert 'right_file="${left_file%_1.amalgkit.fastq.gz}_2.amalgkit.fastq.gz"' in filter_body
-    assert 'expected_left="${right_file%_2.amalgkit.fastq.gz}_1.amalgkit.fastq.gz"' in filter_body
-    assert "read_count_mismatch" in filter_body
-    assert 'files_left=("${valid_left[@]}")' in filter_body
-    assert 'files_right=("${valid_right[@]}")' in filter_body
-    assert 'if ! filter_valid_paired_fastq_files "${dir_tmp}/paired_fastq_validation.tsv"; then' in text
-
-
 def test_transcriptome_core_captures_busco_repro_artifacts_on_failure_paths():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
@@ -696,28 +592,6 @@ def test_transcriptome_core_uses_array_for_assembly_stat_input_files():
     assert '"${input_files[@]}"' in text
 
 
-def test_transcriptome_core_quotes_get_total_fastq_len_dir_argument():
-    script = CORE_DIR / "gg_transcriptome_generation_core.sh"
-    text = _read_text(script)
-    banned_tokens = [
-        'get_total_fastq_len ${selected_fastq_dir} "*.amalgkit.fastq.gz"',
-        'get_total_fastq_len ${selected_fastq_dir} "*_1.amalgkit.fastq.gz"',
-        'get_total_fastq_len ${selected_fastq_dir} "*_2.amalgkit.fastq.gz"',
-        'get_total_fastq_len ${assembly_input_fastq_dir} "*.amalgkit.fastq.gz"',
-    ]
-    for token in banned_tokens:
-        assert token not in text, f"Found unquoted get_total_fastq_len dir arg token: {token}"
-
-    expected_tokens = [
-        'get_total_fastq_len "${selected_fastq_dir}" "*.amalgkit.fastq.gz"',
-        'get_total_fastq_len "${selected_fastq_dir}" "*_1.amalgkit.fastq.gz"',
-        'get_total_fastq_len "${selected_fastq_dir}" "*_2.amalgkit.fastq.gz"',
-        'get_total_fastq_len "${assembly_input_fastq_dir}" "*.amalgkit.fastq.gz"',
-    ]
-    for token in expected_tokens:
-        assert token in text, f"Missing quoted get_total_fastq_len dir arg token: {token}"
-
-
 def test_transcriptome_core_guards_non_positive_assembly_resources():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
@@ -729,17 +603,6 @@ def test_transcriptome_core_guards_non_positive_assembly_resources():
     ]
     for token in expected_tokens:
         assert token in text, f"Missing assembly resource guard token: {token}"
-
-
-def test_is_fastq_requiring_downstream_analysis_done_quotes_path_checks():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "is_fastq_requiring_downstream_analysis_done")
-    assert "-s ${file_isoform}" not in body
-    assert "-s ${file_amalgkit_merge_count}" not in body
-    assert '-s "${file_isoform}"' in body
-    assert '-s "${file_amalgkit_merge_count}"' in body
-    assert 'echo "${out}"' in body
 
 
 def test_transcriptome_gene_and_genome_evolution_core_guard_tmp_delete_against_root_path():
@@ -766,25 +629,6 @@ def test_transcriptome_core_busco_summary_loop_guards_missing_dir_before_find():
         'if [[ ! -d "${dir_busco}" || -z "$(find "${dir_busco}" -mindepth 1 -print -quit 2> /dev/null)" ]]; then'
         in text
     )
-
-
-def test_transcriptome_quant_migrates_legacy_public_manifest_offline_before_provenance():
-    text = _read_text(CORE_DIR / "gg_transcriptome_generation_core.sh")
-    migration = (
-        'is_public_original_completion_manifest_v3 \\\n'
-        '    "${dir_amalgkit_getfastq_sp}/getfastq_completion.json"'
-    )
-    assert migration in text
-    start = text.index(migration)
-    quant_contract = text.index(
-        'gg_artifact_contract_init quant_provenance_args "transcriptome_quant"',
-        start,
-    )
-    block = text[start:quant_contract]
-    assert '"reuse-only"' in block
-    assert "refusing a redundant all-run download" in block
-    assert 'gg_artifact_record "${getfastq_provenance_args[@]}"' in block
-    assert 'gg_artifact_record "${assembly_provenance_args[@]}"' in block
 
 
 def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():

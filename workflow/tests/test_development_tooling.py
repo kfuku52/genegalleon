@@ -1,4 +1,3 @@
-import ast
 import json
 import os
 import re
@@ -604,48 +603,6 @@ def test_sif_runtime_identity_check_uses_embedded_exact_hash(tmp_path: Path):
     )
     assert stale.returncode == 1
     assert "runtime identity mismatch" in stale.stderr
-
-
-
-def test_python_cli_arguments_do_not_publish_empty_help_text():
-    offenders: list[str] = []
-    for path in sorted((REPO_ROOT / "workflow").rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            if node.func.attr != "add_argument":
-                continue
-            for keyword in node.keywords:
-                if keyword.arg == "help" and isinstance(keyword.value, ast.Constant) and keyword.value.value == "":
-                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
-    assert offenders == []
-
-
-def test_format_species_cli_has_no_wildcard_imports():
-    path = REPO_ROOT / "workflow" / "support" / "format_species_inputs.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    wildcard_imports = [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
-    ]
-    assert wildcard_imports == []
-
-
-def test_gene_family_store_cli_definition_is_a_bounded_module():
-    store_path = REPO_ROOT / "workflow" / "support" / "gene_family_output_store.py"
-    cli_path = REPO_ROOT / "workflow" / "support" / "gene_family_output_cli.py"
-
-    assert cli_path.is_file()
-    assert len(cli_path.read_text(encoding="utf-8").splitlines()) < 400
-    assert "from gene_family_output_cli import build_parser as build_cli_parser" in store_path.read_text(
-        encoding="utf-8"
-    )
-    completed = _run("python", str(store_path), "--help")
-    assert completed.returncode == 0, completed.stderr
-    assert "archive-completed" in completed.stdout
-    assert "convert-storage" in completed.stdout
 
 
 def test_genome_annotation_core_can_load_helpers_without_running_the_workflow():

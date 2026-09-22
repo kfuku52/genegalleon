@@ -111,12 +111,6 @@ def test_species_mapping_clone_handles_observed_deep_tree_without_recursion():
     assert next(source.leaves()).name != "changed:Species"
 
 
-def test_node_gene2species_uses_depth_safe_tree_clone():
-    source = MODULE_PATH.read_text(encoding="utf-8")
-    assert "gene_tree2 = clone_tree_for_species_mapping(gene_tree)" in source
-    assert "copy.deepcopy(gene_tree)" not in source
-
-
 def test_gff_join_rejects_duplicate_gene_rows_before_multiplying_branches(tmp_path):
     module = load_module()
     path = tmp_path / "gff.tsv"

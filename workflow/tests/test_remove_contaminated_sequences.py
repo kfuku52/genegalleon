@@ -1,4 +1,3 @@
-import numpy
 import pandas
 
 from workflow.support.remove_contaminated_sequences import (
@@ -68,12 +67,3 @@ def test_resolve_lineage_rank_index_raises_clear_error_when_rank_absent():
         assert "Requested rank 'class' was not found" in str(exc)
     else:
         raise AssertionError("Expected ValueError for missing rank")
-
-
-def test_aligned_taxid_fallback_logic_matches_expected():
-    lineage_to_rank_taxid = {"2;10;70": 70, "2;10;71": 0, "nan": -1}
-    lineage = numpy.array(["2;10;70", "2;10;71", "nan"])
-    lca = numpy.array([1000, 1001, 1002])
-    rank_taxid = numpy.array([lineage_to_rank_taxid[x] for x in lineage], dtype=int)
-    aligned = numpy.where(rank_taxid == -1, 0, numpy.where(rank_taxid == 0, lca, rank_taxid))
-    assert aligned.tolist() == [70, 1001, 0]

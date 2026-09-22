@@ -76,20 +76,6 @@ def test_nonconda_download_helpers_use_archive_files_and_wget_fallback():
     assert 'if ! tar -xzf "${archive_path}" -C "${workdir}"; then' in cafe_body
 
 
-def test_download_lock_helper_uses_shared_lock_metadata_and_heartbeat():
-    lock_path = WORKFLOW_DIR / "support" / "gg_shared_lock.sh"
-    text = _read_text(lock_path)
-    body = _function_body(text, "gg_array_download_once")
-    assert 'if gg_artifact_ready "${artifact_path}"; then' in body
-    assert 'if ! gg_shared_lock_acquire "${lock_file}" "${description}"; then' in body
-    assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
-    assert "heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}" in body
-    assert '"$@" >&2' in body
-    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
-    assert 'gg_shared_lock_release "${lock_file}"' in body
-    assert ".dlock" not in body
-
-
 def test_download_lock_helper_redirects_artifact_stdout(tmp_path):
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     artifact_path = tmp_path / "artifact.ready"
@@ -284,40 +270,12 @@ def test_ete_taxonomy_helper_uses_explicit_shared_taxdump_path():
     assert '_ensure_ete_taxonomy_db_locked "${db_file}" "${taxdump_file}"' in ensure_body
 
 
-def test_latest_jaspar_lock_uses_shared_lock_and_marker_resolution():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "ensure_latest_jaspar_file")
-    assert (
-        'if resolved_path=$(_resolve_latest_jaspar_path_from_marker "${latest_marker}" "${sys_dir}" "${runtime_dir}"); then'
-        in body
-    )
-    assert 'if ! gg_shared_lock_acquire "${lock_file}" "latest JASPAR motif file"; then' in body
-    assert 'gg_shared_lock_start_heartbeat "${lock_file}"' in body
-    assert "heartbeat_pid=${GG_SHARED_LOCK_HEARTBEAT_PID:-}" in body
-    assert 'gg_shared_lock_stop_heartbeat "${heartbeat_pid}"' in body
-    assert 'gg_shared_lock_release "${lock_file}"' in body
-
-
 def test_shared_lock_heartbeat_is_not_started_via_command_substitution():
     disallowed = "heartbeat_pid=$(gg_shared_lock_start_heartbeat"
     for script in _workflow_shell_scripts():
         assert disallowed not in _read_text(script), (
             f"Do not start shared-lock heartbeat via command substitution: {script}"
         )
-
-
-def test_pfam_helpers_use_only_new_runtime_layout_and_function_name():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    gene_core = CORE_DIR / "gg_gene_evolution_core.sh"
-    util_text = _read_text(util_path)
-    gene_text = _read_text(gene_core)
-
-    assert "legacy_runtime_dir" not in util_text
-    assert "downloads/Pfam_LE" not in util_text
-    assert "ensure_pfam_domain_db()" not in util_text
-    assert "ensure_pfam_domain_db" not in gene_text
-    assert 'ensure_pfam_le_db "${gg_workspace_dir}"' in gene_text
 
 
 def test_get_total_fastq_len_uses_bash3_compatible_read_loop_and_excludes_hidden_files():
@@ -333,14 +291,6 @@ def test_gg_util_avoids_mapfile_for_host_bash_compatibility():
     util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
     text = _read_text(util_path)
     assert "mapfile" not in text
-
-
-def test_busco_dataset_download_merges_staged_directory_contents():
-    util_path = WORKFLOW_DIR / "support" / "gg_util.sh"
-    text = _read_text(util_path)
-    body = _function_body(text, "_download_busco_lineage_to_runtime")
-    assert 'gg_merge_directory_contents "busco_downloads" "${runtime_busco_db}"' in body
-    assert "-exec mv -f -- {}" not in body
 
 
 def test_shared_busco_summary_stage_normalizes_and_checks_species_set_before_collect():

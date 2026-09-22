@@ -37,12 +37,6 @@ def container_shell_scripts():
     return sorted(CONTAINER_SCRIPTS_DIR.rglob("*.sh"))
 
 
-def core_and_entrypoint_scripts():
-    core_scripts = sorted(CORE_DIR.glob("*.sh"))
-    entrypoint_scripts = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
-    return core_scripts + entrypoint_scripts
-
-
 def strict_mode_header(script: Path) -> str:
     max_lines = 60 if script.name.endswith("_entrypoint.sh") else 30
     return "\n".join(script.read_text(encoding="utf-8").splitlines()[:max_lines])

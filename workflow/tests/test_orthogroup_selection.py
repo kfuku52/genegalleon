@@ -74,35 +74,17 @@ def test_get_df_gc_original_assigns_multiple_quantiles():
     assert out["geneid_0.75"].iloc[0] == "g3"
 
 
-def test_get_species_protein_files_includes_gzipped_fasta(tmp_path):
+def test_get_species_protein_files_filters_and_sorts_fasta_paths(tmp_path):
     mod = load_module()
-    (tmp_path / "sp1.fa").write_text(">a\nAT\n", encoding="utf-8")
-    (tmp_path / "sp2.fasta.gz").write_text("", encoding="utf-8")
-    (tmp_path / "sp3.fa.gz").write_text("", encoding="utf-8")
-    (tmp_path / "sp4.fas").write_text(">a\nAT\n", encoding="utf-8")
-    (tmp_path / "sp5.fna.gz").write_text("", encoding="utf-8")
-    (tmp_path / "README.txt").write_text("ignore", encoding="utf-8")
+    # Deliberately create in reverse order so filesystem order is not the oracle.
+    names = ["sp5.fna.gz", "sp4.fas", "sp3.fa.gz", "sp2.fasta.gz", "sp1.fa"]
+    for name in names:
+        (tmp_path / name).touch()
+    (tmp_path / "README.txt").touch()
+    (tmp_path / ".hidden.fa").touch()
+    (tmp_path / "directory.fasta.gz").mkdir()
 
-    files = mod.get_species_protein_files(str(tmp_path))
-    assert set(files) == {"sp1.fa", "sp2.fasta.gz", "sp3.fa.gz", "sp4.fas", "sp5.fna.gz"}
-
-
-def test_get_species_protein_files_ignores_hidden_entries_and_directories(tmp_path):
-    mod = load_module()
-    (tmp_path / "sp1.fa").write_text(">a\nAT\n", encoding="utf-8")
-    (tmp_path / ".hidden.fa").write_text(">a\nAT\n", encoding="utf-8")
-    (tmp_path / "sp2.fasta.gz").mkdir()
-
-    files = mod.get_species_protein_files(str(tmp_path))
-    assert files == ["sp1.fa"]
-
-
-def test_get_species_protein_files_returns_sorted_file_names(tmp_path):
-    mod = load_module()
-    (tmp_path / "spB.fa").write_text(">a\nAT\n", encoding="utf-8")
-    (tmp_path / "spA.fa").write_text(">a\nAT\n", encoding="utf-8")
-    files = mod.get_species_protein_files(str(tmp_path))
-    assert files == ["spA.fa", "spB.fa"]
+    assert mod.get_species_protein_files(str(tmp_path)) == sorted(names)
 
 
 def test_format_command_for_log_escapes_control_characters():
