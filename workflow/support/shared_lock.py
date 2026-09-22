@@ -46,7 +46,10 @@ def lock_pid_is_alive(pid):
     try:
         os.kill(int(pid), 0)
         return True
-    except (OSError, TypeError, ValueError):
+    except PermissionError:
+        # EPERM confirms existence even when this user cannot signal the owner.
+        return True
+    except (ProcessLookupError, TypeError, ValueError):
         return False
 
 

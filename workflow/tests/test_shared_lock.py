@@ -1,3 +1,4 @@
+import errno
 import os
 import subprocess
 import sys
@@ -9,6 +10,33 @@ SUPPORT = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT))
 
 import shared_lock  # noqa: E402
+
+
+def test_permission_denied_does_not_reclaim_live_owner(tmp_path, monkeypatch):
+    lock = tmp_path / "shared.lock"
+    token = shared_lock.write_lock_file(lock)
+
+    def denied(pid, signum):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(shared_lock.os, "kill", denied)
+
+    assert shared_lock.reclaim_if_stale(lock, 86400) is None
+    assert shared_lock.read_lock_metadata(lock)["token"] == token
+
+
+def test_unexpected_pid_probe_error_preserves_lock(tmp_path, monkeypatch):
+    lock = tmp_path / "shared.lock"
+    token = shared_lock.write_lock_file(lock)
+
+    def failed(pid, signum):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(shared_lock.os, "kill", failed)
+
+    with pytest.raises(OSError, match="Input/output error"):
+        shared_lock.reclaim_if_stale(lock, 86400)
+    assert shared_lock.read_lock_metadata(lock)["token"] == token
 
 
 def test_snapshot_cannot_mix_metadata_and_inode_during_owner_handoff(tmp_path, monkeypatch):

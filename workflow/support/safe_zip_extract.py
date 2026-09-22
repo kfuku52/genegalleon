@@ -151,6 +151,11 @@ def validated_members(
             files.append(info)
             file_names.add(canonical_name)
 
+    if not seen:
+        raise SafeZipError(
+            f"ZIP does not contain expected prefix {expected_prefix!r}: {archive_path}"
+        )
+
     for canonical_name in seen:
         parent = PurePosixPath(canonical_name).parent
         while parent.as_posix() not in {".", expected_prefix}:

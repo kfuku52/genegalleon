@@ -220,6 +220,31 @@ def test_corrupt_archive_preserves_existing_directory(tmp_path: Path):
     assert not list(destination.parent.glob(".result.extract.*"))
 
 
+def test_empty_archive_preserves_existing_directory(tmp_path: Path):
+    archive_path = tmp_path / "empty.zip"
+    _write_zip(archive_path, [])
+    destination = tmp_path / "output" / "result"
+    destination.mkdir(parents=True)
+    sentinel = destination / "sentinel.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+
+    with pytest.raises(SAFE.SafeZipError, match="expected prefix"):
+        SAFE.extract_expected_prefix(archive_path, destination.parent, "result")
+
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+    assert not list(destination.parent.glob(".result.extract.*"))
+
+
+def test_explicit_empty_directory_can_be_extracted(tmp_path: Path):
+    archive_path = tmp_path / "empty-directory.zip"
+    _write_zip(archive_path, [("result/", b"")])
+
+    extracted = SAFE.extract_expected_prefix(archive_path, tmp_path / "output", "result")
+
+    assert extracted.is_dir()
+    assert list(extracted.iterdir()) == []
+
+
 def test_failed_destination_replace_restores_previous_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

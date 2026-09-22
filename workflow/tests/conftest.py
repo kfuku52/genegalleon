@@ -106,8 +106,11 @@ def pytest_ignore_collect(collection_path: Path, config):
     if suite is None or not filename.startswith("test_") or collection_path.suffix != ".py":
         return None
     if suite == "smoke":
-        return filename not in SMOKE_FILES
-    return _test_lane(filename) != suite
+        excluded = filename not in SMOKE_FILES
+    else:
+        excluded = _test_lane(filename) != suite
+    # False would stop this first-result hook before pytest applies --ignore.
+    return True if excluded else None
 
 
 def pytest_collection_modifyitems(config, items):

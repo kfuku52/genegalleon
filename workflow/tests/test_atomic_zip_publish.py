@@ -133,3 +133,18 @@ def test_expected_prefix_rejects_unexpected_members_without_publication(tmp_path
         PUBLISH.publish_zip(source, destination, expected_prefix="result")
 
     assert destination.read_bytes() == b"old"
+
+
+def test_expected_prefix_rejects_empty_archive_without_publication(tmp_path: Path):
+    source = tmp_path / "source.zip"
+    destination = tmp_path / "result.zip"
+    with zipfile.ZipFile(source, "w"):
+        pass
+    destination.write_bytes(b"old")
+
+    with pytest.raises(PUBLISH.ZipPublishError, match="expected prefix"):
+        PUBLISH.publish_zip(source, destination, expected_prefix="result", remove_source=True)
+
+    assert source.is_file()
+    assert destination.read_bytes() == b"old"
+    assert not list(tmp_path.glob(".result.zip.partial.*"))

@@ -38,6 +38,34 @@ def test_validation_loads_suite_options_without_an_explicit_test_path(suite):
     assert ("workflow/tests/test_generate_orthogroup_database.py::" in result.stdout) == (suite == "fast")
 
 
+@pytest.mark.parametrize("suite", ["fast", "smoke"])
+@pytest.mark.parametrize("option", ["--ignore", "--ignore-glob"])
+def test_suite_selection_honors_pytest_ignore_options(tmp_path, suite, option):
+    test_dir = tmp_path / "workflow/tests"
+    test_dir.mkdir(parents=True)
+    for name in ("conftest.py", "validation_manifest.json"):
+        shutil.copyfile(REPO_ROOT / "workflow/tests" / name, test_dir / name)
+    if suite == "smoke":
+        keep_name = "test_busco_hmmsearch_wrapper.py"
+        keep_test = "test_hmmsearch_wrapper_creates_modified_fas_symlink_when_missing"
+        ignore_name = "test_gg_input_generation_end_to_end.py"
+    else:
+        keep_name, keep_test, ignore_name = "test_keep.py", "test_keep", "test_ignore.py"
+    (test_dir / keep_name).write_text(f"def {keep_test}(): pass\n")
+    # An ignored module must not even be imported during collection.
+    (test_dir / ignore_name).write_text('raise RuntimeError("ignored module was imported")\n')
+    ignored = str(test_dir / ignore_name) if option == "--ignore" else f"*{ignore_name}"
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--collect-only", f"--gg-suite={suite}",
+         option, ignored, "-c", str(REPO_ROOT / "pyproject.toml"),
+         "--rootdir", str(tmp_path), "--confcutdir", str(tmp_path), str(test_dir)],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert keep_test in result.stdout
+    assert "1 test collected" in result.stdout
+
+
 @pytest.mark.parametrize("suite, expected_count", [("fast", 4), ("runtime", 6)])
 def test_promoter_unit_and_tool_checks_are_collected_in_separate_lanes(tmp_path, suite, expected_count):
     test_dir = tmp_path / "workflow/tests"

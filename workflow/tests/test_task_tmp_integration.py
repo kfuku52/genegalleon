@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 RUNNER = SUPPORT / 'task_tmp.py'
 
@@ -37,14 +39,15 @@ def test_input_array_workers_with_separate_scratch_roots(tmp_path, monkeypatch):
 
 
 
-def test_genome_protein_staging_uses_selected_scratch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("protein_id", ["Tetrahymena_thermophila_gene1", "external_gene1"])
+def test_genome_protein_staging_uses_selected_scratch(tmp_path, monkeypatch, protein_id):
     import test_genome_evolution_protein_mode as integration
 
     scratch = tmp_path / 'scratch'
     scratch.mkdir()
     monkeypatch.setenv('GG_COMMON_TMP_ROOT', str(scratch))
     monkeypatch.setenv('GG_TMP_TASK_ROOT', str(scratch / 'work'))
-    integration.test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path)
+    integration.test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path, protein_id)
     inputs = (tmp_path / 'capture/input_files.txt').read_text().splitlines()
     assert inputs
     assert all(Path(p).is_relative_to(scratch) for p in inputs)
