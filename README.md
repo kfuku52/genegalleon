@@ -22,8 +22,14 @@ GeneGalleon SIF or Docker runtime automatically. See
 
 ## Quick Start
 
-Prepare either a repo-root SIF or a pulled Docker image, then run the bundled
-query2family example:
+Clone the repository and run commands from its root:
+
+```bash
+git clone https://github.com/kfuku52/genegalleon.git
+cd genegalleon
+```
+
+Prepare **one** runtime (see [host prerequisites](docs/container-build-and-runtime.md#host-prerequisites)):
 
 ```bash
 # Linux/HPC with Apptainer or Singularity
@@ -31,13 +37,20 @@ IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_conta
 
 # Docker-only host
 docker pull ghcr.io/kfuku52/genegalleon:latest
-
-cd workflow
-bash gg_gene_evolution_entrypoint.sh
 ```
 
-This writes results under `workspace/output/query2family`. Docker-only,
-local-build, HPC, and reproducible-tag options are covered in
+Then run the bundled query2family example:
+
+```bash
+bash workflow/gg_gene_evolution_entrypoint.sh
+```
+
+With no scheduler metadata or task override, this processes task 1 (`AHA` in
+the bundled inputs), not every query file. Results go under
+`workspace/output/query2family`. The default analysis may download the Pfam
+database and CDSKIT model resources on first use; allow network access and
+writable cache space. See [the example and rerun notes](docs/common-workflow-recipes.md#1-run-the-bundled-query2family-example).
+Docker-only, local-build, HPC, and reproducible-tag options are covered in
 [Container Build and Runtime](docs/container-build-and-runtime.md) and
 [Common Workflow Recipes](docs/common-workflow-recipes.md).
 

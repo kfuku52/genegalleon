@@ -5,8 +5,8 @@ that can target both:
 - `linux/amd64` (x86_64)
 - `linux/arm64` (AArch64, Apple Silicon compatible runtime via Linux VM/container host)
 
-For the unmodified official IQ-TREE 3 CLI and external-library dating overlay, see the
-[Gene-tree dating overlay instructions](../docs/gene-tree-dating.md#selecting-iq-tree).
+For the unmodified official IQ-TREE 3 CLI and the standard library worker, see
+[Gene-tree dating runtime selection](../docs/gene-tree-dating.md#selecting-iq-tree).
 
 ## Why this runtime exists
 
@@ -234,7 +234,8 @@ Retention policy:
 - historical qualified SIFs should be pulled by their `.oci.txt` manifest
   digest; rebuilding from the image is a recovery path, not the default
 
-User-side reproducible pull example:
+User-side reproducible pull template (replace the owner and illustrative tag
+with an existing published image):
 
 ```bash
 IMAGE_SOURCE=public IMAGE=ghcr.io/<owner>/genegalleon TAG=20260304-abcd123-8f3a2c41d905 \
@@ -268,10 +269,11 @@ SOURCE=docker-daemon IMAGE=local/genegalleon TAG=dev ./container/apptainer_from_
   - `/opt/pg/logs/runtime_validation_<arch>.tsv`
 - `ete4==4.4.0` is installed via `pip` in `base` because `nwkit` imports
   `ete4` modules directly for tree rooting/transfer/timetree operations.
-- Database paths required by pipeline scripts must be populated manually:
-  - `/usr/local/db/Pfam_LE`
-  - `/usr/local/db/uniprot_sprot.pep` (and derived DIAMOND DB if needed)
-  - `/usr/local/db/jaspar`
+- Reference helpers reuse available system databases (for example
+  `/usr/local/db/Pfam_LE`) or prepare missing references under
+  `workspace/downloads/`. They do not require manually populating every
+  `/usr/local/db` path. See [reference cache troubleshooting](../docs/troubleshooting.md#taxonomy-or-database-cache-issues)
+  for Pfam, UniProt and JASPAR cache locations.
 - NWKIT handles gene-tree D/L rooting and reconciliation; NOTUNG is not installed.
 - `BUSCO`, `paml` and official `iqtree3` are fetched from the current tips of their configured branches by default.
 - `amalgkit`, `cdskit`, `csubst`, `nwkit`, `kfFractBias`, `kftools`, and `rkftools`

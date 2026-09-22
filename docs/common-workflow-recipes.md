@@ -2,14 +2,14 @@
 
 This page collects practical stage combinations that are not obvious from the per-stage reference pages alone.
 
-## 1. Run the bundled smoke test
+## 1. Run the bundled query2family example
 
-Use this when you want to confirm the container and default workspace are working.
+Use this to exercise the default analysis on the bundled workspace. Run from
+the repository root after choosing a runtime in the [Quick Start](../README.md#quick-start).
+This is a scientific workflow, not the bounded developer `dev check smoke` lane.
 
 ```bash
-IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=latest bash ./gg_container_build_entrypoint.sh
-cd workflow
-bash gg_gene_evolution_entrypoint.sh
+bash workflow/gg_gene_evolution_entrypoint.sh
 ```
 
 Default behavior:
@@ -17,6 +17,22 @@ Default behavior:
 - `mode_gene_evolution=query2family`
 - queries are read from `workspace/input/query_gene`
 - outputs are written under `workspace/output/query2family`
+- local execution defaults to `GG_ARRAY_TASK_ID=1` and `GG_TASK_CPUS=1`; scheduler
+  header resource requests do not apply to direct Bash execution
+- task IDs select the sorted, visible regular files directly in `query_gene`;
+  with the bundled input this selects `AHA`. Filenames, including extensions,
+  become family IDs
+
+The default enables RPS-BLAST and CDSKIT localization, so first use can download
+reference/model resources. See [runtime prerequisites](container-build-and-runtime.md#host-prerequisites)
+and [model cache behavior](configuration-and-common-parameters.md#cdskit-localization-model).
+For a separate workspace, set `gg_workspace_dir` to its absolute path and provide
+its inputs before launching; do not use a production workspace for a smoke check.
+
+A rerun can reuse existing outputs; it is not an unconditional overwrite.
+Changed declared inputs/parameters normally stop with the default stale policy.
+See [artifact reuse and stale outputs](troubleshooting.md#stage-skipped-unexpectedly)
+and [progress and task resubmission](gene-family-outputs-and-progress-monitoring.md#gene-family-progress-summaries).
 
 ## 2. Prepare species inputs from a manifest
 
@@ -52,7 +68,6 @@ These are summaries of retained observations, not estimates of the true species
 range. Keep the generated metadata and quality sidecars. See
 [GBIF observation traits](gbif-observation-traits.md) for local downloads, filters,
 explicit analysis selection, sensitivity replay and migration from older columns.
-
 
 Useful outputs to inspect afterward:
 

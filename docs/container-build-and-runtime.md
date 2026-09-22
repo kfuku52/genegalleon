@@ -1,5 +1,24 @@
 # Container Build and Runtime
 
+## Host prerequisites
+
+Clone the repository before running its wrappers; commands on this page start
+at the repository root. Use Linux with Apptainer/Singularity for SIF execution,
+or a running Docker daemon on Linux/macOS (including a Linux VM on Apple Silicon).
+Published container platforms are `linux/amd64` and `linux/arm64`. Scientific
+Python/R programs run inside the image rather than a host environment.
+The arm64 profile excludes Trinity and the jellyfish CLI; see
+[architecture limitations](../container/README.md#important-caveats) before
+choosing transcriptome assembly settings.
+
+Image retrieval and first-use reference/model downloads need network access.
+Keep the workspace and its `downloads/` cache writable. Reference helpers reuse
+available system databases or download into workspace caches; a pulled image
+does not include every analysis database or model. See
+[reference cache troubleshooting](troubleshooting.md#taxonomy-or-database-cache-issues).
+Local image compilation is a substantial separate operation requiring Docker
+Buildx or native Apptainer build support; pulling a published image avoids it.
+
 ### One-command build (local/public selectable)
 
 ```bash
@@ -70,21 +89,19 @@ This repository now includes CI workflows that publish container images to GHCR:
   - after publication, validates an amd64 SIF from the immutable tag and primes
     the exact SIF cache used by subsequent commit checks
 - release publish + SIF build/upload workflow: `.github/workflows/release-sif.yml`
-  - tags: `<release-tag>`, `YYYYMMDD-<sha7>-<source-hash12>`, `sha-<sha7>`
-  - release assets always include `.sha256`
-  - `<repo>_<release-tag>_amd64.sif` is uploaded to the GitHub Release when it is under the release asset size limit; otherwise it is kept as a workflow artifact for 90 days and the Release gets a download notice instead
+  - publishes image tags and an amd64 SIF with checksum and qualification metadata
+  - stores the qualified SIF durably as a digest-addressed GHCR OCI artifact
+  - uploads the SIF to the Release if it is smaller than 2 GiB; otherwise the
+    Release contains a download notice and the exact `.oci.txt` locator
 
-Operational retention policy:
+For retention and retrieval details, see the canonical
+[release storage policy](../container/README.md#ci-publishing-and-reproducible-tags).
+The one-day workflow artifact is only a release handoff. Retrieve an existing
+qualified SIF by its recorded OCI manifest digest; rebuilding from an image is
+an alternative recovery path, not retrieval of the original SIF.
 
-- large workflow `SIF` artifacts are short-lived convenience copies and expire after 90 days
-- long-term reproducibility comes from immutable GHCR tags such as
-  `YYYYMMDD-<sha7>-<source-hash12>`; the final component fingerprints the
-  resolved upstream source revisions included in the image
-- publish workflows refuse to overwrite an existing immutable tag; `sha-*`,
-  `latest`, and release tags are convenience aliases and may be updated
-- recreate a historical `SIF` from GHCR when needed instead of storing old `SIF` artifacts indefinitely
-
-For reproducible runs, use an immutable tag:
+For reproducible runs, use an existing immutable tag. The values below are
+placeholders: replace them with a published tag or release before executing:
 
 ```bash
 IMAGE_SOURCE=public IMAGE=ghcr.io/kfuku52/genegalleon TAG=20260304-abcd123-8f3a2c41d905 \
@@ -233,7 +250,8 @@ Runtime notes:
 Runtime profile highlights in the current container scaffold:
 
 - single conda runtime env: `base` (`biotools`/`r` split envs are obsolete),
-- `iqtree` is conda-pinned to `3.*`,
+- the official IQ-TREE 3 CLI and NWKIT library worker are built from the moving
+  source branch (not a conda `3.*` pin),
 - `pigz` is included for fast compression/decompression,
 - NWKIT handles D/L rooting and reconciliation; no NOTUNG JAR is installed,
 - Git-sourced programs, including `BUSCO`, `paml`, `iqtree3`, `kftools`, and

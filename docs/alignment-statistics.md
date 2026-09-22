@@ -33,7 +33,7 @@ python workflow/migrations/migrate_alignment_statistics.py \
   --workspace-root workspace \
   --mode orthogroup \
   --genecount workspace/output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv \
-  --summary-out workspace/output/orthogroup_summary.tsv
+  --summary-out workspace/orthogroup_summary.tsv
 ```
 
 For query2family, use `--mode query2family`, its output root, and

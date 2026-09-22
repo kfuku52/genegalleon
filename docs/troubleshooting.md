@@ -274,6 +274,8 @@ Relevant locations:
 
 - `workspace/downloads/ete_taxonomy`
 - `workspace/downloads/pfam`
+- `workspace/downloads/uniprot_sprot`
+- `workspace/downloads/jaspar`
 - `workspace/downloads/locks`
 
 What to do:

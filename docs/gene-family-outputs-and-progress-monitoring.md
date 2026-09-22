@@ -953,24 +953,43 @@ cd workflow
 bash gg_progress_summary_entrypoint.sh
 ```
 
-This writes:
+When the corresponding inputs and output directories exist, this writes
+(overwriting the previous aggregate tables):
 
 - `workspace/orthogroup_summary.tsv`
 - `workspace/query2family_summary.tsv`
 - `workspace/transcriptome_assembly_summary.tsv`
+
+The orthogroup run also writes
+`workspace/orthogroup_genecount.alignment_stats.tsv`; it does not edit the
+selected OrthoFinder input table. These paths are relative to the workspace
+root, including when `gg_workspace_dir` relocates it.
+
+This wrapper is not read-only: in the default ZIP storage mode it drains queued
+family artifacts into archives and applies configured failed-task temporary
+retention limits. Use [workflow inspection](workflow-inspection-api.md) for
+read-only recorded status/contract verification, or the archive `status` command
+below for storage status.
 
 For orthogroup runs, `orthogroup_summary.tsv` is useful because:
 
 - it adds `GG_ARRAY_TASK_ID`, which is the row index to resubmit,
 - it appends cdskit-derived alignment statistics such as
   `Parsimony_informative_sites_clean`,
-- it adds one `1/0` completion column per visible output subdirectory under
+- it adds one `1/0` presence column per logical family-output subdirectory under
   `workspace/output/orthogroup/`.
+
+Presence columns include live and ZIP-backed artifacts and exclude shared
+folders such as `tmp` and `parameters`. A `1` means a matching filename exists;
+it does not validate its contents, freshness, or scientific completion (even an
+empty live file can count). A `0` can also mean the stage was disabled. Consult
+logs and provenance before deciding to resubmit.
 
 Practical reading tips:
 
 - rows with `Parsimony_informative_sites_clean == 0` cannot produce normal
-  IQ-TREE-based downstream outputs,
+  IQ-TREE-based downstream outputs (this interpretation is
+  [pending scientific review](reviews/2026-09-22-documentation-audit.md#c-scientific-interpretation-held-for-review)),
 - rows with `0` in late-stage columns such as `stat_tree`, `stat_branch`, or
   `tree_plot` are the first candidates to inspect or rerun.
 
@@ -985,7 +1004,7 @@ For query2family runs, `query2family_summary.tsv` is generated when
 Rows follow the same sorted input-file order used for query2family array
 tasks, so `GG_ARRAY_TASK_ID` can be used directly for resubmission.
 
-The summary adds one `1/0` completion column per visible output subdirectory
+The summary adds one `1/0` presence column per logical family-output subdirectory
 under `workspace/output/query2family/`. It also appends cdskit-derived alignment
 statistics when `alignment_stats_original` or `alignment_stats_cleaned` outputs are present.
 See [alignment statistics](alignment-statistics.md) for the cdskit migration,
