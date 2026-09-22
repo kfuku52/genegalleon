@@ -38,6 +38,21 @@ its spelling was deliberately retained.
 
 ## B: protein input validation
 
+Follow-up in 0.8.3: fixed the first-header-only restriction to honor the
+existing external-protein-ID contract. All records may use unprefixed IDs;
+empty-file, duplicate-ID and prohibited-character rejection remain. Regression
+coverage includes both mixed-prefix orders and preserved external IDs through
+the genome-evolution protein input path. The evidence below describes the
+0.8.2 baseline, not the corrected behavior.
+
+Follow-up validation used the freshness-checked `local/genegalleon:dev` Docker
+runtime: 9 focused helper tests, 2 protein-input preparation cases, and
+`bash ./dev check static` (291 tests) passed without skips. Six temporary-input
+cases also passed using real seqkit, including rejection of empty, duplicate-ID
+and prohibited-character inputs. Host `dev lint` was blocked by Bash 3.2;
+container Bash syntax checks passed for all 74 tracked shell entrypoints,
+while host Ruff and `dev config-check` passed separately. SIF was not tested.
+
 [Input conventions](../input-conventions.md#workspaceinputspecies_protein)
 recommend, but do not require, species-prefixed protein IDs. In contrast,
 `workflow/support/gg_util/06_workspace_validation.sh`, function

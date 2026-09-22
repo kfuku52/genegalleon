@@ -1216,6 +1216,46 @@ def test_check_species_sequences_accept_transcriptome_longest_cds_for_genus_sp(t
         assert success_message in completed.stdout
 
 
+@pytest.mark.parametrize(
+    "headers, expected_error",
+    [
+        (["external1", "external2"], None),
+        (["Species_name_gene1", "external2"], None),
+        (["external2", "Species_name_gene1"], None),
+        (["Species_name_gene1", "Species_name_gene2"], None),
+        ([], "No protein sequence names"),
+        (["external1", "external1"], "Sequence names are not unique"),
+        (["Species_name_gene1", "bad|id"], "Sequence names contain"),
+        (["bad|id", "Species_name_gene1"], "Sequence names contain"),
+    ],
+)
+def test_protein_validation_accepts_external_ids_without_weakening_id_checks(
+    tmp_path, headers, expected_error
+):
+    species_dir = tmp_path / "species_protein"
+    species_dir.mkdir()
+    fasta = species_dir / "Species_name.fa"
+    contents = "".join(f">{header}\nMPEPTIDE\n" for header in headers)
+    fasta.write_text(contents)
+    # Keep this fast-lane test independent of installed scientific tools.
+    # Real seqkit behavior is also exercised in container validation.
+    command = f"""
+source {shlex.quote(str(GG_UTIL_PATH))}
+seqkit() {{ awk '/^>/ {{sub(/^>/, ""); print}}' {shlex.quote(str(fasta))}; }}
+export -f seqkit
+GG_TASK_CPUS=1
+check_species_protein_dir {shlex.quote(str(species_dir))}
+"""
+    completed = run_bash(command, cwd=tmp_path)
+    if expected_error is None:
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert "All per-species protein files are valid." in completed.stdout
+    else:
+        assert completed.returncode != 0
+        assert expected_error in completed.stdout
+    assert fasta.read_text() == contents
+
+
 def test_fasta_relabel_headers_to_species_preserves_taxonomic_qualifiers(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

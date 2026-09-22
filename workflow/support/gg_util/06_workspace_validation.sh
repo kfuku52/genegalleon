@@ -214,27 +214,19 @@ check_species_protein_dir() {
 
   function check_single_species_protein () {
     local spfasta=$1
-    local sp_ub
-    local first_header
-    local first_header_no_gt
-    local spfasta_startswith
     local seq_names_file
-    sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
     seq_names_file=$(gg_mktemp)
     seqkit seq --name --threads 1 "${spfasta}" > "${seq_names_file}"
-    IFS= read -r first_header < "${seq_names_file}" || first_header=""
-    first_header=${first_header%%[[:space:]]*}
-    first_header_no_gt=${first_header}
-    spfasta_startswith=">${first_header_no_gt}"
 
-    if [[ "${first_header_no_gt}" != "${sp_ub}" && "${first_header_no_gt}" != "${sp_ub}_"* ]]; then
-      echo "Sequence names start with ${spfasta_startswith} but this is not consistent with the species name (${sp_ub}) parsed from the file name of ${spfasta}" >> "${error_log}"
-    fi
-
+    # External protein IDs need not carry the species filename prefix.
+    # Apply the same ID checks to every record, independent of record order.
     local num_all_seq
     local num_uniq_seq
     num_all_seq=$(wc -l < "${seq_names_file}" | tr -d '[:space:]')
     num_uniq_seq=$(LC_ALL=C sort -u "${seq_names_file}" | wc -l | tr -d '[:space:]')
+    if [[ ${num_all_seq} -eq 0 ]]; then
+      echo "No protein sequence names were found: ${spfasta}" >> "${error_log}"
+    fi
     if [[ ${num_all_seq} -ne ${num_uniq_seq} ]]; then
       echo "Sequence names are not unique. # all seqs = ${num_all_seq} and # unique seqs = ${num_uniq_seq}" >> "${error_log}"
     fi
@@ -249,7 +241,6 @@ check_species_protein_dir() {
 
   export -f check_single_species_protein
   export -f gg_mktemp gg_tmp_root
-  export -f gg_species_name_from_path_or_dot _gg_strip_species_terminal_suffixes _gg_species_prefix_token_count _gg_species_rank_token_key _gg_species_is_rank_or_qualifier_token _gg_species_label_prefix_part
   export error_log
   if command -v parallel >/dev/null 2>&1; then
     parallel --jobs "${GG_TASK_CPUS}" check_single_species_protein ::: "${species_protein_fasta[@]}"

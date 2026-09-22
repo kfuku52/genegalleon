@@ -88,11 +88,10 @@ Unlike `species_cds`, protein-mode inputs may come from external protein sets,
 so the `GENUS_SPECIES_GENEID` pattern is recommended for join compatibility but
 is not enforced as a CDS validation rule.
 
-There is an unresolved validation discrepancy: the current protein validator
-rejects an unprefixed **first** sequence ID, but does not apply that prefix check
-to subsequent IDs. See the [documentation audit](reviews/2026-09-22-documentation-audit.md#b-protein-input-validation)
-for a reproducer and the pending contract decision; the recommendation above
-must not be read as a guarantee that every external protein set is accepted.
+Protein validation accepts unprefixed IDs in every record and preserves them.
+Empty protein files, duplicate IDs within a file, and prohibited characters are
+rejected. The species identity still comes from the filename; retain compatible
+IDs for downstream annotation joins.
 
 Important behavior:
 

@@ -912,7 +912,8 @@ def _run_core(
 @pytest.mark.skipif(
     SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
 )
-def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: Path):
+@pytest.mark.parametrize("protein_id", ["Tetrahymena_thermophila_gene1", "external_gene1"])
+def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: Path, protein_id):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"
     species_cds_dir = workspace / "input" / "species_cds"
@@ -922,7 +923,7 @@ def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: 
     species_code_dir.mkdir(parents=True)
 
     (species_protein_dir / "Tetrahymena_thermophila_pep.fa").write_text(
-        ">Tetrahymena_thermophila_gene1\nMPEP\n",
+        f">{protein_id}\nMPEP\n",
         encoding="utf-8",
     )
     (species_cds_dir / "Tetrahymena_thermophila_cds.fa").write_text(
@@ -940,7 +941,7 @@ def test_genome_evolution_protein_mode_prefers_species_protein_inputs(tmp_path: 
     assert "species_genetic_code.tsv is ignored because species_protein inputs are provided" in completed.stdout
     assert "Tetrahymena_thermophila.fa.gz" in completed.stdout
     proteins = (tmp_path / "capture" / "proteins.fasta").read_text(encoding="utf-8")
-    assert ">Tetrahymena_thermophila_gene1" in proteins
+    assert f">{protein_id}\n" in proteins
     assert "MPEP" in proteins
     assert "MQ" not in proteins
     assert "M*" not in proteins
