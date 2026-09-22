@@ -27,6 +27,7 @@ Environment:
   GG_RUNTIME_FRESHNESS_SCOPE=owned|all  Upstreams checked locally (default: owned).
   BUILD_TARGET=development|runtime     Target for dev build (default: development).
   GG_BUILD_JOBS=N                      Jobs per native Make/R build (default: 2).
+  GG_LINT_BASH=/path/to/bash           Bash 4+ parser for container shell scripts.
 EOF
 }
 
@@ -52,10 +53,28 @@ case "${command_name}" in
     ;;
   lint)
     cd "${repo_root}"
+    lint_bash="${GG_LINT_BASH:-}"
+    if [[ -z "${lint_bash}" ]]; then
+      for candidate in "${BASH}" /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        if [[ -x "${candidate}" ]] && "${candidate}" -c '(( BASH_VERSINFO[0] >= 4 ))'; then
+          lint_bash="${candidate}"
+          break
+        fi
+      done
+    fi
+    if [[ -z "${lint_bash}" ]] || ! "${lint_bash}" -c '(( BASH_VERSINFO[0] >= 4 ))'; then
+      echo "Host lint requires Bash 4+ to parse container scripts. Set GG_LINT_BASH to a suitable Bash executable; macOS /bin/bash 3.2 is insufficient." >&2
+      exit 2
+    fi
+    script_list="$(mktemp)"
+    trap 'rm -f -- "${script_list}"' EXIT
+    # Preserve enumeration failures (including Git ownership errors); a failed
+    # process substitution would otherwise silently skip all shell checks.
+    git ls-files -z '*.sh' > "${script_list}"
     while IFS= read -r -d '' script; do
-      bash -n "${script}"
-    done < <(git ls-files -z '*.sh')
-    bash -n dev
+      "${lint_bash}" -n "${script}" < /dev/null
+    done < "${script_list}"
+    "${lint_bash}" -n dev
     ruff check workflow container/scripts
     python3 workflow/support/entrypoint_config_schema.py --check
     echo "Host static checks passed; runtime compatibility still requires container checks."

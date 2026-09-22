@@ -64,6 +64,16 @@ for (i in 1:8) {
 legacy <- e$summarise_go_enrichment(rows, 10, 90, .05)
 stopifnot(nrow(legacy$all) == 2, abs(legacy$all$p_value_adjusted[legacy$all$go_ids == 'GO:T'] - .01644975288516) < 1e-12)
 
+# Fixed background GO universe retains the eight zero-hit hypotheses. Families
+# count once even when annotations are duplicated; known BH result is non-significant.
+fixed_ann <- rows[, c('FamilyID', 'go_ids', 'go_aspects', 'go_terms')]
+fixed_families <- data.frame(FamilyID=events$FamilyID, selected=events$is_target)
+fixed_go <- unique(fixed_ann[, c('go_ids', 'go_aspects', 'go_terms')])
+fixed <- e$summarise_family_go(fixed_families, rbind(fixed_ann, fixed_ann), fixed_go)
+stopifnot(nrow(fixed$all)==10, nrow(fixed$significant)==0,
+  abs(fixed$all$p_value_adjusted[fixed$all$go_ids=='GO:T'] - .0822487644258) < 1e-12,
+  fixed$all$n_selected_in_go[fixed$all$go_ids=='GO:T']==4)
+
 cat('CAFE GO native-output selection and legacy numerical regressions passed\n')
 
 # Eight-argument legacy CLI and explicit event mode must remain equivalent,
@@ -125,10 +135,10 @@ tryCatch({
   put(data.frame(Orthogroup=ids,ref=paste0('g',seq_along(ids))), 'ids.tsv')
   put(data.frame(gene_id=paste0('g',seq_along(ids)),go_ids=paste0('GO:',seq_along(ids)),
     go_aspects='BP',go_terms=ids), 'ref.annotation.tsv')
-  run <- function(out, target='A<1>') {
+  run <- function(out, target='A<1>', method='cafe_branch_flags') {
     argv <- c(file.path(root,'workflow/support/cafe_go_enrichment.r'),
       file.path(tmp,c('Base_change.tab','Base_branch_probabilities.tab','ids.tsv','ref.annotation.tsv')),
-      file.path(tmp,out),target,'both','BP','cafe_branch_flags','.05')
+      file.path(tmp,out),target,'both','BP',method,'.05')
     result <- suppressWarnings(system2(file.path(R.home('bin'),'Rscript'),shQuote(argv),stdout=TRUE,stderr=TRUE))
     if (!is.null(attr(result,'status'))) stop(paste(result,collapse='\n'))
     file.path(tmp,out)
@@ -139,6 +149,13 @@ tryCatch({
   screened <- e$read_tsv_base(file.path(out,'family_branch_flags.tsv'))
   stopifnot(nrow(screened)==length(ids),!any(screened$selected),!any(screened$branch_reported),
     nrow(e$read_tsv_base(file.path(out,'enrichment_significant_both_A<1>_all_go.tsv')))==0)
+  # No selected families still produces the complete fixed background GO set
+  # in both directions, rather than disappearing with observed target terms.
+  fixed_out <- run('fixed-none', method='cafe_branch_flags_all_go')
+  fixed_table <- e$read_tsv_base(file.path(fixed_out,'enrichment_significant_both_A<1>_all_go.tsv'))
+  stopifnot(nrow(fixed_table)==2*length(ids), all(fixed_table$p_value_adjusted==1))
+  meta <- e$read_tsv_base(file.path(fixed_out,'branch_flags_metadata.tsv'))
+  stopifnot(meta$go_scope=='all_annotated_background_go', meta$go_adjustment=='BH_all_requested_directions')
   native_changes[['<5>']][1:2] <- c(3,-3)
   native_changes[['A<1>']][1:2] <- 0L
   put(native_changes,'Base_change.tab')
@@ -149,5 +166,9 @@ tryCatch({
   out <- run('internal','<5>')
   screened <- e$read_tsv_base(file.path(out,'family_branch_flags.tsv'))
   stopifnot(setequal(screened$FamilyID[screened$selected],c('gain','loss')))
+  fixed_out <- run('fixed-internal','<5>','cafe_branch_flags_all_go')
+  fixed_table <- e$read_tsv_base(file.path(fixed_out,'enrichment_significant_both_<5>_all_go.tsv'))
+  stopifnot(nrow(fixed_table)==2*length(ids),
+    isTRUE(all.equal(fixed_table$p_value_adjusted,p.adjust(fixed_table$p_value,'BH'))))
 },finally=unlink(tmp,recursive=TRUE))
 cat('CAFE GO empty-report and internal-target CLI regressions passed\n')

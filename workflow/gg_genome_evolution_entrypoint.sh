@@ -230,7 +230,7 @@ file_trait="auto" # Species trait table path for orthogroup copy-number trait PG
 target_branch_go="" # Optional GO-enrichment target branch. Leave empty to skip GO enrichment. Example: "<1>" or "Arabidopsis_thaliana".
 change_direction_go="increase" # increase|decrease (also both with cafe_branch_flags); reconstructed change direction for GO enrichment.
 go_category="BP,MF,CC" # GO aspects included in enrichment: BP biological process, MF molecular function, CC cellular component.
-go_enrichment_method="event" # event (legacy default) | cafe_branch_flags (exploratory screening of unmodified CAFE output); see docs/go-enrichment.md.
+go_enrichment_method="event" # event (legacy default) | cafe_branch_flags | cafe_branch_flags_all_go (fixed background GO set, recommended); see docs/go-enrichment.md.
 go_family_alpha=0.05 # BH-adjusted native family-wide P-value cutoff; used only by cafe_branch_flags.
 
 ### End: Modify this block to tailor your analysis ###

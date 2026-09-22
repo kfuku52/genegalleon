@@ -54,9 +54,17 @@ def adjust_associations(frame):
     return out
 
 
-def write_association_table(engine, store):
+def write_association_table(engine, store, *, append=False):
     """Read live/ZIP comparison bundles and replace the DB's long-form table."""
     frames = []
+    if append:
+        import sqlalchemy
+
+        with engine.connect() as conn:
+            if sqlalchemy.inspect(conn).has_table("pgls_association"):
+                previous = pd.read_sql_query(sqlalchemy.text("SELECT * FROM pgls_association"), conn)
+                if not previous.empty:
+                    frames.append(previous)
     if store is not None:
         for name in sorted(store.file_names("pgls_comparison")):
             if not name.endswith(".tsv"):

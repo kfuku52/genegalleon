@@ -335,7 +335,7 @@ summarise_family_go <- function(families, annotations, candidate_go, alpha = 0.0
 # Input
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 8) {
-  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_branch_flags] [family_alpha] ")
+  stop("Usage: Rscript cafe_go_enrichment.r Gamma_change.tab Gamma_branch_probabilities.tab gene_id_file go_annotation_file outdir target_branch change_direction go_category [event|cafe_branch_flags|cafe_branch_flags_all_go] [family_alpha] ")
 }
 outdir <- args[5]
 target_branch <- args[6]
@@ -343,8 +343,11 @@ direction <- args[7]
 go_category <- strsplit(args[8], ",")[[1]]
 
 go_method <- if (length(args) >= 9) args[9] else "event"
-if (!go_method %in% c("event", "cafe_branch_flags")) stop("Invalid GO method: ", go_method)
-if (go_method == "cafe_branch_flags") {
+if (!go_method %in% c("event", "cafe_branch_flags", "cafe_branch_flags_all_go")) stop("Invalid GO method: ", go_method)
+if (go_method == "event") {
+  warning("Legacy event GO analysis selects hypotheses after observing target events and repeats families across branches; adjusted P values are exploratory. Use cafe_branch_flags_all_go for a fixed GO universe and one observation per family.", call. = FALSE)
+}
+if (go_method %in% c("cafe_branch_flags", "cafe_branch_flags_all_go")) {
   if (!direction %in% c("increase", "decrease", "both") || grepl("[/\\\\]", target_branch)) {
     stop("Invalid native GO direction or target branch.")
   }
@@ -360,7 +363,7 @@ native_branch_probabilities_df <- branch_probabilities_df
 orthogroup_df <- read_tsv_base(args[3])
 ref_annotation_df <- read_tsv_base(args[4])
 family_alpha <- if (length(args) >= 10) suppressWarnings(as.numeric(args[10])) else 0.05
-if (go_method == "cafe_branch_flags" && (length(family_alpha) != 1 || !is.finite(family_alpha) || family_alpha <= 0 || family_alpha >= 1)) {
+if (go_method != "event" && (length(family_alpha) != 1 || !is.finite(family_alpha) || family_alpha <= 0 || family_alpha >= 1)) {
   stop("family_alpha must be between 0 and 1.")
 }
 p_value_threshold <- 0.05
@@ -421,7 +424,7 @@ if (direction == "increase") {
   for (col in value_cols) {
     significant_change_df[[col]] <- ifelse(significant_change_df[[col]] == -1, 1, 0)
   }
-} else if (direction == "both" && go_method == "cafe_branch_flags") {
+} else if (direction == "both" && go_method != "event") {
   for (col in value_cols) significant_change_df[[col]] <- abs(significant_change_df[[col]])
 } else {
   stop("Invalid direction. Use 'increase' or 'decrease' (or 'both' with cafe_branch_flags).")
@@ -436,7 +439,7 @@ write_tsv_base(significant_change_df, file.path(outdir, paste0("orthogroup_table
 
 
 # Output orthogroups with significant increase/decrease in target branch
-if (!target_branch_id %in% colnames(significant_change_df) && go_method == "cafe_branch_flags") {
+if (!target_branch_id %in% colnames(significant_change_df) && go_method != "event") {
   # No CAFE-significant target events means an empty legacy GO candidate set;
   # it must not prevent the native-output family screen.
   significant_change_df[[target_branch_id]] <- rep(0, nrow(significant_change_df))
@@ -491,7 +494,7 @@ if (nrow(orthogroup_go_df) > 0) {
 
 
 # GO enrichment analysis
-if (go_method == "cafe_branch_flags") {
+if (go_method %in% c("cafe_branch_flags", "cafe_branch_flags_all_go")) {
   if (!grepl("_change\\.tab$", args[1])) stop("cafe_branch_flags requires a native *_change.tab input path.")
   cafe_prefix <- sub("_change\\.tab$", "", args[1])
   expected_probabilities <- paste0(cafe_prefix, "_branch_probabilities.tab")
@@ -507,6 +510,10 @@ if (go_method == "cafe_branch_flags") {
   family_ids <- intersect(change_df$FamilyID, orthogroup_go_df$FamilyID)
   native <- read_cafe_branch_families(change_df, native_branch_probabilities_df,
     read_tsv_base(family_file, na = c("N/A", "NA")), family_ids, target_branch_id, read_cafe_root_branch(asr_file))
+  # Fix the all-GO hypothesis set from the annotated background, independently
+  # of observed changes, branch flags, direction and family significance.
+  background_go <- unique(orthogroup_go_df[orthogroup_go_df$FamilyID %in% family_ids,
+    c("go_ids", "go_aspects", "go_terms"), drop = FALSE])
   families <- select_cafe_branch_families(native, family_alpha, direction)
   write_tsv_base(families, file.path(outdir, "family_branch_flags.tsv"))
   directions <- if (direction == "both") c("increase", "decrease") else direction
@@ -516,6 +523,7 @@ if (go_method == "cafe_branch_flags") {
     candidate_ids <- intersect(target_significant_df$FamilyID, signed_ids)
     candidate_go <- unique(orthogroup_go_df[orthogroup_go_df$FamilyID %in% candidate_ids,
       c("go_ids", "go_aspects", "go_terms"), drop = FALSE])
+    if (go_method == "cafe_branch_flags_all_go") candidate_go <- background_go
     selected <- select_cafe_branch_families(native, family_alpha, d)
     out <- summarise_family_go(selected, orthogroup_go_df, candidate_go, p_value_threshold)
     out$all$direction <- rep(d, nrow(out$all))
@@ -524,15 +532,20 @@ if (go_method == "cafe_branch_flags") {
   })
   go_out <- list(all = do.call(rbind, lapply(go_parts, `[[`, "all")),
                  significant = do.call(rbind, lapply(go_parts, `[[`, "significant")))
+  if (go_method == "cafe_branch_flags_all_go") {
+    # One correction across the requested directions, including zero-hit terms.
+    go_out$all$p_value_adjusted <- p.adjust(go_out$all$p_value, "BH")
+    go_out$significant <- go_out$all[go_out$all$p_value_adjusted < p_value_threshold, , drop = FALSE]
+  }
   write_tsv_base(data.frame(
     method = go_method, family_alpha = family_alpha, family_adjustment = "BH_native_family_pvalues_before_branch_screening",
     n_tested_families = nrow(families), n_selected_families = sum(families$selected),
-    n_go_tests = nrow(go_out$all), go_scope = "legacy_target_observed_go_per_direction",
-    interpretation = "exploratory_target_restricted_native_flags_not_a_rate_contrast",
+    n_go_tests = nrow(go_out$all), go_scope = if (go_method == "cafe_branch_flags_all_go") "all_annotated_background_go" else "legacy_target_observed_go_per_direction",
+    interpretation = if (go_method == "cafe_branch_flags_all_go") "exploratory_fixed_go_universe_native_flags_not_a_rate_contrast" else "exploratory_target_restricted_native_flags_not_a_rate_contrast",
     branch_probability_cutoff = 0.05, other_branch_rule = "no_flagged_change_of_either_sign",
     n_families_without_branch_report = sum(!families$branch_reported),
     target_branch = target_branch_id, direction = direction,
-    go_category = paste(go_category, collapse = ","), go_adjustment = "BH_per_direction"
+    go_category = paste(go_category, collapse = ","), go_adjustment = if (go_method == "cafe_branch_flags_all_go") "BH_all_requested_directions" else "BH_per_direction"
   ), file.path(outdir, "branch_flags_metadata.tsv"))
   write_tsv_base(go_out$all, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_all_go.tsv")))
   write_tsv_base(go_out$significant, file.path(outdir, paste0("enrichment_significant_", direction, "_", target_branch, "_significant_go.tsv")))

@@ -1,0 +1,7 @@
+     go_ids     p_value p_value_adjusted
+1 GO:target 0.008224876       0.01644975
+2 GO:common 1.000000000       1.00000000
+Number of eligible GO terms: 10
+Number retained for BH: 2
+BH with all 10 tested terms: 0.08224876
+Number declared significant by current implementation: 1

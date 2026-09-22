@@ -6,6 +6,24 @@ The optional `cafe_branch_flags` method consumes standard, unmodified CAFE
 outputs. It does not fit new models, simulate families, run an additional CAFE
 process, or require a custom CAFE executable.
 
+For new analyses, use `go_enrichment_method="cafe_branch_flags_all_go"`.
+It uses the same native family screen, but fixes the GO hypotheses from **all
+annotated background families before examining target events**. Zero-hit terms
+remain in the correction, each family counts once, and `both` uses one BH
+correction across gains and losses together. This removes target-observed GO
+filtering and repeated-family counting; native screening and annotation
+dependencies still make the results exploratory rather than calibrated causal
+or rate-contrast evidence. Legacy `event` now emits an explicit warning, while
+retaining its numerical results and paths.
+
+The fixed-universe outputs use `go_enrichment/cafe_branch_flags_all_go/` with
+the same table schemas as `cafe_branch_flags`. `branch_flags_metadata.tsv`
+records `all_annotated_background_go` and `BH_all_requested_directions`.
+Switching methods selects a separate output directory and changes the artifact
+contract; use the normal stale-artifact review/rebuild procedure rather than
+renaming old results into the new directory. The sections below describe the
+original target-restricted `cafe_branch_flags` mode unless stated otherwise.
+
 ## Exploratory target-restricted branch flags
 
 ```bash

@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -35,6 +36,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from gene_family_output_store import LEGACY_SUBDIR_ALIASES, GeneFamilyOutputStore
 from pgls_multiplicity import write_association_table
+from shared_namespace_lock import namespace_lock
 
 try:
     import sqlalchemy
@@ -157,10 +159,15 @@ def remove_database_build_files(db_path):
             logger.exception("Failed to remove temporary database file: %s", candidate)
 
 
-def prepare_database_build_path(final_db_path, overwrite):
+def prepare_database_build_path(final_db_path, overwrite, mode=None):
     """Return a build path that preserves the published DB until success."""
-    if not overwrite:
-        return final_db_path, False
+    mode = mode or ("replace" if overwrite else "create")
+    if os.path.islink(final_db_path):
+        raise ValueError(f"Refusing symlinked database destination: {final_db_path}")
+    if mode == "create" and os.path.exists(final_db_path):
+        raise FileExistsError(f"Database already exists: {final_db_path}; use --overwrite 1 to replace or --mode append for new families")
+    if mode == "append" and not os.path.isfile(final_db_path):
+        raise FileNotFoundError(f"Append requires an existing database: {final_db_path}")
 
     db_dir = os.path.dirname(final_db_path) or "."
     db_name = os.path.basename(final_db_path)
@@ -172,6 +179,11 @@ def prepare_database_build_path(final_db_path, overwrite):
     os.close(file_descriptor)
     os.remove(build_db_path)
     atexit.register(remove_database_build_files, build_db_path)
+    if mode == "append":
+        # SQLite's backup API includes committed WAL contents in the private copy.
+        with sqlite3.connect(Path(final_db_path).absolute().as_uri() + "?mode=ro", uri=True) as source:
+            with sqlite3.connect(build_db_path) as target:
+                source.backup(target)
     return build_db_path, True
 
 
@@ -579,58 +591,45 @@ def gene_family_id_from_path(file_path):
 
 
 def parse_cutoff_stat(cutoff_stat):
+    """Parse explicit filters; empty text/None is the only no-filter spelling."""
+    if cutoff_stat is None or cutoff_stat == "":
+        return []
+    tokens = cutoff_stat if isinstance(cutoff_stat, (list, tuple)) else str(cutoff_stat).split("|")
     parsed = []
-    if cutoff_stat is None:
-        return parsed
-
-    if isinstance(cutoff_stat, (list, tuple)):
-        tokens = cutoff_stat
-    else:
-        tokens = [s.strip() for s in str(cutoff_stat).split("|")]
-
     for token in tokens:
         if isinstance(token, (list, tuple)):
-            if len(token) != 2:
-                continue
-            stat_name = str(token[0]).strip().replace("'", "").replace('"', "")
-            stat_value_raw = token[1]
+            parts = token
         else:
-            token_str = str(token).strip().replace("'", "").replace('"', "")
-            if not token_str or "," not in token_str:
-                continue
-            stat_name, stat_value_raw = token_str.split(",", 1)
-            stat_name = stat_name.strip()
-            stat_value_raw = stat_value_raw.strip()
-
-        if not stat_name:
-            continue
+            parts = str(token).strip().split(",")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid cutoff condition: {token!r}; expected STAT,VALUE")
+        name = str(parts[0]).strip().strip("\"'")
         try:
-            stat_value = float(stat_value_raw)
-        except (TypeError, ValueError):
-            continue
-        parsed.append((stat_name, stat_value))
-
+            value = float(parts[1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid cutoff threshold: {token!r}") from exc
+        if not name or not math.isfinite(value):
+            raise ValueError(f"Cutoff requires a column name and finite threshold: {token!r}")
+        parsed.append((name, value))
     return parsed
 
 
 def apply_cutoff(df, cutoff_stat):
-    try:
-        cutoff_stats = parse_cutoff_stat(cutoff_stat)
-        for stat_name, stat_value in cutoff_stats:
-            if stat_name in df.columns:
-                values = pd.to_numeric(df[stat_name], errors="coerce").fillna(0)
-                df = df[values >= stat_value]
-        return df
-    except Exception as e:
-        logger.error(f"Error applying cutoff: {e}")
-        return df
+    for name, threshold in parse_cutoff_stat(cutoff_stat):
+        if name not in df.columns:
+            raise ValueError(f"Unknown cutoff column: {name}")
+        values = pd.to_numeric(df[name], errors="raise")
+        # Missing observations do not pass a numerical threshold.
+        df = df[values.notna() & (values >= threshold)]
+    return df
 
 
 def main():
     parser = argparse.ArgumentParser(description="Optimize performance for database population script.")
     parser.add_argument(
-        "--overwrite", metavar="bool", default=0, type=int, help="Overwrite existing database if set to 1."
+        "--overwrite", metavar="bool", default=0, type=int, choices=(0, 1), help="Atomically replace an existing database if 1; default 0 creates a new database."
     )
+    parser.add_argument("--mode", choices=("create", "replace", "append"), help="Explicit write mode; append rejects families already present in each table.")
     parser.add_argument("--dbpath", metavar="PATH", default="", type=str, help="Path to the SQLite database.")
     parser.add_argument("--dir_stat_tree", metavar="PATH", default="", type=str, help="Directory for stat_tree files.")
     parser.add_argument(
@@ -685,6 +684,17 @@ def main():
         "--ncpu", dest="max_workers", metavar="INT", default=4, type=int, help="Number of worker threads."
     )
     args = parser.parse_args()
+    if not args.dbpath:
+        parser.error("--dbpath must not be empty")
+    destination = Path(args.dbpath).absolute()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # All write modes serialize on the same persistent namespace guard. An
+    # append copy must not replace another successful append made meanwhile.
+    with namespace_lock(destination.with_name("." + destination.name + ".build.guard"), exclusive=True):
+        populate_database(args, parser)
+
+
+def populate_database(args, parser):
     configure_logging()
     require_sqlalchemy()
     logger.info("Starting the orthogroup database generation script.")
@@ -694,6 +704,15 @@ def main():
     if params["row_threshold"] < 1:
         parser.error("--row_threshold must be a positive integer")
     final_db_path = params["dbpath"]
+    if not final_db_path:
+        parser.error("--dbpath must not be empty")
+    if params["overwrite"] and params["mode"] not in (None, "replace"):
+        parser.error("--overwrite 1 conflicts with --mode create/append")
+    params["mode"] = params["mode"] or ("replace" if params["overwrite"] else "create")
+    try:
+        params["cutoff_stat"] = parse_cutoff_stat(params["cutoff_stat"])
+    except ValueError as exc:
+        parser.error(str(exc))
     output_store = GeneFamilyOutputStore(params["dir_gene_family"]) if params["dir_gene_family"] else None
 
     cb_categories = [cat.strip() for cat in args.cb_categories.split(",")]
@@ -808,7 +827,9 @@ def main():
                 duplicate_columns = sorted({column for column in infile_columns if infile_columns.count(column) > 1})
                 if duplicate_columns:
                     schema_problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
-                required_columns = STAT_TABLE_REQUIRED_COLUMNS.get(stat, set())
+                required_columns = set(STAT_TABLE_REQUIRED_COLUMNS.get(stat, set()))
+                if stat.startswith("cb"):
+                    required_columns.update(name for name, _ in params["cutoff_stat"])
                 if infile_columns and required_columns:
                     missing_required = sorted(required_columns.difference(infile_columns))
                     if missing_required:
@@ -883,6 +904,7 @@ def main():
     db_path, replace_database_on_success = prepare_database_build_path(
         final_db_path,
         params["overwrite"],
+        params["mode"],
     )
     if replace_database_on_success:
         logger.info(
@@ -901,6 +923,22 @@ def main():
         pool_size=params["max_workers"],
         max_overflow=0,
     )
+    if params["mode"] == "append":
+        try:
+            with engine.connect() as connection:
+                existing_tables = set(sqlalchemy.inspect(connection).get_table_names())
+                for table, files in infiles.items():
+                    if table not in existing_tables:
+                        continue
+                    quoted = connection.dialect.identifier_preparer.quote(table)
+                    existing = set(connection.exec_driver_sql(f"SELECT DISTINCT orthogroup FROM {quoted}").scalars())
+                    incoming = {gene_family_id_from_path(name) for name in files}
+                    duplicates = sorted(existing & incoming)
+                    if duplicates:
+                        raise ValueError(f"Append would duplicate families in {table}: {', '.join(duplicates)}")
+        except BaseException:
+            engine.dispose()
+            raise
     optimize_sqlite(engine)
 
     logger.info(f"{datetime.datetime.today()}: Started adding infiles to the database.")
@@ -1063,7 +1101,7 @@ def main():
             tables = []
 
     add_analytical_aa_change_fdr(engine)
-    write_association_table(engine, output_store)
+    write_association_table(engine, output_store, append=params["mode"] == "append")
 
     with engine.begin() as conn:
         try:
@@ -1090,7 +1128,12 @@ def main():
     # Dispose engine to close all connections
     engine.dispose()
     if replace_database_on_success:
-        os.replace(db_path, final_db_path)
+        if params["mode"] == "create":
+            # Do not overwrite a destination that appeared during the build.
+            os.link(db_path, final_db_path)
+            os.unlink(db_path)
+        else:
+            os.replace(db_path, final_db_path)
         logger.info("Published completed database atomically: %s", final_db_path)
     logger.info("All database operations completed and engine disposed.")
 

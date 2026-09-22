@@ -1,0 +1,7 @@
+[validation] /opt/conda/bin/python -m pytest -q -n 2 --dist load --gg-suite=integration-download
+bringing up nodes...
+bringing up nodes...
+
+ss...................................................................... [ 80%]
+.................                                                        [100%]
+87 passed, 2 skipped in 44.48s

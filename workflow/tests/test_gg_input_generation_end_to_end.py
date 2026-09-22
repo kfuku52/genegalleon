@@ -402,6 +402,7 @@ def _core_env(
             [str(fake_bin), str(Path(sys.executable).parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         ),
         "TMPDIR": str(workspace / "tmp_runtime"),
+        "GG_COMMON_TMP_ROOT": "workspace",
         "GG_TASK_CPUS": "1",
         "gg_workspace_dir": str(workspace),
         "provider": "direct",

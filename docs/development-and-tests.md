@@ -141,6 +141,12 @@ publication, release SIFs, and the CI SIF job. `dev check full` runs all Python
 tests and every declared R check; `dev check r` runs the complete R list.
 `dev check runtime` also enables the real kfFractBias JCVI/LAST integrations.
 Required Python checks fail the validation if they are skipped unexpectedly.
+Strict validation enables `GG_TEST_CSUBST_3DI=1`, so `dev check full` actually
+runs the two real-predictor checks instead of failing on their opt-in skips.
+The initial run downloads model resources; subsequent checks reuse
+`workspace/downloads/validation/{csubst,huggingface}`. Set `CSUBST_CACHE_DIR`
+and `HF_HOME` inside the runtime command to override these writable defaults.
+The separate CI SIF predictor check retains its existing explicit cache paths.
 The manifest currently permits no skips, and the image includes system `unzip`
 for archive interoperability checks.
 
@@ -301,6 +307,13 @@ bash ./dev lint
 
 This needs Python 3 and Ruff on the host and does not establish runtime
 compatibility. Use the container checks above before publishing changes.
+The syntax parser must be Bash 4+ because core scripts execute in the container.
+`dev lint` discovers the current Bash or Homebrew's Bash; set
+`GG_LINT_BASH=/path/to/bash` to select another executable. macOS `/bin/bash`
+3.2 is rejected with an actionable message before parsing any scripts.
+`GG_LINT_BASH` can also point to an executable wrapper that delegates Bash
+arguments to a container with the checkout mounted at the same working path;
+Git, Ruff and the configuration check still run on the host.
 
 CI also runs `actionlint` against parsed GitHub Actions workflows and runs
 ShellCheck at warning severity against every tracked shell script. Local

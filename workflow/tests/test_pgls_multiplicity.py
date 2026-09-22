@@ -135,3 +135,26 @@ def test_predictors_are_separate_but_levels_and_omnibus_share_a_pair():
     out = adjust_associations(frame)
     assert out.p_value_global_bh.tolist() == pytest.approx([.03, .06, .2, .01])
     assert out.global_n_associations.tolist() == [3, 3, 3, 1]
+
+
+def test_append_preserves_associations_and_recomputes_global_bh(tmp_path):
+    sqlalchemy = pytest.importorskip("sqlalchemy")
+    directory = tmp_path / "pgls_comparison"
+    directory.mkdir()
+    data = rows()
+    file = directory / "batch.tsv"
+    engine = sqlalchemy.create_engine("sqlite://")
+    try:
+        data.iloc[:2].to_csv(file, sep="\t", index=False)
+        write_association_table(engine, GeneFamilyOutputStore(tmp_path))
+        data.iloc[2:].to_csv(file, sep="\t", index=False)
+        write_association_table(engine, GeneFamilyOutputStore(tmp_path), append=True)
+        with engine.connect() as conn:
+            actual = pd.read_sql_query(sqlalchemy.text("SELECT * FROM pgls_association"), conn)
+        assert len(actual) == len(data)
+        assert actual.p_value_global_bh.tolist() == pytest.approx(
+            adjust_associations(data).p_value_global_bh.tolist(), nan_ok=True)
+        with pytest.raises(ValueError, match="Duplicate"):
+            write_association_table(engine, GeneFamilyOutputStore(tmp_path), append=True)
+    finally:
+        engine.dispose()

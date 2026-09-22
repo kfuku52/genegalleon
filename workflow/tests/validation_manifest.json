@@ -2,6 +2,7 @@
   "version": 1,
   "environment": {
     "KFFRACTBIAS_RUN_INTEGRATION": "1",
+    "GG_TEST_CSUBST_3DI": "1",
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [

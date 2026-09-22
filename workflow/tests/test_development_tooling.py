@@ -747,3 +747,43 @@ def test_download_url_preserves_existing_destination_when_transfers_fail(tmp_pat
     assert completed.returncode != 0
     assert destination.read_text(encoding="utf-8") == "known-good\n"
     assert list(tmp_path.glob("archive.tar.gz.tmp.*")) == []
+
+
+def test_host_lint_rejects_old_parser_before_parsing_scripts(tmp_path):
+    old_bash = tmp_path / "bash-old"
+    old_bash.write_text("#!/bin/sh\nexit 1\n")
+    old_bash.chmod(0o755)
+    result = _run("bash", str(REPO_ROOT / "dev"), "lint",
+                  env=os.environ | {"GG_LINT_BASH": str(old_bash)})
+    assert result.returncode == 2
+    assert "requires Bash 4+" in result.stderr
+    assert "unexpected EOF" not in result.stderr
+
+
+def test_host_lint_checks_every_script_even_when_parser_reads_stdin(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shutil.copyfile(REPO_ROOT / "dev", repo / "dev")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for name in ("a.sh", "b.sh"):
+        (repo / name).write_text("echo ok\n")
+    subprocess.run(["git", "-C", str(repo), "add", "a.sh", "b.sh"], check=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "parsed"
+    parser = bin_dir / "parser"
+    parser.write_text('#!/bin/sh\nif [ "$1" = -c ]; then exit 0; fi\ncat >/dev/null\nprintf "%s\n" "$2" >> "$LINT_LOG"\n')
+    for name in ("ruff", "python3"):
+        (bin_dir / name).write_text("#!/bin/sh\nexit 0\n")
+    for path in bin_dir.iterdir():
+        path.chmod(0o755)
+    env = os.environ | {"GG_LINT_BASH": str(parser), "LINT_LOG": str(log),
+                        "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+    result = subprocess.run(["bash", str(repo / "dev"), "lint"], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().splitlines() == ["a.sh", "b.sh", "dev"]
+    shutil.rmtree(repo / ".git")
+    log.unlink()
+    result = subprocess.run(["bash", str(repo / "dev"), "lint"], env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not log.exists()

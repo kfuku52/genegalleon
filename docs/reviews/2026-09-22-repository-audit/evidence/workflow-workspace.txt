@@ -1,0 +1,661 @@
+[validation] /opt/conda/bin/python -m pytest -q -n 2 --dist load --gg-suite=integration-workflow
+bringing up nodes...
+bringing up nodes...
+
+......................................FFFFFFFFFFF.....                   [100%]
+=================================== FAILURES ===================================
+______ test_gg_input_generation_single_mode_accepts_flat_busco_v6_layout _______
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl0')
+
+    def test_gg_input_generation_single_mode_accepts_flat_busco_v6_layout(tmp_path: Path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "single_flat_busco_workspace"
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="single")
+        env["BUSCO_STUB_LAYOUT"] = "flat"
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl0/single_flat_busco_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl0/single_flat_busco_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl0/single_flat_busco_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl0/single_flat_busco_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:561: AssertionError
+_____ test_gg_input_generation_single_mode_uses_relative_busco_output_path _____
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl1')
+
+    def test_gg_input_generation_single_mode_uses_relative_busco_output_path(tmp_path: Path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "single_relative_busco_workspace"
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="single")
+        env["BUSCO_STUB_STRIP_ABSOLUTE_OUT"] = "1"
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl1/single_relative_busco_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl1/single_relative_busco_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl1/single_relative_busco_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl1/single_relative_busco_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:586: AssertionError
+______ test_gg_input_generation_single_mode_auto_selects_default_manifest ______
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2')
+
+    def test_gg_input_generation_single_mode_auto_selects_default_manifest(tmp_path: Path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "manifest_workspace"
+        manifest_path = _write_default_download_manifest(workspace, input_dir)
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+
+>       completed = _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single")
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+workflow/tests/test_gg_input_generation_end_to_end.py:598:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+workspace = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2/manifest_workspace')
+input_dir = None
+fake_bin = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2/fake_bin')
+mode = 'single', task_id = None
+
+    def _run_core(
+        workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2/manifest_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2/manifest_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2/manifest_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_singl2/manifest_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:464: AssertionError
+_____ test_gg_input_generation_auto_selects_single_versioned_tsv_manifest ______
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0')
+
+    def test_gg_input_generation_auto_selects_single_versioned_tsv_manifest(tmp_path: Path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "versioned_manifest_workspace"
+        manifest_path = _write_tsv_download_manifest(workspace, input_dir)
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+
+>       completed = _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single")
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+workflow/tests/test_gg_input_generation_end_to_end.py:630:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+workspace = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0/versioned_manifest_workspace')
+input_dir = None
+fake_bin = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0/fake_bin')
+mode = 'single', task_id = None
+
+    def _run_core(
+        workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0/versioned_manifest_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0/versioned_manifest_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0/versioned_manifest_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_auto_0/versioned_manifest_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:464: AssertionError
+____________ test_provenance_rebuild_reuses_verified_download_cache ____________
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_provenance_rebuild_reuses0')
+
+    def test_provenance_rebuild_reuses_verified_download_cache(tmp_path: Path):
+        """Reformat stale derived outputs without redownloading unchanged inputs."""
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "cache_rebuild_workspace"
+        _write_tsv_download_manifest(workspace, input_dir)
+        _write_minimal_ete_taxonomy_db(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+        env = _core_env(workspace, None, fake_bin, "single")
+        env.update(
+            overwrite="0",
+            artifact_stale_policy="rebuild",
+            download_dir=str(workspace / "downloads" / "input_cache"),
+            run_validate_inputs="0",
+            run_cds_fx2tab="0",
+            run_species_busco="0",
+            run_multispecies_summary="0",
+        )
+
+        def run():
+            result = subprocess.run(
+                ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                capture_output=True, text=True, timeout=180, check=False,
+            )
+            assert result.returncode == 0, result.stdout + "\n" + result.stderr
+            return result
+
+>       first = run()
+                ^^^^^
+
+workflow/tests/test_gg_input_generation_end_to_end.py:664:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def run():
+        result = subprocess.run(
+            ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+            capture_output=True, text=True, timeout=180, check=False,
+        )
+>       assert result.returncode == 0, result.stdout + "\n" + result.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_provenance_rebuild_reuses0/cache_rebuild_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_provenance_rebuild_reuses0/cache_rebuild_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_provenance_rebuild_reuses0/cache_rebuild_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_provenance_rebuild_reuses0/cache_rebuild_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:661: AssertionError
+_____ test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests _____
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_rejec0')
+
+    def test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests(tmp_path: Path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "ambiguous_manifest_workspace"
+        xlsx_manifest = _write_default_download_manifest(workspace, input_dir)
+        tsv_manifest = _write_tsv_download_manifest(workspace, input_dir)
+        fake_bin = _install_fake_toolchain(tmp_path)
+        env = _core_env(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single")
+
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+        assert completed.returncode == 1
+>       assert "Multiple input-generation download manifests were discovered" in completed.stdout
+E       AssertionError: assert 'Multiple input-generation download manifests were discovered' in 'ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1\nensure_gg_scheduler_defaults: GG_ARRAY_TA...M_TOOL_RESERVE_GB: 1\nGG_MEM_TOOL_GB: 2\nGG_JOB_ID: 1\nGG_ARRAY_TASK_ID: 1\nulimit -Hn: 1048576\nulimit -Sn: 1048576\n'
+E        +  where 'ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1\nensure_gg_scheduler_defaults: GG_ARRAY_TA...M_TOOL_RESERVE_GB: 1\nGG_MEM_TOOL_GB: 2\nGG_JOB_ID: 1\nGG_ARRAY_TASK_ID: 1\nulimit -Hn: 1048576\nulimit -Sn: 1048576\n' = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').stdout
+
+workflow/tests/test_gg_input_generation_end_to_end.py:721: AssertionError
+_____ test_gg_input_generation_array_mode_end_to_end_with_parallel_workers _____
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0')
+
+    def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_path: Path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "array_workspace"
+        _write_minimal_ete_taxonomy_db(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+
+        _write_runtime_busco_dataset(workspace)
+>       _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
+
+workflow/tests/test_gg_input_generation_end_to_end.py:734:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+workspace = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/array_workspace')
+input_dir = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/raw_valid/Direct/species_wise_original')
+fake_bin = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/fake_bin')
+mode = 'array_prepare', task_id = None
+
+    def _run_core(
+        workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/array_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/array_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/array_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_array0/array_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:464: AssertionError
+_____ test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors ______
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_gg_input_generation_missi0')
+
+    def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):
+        workspace = tmp_path / "missing_inputs_workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        fake_bin = _install_fake_toolchain(tmp_path)
+
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=_core_env(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="single"),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "No such file or directory" not in completed.stderr
+>       assert "No input source was specified for formatting." in completed.stdout
+E       AssertionError: assert 'No input source was specified for formatting.' in 'ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1\nensure_gg_scheduler_defaults: GG_ARRAY_TA...M_TOOL_RESERVE_GB: 1\nGG_MEM_TOOL_GB: 2\nGG_JOB_ID: 1\nGG_ARRAY_TASK_ID: 1\nulimit -Hn: 1048576\nulimit -Sn: 1048576\n'
+E        +  where 'ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1\nensure_gg_scheduler_defaults: GG_ARRAY_TA...M_TOOL_RESERVE_GB: 1\nGG_MEM_TOOL_GB: 2\nGG_JOB_ID: 1\nGG_ARRAY_TASK_ID: 1\nulimit -Hn: 1048576\nulimit -Sn: 1048576\n' = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').stdout
+
+workflow/tests/test_gg_input_generation_end_to_end.py:793: AssertionError
+_____ test_array_manifest_workers_and_incomplete_finalize_preserve_summary _____
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0')
+
+    def test_array_manifest_workers_and_incomplete_finalize_preserve_summary(tmp_path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "manifest_array_workspace"
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        _write_tsv_download_manifest(workspace, input_dir)
+        fake_bin = _install_fake_toolchain(tmp_path)
+>       _run_core(workspace=workspace, input_dir=None, fake_bin=fake_bin, mode="array_prepare")
+
+workflow/tests/test_gg_input_generation_end_to_end.py:804:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+workspace = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0/manifest_array_workspace')
+input_dir = None
+fake_bin = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0/fake_bin')
+mode = 'array_prepare', task_id = None
+
+    def _run_core(
+        workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0/manifest_array_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0/manifest_array_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0/manifest_array_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_manifest_workers_an0/manifest_array_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:464: AssertionError
+_______ test_array_failed_busco_worker_retries_without_completed_receipt _______
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0')
+
+    def test_array_failed_busco_worker_retries_without_completed_receipt(tmp_path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "retry_array_workspace"
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        fake_bin = _install_fake_toolchain(tmp_path)
+        busco = fake_bin / "busco"
+        busco.write_text(busco.read_text().replace("import os\n", 'import os\nif os.environ.get("GG_TEST_FAIL_BUSCO"):\n    raise SystemExit(43)\n'))
+>       _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
+
+workflow/tests/test_gg_input_generation_end_to_end.py:833:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+workspace = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/retry_array_workspace')
+input_dir = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/raw_valid/Direct/species_wise_original')
+fake_bin = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/fake_bin')
+mode = 'array_prepare', task_id = None
+
+    def _run_core(
+        workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/retry_array_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/retry_array_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/retry_array_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_array_failed_busco_worker0/retry_array_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:464: AssertionError
+_ test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species _
+[gw1] linux -- Python 3.12.14 /opt/conda/bin/python
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0')
+
+    def test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species(tmp_path):
+        input_dir = _write_direct_species_fixture(tmp_path)
+        workspace = tmp_path / "finalize_failure_workspace"
+        _write_minimal_ete_taxonomy_db(workspace)
+        _write_runtime_busco_dataset(workspace)
+        manifest = _write_tsv_download_manifest(workspace, input_dir)
+        fake_bin = _install_fake_toolchain(tmp_path)
+        rscript = fake_bin / "Rscript"
+        rscript.write_text(rscript.read_text().replace("import sys\n", 'import sys\nimport os\nif os.environ.get("GG_TEST_FAIL_SUMMARY"):\n    raise SystemExit(47)\n'))
+>       _run_core(workspace, None, fake_bin, "array_prepare")
+
+workflow/tests/test_gg_input_generation_end_to_end.py:863:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+workspace = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0/finalize_failure_workspace')
+input_dir = None
+fake_bin = PosixPath('/tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0/fake_bin')
+mode = 'array_prepare', task_id = None
+
+    def _run_core(
+        workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+        completed = subprocess.run(
+            ["bash", str(CORE_PATH)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+>       assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+E       AssertionError: ensure_gg_scheduler_defaults: GG_JOB_ID is undefined or empty. GG_JOB_ID=1
+E         ensure_gg_scheduler_defaults: GG_ARRAY_TASK_ID is undefined or empty. GG_ARRAY_TASK_ID=1
+E         ensure_gg_scheduler_defaults: GG_MEM_PER_CPU_GB is undefined or empty. GG_MEM_PER_CPU_GB=3
+E         ensure_gg_scheduler_defaults: GG_MEM_TOTAL_GB is undefined or empty. GG_MEM_TOTAL_GB=3
+E         gg_normalize_memory_budget: GG_MEM_TOOL_RESERVE_GB=1 (derived from GG_MEM_TOTAL_GB=3)
+E         gg_normalize_memory_budget: GG_MEM_TOOL_GB=2 (GG_MEM_TOTAL_GB - GG_MEM_TOOL_RESERVE_GB, floored at 1G)
+E         Tue Sep 22 07:58:42 UTC 2026: Starting gg Singularity/Apptainer environment
+E         pwd: /Users/kf/repos/genegalleon
+E         gg_workspace_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0/finalize_failure_workspace
+E         gg_workspace_layout: split
+E         gg_workspace_input_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0/finalize_failure_workspace/input
+E         gg_workspace_output_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0/finalize_failure_workspace/output
+E         gg_workspace_downloads_dir: /tmp/pytest-of-unknown/pytest-0/popen-gw1/test_failed_final_shared_stage0/finalize_failure_workspace/downloads
+E         python: /opt/conda/bin/python
+E         GG_TASK_CPUS: 1
+E         GG_MEM_PER_CPU_GB: 3
+E         GG_MEM_TOTAL_GB: 3
+E         GG_MEM_TOOL_RESERVE_GB: 1
+E         GG_MEM_TOOL_GB: 2
+E         GG_JOB_ID: 1
+E         GG_ARRAY_TASK_ID: 1
+E         ulimit -Hn: 1048576
+E         ulimit -Sn: 1048576
+E
+E         External scratch requires the GeneGalleon entrypoint supervisor.
+E
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/Users/kf/repos/genegalleon/workflow/core/gg_input_generation_core.sh'], returncode=1,...imit -Hn: 1048576\nulimit -Sn: 1048576\n', stderr='External scratch requires the GeneGalleon entrypoint supervisor.\n').returncode
+
+workflow/tests/test_gg_input_generation_end_to_end.py:464: AssertionError
+=========================== short test summary info ============================
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_single_mode_accepts_flat_busco_v6_layout
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_single_mode_uses_relative_busco_output_path
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_single_mode_auto_selects_default_manifest
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_auto_selects_single_versioned_tsv_manifest
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_provenance_rebuild_reuses_verified_download_cache
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_array_mode_end_to_end_with_parallel_workers
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_array_manifest_workers_and_incomplete_finalize_preserve_summary
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_array_failed_busco_worker_retries_without_completed_receipt
+FAILED workflow/tests/test_gg_input_generation_end_to_end.py::test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species
+11 failed, 43 passed in 135.24s (0:02:15)

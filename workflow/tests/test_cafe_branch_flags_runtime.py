@@ -82,6 +82,23 @@ def test_standard_cafe_outputs_support_gain_loss_flags_and_replay(tmp_path, mode
     assert saved == {p: p.read_bytes() for p in output.iterdir() if p.is_file()}
     assert hashes == {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in hashes}
 
+    # The fixed-universe method uses all background GO terms in both
+    # directions, including GO:U which has no selected target families.
+    fixed_output = tmp_path / 'fixed_go'
+    fixed_command = command.copy()
+    fixed_command[6] = str(fixed_output)
+    fixed_command[-2] = 'cafe_branch_flags_all_go'
+    fixed = subprocess.run(fixed_command, text=True, capture_output=True, timeout=60)
+    assert fixed.returncode == 0, fixed.stdout + fixed.stderr
+    fixed_go = read(fixed_output / f'enrichment_significant_both_{target}_all_go.tsv')
+    assert {(r['go_ids'], r['direction']) for r in fixed_go} == {
+        (go_id, direction) for go_id in ('GO:G', 'GO:L', 'GO:U')
+        for direction in ('increase', 'decrease')}
+    assert all(float(r['p_value']) == 1 for r in fixed_go if r['go_ids'] == 'GO:U')
+    fixed_meta = read(fixed_output / 'branch_flags_metadata.tsv')[0]
+    assert fixed_meta['go_scope'] == 'all_annotated_background_go'
+    assert fixed_meta['go_adjustment'] == 'BH_all_requested_directions'
+
     # An identically shaped report from a different output prefix must not be
     # silently combined with these changes. Failed reruns invalidate summaries.
     mismatched = tmp_path / 'Other_branch_probabilities.tab'

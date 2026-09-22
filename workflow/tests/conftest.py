@@ -92,6 +92,11 @@ class RuntimeSkipGuard:
 def pytest_configure(config):
     if config.getoption("--gg-strict-runtime") or config.getoption("--gg-suite") == "runtime":
         os.environ.update(VALIDATION_MANIFEST["environment"])
+        # Docker validation runs as the host UID, whose default HOME may not be
+        # writable. Share model downloads across workers and repeated checks.
+        cache_root = REPO_ROOT / "workspace/downloads/validation"
+        os.environ.setdefault("CSUBST_CACHE_DIR", str(cache_root / "csubst"))
+        os.environ.setdefault("HF_HOME", str(cache_root / "huggingface"))
         config.pluginmanager.register(RuntimeSkipGuard(config), "gg-runtime-skip-guard")
 
 

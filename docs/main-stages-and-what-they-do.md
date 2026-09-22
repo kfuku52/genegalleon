@@ -673,6 +673,18 @@ Notable defaults:
   without manifests are reported as `legacy_untracked` and remain usable,
 - overwrite builds use a temporary SQLite file and replace the published database
   only after every input has been loaded and indexed successfully,
+- direct `generate_orthogroup_database.py` calls default to creating a new DB
+  and refuse an existing destination. Use `--overwrite 1` (or `--mode replace`)
+  for a full rebuild. Intentional incremental imports require `--mode append`
+  and input directories containing only new families for each table; duplicate
+  family imports are rejected. All modes build privately and serialize writes;
+  append preserves existing PGLS rows and recomputes global corrections. Existing
+  SQLite schemas remain readable. This replaces the old implicit append behavior
+  of `--overwrite 0`, which could silently duplicate rows on retry,
+- `--cutoff_stat` rejects malformed conditions, unknown columns and nonfinite
+  thresholds. Use an explicit empty string (`--cutoff_stat ''`) for no filtering;
+  typos no longer disable a requested filter silently. Failed imports preserve
+  the published DB and failed first builds do not publish a partial DB,
 - database input reads keep at most twice `--ncpu` file chunks in flight and
   release consumed results; each chunk has at most `min(--row_threshold, 50000)`
   rows. Large TSVs, including ZIP members, use a bounded type-discovery pass

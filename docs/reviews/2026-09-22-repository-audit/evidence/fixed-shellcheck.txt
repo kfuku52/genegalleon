@@ -1,0 +1,2 @@
+shellcheck -S warning -x -e SC1091,SC2034,SC2154,SC2317 dev workflow/core/gg_genome_evolution_core.sh workflow/gg_genome_evolution_entrypoint.sh
+Exit status: 0; no diagnostics.

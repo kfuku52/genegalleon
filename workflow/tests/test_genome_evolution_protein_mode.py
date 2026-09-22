@@ -826,6 +826,9 @@ def _run_core(
     env["GG_MEM_TOTAL_GB"] = "1"
     env["GG_JOB_ID"] = "1"
     env["GG_ARRAY_TASK_ID"] = "1"
+    # Direct-core tests do not run the external-scratch supervisor. Dedicated
+    # task_tmp integration tests override this to exercise supervised scratch.
+    env.setdefault("GG_COMMON_TMP_ROOT", "workspace")
     env.update(_load_entrypoint_defaults())
     env.update(
         {

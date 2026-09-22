@@ -1,0 +1,7 @@
+[runtime freshness] local/genegalleon:dev matches the daily owned upstream snapshot and current container inputs.
+[validation] /opt/conda/bin/python -m pytest -q -n 2 --dist load --gg-suite=fast workflow/tests/test_development_tooling.py
+bringing up nodes...
+bringing up nodes...
+
+.................................                                        [100%]
+33 passed in 3.23s

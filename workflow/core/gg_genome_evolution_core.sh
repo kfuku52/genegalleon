@@ -88,7 +88,7 @@ target_branch_go="${target_branch_go:-}"
 go_enrichment_method="${go_enrichment_method:-event}"
 go_family_alpha="${go_family_alpha:-0.05}"
 case "${go_enrichment_method}" in
-  event|cafe_branch_flags) ;;
+  event|cafe_branch_flags|cafe_branch_flags_all_go) ;;
   *) echo "Invalid go_enrichment_method: ${go_enrichment_method}" >&2; exit 1 ;;
 esac
 orthogroup_copy_number_max_size_differential="${orthogroup_copy_number_max_size_differential:-9999999}"
@@ -6052,9 +6052,10 @@ go_enrichment_provenance_args+=(
   --input "adapter=${gg_support_dir}/cafe_go_enrichment.r"
   --parameter "method=${go_enrichment_method}"
 )
-if [[ "${go_enrichment_method}" == cafe_branch_flags ]]; then
+if [[ "${go_enrichment_method}" == cafe_branch_flags* ]]; then
   go_enrichment_provenance_args+=(
     --parameter "family_alpha=${go_family_alpha}"
+    --parameter "go_hypothesis_scope=${go_enrichment_method}"
     --parameter "branch_flags_contract=native_cafe_output_flags_v1"
     --parameter "branch_probability_cutoff=0.05"
     --parameter "other_branch_rule=no_flagged_change_of_either_sign"

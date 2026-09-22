@@ -100,11 +100,12 @@ def test_strict_runtime_detects_skips_and_enables_required_integrations(tmp_path
     body = {
         "skip": 'import pytest\ndef test_runtime(): pytest.skip("missing required executable")\n',
         "skip_collection": 'import pytest\npytest.skip("missing dependency", allow_module_level=True)\n',
-        "check_environment": 'import os\ndef test_runtime(): assert os.environ["KFFRACTBIAS_RUN_INTEGRATION"] == "1"\n',
+        "check_environment": 'import os\ndef test_runtime(): assert os.environ["KFFRACTBIAS_RUN_INTEGRATION"] == "1"; assert os.environ["GG_TEST_CSUBST_3DI"] == "1"\n',
     }[behavior]
     (test_dir / "test_required.py").write_text(body)
     env = os.environ.copy()
     env.pop("KFFRACTBIAS_RUN_INTEGRATION", None)
+    env.pop("GG_TEST_CSUBST_3DI", None)
     command = [sys.executable, "-m", "pytest", "-q", "--gg-strict-runtime",
                "-c", str(REPO_ROOT / "pyproject.toml"), "--rootdir", str(tmp_path),
                "--confcutdir", str(tmp_path), str(test_dir)]

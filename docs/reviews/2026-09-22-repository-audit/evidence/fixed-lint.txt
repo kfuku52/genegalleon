@@ -1,0 +1,3 @@
+All checks passed!
+Validated 8 entrypoints and 23 common parameters.
+Host static checks passed; runtime compatibility still requires container checks.

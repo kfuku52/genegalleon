@@ -189,10 +189,21 @@ def test_database_releases_consumed_input_frames_before_indexing(tmp_path, monke
         assert connection.execute('SELECT COUNT(*) FROM "branch"').fetchone()[0] == 128
 
 
-def test_parse_cutoff_stat_parses_valid_tokens_and_ignores_invalid():
+@pytest.mark.parametrize("condition", ["badtoken", ",1", "ABC,notfloat", "ABC,nan", "ABC,inf", "ABC,1|", "ABC,1,2"])
+def test_parse_cutoff_stat_rejects_invalid_conditions(condition):
+    with pytest.raises(ValueError, match="cutoff|Cutoff"):
+        load_module().parse_cutoff_stat(condition)
+
+
+def test_cutoff_explicit_empty_and_unknown_column():
     mod = load_module()
-    parsed = mod.parse_cutoff_stat("OCNany2spe,0.8|badtoken|,1|ABC,notfloat|XYZ,1.5")
-    assert parsed == [("OCNany2spe", 0.8), ("XYZ", 1.5)]
+    assert mod.parse_cutoff_stat("") == []
+    assert mod.parse_cutoff_stat(None) == []
+    assert mod.parse_cutoff_stat("A,0.8|B,1.5") == [("A", .8), ("B", 1.5)]
+    with pytest.raises(ValueError, match="Unknown cutoff column"):
+        mod.apply_cutoff(pandas.DataFrame({"A": [.1, .9]}), "typo,0.8")
+    frame = pandas.DataFrame({"A": [None, -1, 1]})
+    assert mod.apply_cutoff(frame, "A,-2")["A"].tolist() == [-1, 1]
 
 
 def test_apply_cutoff_accepts_preparsed_cutoff_list():
@@ -757,3 +768,60 @@ def test_analytical_bh_pools_orthogroups_traits_and_matches(tmp_path):
     metadata = pandas.read_sql_table("aa_change_fdr_metadata", engine).iloc[0]
     assert (metadata["test_count"], metadata["undefined_count"]) == (3, 1)
     engine.dispose()
+
+
+def test_database_write_modes_preserve_existing_and_reject_duplicate_append(tmp_path):
+    tree = tmp_path / "stat_tree"
+    branch = tmp_path / "stat_branch"
+    tree.mkdir()
+    branch.mkdir()
+    db = tmp_path / "out.db"
+
+    def write_family(family):
+        stat_tree_frame().to_csv(tree / f"{family}_stat.tree.tsv", sep="\t", index=False)
+        stat_branch_frame().to_csv(branch / f"{family}_stat.branch.tsv", sep="\t", index=False)
+
+    def run(*args):
+        return subprocess.run([sys.executable, str(SCRIPT_PATH), "--dbpath", str(db),
+                               "--dir_stat_tree", str(tree), "--dir_stat_branch", str(branch), *args],
+                              cwd=tmp_path, capture_output=True, text=True)
+
+    write_family("OG1")
+    result = run()
+    assert result.returncode == 0, result.stderr
+    before = db.read_bytes()
+    assert run().returncode != 0
+    assert db.read_bytes() == before
+    result = run("--mode", "append")
+    assert result.returncode != 0 and "duplicate families" in result.stderr
+    assert db.read_bytes() == before
+    for path in list(tree.iterdir()) + list(branch.iterdir()):
+        path.unlink()
+    write_family("OG2")
+    result = run("--mode", "append")
+    assert result.returncode == 0, result.stderr
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT orthogroup FROM tree ORDER BY orthogroup").fetchall() == [("OG1",), ("OG2",)]
+    before = db.read_bytes()
+    assert run("--overwrite", "1", "--cutoff_stat", "OCNany2spe,typo").returncode != 0
+    assert db.read_bytes() == before
+    result = run("--overwrite", "1")
+    assert result.returncode == 0, result.stderr
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT orthogroup FROM tree").fetchall() == [("OG2",)]
+
+
+def test_failed_new_database_is_not_published(tmp_path):
+    tree = tmp_path / "stat_tree"
+    branch = tmp_path / "stat_branch"
+    tree.mkdir()
+    branch.mkdir()
+    stat_tree_frame().to_csv(tree / "OG1_stat.tree.tsv", sep="\t", index=False)
+    (branch / "OG1_stat.branch.tsv").write_text("")
+    db = tmp_path / "out.db"
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), "--dbpath", str(db),
+                             "--dir_stat_tree", str(tree), "--dir_stat_branch", str(branch)],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not db.exists()
+    assert not list(tmp_path.glob(".out.db.*.tmp"))
