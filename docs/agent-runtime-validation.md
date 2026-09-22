@@ -1,36 +1,22 @@
 # Runtime validation
 
-Use a GeneGalleon container runtime for workflow validation, integration tests, R helper checks, and toolchain-dependent behavior.
+Use a GeneGalleon container for workflow integration, R helpers, and
+toolchain-dependent behavior. Host syntax and narrow static checks are useful
+feedback but do not establish runtime compatibility.
 
-On Linux/HPC hosts with Apptainer or Singularity, prefer the repository `genegalleon.sif` runtime.
+From the repository root, use `bash ./dev check <suite>` or
+`bash workflow/tests/run_in_runtime.sh <command>`. These select a usable SIF on
+Linux/HPC or Docker on macOS and check runtime freshness before execution.
+For prerequisites, focused commands, build setup, freshness policy, and expensive
+checks, use [Development and Tests](development-and-tests.md#choose-checks-for-a-change).
+Keep executable procedures there rather than maintaining a second copy here.
 
-On macOS, where SIF execution is normally unavailable, use the Docker-backed GeneGalleon runtime instead. For validation of local code changes, prefer a Docker image built from the current repository rather than a stale public image:
-
-```bash
-BUILD_SIF=0 IMAGE_SOURCE=local IMAGE=local/genegalleon TAG=dev bash ./gg_container_build_entrypoint.sh
-docker run --rm -i -v "$PWD:$PWD" -w "$PWD" local/genegalleon:dev python -m pytest -q workflow/tests/test_hgt_end_to_end.py
-docker run --rm -i -v "$PWD:$PWD" -w "$PWD" local/genegalleon:dev Rscript workflow/tests/test_treevis_main.R
-```
-
-GeneGalleon entrypoint wrappers can also dispatch through the Docker-backed singularity shim:
-
-```bash
-GG_CONTAINER_RUNTIME=docker \
-GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:dev \
-bash workflow/gg_progress_summary_entrypoint.sh
-```
-
-Do not treat host-local Python, R, or command-line tool behavior as authoritative for GeneGalleon runtime compatibility. Host-local checks are acceptable for quick syntax or narrow static checks, but container-backed checks are the source of truth when dependencies matter.
-
-Preferred SIF validation entrypoint:
-
-```bash
-bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
-bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
-```
-
-If `genegalleon.sif` or an Apptainer/Singularity runtime is unavailable, report that clearly and do not conclude SIF compatibility from host-local results. If Docker is available, use Docker-backed container validation and report it as Docker/container validation rather than SIF validation. If no GeneGalleon container runtime is available, report that clearly and do not conclude runtime compatibility from host-local results.
+Report the runtime actually used. Docker results do not establish SIF
+compatibility. If no suitable runtime is available, report the missing
+prerequisite and the unverified checks. Do not silently use host tools, bypass
+freshness, or claim a skipped check as successful.
 
 Do not add backward-compatibility workarounds for older dependency behavior.
-
-If the root cause is in a dependency program or package, do not patch GeneGalleon to absorb it. Report it as dependency-side so the dependency can be fixed or updated instead.
+When the root cause belongs to a dependency, fix/update the owning dependency
+within the authorized scope or report the blocker; do not absorb it into
+GeneGalleon.

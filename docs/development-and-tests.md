@@ -1,5 +1,49 @@
 # Development and Tests
 
+## Choose checks for a change
+
+All commands below start at the repository root. `dev` is the existing entrypoint;
+no separate CONTRIBUTING guide or standalone type-check command is configured.
+Read the affected test before executing it: lane names describe selection, not a
+guarantee of duration or lack of network activity.
+
+| Changed surface | Minimum relevant verification |
+| --- | --- |
+| Documentation or agent instructions only | Check referenced paths and CLI help, run newly documented bounded commands, and `git diff --check`. No full scientific run is needed. |
+| `dev`, test routing, validation wrappers | `bash ./dev lint`, then `bash ./dev check fast workflow/tests/test_validation_runner.py workflow/tests/test_development_tooling.py -x` |
+| Entrypoints, config forwarding, shell helpers | `bash ./dev lint`, `bash ./dev config-check`, `bash ./dev check static`, plus focused behavior tests for the changed stage/helper |
+| Python support helper or output format | `bash ./dev lint` and the matching pytest file plus affected reader/writer tests, through the runtime wrapper below |
+| R helpers or treevis | Container R parse check and affected R tests; treevis also needs `check_treevis_package.sh` (commands below) |
+| Container inputs or tool-dependent behavior | Read [runtime policy](agent-runtime-validation.md), use a matching runtime, and select the required manifest checks; `runtime`/`full` are substantial runs, not preflight |
+
+For a focused Python test without lane filtering, use:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python -m pytest -q workflow/tests/test_validation_runner.py -x
+```
+
+`dev check fast FILE` filters by file membership in `conftest.py`; selecting a
+runtime file in the fast lane can collect nothing. Inspect the selection before
+an unfamiliar run:
+
+```bash
+python3 workflow/tests/run_checks.py fast --list workflow/tests/test_validation_runner.py -x
+bash ./dev check fast workflow/tests/test_validation_runner.py --collect-only
+```
+
+`--list` prints commands only; collection imports test modules but does not run
+tests. Success means the intended tests were collected and then passed, not merely
+that a command printed or tests were skipped. `runtime` and `full` append all R
+checks even with an explicit Python path. Suite membership comes from
+`conftest.py` and `validation_manifest.json`, not from this table.
+
+Use `bash ./dev check smoke` for the existing small main-path preflight. Freshness
+checks can query upstream Git repositories even for a small lane. `runtime` and
+`full` enable real integrations and predictor downloads; builds, real datasets,
+and `gg_all_entrypoints_debug.sh` are not substitutes for a small smoke test.
+Inspect resource/network needs before running them. Pytest fixtures use temporary
+outputs, but full predictor checks have persistent caches as described below.
+
 ## Container-first validation policy
 
 For workflow validation, integration tests, R helper checks, and
@@ -35,11 +79,11 @@ resolve all sources exactly.
 On Linux/HPC hosts with Apptainer or Singularity, the preferred wrapper is:
 
 ```bash
-bash workflow/tests/run_in_sif.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
+GG_TEST_RUNTIME=sif bash workflow/tests/run_in_runtime.sh python -m pytest -q workflow/tests/test_hgt_end_to_end.py
 ```
 
 ```bash
-bash workflow/tests/run_in_sif.sh Rscript workflow/tests/test_treevis_main.R
+GG_TEST_RUNTIME=sif bash workflow/tests/run_in_runtime.sh Rscript workflow/tests/test_treevis_main.R
 ```
 
 The tree visualization helpers are an installed internal R package. Validate
@@ -55,6 +99,10 @@ root. Set `GENEGALLEON_SIF=/path/to/genegalleon.sif` when using a different SIF
 path. Both validation wrappers and `dev` discover versioned
 Apptainer/Singularity installations under `/opt/pkg` and the legacy NIG
 package path, using the same discovery helper as workflow entrypoints.
+
+The direct `run_in_sif.sh` commands in this guide are low-level SIF dispatch examples;
+they do not perform the freshness check. For normal development, use
+`run_in_runtime.sh` (optionally with `GG_TEST_RUNTIME=sif`) to check freshness first.
 
 To expose an external read-only fixture or data directory at the same absolute
 path inside the SIF, provide one absolute path per line:
@@ -305,7 +353,7 @@ For immediate host-only syntax, Ruff, and configuration checks:
 bash ./dev lint
 ```
 
-This needs Python 3 and Ruff on the host and does not establish runtime
+This needs Python 3, Git, and Ruff on the host and does not establish runtime
 compatibility. Use the container checks above before publishing changes.
 The syntax parser must be Bash 4+ because core scripts execute in the container.
 `dev lint` discovers the current Bash or Homebrew's Bash; set
@@ -314,6 +362,16 @@ The syntax parser must be Bash 4+ because core scripts execute in the container.
 `GG_LINT_BASH` can also point to an executable wrapper that delegates Bash
 arguments to a container with the checkout mounted at the same working path;
 Git, Ruff and the configuration check still run on the host.
+
+The `config-check`, `config-schema`, and `bump` subcommands additionally expect
+`python` on PATH. For a new host, use an activated Python 3.12 virtual environment
+outside the checkout and install Ruff there (`python -m pip install ruff`).
+Container test runs already include pytest and scientific dependencies; the full
+host test dependency installation above is not required for `dev check`.
+Ruff is not part of the scientific container, so moving all of `dev lint` inside
+Docker is not a replacement for host setup. If host Bash 4+ is unavailable,
+report that limitation and run host Ruff/config checks and container Bash syntax
+checks separately; do not report `dev lint` as passed.
 
 CI also runs `actionlint` against parsed GitHub Actions workflows and runs
 ShellCheck at warning severity against every tracked shell script. Local

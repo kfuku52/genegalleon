@@ -35,6 +35,51 @@ Repository-specific instructions override these defaults.
   Preserve required coverage; never run untrusted PR code on self-hosted runners.
 <!-- END KF AGENT POLICY -->
 
+# Start Here
+
+Read `README.md`, then [Development and Tests](docs/development-and-tests.md#choose-checks-for-a-change).
+There is no separate CONTRIBUTING guide. For stage changes, follow the matching
+`workflow/gg_*_entrypoint.sh` into `workflow/core/gg_*_core.sh`; shared helpers
+live in `workflow/support/`. Use [Repository Layout](docs/repository-layout.md)
+only when the owner is unclear.
+
+Run commands from the repository root:
+
+- `bash ./dev lint`: shell syntax, Ruff, and configuration checks on the host;
+  see the development guide for prerequisites and the macOS Bash limitation.
+- `bash ./dev config-check`: check entrypoint forwarding metadata (requires `python`).
+- `bash ./dev check smoke`: existing small container smoke lane.
+- `bash ./dev check fast workflow/tests/test_validation_runner.py -x`: example
+  focused check; choose the actual file and lane from the development guide.
+- `bash ./dev build`: provision a local Docker development image when needed;
+  this downloads and compiles dependencies, so it is not a quick check.
+
+There is no configured standalone type checker. The development guide is the
+command and change-to-test reference; do not create a second runner or test list.
+For repeated selection and result reporting, use
+[validate-change](.agents/skills/validate-change/SKILL.md).
+
+## Preserve Research Inputs and Contracts
+
+Entrypoint editable blocks, `workflow/gg_common_params.sh`, scheduler directives,
+and path overrides can contain project-specific settings. Preserve them unless
+the task calls for changing them. Read [configuration](docs/configuration-and-common-parameters.md)
+and [input conventions](docs/input-conventions.md) before changing forwarding,
+species identifiers, CDS/protein mode, genetic codes, trait missingness, or
+calibrations. Do not adjust scientific thresholds or models to make tests pass.
+Preserve CLI/API behavior and output schemas, identifiers, and archive layouts;
+check affected readers as well as writers.
+
+Treat `workspace/input/` as curated data, and `workspace/output/`,
+`workspace/downloads/`, `workspace/db*/`, SIFs, build caches, and benchmark/review
+artifacts as data rather than incidental cleanup targets. Fixture regeneration
+requires [dataset provenance](docs/test-dataset.md). Use test temporary directories
+for reproductions; a normal workflow or debug harness can write persistent outputs.
+
+Before finishing, review `git diff --check` and the final diff. Report commands,
+runtime used, pass/fail/skip results, and checks blocked by missing prerequisites.
+Separate static evidence from executed behavior and Docker from SIF validation.
+
 # Agent / Developer Validation Policy
 
 ## Upstream program version policy
