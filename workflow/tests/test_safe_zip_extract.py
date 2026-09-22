@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import time
 import zipfile
 from pathlib import Path
 
@@ -110,6 +111,33 @@ def test_special_permission_bits_are_not_restored(tmp_path: Path):
     assert stat.S_IMODE((extracted / "tool").stat().st_mode) == 0o755
 
 
+def test_file_and_directory_metadata_survive_extraction(tmp_path: Path):
+    archive_path = tmp_path / "metadata.zip"
+    members = []
+    expected = []
+    for name, mode, date_time, payload in (
+        ("result/", stat.S_IFDIR | stat.S_ISGID | 0o750, (2020, 1, 2, 3, 4, 6), b""),
+        ("result/nested/", stat.S_IFDIR | stat.S_ISVTX | 0o700, (2021, 2, 3, 4, 5, 6), b""),
+        ("result/nested/tool", stat.S_IFREG | stat.S_ISUID | 0o754, (2022, 3, 4, 5, 6, 8), b"payload\n"),
+    ):
+        info = zipfile.ZipInfo(name, date_time=date_time)
+        info.create_system = 3
+        info.external_attr = mode << 16
+        members.append((info, payload))
+        expected.append((name, mode & 0o777, time.mktime((*date_time, 0, 0, -1))))
+    _write_zip(archive_path, members)
+
+    output_root = tmp_path / "output"
+    SAFE.extract_expected_prefix(archive_path, output_root, "result")
+
+    assert (output_root / "result/nested/tool").read_bytes() == b"payload\n"
+    for name, permissions, modified in expected:
+        metadata = (output_root / name).stat()
+        assert stat.S_IMODE(metadata.st_mode) == permissions
+        assert metadata.st_mtime == modified
+    assert not list(output_root.glob(".result.extract.*"))
+
+
 def test_inode_preflight_treats_zero_as_exhausted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -154,12 +182,14 @@ def test_inode_preflight_accepts_filesystem_without_inode_accounting(
     assert (extracted / "value.txt").read_bytes() == b"value"
 
 
+@pytest.mark.parametrize("member_name", ["result/value.txt", "result/"])
 def test_timestamp_conversion_failure_is_wrapped_and_cleans_up(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    member_name: str,
 ):
     archive_path = tmp_path / "result.zip"
-    _write_zip(archive_path, [("result/value.txt", b"value")])
+    _write_zip(archive_path, [(member_name, b"" if member_name.endswith("/") else b"value")])
     output_root = tmp_path / "output"
 
     def invalid_timestamp(_value):

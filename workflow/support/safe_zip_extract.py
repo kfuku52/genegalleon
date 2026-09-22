@@ -163,6 +163,18 @@ def validated_members(
     return files, directories
 
 
+def _restore_member_metadata(
+    target: Path,
+    mode: int,
+    date_time: tuple[int, ...],
+) -> None:
+    """Restore ZIP permissions without special bits, then the member timestamp."""
+    if mode:
+        target.chmod(stat.S_IMODE(mode) & 0o777)
+    modified = time.mktime((*date_time, 0, 0, -1))
+    os.utime(target, (modified, modified))
+
+
 def extract_expected_prefix(
     archive_path: Path | str,
     destination_root: Path | str,
@@ -220,16 +232,11 @@ def extract_expected_prefix(
                         shutil.copyfileobj(source, output, length=1024 * 1024)
                         output.flush()
                         os.fsync(output.fileno())
-                    mode = info.external_attr >> 16
-                    if mode:
-                        target.chmod(stat.S_IMODE(mode) & 0o777)
-                    modified = time.mktime((*info.date_time, 0, 0, -1))
-                    os.utime(target, (modified, modified))
+                    _restore_member_metadata(target, info.external_attr >> 16, info.date_time)
+                # Apply directory metadata after writing children so their
+                # creation cannot change the restored directory timestamps.
                 for target, mode, date_time in reversed(directory_metadata):
-                    if mode:
-                        target.chmod(stat.S_IMODE(mode) & 0o777)
-                    modified = time.mktime((*date_time, 0, 0, -1))
-                    os.utime(target, (modified, modified))
+                    _restore_member_metadata(target, mode, date_time)
                 extracted_directories = [
                     path
                     for path in temporary_root.rglob("*")
