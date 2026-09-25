@@ -688,7 +688,7 @@ def test_transcriptome_core_stores_generated_metadata_under_output_dir():
     script = CORE_DIR / "gg_transcriptome_generation_core.sh"
     text = _read_text(script)
 
-    assert 'dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"' in text
+    assert 'dir_input_amalgkit_metadata="$(transcriptome_metadata_input_root "${gg_workspace_input_dir}" "${transcriptome_metadata_input_subdir:-amalgkit_metadata}")" || exit 1' in text
     assert 'dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"' in text
     assert 'file_input_amalgkit_metadata="${dir_input_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text
     assert 'file_generated_amalgkit_metadata="${dir_generated_amalgkit_metadata}/${sp_ub}_metadata.tsv"' in text

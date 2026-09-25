@@ -554,6 +554,7 @@ orf_aggregation_level
 protocol_rna_seq
 remove_amalgkit_fastq_after_completion
 transcriptome_getfastq_cache_dir
+transcriptome_metadata_input_subdir
 transcriptome_tmp_max_bytes
 transcriptome_tmp_max_dirs
 transcriptome_tmp_max_files

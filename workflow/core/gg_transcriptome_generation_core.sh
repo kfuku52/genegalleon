@@ -3619,7 +3619,7 @@ fi
 dir_transcriptome_assembly_output="${gg_workspace_output_dir}/transcriptome_assembly"
 dir_input_fastq="${gg_workspace_input_dir}/species_rnaseq"
 dir_input_sra_list="${gg_workspace_input_dir}/query_sra_id"
-dir_input_amalgkit_metadata="${gg_workspace_input_dir}/amalgkit_metadata"
+dir_input_amalgkit_metadata="$(transcriptome_metadata_input_root "${gg_workspace_input_dir}" "${transcriptome_metadata_input_subdir:-amalgkit_metadata}")" || exit 1
 dir_generated_amalgkit_metadata="${dir_transcriptome_assembly_output}/amalgkit_metadata"
 dir_amalgkit_quant="${dir_transcriptome_assembly_output}/amalgkit_quant"
 

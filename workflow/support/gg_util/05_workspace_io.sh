@@ -7,6 +7,31 @@ workspace_input_root() {
   echo "${gg_workspace_dir}/input"
 }
 
+transcriptome_metadata_input_root() {
+  local input_root=$1
+  local relative_dir=${2:-amalgkit_metadata}
+  local current="${input_root%/}"
+  local component
+  local -a components
+  if [[ ! "${relative_dir}" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]; then
+    echo "Invalid transcriptome metadata input subdirectory: ${relative_dir}" >&2
+    return 1
+  fi
+  IFS=/ read -r -a components <<< "${relative_dir}"
+  for component in "${components[@]}"; do
+    if [[ "${component}" == "." || "${component}" == ".." ]]; then
+      echo "Transcriptome metadata input subdirectory cannot traverse parents." >&2
+      return 1
+    fi
+    current="${current}/${component}"
+    if [[ -L "${current}" ]]; then
+      echo "Transcriptome metadata input subdirectory cannot contain symlinks: ${current}" >&2
+      return 1
+    fi
+  done
+  printf '%s\n' "${current}"
+}
+
 workspace_output_root() {
   local gg_workspace_dir=$1
   echo "${gg_workspace_dir}/output"

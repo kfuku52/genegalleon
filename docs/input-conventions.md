@@ -358,6 +358,12 @@ same detected or declared factor levels and reference coding.
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
 - `mode_transcriptome_assembly="metadata"`
   - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
+  - for a reviewed cohort within the same workspace, set
+    `GG_TRANSCRIPTOME_METADATA_INPUT_SUBDIR` to a relative directory under
+    `workspace/input`, such as `transcriptome_route/amalgkit_metadata`. Array
+    numbering then follows only that directory's sorted metadata files; outputs
+    still go to the selected workspace's `output/transcriptome_assembly`.
+    Parent traversal and symlinked input directories are rejected.
 - `mode_transcriptome_assembly="auto"` (default)
   - auto-selects the single available input layout
   - exits with an error when multiple layouts are simultaneously present

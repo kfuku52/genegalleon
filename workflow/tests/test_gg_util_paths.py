@@ -57,6 +57,60 @@ def run_bash(cmd: str, cwd: Path):
     )
 
 
+def test_transcriptome_metadata_cohort_uses_main_output_without_changing_task_member(tmp_path):
+    workspace = tmp_path / "workspace"
+    main_input = workspace / "input" / "amalgkit_metadata"
+    route_input = workspace / "input" / "transcriptome_route" / "amalgkit_metadata"
+    main_input.mkdir(parents=True)
+    route_input.mkdir(parents=True)
+    for index in range(1, 47):
+        (route_input / f"Species_{index:02d}_metadata.tsv").write_text(str(index))
+    for index in range(1, 137):
+        (main_input / f"Other_{index:03d}_metadata.tsv").write_text(str(index))
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+input_dir=$(transcriptome_metadata_input_root {shlex.quote(str(workspace / 'input'))} transcriptome_route/amalgkit_metadata)
+find "${{input_dir}}" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort | sed -n '44p'
+workspace_output_root {shlex.quote(str(workspace))}
+"""
+    result = run_bash(script, REPO_ROOT)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        str(route_input / "Species_44_metadata.tsv"), str(workspace / "output")
+    ]
+    for bad in ("../amalgkit_metadata", "transcriptome_route/../amalgkit_metadata"):
+        rejection = run_bash(
+            f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+            f"transcriptome_metadata_input_root {shlex.quote(str(workspace / 'input'))} "
+            f"{shlex.quote(bad)}", REPO_ROOT,
+        )
+        assert rejection.returncode != 0
+    (workspace / "input" / "outside").symlink_to(tmp_path, target_is_directory=True)
+    rejection = run_bash(
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"transcriptome_metadata_input_root {shlex.quote(str(workspace / 'input'))} "
+        "outside/amalgkit_metadata", REPO_ROOT,
+    )
+    assert rejection.returncode != 0
+
+
+def test_transcriptome_metadata_cohort_override_reaches_container():
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+transcriptome_metadata_input_subdir=transcriptome_route/amalgkit_metadata
+forward_config_vars_to_container_env gg_transcriptome_generation_entrypoint.sh
+printf '%s\\n' "${{APPTAINERENV_transcriptome_metadata_input_subdir}}" "${{SINGULARITYENV_transcriptome_metadata_input_subdir}}"
+"""
+    result = run_bash(script, REPO_ROOT)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "transcriptome_route/amalgkit_metadata",
+        "transcriptome_route/amalgkit_metadata",
+    ]
+
+
 def test_version_report_namespace_lock_releases_after_failure_and_reuses_success(tmp_path):
     image = tmp_path / "fixture.sif"
     image.write_text("fixture runtime identity")

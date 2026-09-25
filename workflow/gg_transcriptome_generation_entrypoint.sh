@@ -172,6 +172,19 @@ gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir" \
   "transcriptome_tmp_retention_days" "transcriptome_tmp_max_dirs" \
   "transcriptome_tmp_max_bytes" "transcriptome_tmp_max_files"
 
+# An installed runtime may retain an older project's editable block that has
+# no cache assignment. Keep the external override usable in that case.
+transcriptome_getfastq_cache_dir="${transcriptome_getfastq_cache_dir:-${GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR:-}}"
+
+# Keep a reviewed metadata cohort under workspace/input while writing all
+# generated artifacts to the selected workspace/output. Existing project
+# configuration blocks need no edit to use the registered environment override.
+transcriptome_metadata_input_subdir="${transcriptome_metadata_input_subdir:-${GG_TRANSCRIPTOME_METADATA_INPUT_SUBDIR:-amalgkit_metadata}}" # Relative metadata cohort under workspace/input; outputs remain under this workspace/output.
+if ! transcriptome_metadata_input_root "${gg_workspace_dir%/}/input" \
+  "${transcriptome_metadata_input_subdir}" >/dev/null; then
+  exit 1
+fi
+
 # The container normally binds only the selected workspace. Bind an explicitly
 # configured getfastq cache at a stable in-container path so a cache outside the
 # workspace remains visible to Apptainer/Singularity/Docker jobs.
