@@ -21,6 +21,8 @@ source "${gg_support_dir}/gg_busco.sh"
 
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 input_generation_mode="${input_generation_mode:-single}"
+require_cds="${require_cds:-0}"
+require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
 run_species_busco="${run_species_busco:-1}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
@@ -123,10 +125,12 @@ case "${input_generation_mode}" in
     exit 1
     ;;
 esac
-case "${require_genome}" in
-  0|1) ;;
-  *) echo "require_genome must be 0 or 1" >&2; exit 1 ;;
-esac
+for requirement in require_cds require_gff require_genome; do
+  case "${!requirement}" in
+    0|1) ;;
+    *) echo "${requirement} must be 0 or 1" >&2; exit 1 ;;
+  esac
+done
 
 case "${provider}" in
   refseq|genbank)
@@ -822,6 +826,20 @@ clean_input_generation_shards() {
   ensure_dir "${dir_species_summary_shards}"
   ensure_dir "${dir_task_stats_shards}"
   ensure_dir "${dir_task_meta_shards}"
+}
+
+validate_required_formatted_outputs() {
+  local summary_file="$1"
+  local expected_count="${2:-0}"
+  if [[ ${require_cds} -ne 1 && ${require_gff} -ne 1 && ${require_genome} -ne 1 ]]; then
+    return 0
+  fi
+  local cmd=(python "${gg_support_dir}/validate_required_species_outputs.py" --species-summary "${summary_file}")
+  [[ ${require_cds} -ne 1 ]] || cmd+=(--require-cds)
+  [[ ${require_gff} -ne 1 ]] || cmd+=(--require-gff)
+  [[ ${require_genome} -ne 1 ]] || cmd+=(--require-genome)
+  [[ ${expected_count} -le 0 ]] || cmd+=(--expected-task-count "${expected_count}")
+  "${cmd[@]}"
 }
 
 run_format_stage_single() {
@@ -1875,6 +1893,7 @@ run_array_prepare_mode() {
   if [[ ${strict} -eq 1 ]]; then
     cmd+=(--strict)
   fi
+  [[ ${require_gff} -ne 1 ]] || cmd+=(--require-gff)
   [[ ${require_genome} -ne 1 ]] || cmd+=(--require-genome)
   echo "Running: ${cmd[*]}"
   if "${cmd[@]}"; then
@@ -1892,6 +1911,7 @@ run_array_prepare_mode() {
   if [[ -n "${download_manifest}" ]]; then
     cmd=(python "${gg_support_dir}/stage_input_generation_downloads.py" --task-plan "${task_plan_output}"
       --jobs "${GG_TASK_CPUS:-1}" --download-timeout "${download_timeout}")
+    [[ ${require_gff} -ne 1 ]] || cmd+=(--require-gff)
     [[ ${require_genome} -ne 1 ]] || cmd+=(--require-genome)
     [[ -z "${auth_bearer_token_env}" ]] || cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
     [[ -z "${http_header}" ]] || cmd+=(--http-header "${http_header}")
@@ -1991,7 +2011,7 @@ run_array_worker_mode() {
   cds_output_path=$(read_stats_json_field "${task_meta_file}" "cds_output_path")
   gff_output_path=$(read_stats_json_field "${task_meta_file}" "gff_output_path")
   genome_output_path=$(read_stats_json_field "${task_meta_file}" "genome_output_path")
-  if [[ -z "${species_prefix}" || -z "${cds_output_path}" || -z "${gff_output_path}" ]]; then
+  if [[ -z "${species_prefix}" || -z "${cds_output_path}" || ( ${require_gff} -eq 1 && -z "${gff_output_path}" ) ]]; then
     stage_format_status="failed"
     echo "Array task description is missing required species or output paths: ${task_meta_file}"
     exit 1
@@ -2001,15 +2021,26 @@ run_array_worker_mode() {
     echo "Required genome input is missing for ${species_prefix}" >&2
     exit 1
   fi
+  if [[ ${require_gff} -eq 1 && ( -z "${gff_input_path}" || ! -s "${gff_input_path}" ) && ( -z "${gbff_input_path}" || ! -s "${gbff_input_path}" ) ]]; then
+    stage_format_status="failed"
+    echo "Required GFF input is missing for ${species_prefix}" >&2
+    exit 1
+  fi
   format_provenance_manifest="${input_generation_provenance_dir}/format.${species_prefix}.json"
   gg_artifact_contract_init format_provenance_args "input_generation_format" "${species_prefix}" "${format_provenance_manifest}"
   gg_artifact_add_input_if_present format_provenance_args "cds_input" "${cds_input_path}"
   gg_artifact_add_input_if_present format_provenance_args "gff_input" "${gff_input_path}"
   gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
   gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
+  format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
+  if [[ -n "${gff_output_path}" ]]; then
+    if [[ ${require_gff} -eq 1 || -n "${gff_input_path}" ]]; then
+      format_provenance_args+=(--output "formatted_gff=${gff_output_path}")
+    else
+      format_provenance_args+=(--optional-output "formatted_gff=${gff_output_path}")
+    fi
+  fi
   format_provenance_args+=(
-    --output "formatted_cds=${cds_output_path}"
-    --output "formatted_gff=${gff_output_path}"
     --parameter "provider=${provider}"
     --parameter "gene_grouping_mode=${gene_grouping_mode}"
     --parameter "gff_repair_mode=${gff_repair_mode}"
@@ -2064,12 +2095,10 @@ run_array_worker_mode() {
     echo "Required formatted genome is missing for ${species_prefix}" >&2
     exit 1
   fi
-  if [[ ${require_genome} -eq 1 ]]; then
-    python "${gg_support_dir}/validate_required_genomes.py" --species-summary "${task_summary_file}" --expected-task-count 1 || {
-      stage_format_status="failed"
-      exit 1
-    }
-  fi
+  validate_required_formatted_outputs "${task_summary_file}" 1 || {
+    stage_format_status="failed"
+    exit 1
+  }
   if [[ ${format_needs_update} -eq 1 ]]; then
     gg_artifact_record "${format_provenance_args[@]}"
   fi
@@ -2092,7 +2121,8 @@ run_array_worker_mode() {
   local receipt_cmd=(python "${gg_support_dir}/input_generation_array_state.py" complete
     --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
     --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
-    --file "${cds_output_path}" --file "${gff_output_path}")
+    --file "${cds_output_path}")
+  [[ -z "${gff_output_path}" || ! -s "${gff_output_path}" ]] || receipt_cmd+=(--file "${gff_output_path}")
   if [[ ${run_validate_inputs} -eq 1 ]]; then
     [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json" ]] || {
       echo "CDS/GFF mapping QC is missing for task ${GG_ARRAY_TASK_ID}" >&2
@@ -2188,12 +2218,10 @@ run_array_finalize_mode() {
     stage_format_status="failed"
     exit 1
   fi
-  if [[ ${require_genome} -eq 1 ]]; then
-    python "${gg_support_dir}/validate_required_genomes.py" --species-summary "${species_summary_output}" --expected-task-count "${expected_tasks}" || {
-      stage_format_status="failed"
-      exit 1
-    }
-  fi
+  validate_required_formatted_outputs "${species_summary_output}" "${expected_tasks}" || {
+    stage_format_status="failed"
+    exit 1
+  }
   stage_format_status="ok"
 
   run_validate_stage
@@ -2271,6 +2299,8 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  [[ ${require_cds} -ne 1 ]] || array_settings_cmd+=(--setting "require_cds=1")
+  [[ ${require_gff} -ne 1 ]] || array_settings_cmd+=(--setting "require_gff=1")
   [[ ${require_genome} -ne 1 ]] || array_settings_cmd+=(--setting "require_genome=1")
   if [[ ${run_species_taxonomy} -eq 1 ]]; then
     [[ -z "${taxonomy_taxid_map}" ]] || array_settings_cmd+=(--file "${taxonomy_taxid_map}")
@@ -2299,8 +2329,8 @@ fi
 case "${input_generation_mode}" in
   single)
     run_format_stage_single
-    if [[ ${require_genome} -eq 1 && ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
-      python "${gg_support_dir}/validate_required_genomes.py" --species-summary "${species_summary_output}"
+    if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+      validate_required_formatted_outputs "${species_summary_output}"
     fi
     run_validate_stage
     run_cds_fx2tab_stage_all

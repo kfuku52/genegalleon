@@ -395,7 +395,7 @@ def _install_fake_toolchain(root: Path) -> Path:
 
 def _core_env(
     workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None,
-    require_genome: bool = False,
+    require_genome: bool = False, require_cds: bool = False, require_gff: bool = False,
 ) -> dict[str, str]:
     env = {
         "HOME": os.environ["HOME"],
@@ -411,6 +411,8 @@ def _core_env(
         "input_generation_mode": mode,
         "run_format_inputs": "1",
         "require_genome": "1" if require_genome else "0",
+        "require_cds": "1" if require_cds else "0",
+        "require_gff": "1" if require_gff else "0",
         "run_validate_inputs": "1",
         "run_cds_fx2tab": "1",
         "run_species_busco": "1",
@@ -453,10 +455,11 @@ def _core_env(
 
 def _run_core(
     workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None,
-    require_genome: bool = False,
+    require_genome: bool = False, require_cds: bool = False, require_gff: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode,
-                    task_id=task_id, require_genome=require_genome)
+                    task_id=task_id, require_genome=require_genome,
+                    require_cds=require_cds, require_gff=require_gff)
     completed = subprocess.run(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
@@ -472,13 +475,14 @@ def _run_core(
 
 def _run_core_async(
     workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int,
-    require_genome: bool = False,
+    require_genome: bool = False, require_cds: bool = False, require_gff: bool = False,
 ) -> subprocess.Popen[str]:
     return subprocess.Popen(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
         env=_core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode,
-                      task_id=task_id, require_genome=require_genome),
+                      task_id=task_id, require_genome=require_genome,
+                      require_cds=require_cds, require_gff=require_gff),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -739,15 +743,15 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
 
     _write_runtime_busco_dataset(workspace)
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare",
-              require_genome=True)
+              require_genome=True, require_cds=True, require_gff=True)
 
     worker1 = _run_core_async(
         workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=1,
-        require_genome=True,
+        require_genome=True, require_cds=True, require_gff=True,
     )
     worker2 = _run_core_async(
         workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=2,
-        require_genome=True,
+        require_genome=True, require_cds=True, require_gff=True,
     )
     stdout1, stderr1 = worker1.communicate(timeout=180)
     stdout2, stderr2 = worker2.communicate(timeout=180)
@@ -762,7 +766,7 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
         assert manifest["parameters"]["busco_lineage_resolved"] == "eukaryota_odb12"
 
     _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_finalize",
-              require_genome=True)
+              require_genome=True, require_cds=True, require_gff=True)
     assert len(_read_tsv_rows(workspace / "output" / "input_generation" / "species_mapping_qc.tsv")) == 2
 
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="array_finalize")
@@ -799,6 +803,46 @@ def test_required_genome_worker_does_not_receipt_header_only_fasta(tmp_path: Pat
     assert "Required formatted genome is missing or invalid" in failed.stderr
     receipt = workspace / "output" / "input_generation" / "tmp" / "task_plan.json.completed" / "1.json"
     assert not receipt.exists()
+
+
+def test_required_cds_accepts_gff_and_genome_derived_output(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    (input_dir / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.cds.fa").unlink()
+    workspace = tmp_path / "derived_cds_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _run_core(workspace, input_dir, fake_bin, "array_prepare", require_cds=True)
+    _run_core(workspace, input_dir, fake_bin, "array_worker", task_id=1, require_cds=True)
+    root = workspace / "output" / "input_generation"
+    assert (root / "tmp" / "task_plan.json.completed" / "1.json").is_file()
+    assert list((root / "species_cds").glob("Arabidopsis_thaliana*.fa.gz"))
+
+
+def test_array_keeps_cds_only_species_when_gff_requirement_is_off(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    (input_dir / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.gff").unlink()
+    workspace = tmp_path / "cds_only_array_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    for mode, task_id in (("array_prepare", None), ("array_worker", 1),
+                          ("array_worker", 2), ("array_finalize", None)):
+        env = _core_env(workspace, input_dir, fake_bin, mode, task_id)
+        env.update(run_validate_inputs="0", run_cds_fx2tab="0",
+                   run_species_busco="0", run_multispecies_summary="0")
+        completed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT,
+                                   env=env, capture_output=True, text=True,
+                                   timeout=180, check=False)
+        assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+
+    root = workspace / "output" / "input_generation"
+    rows = _read_tsv_rows(root / "gg_input_generation_species.tsv")
+    assert len(rows) == 2
+    cds_only = next(row for row in rows if row["species_prefix"] == "Arabidopsis_thaliana")
+    assert cds_only["cds_output_path"]
+    assert cds_only["gff_output_path"] == ""
+    assert (root / "tmp" / "task_plan.json.completed" / "1.json").is_file()
 
 
 

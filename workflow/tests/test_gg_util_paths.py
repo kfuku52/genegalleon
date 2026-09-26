@@ -498,13 +498,17 @@ def test_apply_registered_env_overrides_keeps_gg_input_prefix(tmp_path):
         f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
         "provider=NCBI; "
         "trait_profile=none; "
+        "require_cds=0; "
+        "require_gff=0; "
         "require_genome=0; "
         "GG_INPUT_PROVIDER=direct; "
         "GG_INPUT_TRAIT_PROFILE=gift_starter; "
+        "GG_INPUT_REQUIRE_CDS=1; "
+        "GG_INPUT_REQUIRE_GFF=1; "
         "GG_INPUT_REQUIRE_GENOME=1; "
         "gg_apply_registered_env_overrides gg_input_generation_entrypoint.sh; "
-        'printf "provider=%s\\ntrait_profile=%s\\nrequire_genome=%s\\n" '
-        '"${provider}" "${trait_profile}" "${require_genome}"'
+        'printf "provider=%s\\ntrait_profile=%s\\nrequire_cds=%s\\nrequire_gff=%s\\nrequire_genome=%s\\n" '
+        '"${provider}" "${trait_profile}" "${require_cds}" "${require_gff}" "${require_genome}"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -513,6 +517,8 @@ def test_apply_registered_env_overrides_keeps_gg_input_prefix(tmp_path):
     assert completed.stdout.splitlines() == [
         "provider=direct",
         "trait_profile=gift_starter",
+        "require_cds=1",
+        "require_gff=1",
         "require_genome=1",
     ]
 

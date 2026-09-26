@@ -691,6 +691,8 @@ Configuration:
 Alternative runtime overrides (without editing files) via env vars:
 
 - `GG_INPUT_PROVIDER`, `GG_INPUT_STRICT`, `GG_INPUT_OVERWRITE`,
+- `GG_INPUT_REQUIRE_CDS`, `GG_INPUT_REQUIRE_GFF`, `GG_INPUT_REQUIRE_GENOME`
+  (independent formatted-output requirements; each defaults to `0`),
 - `GG_INPUT_DOWNLOAD_ONLY`, `GG_INPUT_DRY_RUN`,
 - `GG_INPUT_DOWNLOAD_TIMEOUT`,
 - `GG_INPUT_GENE_GROUPING_MODE` (`strict` or `rescue_overlap`; default

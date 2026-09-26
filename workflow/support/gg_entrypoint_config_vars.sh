@@ -487,6 +487,8 @@ input_dir
 input_generation_mode
 overwrite
 provider
+require_cds
+require_gff
 require_genome
 resolved_manifest_output
 run_cds_fx2tab

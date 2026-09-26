@@ -25,6 +25,7 @@ def build_arg_parser():
     parser.add_argument("--download-manifest", default="")
     parser.add_argument("--download-dir", default="")
     parser.add_argument("--stage-downloads", action="store_true", help="Require prepare to stage manifest inputs before workers run.")
+    parser.add_argument("--require-gff", action="store_true", help="Reject local tasks without a nonempty GFF or GBFF source; staged manifest tasks are checked after download.")
     parser.add_argument("--require-genome", action="store_true", help="Reject local tasks without a nonempty genome FASTA; staged manifest tasks are checked after download.")
     parser.add_argument(
         "--input-dir",
@@ -93,6 +94,12 @@ def main():
             continue
         tasks, warnings, errors = fsi.discover_tasks(provider, input_dir)
         for task in tasks:
+            if args.require_gff and not any(
+                path is not None and path.is_file() and path.stat().st_size > 0
+                for path in (task.get("gff_path"), task.get("gbff_path"))
+            ):
+                all_errors.append("Required GFF input is missing for " + task["species_prefix"])
+                continue
             if args.require_genome and not any(
                 path is not None and path.is_file() and path.stat().st_size > 0
                 for path in (task.get("genome_path"), task.get("gbff_path"))
@@ -147,7 +154,7 @@ def main():
     for error in all_errors:
         sys.stderr.write("Error: {}\n".format(error))
 
-    if (args.strict or args.require_genome) and all_errors:
+    if (args.strict or args.require_gff or args.require_genome) and all_errors:
         return 1
     if not all_tasks:
         sys.stderr.write("No species tasks were discovered.\n")

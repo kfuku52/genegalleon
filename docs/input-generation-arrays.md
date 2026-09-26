@@ -89,6 +89,18 @@ workers and finalize verify the formatted output. The setting is frozen with
 the array plan. Enable it only in a fresh workspace/plan, rather than changing
 settings on an active or previously prepared array.
 
+`GG_INPUT_REQUIRE_CDS=1` and `GG_INPUT_REQUIRE_GFF=1` independently require
+formatted CDS FASTA and GFF with at least one feature. Both default to `0`.
+CDS derived from GFF plus genome or GBFF counts; GFF derived from GBFF counts.
+`gg_input_generation` already needs a usable source of CDS for its species tasks;
+leaving the CDS flag off does not make it a CDS-free workflow. The flag adds
+an explicit check that formatting produced a FASTA sequence for every species.
+The GFF requirement rejects a species without a GFF or GBFF source during
+prepare. Workers check required outputs before issuing completion receipts,
+and finalize checks every species again. These settings are frozen with the
+array plan. An intentionally CDS-only run also needs `GG_INPUT_RUN_VALIDATE_INPUTS=0`,
+because CDS-to-GFF mapping validation requires GFF regardless of these flags.
+
 Every selected manifest row must have an explicit, valid `species_key`, a
 supported `provider`, and an `id`. Duplicate output species prefixes are rejected,
 even across providers. Species keys and explicit download filenames must be

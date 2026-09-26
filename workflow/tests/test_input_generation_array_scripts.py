@@ -11,6 +11,7 @@ RUN_TASK_SCRIPT = SUPPORT_DIR / "run_input_generation_task.py"
 MERGE_SCRIPT = SUPPORT_DIR / "merge_input_generation_shards.py"
 STAGE_SCRIPT = SUPPORT_DIR / "stage_input_generation_downloads.py"
 REQUIRE_GENOMES_SCRIPT = SUPPORT_DIR / "validate_required_genomes.py"
+REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
 
 
 def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cache(tmp_path):
@@ -81,6 +82,18 @@ def test_required_genome_is_opt_in_for_local_array_planning(tmp_path):
     assert "Required genome input is missing for Arabidopsis_thaliana" in required.stderr
 
 
+def test_required_gff_is_opt_in_for_local_array_planning(tmp_path):
+    source = tmp_path / "Direct" / "species_wise_original"
+    write_direct_species_fixture(source, "Arabidopsis_thaliana")
+    (source / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.gff").unlink()
+    args = ("--provider", "direct", "--input-dir", str(source), "--outfile", str(tmp_path / "plan.json"))
+    default = run_python(PLAN_SCRIPT, *args)
+    assert default.returncode == 0, default.stderr
+    required = run_python(PLAN_SCRIPT, *args, "--require-gff")
+    assert required.returncode != 0
+    assert "Required GFF input is missing for Arabidopsis_thaliana" in required.stderr
+
+
 def test_required_genome_rejects_partial_staged_download_without_receipt(tmp_path):
     import functools
     import threading
@@ -118,6 +131,43 @@ def test_required_genome_rejects_partial_staged_download_without_receipt(tmp_pat
         thread.join(3)
 
 
+def test_required_gff_rejects_partial_staged_download_without_receipt(tmp_path):
+    import functools
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    raw = tmp_path / "raw"
+    species = "Arabidopsis_thaliana"
+    write_direct_species_fixture(raw, species)
+    (raw / species / f"{species}.gff").unlink()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        base = f"http://127.0.0.1:{server.server_port}/{species}/{species}"
+        manifest.write_text("provider\tid\tspecies_key\tcds_url\tgff_url\tgenome_url\n"
+                            f"direct\tfixture\t{species}\t{base}.cds.fa\t{base}.gff\t{base}.genome.fa\n")
+        plan = tmp_path / "plan.json"
+        planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                             "--download-dir", str(tmp_path / "downloads"), "--stage-downloads", "--outfile", str(plan))
+        assert planned.returncode == 0, planned.stderr
+        required = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-gff")
+        assert required.returncode != 0
+        assert "Required GFF input is missing for Arabidopsis_thaliana" in required.stderr
+        assert not Path(str(plan) + ".tasks/1.json").exists()
+        optional = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+        assert optional.returncode == 0, optional.stderr
+        cached = json.loads(Path(str(plan) + ".tasks/1.json").read_text())["task"]
+        assert cached["gff_path"] is None
+        required_cached = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-gff")
+        assert required_cached.returncode != 0
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(3)
+
+
 def test_required_genome_summary_rejects_missing_or_empty_output(tmp_path):
     genome = tmp_path / "genome.fa"
     genome.write_text(">chr1\nATG\n")
@@ -138,6 +188,33 @@ def test_required_genome_summary_rejects_missing_or_empty_output(tmp_path):
     summary.write_text("species_prefix\tgenome_output_path\nArabidopsis_thaliana\t" + str(genome_gz) + "\n")
     compressed = run_python(REQUIRE_GENOMES_SCRIPT, "--species-summary", str(summary))
     assert compressed.returncode == 0, compressed.stderr
+
+
+def test_required_cds_and_gff_outputs_are_independent(tmp_path):
+    cds = tmp_path / "cds.fa.gz"
+    gff = tmp_path / "genes.gff.gz"
+    with gzip.open(cds, "wt") as handle:
+        handle.write(">gene1\nATG\n")
+    with gzip.open(gff, "wt") as handle:
+        handle.write("##gff-version 3\nchr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=gene1\n")
+    summary = tmp_path / "species.tsv"
+    summary.write_text("species_prefix\tcds_output_path\tgff_output_path\n"
+                       f"Arabidopsis_thaliana\t{cds}\t{gff}\n")
+    flags = ("--species-summary", str(summary), "--require-cds", "--require-gff")
+    valid = run_python(REQUIRE_OUTPUTS_SCRIPT, *flags)
+    assert valid.returncode == 0, valid.stderr
+    with gzip.open(gff, "wt") as handle:
+        handle.write("##gff-version 3\n")
+    invalid_gff = run_python(REQUIRE_OUTPUTS_SCRIPT, *flags)
+    assert invalid_gff.returncode != 0
+    assert "Required formatted GFF is missing or invalid" in invalid_gff.stderr
+    cds_only = run_python(REQUIRE_OUTPUTS_SCRIPT, "--species-summary", str(summary), "--require-cds")
+    assert cds_only.returncode == 0, cds_only.stderr
+    with gzip.open(cds, "wt") as handle:
+        handle.write(">gene1\n")
+    invalid_cds = run_python(REQUIRE_OUTPUTS_SCRIPT, "--species-summary", str(summary), "--require-cds")
+    assert invalid_cds.returncode != 0
+    assert "Required formatted CDS is missing or invalid" in invalid_cds.stderr
 
 
 def run_python(script: Path, *args):
