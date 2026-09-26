@@ -16,6 +16,7 @@ taxonomy_species_tree="auto"
 taxonomy_ranks="all"
 taxonomy_plot_clades=0
 taxonomy_taxid_map=""
+taxonomy_taxid_override=""
 ```
 
 Use the entrypoint's ordinary environment prefix, for example
@@ -57,6 +58,12 @@ are errors. Merged TaxIDs are
 translated when recorded in the database. Multiple input identifiers can share
 a TaxID and remain separate tips. Invalid/unresolved TaxIDs remain visible in
 the table, with the originally supplied ID in `input_taxid`.
+For one scheduled correction without a shared TSV, set the entrypoint-scoped
+override, for example
+`GG_GENOME_EVOLUTION_TAXONOMY_TAXID_OVERRIDE=Ficus_sp_unknown:3493`.
+The species must be in the current input set. A
+conflicting TSV and inline correction is an error; the correction is included
+in the output provenance and changes invalidate the cached taxonomy result.
 
 Entry points prepare/reuse the existing `downloads/ete_taxonomy/taxa.sqlite`
 cache. The analysis does not refresh a second independent taxonomy database.

@@ -111,6 +111,7 @@ taxonomy_species_tree="auto" # Species-tree Newick path, or auto to discover a s
 taxonomy_ranks="all" # all includes every available NCBI lineage rank; alternatively use a comma-separated list. Per-species missing ranks remain blank.
 taxonomy_plot_clades=0 # Set to 1 to draw clade columns; tables and NHX retain clades either way.
 taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit taxonomy corrections.
+taxonomy_taxid_override="" # One explicit species:TaxID correction for a scheduled run.
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.

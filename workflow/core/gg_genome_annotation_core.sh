@@ -22,6 +22,11 @@ cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
 cdskit_localize_no_model_download="${cdskit_localize_no_model_download:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
 run_scaffold_taxonomy="${run_scaffold_taxonomy:-1}"
+scaffold_host_taxid="${scaffold_host_taxid:-}"
+if [[ -n "${scaffold_host_taxid}" && ! "${scaffold_host_taxid}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "scaffold_host_taxid must be a positive NCBI TaxID." >&2
+  exit 1
+fi
 ### End: Job-supplied configuration ###
 
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
@@ -622,16 +627,20 @@ if [[ ${run_scaffold_taxonomy} -eq 1 ]]; then
     --output "scaffold_taxonomy=${file_sp_scaffold_taxonomy}"
     --output "gene_taxonomy=${file_sp_gene_taxonomy}"
     --parameter "species=${sp_ub}"
+    --parameter "host_taxid=${scaffold_host_taxid}"
     --parameter "schema_version=1"
   )
   gg_artifact_add_input_if_present scaffold_taxonomy_provenance_args "gff" "${file_sp_gff}"
   gg_artifact_prepare_stage scaffold_taxonomy_needs_update run_scaffold_taxonomy "${scaffold_taxonomy_provenance_args[@]}" || exit $?
   if [[ ${scaffold_taxonomy_needs_update} -eq 1 ]]; then
     gg_step_start "${task}"
+    scaffold_host_taxid_args=()
+    [[ -z "${scaffold_host_taxid}" ]] || scaffold_host_taxid_args=(--host-taxid "${scaffold_host_taxid}")
     python "${gg_support_dir}/scaffold_taxonomy.py" \
       --species "${sp_ub}" --gff-info "${file_sp_gff_info}" --gff "${file_sp_gff}" \
       --taxonomy "${file_sp_cds_mmseqs2taxonomy}" --taxonomy-dbfile "${scaffold_taxonomy_db}" \
-      --gene-out "${file_sp_gene_taxonomy}" --scaffold-out "${file_sp_scaffold_taxonomy}"
+      --gene-out "${file_sp_gene_taxonomy}" --scaffold-out "${file_sp_scaffold_taxonomy}" \
+      "${scaffold_host_taxid_args[@]}"
     gg_artifact_record "${scaffold_taxonomy_provenance_args[@]}"
   else
     gg_step_skip "${task}"

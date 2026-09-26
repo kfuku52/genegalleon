@@ -227,6 +227,32 @@ def test_override_is_authoritative_and_invalidates_cache(args):
     assert hashes(args) == before
 
 
+def test_inline_taxid_override_corrects_one_species_and_rejects_conflicts(args):
+    Path(args.species_table).write_text("species\ttaxid\nUnknown_species\t4530\n")
+    args.taxid_override = "Unknown_species:3702"
+    subject.run(args)
+    row = table(args)[0]
+    assert row["taxid"] == "3702"
+    assert row["resolution_source"] == "inline_override"
+    correct = hashes(args)
+    args.taxid_override = "Unknown_species:4530"
+    subject.run(args)
+    assert table(args)[0]["taxid"] == "4530"
+    assert hashes(args) != correct
+    before = hashes(args)
+    args.taxid_override = "Unknown_species:0"
+    with pytest.raises(ValueError, match="positive_taxid"):
+        subject.run(args)
+    assert hashes(args) == before
+    args.taxid_override = "Unknown_species:3702"
+    mapping = args.workspace / "overrides.tsv"
+    mapping.write_text("species\ttaxid\nUnknown_species\t4530\n")
+    args.taxid_map = str(mapping)
+    with pytest.raises(ValueError, match="Conflicting TaxID"):
+        subject.run(args)
+    assert hashes(args) == before
+
+
 def test_current_inputs_ignore_historical_summary_rows_and_preserve_strain_keys(args):
     args.species_table = ""
     directory = args.workspace / "input/species_cds"
@@ -389,7 +415,8 @@ effective_species_input_source_dir_path() { echo "$species_cds_dir"; }
 '''
     env = dict(os.environ, gg_workspace_dir=str(args.workspace), gg_support_dir=str(SUPPORT),
                run_species_taxonomy="1", taxonomy_species_tree="auto", taxonomy_ranks="order,family",
-               taxonomy_plot_clades="1", taxonomy_taxid_map="", input_generation_mode=mode, dry_run="0", download_only="0",
+               taxonomy_plot_clades="1", taxonomy_taxid_map="", taxonomy_taxid_override="",
+               input_generation_mode=mode, dry_run="0", download_only="0",
                species_cds_dir=str(directory), species_summary_output=args.species_table,
                test_taxonomy_db=args.taxonomy_db, MPLCONFIGDIR=str(args.workspace / "mpl"))
     result = subprocess.run(["bash", "-c", setup + snippet], env=env, text=True, capture_output=True)

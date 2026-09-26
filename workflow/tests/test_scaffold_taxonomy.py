@@ -229,6 +229,7 @@ def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path, raw_gff_present):
     # This fixture launches the core directly, without the scratch supervisor.
     env.update(GG_COMMON_TMP_ROOT="workspace", gg_workspace_dir=str(workspace), GG_ARRAY_TASK_ID="1", run_scaffold_taxonomy="1", delete_tmp_dir="0",
                gg_support_dir=str(root / "workflow/support"))
+    env["scaffold_host_taxid"] = "3"
     env["PATH"] = f"{_install_fake_conda(tmp_path)}{os.pathsep}{env['PATH']}"
     scaffold_output = workspace / "output/species_scaffold_taxonomy/Host_species_scaffold_taxonomy.tsv"
     mtimes = []
@@ -239,6 +240,9 @@ def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path, raw_gff_present):
     assert mtimes[0] == mtimes[1]
     assert pd.read_csv(scaffold_output, sep="\t").total_count.eq(2).all()
     assert (workspace / "output/artifact_provenance/genome_annotation/Host_species.scaffold_taxonomy.json").is_file()
+    gene_taxonomy = pd.read_csv(workspace / "output/species_scaffold_taxonomy/Host_species_gene_taxonomy.tsv",
+                                sep="\t")
+    assert gene_taxonomy.loc[gene_taxonomy["rank"].eq("phylum"), "host_taxid"].eq(3).all()
     raw_taxonomy = tax_dir / "Host_species_mmseqs2taxonomy.tsv"
     raw_taxonomy.write_text(raw_taxonomy.read_text().replace("Host_species_h\t4\t", "Host_species_h\t2\t"))
     completed = subprocess.run(["bash", str(core)], env=env, capture_output=True, text=True)

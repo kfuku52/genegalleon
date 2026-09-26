@@ -110,6 +110,7 @@ taxonomy_species_tree="auto" # Species-tree Newick path, or auto to discover a s
 taxonomy_ranks="all" # all includes every available NCBI lineage rank; alternatively use a comma-separated list. Per-species missing ranks remain blank.
 taxonomy_plot_clades=0 # Set to 1 to draw clade columns; tables and NHX retain clades either way.
 taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit taxonomy corrections.
+taxonomy_taxid_override="" # One explicit species:TaxID correction for a scheduled run.
 
 # Output and shared summary parameters
 summary_output_dir="${summary_output_dir:-auto}" # Output directory for source-specific gene summaries.

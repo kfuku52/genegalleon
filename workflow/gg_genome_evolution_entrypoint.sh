@@ -151,6 +151,7 @@ taxonomy_species_tree="auto" # Species-tree Newick path, or auto to discover a s
 taxonomy_ranks="all" # all includes every available NCBI lineage rank; alternatively use a comma-separated list. Per-species missing ranks remain blank.
 taxonomy_plot_clades=0 # Set to 1 to draw clade columns; tables and NHX retain clades either way.
 taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit taxonomy corrections.
+taxonomy_taxid_override="" # One explicit species:TaxID correction for a scheduled run.
 
 # Shared parameters
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.

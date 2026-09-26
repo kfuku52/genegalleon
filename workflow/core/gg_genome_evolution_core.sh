@@ -25,6 +25,7 @@ taxonomy_species_tree="${taxonomy_species_tree:-auto}"
 taxonomy_ranks="${taxonomy_ranks:-all}"
 taxonomy_plot_clades="${taxonomy_plot_clades:-0}"
 taxonomy_taxid_map="${taxonomy_taxid_map:-}"
+taxonomy_taxid_override="${taxonomy_taxid_override:-}"
 # Resolve explicit paths before downstream stages change the working directory.
 case "${taxonomy_species_tree}" in auto|/*) ;; *) taxonomy_species_tree="${PWD}/${taxonomy_species_tree}" ;; esac
 case "${taxonomy_taxid_map}" in ""|/*) ;; *) taxonomy_taxid_map="${PWD}/${taxonomy_taxid_map}" ;; esac
@@ -4251,6 +4252,7 @@ if [[ ${run_species_taxonomy} -eq 1 ]]; then
     --ranks "${taxonomy_ranks}" \
     --plot-clades "${taxonomy_plot_clades}" \
     --taxid-map "${taxonomy_taxid_map}" \
+    --taxid-override "${taxonomy_taxid_override}" \
     --species-dir "$(effective_species_input_source_dir_path)" || exit $?
 fi
 
@@ -4638,6 +4640,13 @@ PY
 
     if [[ ${orthofinder_core_exit_code} -ne 0 ]]; then
       echo "OrthoFinder failed in the core-species run. Exiting."
+      exit 1
+    fi
+    shopt -s nullglob
+    orthofinder_core_clusters=("${dir_orthofinder}"/core/Results_core/WorkingDirectory/clusters_OrthoFinder*id_pairs.txt)
+    shopt -u nullglob
+    if [[ ${#orthofinder_core_clusters[@]} -ne 1 || ! -s "${orthofinder_core_clusters[0]:-}" ]]; then
+      echo "OrthoFinder core run did not publish its required cluster-pairs file. Exiting." >&2
       exit 1
     fi
 

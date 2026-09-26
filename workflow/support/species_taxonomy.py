@@ -221,6 +221,18 @@ def collect_species(args):
                 raise ValueError(f"Invalid override TaxID for {label}: {row['taxid']!r}")
             rows[label].update(taxid=row["taxid"], taxid_source="override")
             rows[label].pop("taxid_candidates", None)
+    inline = getattr(args, "taxid_override", "")
+    if inline:
+        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_.-]*):([1-9][0-9]*)", inline)
+        if match is None:
+            raise ValueError("TaxID override must be species:positive_taxid")
+        label, taxid = match.groups()
+        if label not in rows:
+            raise ValueError(f"TaxID override contains unknown input species: {label}")
+        if args.taxid_map and label in overrides and overrides[label]["taxid"] != taxid:
+            raise ValueError(f"Conflicting TaxID overrides for {label}")
+        rows[label].update(taxid=taxid, taxid_source="inline_override")
+        rows[label].pop("taxid_candidates", None)
     return [rows[label] for label in sorted(rows)], sources, fasta_inputs
 
 
@@ -642,6 +654,7 @@ def main():
     parser.add_argument("--species-summary", default="", help="Metadata for current input FASTAs; never adds historical species.")
     parser.add_argument("--species-dir", action="append", default=[], help="Current input FASTA directory; repeatable.")
     parser.add_argument("--taxid-map", default="", help="Explicit species-to-TaxID override TSV.")
+    parser.add_argument("--taxid-override", default="", help="One explicit species:TaxID correction for a scheduled task.")
     parser.add_argument("--taxonomy-db", default="")
     parser.add_argument("--species-tree", default="auto")
     parser.add_argument("--ranks", default=DEFAULT_RANKS, help="all (default) includes every observed lineage rank, or specify a comma-separated list.")

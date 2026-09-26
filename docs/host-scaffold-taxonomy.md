@@ -25,7 +25,10 @@ An explicit `Genus_sp_unknown` label may resolve to one verified genus taxid;
 species-level composition remains unresolved. Other unresolvable/ambiguous
 host names are errors, not a guessed classification.
 For a manual invocation, `scaffold_taxonomy.py --host-taxid` supplies an explicit
-host anchor. The pipeline intentionally does not borrow the contamination-removal
+host anchor. For a scheduled single-species annotation task, set
+`GG_GENOME_ANNOTATION_SCAFFOLD_HOST_TAXID` to that NCBI TaxID; the value is
+recorded in the stage provenance and overrides an ambiguous name. The pipeline
+intentionally does not borrow the contamination-removal
 target, which can be a broad taxon rather than the actual host.
 
 Outputs in `output/species_scaffold_taxonomy/`:
