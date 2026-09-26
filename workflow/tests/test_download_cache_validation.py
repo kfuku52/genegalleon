@@ -196,6 +196,51 @@ def test_staging_preserves_successful_task_receipts_on_partial_failure(tmp_path,
             stage_module.stage_downloads(plan, jobs=2, headers={})
 
 
+def test_staging_ignores_unselected_species_in_old_download_cache(tmp_path, monkeypatch):
+    import format_species_inputs as fsi
+    import stage_input_generation_downloads as stage_module
+
+    download_dir = tmp_path / "downloads"
+    plan = tmp_path / "task_plan.json"
+    selected = "Good_species"
+    plan.write_text(json.dumps({
+        "version": 2,
+        "provider": "ncbi",
+        "task_count": 1,
+        "species": [selected],
+        "tasks": [{
+            "provider": "ncbi",
+            "species_key": selected,
+            "species_prefix": selected,
+            "manifest_row": {"provider": "ncbi", "id": selected, "species_key": selected},
+            "download_dir": str(download_dir),
+            "gene_grouping_mode": "rescue_overlap",
+            "gff_repair_mode": "safe",
+            "format_strict": False,
+            "input_sha256": {},
+        }],
+        "download_mode": "staged",
+    }), encoding="utf-8")
+
+    def download_with_stale_cache(**kwargs):
+        root = Path(kwargs["download_root"]) / "NCBI_Genome" / "species_wise_original"
+        selected_dir = root / selected
+        selected_dir.mkdir(parents=True)
+        (selected_dir / "GCA_000001.1_selected_cds_from_genomic.fna").write_text(">gene1\nATG\n", encoding="utf-8")
+        stale_dir = root / "Tanacetum_cinerariifolium"
+        stale_dir.mkdir()
+        (stale_dir / "GCA_000002.1_stale_genomic.fna").write_text(">chr1\nATG\n", encoding="utf-8")
+        return {
+            "warnings": [], "errors": [], "downloaded": 1,
+            "resolved_rows": [{"provider": "ncbi", "species_key": selected}],
+        }
+
+    monkeypatch.setattr(fsi, "download_from_manifest", download_with_stale_cache)
+    stage_module.stage_downloads(plan, jobs=1)
+    receipt = Path(str(plan) + ".tasks") / "1.json"
+    assert json.loads(receipt.read_text(encoding="utf-8"))["task"]["species_key"] == selected
+
+
 def test_replacement_between_validation_and_record_is_not_certified(tmp_path, monkeypatch):
     target = tmp_path / "input.gz"
     _write_gzip(target, ">gene1\nATG\n")

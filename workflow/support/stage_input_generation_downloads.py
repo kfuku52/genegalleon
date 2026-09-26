@@ -63,7 +63,14 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
     discovery_errors = []
     failed_providers = set()
     for provider in sorted({task["provider"] for task in plan["tasks"]}):
-        tasks, warnings, errors = fsi.discover_tasks(provider, download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider])
+        allowed_species_keys = {
+            task["species_key"] for task in plan["tasks"] if task["provider"] == provider
+        }
+        tasks, warnings, errors = fsi.discover_tasks(
+            provider,
+            download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider],
+            allowed_species_keys=allowed_species_keys,
+        )
         for warning in warnings:
             print("Warning: " + warning, file=sys.stderr)
         discovery_errors.extend(errors)
