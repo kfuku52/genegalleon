@@ -67,6 +67,10 @@ python workflow/gg_input_generation_array.py \
 ```
 
 `--retry` skips prepare and selects only missing or invalid completion receipts.
+For a submitted retry with missing workers, the native helper refuses to run
+while any `gg_input_array_worker` job owned by the caller is active or pending.
+This is conservative across projects because older Slurm jobs do not record
+their task-plan identity. Previewing `--retry` remains read-only.
 It also works after the helper was interrupted following successful prepare.
 An atomic prepare-completion marker prevents retry from bypassing failed or
 incomplete shared setup; rerun without `--retry` in that case. If all workers
@@ -76,6 +80,14 @@ UGE/PBS users can continue invoking the three existing modes directly, with one
 worker per 1-based task index. Automated submission in this helper is Slurm only.
 
 ## Frozen inputs and restart behavior
+
+`GG_INPUT_REQUIRE_GENOME=1` opts into requiring a nonempty formatted genome
+FASTA for every selected species. The default is `0`, so projects using only
+CDS/annotation remain supported. In array mode, prepare rejects a staged
+species without a genome FASTA or genomic GBFF source before workers launch;
+workers and finalize verify the formatted output. The setting is frozen with
+the array plan. Enable it only in a fresh workspace/plan, rather than changing
+settings on an active or previously prepared array.
 
 Every selected manifest row must have an explicit, valid `species_key`, a
 supported `provider`, and an `id`. Duplicate output species prefixes are rejected,
@@ -99,6 +111,9 @@ outputs, and summary/statistics shards. When CDS/GFF validation runs, its per-ta
 `tmp/task_stats_shards/N.mapping.json` records phase and UTR conflict counts and
 is included in the completion receipt; finalization aggregates available QC
 shards without requiring them from workers completed by older runtimes.
+Finalize also publishes `species_mapping_qc.tsv` with one row per species;
+`not_recorded` means mapping QC is absent (for example, an older completed
+worker or a run without validation), not that its annotation was clean.
 Finalize checks exact shard indices,
 species identities, receipts, and outputs; incomplete or stale results leave the
 canonical species summary intact. The original manifest is not reread during

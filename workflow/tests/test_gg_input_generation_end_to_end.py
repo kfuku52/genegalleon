@@ -394,7 +394,8 @@ def _install_fake_toolchain(root: Path) -> Path:
 
 
 def _core_env(
-    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None,
+    require_genome: bool = False,
 ) -> dict[str, str]:
     env = {
         "HOME": os.environ["HOME"],
@@ -409,6 +410,7 @@ def _core_env(
         "input_dir": str(input_dir) if input_dir is not None else "",
         "input_generation_mode": mode,
         "run_format_inputs": "1",
+        "require_genome": "1" if require_genome else "0",
         "run_validate_inputs": "1",
         "run_cds_fx2tab": "1",
         "run_species_busco": "1",
@@ -450,9 +452,11 @@ def _core_env(
 
 
 def _run_core(
-    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None
+    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int | None = None,
+    require_genome: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id)
+    env = _core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode,
+                    task_id=task_id, require_genome=require_genome)
     completed = subprocess.run(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
@@ -467,12 +471,14 @@ def _run_core(
 
 
 def _run_core_async(
-    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int
+    workspace: Path, input_dir: Path | None, fake_bin: Path, mode: str, task_id: int,
+    require_genome: bool = False,
 ) -> subprocess.Popen[str]:
     return subprocess.Popen(
         ["bash", str(CORE_PATH)],
         cwd=REPO_ROOT,
-        env=_core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode, task_id=task_id),
+        env=_core_env(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode=mode,
+                      task_id=task_id, require_genome=require_genome),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -732,13 +738,16 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
     fake_bin = _install_fake_toolchain(tmp_path)
 
     _write_runtime_busco_dataset(workspace)
-    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare")
+    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_prepare",
+              require_genome=True)
 
     worker1 = _run_core_async(
-        workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=1
+        workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=1,
+        require_genome=True,
     )
     worker2 = _run_core_async(
-        workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=2
+        workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_worker", task_id=2,
+        require_genome=True,
     )
     stdout1, stderr1 = worker1.communicate(timeout=180)
     stdout2, stderr2 = worker2.communicate(timeout=180)
@@ -752,7 +761,9 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert manifest["parameters"]["busco_lineage_resolved"] == "eukaryota_odb12"
 
-    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_finalize")
+    _run_core(workspace=workspace, input_dir=input_dir, fake_bin=fake_bin, mode="array_finalize",
+              require_genome=True)
+    assert len(_read_tsv_rows(workspace / "output" / "input_generation" / "species_mapping_qc.tsv")) == 2
 
     _assert_expected_outputs(workspace / "output" / "input_generation", expected_last_mode="array_finalize")
     single_workspace = tmp_path / "single_comparison_workspace"

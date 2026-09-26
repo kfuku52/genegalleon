@@ -37,6 +37,7 @@ def build_arg_parser():
         required=True,
         help="Output JSON path for aggregated task stats.",
     )
+    parser.add_argument("--mapping-qc-output", default="", help="Optional per-species mapping and annotation QC TSV.")
     parser.add_argument(
         "--expected-task-count",
         type=int,
@@ -162,6 +163,35 @@ def main():
         )
         if cds_first_sequence_name == "":
             cds_first_sequence_name = str(payload.get("cds_first_sequence_name", "") or "")
+
+    if args.mapping_qc_output:
+        qc_rows = []
+        qc_by_index = {int(path.name.split(".", 1)[0]): read_task_stats(path) for path in mapping_qc_paths}
+        for stats_path in sorted(stats_paths, key=lambda path: int(path.stem)):
+            index = int(stats_path.stem)
+            species = str(read_task_stats(stats_path).get("species_prefix") or "").strip()
+            if not species:
+                parser.error("Task stats is missing species_prefix for mapping QC")
+            qc = qc_by_index.get(index)
+            qc_rows.append({
+                "task_index": index,
+                "species_prefix": species,
+                "qc_status": "available" if qc is not None else "not_recorded",
+                "cds_ids_total": "" if qc is None else qc.get("cds_ids_total", ""),
+                "mapped_ids_total": "" if qc is None else qc.get("mapped_ids_total", ""),
+                "phase_conflicts_total": "" if qc is None else qc.get("phase_conflicts_total", ""),
+                "utr_conflicts_total": "" if qc is None else qc.get("utr_conflicts_total", ""),
+            })
+        if not qc_rows:
+            parser.error("Cannot publish mapping QC without task stats")
+        target = Path(args.mapping_qc_output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False, newline="") as handle:
+            staged_qc = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=list(qc_rows[0]), delimiter="\t")
+            writer.writeheader()
+            writer.writerows(qc_rows)
+        os.replace(staged_qc, target)
 
     aggregate_stats_output.parent.mkdir(parents=True, exist_ok=True)
     with open(aggregate_stats_output, "wt", encoding="utf-8") as handle:

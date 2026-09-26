@@ -23,6 +23,23 @@ def array_expression(indices):
     return ",".join(str(first) if first == last else f"{first}-{last}" for first, last in ranges)
 
 
+def ensure_no_active_legacy_worker_array():
+    """Fail closed before submitting a retry while any legacy-named array is active."""
+    result = subprocess.run(
+        ["squeue", "--noheader", "--me", "--name", "gg_input_array_worker", "--format", "%i"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Cannot verify active input-generation arrays: " + result.stderr.strip())
+    active = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if active:
+        raise RuntimeError(
+            "An input-generation worker array is still active or pending ({}); retry after it exits.".format(
+                ", ".join(active[:8])
+            )
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-plan", required=True)
@@ -89,6 +106,8 @@ def main():
         pending = [i for i in range(1, plan["task_count"] + 1) if not args.retry or not verify_receipt(plan_path, i, plan_sha256)]
         print(json.dumps({"species_count": plan["task_count"], "selected_tasks": pending, "cpus_per_task": args.cpus,
                           "memory_per_task": args.memory, "max_running": args.max_running}))
+        if args.retry and args.submit and pending:
+            ensure_no_active_legacy_worker_array()
         worker_id = dispatch("array_worker", ["--array=" + array_expression(pending) + "%" + str(args.max_running)]) if pending else ""
     dispatch("array_finalize", (["--dependency=afterok:" + worker_id] if worker_id else []))
 

@@ -121,6 +121,7 @@ species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BU
 trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.
 busco_lineage="${GG_COMMON_BUSCO_LINEAGE:-auto}" # BUSCO lineage dataset name, or auto to infer a shared dataset from the discovered species set.
 strict=0 # Treat input formatting and validation warnings as fatal errors.
+require_genome=0 # 0|1; require a nonempty formatted genome FASTA for every selected species. Default off for annotation-only projects.
 overwrite=0 # Regenerate formatted/downloaded outputs even when existing non-empty outputs are present.
 download_only=0 # Single mode only: stop after manifest downloads, before formatting or downstream processing.
 dry_run=0 # Print planned downloads/formatting actions without writing formatted outputs.

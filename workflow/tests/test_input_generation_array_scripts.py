@@ -10,6 +10,7 @@ PLAN_SCRIPT = SUPPORT_DIR / "plan_input_generation_tasks.py"
 RUN_TASK_SCRIPT = SUPPORT_DIR / "run_input_generation_task.py"
 MERGE_SCRIPT = SUPPORT_DIR / "merge_input_generation_shards.py"
 STAGE_SCRIPT = SUPPORT_DIR / "stage_input_generation_downloads.py"
+REQUIRE_GENOMES_SCRIPT = SUPPORT_DIR / "validate_required_genomes.py"
 
 
 def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cache(tmp_path):
@@ -66,6 +67,77 @@ def test_prepare_resources_are_separate_from_compute_array(tmp_path):
     worker = next(line for line in result.stdout.splitlines() if "MODE=array_worker " in line)
     assert "--cpus-per-task=8" in prepare and "--mem=8G" in prepare and "--partition=network" in prepare
     assert "--cpus-per-task=4" in worker and "--mem=32G" in worker and "--partition=compute" in worker
+
+
+def test_required_genome_is_opt_in_for_local_array_planning(tmp_path):
+    source = tmp_path / "Direct" / "species_wise_original"
+    write_direct_species_fixture(source, "Arabidopsis_thaliana")
+    (source / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.genome.fa").unlink()
+    args = ("--provider", "direct", "--input-dir", str(source), "--outfile", str(tmp_path / "plan.json"))
+    default = run_python(PLAN_SCRIPT, *args)
+    assert default.returncode == 0, default.stderr
+    required = run_python(PLAN_SCRIPT, *args, "--require-genome")
+    assert required.returncode != 0
+    assert "Required genome input is missing for Arabidopsis_thaliana" in required.stderr
+
+
+def test_required_genome_rejects_partial_staged_download_without_receipt(tmp_path):
+    import functools
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    raw = tmp_path / "raw"
+    species = "Arabidopsis_thaliana"
+    write_direct_species_fixture(raw, species)
+    (raw / species / f"{species}.genome.fa").unlink()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        manifest = tmp_path / "manifest.tsv"
+        base = f"http://127.0.0.1:{server.server_port}/{species}/{species}"
+        manifest.write_text("provider\tid\tspecies_key\tcds_url\tgff_url\tgenome_url\n"
+                            f"direct\tfixture\t{species}\t{base}.cds.fa\t{base}.gff\t{base}.genome.fa\n")
+        plan = tmp_path / "plan.json"
+        planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                             "--download-dir", str(tmp_path / "downloads"), "--stage-downloads", "--outfile", str(plan))
+        assert planned.returncode == 0, planned.stderr
+        required = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-genome")
+        assert required.returncode != 0
+        assert "Required genome input is missing for Arabidopsis_thaliana" in required.stderr
+        assert not Path(str(plan) + ".tasks/1.json").exists()
+        optional = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+        assert optional.returncode == 0, optional.stderr
+        assert json.loads(Path(str(plan) + ".tasks/1.json").read_text())["task"]["genome_path"] is None
+        required_cached = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-genome")
+        assert required_cached.returncode != 0
+        assert "Required genome input is missing for Arabidopsis_thaliana" in required_cached.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(3)
+
+
+def test_required_genome_summary_rejects_missing_or_empty_output(tmp_path):
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">chr1\nATG\n")
+    summary = tmp_path / "species.tsv"
+    summary.write_text("species_prefix\tgenome_output_path\nArabidopsis_thaliana\t" + str(genome) + "\n")
+    ok = run_python(REQUIRE_GENOMES_SCRIPT, "--species-summary", str(summary), "--expected-task-count", "1")
+    assert ok.returncode == 0, ok.stderr
+    genome.write_text("")
+    missing = run_python(REQUIRE_GENOMES_SCRIPT, "--species-summary", str(summary), "--expected-task-count", "1")
+    assert missing.returncode != 0
+    assert "Required formatted genome is missing" in missing.stderr
+    genome.write_text("not a FASTA\nATG\n")
+    invalid = run_python(REQUIRE_GENOMES_SCRIPT, "--species-summary", str(summary))
+    assert invalid.returncode != 0
+    genome_gz = tmp_path / "genome.fa.gz"
+    with gzip.open(genome_gz, "wt") as handle:
+        handle.write(">chr1\nATG\n")
+    summary.write_text("species_prefix\tgenome_output_path\nArabidopsis_thaliana\t" + str(genome_gz) + "\n")
+    compressed = run_python(REQUIRE_GENOMES_SCRIPT, "--species-summary", str(summary))
+    assert compressed.returncode == 0, compressed.stderr
 
 
 def run_python(script: Path, *args):
@@ -182,6 +254,7 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
     }), encoding="utf-8")
 
     aggregate_stats = tmp_path / "aggregate_stats.json"
+    mapping_qc = tmp_path / "species_mapping_qc.tsv"
     merged_species_summary = tmp_path / "gg_input_generation_species.tsv"
     completed = run_python(
         MERGE_SCRIPT,
@@ -193,6 +266,7 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
         str(stats_dir),
         "--aggregate-stats-output",
         str(aggregate_stats),
+        "--mapping-qc-output", str(mapping_qc),
         "--expected-task-count",
         "2",
     )
@@ -216,6 +290,12 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
     assert payload["num_species_cds_files"] == 2
     assert payload["num_species_gff_files"] == 2
     assert payload["num_species_genome_files"] == 2
+    with mapping_qc.open(newline="") as handle:
+        qc_rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [(row["species_prefix"], row["qc_status"]) for row in qc_rows] == [
+        ("Arabidopsis_thaliana", "available"), ("Oryza_sativa", "not_recorded")
+    ]
+    assert qc_rows[0]["phase_conflicts_total"] == "3"
     assert payload["cds_gff_records_mapped"] == 2
     assert payload["cds_gff_records_unmapped"] == 0
 
@@ -334,6 +414,25 @@ def test_receipts_detect_changed_outputs_and_retry_selects_only_pending(tmp_path
     assert "--cpus-per-task=3" in preview.stdout
     output.write_text("corrupt")
     assert run_python(state, "pending", "--task-plan", str(plan)).stdout.strip() == "1,2"
+
+
+def test_retry_submission_refuses_any_active_legacy_worker_array(tmp_path, monkeypatch):
+    import os
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    plan = tmp_path / "plan.json"
+    assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw), "--outfile", str(plan)).returncode == 0
+    assert run_python(state, "configure", "--task-plan", str(plan), "--prepare").returncode == 0
+    assert run_python(state, "prepared", "--task-plan", str(plan)).returncode == 0
+    fake = tmp_path / "squeue"
+    fake.write_text("#!/bin/sh\necho 40457_29\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--retry", "--submit")
+    assert result.returncode != 0
+    assert "40457_29" in result.stderr
 
 
 def test_slurm_helper_waits_for_prepare_and_submits_afterok(tmp_path, monkeypatch):

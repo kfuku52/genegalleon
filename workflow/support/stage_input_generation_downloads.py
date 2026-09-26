@@ -12,7 +12,14 @@ from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from input_generation_array_state import atomic_json, digest, export_manifest, load_plan
 
 
-def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
+def has_genome_input(task):
+    return any(
+        path and Path(path).is_file() and Path(path).stat().st_size > 0
+        for path in (task.get("genome_path"), task.get("gbff_path"))
+    )
+
+
+def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_genome=False):
     plan_path = Path(plan_path).resolve()
     plan = load_plan(plan_path)
     if plan.get("download_mode") != "staged" or any("manifest_row" not in task for task in plan["tasks"]):
@@ -35,6 +42,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
                     raise ValueError("Staged raw input changed; use a new workspace: " + path)
             if not (task_root / f"{index}.resolved.tsv").is_file():
                 raise ValueError("Staged resolved manifest is missing; use a new workspace")
+            if require_genome and not has_genome_input(cached["task"]):
+                raise ValueError("Required genome input is missing for " + task["species_prefix"])
         else:
             pending.append((index, task))
     if not pending:
@@ -93,6 +102,9 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None):
         if task["provider"] in failed_providers:
             continue
         actual = discovered[key]
+        if require_genome and not has_genome_input(actual):
+            staging_errors.append("Required genome input is missing for " + task["species_prefix"])
+            continue
         actual["input_sha256"] = {
             **task.get("input_sha256", {}),
             **{str(actual[k]): digest(actual[k]) for k in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(k)},
@@ -127,10 +139,11 @@ def main():
     parser.add_argument("--download-timeout", type=float, default=120)
     parser.add_argument("--http-header", action="append", default=[])
     parser.add_argument("--auth-bearer-token-env", default="")
+    parser.add_argument("--require-genome", action="store_true")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    stage_downloads(args.task_plan, jobs=args.jobs, timeout=args.download_timeout,
+    stage_downloads(args.task_plan, jobs=args.jobs, timeout=args.download_timeout, require_genome=args.require_genome,
                     headers=fsi.parse_http_headers(args.http_header, args.auth_bearer_token_env))
 
 
