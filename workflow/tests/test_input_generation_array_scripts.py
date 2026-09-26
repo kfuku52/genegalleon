@@ -176,6 +176,11 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
         )
         assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
 
+    (stats_dir / "1.mapping.json").write_text(json.dumps({
+        "phase_conflicts_total": 3,
+        "utr_conflicts_total": 1,
+    }), encoding="utf-8")
+
     aggregate_stats = tmp_path / "aggregate_stats.json"
     merged_species_summary = tmp_path / "gg_input_generation_species.tsv"
     completed = run_python(
@@ -205,11 +210,57 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
 
     payload = json.loads(aggregate_stats.read_text(encoding="utf-8"))
     assert payload["task_stats_files"] == 2
+    assert payload["mapping_qc_files"] == 1
+    assert payload["phase_conflicts_total"] == 3
+    assert payload["utr_conflicts_total"] == 1
     assert payload["num_species_cds_files"] == 2
     assert payload["num_species_gff_files"] == 2
     assert payload["num_species_genome_files"] == 2
     assert payload["cds_gff_records_mapped"] == 2
     assert payload["cds_gff_records_unmapped"] == 0
+
+
+def test_merge_requires_mapping_qc_to_be_bound_to_worker_receipt(tmp_path: Path):
+    raw = tmp_path / "Direct" / "species_wise_original"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    plan = tmp_path / "plan.json"
+    state = SUPPORT_DIR / "input_generation_array_state.py"
+    assert run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw),
+                      "--outfile", str(plan)).returncode == 0
+    shard_dir = tmp_path / "species_summary_shards"
+    stats_dir = tmp_path / "task_stats_shards"
+    shard_dir.mkdir()
+    stats_dir.mkdir()
+    summary = shard_dir / "1.tsv"
+    stats = stats_dir / "1.json"
+    generated = run_python(
+        RUN_TASK_SCRIPT, "--task-plan", str(plan), "--task-index", "1",
+        "--species-cds-dir", str(tmp_path / "cds"),
+        "--species-gff-dir", str(tmp_path / "gff"),
+        "--species-genome-dir", str(tmp_path / "genome"),
+        "--species-summary-output", str(summary), "--stats-output", str(stats),
+    )
+    assert generated.returncode == 0, generated.stderr
+    receipt_args = ("complete", "--task-plan", str(plan), "--task-index", "1",
+                    "--file", str(summary), "--file", str(stats))
+    assert run_python(state, *receipt_args).returncode == 0
+    qc = stats_dir / "1.mapping.json"
+    qc.write_text(json.dumps({"phase_conflicts_total": 2, "utr_conflicts_total": 1}), encoding="utf-8")
+    merge_args = (
+        "--species-summary-shard-dir", str(shard_dir),
+        "--species-summary-output", str(tmp_path / "merged.tsv"),
+        "--task-stats-dir", str(stats_dir),
+        "--aggregate-stats-output", str(tmp_path / "aggregate.json"),
+        "--expected-task-count", "1", "--task-plan", str(plan),
+    )
+    unbound = run_python(MERGE_SCRIPT, *merge_args)
+    assert unbound.returncode != 0
+    assert "Mapping QC is not bound" in unbound.stderr
+    assert run_python(state, *receipt_args, "--file", str(qc)).returncode == 0
+    merged = run_python(MERGE_SCRIPT, *merge_args)
+    assert merged.returncode == 0, merged.stderr
+    qc.write_text(json.dumps({"phase_conflicts_total": 0}), encoding="utf-8")
+    assert run_python(MERGE_SCRIPT, *merge_args).returncode != 0
 
 
 def test_manifest_planning_defers_downloads_and_freezes_inputs(tmp_path):

@@ -95,7 +95,11 @@ completed work; changed inputs or settings require a new output workspace. Do no
 edit plan/settings/receipt files or remove lock files while jobs are active.
 Completion receipts are written atomically only after all enabled worker stages
 succeed and include hashes of raw inputs, formatted outputs, enabled fx2tab/BUSCO
-outputs, and summary/statistics shards. Finalize checks exact shard indices,
+outputs, and summary/statistics shards. When CDS/GFF validation runs, its per-task
+`tmp/task_stats_shards/N.mapping.json` records phase and UTR conflict counts and
+is included in the completion receipt; finalization aggregates available QC
+shards without requiring them from workers completed by older runtimes.
+Finalize checks exact shard indices,
 species identities, receipts, and outputs; incomplete or stale results leave the
 canonical species summary intact. The original manifest is not reread during
 workers or finalization; trait species are reconstructed from the frozen plan.

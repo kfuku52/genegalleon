@@ -84,7 +84,7 @@ def build_arg_parser():
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Reject every unexpected CDS/GFF mismatch instead of tolerating a very small residual set.",
+        help="Reject every unexpected CDS/GFF mismatch and malformed CDS phase or UTR annotation.",
     )
     return parser
 
@@ -138,17 +138,29 @@ def first_nonmatching_prefix(cds_ids, species_prefix):
     return ""
 
 
-def read_gene_ids_from_tsv(path):
+def read_gene_ids_and_issues_from_tsv(path, *, require_structure_status=False):
     if not path.exists() or path.stat().st_size == 0:
-        return []
+        return [], {"phase_conflicts": [], "utr_conflicts": []}
     ids = []
+    phase_conflicts = set()
+    utr_conflicts = set()
     with open(path, "rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
+        if require_structure_status and not {"phase_status", "utr_status"}.issubset(reader.fieldnames or ()):
+            raise ValueError("CDS annotation status columns are missing")
         for row in reader:
             gene_id = str(row.get("gene_id") or "").strip()
             if gene_id != "":
                 ids.append(gene_id)
-    return ids
+                if row.get("phase_status") == "conflicting":
+                    phase_conflicts.add(gene_id)
+                utr_status = str(row.get("utr_status") or "")
+                if utr_status.startswith("conflicting:"):
+                    utr_conflicts.add("{} ({})".format(gene_id, utr_status.partition(":")[2]))
+    return ids, {
+        "phase_conflicts": sorted(phase_conflicts),
+        "utr_conflicts": sorted(utr_conflicts),
+    }
 
 
 def symlink_or_copy(src, dst):
@@ -166,7 +178,7 @@ def resolve_nthreads(args):
     return 1
 
 
-def run_gff2genestat(cds_file, gff_file, feature="CDS"):
+def run_gff2genestat(cds_file, gff_file, feature="CDS", *, annotation_policy="strict"):
     script_dir = Path(__file__).resolve().parent
     gff2genestat = script_dir / "gff2genestat.py"
     with tempfile.TemporaryDirectory(prefix="validate_cds_gff_mapping_") as tmp_dir_str:
@@ -189,9 +201,13 @@ def run_gff2genestat(cds_file, gff_file, feature="CDS"):
             "--ncpu",
             "1",
         ]
+        if feature == "CDS":
+            cmd.extend(("--phase-policy", annotation_policy, "--structure-policy", annotation_policy))
         completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        mapped_ids = read_gene_ids_from_tsv(out_path)
-        return completed, mapped_ids
+        mapped_ids, issues = read_gene_ids_and_issues_from_tsv(
+            out_path, require_structure_status=feature == "CDS" and completed.returncode == 0
+        )
+        return completed, mapped_ids, issues
 
 
 def first_n(items, limit):
@@ -271,7 +287,10 @@ def validate_single_species(task, missing_limit):
                 ).format(species_prefix, cds_file.name, species_prefix, first_bad_prefix),
             }
 
-        completed, mapped_ids = run_gff2genestat(cds_file=cds_file, gff_file=gff_file, feature="CDS")
+        annotation_policy = "strict" if task.get("strict", False) else "report"
+        completed, mapped_ids, annotation_issues = run_gff2genestat(
+            cds_file=cds_file, gff_file=gff_file, feature="CDS", annotation_policy=annotation_policy
+        )
         if completed.returncode != 0:
             detail = "\n".join(
                 text for text in (completed.stdout.strip(), completed.stderr.strip()) if text
@@ -291,7 +310,7 @@ def validate_single_species(task, missing_limit):
         cds_id_set = set(cds_ids)
         mapped_id_set = set(mapped_ids)
         if mapped_id_set != cds_id_set:
-            gene_completed, gene_mapped_ids = run_gff2genestat(
+            gene_completed, gene_mapped_ids, _gene_issues = run_gff2genestat(
                 cds_file=cds_file, gff_file=gff_file, feature="gene"
             )
             if gene_completed.returncode == 0:
@@ -317,6 +336,8 @@ def validate_single_species(task, missing_limit):
             "mapped_ids": len(mapped_ids),
             "allowed_missing_ids": len(allowed_missing_ids),
             "fallback_ids": unexpected_mapping_count if mapping_fallback_tolerated else 0,
+            "phase_conflicts": len(annotation_issues["phase_conflicts"]),
+            "utr_conflicts": len(annotation_issues["utr_conflicts"]),
         }
 
         if unexpected_mapping_count > 0 and not mapping_fallback_tolerated:
@@ -358,8 +379,9 @@ def validate_single_species(task, missing_limit):
                 "" if not mapping_fallback_tolerated else " (fallback={})".format(unexpected_mapping_count),
             ),
         }
+        warnings = []
         if mapping_fallback_tolerated:
-            result["warning"] = (
+            warnings.append((
                 "[{}] Retaining {} low-rate CDS/GFF fallback record(s): missing={} extra={}. "
                 "Use --strict to reject any unexpected mismatch."
             ).format(
@@ -367,7 +389,17 @@ def validate_single_species(task, missing_limit):
                 unexpected_mapping_count,
                 len(unexpected_missing_ids),
                 len(extra_ids),
-            )
+            ))
+        for label, issue_ids in (("CDS phase", annotation_issues["phase_conflicts"]),
+                                 ("UTR", annotation_issues["utr_conflicts"])):
+            if issue_ids:
+                warnings.append(
+                    "[{}] {} conflicting {} annotation(s); affected structure is unavailable, "
+                    "CDS/GFF identity remains validated. Sample: {}. Use --strict to reject."
+                    .format(species_prefix, len(issue_ids), label, ",".join(issue_ids[:5]))
+                )
+        if warnings:
+            result["warning"] = "\nWarning: ".join(warnings)
         return result
     except Exception as exc:
         return {
@@ -445,6 +477,8 @@ def main():
         "cds_ids_total": 0,
         "mapped_ids_total": 0,
         "fallback_ids_total": 0,
+        "phase_conflicts_total": 0,
+        "utr_conflicts_total": 0,
         "nthreads": nthreads,
     }
 
@@ -497,6 +531,8 @@ def main():
             stats["cds_ids_total"] += int(result["stats"]["cds_ids"])
             stats["mapped_ids_total"] += int(result["stats"]["mapped_ids"])
             stats["fallback_ids_total"] += int(result["stats"].get("fallback_ids", 0) or 0)
+            stats["phase_conflicts_total"] += int(result["stats"].get("phase_conflicts", 0) or 0)
+            stats["utr_conflicts_total"] += int(result["stats"].get("utr_conflicts", 0) or 0)
         if result["ok"]:
             stats["species_passed"] += 1
             print(result["message"])

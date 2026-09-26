@@ -667,6 +667,11 @@ Latest template distribution:
 - can download provider files from a manifest and format inputs in one run,
 - can validate produced `species_cds` naming, `species_gff` consistency, and CDS-to-GFF mapping compatibility,
 - CDS-to-GFF mapping validation is species-parallel and accepts `validate_cds_gff_mapping.py --nthreads N` (`--ncpu` remains as a compatibility alias),
+- in non-strict mode, the mapping validator records conflicting CDS phases and
+  malformed UTR coordinates as unavailable structure while still checking every
+  CDS/GFF identity; warnings name affected genes and stats count both issues.
+  `--strict` rejects those annotations. Missing genome sequences, ambiguous
+  gene identities, and other CDS-coordinate errors remain failures,
 - NCBI-like CDS records whose only identity is an anonymous `lcl..._cds_N`
   placeholder are excluded only when they cannot link to the companion GFF;
   the per-record grouping audit records `excluded_anonymous_unmapped`, while

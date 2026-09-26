@@ -104,6 +104,56 @@ def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     assert "species_checked=1, species_passed=1" in completed.stdout
 
 
+def test_non_strict_mapping_reports_bad_phase_and_utr_without_losing_cds_ids(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    species = "Species_a"
+    write_gzip_text(
+        cds_dir / f"{species}_models.fa.gz",
+        f">{species}_gene1\nATGAAA\n>{species}_gene2\nATGAAATTT\n",
+    )
+    write_gzip_text(
+        gff_dir / f"{species}_models.gff.gz",
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=gene1.cds;Parent=gene1\n"
+        "chr1\tsrc\tfive_prime_UTR\t12\t10\t.\t+\t.\tID=gene1.utr;Parent=gene1\n"
+        "chr1\tsrc\tCDS\t20\t23\t.\t+\t0\tID=gene2.cds1;Parent=gene2\n"
+        "chr1\tsrc\tCDS\t30\t34\t.\t+\t0\tID=gene2.cds2;Parent=gene2\n",
+    )
+    stats_path = tmp_path / "mapping.json"
+    args = (
+        "--species-cds-dir", str(cds_dir), "--species-gff-dir", str(gff_dir),
+        "--stats-output", str(stats_path),
+    )
+    report = run_script(*args)
+    assert report.returncode == 0, report.stderr + "\n" + report.stdout
+    assert "CDS-to-GFF mapping OK: 2/2 IDs" in report.stdout
+    assert "1 conflicting CDS phase annotation(s)" in report.stderr
+    assert "1 conflicting UTR annotation(s)" in report.stderr
+    assert json.loads(stats_path.read_text(encoding="utf-8"))["phase_conflicts_total"] == 1
+    assert json.loads(stats_path.read_text(encoding="utf-8"))["utr_conflicts_total"] == 1
+
+    strict = run_script(*args, "--strict")
+    assert strict.returncode == 1
+    assert "Invalid GFF coordinates or strand" in strict.stderr
+
+
+def test_non_strict_mapping_still_rejects_invalid_cds_coordinates(tmp_path):
+    cds_dir = tmp_path / "species_cds"
+    gff_dir = tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    write_gzip_text(cds_dir / "Species_a_models.fa.gz", ">Species_a_gene1\nATGAAA\n")
+    write_gzip_text(
+        gff_dir / "Species_a_models.gff.gz",
+        "chr1\tsrc\tCDS\t12\t10\t.\t+\t0\tID=gene1.cds;Parent=gene1\n",
+    )
+    result = run_script("--species-cds-dir", str(cds_dir), "--species-gff-dir", str(gff_dir))
+    assert result.returncode == 1
+    assert "Invalid GFF coordinates or strand" in result.stderr
+
+
 def test_validate_cds_gff_mapping_keeps_dotted_taxonomic_qualifier_species_distinct(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

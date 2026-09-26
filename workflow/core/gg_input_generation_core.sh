@@ -1156,7 +1156,9 @@ run_validate_stage_one_worker() {
     echo "Failed: ${task} (longest CDS selection)"
     exit 1
   fi
-  rm -f -- "${mapping_stats_file}" "${longest_stats_file}"
+  # Keep mapping QC for this species so reported phase/UTR conflicts remain
+  # inspectable and are bound to the worker's completion receipt.
+  rm -f -- "${longest_stats_file}"
   stage_validate_status="ok"
 }
 
@@ -2068,6 +2070,13 @@ run_array_worker_mode() {
     --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
     --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
     --file "${cds_output_path}" --file "${gff_output_path}")
+  if [[ ${run_validate_inputs} -eq 1 ]]; then
+    [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json" ]] || {
+      echo "CDS/GFF mapping QC is missing for task ${GG_ARRAY_TASK_ID}" >&2
+      exit 1
+    }
+    receipt_cmd+=(--file "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json")
+  fi
   local raw_input_path
   for raw_input_path in "${cds_input_path}" "${gff_input_path}" "${gbff_input_path}" "${genome_input_path}"; do
     [[ -z "${raw_input_path}" ]] || receipt_cmd+=(--file "${raw_input_path}")
