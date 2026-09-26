@@ -361,6 +361,10 @@ results_dir="${{output_dir}}/Results_${{run_name}}"
 mkdir -p \
   "${{results_dir}}/Orthogroups" \
   "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups"
+if [[ "${{run_name}}" == "core" ]]; then
+  mkdir -p "${{results_dir}}/WorkingDirectory"
+  printf '0_0 1_0\n' > "${{results_dir}}/WorkingDirectory/clusters_OrthoFinder0_id_pairs.txt"
+fi
 input_capture="${{capture_dir}}/input_files_${{run_name}}.txt"
 proteins_capture="${{capture_dir}}/proteins_${{run_name}}.fasta"
 find "${{input_dir}}" -maxdepth 1 -type f ! -name '.*' | sort > "${{input_capture}}"
