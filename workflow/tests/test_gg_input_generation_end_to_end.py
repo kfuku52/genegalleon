@@ -784,6 +784,23 @@ def test_gg_input_generation_array_mode_end_to_end_with_parallel_workers(tmp_pat
                 assert (array_dir / name).read_bytes() == (single_dir / name).read_bytes()
 
 
+def test_required_genome_worker_does_not_receipt_header_only_fasta(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    (input_dir / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.genome.fa").write_text(">chr1\n")
+    workspace = tmp_path / "required_genome_workspace"
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _run_core(workspace, input_dir, fake_bin, "array_prepare", require_genome=True)
+    failed = subprocess.run(
+        ["bash", str(CORE_PATH)], cwd=REPO_ROOT,
+        env=_core_env(workspace, input_dir, fake_bin, "array_worker", 1, require_genome=True),
+        capture_output=True, text=True, timeout=180, check=False,
+    )
+    assert failed.returncode != 0
+    assert "Required formatted genome is missing or invalid" in failed.stderr
+    receipt = workspace / "output" / "input_generation" / "tmp" / "task_plan.json.completed" / "1.json"
+    assert not receipt.exists()
+
+
 
 def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):
     workspace = tmp_path / "missing_inputs_workspace"

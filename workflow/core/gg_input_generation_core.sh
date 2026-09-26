@@ -2064,6 +2064,12 @@ run_array_worker_mode() {
     echo "Required formatted genome is missing for ${species_prefix}" >&2
     exit 1
   fi
+  if [[ ${require_genome} -eq 1 ]]; then
+    python "${gg_support_dir}/validate_required_genomes.py" --species-summary "${task_summary_file}" --expected-task-count 1 || {
+      stage_format_status="failed"
+      exit 1
+    }
+  fi
   if [[ ${format_needs_update} -eq 1 ]]; then
     gg_artifact_record "${format_provenance_args[@]}"
   fi
