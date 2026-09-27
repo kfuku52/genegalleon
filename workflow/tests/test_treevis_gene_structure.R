@@ -60,6 +60,25 @@ stopifnot(nrow(sites$sites)==2,
     'missing_GFF' %in% sites$diagnostics$reason,
     sites$cells$state[sites$cells$node_name=='zero' & sites$cells$site_id=='I001']=='absent')
 cat('CDS/UTR encoding, phase-specific correspondence and ambiguous junctions passed.\n')
+# Only verified terminal CDSKit N padding is outside the GFF coordinate span.
+padding_tip = site_tips[site_tips$label=='a',,drop=FALSE]
+padding_tip$structure_status = 'length_compatible'
+for (suffix in c('N','NN')) {
+    padded = genegalleon.treevis:::treevis_intron_site_data(
+        padding_tip, c(a=paste0('AAACCCGGGTTT',suffix)))
+    stopifnot(nrow(padded$diagnostics)==0,
+        nrow(padded$events)==1, padded$events$cds_offset==3)
+}
+padding_tip$structure_status = 'sequence_verified'
+stopifnot(nrow(genegalleon.treevis:::treevis_intron_site_data(
+    padding_tip,c(a='AAACCCGGGTTTNN'))$diagnostics)==0)
+for (sequence in c('AAACCCGGGTTTNNN','AAACCCGGGTTTNA','AAACCCGGGTT')) {
+    bad_padding = genegalleon.treevis:::treevis_intron_site_data(padding_tip,c(a=sequence))
+    stopifnot(identical(bad_padding$diagnostics$reason,'CDS_length_mismatch'))
+}
+padding_tip$structure_status = 'unverified_source'
+stopifnot(identical(genegalleon.treevis:::treevis_intron_site_data(
+    padding_tip,c(a='AAACCCGGGTTTNN'))$diagnostics$reason,'CDS_length_mismatch'))
 unknown = site_tips
 unknown$cds_first_phase[unknown$label=='b'] = NA
 unknown_sites = genegalleon.treevis:::treevis_intron_site_data(unknown,seqs)

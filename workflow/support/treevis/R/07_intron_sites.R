@@ -21,7 +21,21 @@ treevis_intron_site_data = function(tips, seqs) {
         if (is.na(reason)) {
             chars = strsplit(seqs[[id]], '', fixed=TRUE)[[1]]
             nongap = which(!chars %in% c('-', '.'))
-            if (length(nongap) != length_cds) reason = 'CDS_length_mismatch'
+            if (length(nongap) != length_cds) {
+                # CDSKit may complete the terminal codon with one or two N
+                # bases. GFF coordinates and intron offsets describe only the
+                # original CDS, so exclude exactly that verified suffix.
+                padding = length(nongap) - length_cds
+                status = if ('structure_status' %in% names(tips))
+                    as.character(tips[['structure_status']][i]) else NA_character_
+                if (is.finite(padding) && padding %in% 1:2 &&
+                    !is.na(status) && status %in% c('length_compatible', 'sequence_verified') &&
+                    all(chars[tail(nongap, padding)] == 'N')) {
+                    nongap = nongap[seq_len(length_cds)]
+                } else {
+                    reason = 'CDS_length_mismatch'
+                }
+            }
         }
         if (is.na(reason) && trans) reason = 'trans_splicing'
         if ('structure_status' %in% names(tips) && !is.na(tips[['structure_status']][i]) &&
