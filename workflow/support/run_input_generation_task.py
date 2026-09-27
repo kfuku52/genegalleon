@@ -275,7 +275,11 @@ def main():
     stats = {
         "species_processed": 1,
         "num_species_cds_files": 1,
-        "num_species_gff_files": 1,
+        "num_species_gff_files": int(
+            gff_result["status"] in ("write", "skip")
+            and gff_result.get("output_path") is not None
+            and gff_result["output_path"].is_file()
+        ),
         "num_species_genome_files": 0 if genome_result["status"] == "missing" else 1,
         "cds_sequences_before": cds_result.get("before_count", 0),
         "cds_sequences_after": cds_result.get("after_count", 0),

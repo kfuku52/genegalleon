@@ -217,6 +217,41 @@ def test_required_cds_and_gff_outputs_are_independent(tmp_path):
     assert "Required formatted CDS is missing or invalid" in invalid_cds.stderr
 
 
+def test_required_outputs_reject_late_corruption_and_truncated_gzip(tmp_path):
+    genome = tmp_path / "genome.fa.gz"
+    cds = tmp_path / "cds.fa.gz"
+    gff = tmp_path / "genes.gff.gz"
+    summary = tmp_path / "species.tsv"
+    summary.write_text(
+        "species_prefix\tgenome_output_path\tcds_output_path\tgff_output_path\n"
+        f"Arabidopsis_thaliana\t{genome}\t{cds}\t{gff}\n"
+    )
+    valid_fasta = ">chr1\nATG\n>chr2\nGCC\n"
+    valid_gff = "##gff-version 3\nchr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=gene1\n"
+    genome.write_bytes(gzip.compress(valid_fasta.encode()))
+    cds.write_bytes(gzip.compress(valid_fasta.encode()))
+    gff.write_bytes(gzip.compress(valid_gff.encode()))
+    args = ("--species-summary", str(summary), "--require-genome", "--require-cds", "--require-gff")
+    assert run_python(REQUIRE_OUTPUTS_SCRIPT, *args).returncode == 0
+
+    genome.write_bytes(gzip.compress(valid_fasta.encode())[:-4])
+    invalid_genome = run_python(REQUIRE_OUTPUTS_SCRIPT, *args)
+    assert "Required formatted genome is missing or invalid" in invalid_genome.stderr
+    genome.write_bytes(gzip.compress(valid_fasta.encode()))
+
+    cds.write_bytes(gzip.compress(">gene1\nATG\n>gene2\n".encode()))
+    invalid_cds = run_python(REQUIRE_OUTPUTS_SCRIPT, *args)
+    assert "Required formatted CDS is missing or invalid" in invalid_cds.stderr
+    cds.write_bytes(gzip.compress(valid_fasta.encode()))
+
+    gff.write_bytes(gzip.compress(valid_gff.encode())[:-4])
+    invalid_gff = run_python(REQUIRE_OUTPUTS_SCRIPT, *args)
+    assert "Required formatted GFF is missing or invalid" in invalid_gff.stderr
+    gff.write_bytes(gzip.compress((valid_gff + "chr1\tbroken\n").encode()))
+    invalid_late_gff = run_python(REQUIRE_OUTPUTS_SCRIPT, *args)
+    assert "Required formatted GFF is missing or invalid" in invalid_late_gff.stderr
+
+
 def run_python(script: Path, *args):
     return subprocess.run(
         [sys.executable, str(script), *args],

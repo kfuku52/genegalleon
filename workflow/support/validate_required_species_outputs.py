@@ -4,6 +4,7 @@
 import argparse
 import csv
 import gzip
+import zlib
 from pathlib import Path
 
 OUTPUT_COLUMNS = {
@@ -23,10 +24,25 @@ def has_fasta_sequence(path):
         return False
     try:
         with open_text(path) as handle:
-            first = handle.readline()
-            sequence = handle.readline().strip()
-            return first.startswith(">") and bool(sequence) and not sequence.startswith(">")
-    except (OSError, UnicodeError):
+            has_record = False
+            has_sequence = False
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith(">"):
+                    if has_record and not has_sequence:
+                        return False
+                    if not line[1:].strip():
+                        return False
+                    has_record = True
+                    has_sequence = False
+                elif not has_record:
+                    return False
+                else:
+                    has_sequence = True
+            return has_record and has_sequence
+    except (OSError, UnicodeError, EOFError, zlib.error):
         return False
 
 
@@ -35,14 +51,23 @@ def has_gff_feature(path):
         return False
     try:
         with open_text(path) as handle:
+            has_feature = False
+            in_fasta = False
             for line in handle:
+                if in_fasta:
+                    continue
+                if line.startswith("##FASTA"):
+                    in_fasta = True
+                    continue
                 if not line.strip() or line.startswith("#"):
                     continue
                 fields = line.rstrip("\r\n").split("\t")
-                return len(fields) == 9 and bool(fields[0]) and bool(fields[2])
-    except (OSError, UnicodeError):
+                if len(fields) != 9 or not fields[0] or not fields[2]:
+                    return False
+                has_feature = True
+            return has_feature
+    except (OSError, UnicodeError, EOFError, zlib.error):
         return False
-    return False
 
 
 def main(default_required=()):

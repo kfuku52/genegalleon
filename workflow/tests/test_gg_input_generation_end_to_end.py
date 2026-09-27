@@ -805,6 +805,33 @@ def test_required_genome_worker_does_not_receipt_header_only_fasta(tmp_path: Pat
     assert not receipt.exists()
 
 
+def test_required_genome_worker_rejects_reused_truncated_output(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "truncated_genome_workspace"
+    fake_bin = _install_fake_toolchain(tmp_path)
+    prepare_env = _core_env(workspace, input_dir, fake_bin, "array_prepare", require_genome=True)
+    prepare_env["overwrite"] = "0"
+    prepared = subprocess.run(
+        ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=prepare_env,
+        capture_output=True, text=True, timeout=180, check=False,
+    )
+    assert prepared.returncode == 0, prepared.stdout + "\n" + prepared.stderr
+    genome_dir = workspace / "output" / "input_generation" / "species_genome"
+    genome_dir.mkdir(parents=True, exist_ok=True)
+    genome = genome_dir / "Arabidopsis_thaliana_genome.fa.gz"
+    genome.write_bytes(gzip.compress(b">chr1\nATGAAATTT\n")[:-4])
+    env = _core_env(workspace, input_dir, fake_bin, "array_worker", 1, require_genome=True)
+    env["overwrite"] = "0"
+    failed = subprocess.run(
+        ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+        capture_output=True, text=True, timeout=180, check=False,
+    )
+    assert failed.returncode != 0
+    assert "Required formatted genome is missing or invalid" in failed.stderr
+    receipt = workspace / "output" / "input_generation" / "tmp" / "task_plan.json.completed" / "1.json"
+    assert not receipt.exists()
+
+
 def test_required_cds_accepts_gff_and_genome_derived_output(tmp_path: Path):
     input_dir = _write_direct_species_fixture(tmp_path)
     (input_dir / "Arabidopsis_thaliana" / "Arabidopsis_thaliana.cds.fa").unlink()
@@ -843,6 +870,23 @@ def test_array_keeps_cds_only_species_when_gff_requirement_is_off(tmp_path: Path
     assert cds_only["cds_output_path"]
     assert cds_only["gff_output_path"] == ""
     assert (root / "tmp" / "task_plan.json.completed" / "1.json").is_file()
+    stats = json.loads((root / "tmp" / "merged_task_stats.json").read_text())
+    assert stats["num_species_gff_files"] == 1
+    assert len(list((root / "species_gff").glob("*.gz"))) == 1
+    assert _read_tsv_rows(root / "gg_input_generation_runs.tsv")[-1]["num_species_gff"] == "1"
+
+    single_workspace = tmp_path / "cds_only_single_workspace"
+    _write_minimal_ete_taxonomy_db(single_workspace)
+    single_env = _core_env(single_workspace, input_dir, fake_bin, "single")
+    single_env.update(run_validate_inputs="0", run_cds_fx2tab="0",
+                      run_species_busco="0", run_multispecies_summary="0")
+    single = subprocess.run(
+        ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=single_env,
+        capture_output=True, text=True, timeout=180, check=False,
+    )
+    assert single.returncode == 0, single.stdout + "\n" + single.stderr
+    single_root = single_workspace / "output" / "input_generation"
+    assert _read_tsv_rows(single_root / "gg_input_generation_runs.tsv")[-1]["num_species_gff"] == "1"
 
 
 

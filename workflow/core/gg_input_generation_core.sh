@@ -1919,7 +1919,7 @@ run_array_prepare_mode() {
   fi
   expected_tasks=$(task_plan_task_count "${task_plan_output}")
   num_species_cds="${expected_tasks}"
-  num_species_gff="${expected_tasks}"
+  num_species_gff=""
   num_species_genome=""
 
   if [[ ${run_species_busco} -eq 1 ]]; then

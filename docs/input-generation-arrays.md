@@ -88,6 +88,11 @@ species without a genome FASTA or genomic GBFF source before workers launch;
 workers and finalize verify the formatted output. The setting is frozen with
 the array plan. Enable it only in a fresh workspace/plan, rather than changing
 settings on an active or previously prepared array.
+The output check reads each required FASTA or GFF through the end, including
+the gzip trailer, and rejects truncated or malformed files. It checks file
+integrity and content, not whether a genome is nuclear; nuclear-only datasets
+must review assembly provenance and exclude organelle-only sources in their
+manifest.
 
 `GG_INPUT_REQUIRE_CDS=1` and `GG_INPUT_REQUIRE_GFF=1` independently require
 formatted CDS FASTA and GFF with at least one feature. Both default to `0`.
