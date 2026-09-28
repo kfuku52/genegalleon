@@ -15,6 +15,23 @@ The generator writes its tiny input tables under
 used by the workflow where possible. The quick-start tree-plot PNG is refreshed
 when `workspace/output/query2family/tree_plot/AHA_tree_plot.pdf` is present.
 
+The README figures use the completed bundled `AHA`, `STRICTCHK`, and `YABBY`
+query2family outputs. The generator recalculates AHA synteny from the bundled
+species CDS and GFF inputs before drawing the tree plot and the reference-gene
+ortholog summary. The tree plot omits the expression pointplot while retaining
+the expression heatmap. The ortholog summary includes local-synteny and gene-tree
+UFBoot evidence bands. To refresh the figures
+with a current GeneGalleon runtime and host `pdftoppm`, run:
+
+```bash
+bash docs/assets/example-plots/generate_readme_plots.sh
+```
+
+In the README AHA plot, thin gray lines connect genes from the same species
+across clusters; colored lines join members of a distance-defined cluster.
+Cluster colors follow the species label hue, with shade variations when a
+species has multiple clusters.
+
 ## Query2family tree plot
 
 The per-family `tree_plot` combines the gene tree with panels such as tip

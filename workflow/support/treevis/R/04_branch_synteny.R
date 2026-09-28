@@ -142,6 +142,28 @@ add_gene_cluster_membership = function(df_tip, max_bp_membership) {
     return(df_tip)
 }
 
+treevis_cluster_color_variants = function(base_color, n) {
+    if (n == 0) return(character(0))
+    variants = rep(base_color, n)
+    rgb = as.numeric(grDevices::col2rgb(base_color)) / 255
+    luminance = sum(rgb * c(0.2126, 0.7152, 0.0722))
+    if (n > 1) for (i in seq.int(2L, n)) {
+        if (luminance < 0.18 || luminance > 0.82) {
+            amount = 1 - 0.8^(i - 1)
+            use_light = luminance < 0.18
+        } else {
+            amount = 1 - 0.8^ceiling((i - 1) / 2)
+            use_light = (i %% 2 == 1)
+        }
+        if (use_light) {
+            variants[[i]] = colorspace::lighten(base_color, amount=amount)
+        } else {
+            variants[[i]] = colorspace::darken(base_color, amount=amount)
+        }
+    }
+    variants
+}
+
 add_cluster_membership_column = function(g, args, gname, max_bp_membership){
     cat(as.character(Sys.time()), 'Adding gene cluster membership column.\n')
     if (!'start'%in%colnames(g[['tree']][['data']])) {
@@ -161,9 +183,24 @@ add_cluster_membership_column = function(g, args, gname, max_bp_membership){
     is_na = (is.na(df_tip[['cluster_membership']]))|(df_tip[['cluster_membership']]=='')
     df_single = df_tip[(!is_multimember)&(!is_na),]
     df_multi = df_tip[(is_multimember)&(!is_na),]
+    df_species = df_tip[!is_na, , drop=FALSE]
+    species_counts = table(df_species[['species']])
+    df_species = df_species[df_species[['species']] %in%
+        names(species_counts)[species_counts >= 2], , drop=FALSE]
+    cluster_palette = character(0)
+    for (sp in unique(df_multi[['species']])) {
+        sp_clusters = df_multi[df_multi[['species']] == sp, , drop=FALSE]
+        ids = unique(as.character(sp_clusters[['cluster_membership']]))
+        base_color = if ('tiplab_color' %in% names(sp_clusters))
+            as.character(sp_clusters[['tiplab_color']][[1]]) else 'black'
+        if (is.na(base_color) || !nzchar(base_color)) base_color = 'black'
+        cluster_palette[ids] = treevis_cluster_color_variants(base_color, length(ids))
+    }
 
     g[[gname]] = ggplot(mapping=aes(x=species, y=y)) +
         geom_blank(data=df_tip, aes(y=label)) + 
+        geom_line(data=df_species, mapping=aes(group=species),
+                  color='gray90', linewidth=0.2) +
         geom_point(data=df_single, color='gray90', alpha=1) +
         geom_line(data=df_multi, mapping=aes(group=cluster_membership, color=cluster_membership), alpha=0.5) +
         geom_point(data=df_multi, mapping=aes(color=cluster_membership), alpha=1) +
@@ -189,6 +226,9 @@ add_cluster_membership_column = function(g, args, gname, max_bp_membership){
             legend.box.just='center',
             plot.margin=unit(args[['margins']], "cm")
         )
+    if (length(cluster_palette)) {
+        g[[gname]] = g[[gname]] + scale_color_manual(values=cluster_palette)
+    }
   return(g)
 }
 

@@ -112,6 +112,18 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
         outside = setdiff(seq_along(gt$heights), seq.int(panel$t[1], panel$b[1]))
         sum(grid::convertHeight(gt$heights[outside], 'mm', valueOnly=TRUE))
     }, numeric(1))
+    # A requested expression width is a data-panel minimum. Grow the page
+    # vertically when necessary so the heatmap tiles can retain that width.
+    for (name in names(g)) {
+        if (!isTRUE(attr(g[[name]], 'treevis_square_tiles'))) next
+        ranges = built_plots[[name]]$layout$panel_params[[1]]
+        x_span = diff(ranges$x.range)
+        y_span = diff(ranges$y.range)
+        if (!is.finite(x_span) || !is.finite(y_span) || x_span <= 0 || y_span <= 0)
+            stop('Invalid expression heatmap range: ', name)
+        requested_width = minimum_width(name, 0)
+        height_mm = max(height_mm, requested_width * y_span / x_span + vertical_margin[[name]])
+    }
     panel_height_mm = height_mm - max(vertical_margin)
 
     widths = panel_widths = setNames(numeric(length(g)), names(g))
@@ -146,6 +158,7 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
             20
         }
         square_bar_height = attr(p, 'treevis_square_bar_height')
+        square_tiles = isTRUE(attr(p, 'treevis_square_tiles'))
         if (!is.null(square_bar_height)) {
             if (panel_height_mm <= 0) stop('Figure height leaves no space for localization bars.')
             ranges = built$layout$panel_params[[1]]
@@ -155,8 +168,14 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
         }
         fixed = attr(p, 'treevis_width_mm')
         if (!is.null(fixed)) needed = fixed
-        if (grepl('^heatmap($|,)', name)) {
+        if (grepl('^heatmap($|,)', name) && !square_tiles) {
             needed = max(8, length(unique(p$data$group)) * 4)
+        }
+        if (square_tiles) {
+            ranges = built$layout$panel_params[[1]]
+            data_height_mm = height_mm - vertical_margin[[name]]
+            if (data_height_mm <= 0) stop('Figure height leaves no space for expression tiles.')
+            needed = data_height_mm * diff(ranges$x.range) / diff(ranges$y.range)
         }
         if (name == 'alignment') {
             xs = unlist(lapply(built$data, function(d) d$x))
@@ -196,7 +215,7 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
             if (!grepl('^(guide-box|xlab|title|subtitle|caption)', gt$layout$name[i])) next
             child = gt$grobs[[i]]
             child_mm = grid::convertWidth(grid::grobWidth(child), 'mm', valueOnly=TRUE)
-            if (!is.null(square_bar_height) && inherits(child, 'titleGrob')) {
+            if ((!is.null(square_bar_height) || square_tiles) && inherits(child, 'titleGrob')) {
                 # titleGrob itself has a null width; measure its text children.
                 child_mm = max(c(child_mm, vapply(child$children, function(text) {
                     grid::convertWidth(grid::grobWidth(text), 'mm', valueOnly=TRUE)
@@ -207,8 +226,8 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
             extra_mm = if (length(extra)) sum(grid::convertWidth(gt$widths[extra], 'mm', valueOnly=TRUE)) else 0
             needed = max(needed, child_mm - extra_mm + 2)
         }
-        if (!is.null(square_bar_height)) {
-            # Keep each probability bar square; let the legend/title use a
+        if (!is.null(square_bar_height) || square_tiles) {
+            # Keep probability bars and expression tiles square; let legends use a
             # separate gutter instead of stretching the data panel.
             gutter = needed - data_width
             edges = c(1L, length(gt$widths))
@@ -225,6 +244,6 @@ treevis_layout_mm = function(g, panel_widths_mm = NULL, height_mm = NULL) {
         grobs[[name]] = gt
     }
     list(plots=grobs, widths_mm=widths, panel_widths_mm=panel_widths,
-         width_mm=sum(widths),
+         width_mm=sum(widths), height_mm=height_mm,
          legend_entries=lapply(g, function(p) attr(p, 'treevis_legend_visible')))
 }

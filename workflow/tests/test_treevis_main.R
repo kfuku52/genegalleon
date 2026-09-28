@@ -60,7 +60,7 @@ if (!identical(wrapped_site_xlab, "Recoded\nstate\n(dayhoff6)")) stop("treevis_w
 if (!treevis_should_wrap_site_axis_label("Amino acid position (aa)", c(130, 323))) stop("Narrow site panels should wrap long x-axis labels.")
 if (treevis_should_wrap_site_axis_label("Amino acid position (aa)", seq_len(12))) stop("Wide site panels should keep x-axis labels unwrapped.")
 
-# 2d) Ortholog panels reserve enough width for abbreviated labels and wrap every axis-label word.
+# 2d) Ortholog panels reserve enough width and use compact four-line axis labels.
 g_ortholog <- list(tree = ggplot(), "ortholog,Arabidopsis_thaliana_" = ggplot())
 w_ortholog <- get_rel_widths(g_ortholog, "")
 expected_ortholog_width <- 0.76 / (1.5 + 0.76)
@@ -69,7 +69,7 @@ if (abs(unname(w_ortholog["ortholog,Arabidopsis_thaliana_"]) - expected_ortholog
 }
 expected_ortholog_xlab <- expression(atop(displaystyle(italic("Arabidopsis")), displaystyle(atop(displaystyle(italic("thaliana")), displaystyle(atop(displaystyle("closest"), displaystyle("gene")))))))
 if (!identical(treevis_ortholog_axis_label("Arabidopsis_thaliana_"), expected_ortholog_xlab)) {
-  stop("treevis_ortholog_axis_label should stack words and italicize only the species name.")
+  stop("treevis_ortholog_axis_label should preserve the exported plotmath label.")
 }
 
 # 2e) read_site_state_alignment: recoded symbols are preserved as plain characters.
@@ -199,12 +199,13 @@ if (!all(expected_sites %in% as.numeric(df_intron$x))) stop("get_df_intron shoul
 
 # 5) add_gene_cluster_membership: splits by intergenic distance and chromosome.
 df_tip_cluster <- data.frame(
-  so_event = c("L", "L", "L", "L"),
-  taxon = c("Sp one", "Sp one", "Sp one", "Sp one"),
-  chromosome = c("chr1", "chr1", "chr1", "chr2"),
-  label = c("g1", "g2", "g3", "g4"),
-  start = c(100, 140, 1000, 50),
-  end = c(120, 160, 1020, 70),
+  so_event = rep("L", 8),
+  taxon = c(rep("Sp one", 4), "Sp two", "Sp one", "Sp two", "Sp three"),
+  chromosome = c("chr1", "chr1", "chr1", "chr2", "chr1", "chr1", "chr1", "chr1"),
+  label = paste0("g", 1:8),
+  start = c(100, 140, 1000, 50, 100, 1040, 140, 100),
+  end = c(120, 160, 1020, 70, 120, 1060, 160, 120),
+  tiplab_color = c(rep('#16A085', 4), '#E74C3C', '#16A085', '#E74C3C', '#333333'),
   stringsAsFactors = FALSE
 )
 clustered <- add_gene_cluster_membership(df_tip_cluster, max_bp_membership = 100)
@@ -212,6 +213,33 @@ cid <- setNames(as.character(clustered$cluster_membership), clustered$label)
 if (!(cid[["g1"]] == cid[["g2"]])) stop("Nearby genes should share the same cluster_membership.")
 if (cid[["g2"]] == cid[["g3"]]) stop("Distant genes should not share the same cluster_membership.")
 if (cid[["g3"]] == cid[["g4"]]) stop("Different chromosomes should not share the same cluster_membership.")
+if (cid[["g3"]] != cid[["g6"]] || cid[["g5"]] != cid[["g7"]]) {
+  stop('Nearby genes within each species should share a cluster.')
+}
+df_tip_cluster$isTip <- TRUE
+df_tip_cluster$y <- seq_len(nrow(df_tip_cluster))
+cluster_plot <- add_cluster_membership_column(
+  list(tree=list(data=df_tip_cluster)), list(font_size=6,margins=rep(0,4)),
+  'cluster_membership', 100)$cluster_membership
+species_line <- cluster_plot$layers[[2]]
+if (!inherits(species_line$geom, 'GeomLine') ||
+    !setequal(as.character(species_line$data$label), paste0('g',1:7)) ||
+    length(unique(species_line$data$cluster_membership)) != 4 ||
+    species_line$aes_params$colour != cluster_plot$layers[[3]]$aes_params$colour ||
+    species_line$aes_params$linewidth != 0.2) {
+  stop('Same-species circles should have a thin gray line across cluster boundaries.')
+}
+cluster_scale <- ggplot_build(cluster_plot)$plot$scales$get_scales('colour')
+cluster_colors <- unname(cluster_scale$map(c(cid[['g1']],cid[['g3']],cid[['g5']])))
+if (!identical(cluster_colors[c(1,3)], c('#16A085','#E74C3C')) ||
+    cluster_colors[[2]] == cluster_colors[[1]]) {
+  stop('Cluster colors should follow species label colors and vary within a species.')
+}
+cluster_variants <- getFromNamespace('treevis_cluster_color_variants', 'genegalleon.treevis')
+if (length(unique(cluster_variants('black',3))) != 3 ||
+    length(unique(cluster_variants('white',3))) != 3) {
+  stop('Black and white species labels should also produce distinct cluster shades.')
+}
 
 # 6) add_complete_overlap_groups: fully overlapping motifs are merged.
 df_fimo_overlap <- data.frame(
@@ -339,8 +367,7 @@ df_trait_heat <- data.frame(hgt_Cand = c(1, 0), row.names = c("g1", "g2"))
 g_heatmap_out <- add_heatmap_column(g_heatmap_in, args_heat, df_trait_heat, fill_label = "HGT evidence")
 if (g_heatmap_out$heatmap$labels$fill != "HGT evidence") stop("add_heatmap_column should retain the requested fill label.")
 
-# 8ea) add_heatmap_column: independently named heatmaps should coexist and
-# retain the standard heatmap width.
+# 8ea) Independently named heatmaps coexist; only expression uses square tiles.
 df_trait_expression <- data.frame(expression = c(2, 4), row.names = c("g1", "g2"))
 g_multi_heatmap <- add_heatmap_column(
   g_heatmap_in,
@@ -365,6 +392,8 @@ if (g_multi_heatmap[["heatmap,expression_"]]$labels$fill != "Expression") {
 if (g_multi_heatmap[["heatmap,hgt_"]]$labels$fill != "HGT evidence") {
   stop("The HGT heatmap should retain its fill label.")
 }
+stopifnot(isTRUE(attr(g_multi_heatmap[["heatmap,expression_"]], 'treevis_square_tiles')),
+          !isTRUE(attr(g_multi_heatmap[["heatmap,hgt_"]], 'treevis_square_tiles')))
 multi_heatmap_widths <- get_rel_widths(g_multi_heatmap, "")
 if (abs(unname(multi_heatmap_widths[["heatmap,expression_"]]) - 0.2) > 1e-9 ||
     abs(unname(multi_heatmap_widths[["heatmap,hgt_"]]) - 0.2) > 1e-9) {

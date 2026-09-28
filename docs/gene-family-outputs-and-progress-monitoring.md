@@ -661,9 +661,12 @@ command when logical deletion is intended.
 ## How to read `tree_plot`
 
 Column widths are physical minima in millimetres. Each column reserves its data
-panel plus axes, legends, and margins; the PDF width is their sum. Adding or
-omitting a column does not resize the remaining columns. Text columns follow
-rendered glyph widths, heatmaps reserve at least 4 mm per group, and selected
+panel plus axes, legends, and margins; the PDF width is their sum. At the
+default figure height, adding or omitting a column does not resize the
+remaining columns. Text columns follow
+rendered glyph widths, expression heatmaps set their data-panel width from the
+number of samples and tree tips so each tile is square, other heatmaps reserve
+at least 4 mm per group, and selected
 site columns reserve at least 3 mm per site. Trees default to a 60 mm data panel;
 domain, alignment, and neighboring-gene panels default to 22.5 mm; structure
 panels default to 23 mm, without intron-number labels. Promoter motif panels follow the protein-domain width
@@ -675,7 +678,9 @@ For direct calls to `stat_branch2tree_plot.r`, use
 `--panel_widths_mm=tree:80,domain:60` to increase minimum data-panel widths.
 The workflow records the layout version so existing plots are regenerated on
 the next enabled tree-plot run. Keys match column-name prefixes; absent optional columns add no width. A
-requested width below the content minimum never shrinks it. The former
+requested width below the content minimum never shrinks it. A wider requested
+expression-heatmap width increases the figure height to keep its tiles square.
+The former
 `--width` (inches) and nonempty `--rel_widths` options are rejected with a
 migration message. HGT uses `hgt_summary_tree_width_mm` (default 60), replacing
 `hgt_summary_tree_plot_width`; direct HGT core calls use `hgt_tree_width_mm`.

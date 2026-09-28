@@ -80,3 +80,60 @@ ranges <- ggplot_build(q[[1]])$layout$panel_params[[1]]
 stopifnot(abs(ql$panel_widths_mm[[1]]*0.9/diff(ranges$x.range) - y_mm*0.9/diff(ranges$y.range)) < 1e-8)
 dev.off()
 cat('Compact panels, query squares, and frequency-limited legends passed.\n')
+
+# Expression cells remain square across tip and sample counts, including a
+# width override that requires the output page to grow taller.
+pdf(NULL)
+expression_layout <- function(n_tip, n_sample, override=NULL) {
+    labels <- paste0('gene',seq_len(n_tip))
+    input <- list(tree=list(data=data.frame(isTip=TRUE,label=labels,y=seq_len(n_tip),
+                                            tiplab_color='black')))
+    values <- as.data.frame(matrix(1, nrow=n_tip, ncol=n_sample))
+    names(values) <- paste0('sample',seq_len(n_sample))
+    row.names(values) <- labels
+    panel <- add_heatmap_column(input, list(font_size=6,margins=rep(0,4)), values,
+                                gname='heatmap,expression_')[['heatmap,expression_']]
+    layout <- treevis_layout_mm(list('heatmap,expression_'=panel),
+                                panel_widths_mm=override,
+                                height_mm=max(3,n_tip/10)*25.4)
+    gt <- layout$plots[[1]]
+    cell <- gt$layout[gt$layout$name == 'panel',]
+    outside <- setdiff(seq_along(gt$heights),seq.int(cell$t,cell$b))
+    panel_height <- layout$height_mm - sum(grid::convertHeight(
+        gt$heights[outside],'mm',valueOnly=TRUE))
+    built <- ggplot_build(panel)
+    tile <- built$data[[1]][1,]
+    ranges <- built$layout$panel_params[[1]]
+    tile_width <- layout$panel_widths_mm[[1]] * (tile$xmax-tile$xmin) /
+        diff(ranges$x.range)
+    tile_height <- panel_height * (tile$ymax-tile$ymin) / diff(ranges$y.range)
+    stopifnot(abs(tile_width-tile_height) < 1e-7)
+    layout
+}
+for (n_tip in c(10, 30)) {
+    widths <- vapply(c(1, 3, 10), function(n) expression_layout(n_tip,n)$panel_widths_mm[[1]], numeric(1))
+    stopifnot(all(diff(widths) > 0))
+}
+compact <- expression_layout(60, 3)
+stopifnot(compact$widths_mm[[1]] < 20)
+expression_ticks <- function(max_value) {
+    labels <- c('gene1', 'gene2')
+    input <- list(tree=list(data=data.frame(isTip=TRUE,label=labels,y=1:2,
+                                            tiplab_color='black')))
+    values <- data.frame(sample1=c(0,max_value),row.names=labels)
+    panel <- add_heatmap_column(input,list(font_size=6,margins=rep(0,4)),values,
+                                gname='heatmap,expression_')[['heatmap,expression_']]
+    scale <- panel$scales$get_scales('fill')
+    stopifnot(identical(scale$limits,c(0,max_value)),
+              identical(panel$theme$legend.ticks$colour,'black'),
+              identical(panel$theme$legend.ticks$linewidth,0.3))
+    scale$breaks
+}
+stopifnot(identical(expression_ticks(868.842),c(0,400,800)),
+          isTRUE(all.equal(expression_ticks(0.87),c(0,0.4,0.8))))
+default <- expression_layout(20, 3)
+wider <- expression_layout(20, 3, 'heatmap:20')
+stopifnot(wider$panel_widths_mm[[1]] >= 20,
+          wider$height_mm > default$height_mm)
+dev.off()
+cat('Square expression heatmaps and sample-dependent widths passed.\n')

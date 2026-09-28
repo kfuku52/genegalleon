@@ -1671,7 +1671,8 @@ def main():
             if len(min_cor_by_label) > 0:
                 df_branch.loc[:, col] = df_branch["branch_id"].map(min_cor_by_label)
         df_exp.columns = "expression_" + df_exp.columns
-        node_left_merge_tables.append(df_exp.reset_index().rename(columns={"index": "node_name"}))
+        df_exp.index.name = "node_name"
+        node_left_merge_tables.append(df_exp.reset_index())
     if os.path.exists(params["csubst_b"]):
         df_tmp = pandas.read_csv(
             params["csubst_b"],

@@ -56,12 +56,26 @@ treevis_wrap_axis_label <- function(label, width = 12) {
     paste(wrapped_parts, collapse = '\n')
 }
 
-treevis_ortholog_axis_label <- function(ortholog_prefix) {
+treevis_ortholog_axis_words <- function(ortholog_prefix) {
     label <- treevis_ortholog_prefix_target(ortholog_prefix)
     words <- strsplit(label, "[_[:space:]]+")[[1]]
-    words <- words[nzchar(words)]
-    lines <- c(lapply(words, function(word) call("italic", word)), list("closest", "gene"))
-    as.expression(Reduce(function(top, bottom) call("atop", call("displaystyle", top), call("displaystyle", bottom)), lines, right = TRUE))
+    words[nzchar(words)]
+}
+
+# Keep the exported plotmath label for callers that use it directly.
+treevis_ortholog_axis_label <- function(ortholog_prefix) {
+    words <- treevis_ortholog_axis_words(ortholog_prefix)
+    lines <- c(lapply(words, function(word) call('italic', word)), list('closest', 'gene'))
+    as.expression(Reduce(function(top, bottom) call('atop', call('displaystyle', top), call('displaystyle', bottom)), lines, right = TRUE))
+}
+
+# The panel uses rich text so every word keeps the same font size and line spacing.
+treevis_ortholog_axis_label_markup <- function(ortholog_prefix) {
+    words <- treevis_ortholog_axis_words(ortholog_prefix)
+    words <- gsub('&', '&amp;', words, fixed = TRUE)
+    words <- gsub('<', '&lt;', words, fixed = TRUE)
+    words <- gsub('>', '&gt;', words, fixed = TRUE)
+    paste0('<i>', paste(words, collapse = '<br>'), '</i><br>closest<br>gene')
 }
 
 treevis_site_panel_width <- function(num_sites) {

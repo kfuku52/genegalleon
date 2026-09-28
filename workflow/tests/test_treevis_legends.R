@@ -60,11 +60,18 @@ overridden <- get_rel_widths(g,'categorical,0.8')
 stopifnot(all(overridden[grepl('^categorical,',names(overridden))] == 0.8))
 
 # Rich species labels must render as text, including names with punctuation.
+ortholog_markup <- getFromNamespace('treevis_ortholog_axis_label_markup', 'genegalleon.treevis')
+stopifnot(identical(ortholog_markup('Arabidopsis_thaliana_'),
+                    '<i>Arabidopsis<br>thaliana</i><br>closest<br>gene'),
+          identical(ortholog_markup('A&B_C<D_'),
+                    '<i>A&amp;B<br>C&lt;D</i><br>closest<br>gene'))
 for (prefix in c('Arabidopsis_thaliana_', 'Species_a_subsp_b_', 'Species_a_x_Species_b_')) {
-    label <- treevis_ortholog_axis_label(prefix)
-    p <- ggplot(data.frame(x=1,y=1),aes(x,y)) + geom_blank() + xlab(label)
+    label <- ortholog_markup(prefix)
+    p <- ggplot(data.frame(x=1,y=1),aes(x,y)) + geom_blank() + xlab(label) +
+        theme(axis.title.x=ggtext::element_markdown(lineheight=0.8))
     gt <- ggplotGrob(p)
-    stopifnot(is.expression(label), inherits(gt,'gtable'))
+    stopifnot(is.character(label), identical(length(label),1L),
+              inherits(gt,'gtable'))
 }
 
 # A long domain legend is limited to the available width. Exercise the

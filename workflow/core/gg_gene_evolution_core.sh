@@ -6506,7 +6506,7 @@ tree_plot_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --output "tree_plot=${file_og_tree_plot}"
-  --parameter "column_layout=physical-mm-v2-compact-legends"
+  --parameter "column_layout=physical-mm-v3-square-expression"
   --parameter "localization_layout=paired-squares-v3-black-labels"
   --parameter "domain_intron_marks=no"
   --parameter "branch_length=${treevis_branch_length}"

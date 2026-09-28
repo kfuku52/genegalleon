@@ -477,7 +477,7 @@ for (extension in extensions) {
     filename = paste0('stat_branch2tree_plot', extension),
     plot = cp,
     nrow = 1,
-    base_height = max(3, height),
+    base_height = layout_mm$height_mm / 25.4,
     base_width = base_width,
     units = 'in',
     dpi = 300,

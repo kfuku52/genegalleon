@@ -5,6 +5,7 @@ r-aplot
 r-cowplot
 r-ggimage
 r-ggrepel
+r-ggtext
 bioconductor-ggtree
 r-igraph
 r-missmda

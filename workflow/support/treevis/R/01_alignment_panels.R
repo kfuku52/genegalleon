@@ -326,6 +326,14 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
     if (max_val <= 0) {
         max_val = 1
     }
+    square_tiles = startsWith(gname, 'heatmap,expression_') ||
+        identical(fill_label, 'Expression')
+    expression_breaks = ggplot2::waiver()
+    if (square_tiles) {
+        magnitude = 10^floor(log10(max_val))
+        rounded_max = floor(max_val/magnitude)*magnitude
+        expression_breaks = c(0, rounded_max/2, rounded_max)
+    }
     grid_color = ifelse(any(is.na(df_tip_tidy[['value']])), rgb(0,0,0,0), rgb(0,0,0,1))
     g[[gname]] = ggplot(data=df_tip_tidy)
     if (any(apply(df_tip[, colnames(df_trait), drop = FALSE], 1, function(x){all(is.na(x))}))) {
@@ -348,6 +356,7 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
             high="#ffe945", 
             midpoint=max_val/2, 
             limits=c(0, max_val), 
+            breaks=expression_breaks,
             na.value=rgb(1,1,1,0)
         ) +
         ggplot2::labs(fill=fill_label) +
@@ -357,11 +366,16 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
             axis.line=element_blank(), 
             axis.ticks=element_blank(), 
             axis.text.y=element_blank(),
-            axis.text.x=element_text(angle=45, hjust=1, colour=trait_colors, size=font_size),
+            axis.text.x=element_text(angle=if (square_tiles) 90 else 45, hjust=1,
+                                     colour=trait_colors, size=font_size),
             legend.position="bottom",
             legend.title=element_text(size=font_size),
             legend.text=element_text(size=font_size),
             legend.box.just='center',
+            legend.margin=if (square_tiles) margin(0,0,0,0) else NULL,
+            legend.ticks=if (square_tiles) element_line(colour='black', linewidth=0.3,
+                                                       lineend='butt') else NULL,
+            legend.ticks.length=if (square_tiles) unit(c(-0.6,0),'mm') else NULL,
             rect=element_rect(fill="transparent"),
             plot.margin=unit(args[['margins']], "cm")
         ) +
@@ -370,10 +384,12 @@ add_heatmap_column = function(g, args, df_trait, fill_label='Expression', gname=
                 title.position="bottom", 
                 title.hjust=0.25, 
                 label.position="bottom", 
-                barheight=0.3,
-                barwidth=ncol(df_trait)*0.7
+                ticks=TRUE,
+                barheight=if (square_tiles) unit(2,'mm') else 0.3,
+                barwidth=if (square_tiles) unit(min(30, max(10, ncol(df_trait)*2)), 'mm') else ncol(df_trait)*0.7
             )
         )
+    attr(g[[gname]], 'treevis_square_tiles') = square_tiles
     return(g)
 }
 

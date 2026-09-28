@@ -96,7 +96,7 @@ add_ortholog_column <- function(g,
   df_clade <- split_nested_clade(df_clade)
   
   # Axis label
-  xlabel <- treevis_ortholog_axis_label(ortholog_prefix)
+  xlabel <- treevis_ortholog_axis_label_markup(ortholog_prefix)
   
   gname <- paste0('ortholog,', ortholog_prefix)
   
@@ -109,6 +109,7 @@ add_ortholog_column <- function(g,
     theme_minimal(base_size = font_size) +
     coord_cartesian(clip = "off") +
     theme(
+      axis.title.x    = ggtext::element_markdown(lineheight = 0.8),
       axis.text       = element_blank(),
       axis.ticks      = element_blank(),
       panel.grid      = element_blank(),

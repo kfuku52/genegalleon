@@ -56,13 +56,17 @@ Docker-only, local-build, HPC, and reproducible-tag options are covered in
 
 ## Output Examples
 
-Query2family tree plot:
+Query2family `AHA` tree plot with the bundled test-data panels, excluding the
+expression pointplot:
 
-![Query2family tree plot example](docs/assets/example-plots/query2family-tree-plot.png)
+![AHA query2family tree plot](docs/assets/example-plots/readme-aha-tree-plot.png)
 
-Gene-family presence/absence summary:
+Gene-family presence/absence and reference-gene ortholog summary for all three
+bundled query families, with local synteny and gene-tree topology support:
 
-![Gene-family presence/absence example](docs/assets/example-plots/query2family-presence-absence.png)
+![AHA, STRICTCHK, and YABBY ortholog presence with synteny and topology support](docs/assets/example-plots/readme-test-family-presence-absence.png)
+
+All three families are detected in each of the seven test species.
 
 See [Example Plots](docs/example-plots.md) for more outputs.
 

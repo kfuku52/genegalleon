@@ -75,6 +75,46 @@ def test_no_significant_pfam_hits_preserve_branch_table_schema(tmp_path):
     assert branch_table["pfam_domain"].isna().all()
 
 
+def test_expression_gene_ids_join_to_tree_tips(tmp_path):
+    rooted_tree = tmp_path / "rooted.nwk"
+    rooted_tree.write_text("(Species_A_gene1:1,Species_B_gene2:1)n0;\n", encoding="utf-8")
+    expression = tmp_path / "expression.tsv"
+    expression.write_text(
+        "gene_id\ttissue1_1\ttissue1_2\n"
+        "Species_A_gene1\t2\t4\n"
+        "Species_B_gene2\t6\t8\n",
+        encoding="utf-8",
+    )
+
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--rooted_tree",
+            str(rooted_tree),
+            "--expression",
+            str(expression),
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t")
+    tips = branches.set_index("node_name")
+    assert tips.loc["Species_A_gene1", "expression_tissue1_1"] == 2
+    assert tips.loc["Species_A_gene1", "expression_tissue1_2"] == 4
+    assert tips.loc["Species_B_gene2", "expression_tissue1_1"] == 6
+    assert tips.loc["Species_B_gene2", "expression_tissue1_2"] == 8
+
+
 def test_load_fimo_hits_parses_modern_fimo_tsv(tmp_path):
     mod = load_module()
     infile = tmp_path / "fimo.tsv"
