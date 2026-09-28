@@ -68,6 +68,11 @@ bundled query families, with local synteny and gene-tree topology support:
 
 All three families are detected in each of the seven test species.
 
+Orthogroup rarefaction from small illustrative test data. Curves show mean
+counts across random species subsets; shaded bands show one standard deviation:
+
+![Orthogroup rarefaction across random species subsets](docs/assets/example-plots/single-copy-ortholog-decay.svg)
+
 See [Example Plots](docs/example-plots.md) for more outputs.
 
 ## Updating with an AI agent
