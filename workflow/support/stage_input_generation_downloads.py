@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 import format_species_inputs as fsi
+from format_species_annotation.tasks import task_missing_annotation_label
+from format_species_common import is_fasta_filename, is_gbff_filename, is_gff_filename
 from format_species_manifest import resolved_manifest_fieldnames, write_resolved_manifest_tsv
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from input_generation_array_state import atomic_json, digest, export_manifest, load_plan
@@ -17,6 +19,47 @@ def has_required_source(task, keys):
         path and Path(path).is_file() and Path(path).stat().st_size > 0
         for path in (task.get(key) for key in keys)
     )
+
+
+def explicit_manifest_task(task, row, download_root):
+    """Keep explicit direct/NCBI manifest roles when filenames lack role markers."""
+    provider = task["provider"]
+    roles = ("cds", "gff", "gbff", "genome")
+    if provider not in ("direct", "ncbi") or not any((row.get(role + "_url") or "").strip() for role in roles):
+        return None
+    species_key = task["species_key"]
+    if species_key in ("", ".", "..") or Path(species_key).name != species_key:
+        raise ValueError("Unsafe manifest species key: " + species_key)
+    raw_dir = download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
+    actual = {
+        "provider": provider, "species_key": species_key,
+        "species_prefix": task["species_prefix"],
+        "gff_auto_selected_from_multiple": False,
+        "gff_selection_candidates": (),
+    }
+    validators = {"cds": is_fasta_filename, "gff": is_gff_filename,
+                  "gbff": is_gbff_filename, "genome": is_fasta_filename}
+    for role in roles:
+        url = (row.get(role + "_url") or "").strip()
+        filename = (row.get(role + "_filename") or "").strip()
+        path = None
+        if url:
+            if not filename or filename in (".", "..") or Path(filename).name != filename or not validators[role](filename):
+                raise ValueError("Invalid explicit {} filename for {}".format(role, species_key))
+            path = raw_dir / filename
+            if path.is_symlink():
+                raise ValueError("Explicit {} input is a symlink for {}".format(role, species_key))
+            if not path.is_file() or path.stat().st_size == 0:
+                path = None
+        actual[role + "_path"] = path
+    missing = task_missing_annotation_label(
+        actual["cds_path"], actual["gff_path"], actual["gbff_path"], actual["genome_path"])
+    if missing:
+        raise ValueError("[{}] {}: missing {}".format(provider, species_key, missing))
+    actual["gff_selection_candidates"] = (
+        (actual["gff_path"].name,) if actual["gff_path"] is not None else ()
+    )
+    return actual
 
 
 def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff=False, require_genome=False):
@@ -73,10 +116,24 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     discovered = {}
     discovery_errors = []
     failed_providers = set()
-    for provider in sorted({task["provider"] for task in plan["tasks"]}):
-        allowed_species_keys = {
-            task["species_key"] for task in plan["tasks"] if task["provider"] == provider
-        }
+    explicit_errors = {}
+    explicit_keys = set()
+    fallback_species = {}
+    for _index, task in pending:
+        provider = task["provider"]
+        key = (provider, task["species_prefix"])
+        row = resolved_rows.get((provider, task["species_key"]))
+        try:
+            actual = explicit_manifest_task(task, row or {}, download_root)
+        except ValueError as exc:
+            explicit_errors[key] = str(exc)
+            continue
+        if actual is None:
+            fallback_species.setdefault(provider, set()).add(task["species_key"])
+        else:
+            discovered[key] = actual
+            explicit_keys.add(key)
+    for provider, allowed_species_keys in sorted(fallback_species.items()):
         tasks, warnings, errors = fsi.discover_tasks(
             provider,
             download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider],
@@ -98,10 +155,13 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     staging_errors = []
     for index, task in pending:
         key = (task["provider"], task["species_prefix"])
+        if key in explicit_errors:
+            staging_errors.append(explicit_errors[key])
+            continue
         if key not in discovered or key not in resolved_rows:
             staging_errors.append("Missing staged species: " + repr(key))
             continue
-        if task["provider"] in failed_providers:
+        if task["provider"] in failed_providers and key not in explicit_keys:
             continue
         actual = discovered[key]
         if require_gff and not has_required_source(actual, ("gff_path", "gbff_path")):

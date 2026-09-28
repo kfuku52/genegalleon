@@ -58,6 +58,38 @@ def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cac
     assert rejected_stage.returncode != 0 and "Staged raw input changed" in rejected_stage.stderr
 
 
+def test_staged_manifest_roles_override_nonstandard_direct_and_ncbi_filenames(tmp_path):
+    cases = (
+        ("direct", "fixture", "Chrysanthemum_morifolium", "Cmo.fasta"),
+        ("ncbi", "GCA_000000001.1", "Nicotiana_benthamiana", "Nbe_scf.fa"),
+    )
+    for provider, source_id, species, genome_name in cases:
+        root = tmp_path / species
+        root.mkdir()
+        cds = root / "genes.cds.fa"
+        gff = root / "genes.gff"
+        genome = root / genome_name
+        cds.write_text(">gene1\nATGAAATTT\n", encoding="utf-8")
+        gff.write_text("##gff-version 3\nchr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n", encoding="utf-8")
+        genome.write_text(">chr1\nATGAAATTT\n", encoding="utf-8")
+        manifest = root / "manifest.tsv"
+        manifest.write_text(
+            "provider\tid\tspecies_key\tcds_url\tgff_url\tgenome_url\tcds_filename\tgff_filename\tgenome_filename\n"
+            f"{provider}\t{source_id}\t{species}\t{cds.as_uri()}\t{gff.as_uri()}\t{genome.as_uri()}\t{cds.name}\t{gff.name}\t{genome.name}\n",
+            encoding="utf-8",
+        )
+        plan = root / "plan.json"
+        planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                             "--download-dir", str(root / "downloads"), "--stage-downloads", "--outfile", str(plan),
+                             "--require-gff", "--require-genome")
+        assert planned.returncode == 0, planned.stderr
+        staged = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-gff", "--require-genome")
+        assert staged.returncode == 0, staged.stdout + staged.stderr
+        task = json.loads(Path(str(plan) + ".tasks/1.json").read_text())["task"]
+        assert Path(task["genome_path"]).name == genome_name
+        assert Path(task["cds_path"]).name == cds.name
+
+
 def test_prepare_resources_are_separate_from_compute_array(tmp_path):
     helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
     result = run_python(helper, "--task-plan", str(tmp_path / "plan.json"), "--cpus", "4", "--memory", "32G",

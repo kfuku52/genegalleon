@@ -12,6 +12,11 @@ For most species-wise inputs, use either:
 - a filename that starts with `GENUS_SPECIES_...`
 - or a directory named `GENUS_SPECIES`
 
+For staged `direct` and `ncbi` download manifests, the explicit CDS, GFF, GBFF,
+and genome URL/filename columns define each file's role. A genome named
+`Cmo.fasta`, for example, remains a genome even though its name has no assembly
+marker. Directory-only discovery still infers roles from filenames.
+
 Typical examples:
 
 - `Arabidopsis_thaliana_Araport11.fa.gz`
