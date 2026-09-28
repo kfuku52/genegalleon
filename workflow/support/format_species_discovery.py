@@ -184,8 +184,9 @@ def cds_gff_result_fields(audit=None):
     }
 
 
-def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_mode):
+def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_mode, failure_reason=None):
     json_path, records_path = cds_gff_grouping_audit_paths(output_path)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
     json_tmp = Path(str(json_path) + ".tmp.{}.{}".format(time.time_ns(), len(audit_rows)))
     records_tmp = Path(str(records_path) + ".tmp.{}.{}".format(time.time_ns(), len(audit_rows)))
     fieldnames = (
@@ -220,7 +221,11 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_
                 "cds_input": cds_gff_source_signature(task["cds_path"]),
                 "gff_input": cds_gff_source_signature(task["gff_path"]),
                 "output_path": str(Path(output_path).expanduser().resolve()),
-                "output_fingerprint": cds_gff_artifact_signature(output_path),
+                "status": "failed" if failure_reason else "complete",
+                "failure_reason": failure_reason or "",
+                "output_fingerprint": (
+                    cds_gff_artifact_signature(output_path) if failure_reason is None else None
+                ),
                 "records_audit_path": str(records_path.resolve()),
                 "records_audit_fingerprint": cds_gff_artifact_signature(records_path),
             }
@@ -777,9 +782,10 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             mapping_counts["ambiguous"],
         )
     )
+    mapping_failure = ""
     if grouping_index is not None and unexpected_mapping_count > 0 and not mapping_fallback_tolerated:
         candidate_names = ",".join(task.get("gff_selection_candidates", ())) or Path(task["gff_path"]).name
-        raise ValueError(
+        mapping_failure = (
             "GFF-backed CDS grouping for {} failed: unexpected_unmapped={} ambiguous={} "
             "GFF='{}' candidates={} sample={}".format(
                 task.get("species_prefix", ""),
@@ -791,9 +797,24 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             )
         )
 
-    if task.get("cds_path") is None and after_count == 0:
+    if after_count == 0:
         if output_path.exists():
             output_path.unlink()
+        if grouping_index is not None and not dry_run:
+            empty_audit = {
+                "grouping_source": "gff",
+                "before_count": before_count,
+                "after_count": 0,
+                "duplicates": aggregated_away,
+                "first_sequence_name": "",
+                "stats": dict(mapping_counts),
+            }
+            write_cds_gff_grouping_audit(
+                task, output_path, audit_rows, empty_audit, strict_mode,
+                failure_reason=mapping_failure or "No nuclear CDS records remain after filtering",
+            )
+        if mapping_failure:
+            raise ValueError(mapping_failure)
         result = {
             "status": "empty",
             "output_path": None,
@@ -806,12 +827,6 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         }
         result.update(cds_gff_result_fields())
         return result
-
-    if not dry_run:
-        write_fasta_records_gzip(
-            output_path,
-            ((records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"]) for gene_id in ordered_ids),
-        )
 
     if grouping_index is None:
         grouping_source = "header"
@@ -841,6 +856,19 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             "coordinate_rescued_groups": int((grouping_index or {}).get("coordinate_rescued_groups", 0) or 0),
         },
     }
+    if mapping_failure:
+        if not dry_run:
+            write_cds_gff_grouping_audit(
+                task, output_path, audit_rows, audit_payload, strict_mode,
+                failure_reason=mapping_failure,
+            )
+        raise ValueError(mapping_failure)
+
+    if not dry_run:
+        write_fasta_records_gzip(
+            output_path,
+            ((records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"]) for gene_id in ordered_ids),
+        )
     if grouping_index is not None and not dry_run:
         audit_payload = write_cds_gff_grouping_audit(
             task,

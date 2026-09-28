@@ -25,6 +25,7 @@ require_cds="${require_cds:-0}"
 require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
 run_species_busco="${run_species_busco:-1}"
+busco_timeout_seconds="${busco_timeout_seconds:-0}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
 species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
 run_cds_fx2tab="${run_cds_fx2tab:-1}"
@@ -131,6 +132,10 @@ for requirement in require_cds require_gff require_genome; do
     *) echo "${requirement} must be 0 or 1" >&2; exit 1 ;;
   esac
 done
+if [[ ! "${busco_timeout_seconds}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+  echo "busco_timeout_seconds must be 0 or a positive integer." >&2
+  exit 1
+fi
 
 case "${provider}" in
   refseq|genbank)
@@ -1417,7 +1422,7 @@ run_species_busco_for_one_file() {
 
   (
     cd "${busco_work_root}"
-    gg_run_busco_with_metaeuk_modified_fas_compat \
+    GG_BUSCO_TIMEOUT_SECONDS="${busco_timeout_seconds}" gg_run_busco_with_metaeuk_modified_fas_compat \
       --in "input.fasta" \
       --mode "transcriptome" \
       --out "busco_tmp" \
@@ -1427,7 +1432,16 @@ run_species_busco_for_one_file() {
       --limit 20 \
       --lineage_dataset "${dir_busco_lineage}" \
       --download_path "${dir_busco_db}" \
-      --offline
+      --offline 2>&1 | awk -v max_lines=10000 '
+        NR <= max_lines { print; fflush(); next }
+        { tail_lines[NR % 50] = $0 }
+        END {
+          if (NR > max_lines) {
+            print "BUSCO output exceeded 10000 lines; intermediate lines suppressed (" NR " total)."
+            first = NR > 50 ? NR - 49 : 1
+            for (i = first; i <= NR; i++) print tail_lines[i % 50]
+          }
+        }'
   )
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
@@ -2288,7 +2302,7 @@ done <<< "${array_output_locks}"
 
 if [[ "${input_generation_mode}" == array_* ]]; then
   array_settings_cmd=(python "${gg_support_dir}/input_generation_array_state.py" configure --task-plan "${task_plan_output}")
-  for array_setting in provider download_limit_dir gene_grouping_mode gff_repair_mode strict busco_lineage \
+  for array_setting in provider download_limit_dir gene_grouping_mode gff_repair_mode strict busco_lineage busco_timeout_seconds \
     run_validate_inputs run_cds_fx2tab run_species_busco run_generate_species_trait run_multispecies_summary \
     run_species_taxonomy taxonomy_species_tree taxonomy_ranks taxonomy_plot_clades taxonomy_taxid_map \
     species_cds_dir species_gff_dir species_genome_dir species_cds_fx2tab_dir species_busco_full_dir species_busco_short_dir \

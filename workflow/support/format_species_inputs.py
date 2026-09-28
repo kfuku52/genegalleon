@@ -203,6 +203,7 @@ def main():
     total_cds_after = 0
     first_cds_sequence_name = ""
     species_with_gff = 0
+    species_with_cds = 0
     species_with_genome = 0
     failed_format_tasks = 0
     total_gff_repaired_gene_ids = 0
@@ -322,6 +323,11 @@ def main():
             first_cds_sequence_name = cds_result["first_sequence_name"]
         if genome_result["status"] != "missing":
             species_with_genome += 1
+        if (cds_result["status"] in ("write", "skip")
+                and cds_result.get("output_path") is not None
+                and cds_result["output_path"].is_file()
+                and cds_result["after_count"] > 0):
+            species_with_cds += 1
         if (gff_result["status"] in ("write", "skip")
                 and gff_result.get("output_path") is not None
                 and gff_result["output_path"].is_file()):
@@ -358,7 +364,7 @@ def main():
 
     stats = {
         "species_processed": processed,
-        "num_species_cds_files": processed,
+        "num_species_cds_files": species_with_cds,
         "num_species_gff_files": species_with_gff,
         "num_species_genome_files": species_with_genome,
         "cds_sequences_before": total_cds_before,

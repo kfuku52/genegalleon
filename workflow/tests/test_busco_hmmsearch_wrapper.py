@@ -1,8 +1,11 @@
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
@@ -140,6 +143,27 @@ printf '%s\\n' "${{GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT:-}}" > {shlex.quote(str(
     assert observed_wrapper.read_text(encoding="utf-8").strip() == str(HMMSEARCH_WRAPPER_PATH)
     assert observed_real.read_text(encoding="utf-8").strip() == str(real_hmmsearch)
     assert observed_compat.read_text(encoding="utf-8").strip() == "1"
+
+
+def test_gg_run_busco_with_metaeuk_modified_fas_compat_enforces_opt_in_timeout(tmp_path: Path):
+    if shutil.which("timeout") is None:
+        pytest.skip("GNU timeout is unavailable on this host")
+    bin_dir = tmp_path / "bin"
+    _write_executable(bin_dir / "hmmsearch", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(bin_dir / "busco", "#!/usr/bin/env bash\nsleep 5\n")
+    command = (
+        f"source {shlex.quote(str(GG_BUSCO_PATH))}; "
+        f"gg_support_dir={shlex.quote(str(SUPPORT_DIR))}; "
+        "GG_BUSCO_TIMEOUT_SECONDS=1 gg_run_busco_with_metaeuk_modified_fas_compat --in input.fasta"
+    )
+
+    completed = _run_bash(
+        command,
+        cwd=tmp_path,
+        env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+    assert completed.returncode == 124
 
 
 def test_gg_busco_stderr_matches_known_metaeuk_modified_fas_bug(tmp_path: Path):

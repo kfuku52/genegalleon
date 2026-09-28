@@ -2,6 +2,8 @@
 import re
 from urllib.parse import unquote
 
+STRUCTURAL_GFF_ATTRIBUTES = frozenset({"exception", "gg_source_overlap", "pseudo", "ID", "Parent", "number", "part"})
+
 
 def has_trans_splicing_exception(text):
     for field in str(text).split(';'):
@@ -44,7 +46,10 @@ def ordered_annotated_blocks(rows, gene_id):
         for field in str(text).split(';'):
             if '=' in field:
                 key, value = field.split('=', 1)
-                if key in fields and fields[key] != value:
+                # Only attributes that control block interpretation must be
+                # unambiguous. Public GFFs may repeat free-text annotations
+                # (for example AltName) within one feature line.
+                if key in STRUCTURAL_GFF_ATTRIBUTES and key in fields and fields[key] != value:
                     raise ValueError(f'Conflicting GFF attribute {key} for {gene_id}')
                 fields[key] = value
         attributes.append(fields)

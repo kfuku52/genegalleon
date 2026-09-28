@@ -110,6 +110,15 @@ and finalize checks every species again. These settings are frozen with the
 array plan. An intentionally CDS-only run also needs `GG_INPUT_RUN_VALIDATE_INPUTS=0`,
 because CDS-to-GFF mapping validation requires GFF regardless of these flags.
 
+`GG_INPUT_BUSCO_TIMEOUT_SECONDS` defaults to `0` (no timeout). A positive
+value bounds each species BUSCO invocation and is frozen into the array plan.
+If the limit is reached, that worker fails without a completion receipt so a
+later retry can select it; the timeout does not turn missing BUSCO output into
+a successful species. Worker logs keep the first 10,000 BUSCO lines and the
+last 50 lines, while preserving the BUSCO exit status. This avoids unbounded
+logs from a repeatedly failing predictor. Choose the limit after measuring
+large representative species, not from the scheduler wall time alone.
+
 Every selected manifest row must have an explicit, valid `species_key`, a
 supported `provider`, and an `id`. Duplicate output species prefixes are rejected,
 even across providers. Species keys and explicit download filenames must be

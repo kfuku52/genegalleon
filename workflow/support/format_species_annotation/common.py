@@ -259,16 +259,37 @@ def choose_first_gff_attribute(attrs, keys):
     return ""
 
 
+class GenomeSequenceIndex(dict):
+    """FASTA sequences with an unambiguous canonical ID for each header alias."""
+
+    def __init__(self):
+        super().__init__()
+        self.canonical_ids = {}
+
+
 def load_genome_sequences(path):
-    sequences = {}
+    sequences = GenomeSequenceIndex()
     for header, sequence in iter_fasta_records(path):
         full_name = apply_common_replacements(str(header or "").strip())
         token = first_token(full_name)
         seq = re.sub(r"\s+", "", str(sequence or "")).upper()
-        if token != "" and token not in sequences:
-            sequences[token] = seq
-        if full_name != "" and full_name not in sequences:
-            sequences[full_name] = seq
+        if token == "":
+            continue
+        aliases = {token, full_name}
+        original_id = re.search(r"(?:^|\s)OriSeqID=([^\s;]+)", full_name)
+        if original_id is not None:
+            declared_length = re.search(r"(?:^|\s)Len=(\d+)(?:\s|$)", full_name)
+            if declared_length is not None and int(declared_length.group(1)) != len(seq):
+                raise ValueError("FASTA OriSeqID length disagrees with sequence for '{}'".format(token))
+            aliases.add(original_id.group(1))
+        for alias in aliases:
+            previous = sequences.canonical_ids.get(alias)
+            if previous is not None and previous != token:
+                raise ValueError(
+                    "FASTA sequence alias '{}' is shared by '{}' and '{}'".format(alias, previous, token)
+                )
+            sequences[alias] = seq
+            sequences.canonical_ids[alias] = token
     return sequences
 
 
@@ -294,17 +315,18 @@ def build_gff_genome_seqid_map(genome_sequences, required_gff_seqids):
                 continue
             fasta_seqid = prefixed_seqid
 
-        previous_gff_seqid = gff_seqid_by_fasta_seqid.get(fasta_seqid)
+        canonical_seqid = getattr(genome_sequences, "canonical_ids", {}).get(fasta_seqid, fasta_seqid)
+        previous_gff_seqid = gff_seqid_by_fasta_seqid.get(canonical_seqid)
         if previous_gff_seqid is not None and previous_gff_seqid != gff_seqid:
             raise ValueError(
                 "GFF seqids '{}' and '{}' both resolve to FASTA sequence ID '{}'".format(
                     previous_gff_seqid,
                     gff_seqid,
-                    fasta_seqid,
+                    canonical_seqid,
                 )
             )
-        gff_seqid_by_fasta_seqid[fasta_seqid] = gff_seqid
-        seqid_map[gff_seqid] = fasta_seqid
+        gff_seqid_by_fasta_seqid[canonical_seqid] = gff_seqid
+        seqid_map[gff_seqid] = canonical_seqid
     return seqid_map, tuple(missing_seqids)
 
 

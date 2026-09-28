@@ -968,6 +968,39 @@ def test_array_failed_busco_worker_retries_without_completed_receipt(tmp_path):
     assert pending.stdout.strip() == "2"
 
 
+def test_array_busco_timeout_leaves_worker_retryable(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "timed_array_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    busco = fake_bin / "busco"
+    busco.write_text(
+        busco.read_text().replace(
+            "import os\n", 'import os\nimport time\nif os.environ.get("GG_TEST_SLEEP_BUSCO"):\n    time.sleep(5)\n'
+        ),
+        encoding="utf-8",
+    )
+    prepare_env = _core_env(workspace, input_dir, fake_bin, "array_prepare")
+    prepare_env["busco_timeout_seconds"] = "1"
+    prepared = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=prepare_env,
+                              capture_output=True, text=True, timeout=180)
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    worker_env = _core_env(workspace, input_dir, fake_bin, "array_worker", 1)
+    worker_env["busco_timeout_seconds"] = "1"
+    worker_env["GG_TEST_SLEEP_BUSCO"] = "1"
+    failed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=worker_env,
+                            capture_output=True, text=True, timeout=180)
+    assert failed.returncode != 0
+    receipt = workspace / "output/input_generation/tmp/task_plan.json.completed/1.json"
+    assert not receipt.exists()
+    del worker_env["GG_TEST_SLEEP_BUSCO"]
+    resumed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=worker_env,
+                             capture_output=True, text=True, timeout=180)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert receipt.exists()
+
+
 def test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species(tmp_path):
     input_dir = _write_direct_species_fixture(tmp_path)
     workspace = tmp_path / "finalize_failure_workspace"

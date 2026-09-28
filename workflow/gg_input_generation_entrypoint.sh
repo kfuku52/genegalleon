@@ -103,6 +103,7 @@ run_format_inputs=1 # Format local inputs or download-manifest targets into work
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
 run_cds_fx2tab=1 # Run seqkit fx2tab for formatted species CDS files.
 run_species_busco=1 # Run BUSCO for formatted species CDS files.
+busco_timeout_seconds=0 # 0 disables the per-species BUSCO wall-time limit; set a positive number for large arrays.
 run_multispecies_summary=1 # Generate multi-species BUSCO summary plots and tables from species BUSCO outputs.
 run_generate_species_trait=0 # Generate species_trait.tsv from downloaded or local metadata sources.
 

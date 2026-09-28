@@ -52,6 +52,26 @@ def test_longest_gtf_transcripts_do_not_merge_isoforms():
     assert out["end"].tolist() == [90]
 
 
+def test_same_parent_cds_protein_variants_are_selected_separately():
+    gff = pandas.DataFrame(
+        [
+            ["chr1", "gene", 1, 40, "+", "ID=gene1"],
+            ["chr1", "mRNA", 1, 40, "+", "ID=rna1;Parent=gene1"],
+            ["chr1", "CDS", 1, 9, "+", "ID=cds-P1;Parent=rna1;protein_id=P1"],
+            ["chr1", "CDS", 20, 28, "+", "ID=cds-P1;Parent=rna1;protein_id=P1"],
+            ["chr1", "CDS", 3, 9, "+", "ID=cds-P2;Parent=rna1;protein_id=P2"],
+            ["chr1", "CDS", 20, 28, "+", "ID=cds-P2;Parent=rna1;protein_id=P2"],
+        ], columns=["sequence", "feature", "start", "end", "strand", "attributes"]
+    )
+
+    selected = extract_by_ids(gff, pandas.Series(["Species_a_gene1"]), "CDS", "longest")
+    summary = summarize_gene_features(selected, OUT_COLS)
+
+    assert selected["selected_transcript"].unique().tolist() == ["protein_id:P1"]
+    assert summary.iloc[0]["feature_blocks"] == "1-9;20-28"
+    assert summary.iloc[0]["feature_size"] == 18
+
+
 def test_longest_breaks_equal_length_ties_by_transcript_id(capsys):
     gff = pandas.DataFrame(
         [

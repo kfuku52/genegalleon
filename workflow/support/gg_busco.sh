@@ -77,6 +77,7 @@ gg_run_busco_with_metaeuk_modified_fas_compat() {
   local wrapper_dir=""
   local real_hmmsearch=""
   local wrapped_path=""
+  local -a busco_command=(busco "$@")
 
   wrapper_path="$(gg_busco_hmmsearch_wrapper_path)"
   if [[ ! -x "${wrapper_path}" ]]; then
@@ -107,10 +108,18 @@ gg_run_busco_with_metaeuk_modified_fas_compat() {
       ;;
   esac
 
+  if [[ "${GG_BUSCO_TIMEOUT_SECONDS:-0}" != 0 ]]; then
+    if [[ ! "${GG_BUSCO_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "GG_BUSCO_TIMEOUT_SECONDS must be a positive integer or 0." >&2
+      return 2
+    fi
+    busco_command=(timeout --signal=TERM --kill-after=60s "${GG_BUSCO_TIMEOUT_SECONDS}" "${busco_command[@]}")
+  fi
+
   PATH="${wrapped_path}" \
     GG_REAL_HMMSEARCH="${real_hmmsearch}" \
     GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT=1 \
-    busco "$@"
+    "${busco_command[@]}"
 }
 
 gg_busco_stderr_matches_known_metaeuk_modified_fas_bug() {

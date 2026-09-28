@@ -391,6 +391,39 @@ def test_gff_genome_seqid_map_reports_unresolved_seqids():
     assert missing_seqids == ("Gy3",)
 
 
+def test_gff_genome_seqid_map_uses_verified_original_sequence_ids(tmp_path):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(
+        ">GWHEUWF00000001.1 Chromosome 1a OriSeqID=Chr1A Len=9\nATGAAATTT\n",
+        encoding="utf-8",
+    )
+    sequences = module.load_genome_sequences(genome)
+
+    seqid_map, missing = module.build_gff_genome_seqid_map(sequences, {"Chr1A"})
+
+    assert missing == ()
+    assert seqid_map == {"Chr1A": "GWHEUWF00000001.1"}
+    with pytest.raises(ValueError, match="both resolve"):
+        module.build_gff_genome_seqid_map(sequences, {"Chr1A", "GWHEUWF00000001.1"})
+
+
+def test_gff_genome_seqid_map_rejects_incorrect_or_colliding_original_ids(tmp_path):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">acc1 OriSeqID=Chr1 Len=8\nATGAAATTT\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="length disagrees"):
+        module.load_genome_sequences(genome)
+
+    genome.write_text(
+        ">acc1 OriSeqID=Chr1 Len=9\nATGAAATTT\n"
+        ">acc2 OriSeqID=Chr1 Len=9\nATGCCCTTT\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="alias 'Chr1' is shared"):
+        module.load_genome_sequences(genome)
+
+
 def test_direct_ncbi_like_cds_header_uses_locus_tag_for_gene_grouping():
     module = load_module()
     task = {
@@ -1565,6 +1598,33 @@ def test_figshare_rejects_all_unmapped_auto_selected_gff(tmp_path):
 
     with pytest.raises(ValueError, match=r"unexpected_unmapped=2 ambiguous=0"):
         module.format_cds(task, output_dir, overwrite=False, dry_run=False)
+    audit_json, audit_tsv = module.cds_gff_grouping_audit_paths(
+        output_dir / module.normalize_cds_output_basename(cds_path.name, task["species_prefix"])
+    )
+    assert not list(output_dir.glob("*.fa.gz"))
+    assert json.loads(audit_json.read_text(encoding="utf-8"))["status"] == "failed"
+    assert len(audit_tsv.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_empty_raw_cds_does_not_create_formatted_output(tmp_path):
+    module = load_module()
+    cds_path = tmp_path / "empty.cds.fa"
+    cds_path.write_text("", encoding="utf-8")
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    task = {
+        "provider": "direct",
+        "species_key": "Example_species",
+        "species_prefix": "Example_species",
+        "cds_path": cds_path,
+        "gff_path": None,
+    }
+
+    result = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
+
+    assert result["status"] == "empty"
+    assert result["output_path"] is None
+    assert not list(output_dir.iterdir())
 
 
 def test_provided_cds_gff_grouping_rejects_unmapped_records_by_default(tmp_path):

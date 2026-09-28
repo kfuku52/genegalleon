@@ -573,11 +573,30 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
         # under that gene are alternative models; repeated IDs are CDS parts.
         gene_features = {parse_attribute_fields(a)[0] for a in
                          gff.loc[gff["feature"].str.lower().isin(["gene", "pseudogene"]), "attributes"]}
+        parent_proteins = {}
+        for gene_id, attr in zip(out["gene_id"], out["attributes"], strict=True):
+            protein_values = _parse_gff_attributes(attr).get("protein_id", [])
+            protein_id = protein_values[0] if len(protein_values) == 1 else ""
+            for parent in transcript_ids(attr, gene_id):
+                parent_proteins.setdefault((gene_id, parent), set()).add(protein_id)
         models = []
         for gene_id, attr in zip(out["gene_id"], out["attributes"], strict=True):
             feature_id, parents, _ = parse_attribute_fields(attr)
-            models.append((feature_id,) if feature_id and parents and all(p in gene_features for p in parents)
-                          else transcript_ids(attr, gene_id))
+            if feature_id and parents and all(p in gene_features for p in parents):
+                models.append((feature_id,))
+                continue
+            parent_ids = transcript_ids(attr, gene_id)
+            split_parents = [parent for parent in parent_ids
+                             if len(parent_proteins[(gene_id, parent)]) > 1]
+            if split_parents:
+                protein_values = _parse_gff_attributes(attr).get("protein_id", [])
+                if len(protein_values) != 1 or not protein_values[0] or any(
+                    "" in parent_proteins[(gene_id, parent)] for parent in split_parents
+                ):
+                    raise ValueError(f"Cannot separate CDS protein variants for {gene_id}")
+                models.append(("protein_id:" + protein_values[0],))
+            else:
+                models.append(parent_ids)
         out = out.copy()
         out["_model_ids"] = models
         return select_longest_transcripts(out)
@@ -667,6 +686,14 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
         cds_blocks, splice_mode = transcript_blocks(cds, gene_id)
         utr_rows = utr_by_transcript.get(transcript[0], [])
         utr_status[gene_id] = "available"
+        if transcript[0].startswith("protein_id:"):
+            parent_ids = {parent for attr in cds["attributes"]
+                          for parent in transcript_ids(attr, gene_id)}
+            if any(utr_by_transcript.get(parent) for parent in parent_ids):
+                if structure_policy != "report":
+                    raise ValueError(f"UTR isoform is ambiguous for {gene_id}")
+                utr_status[gene_id] = "conflicting:UTR isoform is ambiguous"
+            utr_rows = []
         try:
             utr_blocks = ordered_feature_blocks(utr_rows, gene_id) if utr_rows else []
             # Reject annotation overlap or a different contig/strand.

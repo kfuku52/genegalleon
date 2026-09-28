@@ -482,6 +482,7 @@ gbif_min_match_confidence
 gbif_page_size
 gene_grouping_mode
 gff_repair_mode
+busco_timeout_seconds
 http_header
 input_dir
 input_generation_mode

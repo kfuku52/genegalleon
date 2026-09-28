@@ -59,6 +59,19 @@ def test_source_audited_marker_cannot_bypass_overlap_validation():
         ], 'g')
 
 
+def test_repeated_free_text_gff_attributes_do_not_change_block_structure():
+    rows = [
+        ('chr', '+', 1, 30, 'ID=cds;Parent=tx;AltName: Full=one;AltName: Full=two'),
+        ('chr', '+', 41, 60, 'ID=cds;Parent=tx;AltName: Full=three'),
+    ]
+    blocks, mode = ordered_annotated_blocks(rows, 'g')
+    assert blocks == [row[:4] for row in rows] and mode == 'cis'
+    with pytest.raises(ValueError, match='Conflicting GFF attribute Parent'):
+        ordered_annotated_blocks([
+            ('chr', '+', 1, 30, 'ID=cds;Parent=tx;Parent=other'),
+        ], 'g')
+
+
 def test_partial_cds_length_validation_uses_fuzzy_termini_and_phase():
     from workflow.support.gff2genestat import validate_cds_lengths
     traits = pd.DataFrame([
