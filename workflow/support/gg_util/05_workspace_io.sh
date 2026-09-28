@@ -177,6 +177,10 @@ def ensure_with_ete4():
     if os.path.exists(db_file) and ncbiquery.is_taxadb_up_to_date(db_file):
         return "ete4:up_to_date"
     NCBITaxa = importlib.import_module("ete4").NCBITaxa
+    # ETE4 writes taxa.tab, syn.tab, and merged.tab in the current directory
+    # while building dbfile. Keep those large intermediates on the workspace
+    # filesystem rather than the container's default home overlay.
+    os.chdir(os.path.dirname(db_file))
     NCBITaxa(dbfile=db_file, taxdump_file=ensure_taxdump_file(), update=True)
     return "ete4:updated"
 

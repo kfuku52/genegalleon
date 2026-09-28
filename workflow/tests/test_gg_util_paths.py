@@ -863,6 +863,43 @@ def test_failed_busco_download_keeps_partial_data_out_of_runtime(tmp_path):
     ]
 
 
+def test_ete_taxonomy_build_writes_intermediates_beside_workspace_db(tmp_path):
+    fake = tmp_path / "fake" / "ete4"
+    (fake / "ncbi_taxonomy").mkdir(parents=True)
+    (fake / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "class NCBITaxa:\n"
+        "    def __init__(self, dbfile, taxdump_file, update):\n"
+        "        Path(dbfile).write_text(os.getcwd())\n"
+        "        Path('taxa.tab').write_text('intermediate')\n",
+        encoding="utf-8",
+    )
+    (fake / "ncbi_taxonomy" / "__init__.py").write_text("", encoding="utf-8")
+    (fake / "ncbi_taxonomy" / "ncbiquery.py").write_text(
+        "def is_taxadb_up_to_date(_dbfile):\n    return False\n", encoding="utf-8",
+    )
+    db_dir = tmp_path / "workspace" / "downloads" / "ete_taxonomy"
+    db_dir.mkdir(parents=True)
+    db_file = db_dir / "taxa.sqlite"
+    taxdump = db_dir / "taxdump.tar.gz"
+    taxdump.write_bytes(b"test fixture")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    completed = run_bash(
+        f"export HOME={shlex.quote(str(home))} PYTHONPATH={shlex.quote(str(fake.parent))}; "
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"_ensure_ete_taxonomy_db_locked {shlex.quote(str(db_file))} {shlex.quote(str(taxdump))}",
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert db_file.read_text() == str(db_dir)
+    assert (db_dir / "taxa.tab").read_text() == "intermediate"
+    assert not (tmp_path / "taxa.tab").exists()
+
+
 def test_contamination_rank_normalizes_superkingdom_for_amalgkit(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; gg_normalize_contamination_removal_rank_for_amalgkit superkingdom"

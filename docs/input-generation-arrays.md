@@ -15,6 +15,8 @@ the merged species summary and resolved download manifest.
 BUSCO lineage downloads are extracted into a temporary directory inside the
 workspace download cache and published only after BUSCO succeeds. An incomplete
 download remains there for diagnosis and is not treated as a ready lineage.
+ETE taxonomy database intermediates are also built in the workspace taxonomy
+directory, so container-home overlay capacity does not limit preparation.
 
 ```mermaid
 flowchart LR
