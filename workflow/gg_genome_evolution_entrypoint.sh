@@ -8,8 +8,8 @@
 # SLURM
 # Common parameters: job name, cores per task, memory per core, walltime, log files, and working directory.
 #SBATCH -J gg_genome_evolution
-#SBATCH -c 4
-#SBATCH --mem-per-cpu=8G
+#SBATCH -c 16
+#SBATCH --mem-per-cpu=4G
 #SBATCH -t 14-00:00:00
 #SBATCH --output=gg_genome_evolution_entrypoint.sh_%j.out
 #SBATCH --error=gg_genome_evolution_entrypoint.sh_%j.err
@@ -25,8 +25,8 @@
 # SHIROKANE AGE defaults: shell, working directory, slot count, memory per slot, and ljob.
 #$ -S /bin/bash
 #$ -cwd
-#$ -pe def_slot 4
-#$ -l s_vmem=8G
+#$ -pe def_slot 16
+#$ -l s_vmem=4G
 #$ -l ljob
 
 ## PBS
