@@ -96,6 +96,34 @@ def test_generate_species_trait_from_manifest_bulk_source(tmp_path):
     assert mass_by_species["Mus_musculus"] == 22
 
 
+def test_generate_species_trait_preserves_hybrid_binomial_manifest_keys(tmp_path):
+    manifest = tmp_path / "manifest.tsv"
+    write_text(
+        manifest,
+        "provider\tid\tspecies_key\n"
+        "direct\tCitrus_x_limon\tCitrus_x_limon\n"
+        "direct\tFragaria_x_ananassa\tFragaria_x_ananassa\n",
+    )
+    source = tmp_path / "traits.tsv"
+    write_text(source, "taxon\tvalue\nCitrus × limon\t3\nFragaria x ananassa\t5\n")
+    plan = tmp_path / "plan.tsv"
+    write_text(plan, "database\tsource_column\toutput_trait\tvalue_type\taggregation\n"
+               "austraits\tvalue\ttrait_value\tnumeric\tmedian\n")
+    sources = tmp_path / "sources.tsv"
+    write_text(sources, "database\tacquisition_mode\turi\tspecies_column\tdelimiter\n"
+               f"austraits\tbulk\t{source}\ttaxon\ttsv\n")
+    output = tmp_path / "out.tsv"
+    completed = run_script(
+        "--download-manifest", str(manifest), "--trait-plan", str(plan),
+        "--database-sources", str(sources), "--output", str(output), "--strict",
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    table = pandas.read_csv(output, sep="\t").set_index("species")
+    assert set(table.index) == {"Citrus_x_limon", "Fragaria_x_ananassa"}
+    assert table.loc["Citrus_x_limon", "trait_value"] == 3
+    assert table.loc["Fragaria_x_ananassa", "trait_value"] == 5
+
+
 def test_generate_species_trait_from_species_cds_source(tmp_path):
     species_cds = tmp_path / "output" / "input_generation" / "species_cds"
     species_cds.mkdir(parents=True, exist_ok=True)

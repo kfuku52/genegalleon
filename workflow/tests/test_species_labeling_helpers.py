@@ -214,6 +214,11 @@ def test_species_labeling_builds_qualified_labels_from_scientific_text():
     )
     assert mod.extract_species_label("Citrus_x_limon_gene1") == "Citrus_x_limon"
     assert mod.extract_species_label("Citrus_\u00d7_limon_gene1") == "Citrus_x_limon"
+    assert mod.species_label_from_taxonomic_text("Citrus x limon") == "Citrus_x_limon"
+    assert mod.species_label_from_taxonomic_text("Citrus \u00d7 limon") == "Citrus_x_limon"
+    assert mod.species_label_from_taxonomic_text("Citrus_x_limon") == "Citrus_x_limon"
+    assert mod.base_species_label("Citrus_x_limon") == "Citrus_x_limon"
+    assert mod.scientific_name_from_label("Citrus_x_limon") == "Citrus x limon"
 
 
 def test_species_labeling_extracts_dotted_rank_labels_from_filenames():

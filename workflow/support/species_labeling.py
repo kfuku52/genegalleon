@@ -250,6 +250,8 @@ def species_label_from_taxonomic_text(text):
 
     genus = tokens[0][:1].upper() + tokens[0][1:].lower()
     second_key = taxonomic_token_key(tokens[1])
+    if is_hybrid_connector_token(tokens[1]) and len(tokens) >= 3:
+        return "{}_x_{}".format(genus, species_key_token(tokens[2].lower()))
     if second_key in TAXONOMIC_PROXIMITY_QUALIFIERS:
         if len(tokens) >= 3:
             return "{}_{}_{}".format(genus, display_rank_token(second_key), species_key_token(tokens[2].lower()))
@@ -362,6 +364,8 @@ def scientific_name_from_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
+    if len(parts) >= 3 and is_hybrid_connector_token(parts[1]):
+        return "{} x {}".format(parts[0], parts[2])
     if len(parts) >= 5 and is_hybrid_connector_token(parts[2]):
         return "{} {} x {} {}".format(parts[0], parts[1], parts[3], parts[4])
     if len(parts) >= 3 and taxonomic_token_key(parts[1]) in TAXONOMIC_PROXIMITY_QUALIFIERS:
@@ -381,6 +385,8 @@ def base_species_label(value):
     if species_label == "":
         species_label = str(value or "").strip()
     parts = [part for part in species_label.split("_") if part != ""]
+    if len(parts) >= 3 and is_hybrid_connector_token(parts[1]):
+        return "_".join(parts[:3])
     if len(parts) >= 5 and is_hybrid_connector_token(parts[2]):
         return "_".join(parts[:5])
     if len(parts) >= 3 and taxonomic_token_key(parts[1]) == "sp":
