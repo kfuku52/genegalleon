@@ -101,7 +101,7 @@ def test_synteny_neighbors_load_gene_info_keeps_valid_rows_after_filtering(tmp_p
     ]
 
 
-def test_synteny_neighbors_main_warns_for_empty_gene_info_without_clustering(tmp_path, monkeypatch, capsys):
+def test_synteny_neighbors_rejects_empty_gene_info_without_clustering(tmp_path, monkeypatch):
     mod = load_module("synteny_neighbors.py", "synteny_neighbors_empty_main_module")
     cds = tmp_path / "Species_a.fa"
     cds.write_text(">Species_a_gene1\nATG\n", encoding="utf-8")
@@ -118,10 +118,31 @@ def test_synteny_neighbors_main_warns_for_empty_gene_info_without_clustering(tmp
     monkeypatch.setattr(mod, "ensure_species_gene_cache", lambda **_kwargs: str(cache))
     monkeypatch.setattr(mod, "cluster_neighbors_by_similarity", lambda **_kwargs: pytest.fail("no neighbors"))
 
-    mod.main()
+    with pytest.raises(ValueError, match="gene info is empty for species: Species_a"):
+        mod.main()
+    assert not output.exists()
 
-    assert "gene info is empty for species: Species_a" in capsys.readouterr().err
-    assert mod.pandas.read_csv(output, sep="\t").empty
+
+def test_synteny_neighbors_fails_when_gene_cache_cannot_be_prepared(tmp_path, monkeypatch):
+    mod = load_module("synteny_neighbors.py", "synteny_neighbors_failed_cache_module")
+    cds = tmp_path / "Species_a.fa"
+    cds.write_text(">Species_a_gene1\nATG\n", encoding="utf-8")
+    output = tmp_path / "synteny.tsv"
+    monkeypatch.setattr(mod.sys, "argv", [
+        "synteny_neighbors.py", "--focal_cds_fasta", str(cds),
+        "--dir_sp_cds", str(tmp_path), "--dir_sp_gff", str(tmp_path),
+        "--cache_dir", str(tmp_path), "--lock_dir", str(tmp_path / "locks"),
+        "--gff2genestat_script", str(SUPPORT_DIR / "gff2genestat.py"),
+        "--outfile", str(output),
+    ])
+
+    def fail_cache(**_kwargs):
+        raise RuntimeError("broken annotation")
+
+    monkeypatch.setattr(mod, "ensure_species_gene_cache", fail_cache)
+    with pytest.raises(RuntimeError, match="failed to prepare gene cache for Species_a: broken annotation"):
+        mod.main()
+    assert not output.exists()
 
 
 def test_synteny_species_gene_cache_tracks_input_and_output_content(tmp_path):

@@ -4,6 +4,7 @@
 import argparse
 import csv
 import gzip
+import math
 import zlib
 from pathlib import Path
 
@@ -13,6 +14,8 @@ OUTPUT_COLUMNS = {
     "genome": "genome_output_path",
 }
 OUTPUT_LABELS = {"cds": "CDS", "gff": "GFF", "genome": "genome"}
+DNA_RESIDUES = frozenset("ACGTURYSWKMBDHVN")
+DNA_SYMBOLS = DNA_RESIDUES | frozenset("-?.")
 
 
 def open_text(path):
@@ -25,23 +28,26 @@ def has_fasta_sequence(path):
     try:
         with open_text(path) as handle:
             has_record = False
-            has_sequence = False
+            has_residue = False
             for raw_line in handle:
                 line = raw_line.strip()
                 if not line:
                     continue
                 if line.startswith(">"):
-                    if has_record and not has_sequence:
+                    if has_record and not has_residue:
                         return False
                     if not line[1:].strip():
                         return False
                     has_record = True
-                    has_sequence = False
+                    has_residue = False
                 elif not has_record:
                     return False
                 else:
-                    has_sequence = True
-            return has_record and has_sequence
+                    sequence = line.upper()
+                    if not set(sequence) <= DNA_SYMBOLS:
+                        return False
+                    has_residue = has_residue or any(base in DNA_RESIDUES for base in sequence)
+            return has_record and has_residue
     except (OSError, UnicodeError, EOFError, zlib.error):
         return False
 
@@ -62,7 +68,18 @@ def has_gff_feature(path):
                 if not line.strip() or line.startswith("#"):
                     continue
                 fields = line.rstrip("\r\n").split("\t")
-                if len(fields) != 9 or not fields[0] or not fields[2]:
+                if len(fields) != 9 or any(not field.strip() for field in fields):
+                    return False
+                if fields[0] == "." or fields[2] == ".":
+                    return False
+                try:
+                    start, end = int(fields[3]), int(fields[4])
+                    score = None if fields[5] == "." else float(fields[5])
+                except ValueError:
+                    return False
+                if start < 1 or end < start or (score is not None and not math.isfinite(score)):
+                    return False
+                if fields[6] not in {"+", "-", ".", "?"} or fields[7] not in {"0", "1", "2", "."}:
                     return False
                 has_feature = True
             return has_feature

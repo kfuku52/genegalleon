@@ -89,8 +89,12 @@ workers and finalize verify the formatted output. The setting is frozen with
 the array plan. Enable it only in a fresh workspace/plan, rather than changing
 settings on an active or previously prepared array.
 The output check reads each required FASTA or GFF through the end, including
-the gzip trailer, and rejects truncated or malformed files. It checks file
-integrity and content, not whether a genome is nuclear; nuclear-only datasets
+the gzip trailer. It rejects empty records, unsupported nucleotide symbols,
+and records made only of gap/missing symbols. Required GFF features must have
+nine populated fields, positive ordered coordinates, a finite score or `.`,
+and valid strand and phase values. These structural checks do not establish
+CDS/GFF identity or scientific annotation quality. The check does not determine
+whether a genome is nuclear; nuclear-only datasets
 must review assembly provenance and exclude organelle-only sources in their
 manifest.
 

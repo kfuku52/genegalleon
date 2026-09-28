@@ -3283,6 +3283,36 @@ def test_format_species_inputs_fernbase_uses_plain_gene_tag_for_aggregation(tmp_
     assert rows[0]["cds_sequences_after"] == "2"
 
 
+def test_reuse_gff_grouped_cds_without_audit_reports_unverified_grouping(tmp_path):
+    mod = load_module()
+    cds_path = tmp_path / "input.cds.fa"
+    gff_path = tmp_path / "input.gff3"
+    cds_path.write_text(">transcript1\nATG\n>transcript2\nATGA\n", encoding="utf-8")
+    gff_path.write_text("chr1\tsrc\tgene\t1\t4\t.\t+\t.\tID=gene1\n", encoding="utf-8")
+    task = {
+        "provider": "local",
+        "species_key": "Species_a",
+        "species_prefix": "Species_a",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+    }
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    output_path = output_dir / mod.normalize_cds_output_basename(cds_path.name, "Species_a")
+    with gzip.open(output_path, "wt", encoding="utf-8") as handle:
+        handle.write(">Species_a_gene1\nATG\n")
+
+    result = mod.format_cds(task, output_dir, overwrite=False, dry_run=False, reuse_existing=True)
+
+    assert result["status"] == "skip"
+    assert result["output_path"] == output_path
+    assert result["after_count"] == 1
+    assert result["first_sequence_name"] == "Species_a_gene1"
+    assert result["grouping_source"] == "reused_without_audit"
+    assert result["gff_grouping_audit_path"] == ""
+    assert not Path(str(output_path) + ".gff-grouping.json").exists()
+
+
 def test_write_fasta_records_gzip_prefers_seqkit(monkeypatch, tmp_path):
     mod = load_module()
     output_path = tmp_path / "species.fa.gz"
@@ -3320,6 +3350,25 @@ def test_write_fasta_records_gzip_prefers_seqkit(monkeypatch, tmp_path):
     assert calls["command"][-1] == "-"
 
 
+def test_fallback_fasta_writer_preserves_existing_output_on_record_error(monkeypatch, tmp_path):
+    mod = load_module()
+    output_path = tmp_path / "species.fa.gz"
+    with gzip.open(output_path, "wt", encoding="utf-8") as handle:
+        handle.write(">original\nACGT\n")
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    def broken_records():
+        yield "new", "ATG"
+        raise RuntimeError("source read failed")
+
+    with pytest.raises(RuntimeError, match="source read failed"):
+        mod.write_fasta_records_gzip(output_path, broken_records())
+
+    with gzip.open(output_path, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">original\nACGT\n"
+    assert not list(tmp_path.glob(".species.fa.tmp.*"))
+
+
 def test_write_gff_gzip_prefers_pigz(monkeypatch, tmp_path):
     mod = load_module()
     input_path = tmp_path / "input.gff3"
@@ -3355,6 +3404,31 @@ def test_write_gff_gzip_prefers_pigz(monkeypatch, tmp_path):
     assert line_count == 1
     assert "evm.model." not in text
     assert calls["command"] == ["/usr/bin/pigz", "-p", "4", "-c"]
+
+
+def test_fallback_gff_writers_preserve_existing_output_on_error(monkeypatch, tmp_path):
+    mod = load_module()
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    output_path = tmp_path / "species.gff.gz"
+    with gzip.open(output_path, "wt", encoding="utf-8") as handle:
+        handle.write("original\n")
+
+    def broken_lines():
+        yield "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=new\n"
+        raise RuntimeError("GFF generation failed")
+
+    with pytest.raises(RuntimeError, match="GFF generation failed"):
+        mod.write_gff_lines_gzip(output_path, broken_lines())
+    with gzip.open(output_path, "rt", encoding="utf-8") as handle:
+        assert handle.read() == "original\n"
+
+    input_path = tmp_path / "truncated.gff.gz"
+    input_path.write_bytes(gzip.compress(b"chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=new\n")[:-4])
+    with pytest.raises((EOFError, OSError)):
+        mod.write_gff_gzip(input_path, output_path)
+    with gzip.open(output_path, "rt", encoding="utf-8") as handle:
+        assert handle.read() == "original\n"
+    assert not list(tmp_path.glob(".species.gff.tmp.*"))
 
 
 def test_resolve_provider_download_limits_keeps_fernbase_and_insectbase_default_caps_at_two(monkeypatch):

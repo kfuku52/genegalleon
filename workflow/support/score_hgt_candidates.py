@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import gzip
 import os
 import re
@@ -770,32 +771,51 @@ def compare_species_name_heuristic(query_name: str, hit_name: str) -> Optional[D
 def read_contamination_table(path: str) -> pandas.DataFrame:
     try:
         header = pandas.read_csv(path, sep="\t", header=0, nrows=0)
-    except Exception:
-        return empty_frame(["gene_id", "is_compatible_lineage"])
+    except Exception as exc:
+        raise ValueError(f"Cannot read HGT contamination table {path}: {exc}") from exc
     gene_col = first_present(header.columns, ["query", "gene_id"])
     compat_col = first_present(header.columns, ["is_compatible_lineage"])
     if gene_col == "" or compat_col == "":
-        return empty_frame(["gene_id", "is_compatible_lineage"])
+        raise ValueError(f"HGT contamination table lacks query/gene_id or is_compatible_lineage: {path}")
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            rows = csv.reader(handle, delimiter="\t", strict=True)
+            expected_fields = len(next(rows))
+            for record_number, fields in enumerate(rows, start=2):
+                if fields and len(fields) != expected_fields:
+                    raise ValueError(
+                        f"HGT contamination table has {len(fields)} fields in record {record_number}; "
+                        f"expected {expected_fields}: {path}"
+                    )
+    except (OSError, UnicodeError, csv.Error, StopIteration) as exc:
+        raise ValueError(f"Cannot read HGT contamination table {path}: {exc}") from exc
     usecols = [gene_col, compat_col]
     optional_cols = [col for col in ["aligned_taxid", "lca_taxid", "lca_sciname"] if col in header.columns]
     usecols.extend(optional_cols)
     try:
         df = pandas.read_csv(path, sep="\t", header=0, usecols=usecols, low_memory=False)
-    except Exception:
-        return empty_frame(["gene_id", "is_compatible_lineage"])
+    except Exception as exc:
+        raise ValueError(f"Cannot read HGT contamination table {path}: {exc}") from exc
+    if df[gene_col].isna().any() or df[gene_col].astype(str).str.strip().eq("").any():
+        raise ValueError(f"HGT contamination table has an empty gene identifier: {path}")
+    compatible = df[compat_col].map(parse_boolish)
+    if compatible.isna().any():
+        raise ValueError(f"HGT contamination table has an invalid is_compatible_lineage value: {path}")
     df = df.rename(columns={gene_col: "gene_id", compat_col: "is_compatible_lineage"})
     df["gene_id"] = df["gene_id"].astype(str)
-    df["is_compatible_lineage"] = df["is_compatible_lineage"].map(parse_boolish)
+    df["is_compatible_lineage"] = compatible
     return df.drop_duplicates(subset=["gene_id"], keep="first")
 
 
 def read_contamination_dir(dir_path: str) -> pandas.DataFrame:
     dir_path = str(dir_path).strip()
-    if dir_path == "" or not os.path.isdir(dir_path):
+    if dir_path == "":
         return empty_frame(["gene_id", "is_compatible_lineage"])
+    if not os.path.isdir(dir_path):
+        raise ValueError(f"HGT contamination directory does not exist: {dir_path}")
     frames = []
     for name in sorted(os.listdir(dir_path)):
-        if name.startswith("."):
+        if name.startswith(".") or not name.lower().endswith(".tsv"):
             continue
         path = os.path.join(dir_path, name)
         if not os.path.isfile(path):
@@ -1308,13 +1328,14 @@ def main():
         selected_columns = [col for col in selected_columns if col in set(branch_columns)]
         branch_df = read_branch_subset(conn, orthogroups, selected_columns)
 
+    contamination_by_gene = read_contamination_dir(args.dir_contamination_tsv)
+
     if branch_df.empty:
         write_tsv(empty_frame(BRANCH_OUTPUT_COLUMNS), args.branch_out, BRANCH_OUTPUT_COLUMNS)
         write_tsv(empty_frame(GENE_OUTPUT_COLUMNS), args.gene_out, GENE_OUTPUT_COLUMNS)
         write_tsv(empty_frame(ORTHOGROUP_OUTPUT_COLUMNS), args.orthogroup_out, ORTHOGROUP_OUTPUT_COLUMNS)
         return
 
-    contamination_by_gene = read_contamination_dir(args.dir_contamination_tsv)
     expression_cols = [col for col in branch_df.columns if col.startswith("expression_")]
 
     candidate_mask = pandas.Series(False, index=branch_df.index)

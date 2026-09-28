@@ -475,8 +475,7 @@ def main():
     for species_name in sorted(focal_by_species.keys()):
         sp_cds = find_species_file(args.dir_sp_cds, species_name, FASTA_EXTENSIONS)
         if not sp_cds:
-            print("species CDS file not found: {}".format(species_name), file=sys.stderr)
-            continue
+            raise FileNotFoundError("species CDS file not found: {}".format(species_name))
         species_cds_paths[species_name] = sp_cds
         try:
             cache_path = ensure_species_gene_cache(
@@ -489,12 +488,10 @@ def main():
                 threads=args.threads,
             )
         except Exception as exc:
-            print("failed to prepare gene cache for {}: {}".format(species_name, exc), file=sys.stderr)
-            continue
+            raise RuntimeError("failed to prepare gene cache for {}: {}".format(species_name, exc)) from exc
         gene_info = load_gene_info(cache_path)
         if gene_info.shape[0] == 0:
-            print("gene info is empty for species: {}".format(species_name), file=sys.stderr)
-            continue
+            raise ValueError("gene info is empty for species: {}".format(species_name))
         chrom_genes = {}
         gene_locus = {}
         for chromosome, df_chr in gene_info.groupby("chromosome", sort=False):
@@ -505,9 +502,10 @@ def main():
             for i, gene_id in enumerate(genes):
                 if gene_id not in gene_locus:
                     gene_locus[gene_id] = (chromosome, i, strands[i])
-        for focal_gene in sorted(focal_by_species[species_name]):
-            if focal_gene not in gene_locus:
-                continue
+        matched_focals = sorted(focal_by_species[species_name].intersection(gene_locus))
+        if not matched_focals:
+            raise ValueError("no focal genes matched GFF gene information for species: {}".format(species_name))
+        for focal_gene in matched_focals:
             chromosome, focal_idx, strand = gene_locus[focal_gene]
             genes = chrom_genes[chromosome]["genes"]
             if strand == "-":
@@ -556,8 +554,7 @@ def main():
         seqs = parse_fasta_subset(species_cds_paths[species_name], ids)
         neighbor_seqs.update(seqs)
     if len(neighbor_seqs) == 0:
-        write_empty_output(args.outfile)
-        return
+        raise ValueError("GFF neighbors have no matching sequences in the species FASTA files")
     tmpdir = tempfile.mkdtemp(prefix="gg_synteny_neighbors_")
     try:
         seq_fasta = os.path.join(tmpdir, "neighbors.input.fasta")

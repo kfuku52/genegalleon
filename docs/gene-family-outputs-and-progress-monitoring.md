@@ -861,6 +861,9 @@ artifact so it is regenerated on the next enabled summary/tree-plot run.
 Keep `run_summary=1` when changing the search window: the regenerated synteny
 table also invalidates summary statistics, and a plot-only run refuses to use
 the stale summary. Changing only the display window does not rerun the search.
+Missing species sequences, gene-cache preparation errors, empty gene information,
+and unmatched focal genes stop this stage. A successful empty synteny table then
+means the located focal genes have no neighbors within the requested window.
 
 The **Neighboring genes** column includes a graphical legend underneath:
 black dots mark focal genes, pale gray dots mark other recorded neighbors,

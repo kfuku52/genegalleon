@@ -252,6 +252,39 @@ def test_required_outputs_reject_late_corruption_and_truncated_gzip(tmp_path):
     assert "Required formatted GFF is missing or invalid" in invalid_late_gff.stderr
 
 
+def test_required_outputs_reject_invalid_sequence_symbols_and_gff_fields(tmp_path):
+    cds = tmp_path / "cds.fa.gz"
+    gff = tmp_path / "genes.gff.gz"
+    summary = tmp_path / "species.tsv"
+    summary.write_text(
+        "species_prefix\tcds_output_path\tgff_output_path\n"
+        f"Species_a\t{cds}\t{gff}\n",
+        encoding="utf-8",
+    )
+    args = ("--species-summary", str(summary), "--require-cds", "--require-gff")
+    valid_gff = "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+    gff.write_bytes(gzip.compress(valid_gff.encode()))
+    for sequence in ("???", "ATG@", "---"):
+        cds.write_bytes(gzip.compress(f">g1\n{sequence}\n".encode()))
+        rejected = run_python(REQUIRE_OUTPUTS_SCRIPT, *args)
+        assert rejected.returncode != 0
+        assert "Required formatted CDS is missing or invalid" in rejected.stderr
+
+    cds.write_bytes(gzip.compress(b">g1\nATGNRYS\n"))
+    assert run_python(REQUIRE_OUTPUTS_SCRIPT, *args).returncode == 0
+    invalid_features = (
+        "chr1\tsrc\tgene\tabc\t-2\t.\t?\t9\tID=g1\n",
+        "chr1\tsrc\tgene\t9\t1\t.\t+\t.\tID=g1\n",
+        "chr1\tsrc\tgene\t1\t9\tNaN\t+\t.\tID=g1\n",
+        "chr1\tsrc\tgene\t1\t9\t.\tinvalid\t.\tID=g1\n",
+    )
+    for feature in invalid_features:
+        gff.write_bytes(gzip.compress(feature.encode()))
+        rejected = run_python(REQUIRE_OUTPUTS_SCRIPT, *args)
+        assert rejected.returncode != 0
+        assert "Required formatted GFF is missing or invalid" in rejected.stderr
+
+
 def run_python(script: Path, *args):
     return subprocess.run(
         [sys.executable, str(script), *args],

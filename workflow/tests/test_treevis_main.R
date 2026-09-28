@@ -3,6 +3,8 @@ if (!requireNamespace("genegalleon.treevis", quietly = TRUE)) {
 }
 suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(genegalleon.treevis))
+# Plotting helpers may open the default device during this test. Keep it off disk.
+pdf(NULL)
 
 # 1) tidy_df_tip: group order and tip order are stable and numeric conversion works.
 df_tip <- data.frame(

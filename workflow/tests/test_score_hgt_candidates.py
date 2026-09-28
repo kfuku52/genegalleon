@@ -221,6 +221,49 @@ def test_score_hgt_candidates_applies_contamination_penalty(tmp_path):
     assert set(gene_out["contamination_lca_sciname"].tolist()) == {"Escherichia coli"}
 
 
+def test_score_hgt_candidates_rejects_missing_or_malformed_contamination_before_publication(tmp_path):
+    db_path = tmp_path / "gg_orthogroup.db"
+    write_branch_db(db_path)
+    outputs = [tmp_path / name for name in (
+        "hgt_branch_candidates.tsv", "hgt_gene_candidates.tsv", "hgt_orthogroup_summary.tsv"
+    )]
+    for output in outputs:
+        output.write_text("previous result\n", encoding="utf-8")
+
+    def run_with_directory(directory):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--dbpath", str(db_path),
+             "--branch_out", str(outputs[0]), "--gene_out", str(outputs[1]),
+             "--orthogroup_out", str(outputs[2]),
+             "--dir_contamination_tsv", str(directory)],
+            capture_output=True, text=True, check=False,
+        )
+
+    missing = run_with_directory(tmp_path / "missing")
+    assert missing.returncode != 0
+    assert "HGT contamination directory does not exist" in missing.stderr
+
+    contamination_dir = tmp_path / "contamination"
+    contamination_dir.mkdir()
+    (contamination_dir / "invalid.tsv").write_text("wrong\tcolumns\na\tb\n", encoding="utf-8")
+    malformed = run_with_directory(contamination_dir)
+    assert malformed.returncode != 0
+    assert "HGT contamination table lacks" in malformed.stderr
+    (contamination_dir / "invalid.tsv").write_text(
+        "query\tis_compatible_lineage\ngeneA\tmaybe\n", encoding="utf-8"
+    )
+    malformed_value = run_with_directory(contamination_dir)
+    assert malformed_value.returncode != 0
+    assert "invalid is_compatible_lineage" in malformed_value.stderr
+    (contamination_dir / "invalid.tsv").write_text(
+        "query\tis_compatible_lineage\ngeneA\tignored\tTrue\n", encoding="utf-8"
+    )
+    extra_field = run_with_directory(contamination_dir)
+    assert extra_field.returncode != 0
+    assert "has 3 fields in record 2; expected 2" in extra_field.stderr
+    assert all(output.read_text(encoding="utf-8") == "previous result\n" for output in outputs)
+
+
 def test_score_hgt_candidates_explicit_empty_taxonomy_dbfile_overrides_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GG_TAXONOMY_DBFILE", "/nonexistent/taxa.sqlite")
     branch_out = run_script_with_env(

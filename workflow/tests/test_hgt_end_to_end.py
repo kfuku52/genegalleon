@@ -378,6 +378,24 @@ def _write_workspace_fixture(workspace: Path) -> None:
     )
 
 
+def test_hgt_core_rejects_explicit_missing_contamination_directory(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env = dict(os.environ)
+    env.update({
+        "gg_workspace_dir": str(workspace),
+        "hgt_contamination_dir": str(tmp_path / "missing-contamination"),
+        "run_hgt_eval": "0",
+        "run_hgt_plot": "0",
+    })
+    completed = subprocess.run(
+        ["bash", str(HGT_CORE)], cwd=str(REPO_ROOT), env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode != 0
+    assert "HGT contamination directory was provided but not found" in completed.stderr
+
+
 @pytest.mark.skipif(shutil.which("seqkit") is None, reason="seqkit is required for gg_hgt_core end-to-end validation")
 def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     if not _has_r_package("rkftools"):

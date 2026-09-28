@@ -621,7 +621,10 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             or cds_gff_grouping_audit_matches(existing_audit, task, output_path, strict_mode)
         )
     ):
-        if use_gff_grouping:
+        if use_gff_grouping and isinstance(existing_audit, dict) and all(
+            field in existing_audit
+            for field in ("before_count", "after_count", "duplicates", "first_sequence_name")
+        ):
             result = {
                 "status": "skip",
                 "output_path": output_path,
@@ -649,6 +652,10 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             "first_sequence_name": first_existing,
         }
         result.update(cds_gff_result_fields())
+        if use_gff_grouping:
+            # Explicit reuse can encounter an output predating the grouping audit.
+            # Counts are observable, but its original grouping evidence is not.
+            result["grouping_source"] = "reused_without_audit"
         return result
 
     before_count = 0

@@ -292,7 +292,8 @@ if [[ -n "${hgt_contamination_dir}" ]]; then
   if [[ -d "${hgt_contamination_dir}" ]]; then
     contamination_arg="${hgt_contamination_dir}"
   else
-    echo "Warning: HGT contamination directory was provided but not found. Skipping contamination input: ${hgt_contamination_dir}" >&2
+    echo "HGT contamination directory was provided but not found: ${hgt_contamination_dir}" >&2
+    exit 1
   fi
 elif [[ -d "${default_hgt_contamination_dir}" ]]; then
   contamination_arg="${default_hgt_contamination_dir}"

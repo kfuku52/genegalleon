@@ -430,6 +430,9 @@ Notes:
 - GFF-backed CDS grouping writes `*.fa.gz.gff-grouping.json` and
   `*.fa.gz.gff-grouping.tsv` audit files beside the formatted CDS, including
   mapping status and the selected representative for every input record,
+- an explicit `artifact_stale_policy=reuse` may retain a pre-audit CDS output;
+  its species summary then reports `cds_grouping_source=reused_without_audit`
+  and leaves the grouping-audit path empty rather than inferring GFF evidence,
 - common historical replacements are applied to CDS/GFF text,
 - malformed UTF-8 bytes in source GFF/GTF attributes are replaced during
   formatting so structural IDs remain usable; byte/line counts and sampled

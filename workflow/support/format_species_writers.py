@@ -169,6 +169,18 @@ def write_text_output_via_command(output_path, writer, command_builder, output_v
             tmp_output.unlink()
 
 
+def write_text_output_directly(output_path, writer):
+    """Publish fallback text output only after the complete write succeeds."""
+    tmp_output = make_temporary_output_path(output_path)
+    try:
+        with open_text(tmp_output, "wt") as handle:
+            writer(handle)
+        tmp_output.replace(output_path)
+    finally:
+        if tmp_output.exists():
+            tmp_output.unlink()
+
+
 def write_fasta_record(handle, record_id, sequence, width=80):
     handle.write(">{}\n".format(record_id))
     for idx in range(0, len(sequence), width):
@@ -177,15 +189,13 @@ def write_fasta_record(handle, record_id, sequence, width=80):
 
 def write_fasta_records_gzip(output_path, records):
     seqkit_path = shutil.which("seqkit")
-    if seqkit_path is None:
-        with open_text(output_path, "wt") as handle:
-            for record_id, sequence in records:
-                write_fasta_record(handle, record_id, sequence)
-        return
-
     def writer(handle):
         for record_id, sequence in records:
             write_fasta_record(handle, record_id, sequence)
+
+    if seqkit_path is None:
+        write_text_output_directly(output_path, writer)
+        return
 
     write_text_output_via_command(
         output_path,
@@ -215,10 +225,14 @@ def write_gff_gzip(input_path, output_path):
     line_count = 0
 
     if pigz_path is None:
-        with open_text(input_path, "rt", errors="replace") as fin, open_text(output_path, "wt") as fout:
-            for line in fin:
-                fout.write(apply_common_replacements(line))
-                line_count += 1
+        def writer(handle):
+            nonlocal line_count
+            with open_text(input_path, "rt", errors="replace") as fin:
+                for line in fin:
+                    handle.write(apply_common_replacements(line))
+                    line_count += 1
+
+        write_text_output_directly(output_path, writer)
         return line_count
 
     def writer(handle):
@@ -248,13 +262,16 @@ def write_gff_lines_gzip(output_path, lines):
     feature_count = 0
 
     if pigz_path is None:
-        with open_text(output_path, "wt") as fout:
+        def writer(handle):
+            nonlocal line_count, feature_count
             for line in lines:
                 normalized = apply_common_replacements(line)
-                fout.write(normalized)
+                handle.write(normalized)
                 line_count += 1
                 if normalized.strip() != "" and not normalized.startswith("#"):
                     feature_count += 1
+
+        write_text_output_directly(output_path, writer)
         return line_count, feature_count
 
     def writer(handle):

@@ -138,7 +138,7 @@ presence_absence_family_file="${presence_absence_family_file:-}" # Optional file
 
 # HGT parameters
 hgt_summary_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" # Resolve UniProt best-hit taxonomic distances with the local ETE taxonomy DB when available.
-hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}" # Optional directory containing species_cds_contamination_removal_tsv files; empty auto-detects the workspace default.
+hgt_summary_contamination_dir="${hgt_summary_contamination_dir:-}" # Optional directory containing species_cds_contamination_removal_tsv files; empty auto-detects the workspace default. An explicit missing directory or malformed TSV stops HGT scoring.
 hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" # Taxonomic rank used to collapse recipient/best-hit lineages in the flow plot.
 hgt_summary_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" # Maximum recipient and best-hit categories retained before collapsing to Other.
 hgt_summary_species_tree="${hgt_summary_species_tree:-auto}" # Species-tree Newick path for the directed HGT transfer plot; auto searches standard workspace outputs.
