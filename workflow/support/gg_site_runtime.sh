@@ -20,6 +20,10 @@ gg_detect_site_profile() {
     return 0
   fi
   case "${hostname_text}" in
+    audrey1)
+      echo "audrey1"
+      return 0
+      ;;
     at*|m*|igt*|it*)
       echo "nig"
       return 0
@@ -202,6 +206,22 @@ gg_site_container_shell_command() {
 
   site_profile="$(gg_detect_site_profile)"
   case "${site_profile}" in
+    audrey1)
+      echo "${echo_header}site profile = audrey1"
+      if [[ -n "${GG_CONTAINER_PROJECT_ROOT_BIND:-}" ]]; then
+        local project_root=${GG_CONTAINER_PROJECT_ROOT_BIND%%:*}
+        if [[ "${project_root}" != /* || "${GG_CONTAINER_PROJECT_ROOT_BIND}" != "${project_root}:${project_root}" || \
+              "${project_root}" == *','* || "${project_root}" == *'/../'* || "${project_root}" == *'/./'* || \
+              ! -d "${project_root}" || -L "${project_root}" ]]; then
+          echo "${echo_header}invalid GG_CONTAINER_PROJECT_ROOT_BIND" >&2
+          return 1
+        fi
+        gg_add_container_bind_mount "${GG_CONTAINER_PROJECT_ROOT_BIND}" || return 1
+        gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1
+      else
+        gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
+      fi
+      ;;
     shirokane)
       echo "${echo_header}site profile = shirokane"
       gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1

@@ -176,6 +176,13 @@ The low-level plan script supports on-demand manifest tasks for direct callers.
 The core always requests `--stage-downloads`; its staged plans cannot fall back
 to worker-side downloading. Do not switch runtimes for an active plan.
 
+On audrey1, a launcher that sets `GG_CONTAINER_PROJECT_ROOT_BIND` to the same
+absolute project directory on both sides of the bind runs Apptainer with
+`--contain`. This keeps Python/BUSCO semaphores in a private `/dev/shm` while
+preserving project-local absolute paths. The project root must contain all
+absolute inputs and shared resources needed inside the container; existing
+launches without this bind retain their previous runtime behavior.
+
 ## Shared database request limits
 
 All input-generation jobs in the same workspace default to the shared directory
