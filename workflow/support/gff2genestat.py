@@ -455,8 +455,14 @@ def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, loo
         return None
     info = id_info.get(feature_id)
     if info is None:
-        resolved_cache[feature_id] = None
-        return None
+        # Some valid source bundles omit gene rows while an mRNA still names
+        # its gene in Parent. Only an exact canonical FASTA identifier may
+        # stand in for that absent ancestor; substring/suffix aliases can
+        # silently join unrelated models.
+        hit = lookup.get(feature_id)
+        match = (hit[0], len(feature_id), hit[1], hit[2]) if hit is not None and hit[1] >= 1 else None
+        resolved_cache[feature_id] = match
+        return match
     active_stack.add(feature_id)
     best = info["match"]
     for parent_id in info["parents"]:

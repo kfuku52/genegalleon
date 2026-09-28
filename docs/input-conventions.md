@@ -429,6 +429,9 @@ Notes:
   no more than 0.1% of the CDS input. Larger mismatches are rejected as a likely
   wrong annotation bundle, and input-generation `strict=1` rejects every
   unexpected mismatch,
+- when a GFF omits a gene feature but an mRNA names its parent gene, that
+  otherwise absent parent resolves only when it exactly matches a canonical CDS
+  gene ID; a suffix or partial alias never establishes the missing ancestor,
 - `--gene-grouping-mode rescue_overlap` (the entrypoint default) merges only
   compatible overlapping/fragmented models that do not cross strands or
   authoritative locus boundaries; `strict` keeps provider model boundaries,

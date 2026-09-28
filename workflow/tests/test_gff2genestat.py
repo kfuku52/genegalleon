@@ -347,6 +347,40 @@ def test_extract_by_ids_resolves_exact_parent_chain_via_gene_feature():
     assert out.iloc[0]["gene_id"] == "Arabidopsis_thaliana_gene1"
 
 
+def test_extract_by_ids_resolves_missing_merged_parent_by_exact_id():
+    gff = pandas.DataFrame(
+        {
+            "feature": ["mRNA", "CDS"],
+            "attributes": [
+                "ID=1023.g46.t1_1023.g47.t1;Parent=1023.g46_1023.g47;Name=MERGED",
+                "ID=cds.1023.g46.t1_1023.g47.t1;Parent=1023.g46.t1_1023.g47.t1",
+            ],
+        }
+    )
+    seq_names = pandas.Series(["Ocimum_basilicum_1023.g46_1023.g47"])
+
+    out = extract_by_ids(gff=gff, seq_names=seq_names, feature="CDS", multiple_hits="longest")
+
+    assert out["gene_id"].tolist() == ["Ocimum_basilicum_1023.g46_1023.g47"]
+
+
+def test_extract_by_ids_does_not_resolve_missing_parent_from_suffix_alias():
+    gff = pandas.DataFrame(
+        {
+            "feature": ["mRNA", "CDS"],
+            "attributes": [
+                "ID=merged_rna;Parent=1023.g47",
+                "ID=merged_cds;Parent=merged_rna",
+            ],
+        }
+    )
+    seq_names = pandas.Series(["Ocimum_basilicum_1023.g46_1023.g47"])
+
+    out = extract_by_ids(gff=gff, seq_names=seq_names, feature="CDS", multiple_hits="longest")
+
+    assert out.empty
+
+
 def test_extract_by_ids_resolves_namespaced_parent_identifier():
     gff = pandas.DataFrame(
         {
