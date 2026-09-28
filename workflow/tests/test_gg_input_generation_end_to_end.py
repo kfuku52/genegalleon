@@ -317,7 +317,8 @@ def _install_fake_toolchain(root: Path) -> Path:
 
             if "--download" in sys.argv:
                 lineage = parse("--download")
-                target = Path("busco_downloads") / "lineages" / lineage
+                download_path = parse("--download_path")
+                target = (Path(download_path) if download_path else Path("busco_downloads")) / "lineages" / lineage
                 target.mkdir(parents=True, exist_ok=True)
                 (target / "dataset.cfg").write_text("name=test\\n", encoding="utf-8")
                 raise SystemExit(0)
