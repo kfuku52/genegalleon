@@ -683,10 +683,15 @@ Latest template distribution:
   CDS/GFF identity; warnings name affected genes and stats count both issues.
   `--strict` rejects those annotations. Missing genome sequences, ambiguous
   gene identities, and other CDS-coordinate errors remain failures,
-- NCBI-like CDS records whose only identity is an anonymous `lcl..._cds_N`
-  placeholder are excluded only when they cannot link to the companion GFF;
+- For the `ncbi`, `refseq`, and `genbank` providers, CDS records whose only
+  identity is an anonymous `lcl..._cds_N` placeholder are excluded only when
+  they cannot link to the companion GFF;
   the per-record grouping audit records `excluded_anonymous_unmapped`, while
   named, ambiguous, and wrong-file mismatches remain errors,
+- NCBI `lcl|..._cds_...` headers staged by a `direct` manifest can also link
+  through an exact sequence ID, strand, and CDS interval match against the paired
+  GFF. This recovers anonymous pseudogene CDS without editing source headers.
+  Conflicting or inexact matches remain mapping failures,
 - can optionally generate `workspace/input/species_trait/species_trait.tsv`
   from configured trait databases. See [public plant trait sources](public-plant-traits.md)
   for BROT, CPT, AlgaeTraits and BIEN acquisition and source-specific limits.

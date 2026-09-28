@@ -62,7 +62,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 10
+CDS_GFF_GROUPING_AUDIT_VERSION = 11
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")

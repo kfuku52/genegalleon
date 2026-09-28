@@ -97,9 +97,12 @@ def gff_grouping_parent_feature_type(feature_type):
 
 def ncbi_cds_location_signature(task, header):
     """Parse an NCBI CDS FASTA location into the exact GFF CDS feature signature."""
-    if task.get("provider") not in NCBI_LIKE_PROVIDERS:
-        return None
     raw_token = first_token(str(header or "")).lstrip(">")
+    # An NCBI file can arrive through a direct URL manifest. In that case the
+    # provider describes transport, not the CDS header format. Require the
+    # distinctive NCBI local-ID prefix before using locations for other providers.
+    if task.get("provider") not in NCBI_LIKE_PROVIDERS and not raw_token.startswith("lcl|"):
+        return None
     if raw_token.startswith("lcl|"):
         raw_token = raw_token[len("lcl|") :]
     if "_cds_" not in raw_token:

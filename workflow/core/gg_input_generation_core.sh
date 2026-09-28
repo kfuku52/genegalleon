@@ -74,7 +74,7 @@ gbif_taxon_map="${gbif_taxon_map:-}"
 gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
-format_contract_version=9
+format_contract_version=10
 
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"

@@ -1372,7 +1372,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 10
+    assert audit["version"] == 11
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -2668,7 +2668,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 10
+    assert audit["version"] == 11
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -2711,7 +2711,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 10
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 11
     assert skipped["status"] == "skip"
 
 
@@ -2979,7 +2979,8 @@ def test_format_species_inputs_excludes_only_unlinkable_anonymous_ncbi_cds(tmp_p
     assert rows[0]["cds_gff_records_excluded_anonymous"] == "1"
 
 
-def test_format_species_inputs_maps_anonymous_ncbi_cds_by_exact_location(tmp_path):
+@pytest.mark.parametrize("provider", ("ncbi", "direct"))
+def test_format_species_inputs_maps_anonymous_ncbi_cds_by_exact_location(tmp_path, provider):
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
     species_dir = input_dir / "Clitoria_ternatea"
     species_dir.mkdir(parents=True)
@@ -3021,7 +3022,7 @@ def test_format_species_inputs_maps_anonymous_ncbi_cds_by_exact_location(tmp_pat
     out_genome = tmp_path / "species_genome"
     completed = run_script(
         "--provider",
-        "ncbi",
+        provider,
         "--input-dir",
         str(input_dir),
         "--species-cds-dir",
@@ -3057,6 +3058,69 @@ def test_format_species_inputs_maps_anonymous_ncbi_cds_by_exact_location(tmp_pat
     )
     assert mapping.returncode == 0, mapping.stderr + "\n" + mapping.stdout
     assert "CDS-to-GFF mapping OK: 2/2 IDs" in mapping.stdout
+
+
+def test_direct_ncbi_pseudogene_location_match_requires_unique_exact_coordinates(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "pseudogenes.gff"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "CM000001.1\tGenbank\tpseudogene\t1\t9\t.\t+\t.\tID=gene-L1;locus_tag=L1;pseudo=true",
+                "CM000001.1\tGenbank\tmRNA\t1\t9\t.\t+\t.\tID=rna-L1;Parent=gene-L1;locus_tag=L1;pseudo=true",
+                "CM000001.1\tGenbank\tCDS\t1\t9\t.\t+\t0\tID=cds-L1;Parent=rna-L1;pseudo=true",
+                "CM000001.1\tGenbank\tpseudogene\t20\t28\t.\t-\t.\tID=gene-L2;locus_tag=L2;pseudo=true",
+                "CM000001.1\tGenbank\tmRNA\t20\t28\t.\t-\t.\tID=rna-L2;Parent=gene-L2;locus_tag=L2;pseudo=true",
+                "CM000001.1\tGenbank\tCDS\t20\t28\t.\t-\t0\tID=cds-L2;Parent=rna-L2;pseudo=true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cds_path = tmp_path / "pseudogenes_cds.fna"
+    cds_path.write_text(
+        ">lcl|CM000001.1_cds_1 [location=1..9] [gbkey=CDS]\nATGAAATTT\n",
+        encoding="utf-8",
+    )
+    task = {
+        "provider": "direct",
+        "species_key": "Example_species",
+        "species_prefix": "Example_species",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+    }
+    index = module.build_gff_cds_grouping_index(task)
+    mapped = module.resolve_cds_header_gff_gene(
+        task, "lcl|CM000001.1_cds_1 [location=1..9] [gbkey=CDS]", index
+    )
+    assert (mapped["status"], mapped["gene_token"], mapped["matched_aliases"]) == (
+        "mapped", "L1", ("location",)
+    )
+    output_dir = tmp_path / "formatted"
+    output_dir.mkdir()
+    formatted = module.format_cds(task, output_dir, overwrite=False, dry_run=False, strict=True)
+    with gzip.open(formatted["output_path"], "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Example_species_L1\nATGAAATTT\n"
+    for header in (
+        "lcl|CM000001.1_cds_2 [location=complement(1..9)] [gbkey=CDS]",
+        "lcl|CM000001.1_cds_3 [location=1..10] [gbkey=CDS]",
+        "custom_cds_4 [location=1..9]",
+    ):
+        assert module.resolve_cds_header_gff_gene(task, header, index)["status"] == "unmapped"
+        assert not module.is_unlinkable_anonymous_ncbi_cds(task, header, "unmapped")
+
+    with gff_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "CM000001.1\tGenbank\tpseudogene\t1\t9\t.\t+\t.\tID=gene-L3;locus_tag=L3;pseudo=true\n"
+            "CM000001.1\tGenbank\tmRNA\t1\t9\t.\t+\t.\tID=rna-L3;Parent=gene-L3;locus_tag=L3;pseudo=true\n"
+            "CM000001.1\tGenbank\tCDS\t1\t9\t.\t+\t0\tID=cds-L3;Parent=rna-L3;pseudo=true\n"
+        )
+    ambiguous_index = module.build_gff_cds_grouping_index(task)
+    ambiguous = module.resolve_cds_header_gff_gene(
+        task, "lcl|CM000001.1_cds_1 [location=1..9] [gbkey=CDS]", ambiguous_index
+    )
+    assert ambiguous["status"] == "ambiguous"
+    assert ambiguous["candidate_gene_tokens"] == ("L1", "L3")
 
 
 def test_format_species_inputs_does_not_exclude_named_ncbi_cds_from_unrelated_gff(tmp_path):
