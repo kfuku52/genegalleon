@@ -794,11 +794,12 @@ def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_p
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
         "busco() { "
-        "mkdir -p busco_downloads/lineages/eukaryota_odb12/info; "
-        "mkdir -p busco_downloads/placement_files; "
-        "printf 'new\\n' > busco_downloads/lineages/eukaryota_odb12/dataset.cfg; "
-        "printf 'placement\\n' > busco_downloads/placement_files/new_mapping.txt; "
-        "printf 'versions\\n' > busco_downloads/file_versions.tsv; "
+        'test "$1" = --download_path && test "$3" = --download && test "$4" = eukaryota_odb12 || return 2; '
+        'case "$2" in */busco_downloads/.download.eukaryota_odb12.*) ;; *) return 3 ;; esac; '
+        'mkdir -p "$2/lineages/eukaryota_odb12/info" "$2/placement_files"; '
+        'printf "new\\n" > "$2/lineages/eukaryota_odb12/dataset.cfg"; '
+        'printf "placement\\n" > "$2/placement_files/new_mapping.txt"; '
+        'printf "versions\\n" > "$2/file_versions.tsv"; '
         "}; "
         f'_download_busco_lineage_to_runtime "eukaryota_odb12" '
         f"{shlex.quote(str(runtime_db))} "
@@ -811,7 +812,9 @@ def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_p
         f'test -s {shlex.quote(str(placement_dir / "mapping.txt"))}; printf "mapping=%s\\n" "$?"; '
         f'test -s {shlex.quote(str(placement_dir / "new_mapping.txt"))}; printf "new_mapping=%s\\n" "$?"; '
         f'test -s {shlex.quote(str(ready_marker))}; printf "ready=%s\\n" "$?"; '
-        'test ! -e busco_downloads; printf "staging_removed=%s\\n" "$?"'
+        f'test "$(find {shlex.quote(str(runtime_db))} -maxdepth 1 -name ".download.*" | wc -l)" -eq 0; '
+        'printf "staging_removed=%s\\n" "$?"; '
+        'test ! -e busco_downloads; printf "home_cache_untouched=%s\\n" "$?"'
     )
 
     completed = run_bash(command, cwd=tmp_path)
@@ -825,6 +828,38 @@ def test_download_busco_lineage_to_runtime_merges_into_existing_runtime_db(tmp_p
         "new_mapping=0",
         "ready=0",
         "staging_removed=0",
+        "home_cache_untouched=0",
+    ]
+
+
+def test_failed_busco_download_keeps_partial_data_out_of_runtime(tmp_path):
+    runtime_db = tmp_path / "workspace" / "downloads" / "busco_downloads"
+    lineage = runtime_db / "lineages" / "eukaryota_odb12"
+    runtime_db.mkdir(parents=True)
+    ready_marker = lineage / ".download.ready"
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        "busco() { "
+        'test "$1" = --download_path && test "$3" = --download || return 2; '
+        'mkdir -p "$2/lineages/eukaryota_odb12"; '
+        'printf "incomplete\\n" > "$2/lineages/eukaryota_odb12/dataset.cfg"; '
+        "return 1; "
+        "}; "
+        f'if _download_busco_lineage_to_runtime eukaryota_odb12 {shlex.quote(str(runtime_db))} '
+        f'{shlex.quote(str(lineage))} {shlex.quote(str(ready_marker))}; then exit 91; fi; '
+        f'test ! -e {shlex.quote(str(lineage))}; printf "published=%s\\n" "$?"; '
+        f'test ! -e {shlex.quote(str(ready_marker))}; printf "ready=%s\\n" "$?"; '
+        f'test "$(find {shlex.quote(str(runtime_db))} -maxdepth 1 -name ".download.*" | wc -l)" -eq 1; '
+        'printf "partial_retained=%s\\n" "$?"'
+    )
+
+    completed = run_bash(command, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip().splitlines() == [
+        "published=0",
+        "ready=0",
+        "partial_retained=0",
     ]
 
 

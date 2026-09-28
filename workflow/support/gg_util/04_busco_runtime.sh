@@ -511,19 +511,22 @@ _download_busco_lineage_to_runtime() {
   local runtime_busco_db=$2
   local runtime_busco_lineage=$3
   local runtime_ready_marker=$4
+  local staged_dir=""
   if gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
     gg_write_ready_marker "${runtime_ready_marker}"
     return 0
   fi
   echo "Starting BUSCO dataset download: ${busco_lineage}" >&2
-  if ! busco --download "${busco_lineage}" >&2; then
+  staged_dir=$(mktemp -d "${runtime_busco_db}/.download.${busco_lineage}.XXXXXX") || return 1
+  # BUSCO otherwise extracts into its default $HOME/busco_downloads, which
+  # can be the container overlay rather than the workspace filesystem.
+  if ! busco --download_path "${staged_dir}" --download "${busco_lineage}" >&2; then
     echo "BUSCO dataset download failed: ${busco_lineage}" >&2
+    echo "Incomplete BUSCO download retained at: ${staged_dir}" >&2
     return 1
   fi
-  if [[ -d busco_downloads ]]; then
-    gg_merge_directory_contents "busco_downloads" "${runtime_busco_db}" || return 1
-    rm -rf -- busco_downloads
-  fi
+  gg_merge_directory_contents "${staged_dir}" "${runtime_busco_db}" || return 1
+  rmdir -- "${staged_dir}" || return 1
   if ! gg_busco_lineage_is_ready "${runtime_busco_lineage}"; then
     echo "BUSCO lineage dataset is still missing after download: ${runtime_busco_lineage}" >&2
     return 1

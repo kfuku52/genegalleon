@@ -12,6 +12,10 @@ not fetch missing reference files. `array_finalize`
 requires verified completion receipts for every planned species before publishing
 the merged species summary and resolved download manifest.
 
+BUSCO lineage downloads are extracted into a temporary directory inside the
+workspace download cache and published only after BUSCO succeeds. An incomplete
+download remains there for diagnosis and is not treated as a ready lineage.
+
 ```mermaid
 flowchart LR
   D[Single download/prepare job<br/>Independent database queues] --> L[Hashed local inputs]
