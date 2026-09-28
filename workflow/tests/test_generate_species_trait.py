@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "generate_species_trait.py"
 
@@ -354,14 +355,17 @@ def test_generate_species_trait_strict_fails_when_source_column_missing(tmp_path
     assert "missing source column" in completed.stdout
 
 
-def test_generate_species_trait_supports_long_format_with_trait_key_and_zip_source(tmp_path):
+@pytest.mark.parametrize("archive_name", ["austraits.zip", "content"])
+def test_generate_species_trait_supports_long_format_with_trait_key_and_zip_source(
+    tmp_path, archive_name
+):
     manifest = tmp_path / "manifest.tsv"
     write_text(
         manifest,
         ("provider\tid\tspecies_key\nlocal\ta\tEucalyptus_regnans\nlocal\tb\tAcacia_dealbata\n"),
     )
 
-    zip_path = tmp_path / "austraits.zip"
+    zip_path = tmp_path / archive_name
     zip_member = "austraits-7.0.0/traits.csv"
     with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(

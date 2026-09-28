@@ -468,7 +468,7 @@ def read_bulk_table_from_path(path: Path, config: Dict[str, str]) -> pandas.Data
     delimiter = config.get("delimiter", "")
     archive_member = str(config.get("archive_member", "") or "").strip()
     suffix = "".join(path.suffixes).lower()
-    if suffix.endswith(".zip"):
+    if suffix.endswith(".zip") or zipfile.is_zipfile(path):
         return read_table_from_zip(path=path, delimiter=delimiter, archive_member=archive_member)
     return read_table(path=path, delimiter=delimiter)
 
