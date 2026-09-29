@@ -959,6 +959,16 @@ def artifact_manifest_lock(args: argparse.Namespace):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def legacy_policy_result(args: argparse.Namespace) -> int:
+    """Keep adoption separate from explicitly rebuilding untracked outputs."""
+    reason = f"legacy artifact has no provenance manifest: {args.manifest}"
+    if args.legacy_policy == "rebuild":
+        print(f"Artifact will be regenerated because {reason}")
+        return NEEDS_RUN
+    print(f"Artifact provenance stopped because {reason}; choose an explicit legacy policy", file=sys.stderr)
+    return STALE_STOP
+
+
 def needs_run(args: argparse.Namespace) -> int:
     try:
         if recover_declared_outputs(args) and args.dry_run:
@@ -984,6 +994,8 @@ def needs_run(args: argparse.Namespace) -> int:
                     f"{args.manifest}"
                 )
                 return NEEDS_RUN
+            if args.legacy_policy != "adopt":
+                return legacy_policy_result(args)
             try:
                 adopted = build_contract(args, include_diagnostics=False)
             except FileNotFoundError as exc:
@@ -1025,6 +1037,9 @@ def needs_run(args: argparse.Namespace) -> int:
                 + ", ".join(missing_outputs),
                 reusable=False,
             )
+
+        if args.legacy_policy != "adopt":
+            return legacy_policy_result(args)
 
         try:
             adopted = build_contract(args, include_diagnostics=False)
@@ -1546,6 +1561,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("stop", "reuse", "rebuild"),
         default="stop",
         help="Action when an existing tracked artifact is stale",
+    )
+    needs_parser.add_argument(
+        "--legacy-policy", choices=("adopt", "stop", "rebuild"), default="adopt",
+        help="Action when existing outputs have no provenance manifest",
     )
 
     record_parser = subparsers.add_parser("record", help="Write a completed artifact contract")

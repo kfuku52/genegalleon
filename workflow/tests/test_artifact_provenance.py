@@ -135,6 +135,57 @@ def test_manifest_detects_content_and_parameter_changes_but_ignores_versions(tmp
     assert run_cli("needs-run", *args).returncode == 3
 
 
+@pytest.mark.parametrize("optional", [False, True])
+@pytest.mark.parametrize("policy,status", [("rebuild", 0), ("stop", 3)])
+def test_explicit_legacy_policy_does_not_adopt_or_modify_old_outputs(tmp_path, optional, policy, status):
+    workspace = tmp_path / "workspace"
+    input_path = workspace / "input.txt"
+    output_path = workspace / "old.tsv"
+    manifest = workspace / "provenance.json"
+    workspace.mkdir()
+    input_path.write_text("new input")
+    output_path.write_text("old results")
+    args = contract_args(workspace, manifest, input_path, output_path)
+    if optional:
+        args[args.index("--output")] = "--optional-output"
+    before = output_path.stat()
+    result = run_cli("needs-run", *args, "--legacy-policy", policy)
+    assert result.returncode == status, result.stderr
+    assert not manifest.exists()
+    assert output_path.read_text() == "old results"
+    assert output_path.stat().st_mtime_ns == before.st_mtime_ns
+    output_path.unlink()
+    assert run_cli("needs-run", *args, "--legacy-policy", policy).returncode == 0
+
+
+def test_legacy_rebuild_does_not_force_current_tracked_artifacts(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    input_path, output_path, manifest = (workspace / name for name in ("input", "output", "manifest.json"))
+    input_path.write_text("input")
+    output_path.write_text("output")
+    args = contract_args(workspace, manifest, input_path, output_path)
+    assert run_cli("record", *args).returncode == 0
+    assert run_cli("needs-run", *args, "--legacy-policy", "rebuild").returncode == 1
+
+
+def test_shell_forwards_and_validates_legacy_policy(tmp_path):
+    script = f'''
+source "{GG_UTIL}"
+gg_artifact_provenance_script_path() {{ printf /unused; }}
+gg_artifact_server_request() {{ printf '%s\\n' "$@"; }}
+artifact_legacy_policy=rebuild
+gg_artifact_needs_run --manifest example
+artifact_legacy_policy=invalid
+gg_artifact_needs_run --manifest example
+'''
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 2
+    assert "--legacy-policy\nrebuild\n" in result.stdout
+    assert result.stdout.count("needs-run") == 1
+    assert "Invalid artifact_legacy_policy" in result.stderr
+
+
 def test_legacy_fasta_output_must_match_declared_sequence_type_before_adoption(tmp_path):
     workspace = tmp_path / "workspace"
     logical_root = workspace / "output" / "orthogroup"

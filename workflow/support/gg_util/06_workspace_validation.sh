@@ -327,9 +327,17 @@ gg_artifact_needs_run() {
       return 2
       ;;
   esac
+  case "${artifact_legacy_policy:-adopt}" in
+    adopt|stop|rebuild) ;;
+    *)
+      echo "Invalid artifact_legacy_policy=${artifact_legacy_policy:-}; expected adopt, stop, or rebuild." >&2
+      return 2
+      ;;
+  esac
   script_path=$(gg_artifact_provenance_script_path) || return 2
   gg_artifact_server_request "${script_path}" needs-run \
     --stale-policy "${artifact_stale_policy:-stop}" \
+    --legacy-policy "${artifact_legacy_policy:-adopt}" \
     "$@"
 }
 

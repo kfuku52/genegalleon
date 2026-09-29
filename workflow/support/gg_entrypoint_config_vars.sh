@@ -589,5 +589,5 @@ EOF
       return 1
       ;;
   esac
-  printf '%s\n' artifact_stale_policy
+  printf '%s\n' artifact_stale_policy artifact_legacy_policy
 }

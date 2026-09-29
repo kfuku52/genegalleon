@@ -193,6 +193,14 @@ resume after interruption before a manifest update.
 - `reuse` continues with the stale output and does not rewrite its manifest;
 - `rebuild` enables the affected stage and regenerates it without confirmation.
 
+Existing outputs without a manifest use `artifact_legacy_policy`: `adopt`
+(default) records the current inputs as an adoption baseline, `stop` requires
+an explicit decision, and `rebuild` regenerates the outputs without adopting
+them. For example, `GG_GENE_SUMMARY_ARTIFACT_LEGACY_POLICY=rebuild` rebuilds an
+old summary database whose historical inputs are unknown. Preserve previous
+results before requesting a rebuild. This setting does not force current,
+tracked artifacts to run again.
+
 Only declared data content and output-affecting parameters participate in the
 freshness decision. Tool, container, and GeneGalleon versions are retained as
 diagnostics and do not cause regeneration. Raw and ZIP-backed managed output

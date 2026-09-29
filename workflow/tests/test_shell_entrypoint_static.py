@@ -188,6 +188,9 @@ def test_registered_config_vars_are_consumed_by_core_or_shared_runtime():
         "artifact_stale_policy": read_text(
             WORKFLOW_DIR / "support" / "gg_util" / "06_workspace_validation.sh"
         ),
+        "artifact_legacy_policy": read_text(
+            WORKFLOW_DIR / "support" / "gg_util" / "06_workspace_validation.sh"
+        ),
     }
     for variable, consumer in shared_consumers.items():
         assert variable in consumer
