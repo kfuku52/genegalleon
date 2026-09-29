@@ -573,8 +573,10 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
     unique_gene_tokens = set()
     candidate_gene_tokens = set()
     location_signature = ncbi_cds_location_signature(task, header)
+    location_candidates = ()
     if location_signature is not None:
         candidates = tuple(index.get("location_to_gene_tokens", {}).get(location_signature, ()))
+        location_candidates = candidates
         if len(candidates) > 0:
             evidence.append(("location", candidates))
             candidate_gene_tokens.update(candidates)
@@ -591,6 +593,41 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
                 candidate_gene_tokens.update(candidates)
             if len(candidates) == 1:
                 unique_gene_tokens.add(candidates[0])
+    # Some NCBI CDS headers carry a locus_tag copied from a neighboring gene.
+    # The paired GFF can resolve that conflict when the complete CDS location
+    # identifies one gene and any supplied protein ID agrees. Anonymous NCBI
+    # pseudogene CDS records have no protein ID; require their CDS gbkey.
+    # Do not waive any disagreement other than the header's locus_tag.
+    if len(location_candidates) == 1 and len(candidate_gene_tokens) > 1:
+        selected = location_candidates[0]
+        protein_id = extract_header_tag_value(header, "protein_id")
+        locus_tag = extract_header_tag_value(header, "locus_tag")
+        gbkey = extract_header_tag_value(header, "gbkey")
+        protein_hits = [
+            tuple(alias_index.get(alias, ()))
+            for alias in gff_alias_variants(protein_id)
+            if alias in alias_index
+        ]
+        locus_aliases = set(gff_alias_variants(locus_tag))
+        conflicts = [alias for alias, candidates in evidence if selected not in candidates]
+        if (
+            locus_tag != ""
+            and (
+                (protein_id != "" and protein_hits and all(hit == (selected,) for hit in protein_hits))
+                or (protein_id == "" and gbkey.upper() == "CDS")
+            )
+            and conflicts
+            and all(alias in locus_aliases for alias in conflicts)
+        ):
+            return {
+                "status": "mapped",
+                "gene_token": selected,
+                "matched_aliases": tuple(
+                    alias for alias, candidates in evidence if selected in candidates
+                ),
+                "candidate_gene_tokens": (selected,),
+                "ignored_conflicting_locus_tag": locus_tag,
+            }
     if len(unique_gene_tokens) == 1:
         selected = next(iter(unique_gene_tokens))
         if all(selected in candidates for _alias, candidates in evidence):

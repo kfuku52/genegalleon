@@ -683,6 +683,11 @@ Latest template distribution:
   CDS/GFF identity; warnings name affected genes and stats count both issues.
   `--strict` rejects those annotations. Missing genome sequences, ambiguous
   gene identities, and other CDS-coordinate errors remain failures,
+- for NCBI-format CDS headers, a conflicting header `locus_tag` may be ignored
+  only when the full CDS location identifies one GFF gene, every supplied
+  `protein_id` alias agrees, and no other header identity conflicts. CDS headers
+  without `protein_id` additionally require `gbkey=CDS`. The grouping audit TSV
+  records the ignored source `locus_tag`; unresolved conflicts still fail.
 - For the `ncbi`, `refseq`, and `genbank` providers, CDS records whose only
   identity is an anonymous `lcl..._cds_N` placeholder are excluded only when
   they cannot link to the companion GFF;

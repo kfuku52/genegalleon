@@ -3128,6 +3128,66 @@ def test_direct_ncbi_pseudogene_location_match_requires_unique_exact_coordinates
     assert ambiguous["candidate_gene_tokens"] == ("L1", "L3")
 
 
+def test_ncbi_conflicting_header_locus_requires_matching_protein_and_exact_location(tmp_path):
+    module = load_module()
+    gff_path = tmp_path / "models.gff3"
+    gff_path.write_text(
+        "\n".join(
+            [
+                "chr1\tGenbank\tgene\t1\t9\t.\t+\t.\tID=gene-L1;locus_tag=L1",
+                "chr1\tGenbank\tmRNA\t1\t9\t.\t+\t.\tID=rna-L1;Parent=gene-L1;locus_tag=L1",
+                "chr1\tGenbank\tCDS\t1\t9\t.\t+\t0\tID=cds-P1;Parent=rna-L1;protein_id=P1;locus_tag=L1",
+                "chr1\tGenbank\tgene\t20\t28\t.\t+\t.\tID=gene-L2;locus_tag=L2",
+                "chr1\tGenbank\tmRNA\t20\t28\t.\t+\t.\tID=rna-L2;Parent=gene-L2;locus_tag=L2",
+                "chr1\tGenbank\tCDS\t20\t28\t.\t+\t0\tID=cds-P2;Parent=rna-L2;protein_id=P2;locus_tag=L2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cds_path = tmp_path / "models.fna"
+    header = "lcl|chr1_cds_P1_1 [locus_tag=L2] [protein_id=P1] [location=1..9]"
+    cds_path.write_text(">" + header + "\nATGAAATTT\n", encoding="utf-8")
+    task = {
+        "provider": "direct",
+        "species_key": "Example_species",
+        "species_prefix": "Example_species",
+        "cds_path": cds_path,
+        "gff_path": gff_path,
+        "gene_grouping_mode": "strict",
+    }
+    index = module.build_gff_cds_grouping_index(task)
+    mapped = module.resolve_cds_header_gff_gene(task, header, index)
+    assert mapped["status"] == "mapped"
+    assert mapped["gene_token"] == "L1"
+    assert mapped["ignored_conflicting_locus_tag"] == "L2"
+    anonymous = "lcl|chr1_cds_L2_1 [locus_tag=L2] [location=1..9] [gbkey=CDS]"
+    assert module.resolve_cds_header_gff_gene(task, anonymous, index)["gene_token"] == "L1"
+    output_dir = tmp_path / "formatted"
+    output_dir.mkdir()
+    result = module.format_cds(task, output_dir, overwrite=False, dry_run=False, strict=True)
+    with gzip.open(result["output_path"], "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">Example_species_L1\nATGAAATTT\n"
+    with open(result["gff_grouping_audit_path"], newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert rows[0]["ignored_conflicting_locus_tag"] == "L2"
+
+    for rejected_header in (
+        header.replace("[protein_id=P1]", "[protein_id=P2]"),
+        header.replace("[location=1..9]", "[location=2..9]"),
+        header + " [transcript_id=rna-L2]",
+        anonymous.replace(" [gbkey=CDS]", ""),
+    ):
+        assert module.resolve_cds_header_gff_gene(task, rejected_header, index)["status"] != "mapped"
+
+    gff_path.write_text(
+        gff_path.read_text(encoding="utf-8").replace("protein_id=P2", "protein_id=P1"),
+        encoding="utf-8",
+    )
+    duplicate_protein_index = module.build_gff_cds_grouping_index(task)
+    assert module.resolve_cds_header_gff_gene(task, header, duplicate_protein_index)["status"] == "ambiguous"
+
+
 def test_format_species_inputs_does_not_exclude_named_ncbi_cds_from_unrelated_gff(tmp_path):
     module = load_module()
     task = {
