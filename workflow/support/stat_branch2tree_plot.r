@@ -459,6 +459,12 @@ measurement_pdf = tempfile(fileext='.pdf')
 grDevices::pdf(measurement_pdf)
 layout_mm = tryCatch(treevis_layout_mm(g, args[['panel_widths_mm']], height_mm=height * 25.4),
     finally = { grDevices::dev.off(); unlink(measurement_pdf) })
+# An older installed treevis package returns widths without height_mm. The
+# requested height remains valid when no square expression panel enlarged it.
+output_height_mm = layout_mm$height_mm
+if (is.null(output_height_mm)) output_height_mm = height * 25.4
+if (length(output_height_mm) != 1 || !is.finite(output_height_mm) || output_height_mm <= 0)
+    stop('Invalid tree plot height from treevis_layout_mm.')
 rel_widths = layout_mm$widths_mm
 base_width = layout_mm$width_mm / 25.4
 cat('Column widths (mm):', paste(names(rel_widths), round(rel_widths, 2), collapse='; '), '\n')
@@ -477,7 +483,7 @@ for (extension in extensions) {
     filename = paste0('stat_branch2tree_plot', extension),
     plot = cp,
     nrow = 1,
-    base_height = layout_mm$height_mm / 25.4,
+    base_height = output_height_mm / 25.4,
     base_width = base_width,
     units = 'in',
     dpi = 300,
