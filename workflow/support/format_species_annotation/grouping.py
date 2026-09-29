@@ -101,7 +101,9 @@ def ncbi_cds_location_signature(task, header):
     # An NCBI file can arrive through a direct URL manifest. In that case the
     # provider describes transport, not the CDS header format. Require the
     # distinctive NCBI local-ID prefix before using locations for other providers.
-    if task.get("provider") not in NCBI_LIKE_PROVIDERS and not raw_token.startswith("lcl|"):
+    if task.get("provider") not in NCBI_LIKE_PROVIDERS and not (
+        task.get("provider") == "direct" and raw_token.startswith("lcl|")
+    ):
         return None
     if raw_token.startswith("lcl|"):
         raw_token = raw_token[len("lcl|") :]

@@ -3096,6 +3096,11 @@ def test_direct_ncbi_pseudogene_location_match_requires_unique_exact_coordinates
     assert (mapped["status"], mapped["gene_token"], mapped["matched_aliases"]) == (
         "mapped", "L1", ("location",)
     )
+    assert module.resolve_cds_header_gff_gene(
+        {**task, "provider": "ensembl"},
+        "lcl|CM000001.1_cds_1 [location=1..9]",
+        index,
+    )["status"] == "unmapped"
     output_dir = tmp_path / "formatted"
     output_dir.mkdir()
     formatted = module.format_cds(task, output_dir, overwrite=False, dry_run=False, strict=True)
