@@ -12,6 +12,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "support" / "artifact_provenance.py"
 STORE_SCRIPT = Path(__file__).resolve().parents[1] / "support" / "gene_family_output_store.py"
 GG_UTIL = Path(__file__).resolve().parents[1] / "support" / "gg_util.sh"
+SUMMARY_PATHS = Path(__file__).resolve().parents[1] / "support" / "summary_analysis_paths.py"
 
 
 def bash_major_version():
@@ -327,6 +328,40 @@ fi
     assert "summary_status=3" in stale.stdout
     assert "plot=" not in stale.stdout
     assert not plot.exists()
+
+
+def test_plot_only_recovers_recorded_analysis_paths_without_escaping_root(tmp_path):
+    root = tmp_path / "orthogroup"
+    mafft = root / "mafft" / "OG0001.fa.gz"
+    clipkit = root / "clipkit" / "OG0001.fa.gz"
+    for path in (mafft, clipkit):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"alignment")
+    manifest = root / "artifact_provenance" / "OG0001.summary_statistics.json"
+    manifest.parent.mkdir()
+    payload = {
+        "step": "summary_statistics",
+        "inputs": [
+            {"label": "input_2", "artifact_type": "file", "scope": "logical", "path": "mafft/OG0001.fa.gz"},
+            {"label": "input_3", "artifact_type": "file", "scope": "logical", "path": "clipkit/OG0001.fa.gz"},
+        ],
+    }
+
+    def recover():
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(SUMMARY_PATHS), "--manifest", str(manifest), "--logical-root", str(root)],
+            text=True, capture_output=True, check=False,
+        )
+
+    valid = recover()
+    assert valid.returncode == 0, valid.stderr
+    assert f"untrimmed_aln\t{mafft}\n" in valid.stdout
+    assert f"trimmed_aln\t{clipkit}\n" in valid.stdout
+    payload["inputs"][1]["path"] = "../outside.fa.gz"
+    unsafe = recover()
+    assert unsafe.returncode == 1
+    assert "unsafe recorded analysis path" in unsafe.stderr
 
 def test_gene_family_store_input_is_content_based_and_storage_layout_independent(tmp_path):
     workspace = tmp_path / "workspace"

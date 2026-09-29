@@ -6199,6 +6199,19 @@ fi
 # shellcheck shell=bash
 # Sourced by gg_gene_evolution_core.sh.
 
+if [[ ${gene_evolution_plot_only} -eq 1 ]]; then
+  # Run flags select analysis files as well as stages. Recover the exact files
+  # recorded by the summary before auditing it, while leaving execution off.
+  recorded_summary_paths=$(python "${gg_support_dir}/summary_analysis_paths.py" \
+    --manifest "${file_og_summary_provenance}" \
+    --logical-root "${dir_output_active}") || exit 1
+  while IFS=$'\t' read -r analysis_slot analysis_path; do
+    [[ -n ${analysis_slot} ]] || continue
+    set_analysis_file "${analysis_slot}" "${analysis_path}"
+  done <<< "${recorded_summary_paths}"
+  unset recorded_summary_paths analysis_slot analysis_path
+fi
+
 task="summary statistics"
 summary_input_files=(
   "${file_og_native_ou_prefix}.model.json"
