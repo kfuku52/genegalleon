@@ -6219,17 +6219,19 @@ def repair_archive_index(
     *,
     remove_orphans: bool = False,
     progress_callback: Optional[Callable[..., None]] = None,
+    preview: bool = False,
 ) -> List[Path]:
     root = Path(root).resolve()
     archive_root = _archive_state_root(root)
     payload_root = _archive_payload_root(root)
     if not archive_root.is_dir() and not _physical_archive_paths(root):
         return []
-    with producer_quiescence_lock(archive_root) as readers_idle:
+    with (contextlib.nullcontext(True) if preview else producer_quiescence_lock(archive_root)) as readers_idle:
         if not readers_idle:
             raise ArchiveStoreError("Failed to acquire the archive maintenance lock")
-        with archive_lock(archive_root):
-            _cleanup_partial_archives(payload_root)
+        with (contextlib.nullcontext() if preview else archive_lock(archive_root)):
+            if not preview:
+                _cleanup_partial_archives(payload_root)
             store = GeneFamilyOutputStore(root)
             rebuilt: Dict[str, Artifact] = {}
             rebuilt_ranks: Dict[str, Tuple[int, int, str]] = {}
@@ -6355,6 +6357,11 @@ def repair_archive_index(
                 store._index_generation = max(store._index_generation, existing_generation)
             # Reserve the recovered high-water mark before replacing indexes;
             # failed repairs may leave a harmless gap, never a reused generation.
+            orphaned = [path for path in physical_paths if path.resolve() not in referenced]
+            if preview:
+                # The same ZIP/member checks ran without creating lock or index files.
+                # A subsequent apply must rescan under its normal maintenance locks.
+                return orphaned
             store._write_generation_counter(max(1, store._index_generation))
             store._write_index(rebuilt, recover_pending=True)
             if referenced_modes and _read_store_metadata(root) is None:
@@ -6364,7 +6371,6 @@ def repair_archive_index(
                     repaired_mode,
                     (artifact.family_id for artifact in rebuilt.values() if artifact.family_id is not None),
                 )
-            orphaned = [path for path in physical_paths if path.resolve() not in referenced]
             if remove_orphans:
                 for path in orphaned:
                     path.unlink()
@@ -7142,11 +7148,14 @@ def run_cli(args: argparse.Namespace) -> int:
                 root,
                 remove_orphans=args.remove_orphans,
                 progress_callback=reporter.update,
+                preview=args.dry_run,
             )
         finally:
             reporter.close()
         for path in orphaned:
-            action = "removed-orphan" if args.remove_orphans else "orphan"
+            action = "would-remove-orphan" if args.dry_run and args.remove_orphans else (
+                "removed-orphan" if args.remove_orphans else "orphan"
+            )
             print(f"{action}\t{path}")
         return 0
     if args.command == "lock-path":

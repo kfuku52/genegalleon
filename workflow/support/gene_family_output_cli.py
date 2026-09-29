@@ -259,6 +259,8 @@ def build_parser(
 
     repair_parser = subparsers.add_parser("repair")
     add_root(repair_parser)
+    repair_parser.add_argument("--dry-run", action="store_true",
+                               help="Verify the same ZIP/member inputs without modifying archive metadata or payloads")
     repair_parser.add_argument("--remove-orphans", action="store_true")
     repair_parser.add_argument("--progress-interval", type=float, default=30.0)
 

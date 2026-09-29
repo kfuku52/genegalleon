@@ -1864,6 +1864,41 @@ def test_repair_rebuilds_missing_index_and_can_remove_orphans(tmp_path: Path):
     )
 
 
+def test_repair_preview_verifies_shards_without_writing_or_deleting(tmp_path: Path, capsys):
+    root = tmp_path / "orthogroup"
+    family_id = "OG0000001"
+    _write_family_outputs(root, family_id, complete=True)
+    archive_completed_outputs(
+        root, "orthogroup", [family_id],
+        lambda name: family_id if name.startswith(f"{family_id}_") else None,
+    )
+    source = next((root / "archives" / "mafft").glob("*.zip"))
+    duplicate = source.with_name(f"orphan-{source.name}")
+    shutil.copy2(source, duplicate)
+    for index_path in (root / ".gg_store" / "index").glob("*.json"):
+        index_path.unlink()
+
+    def snapshot():
+        return {str(path.relative_to(root)): path.read_bytes()
+                for path in root.rglob("*") if path.is_file()}
+
+    before = snapshot()
+    orphaned = repair_archive_index(root, remove_orphans=True, preview=True)
+    assert len(orphaned) == 1
+    assert snapshot() == before
+    args = build_parser().parse_args(["repair", "--root", str(root), "--dry-run", "--remove-orphans",
+                                      "--progress-interval", "0"])
+    assert run_cli(args) == 0
+    assert "would-remove-orphan" in capsys.readouterr().out
+    assert snapshot() == before
+
+    duplicate.write_bytes(b"broken central directory")
+    damaged = snapshot()
+    with pytest.raises(ArchiveStoreError):
+        repair_archive_index(root, preview=True)
+    assert snapshot() == damaged
+
+
 def test_purge_physically_applies_tombstones_live_overrides_and_family_filter(
     tmp_path: Path,
 ):

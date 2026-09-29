@@ -64,6 +64,124 @@ def test_capabilities_requires_no_project_or_controller():
     response = query("capabilities")
     assert response["schema"] == "genegalleon-api-v1"
     assert response["requires_kfauto"] is False
+    assert response["capabilities"]["producers"] == "declared-recorded-producers-v1"
+
+
+def test_producers_trace_missing_derived_inputs_without_mutating_workspace(project, tmp_path):
+    workspace, root, source, intermediate, manifest, first_argv, _ = project
+    final = root / "stat_tree" / "OG0001_stat.tree.tsv"
+    final.parent.mkdir()
+    final.write_text("tree\n")
+    second_manifest = root / "artifact_provenance" / "OG0001.tree_statistics.json"
+    second_argv = ["--workspace-root", str(workspace), "--logical-root", str(root),
+                   "--manifest", str(second_manifest), "--step", "tree_statistics",
+                   "--family-id", "OG0001", "--input", f"table={intermediate}",
+                   "--output", f"tree={final}", "--parameter", "mode=a"]
+    assert cli(PROVENANCE, "record", *first_argv).returncode == 0
+    assert cli(PROVENANCE, "record", *second_argv).returncode == 0
+    intermediate.unlink()
+    final.unlink()
+    plan = tmp_path / "producer-plan.json"
+    first_argv = [*first_argv, "--stale-policy", "rebuild"]
+    second_argv = [*second_argv, "--stale-policy", "rebuild"]
+    payload = {"schema": "genegalleon-producer-plan-v1", "targets": [str(final)],
+               "contracts": [{"argv": first_argv, "enabled": True},
+                             {"argv": second_argv, "enabled": True}]}
+    plan.write_text(json.dumps(payload))
+    before = snapshot(workspace)
+    response = query("producers", "--plan", plan)
+    assert response["read_only"] is True
+    assert response["execution_authorized"] is False
+    assert response["requires_runtime_revalidation"] is True
+    target = response["targets"][0]
+    assert target["state"] == "producer_candidate"
+    assert target["dependencies"][0]["state"] == "producer_candidate"
+    assert target["dependencies"][0]["dependencies"] == [
+        {"path": str(source), "state": "verified_input"}]
+    assert snapshot(workspace) == before
+
+    source.write_text("changed\n")
+    assert query("producers", "--plan", plan)["targets"][0]["state"] == "blocked"
+    source.unlink()
+    assert query("producers", "--plan", plan)["targets"][0]["state"] == "blocked"
+    source.write_text("(A,B);\n")
+    payload["contracts"][0]["enabled"] = False
+    plan.write_text(json.dumps(payload))
+    assert query("producers", "--plan", plan)["targets"][0]["dependencies"][0]["state"] == "producer_disabled"
+
+
+def test_producers_reject_ambiguous_or_changed_recorded_declarations(project, tmp_path):
+    workspace, root, _, output, manifest, argv, _ = project
+    recorded = cli(PROVENANCE, "record", *argv)
+    assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+    output.unlink()
+    plan = tmp_path / "producer-plan.json"
+    argv = [*argv, "--stale-policy", "rebuild"]
+    payload = {"schema": "genegalleon-producer-plan-v1", "targets": [str(output)],
+               "contracts": [{"argv": argv, "enabled": True}]}
+    plan.write_text(json.dumps(payload))
+    assert query("producers", "--plan", plan)["targets"][0]["state"] == "producer_candidate"
+    payload["contracts"][0]["argv"] = ["mode=b" if token == "mode=a" else token for token in argv]
+    plan.write_text(json.dumps(payload))
+    result = cli(API, "producers", "--plan", plan)
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["error_code"] == "query_unavailable"
+    payload["contracts"][0]["argv"] = argv
+    payload["contracts"].append({"argv": ["second" if token == "summary_statistics" else token for token in argv],
+                                  "enabled": True})
+    second_manifest = root / "artifact_provenance" / "OG0001.second.json"
+    payload["contracts"][1]["argv"] = [str(second_manifest) if token == str(manifest) else token
+                                          for token in payload["contracts"][1]["argv"]]
+    second_manifest.write_text(manifest.read_text().replace("summary_statistics", "second"))
+    plan.write_text(json.dumps(payload))
+    assert query("producers", "--plan", plan)["targets"][0]["state"] == "ambiguous_producer"
+
+
+def test_producers_preserve_optional_absence_and_logical_zip_inputs(tmp_path):
+    workspace = tmp_path / "workspace"
+    root = workspace / "output" / "species_tree"
+    logical_root = workspace / "output" / "orthogroup"
+    raw = root / "gene_trees"
+    raw.mkdir(parents=True)
+    (raw / "one.nwk").write_text("(A,B);\n")
+    output = root / "astral" / "tree.nwk"
+    output.parent.mkdir()
+    output.write_text("(A,B);\n")
+    manifest = root / "artifact_provenance" / "astral.json"
+    argv = ["--workspace-root", str(workspace), "--logical-root", str(logical_root),
+            "--manifest", str(manifest), "--step", "astral", "--family-id", "trees",
+            "--input-logical-directory", f"genes={raw}", "--optional-output", f"tree={output}"]
+    recorded = cli(PROVENANCE, "record", *argv)
+    assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+    downstream = root / "summary" / "result.tsv"
+    downstream.parent.mkdir()
+    downstream.write_text("present\n")
+    downstream_argv = ["--workspace-root", str(workspace), "--logical-root", str(logical_root),
+                       "--manifest", str(root / "artifact_provenance" / "summary.json"),
+                       "--step", "summary", "--family-id", "trees",
+                       "--input", f"tree={output}", "--output", f"summary={downstream}"]
+    assert cli(PROVENANCE, "record", *downstream_argv).returncode == 0
+    with zipfile.ZipFile(raw.with_suffix(".zip"), "w") as archive:
+        archive.write(raw / "one.nwk", "gene_trees/one.nwk")
+    (raw / "one.nwk").unlink()
+    raw.rmdir()
+    output.unlink()
+    plan = tmp_path / "producer-plan.json"
+    plan.write_text(json.dumps({"schema": "genegalleon-producer-plan-v1", "targets": [str(output)],
+                                "contracts": [{"argv": [*argv, "--stale-policy", "rebuild"],
+                                               "enabled": True}]}))
+    target = query("producers", "--plan", plan)["targets"][0]
+    assert target["state"] == "optional_producer_candidate"
+    assert target["dependencies"] == [{"path": str(raw), "state": "verified_input"}]
+    downstream.unlink()
+    payload = json.loads(plan.read_text())
+    payload["targets"] = [str(downstream)]
+    payload["contracts"].append({"argv": [*downstream_argv, "--stale-policy", "rebuild"],
+                                 "enabled": True})
+    plan.write_text(json.dumps(payload))
+    result = query("producers", "--plan", plan)["targets"][0]
+    assert result["state"] == "blocked"
+    assert result["dependencies"][0]["state"] == "optional_producer_candidate"
 
 
 def test_old_outputs_remain_reusable_without_adoption_or_cache_writes(project, tmp_path):

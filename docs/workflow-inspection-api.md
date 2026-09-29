@@ -195,6 +195,53 @@ the original generating inputs. The preview includes runtime exit codes,
 diagnostics, and a binding digest; runtime validation must still run immediately
 before execution. Preflight never changes the configured stale policy.
 
+## Trace declared producers of missing inputs
+
+`producers` traces missing workspace paths through the inputs and outputs of
+recorded artifact contracts. It is useful when a later stage reports a missing
+input that an earlier enabled stage may regenerate. Supply declarations from
+the **current** runtime, with an explicit stage-enabled decision from its
+effective configuration; historical manifests alone cannot establish that a
+producer will run now.
+
+```json
+{
+  "schema": "genegalleon-producer-plan-v1",
+  "targets": ["/workspace/output/example/derived.tsv"],
+  "contracts": [{
+    "argv": ["--workspace-root", "/workspace", "--logical-root", "/workspace/output/example",
+             "--manifest", "/workspace/output/example/artifact_provenance/producer.json",
+             "--family-id", "example", "--step", "producer",
+             "--input", "raw=/workspace/input/raw.tsv",
+             "--output", "derived=/workspace/output/example/derived.tsv",
+             "--stale-policy", "rebuild"],
+    "enabled": true
+  }]
+}
+```
+
+```bash
+python -B workflow/support/workflow_api.py producers --plan producer-plan.json
+```
+
+The query requires a matching recorded manifest for each producer, unchanged
+parameters and paths, `rebuild` policy, one workspace, and one producer for each
+missing path. It hashes available inputs against their recorded digests. A
+missing input is followed to another declared producer; an unproduced raw input,
+changed input, disabled producer, cycle, or ambiguous producer blocks the chain.
+`optional_producer_candidate` means the stage may validly produce no file.
+It does not satisfy a later stage's required input.
+Store-backed inputs, FASTA-specific policies, and recovery recipes are outside
+this first query's coverage and are rejected rather than guessed.
+
+`producer_candidate` identifies a possible regeneration chain, **not** a
+completed preflight or permission to submit. The caller must prove the current
+runtime and enabled settings, inspect the complete selected work unit, and rerun
+the ordinary provenance and workflow validators immediately before execution.
+New output may legitimately differ from a historical digest; downstream stages
+must then apply their configured stale policy. The query makes no project writes
+and does not inspect provider availability or guarantee scientific completion.
+
 ## Verify declared completion, including ZIP storage
 
 ```bash

@@ -20,6 +20,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 os.environ.pop("GG_CONTENT_DIGEST_CACHE", None)
 import artifact_provenance as provenance
+import producer_graph
 from gene_family_output_store import GeneFamilyOutputStore, archive_queue_status, read_only_observation
 from workflow_observation import contract_arguments, read_regular_json, strict_json_loads
 
@@ -120,6 +121,7 @@ def envelope(command, **values):
 def capabilities(_args):
     return envelope("capabilities", capabilities={
         "status": "attempt-delta-v1", "preflight": "declared-artifact-contracts-v1",
+        "producers": "declared-recorded-producers-v1",
         "status_pages": "attempt-pages-v1",
         "verify": "family-provenance-v1", "runtime": "registered-config-v1",
         "errors": "owned-boundary-codes-v1",
@@ -395,6 +397,24 @@ def preflight(args):
                     workspace_root_override=str(args.workspace_root) if args.workspace_root else None)
 
 
+def producer_contract_args(argv):
+    if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
+        raise ValueError("producer argv must be a list of provenance arguments")
+    if any(value.split("=", 1)[0] in {"--dry-run", "--help", "-h"} for value in argv):
+        raise ValueError("producer query controls dry-run")
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return provenance.build_parser().parse_args(["needs-run", *argv, "--dry-run"])
+    except SystemExit as exc:
+        raise ValueError("invalid producer contract arguments") from exc
+
+
+def producers(args):
+    plan = read_json(args.plan)
+    result = producer_graph.inspect(plan, producer_contract_args)
+    return envelope("producers", **result, plan_sha256=digest(plan))
+
+
 def verify_terminal_profile(store, family):
     members = []
     try:
@@ -559,6 +579,9 @@ def main(argv=None):
     preflight_parser.add_argument("--stale-policy", choices=("stop", "rebuild", "reuse"),
                                   help="explicitly preview a proposed policy instead of the recorded policy")
     preflight_parser.set_defaults(handler=preflight)
+    producers_parser = commands.add_parser("producers")
+    producers_parser.add_argument("--plan", type=Path, required=True)
+    producers_parser.set_defaults(handler=producers)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--root", type=Path, required=True)
     verify_parser.add_argument("--workspace-root", type=Path, required=True)

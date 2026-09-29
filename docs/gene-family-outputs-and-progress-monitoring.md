@@ -406,6 +406,15 @@ bash workflow/gg_gene_family_archive.sh repair \
   --progress-interval 10
 ```
 
+Use `repair --dry-run` first to run the same ZIP manifest and payload checks
+without creating lock files, changing indexes, cleaning partial archives, or
+removing orphan shards. `--dry-run --remove-orphans` reports
+`would-remove-orphan` paths; it does not delete them. The preview is an
+observation, not a reservation: after checking project job activity and keeping
+the required recovery copies, a later `repair` scans again under maintenance
+locks before writing. Keep `--remove-orphans` off unless the reported paths have
+been reviewed separately.
+
 Repair restores the generation counter from ZIP manifest generations and deletion
 history, retaining a higher existing counter. Missing counters also account for
 compaction generations, which may exceed every member's original generation.
