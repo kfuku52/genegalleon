@@ -408,6 +408,14 @@ gg_artifact_prepare_stage() {
   local relevant=${run_value}
   local argument
 
+  # A gene-family plot-only run treats earlier stage outputs as frozen inputs.
+  # The summary and plot stages clear this switch and audit their own complete
+  # input/output contracts before the plot is generated.
+  if [[ ${gg_skip_disabled_artifact_checks:-0} == 1 && ${run_value} != 1 ]]; then
+    printf -v "${needs_update_variable}" '%s' 0
+    return 0
+  fi
+
   for argument in "$@"; do
     if [[ "${previous}" == "--manifest" ]]; then
       [[ -s "${argument}" ]] && relevant=1

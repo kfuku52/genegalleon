@@ -261,6 +261,73 @@ printf 'status=%s needs=%s run=%s\n' "${{stage_status}}" "${{needs_update}}" "${
         in completed.stdout
     )
 
+
+@pytest.mark.skipif(bash_major_version() < 4, reason="gg_util.sh requires Bash 4+")
+def test_plot_only_skips_frozen_stages_but_audits_summary_and_plot(tmp_path):
+    workspace = tmp_path / "workspace"
+    logical_root = workspace / "output" / "orthogroup"
+    source = logical_root / "rooted_tree" / "OG0001_root.nwk"
+    summary = logical_root / "stat_branch" / "OG0001_stat.branch.tsv"
+    plot = logical_root / "tree_plot" / "OG0001_tree_plot.pdf"
+    frozen_manifest = logical_root / "artifact_provenance" / "OG0001.tree_root.json"
+    summary_manifest = logical_root / "artifact_provenance" / "OG0001.summary_statistics.json"
+    plot_manifest = logical_root / "artifact_provenance" / "OG0001.tree_plot.json"
+    source.parent.mkdir(parents=True)
+    summary.parent.mkdir(parents=True)
+    source.write_text("(A,B);\n", encoding="utf-8")
+    summary.write_text("branch_id\n0\n", encoding="utf-8")
+    frozen_args = contract_args(workspace, frozen_manifest, source, summary)
+    summary_args = contract_args(workspace, summary_manifest, source, summary)
+    assert run_cli("record", *frozen_args).returncode == 0
+    assert run_cli("record", *summary_args).returncode == 0
+
+    def stage_script(summary_parameter):
+        return f'''
+gg_support_dir="{GG_UTIL.parent}"
+gg_workspace_dir="{workspace}"
+gg_workspace_output_dir="{workspace / 'output'}"
+artifact_stale_policy=stop
+source "{GG_UTIL}"
+gg_skip_disabled_artifact_checks=1
+run_tree_root=0
+gg_artifact_prepare_stage root_needs_update run_tree_root \
+  --manifest "{frozen_manifest}" --step tree_root --family-id OG0001 \
+  --logical-root "{logical_root}" --workspace-root "{workspace}" \
+  --input "rooted_tree={source}" --output "stat_branch={summary}" --parameter mode=changed
+printf 'root=%s\\n' "$root_needs_update"
+gg_skip_disabled_artifact_checks=0
+run_summary=0
+if gg_artifact_prepare_stage summary_needs_update run_summary \
+  --manifest "{summary_manifest}" --step summary_statistics --family-id OG0001 \
+  --logical-root "{logical_root}" --workspace-root "{workspace}" \
+  --input "rooted_tree={source}" --output "stat_branch={summary}" --parameter mode={summary_parameter}; then
+  summary_status=0
+else
+  summary_status=$?
+fi
+printf 'summary_status=%s summary_needs=%s\\n' "$summary_status" "$summary_needs_update"
+if [[ $summary_status -eq 0 ]]; then
+  run_tree_plot=1
+  gg_artifact_prepare_stage plot_needs_update run_tree_plot \
+    --manifest "{plot_manifest}" --step tree_plot --family-id OG0001 \
+    --logical-root "{logical_root}" --workspace-root "{workspace}" \
+    --input "stat_branch={summary}" --output "tree_plot={plot}"
+  printf 'plot=%s\\n' "$plot_needs_update"
+fi
+'''
+
+    valid = subprocess.run([shutil.which("bash"), "-c", stage_script("a")], text=True, capture_output=True)
+    assert valid.returncode == 0, valid.stderr
+    assert "root=0" in valid.stdout
+    assert "summary_status=0 summary_needs=0" in valid.stdout
+    assert "plot=1" in valid.stdout
+    stale = subprocess.run([shutil.which("bash"), "-c", stage_script("changed")], text=True, capture_output=True)
+    assert stale.returncode == 0, stale.stderr
+    assert "root=0" in stale.stdout
+    assert "summary_status=3" in stale.stdout
+    assert "plot=" not in stale.stdout
+    assert not plot.exists()
+
 def test_gene_family_store_input_is_content_based_and_storage_layout_independent(tmp_path):
     workspace = tmp_path / "workspace"
     logical_root = workspace / "output" / "orthogroup"

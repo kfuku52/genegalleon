@@ -167,6 +167,15 @@ completion-state tracking use the historical
 Starting a rerun immediately invalidates the previous completion state until
 that rerun succeeds.
 
+To generate a missing tree-plot PDF from an existing orthogroup analysis, set
+`gene_evolution_plot_only=1` and `run_tree_plot=1` on the gene-evolution
+entrypoint. This mode freezes all earlier stages, checks the summary-table
+provenance with the strict `stop` policy, and then audits or renders the PDF.
+It requires orthogroup mode and debug mode off. A missing or stale summary is
+an error; regenerate that summary through the normal workflow before plotting.
+The plot stage still honors `artifact_stale_policy`, so a deliberate `rebuild`
+can replace a stale PDF without rerunning the earlier scientific analyses.
+
 Storage conversion and controlled failed-run cleanup may archive an incomplete
 family without marking it complete. Before a rerun starts, GeneGalleon
 materializes only that family's archived artifacts at their historical paths,

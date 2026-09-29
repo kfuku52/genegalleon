@@ -148,6 +148,7 @@ run_tree_pruning=0 # If 1, discard genes without expression data.
 
 # Workflow control flags
 check_pruned=0 # Delete downstream outputs if inconsistent to run_tree_pruning.
+gene_evolution_plot_only=0 # Render from verified existing summary tables without rerunning upstream stages.
 
 # dN/dS workflow flags
 run_mapdnds_parameter_estimation=0 # Parameter estimation for mapdNdS.

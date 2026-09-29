@@ -1232,6 +1232,32 @@ rsc_categorical_origin_diagnostics=$(printf '%s' "${rsc_categorical_origin_diagn
 rsc_origin_leave_one_out=$(printf '%s' "${rsc_origin_leave_one_out}" | tr '[:upper:]' '[:lower:]')
 rsc_allow_large_dense=$(printf '%s' "${rsc_allow_large_dense}" | tr '[:upper:]' '[:lower:]')
 apply_gene_evolution_profile
+gene_evolution_plot_only=${gene_evolution_plot_only:-0}
+case "${gene_evolution_plot_only}" in
+  0) ;;
+  1)
+    if [[ "${mode_gene_evolution}" != "orthogroup" || ${gg_debug_mode:-0} -ne 0 || ${run_tree_plot} -ne 1 ]]; then
+      echo "gene_evolution_plot_only=1 requires orthogroup mode, run_tree_plot=1 and debug mode off." >&2
+      exit 1
+    fi
+    if ! declare -F gg_print_entrypoint_config_vars >/dev/null 2>&1; then
+      echo "The registered gene-evolution stage flags are unavailable." >&2
+      exit 1
+    fi
+    while IFS= read -r gene_plot_only_flag; do
+      if [[ ${gene_plot_only_flag} == run_* && ${gene_plot_only_flag} != run_tree_plot ]]; then
+        printf -v "${gene_plot_only_flag}" '%s' 0
+      fi
+    done < <(gg_print_entrypoint_config_vars gg_gene_evolution_entrypoint.sh)
+    unset gene_plot_only_flag
+    gg_skip_disabled_artifact_checks=1
+    echo "gene_evolution_plot_only=1: retaining existing upstream outputs for verified summary and tree plotting."
+    ;;
+  *)
+    echo "Invalid gene_evolution_plot_only=${gene_evolution_plot_only}; expected 0 or 1." >&2
+    exit 1
+    ;;
+esac
 pgls_run_rsc=0
 if [[ "${pgls_methods}" == "all" ]]; then
   pgls_methods="rsc,species-nwkit"
@@ -6210,7 +6236,7 @@ summary_input_files=(
   "${file_og_synteny}"
 )
 task="Synteny neighborhood grouping"
-if [[ ${treevis_synteny} -eq 1 || ${treevis_synteny_similarity} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
+if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${treevis_synteny_similarity} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
   synteny_source_dir="${dir_sp_cds}"
   synteny_sequence_mode="cds"
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
@@ -6294,6 +6320,11 @@ else
   gg_step_skip "${task}"
 fi
 task="summary statistics"
+if [[ ${gene_evolution_plot_only} -eq 1 ]]; then
+  gg_skip_disabled_artifact_checks=0
+  gene_plot_only_stale_policy=${artifact_stale_policy:-stop}
+  artifact_stale_policy=stop
+fi
 summary_needs_update=0
 summary_outputs_changed=0
 summary_provenance_args=(
@@ -6419,6 +6450,9 @@ if [[ ${summary_needs_update} -eq 1 && ${run_summary} -ne 1 ]] && { [[ ${run_tre
   echo "Refusing to consume stale or unverified summary outputs: ${file_og_stat_branch}, ${file_og_stat_tree}" >&2
   echo "Set run_summary=1 so they can be regenerated from the declared inputs and parameters." >&2
   exit 1
+fi
+if [[ ${gene_evolution_plot_only} -eq 1 ]]; then
+  artifact_stale_policy=${gene_plot_only_stale_policy}
 fi
 
 task="Query marker annotation"
