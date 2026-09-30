@@ -51,6 +51,36 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_prese
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Alignment-derived MAPNH frequencies
+
+For sequences of at least 128 codons, IQ-TREE-to-MAPNH conversion counts repeated
+codons before accumulating the three nucleotide-position frequencies. Shorter
+sequences retain the original loop. RNA/case normalization, whole-codon rejection
+for ambiguity/gaps, incomplete terminal codons and leaf matching remain unchanged;
+this dispatch affects runtime only.
+
+Linux arm64 Docker, Python 3.12.14, base `46b00fc`, same immutable image, one
+warmup and three measured fresh processes: reading and computing F3X4 frequencies
+for a full 1,024-gene alignment and its two half-size subroots, with 512 codons
+per gene, took 0.469 to 0.169 s (2.77×). The fixture has biased nucleotide
+frequencies, all 64 valid codons, ambiguity/gaps, Unicode invalid bases,
+RNA/lowercase sequences, incomplete tails and normalized leaf labels. Frequencies,
+derived theta values and source bytes match. A 32-gene/32-codon control remained
+about 1.11 ms on both versions. Process peak RSS stayed about 143 MiB (137.7 MiB
+for the control), with no memory saving established. Timing includes three FASTA
+reads, matching and frequency calculation, excluding fixture construction,
+theta conversion and fingerprints; it does not measure IQ-TREE inference or
+the full MAPNH conversion.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_alignment_frequencies.py \
+  --output alignment-frequencies.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs. Add
+`--genes 32 --codons 32` for the short-sequence control.
+
 ## GFF transcript statistics
 
 Longest-transcript selection collects row positions and builds one result table,

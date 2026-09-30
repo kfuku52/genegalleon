@@ -4,6 +4,7 @@
 import argparse
 import math
 import re
+from collections import Counter
 
 import pandas
 from kftools import kfphylo, kfseq
@@ -122,12 +123,21 @@ def alignment_subset_nuc_freqs(alignment_file, model, leaf_names=None):
     for header in selected_headers:
         seq = all_sequences[header].upper().replace('U', 'T')
         usable_len = len(seq) - (len(seq) % 3)
-        for i in range(0, usable_len, 3):
-            codon = seq[i:(i + 3)]
-            if any(base not in VALID_NUCLEOTIDES for base in codon):
-                continue
-            for pos, base in enumerate(codon):
-                counts[pos][base] += 1.0
+        # Short sequences seldom repeat enough codons to offset aggregation.
+        if usable_len < 384:
+            for i in range(0, usable_len, 3):
+                codon = seq[i:(i + 3)]
+                if any(base not in VALID_NUCLEOTIDES for base in codon):
+                    continue
+                for pos, base in enumerate(codon):
+                    counts[pos][base] += 1.0
+        else:
+            codon_counts = Counter(seq[i:(i + 3)] for i in range(0, usable_len, 3))
+            for codon, count in codon_counts.items():
+                if any(base not in VALID_NUCLEOTIDES for base in codon):
+                    continue
+                for pos, base in enumerate(codon):
+                    counts[pos][base] += count
     return [normalize_nuc_counts(c) for c in counts]
 
 
