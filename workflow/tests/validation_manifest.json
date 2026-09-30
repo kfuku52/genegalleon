@@ -33,7 +33,8 @@
     "test_rsc_runtime_integration.py",
     "test_pgls_multiplicity.py",
     "test_fractionation_bias_integration.py",
-    "test_gbif_runtime_integration.py"
+    "test_gbif_runtime_integration.py",
+    "test_tree_plot_batch.py"
   ],
   "runtime_extra_python": [
     "workflow/tests/test_hgt_end_to_end.py",

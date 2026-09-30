@@ -712,43 +712,28 @@ run_gene_family_database_for_source() {
   if [[ "${gene_family_source}" == "query2family" ]]; then
     provenance_audit_args+=(--query-dir "${dir_query_gene}")
   fi
-  echo "Auditing gene-family artifact provenance before database generation: ${dir_gene_family}"
-  if ! gg_artifact_audit "${provenance_audit_args[@]}"; then
-    echo "Gene-family artifact provenance audit failed: ${provenance_report}" >&2
-    echo "Regenerate the reported changed or semantically inconsistent steps before rebuilding the database." >&2
-    return 1
-  fi
-  local required_subdir
-  local store_status
-  for required_subdir in stat_tree stat_branch; do
-    if python "${gg_support_dir}/gene_family_output_store.py" has-files \
-      --root "${dir_gene_family}" \
-      --subdir "${required_subdir}"
-    then
-      :
-    else
-      store_status=$?
-      if [[ ${store_status} -eq 1 ]]; then
-        echo "Skipping database prep because no live or ZIP-backed files were found in logical subdirectory: ${required_subdir}"
-        return 0
-      fi
-      return "${store_status}"
-    fi
-  done
-  echo "Generating gene-family database for gene_family_source=${gene_family_source}: ${file_gene_family_db}"
-  python "${gg_support_dir}/generate_orthogroup_database.py" \
-    --overwrite 1 \
-    --dbpath "${file_gene_family_db}" \
-    --dir_gene_family "${dir_gene_family}" \
-    --dir_stat_tree "${dir_gene_family}/stat_tree" \
-    --dir_stat_branch "${dir_gene_family}/stat_branch" \
-    --dir_csubst_cb_prefix "${dir_gene_family}/csubst_cb_" \
-    --dir_csubst_aa_change "${dir_gene_family}/csubst_scan" \
-    --dir_csubst_aa_change_unit "${dir_gene_family}/csubst_scan_units" \
-    --row_threshold 8000 \
-    --cutoff_stat "OCNany2spe,0.8" \
+  provenance_audit_args+=(--stale-policy "${artifact_stale_policy:-stop}")
+  local database_args=(
+    --overwrite 1
+    --dbpath "${file_gene_family_db}"
+    --dir_gene_family "${dir_gene_family}"
+    --dir_stat_tree "${dir_gene_family}/stat_tree"
+    --dir_stat_branch "${dir_gene_family}/stat_branch"
+    --dir_csubst_cb_prefix "${dir_gene_family}/csubst_cb_"
+    --dir_csubst_aa_change "${dir_gene_family}/csubst_scan"
+    --dir_csubst_aa_change_unit "${dir_gene_family}/csubst_scan_units"
+    --row_threshold 8000
+    --cutoff_stat "OCNany2spe,0.8"
     --ncpu "${GG_TASK_CPUS:-1}"
-  gg_artifact_record "${database_provenance_args[@]}"
+  )
+  local pipeline_args=()
+  local argument
+  for argument in "${provenance_audit_args[@]}"; do pipeline_args+=("--audit=${argument}"); done
+  for argument in "${database_args[@]}"; do pipeline_args+=("--database=${argument}"); done
+  for argument in "${database_provenance_args[@]}"; do pipeline_args+=("--record=${argument}"); done
+  echo "Auditing and generating gene-family database: ${file_gene_family_db}"
+  python "${gg_support_dir}/gene_family_database_pipeline.py" "${pipeline_args[@]}"
+
 }
 
 run_csubst_scan_aa_change_summary_for_source() {

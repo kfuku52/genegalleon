@@ -408,7 +408,8 @@ workloads exercise bounded input buffering, not the peak memory of the global
 BH-FDR calculation or a production workload of arbitrary size.
 
 For verification, store fingerprints, raw/ZIP database input and PDF comparisons,
-see [remaining I/O performance](remaining-io-performance.md). Its benchmark also
+see [remaining I/O performance](remaining-io-performance.md) and
+[batch I/O performance](batch-io-performance.md). Its benchmark also
 checks equivalent logical outputs and separates parent/child peak RSS.
 
 ## Dependency-aware debug harness

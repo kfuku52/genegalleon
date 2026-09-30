@@ -106,7 +106,7 @@ def _runtime_path(path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def digest_observation():
+def digest_observation(*, workers=1, progress=None):
     """Share content reads within one query, then rehash every unique source.
 
     Never reuse persistent digests as read-only verification evidence. Nested
@@ -122,7 +122,7 @@ def digest_observation():
     token = _DIGEST_OBSERVATION.set(memo)
     try:
         yield memo
-        without_digest_reuse(memo.validate)
+        without_digest_reuse(lambda: memo.validate(workers=workers, progress=progress))
     finally:
         _DIGEST_OBSERVATION.reset(token)
         configure_digest_cache(previous.database if previous is not None else None)
@@ -423,6 +423,10 @@ def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
 
 
 def _store_artifact_digest(store, artifact):
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is not None:
+        return audit_entry_digest({"scope": "logical", "path": artifact.logical_path},
+                                  store, store.root, store.root, memo)
     if not observing_files() and artifact.sha256 and artifact.size is not None:
         return artifact.sha256, artifact.size
     if artifact.live_path is not None and not observing_files():
@@ -438,8 +442,16 @@ def _gene_family_collection_digest(root, subdir=None):
     member_count = 0
     with store.read_snapshot():
         subdirs = [subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]
+        memo = _DIGEST_OBSERVATION.get()
+        if memo is not None:
+            memo.guard((str(store.root), "collection_subdirs", subdir), tuple(subdirs),
+                       lambda: tuple([subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]))
         for selected in subdirs:
-            for name in store.file_names(selected):
+            names = store.file_names(selected)
+            if memo is not None:
+                memo.guard((str(store.root), "collection_inventory", selected), tuple(names),
+                           lambda selected=selected: tuple(store.file_names(selected)))
+            for name in names:
                 artifact = store.source_artifact(selected, name)
                 if artifact is None:
                     raise FileNotFoundError(store.root / selected / name)
@@ -1546,7 +1558,7 @@ def _audit(args, memo, progress, workers):
     return _publish_audit(args, memo, progress, rows, inventory_digest)
 
 
-def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest):
+def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest, *, revalidate=True):
     logical_root = args.logical_root.absolute()
     workspace_root = args.workspace_root.absolute()
     query_matcher_list = None
@@ -1621,7 +1633,8 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
 
     progress.phase("source_revalidation")
     try:
-        memo.validate(workers=workers, progress=progress)
+        if revalidate:
+            memo.validate(workers=workers, progress=progress)
     except (OSError, ValueError) as exc:
         rows.append({"family_id": "-", "step": "snapshot_identity", "status": "audit_error",
                      "reason": str(exc), "manifest": ""})
@@ -1645,18 +1658,7 @@ def _publish_audit(args, memo, progress, rows, inventory_digest):
     finally:
         temporary.unlink(missing_ok=True)
 
-    nonfailure_statuses = {"current", "legacy_untracked"}
-    if args.stale_policy == "reuse":
-        nonfailure_statuses.update(
-            {
-                "changed_input",
-                "changed_output",
-                "changed_optional_output",
-                "missing_optional_output",
-                "unexpected_optional_output",
-            }
-        )
-    failures = [row for row in rows if row["status"] not in nonfailure_statuses]
+    failures = audit_failures(args, rows)
     print(f"Artifact provenance audit: checked={len(rows)}, failures={len(failures)}, report={args.output_tsv}")
     for row in failures[:20]:
         print(
@@ -1668,6 +1670,21 @@ def _publish_audit(args, memo, progress, rows, inventory_digest):
     progress.finish(status=status, rows=rows, report=args.output_tsv,
                     inventory_sha256=inventory_digest.hexdigest(), metrics=memo.metrics())
     return status
+
+
+def audit_failures(args, rows):
+    nonfailure_statuses = {"current", "legacy_untracked"}
+    if args.stale_policy == "reuse":
+        nonfailure_statuses.update(
+            {
+                "changed_input",
+                "changed_output",
+                "changed_optional_output",
+                "missing_optional_output",
+                "unexpected_optional_output",
+            }
+        )
+    return [row for row in rows if row["status"] not in nonfailure_statuses]
 
 
 def add_contract_arguments(parser: argparse.ArgumentParser) -> None:

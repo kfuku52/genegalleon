@@ -371,7 +371,7 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
     def source(stack):
         return file_path if store is None else stack.enter_context(store.open_binary(logical_subdir, logical_name))
 
-    with ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="gg-tsv-types-") as spool, ExitStack() as stack:
         input_file = source(stack)
         if chunksize is None:
             yield pd.read_csv(input_file, **options)
@@ -418,11 +418,29 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
                     dtypes[column] = pd.Series(["text"]).dtype
                 only_missing[column] = only_missing[column] and incoming_missing
 
+        # Keep the exact inferred frames in a private, bounded disk spool.
+        # Reuse only when every chunk has the final dtype. Promotion still
+        # reparses the original lexemes: casting 001 to text would lose zeros.
+        frame_count = 0
+        first_dtypes = first.dtypes.to_dict()
+        same_types = True
+        def save_frame(frame):
+            nonlocal frame_count, same_types
+            frame_count += 1
+            same_types = same_types and frame.dtypes.to_dict() == first_dtypes
+            frame.to_pickle(Path(spool) / str(frame_count), protocol=5)
+        save_frame(first)
+        save_frame(second)
         merge_types(second)
         del first, second
         for frame in reader:
+            save_frame(frame)
             merge_types(frame)
             del frame
+        if same_types and first_dtypes == dtypes:
+            for index in range(1, frame_count + 1):
+                yield pd.read_pickle(Path(spool) / str(index))
+            return
 
     with ExitStack() as stack:
         reader = stack.enter_context(pd.read_csv(source(stack), chunksize=chunksize, dtype=dtypes, **options))
@@ -625,7 +643,7 @@ def apply_cutoff(df, cutoff_stat):
     return df
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="Optimize performance for database population script.")
     parser.add_argument(
         "--overwrite", metavar="bool", default=0, type=int, choices=(0, 1), help="Atomically replace an existing database if 1; default 0 creates a new database."
@@ -684,7 +702,12 @@ def main():
     parser.add_argument(
         "--ncpu", dest="max_workers", metavar="INT", default=4, type=int, help="Number of worker threads."
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not args.dbpath:
         parser.error("--dbpath must not be empty")
     destination = Path(args.dbpath).absolute()
