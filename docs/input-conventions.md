@@ -248,6 +248,10 @@ annotation values. It renames only the identifier header; condition names are
 preserved. BUSCO entries without a sequence ID are omitted, and missing BUSCO
 metadata is serialized as `nan` in aggregated annotations.
 
+Family expression matrices also read the first column as literal gene IDs,
+preserving leading zeros and IDs such as `NA`, `NULL`, and `nan`. Numeric trait
+columns retain their normal type inference and missing-value handling.
+
 Minimal example:
 
 ```tsv
