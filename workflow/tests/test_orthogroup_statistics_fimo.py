@@ -319,6 +319,44 @@ def test_load_asr_intron_branch_table_rejects_mismatched_or_invalid_results(tmp_
         mod.load_asr_intron_branch_table(str(table), str(tree))
 
 
+def test_asr_node_validation_retains_input_row_error_precedence(tmp_path):
+    mod = load_module()
+    tree = tmp_path / 'dated.nwk'
+    tree.write_text('((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;')
+    table = tmp_path / 'asr.tsv'
+    write_asr_fixture(table)
+    frame = pandas.read_csv(table, sep='\t', dtype=str, keep_default_na=False)
+    frame.loc[0, 'parent'] = '-1'
+    frame.loc[1, 'name'] = 'incorrect'
+    frame.loc[0, 'p_intron_present'] = '2'
+    frame['additional_text'] = 'NA'
+    frame.to_csv(table, sep='\t', index=False)
+    with pytest.raises(ValueError) as error:
+        mod.load_asr_intron_branch_table(str(table), str(tree))
+    assert str(error.value) == 'Intron ASR node 6 does not match the dated tree.'
+
+
+def test_asr_loading_retains_inferred_csv_index_and_parent_alignment(tmp_path):
+    mod = load_module()
+    tree = tmp_path / 'dated.nwk'
+    tree.write_text('((A:1,B:1)n11:1,(C:1,D:1)n12:1)n99;')
+    table = tmp_path / 'asr.tsv'
+    write_asr_fixture(table)
+    expected = mod.load_asr_intron_branch_table(str(table), str(tree))
+    lines = table.read_text().splitlines()
+    indices = [101 + 3 * i for i in range(len(lines) - 1)]
+    table.write_text(lines[0] + '\n' + '\n'.join(
+        f'{index}\t{line}' for index, line in zip(indices, lines[1:], strict=True)) + '\n')
+    result = mod.load_asr_intron_branch_table(str(table), str(tree))
+    assert result.index.tolist() == indices
+    pandas.testing.assert_frame_equal(result.reset_index(drop=True), expected)
+    # Duplicate inferred index labels must retain the rejection from parent
+    # lookup, rather than silently admitting the ambiguous table.
+    table.write_text(lines[0] + '\n' + '\n'.join('same\t' + line for line in lines[1:]) + '\n')
+    with pytest.raises(ValueError, match='truth value of a Series is ambiguous'):
+        mod.load_asr_intron_branch_table(str(table), str(tree))
+
+
 def test_flatten_trait_variable_stats_builds_tree_info_keys():
     mod = load_module()
     df = mod.pandas.DataFrame(

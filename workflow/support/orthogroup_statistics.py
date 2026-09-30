@@ -828,12 +828,13 @@ def load_asr_intron_branch_table(asr_intron_path, dated_tree_path):
         raise ValueError("Intron ASR branch IDs do not match the dated tree.")
     df["branch_id"] = ids.astype(int)
     parents = pandas.to_numeric(df.parent, errors="raise")
-    for index, row in df.iterrows():
-        node = nodes[row.branch_id]
+    node_rows = df[["branch_id", "name", "node_class"]].itertuples(index=True, name=None)
+    for index, branch_id, name, recorded_class in node_rows:
+        node = nodes[branch_id]
         node_class = "root" if node_is_root(node) else "leaf" if node_is_leaf(node) else "intnode"
         parent = -1 if node_is_root(node) else native_ids[node.up]
-        if row["name"] != (node.name or "") or row.node_class != node_class or parents[index] != parent:
-            raise ValueError(f"Intron ASR node {row.branch_id} does not match the dated tree.")
+        if name != (node.name or "") or recorded_class != node_class or parents[index] != parent:
+            raise ValueError(f"Intron ASR node {branch_id} does not match the dated tree.")
     probabilities = df[["p_intron_present", "p_intron_absent"]].apply(pandas.to_numeric, errors="raise")
     if (
         not numpy.isfinite(probabilities.to_numpy()).all()

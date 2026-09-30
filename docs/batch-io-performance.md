@@ -86,6 +86,33 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_cds_e
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Intron-ASR result validation
+
+Native node-name/class/parent validation iterates compact tuples of the needed
+columns instead of creating a pandas Series per node. Input row order and parent
+index lookup remain unchanged, including inferred CSV indexes and rejection of
+ambiguous duplicate indexes. Native-ID to clade-rank translation, probability,
+observed-count and imputation checks, output columns/types and error precedence
+are retained.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `3a4be10`, same immutable
+image, one warmup and three measured fresh processes: a 2,048-tip balanced tree
+and 4,095 native rows in reverse order, with missing leaf observations, internal
+probabilities, literal identifier values and additional columns. Complete table
+read, tree parse, validation and ID translation took 0.0821 to 0.0293 s (2.80×).
+Every output value, column type, row/index order and source byte matches. Median
+process peak RSS stayed about 151.5 MiB. Timing excludes fixture construction,
+imports and fingerprints; this does not measure ancestral-state inference or
+the full branch-statistics stage.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_asr_intron_loading.py \
+  --output asr-intron-loading.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Wide-header validation
 
 Database and scan-schema preflight count each column name once, preserving
