@@ -549,7 +549,13 @@ def annotate_candidate_input_state(candidates, input_states):
     input_signatures = []
     analysis_keys = []
     cache_names = []
-    for _, row in annotated.iterrows():
+    columns = ["orthogroup", "_analysis_key", "_candidate_id"]
+    rows = (row for _, row in annotated.iterrows())
+    if (annotated.columns.is_unique and all(column in annotated for column in columns)
+            and all(type(value) is str for column in columns for value in annotated[column])):
+        rows = (dict(zip(columns, values, strict=True))
+                for values in annotated[columns].itertuples(index=False, name=None))
+    for row in rows:
         state = input_states[str(row["orthogroup"])]
         missing_text = ";".join(state["missing_required_inputs"])
         input_signature = state["required_input_signature"]

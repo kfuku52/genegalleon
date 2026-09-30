@@ -81,6 +81,38 @@ Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs. Add
 `--genes 32 --codons 32` for the short-sequence control.
 
+## CSUBST candidate input-state annotation
+
+Candidate input-state annotation reads compact tuples of its three needed
+identifier columns, retaining the existing row behavior for non-string IDs or
+ambiguous columns. Input signatures, missing-input text, analysis-key hashes and
+cache names remain exact; verification and cache-completion rules are unchanged.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `545bcf0`, same immutable
+image, one warmup and three measured fresh processes: 8,192 candidate rows across
+256 families, 32 additional probability columns, 1,184 candidates with missing
+inputs and nondefault source-row indexes:
+
+| Input-state annotation | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| 8,192 candidates | 0.101 s | 0.0160 s | 6.32× |
+| 32 candidates / 32 families | 0.936 ms | 0.928 ms | No material gain |
+
+Every output value, type, column and index/order matches; the input table remains
+unchanged. Large-case peak RSS stayed about 139 MiB, without an established memory
+saving. Timing includes copying and annotation but excludes fixture construction
+and fingerprinting; peak RSS includes both. This does not measure input discovery,
+artifact hashing, scientific scans, candidate-ID assignment or site analysis.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_candidate_input_state.py \
+  --output candidate-input-state.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs. Add
+`--candidates 32 --families 32` for the small control.
+
 ## GFF transcript statistics
 
 Longest-transcript selection collects row positions and builds one result table,
