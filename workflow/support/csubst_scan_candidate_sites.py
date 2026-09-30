@@ -391,7 +391,8 @@ def assign_candidate_ids(frame, csubst_nonsyn_recode, pdb):
     if (frame.columns.is_unique and not isinstance(frame.columns, pd.MultiIndex)
             and "orthogroup" in frame and all(type(value) is str for value in frame["orthogroup"])):
         # String IDs keep iterrows' mixed object values without constructing a Series.
-        rows = (dict(zip(frame.columns, values, strict=True)) for values in frame.values)
+        columns = tuple(frame.columns)
+        rows = (dict(zip(columns, values, strict=True)) for values in frame.values)
     for row in rows:
         identity = candidate_identity(row)
         identity_text = json.dumps(identity, sort_keys=True, separators=(",", ":"))

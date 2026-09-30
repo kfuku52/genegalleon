@@ -110,6 +110,13 @@ Other inputs retain the original row coercion and error order. Compared with
 | 8,192 candidates / 256 families | 0.278 s | 0.143 s | 1.94× |
 | 32 candidates / 32 families | 1.79 ms | 1.24 ms | 1.44× |
 
+Reusing the immutable column-name tuple once per assignment further avoids
+repeated pandas string-array iteration. A separate comparison with `13c590c`,
+using the same fixture and sampling, reduced 8,192-candidate assignment from
+0.148 s to 0.0940 s (1.57×); the 32-candidate control changed from 1.20 ms to
+1.02 ms (1.17×). Complete IDs, keys, cache names and tables remained identical;
+process peak RSS stayed about 144 MiB for the large case.
+
 Every output value, type, column and index/order matches; the input table remains
 unchanged. Large-case peak RSS stayed about 139 MiB, without an established memory
 saving (about 143–144 MiB with ID assignment). Timing includes copying and
