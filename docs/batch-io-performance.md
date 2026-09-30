@@ -54,6 +54,23 @@ casts remain unchanged. Complete selection → structure → summary time fell f
 Selected/annotated/final table fingerprints and warnings match. Median process
 peak RSS was 98.9 to 99.3 MiB, with no material memory saving established.
 
+Gene-local phase validation also avoids casts for exact Python string values
+and columns already using the native integer dtype. Other types retain the
+original pandas conversion, and each gene is validated before advancing to the
+next. A further comparison (base `b3272f5`, same image/runtime/repetitions) gives:
+
+| Complete in-memory GFF workload | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| 2,000 genes, 3 exons each | 0.425 s | 0.321 s | 1.32× |
+| 64 genes, 128 exons each | 0.118 s | 0.121 s | 0.97× |
+
+Structure-validation medians were 0.327 to 0.226 s for the first case and about
+0.0376 s on both versions for the second; no speedup is established for the
+many-exon control. All intermediate/final tables, types/order and warnings match.
+Process peak RSS remained about 99.1 / 96.9 MiB for the two workloads.
+Add `--genes 64 --exons 128` to the command below to reproduce the control;
+the existing three-exon default is unchanged.
+
 ```bash
 bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_gff_summary.py \
   --output /tmp/gff-summary.json

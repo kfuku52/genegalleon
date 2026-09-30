@@ -682,6 +682,15 @@ def select_longest_transcripts(gff):
 
 
 
+def _phase_column_values(column, dtype):
+    """Avoid a Series cast only when its values already have the target type."""
+    if dtype is str and all(type(value) is str for value in column):
+        return column
+    if dtype is int and column.dtype == numpy.dtype(int):
+        return column
+    return column.astype(dtype)
+
+
 def attach_transcript_structure(selected_cds, gff, phase_policy="strict", structure_policy="strict"):
     """Attach only explicit UTRs from the exact transcript selected for CDS."""
     selected_cds = selected_cds.copy()
@@ -741,8 +750,9 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
         # Recasting and scanning all CDS rows for each block is unnecessary.
         phases_by_block = {}
         for sequence, strand, start, end, phase in zip(
-                cds["sequence"].astype(str), cds["strand"].astype(str),
-                cds["start"].astype(int), cds["end"].astype(int), cds["phase"], strict=True):
+                _phase_column_values(cds["sequence"], str), _phase_column_values(cds["strand"], str),
+                _phase_column_values(cds["start"], int), _phase_column_values(cds["end"], int),
+                cds["phase"], strict=True):
             phases_by_block.setdefault((sequence, strand, start, end), []).append(phase)
         for block in cds_blocks:
             for value in phases_by_block.get(block, []):

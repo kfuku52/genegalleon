@@ -97,6 +97,36 @@ def test_transcript_blocks_keeps_missing_and_duplicate_coordinate_column_errors(
         transcript_blocks(duplicate, 'g')
 
 
+@pytest.mark.parametrize('coordinate_dtype', ['int64', 'int32', 'Int64', 'Float64', 'object', 'UInt64'])
+@pytest.mark.parametrize('numeric_sequence', [False, True])
+def test_phase_validation_preserves_non_native_coordinate_and_name_types(coordinate_dtype, numeric_sequence):
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({'gene_id': ['g'] * 2, 'selected_transcript': ['t'] * 2,
+                             'sequence': [123 if numeric_sequence else 'chr1'] * 2,
+                             'strand': ['+'] * 2, 'feature': ['CDS'] * 2,
+                             'start': pandas.Series(['1', '201'], dtype=coordinate_dtype),
+                             'end': pandas.Series(['90', '290'], dtype=coordinate_dtype),
+                             'phase': ['0', '0'], 'attributes': ['Parent=t'] * 2})
+    original = frame.copy(deep=True)
+    result = attach_transcript_structure(frame, frame)
+    assert result.phase_status.tolist() == ['consistent', 'consistent']
+    assert result.cds_first_phase.tolist() == [0, 0]
+    pandas.testing.assert_frame_equal(frame, original)
+    pandas.testing.assert_frame_equal(result[original.columns], original)
+
+
+def test_phase_validation_keeps_gene_local_error_order():
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({'gene_id': ['first', 'second'], 'selected_transcript': ['t1', 't2'],
+                             'sequence': ['chr1'] * 2, 'strand': ['+'] * 2, 'feature': ['CDS'] * 2,
+                             'start': [1, 'invalid-coordinate'], 'end': [90, 290],
+                             'phase': ['invalid-phase', '0'], 'attributes': ['Parent=t1', 'Parent=t2']})
+    with pytest.raises(ValueError, match='Invalid CDS phase for first: invalid-phase'):
+        attach_transcript_structure(frame, frame)
+
+
 @pytest.mark.parametrize('phase', ['1', 'invalid'])
 def test_duplicate_cds_coordinates_retain_every_phase_record(phase):
     from workflow.support.gff2genestat import attach_transcript_structure
