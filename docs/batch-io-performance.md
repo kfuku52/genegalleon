@@ -132,6 +132,38 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_gff_s
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## CDS coordinate-compatibility reporting
+
+Sequence/coordinate compatibility reporting updates scalar cells directly,
+retaining collection/MultiIndex selection behavior. Exact length and terminal-N
+checks, mismatch reasons, cleared coordinates/structure fields, value types,
+gene order and partial updates before a later error remain unchanged.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `efebae1`, same immutable
+image, one warmup and three measured fresh processes:
+
+| Complete compatibility reporting | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| 4,096 genes, 2,925 compatible / 1,171 mismatched | 1.056 s | 0.233 s | 4.53× |
+| 4,096 genes, all compatible | 0.246 s | 0.0758 s | 3.25× |
+| 32 genes, mixed lengths | 10.4 ms | 3.27 ms | 3.18× |
+
+Complete tables, columns/types, indexes/order and input sequence records match.
+Process peak RSS stayed about 90 MiB (86 MiB for the small control), with no
+material memory saving established. Timing excludes fixture construction and
+fingerprinting; peak RSS includes both. This does not measure GFF parsing,
+transcript selection, sequence resolution or the entire annotation stage.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_structure_compatibility.py \
+  --output structure-compatibility.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs. Add
+`--scenario compatible` for the all-compatible case or `--genes 32` for the
+small mixed-length control.
+
 ## CDS validation and source selection
 
 CDS admission checks ambiguous bases once over the exact existing internal

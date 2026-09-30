@@ -630,6 +630,83 @@ def test_cds_length_validation_rejects_wrong_transcript_and_preserves_missing():
         validate_cds_lengths(traits,[('a','a','MKE')])
 
 
+@pytest.mark.parametrize('nullable', [False, True])
+@pytest.mark.parametrize('index_kind', ['integer', 'string', 'multiindex'])
+def test_structure_reporting_keeps_types_and_clears_exact_mismatch_fields(nullable, index_kind):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    numeric = {'feature_size': [6] * 8, 'num_intron': [1] * 8, 'cds_first_phase': [0] * 8,
+               'start': [1] * 8, 'end': [9] * 8}
+    text = {'intron_positions': '3', 'feature_blocks': '1-3;7-9', 'utr_blocks': '10-12',
+            'chromosome': 'chr1', 'strand': '+', 'feature_block_sequences': 'chr1;chr1',
+            'feature_block_strands': '+;+', 'transcript_junction_positions': ''}
+    traits = pandas.DataFrame({key: pandas.array(values, dtype='Int64' if nullable else 'int64')
+                               for key, values in numeric.items()})
+    for column, value in text.items():
+        traits[column] = value
+    traits['gene_id'] = list('abcdefgh')
+    traits['structure_status'] = 'unchecked'
+    traits['gff_transcript_id'] = [f'tx{i}' for i in range(8)]
+    traits['metadata'] = pandas.Categorical(['keep'] * 8)
+    if index_kind == 'integer':
+        traits.index = pandas.Index([i * 3 + 7 for i in range(8)], name='source')
+    elif index_kind == 'string':
+        traits.index = pandas.Index([f'row{i}' for i in range(8)], name='source')
+    else:
+        traits.index = pandas.MultiIndex.from_tuples([('chr1', i) for i in range(8)], names=['contig', 'source'])
+    expected = traits.copy(deep=True)
+    for column, values in numeric.items():
+        expected[column] = pandas.array(values[:3] + [pandas.NA if nullable else float('nan')] * 5,
+                                        dtype='Int64' if nullable else 'float64')
+    for column, value in text.items():
+        expected[column] = pandas.array([value] * 3 + [''] * 5, dtype=traits[column].dtype)
+    expected['structure_status'] = pandas.array(['length_compatible'] * 3 + ['cds_length_mismatch'] * 5,
+                                               dtype=traits.structure_status.dtype)
+    sequences = ['ATGAAA', 'ATGAAAN', 'ATGAAAnn', 'ATGAAANNN', 'ATGAAAA', 'ATGAA', 'ATGAAATT', '']
+    records = [(gene, gene, sequence) for gene, sequence in zip('abcdefgh', sequences, strict=True)]
+    original_records = list(records)
+    mark_incompatible_structures(traits, records)
+    pandas.testing.assert_frame_equal(traits, expected)
+    assert records == original_records
+
+
+@pytest.mark.parametrize('selector,selected', [('a', ['a']), (['a', 'c'], ['a', 'c']),
+                                              ([True, False, True], ['a', 'c'])])
+def test_disable_structure_keeps_scalar_and_collection_selectors(selector, selected):
+    from workflow.support.gff2genestat import disable_structure
+
+    frame = pandas.DataFrame({'feature_size': [6, 6, 6], 'chromosome': [1.0, 2.0, 3.0],
+                              'structure_status': [float('nan')] * 3, 'untouched': [4, 5, 6]}, index=['a', 'b', 'c'])
+    disable_structure(frame, selector, 'unsupported')
+    assert frame.loc[selected, 'feature_size'].isna().all()
+    assert frame.loc[selected, 'chromosome'].tolist() == [''] * len(selected)
+    assert frame.loc[selected, 'structure_status'].tolist() == ['unsupported'] * len(selected)
+    remaining = frame.index.difference(selected)
+    assert frame.loc[remaining, 'feature_size'].eq(6).all()
+    assert frame.untouched.tolist() == [4, 5, 6]
+    assert str(frame.structure_status.dtype) == str(frame.chromosome.dtype) == 'object'
+
+
+def test_disable_structure_preserves_duplicate_index_updates():
+    from workflow.support.gff2genestat import disable_structure
+
+    frame = pandas.DataFrame({'feature_size': [6, 9, 12], 'chromosome': ['chr1'] * 3}, index=['a', 'a', 'b'])
+    disable_structure(frame, 'a', 'unsupported')
+    assert frame.feature_size.iloc[:2].isna().all()
+    assert frame.chromosome.tolist() == ['', '', 'chr1']
+    assert frame.feature_size.iloc[2] == 12
+
+
+def test_structure_reporting_keeps_prior_updates_before_later_length_error():
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    frame = pandas.DataFrame({'gene_id': ['a', 'b'], 'feature_size': [6.0, float('nan')],
+                              'structure_status': ['unchecked', 'unchecked']}, index=[4, 7])
+    with pytest.raises(ValueError):
+        mark_incompatible_structures(frame, [('a', 'a', 'ATGAAA'), ('b', 'b', 'ATGAAA')])
+    assert frame.structure_status.tolist() == ['length_compatible', 'unchecked']
+
+
 @pytest.mark.parametrize('strand,attributes,expected', [
     ('+', 'partial=true;start_range=.,10', '5prime'),
     ('+', 'partial=true;end_range=20,.', '3prime'),

@@ -1072,24 +1072,26 @@ def mark_incompatible_structures(traits, records):
         tail = sequence[size:]
         compatible = len(sequence) == size or (0 < len(tail) <= 2 and set(tail.upper()) <= {"N"})
         if compatible:
-            traits.loc[index, "structure_status"] = "length_compatible"
+            indexer = traits.at if pandas.api.types.is_scalar(index) else traits.loc
+            indexer[index, "structure_status"] = "length_compatible"
             continue
         disable_structure(traits, index, "cds_length_mismatch")
 
 
 def disable_structure(traits, index, reason):
+    indexer = traits.at if (pandas.api.types.is_scalar(index) and pandas.api.types.is_scalar(reason)) else traits.loc
     if "structure_status" not in traits or pandas.api.types.is_numeric_dtype(traits["structure_status"]):
         traits["structure_status"] = traits.get("structure_status", pandas.Series(index=traits.index, dtype=object)).astype(object)
-    traits.loc[index, "structure_status"] = reason
+    indexer[index, "structure_status"] = reason
     for column in ("feature_size", "num_intron", "cds_first_phase", "start", "end"):
         if column in traits:
-            traits.loc[index, column] = numpy.nan
+            indexer[index, column] = numpy.nan
     for column in ("intron_positions", "feature_blocks", "utr_blocks", "chromosome", "strand",
                    "feature_block_sequences", "feature_block_strands", "transcript_junction_positions"):
         if column in traits:
             if pandas.api.types.is_numeric_dtype(traits[column]):
                 traits[column] = traits[column].astype(object)
-            traits.loc[index, column] = ""
+            indexer[index, column] = ""
 
 
 def apply_cds_resolution(traits, records, directory):
