@@ -223,10 +223,11 @@ MAKKIK...
 
 When using gene IDs rather than FASTA, keep the identifiers consistent with
 the headers in `workspace/input/species_cds`.
-Query-marker BLAST accessions (`qacc` and `sacc`) retain literal text, including
-leading zeros and NA-like IDs. Empty accessions are excluded from marker
-selection; numeric and annotation columns retain their normal missing-value
-handling.
+BLAST coverage and query-marker accessions (`qacc` and `sacc`) retain literal
+text, including leading zeros and NA-like IDs. DIAMOND annotation also preserves
+literal query/subject identifiers (`qseqid` and `sseqid`). Empty accessions remain
+missing and are excluded from marker selection; numeric and annotation columns
+retain their normal missing-value handling.
 
 ### `workspace/input/species_expression`
 
