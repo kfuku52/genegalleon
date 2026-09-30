@@ -89,7 +89,11 @@ def summarize_gene_tree(task, species_names=None, species_set=None, species_suff
         candidate_species = extract_species_label(gene_name)
         if candidate_species in species_set:
             matched_species = candidate_species
-            gene_id = strip_species_label(gene_name)
+            if type(gene_name) is str:
+                prefix = candidate_species + "_"
+                gene_id = gene_name[len(prefix):] if candidate_species and gene_name.startswith(prefix) else gene_name
+            else:
+                gene_id = strip_species_label(gene_name)
         if matched_species is None:
             for suffix, species_name in species_suffixes:
                 if gene_name.endswith(suffix):

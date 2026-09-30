@@ -605,6 +605,11 @@ the modern fixture and 147 MiB for the legacy fixture on both versions; no
 memory reduction is claimed, and this is not summed process-tree memory.
 A 32-tree/four-species fixture took 0.556 to 0.532 s, dominated by startup;
 no reliable speedup is claimed for that small case.
+Reusing the already extracted species label instead of extracting it again
+when removing the gene prefix gives a further 1.12× on the modern fixture:
+1.332 to 1.185 s against baseline `788aaf7`, with the same complete output
+fingerprints and near 154 MiB largest-child RSS. Qualified labels, normalized
+hybrid names and legacy suffix matching retain their original behavior.
 Timing includes CLI startup, tree parsing, file reads, merges and writing the
 summary; fixture creation and fingerprints are excluded. It does not measure
 GRAMPA reconciliation or the full HGT workflow.
