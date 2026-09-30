@@ -258,8 +258,22 @@ with reversed child order, explicit support and deterministic branch IDs:
 
 Every mapped branch value and diagnostic matches, and input trees are unchanged.
 Median process peak RSS stayed about 148.5 MiB (balanced) / 167.7 MiB (comb).
-Deep trees still require quadratic descendant-set storage; that cost is not
-removed. Timing includes both trees' validation, split construction, support
+
+A further pass (base `70b0185`, same workloads/runtime/repetitions) uses integer
+bit masks over one sorted, operation-local tip catalog. It avoids descendant
+name sets and sorted tuple keys during normal mapping. Equal-size complements
+still select the lexicographically smaller side; errors decode the original
+tuple previews, and the existing tuple-key helper APIs remain available.
+All mapped values, diagnostics and input trees again match:
+
+| Complete mapping workload | Before median | After median | Ratio | Process peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Balanced tree, 2,048 tips | 0.0145 s | 0.0103 s | 1.41× | 148.4 → 147.8 MiB |
+| Comb tree, 1,024 tips | 0.0668 s | 0.00497 s | 13.4× | 167.7 → 145.3 MiB |
+
+The comb workload uses 13.4% less total process peak memory. Masks still have
+quadratic worst-case bit storage in tree size; this is a compact representation,
+not a linear-memory guarantee. Timing includes both trees' validation, split construction, support
 checks and final mapping; it excludes fixture construction/import, fingerprints,
 tree inference, support estimation and the rest of branch-statistics generation.
 

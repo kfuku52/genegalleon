@@ -247,6 +247,77 @@ def test_reports_all_one_hundred_without_rejecting_a_valid_distribution():
     assert diagnostics["all_support_100"] is True
 
 
+@pytest.mark.parametrize('newick', [
+    '(NA,None);',
+    '(a,b,c);',
+    '((ä,NA),(None,a));',
+    '(((a,b),c),(d,e,f));',
+    '((((a,b)),(c,d)),(e,f));',
+    '(a,(b,(c,(d,(e,(f,(g,h)))))));',
+])
+def test_full_support_mapping_matches_existing_split_keys_and_branch_order(newick):
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree(newick, format=1))
+    support = module.new_tree(newick, format=1)
+    for node in support.traverse():
+        if not module.node_is_leaf(node):
+            node.support = 75.0
+    _tips, legacy_nodes = module._internal_split_nodes(rooted)
+    expected = {node.props['branch_id']: 75.0
+                for nodes in legacy_nodes.values() for node in nodes}
+    mapped, diagnostics = module.map_internal_support_by_split(rooted, support, require_support=True)
+    assert list(mapped.items()) == list(expected.items())
+    assert diagnostics['internal_split_count'] == len(legacy_nodes)
+    assert diagnostics['supported_split_count'] == len(legacy_nodes)
+
+
+def test_topology_error_preserves_lexicographic_tuple_preview():
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('(((a,b),(c,d)),(e,f));', format=1))
+    support = module.new_unrooted_tree('((a,c)80,(b,d)90,(e,f)95);')
+    with pytest.raises(ValueError) as error:
+        module.map_internal_support_by_split(rooted, support)
+    assert str(error.value) == (
+        "Support and rooted trees have incompatible unrooted topologies: "
+        "only_in_rooted=2, only_in_support=2; "
+        "rooted_preview=[('a', 'b'), ('c', 'd')], "
+        "support_preview=[('a', 'c'), ('b', 'd')]"
+    )
+
+
+def test_partial_support_error_preserves_sorted_missing_splits():
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('(((a,b),(c,d)),(e,f));', format=1))
+    support = module.new_unrooted_tree('((a,b),(c,d)50,(e,f));')
+    with pytest.raises(ValueError) as error:
+        module.map_internal_support_by_split(rooted, support)
+    assert str(error.value) == (
+        "Support tree labels only a subset of its internal splits: "
+        "supported=1, total=3, missing_preview=[('a', 'b'), ('e', 'f')]"
+    )
+
+
+@pytest.mark.parametrize('value', [-1.0, float('nan'), float('inf'), 100.1])
+def test_support_mapping_retains_support_range_checks(value):
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('((a,b),(c,d));', format=1))
+    support = module.new_tree('((a,b),(c,d));', format=1)
+    for child in support.children:
+        child.support = value
+    with pytest.raises(ValueError, match='invalid support value|exceeds the expected maximum'):
+        module.map_internal_support_by_split(rooted, support, support_max=100)
+
+
+def test_support_mapping_retains_duplicate_root_edge_consistency_check():
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('((a,b),(c,d));', format=1))
+    support = module.new_tree('((a,b),(c,d));', format=1)
+    support.children[0].support = 80
+    support.children[1].support = 90
+    with pytest.raises(ValueError, match='carry different support values: \\[80.0, 90.0\\]'):
+        module.map_internal_support_by_split(rooted, support)
+
+
 def test_observed_intron_counts_survive_without_asr_and_merge_without_suffixes(tmp_path):
     import pandas as pd
 

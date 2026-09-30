@@ -200,15 +200,21 @@ def clone_tree_for_species_mapping(tree):
     return clone
 
 
-def _tree_descendant_tip_sets(tree):
-    """Return descendant-tip sets and reject duplicate/empty leaf labels."""
-
+def _tree_tip_names(tree):
+    """Return the validated leaf labels without constructing descendant sets."""
     leaf_names = [str(leaf.name) if leaf.name is not None else "" for leaf in iter_leaves(tree)]
     if any(not name for name in leaf_names):
         raise ValueError("Tree contains an empty leaf label.")
     duplicate_names = sorted(name for name, count in Counter(leaf_names).items() if count > 1)
     if duplicate_names:
         raise ValueError(f"Tree contains duplicate leaf labels: {duplicate_names[:5]}")
+    return frozenset(leaf_names)
+
+
+def _tree_descendant_tip_sets(tree):
+    """Return descendant-tip sets and reject duplicate/empty leaf labels."""
+
+    all_tips = _tree_tip_names(tree)
 
     descendants = {}
     for node in tree.traverse(strategy="postorder"):
@@ -216,7 +222,7 @@ def _tree_descendant_tip_sets(tree):
             descendants[node] = frozenset([str(node.name)])
         else:
             descendants[node] = frozenset().union(*(descendants[child] for child in node.get_children()))
-    return frozenset(leaf_names), descendants
+    return all_tips, descendants
 
 
 def _canonical_internal_split(descendant_tips, all_tips):
@@ -251,6 +257,50 @@ def _internal_split_nodes(tree):
     return all_tips, nodes_by_split
 
 
+def _internal_split_masks(tree, tip_masks, full_mask):
+    """Index splits in one shared tip catalog, retaining traversal order."""
+
+    descendants = {}
+    for node in tree.traverse(strategy="postorder"):
+        if node_is_leaf(node):
+            descendants[node] = tip_masks[str(node.name)]
+        else:
+            mask = 0
+            for child in node.get_children():
+                mask |= descendants[child]
+            descendants[node] = mask
+
+    tip_count = len(tip_masks)
+    nodes_by_split = {}
+    for node in tree.traverse():
+        if node_is_root(node) or node_is_leaf(node):
+            continue
+        mask = descendants[node]
+        size = mask.bit_count()
+        if min(size, tip_count - size) < 2:
+            continue
+        # Equal-sized complements are disjoint; the side containing the
+        # lexicographically first tip has the smaller sorted tuple.
+        if 2 * size > tip_count or (2 * size == tip_count and not mask & 1):
+            mask = full_mask ^ mask
+        nodes_by_split.setdefault(mask, []).append(node)
+    return nodes_by_split
+
+
+def _split_mask_preview(masks, ordered_tips):
+    """Decode only diagnostics, preserving the existing sorted tuple previews."""
+
+    splits = []
+    for mask in masks:
+        names = []
+        while mask:
+            bit = mask & -mask
+            names.append(ordered_tips[bit.bit_length() - 1])
+            mask ^= bit
+        splits.append(tuple(names))
+    return sorted(splits)[:2]
+
+
 def map_internal_support_by_split(
     rooted_tree,
     support_tree,
@@ -265,8 +315,8 @@ def map_internal_support_by_split(
     silently assigning values by incompatible rooted clades.
     """
 
-    rooted_tips, rooted_nodes = _internal_split_nodes(rooted_tree)
-    support_tips, support_nodes = _internal_split_nodes(support_tree)
+    rooted_tips = _tree_tip_names(rooted_tree)
+    support_tips = _tree_tip_names(support_tree)
     if rooted_tips != support_tips:
         only_rooted = sorted(rooted_tips.difference(support_tips))
         only_support = sorted(support_tips.difference(rooted_tips))
@@ -275,15 +325,21 @@ def map_internal_support_by_split(
             f"only_in_rooted={only_rooted[:5]}, only_in_support={only_support[:5]}"
         )
 
+    ordered_tips = sorted(rooted_tips)
+    tip_masks = {name: 1 << index for index, name in enumerate(ordered_tips)}
+    full_mask = (1 << len(ordered_tips)) - 1
+    rooted_nodes = _internal_split_masks(rooted_tree, tip_masks, full_mask)
+    support_nodes = _internal_split_masks(support_tree, tip_masks, full_mask)
     rooted_splits = set(rooted_nodes)
     support_splits = set(support_nodes)
     if rooted_splits != support_splits:
-        only_rooted = sorted(rooted_splits.difference(support_splits))
-        only_support = sorted(support_splits.difference(rooted_splits))
+        only_rooted = rooted_splits.difference(support_splits)
+        only_support = support_splits.difference(rooted_splits)
         raise ValueError(
             "Support and rooted trees have incompatible unrooted topologies: "
             f"only_in_rooted={len(only_rooted)}, only_in_support={len(only_support)}; "
-            f"rooted_preview={only_rooted[:2]}, support_preview={only_support[:2]}"
+            f"rooted_preview={_split_mask_preview(only_rooted, ordered_tips)}, "
+            f"support_preview={_split_mask_preview(only_support, ordered_tips)}"
         )
 
     support_by_split = {}
@@ -312,11 +368,11 @@ def map_internal_support_by_split(
     # A partially labelled support tree is more dangerous than a completely
     # unlabelled tree (the latter is expected for families with <4 sequences).
     if support_by_split and set(support_by_split) != support_splits:
-        missing = sorted(support_splits.difference(support_by_split))
+        missing = support_splits.difference(support_by_split)
         raise ValueError(
             "Support tree labels only a subset of its internal splits: "
             f"supported={len(support_by_split)}, total={len(support_splits)}, "
-            f"missing_preview={missing[:2]}"
+            f"missing_preview={_split_mask_preview(missing, ordered_tips)}"
         )
     if require_support and support_splits and not support_by_split:
         raise ValueError(
