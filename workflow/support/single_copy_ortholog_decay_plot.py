@@ -133,9 +133,21 @@ def load_gene_count_table(path):
     counts_df = df.loc[:, species_cols].apply(pandas.to_numeric, errors="raise")
     if counts_df.isna().any().any():
         raise ValueError("Species count columns contain missing values: {}".format(path))
+    for column in species_cols:
+        numeric = counts_df[column].to_numpy()
+        if not numpy.isfinite(numeric).all() or (
+            numeric.dtype.kind == "f" and (numeric != numpy.floor(numeric)).any()
+        ):
+            raise ValueError("Species count columns must contain finite integers: {}".format(path))
+        if (numeric < 0).any():
+            raise ValueError("Species count columns contain negative values: {}".format(path))
+        if (
+            numeric.dtype.kind == "u" and (numeric > numpy.iinfo(numpy.int64).max).any()
+        ) or (
+            numeric.dtype.kind == "f" and (numeric >= 2**63).any()
+        ):
+            raise ValueError("Species count columns exceed the int64 range: {}".format(path))
     counts = counts_df.to_numpy(dtype=numpy.int64, copy=True)
-    if (counts < 0).any():
-        raise ValueError("Species count columns contain negative values: {}".format(path))
     return species_cols, counts
 
 

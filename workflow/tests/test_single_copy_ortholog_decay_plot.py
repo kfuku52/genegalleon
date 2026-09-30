@@ -68,6 +68,25 @@ def test_load_gene_count_table_ignores_metadata_columns(tmp_path):
     assert counts.tolist() == [[1, 2]]
 
 
+@pytest.mark.parametrize("value", ["-0.5", "1.5", "inf", "-inf", "9223372036854775808", "9223372036854775808.0", "1e30"])
+def test_gene_count_reader_rejects_invalid_values_before_integer_conversion(tmp_path, value):
+    mod = load_module()
+    path = tmp_path / "counts.tsv"
+    path.write_text(f"Orthogroup\tspA\nOG1\t{value}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="finite integers|negative|int64"):
+        mod.load_gene_count_table(path)
+
+
+def test_gene_count_reader_preserves_int64_limit_and_integral_float_columns(tmp_path):
+    mod = load_module()
+    path = tmp_path / "counts.tsv"
+    path.write_text("Orthogroup\tspA\tspB\nOG1\t9223372036854775807\t1.0\n", encoding="utf-8")
+    columns, counts = mod.load_gene_count_table(path)
+    assert columns == ["spA", "spB"]
+    assert counts.dtype == mod.numpy.int64
+    assert counts.tolist() == [[9223372036854775807, 1]]
+
+
 def test_decay_metrics_are_nested_for_all_species_count(tmp_path):
     mod = load_module()
     path = tmp_path / "Orthogroups.GeneCount.tsv"

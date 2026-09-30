@@ -182,6 +182,8 @@ reuse more columns than a complete table pass, species-major presence and
 single-copy masks are computed once. Small partial runs avoid that full-table
 work. Species permutations, seed handling, requested count order, all/selected
 metrics and summary/plot formats remain unchanged; input arrays are untouched.
+Input tables require finite, non-negative integer counts within int64 range;
+fractional values are rejected before conversion rather than silently truncated.
 
 Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `dff3b95`, same immutable
 image, one warmup and three measured fresh processes: 8,192 orthogroups, 64
