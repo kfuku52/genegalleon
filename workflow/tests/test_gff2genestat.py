@@ -41,6 +41,52 @@ def test_longest_selects_one_transcript_before_summarizing():
         assert out.iloc[0]["feature_type"] == "CDS"
 
 
+def test_longest_selection_preserves_group_order_extra_dtypes_and_input():
+    from workflow.support.gff2genestat import select_longest_transcripts
+
+    frame = pandas.DataFrame({
+        'gene_id': ['b', 'a', 'b', 'a', 'b'], 'sequence': ['chr1'] * 5,
+        'strand': ['+'] * 5, 'start': pandas.Series([1, 100, 1, 200, 201], dtype='Int64'),
+        'end': [9, 108, 18, 208, 209],
+        'attributes': ['Parent=short', 'Parent=only', 'Parent=long', 'Parent=only', 'Parent=long'],
+        'annotation': pandas.Categorical(['x', 'y', 'y', 'x', 'x']),
+        'selected_transcript': ['stale'] * 5,
+    })
+    frame.index = pandas.Index([8, 8, 2, 5, 1], name='source_row')
+    original = frame.copy(deep=True)
+    selected = select_longest_transcripts(frame)
+    assert selected.gene_id.tolist() == ['b', 'b', 'a', 'a']
+    assert selected.start.tolist() == [1, 201, 100, 200]
+    assert selected.selected_transcript.tolist() == ['long', 'long', 'only', 'only']
+    assert selected.annotation.tolist() == ['y', 'x', 'y', 'x']
+    assert selected.start.dtype == original.start.dtype
+    assert selected.annotation.dtype == original.annotation.dtype
+    assert selected.selected_transcript.dtype == pandas.Series(['long']).dtype
+    assert selected.index.equals(pandas.RangeIndex(4))
+    pandas.testing.assert_frame_equal(frame, original)
+
+
+@pytest.mark.parametrize('phase', ['1', 'invalid'])
+def test_duplicate_cds_coordinates_retain_every_phase_record(phase):
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    cds = pandas.DataFrame({'gene_id': ['g', 'g'], 'selected_transcript': ['t', 't'],
+                           'sequence': ['chr1', 'chr1'], 'strand': ['+', '+'],
+                           'start': [1, 1], 'end': [9, 9], 'feature': ['CDS', 'CDS'],
+                           'phase': ['0', phase], 'attributes': ['Parent=t', 'Parent=t']})
+    error = 'Conflicting CDS phases' if phase == '1' else 'Invalid CDS phase'
+    with pytest.raises(ValueError, match=error):
+        attach_transcript_structure(cds, cds)
+    if phase == '1':
+        report = attach_transcript_structure(cds, cds, phase_policy='report')
+        assert report.phase_status.eq('conflicting').all()
+        assert report.cds_first_phase.isna().all()
+        assert report.phase.tolist() == ['0', '1']
+    else:
+        with pytest.raises(ValueError, match=error):
+            attach_transcript_structure(cds, cds, phase_policy='report')
+
+
 def test_longest_gtf_transcripts_do_not_merge_isoforms():
     gff = pandas.DataFrame(
         [

@@ -636,11 +636,13 @@ def select_longest_transcripts(gff):
         for transcript in models:
             candidates.setdefault(transcript, []).append(index)
     annotated_rows = None
-    selected = []
+    selected_indices = []
+    selected_transcripts = []
     for gene_id, candidates in by_gene.items():
         if len(candidates) == 1:
             transcript, indices = next(iter(candidates.items()))
-            selected.append(gff.iloc[indices].assign(selected_transcript=transcript))
+            selected_indices.extend(indices)
+            selected_transcripts.extend([transcript] * len(indices))
             continue
         if annotated_rows is None:
             annotated_rows = list(gff[["sequence", "strand", "start", "end", "attributes"]].itertuples(index=False, name=None))
@@ -666,8 +668,11 @@ def select_longest_transcripts(gff):
                     ",".join(tied_transcripts),
                 )
             )
-        selected.append(gff.iloc[best_indices].assign(selected_transcript=tied_transcripts[0]))
-    return pandas.concat(selected, ignore_index=True) if selected else gff.assign(selected_transcript="")
+        selected_indices.extend(best_indices)
+        selected_transcripts.extend([tied_transcripts[0]] * len(best_indices))
+    if not selected_indices:
+        return gff.assign(selected_transcript="")
+    return gff.iloc[selected_indices].reset_index(drop=True).assign(selected_transcript=selected_transcripts)
 
 
 
@@ -726,12 +731,15 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
         # are validated, including duplicate annotations.
         implied_phases = set()
         offset = 0
+        # Build the coordinate lookup once, retaining every duplicate phase row.
+        # Recasting and scanning all CDS rows for each block is unnecessary.
+        phases_by_block = {}
+        for sequence, strand, start, end, phase in zip(
+                cds["sequence"].astype(str), cds["strand"].astype(str),
+                cds["start"].astype(int), cds["end"].astype(int), cds["phase"], strict=True):
+            phases_by_block.setdefault((sequence, strand, start, end), []).append(phase)
         for block in cds_blocks:
-            phase_rows = cds.loc[(cds["sequence"].astype(str) == block[0]) &
-                                 (cds["strand"].astype(str) == block[1]) &
-                                 (cds["start"].astype(int) == block[2]) &
-                                 (cds["end"].astype(int) == block[3]), "phase"]
-            for value in phase_rows:
+            for value in phases_by_block.get(block, []):
                 if pandas.isna(value) or str(value).strip() in {".", ""}:
                     continue
                 try:

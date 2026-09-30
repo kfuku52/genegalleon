@@ -27,6 +27,32 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## GFF transcript statistics
+
+Longest-transcript selection collects row positions and builds one result table,
+preserving gene discovery order, annotation row order, tie handling and extra
+column types. CDS phase validation indexes coordinates once per gene, retaining
+every phase record at duplicate coordinates. Coordinate ordering, UTR validation,
+strict/report policies, missing phases and trans-splicing behavior are unchanged.
+
+Linux arm64 Docker `local/genegalleon:dev`, Python 3.12.14, pandas 3.0.6, base
+`f6f68bf`, one warmup and three measured fresh processes: the live in-memory
+selection → structure validation → statistics path for 2,000 genes took 2.607
+to 0.686 s (3.80×). Selection took 0.495 to 0.0591 s; structure validation took
+2.072 to 0.591 s. Median peak RSS was 129.5 to 98.8 MiB (23.7% less). The
+fixture includes both strands, alternative isoforms, explicit UTRs and duplicate
+CDS records. Intermediate/final tables, column types/order and warnings match.
+Time excludes fixture construction and result fingerprinting; process peak RSS
+includes both. This does not measure GFF download, file parsing or sequence
+resolution.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_gff_summary.py \
+  --output /tmp/gff-summary.json
+```
+
+Use `--support-root` with a complete baseline support tree for comparison.
+
 ## Wide-header validation
 
 Database and scan-schema preflight count each column name once, preserving
