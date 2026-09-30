@@ -155,7 +155,12 @@ def direct_query_sources_by_node(tip_names, query_gene_path, query_aa_fasta_path
 def read_query_blast(path):
     if not path or not Path(path).exists() or Path(path).stat().st_size == 0:
         return pandas.DataFrame()
-    df = pandas.read_csv(path, sep="\t", header=0, dtype=str)
+    columns = pandas.read_csv(path, sep="\t", header=0, nrows=0).columns
+    df = pandas.read_csv(
+        path, sep="\t", header=0,
+        dtype={column: str for column in columns if column not in {"qacc", "sacc"}},
+        converters={"qacc": str, "sacc": str},
+    )
     if df.empty:
         return df
     required = {"qacc", "sacc", "qjointcov"}

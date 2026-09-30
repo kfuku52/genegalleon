@@ -143,3 +143,26 @@ def test_direct_sources_preserve_exact_priority_and_suffix_catalog_order(tmp_pat
     assert mod.direct_query_sources_by_node(["A-b", "A−b", "species_A-b"], query_fasta) == {
         "A-b": ["A-b"], "A−b": ["A-b"],
     }
+
+
+def test_blast_preserves_literal_accessions_and_metadata_missingness(tmp_path):
+    mod = load_module()
+    blast = tmp_path / "blast.tsv"
+    blast.write_text(
+        "qacc\tsacc\tqjointcov\tmin_evalue\tnote\n"
+        "NA\tNULL\t0.90\t\tNA\n"
+        "00123\tnan\t0.80\t1e-4\t0007\n"
+        "\tnan\t1.00\t0\ttext\n"
+        "unrelated\t\t1.00\t0\ttext\n", encoding="utf-8",
+    )
+    table = mod.read_query_blast(blast)
+    assert table.qacc.tolist() == ["NA", "00123", "", "unrelated"]
+    assert table.sacc.tolist() == ["NULL", "nan", "nan", ""]
+    assert table.qjointcov.tolist() == ["0.90", "0.80", "1.00", "1.00"]
+    assert pandas.isna(table.note.iloc[0])
+    assert table.note.iloc[1] == "0007"
+    best = mod.best_blast_sources_by_node(["NULL", "nan"], blast)
+    assert best == {
+        "NULL": {"query_ids": ["NA"], "evalues": [""], "qjointcovs": ["0.9"], "bitscores": [""]},
+        "nan": {"query_ids": ["00123"], "evalues": ["0.0001"], "qjointcovs": ["0.8"], "bitscores": [""]},
+    }

@@ -158,10 +158,10 @@ Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `5f8cf15`, same immutable
 image, one warmup and three measured fresh processes: 4,096 tips plus four edge
 controls, 512 base query IDs plus overlapping suffixes and exact FASTA IDs,
 internal branches and competing BLAST hits. Direct source matching took 1.704
-to 0.0291 s (58.6×); complete 4,613-row branch annotation, including input/output
-and BLAST processing, took 1.818 to 0.0829 s (21.9×). Complete direct-source
+to 0.0315 s (54.0×); complete 4,613-row branch annotation, including input/output
+and BLAST processing, took 1.818 to 0.0877 s (20.7×). Complete direct-source
 maps, output TSV bytes and reported marker count match. Median peak RSS was
-about 78.8 / 78.7 MiB. Fixture construction/fingerprinting are excluded from
+about 78.8 / 78.6 MiB. Fixture construction/fingerprinting are excluded from
 timing and included in peak RSS. Gains for smaller query catalogs will differ;
 this does not measure the entire gene-evolution stage or plotting.
 
