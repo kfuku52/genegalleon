@@ -145,6 +145,34 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_expre
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Query branch markers
+
+Direct query matching indexes normalized exact IDs and the gene-list priority
+once. Each tip checks suffixes at the existing underscore, hyphen and dot
+boundaries. Exact sources retain priority, gene-list sources retain catalog
+order, and FASTA IDs still require exact matching. Branch annotation reads the
+node/tip columns directly rather than constructing Series for every branch.
+BLAST filtering, best-hit selection and marker columns are unchanged.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `5f8cf15`, same immutable
+image, one warmup and three measured fresh processes: 4,096 tips plus four edge
+controls, 512 base query IDs plus overlapping suffixes and exact FASTA IDs,
+internal branches and competing BLAST hits. Direct source matching took 1.704
+to 0.0291 s (58.6×); complete 4,613-row branch annotation, including input/output
+and BLAST processing, took 1.818 to 0.0829 s (21.9×). Complete direct-source
+maps, output TSV bytes and reported marker count match. Median peak RSS was
+about 78.8 / 78.7 MiB. Fixture construction/fingerprinting are excluded from
+timing and included in peak RSS. Gains for smaller query catalogs will differ;
+this does not measure the entire gene-evolution stage or plotting.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query_markers.py \
+  --output query-markers.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,

@@ -121,3 +121,25 @@ def test_existing_query_marker_columns_are_replaced(tmp_path):
     out = pandas.read_csv(outfile, sep="\t", dtype=str, keep_default_na=False)
     assert list(out.columns).count("query_marker") == 1
     assert "stale" not in set(out["query_marker"])
+
+
+def test_direct_sources_preserve_exact_priority_and_suffix_catalog_order(tmp_path):
+    mod = load_module()
+    query_gene = tmp_path / "genes.txt"
+    query_fasta = tmp_path / "query.fa"
+    query_gene.write_text("b\nprefix_b\nA−b\nb\nNA\n_b\n", encoding="utf-8")
+    query_fasta.write_text(">A-b description\nMAAA\n", encoding="utf-8")
+    tips = [" x_prefix_b ", "A−b", "prefix_b", "sp.b", "sp-b", "sp__b", "spb", "NA", "", "x_prefix_b_extra"]
+    assert mod.direct_query_sources_by_node(tips, query_gene, query_fasta) == {
+        " x_prefix_b ": ["b", "prefix_b"],
+        "A−b": ["A-b", "b"],
+        "prefix_b": ["prefix_b", "b"],
+        "sp.b": ["b"],
+        "sp-b": ["b"],
+        "sp__b": ["b", "_b"],
+        "NA": ["NA"],
+    }
+    # FASTA identifiers must remain exact matches even at an allowed separator.
+    assert mod.direct_query_sources_by_node(["A-b", "A−b", "species_A-b"], query_fasta) == {
+        "A-b": ["A-b"], "A−b": ["A-b"],
+    }

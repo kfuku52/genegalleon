@@ -133,18 +133,19 @@ def node_matches_query(node_name, query_id, allow_suffix_match=False):
 def direct_query_sources_by_node(tip_names, query_gene_path, query_aa_fasta_path=""):
     query_ids, query_gene_is_fasta = read_query_gene_ids(query_gene_path)
     query_aa_headers = read_fasta_headers(query_aa_fasta_path)
-    exact_ids = unique_preserve_order([normalize_id(x) for x in query_ids + query_aa_headers])
+    exact_ids = set(unique_preserve_order([normalize_id(x) for x in query_ids + query_aa_headers]))
     gene_list_ids = unique_preserve_order([normalize_id(x) for x in query_ids]) if not query_gene_is_fasta else []
+    gene_order = {query_id: position for position, query_id in enumerate(gene_list_ids)}
 
     direct = {}
     for tip in tip_names:
-        sources = []
-        for query_id in exact_ids:
-            if node_matches_query(tip, query_id, allow_suffix_match=False):
-                sources.append(query_id)
-        for query_id in gene_list_ids:
-            if node_matches_query(tip, query_id, allow_suffix_match=True):
-                sources.append(query_id)
+        node = normalize_id(tip)
+        sources = [node] if node in exact_ids else []
+        if gene_order:
+            candidates = {node}
+            candidates.update(node[position + 1:] for position, character in enumerate(node) if character in "_-.")
+            matched = candidates.intersection(gene_order)
+            sources.extend(sorted(matched, key=gene_order.__getitem__))
         sources = unique_preserve_order(sources)
         if sources:
             direct[tip] = sources
@@ -249,10 +250,10 @@ def annotate_stat_branch(
 
     values = {column: [""] * len(df) for column in MARKER_COLUMNS}
     values["query_marker"] = ["-"] * len(df)
-    for idx, row in df.iterrows():
-        if not bool(is_tip.loc[idx]):
+    for idx, (node, tip) in enumerate(zip(df["node_name"], is_tip, strict=True)):
+        if not bool(tip):
             continue
-        node_name = str(row["node_name"])
+        node_name = str(node)
         direct_sources = direct_by_node.get(node_name, [])
         best = best_by_node.get(node_name, {})
         best_sources = best.get("query_ids", [])
