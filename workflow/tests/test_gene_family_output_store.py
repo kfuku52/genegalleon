@@ -36,12 +36,41 @@ from workflow.support.gene_family_output_store import (
     optimize_archive_metadata,
     orthogroup_id_from_name,
     purge_archives,
+    query_id_extractor,
+    query_id_from_name,
+    query_id_matchers,
     repair_archive_index,
     run_cli,
     storage_conversion_status,
     storage_conversion_summary,
 )
 from workflow.support.shared_namespace_lock import acquire, release
+
+
+def test_indexed_query_ownership_matches_scalar_priority_and_boundaries():
+    import random
+    rng = random.Random(43)
+    identifiers = ['', 'A', 'A_B', 'A_B.extra', 'A.', 'β', 'β_γ']
+    identifiers += [''.join(rng.choices('ab_.', k=rng.randint(1, 12))) for _ in range(200)]
+    names = [identifier + suffix for identifier in identifiers
+             for suffix in ('', '_stat.branch.tsv', '.tree_plot.pdf', '-unrelated.tsv')]
+    names += ['unknown', 'AHA_tree_plot.pdf', 'βγ.pdf']
+    orders = [identifiers, query_id_matchers(identifiers), list(reversed(identifiers))]
+    for matchers in orders:
+        extract = query_id_extractor(matchers)
+        for name in names:
+            path = '/some/output/' + name
+            assert extract(path) == query_id_from_name(path, matchers)
+
+
+def test_indexed_query_ownership_snapshots_mutable_catalog():
+    matchers = ['A_B', 'A', 'B']
+    extract = query_id_extractor(matchers)
+    matchers.clear()
+    assert extract('A_B_stat.branch.tsv') == 'A_B'
+    assert extract('A_alignment.fa') == 'A'
+    assert extract('B_tree_plot.pdf') == 'B'
+    assert extract('UNKNOWN.pdf') is None
 
 
 def _write_family_outputs(root: Path, family_id: str, complete: bool = True):

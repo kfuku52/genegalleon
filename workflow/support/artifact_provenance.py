@@ -42,6 +42,7 @@ from fasta_sequence_contract import SequenceContractError, validate_fasta, valid
 from gene_family_output_store import (
     ArchiveStoreError,
     GeneFamilyOutputStore,
+    query_id_extractor,
     query_id_from_name,
     query_id_matchers,
     read_only_observation,
@@ -1425,12 +1426,14 @@ def parse_required_step_subdirs(values: Iterable[str]) -> dict[str, str]:
     return dict(parse_unique_pairs(values, "--require-step-for-subdir"))
 
 
-def artifact_family_id(artifact, mode: str, query_matcher_list=None) -> str | None:
+def artifact_family_id(artifact, mode: str, query_matcher_list=None, query_extractor=None) -> str | None:
     if artifact.family_id:
         return str(artifact.family_id)
     if mode == "orthogroup":
         return infer_orthogroup_id(artifact.name)
     if mode == "query2family" and query_matcher_list:
+        if query_extractor is not None:
+            return query_extractor(artifact.name)
         return query_id_from_name(artifact.name, query_matcher_list)
     return None
 
@@ -1458,15 +1461,16 @@ def branch_identity_rows(
     query_matcher_list=None,
     progress=None,
 ) -> list[dict[str, str]]:
+    query_extractor = query_id_extractor(query_matcher_list) if query_matcher_list else None
     iqtree_by_family = {
         family_id: artifact
         for artifact in store.artifacts("iqtree_anc")
-        if (family_id := artifact_family_id(artifact, mode, query_matcher_list)) is not None
+        if (family_id := artifact_family_id(artifact, mode, query_matcher_list, query_extractor)) is not None
     }
     stat_by_family = {
         family_id: artifact
         for artifact in store.artifacts("stat_branch")
-        if (family_id := artifact_family_id(artifact, mode, query_matcher_list)) is not None
+        if (family_id := artifact_family_id(artifact, mode, query_matcher_list, query_extractor)) is not None
     }
     rows: list[dict[str, str]] = []
     try:
@@ -1568,6 +1572,7 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         query_matcher_list = query_id_matchers(
             sorted(path.name for path in args.query_dir.iterdir() if path.is_file() and not path.name.startswith("."))
         )
+    query_extractor = query_id_extractor(query_matcher_list) if query_matcher_list else None
     manifested_steps: set[tuple[str, str]] = set()
     def inspect_manifest(name):
         family_id = infer_orthogroup_id(name) or "-"
@@ -1589,7 +1594,7 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         except Exception as exc:
             family_id, step = infer_orthogroup_id(name) or "-", "unknown"
             if args.mode == "query2family" and query_matcher_list:
-                family_id = query_id_from_name(name, query_matcher_list) or "-"
+                family_id = query_extractor(name) or "-"
             status, reason = "invalid_manifest", str(exc)
         row = {"family_id": family_id, "step": step, "status": status, "reason": reason,
                "manifest": f"{MANIFEST_SUBDIR}/{name}"}
@@ -1615,7 +1620,7 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
         if subdir not in store.logical_subdirs():
             continue
         for artifact in store.artifacts(subdir):
-            family_id = artifact_family_id(artifact, args.mode, query_matcher_list)
+            family_id = artifact_family_id(artifact, args.mode, query_matcher_list, query_extractor)
             if family_id is None or (family_id, step) in manifested_steps:
                 continue
             rows.append(

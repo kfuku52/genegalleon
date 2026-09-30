@@ -15,7 +15,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore
+from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore, query_id_extractor
 
 
 def build_arg_parser():
@@ -105,11 +105,12 @@ def get_alignment_stats(
     queued = []
     seen_query_ids = set()
     valid_query_ids = set(df.index.astype(str))
+    extract_query_id = query_id_extractor(query_id_matchers)
     for file in files:
         file_path = os.path.join(dir_alignment_stats, file)
         if store is None and not os.path.isfile(file_path):
             continue
-        query_id = _extract_query_id(file, query_id_matchers)
+        query_id = extract_query_id(file)
         if query_id is None:
             continue
         if query_id in seen_query_ids:
@@ -182,6 +183,7 @@ def run(args):
         raise ValueError(f"Input query_gene directory is empty: {args.dir_query_gene}")
 
     query_id_matchers = _query_id_matchers(query_ids)
+    extract_query_id = query_id_extractor(query_id_matchers)
     df = pandas.DataFrame(index=query_ids)
     df.index.name = "query"
     store = GeneFamilyOutputStore(args.dir_query2family)
@@ -215,7 +217,7 @@ def run(args):
         query_ids_in_files = sorted(
             {
                 query_id
-                for query_id in (_extract_query_id(f, query_id_matchers) for f in files)
+                for query_id in (extract_query_id(f) for f in files)
                 if query_id is not None and query_id in valid_query_ids
             }
         )

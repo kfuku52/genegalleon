@@ -4,6 +4,29 @@ The single-family API, SQLite format, type promotion rules, plot arguments and
 scheduler resources remain compatible. Content reuse lasts one operation only;
 no saved hash or rendering receipt is accepted as scientific completion evidence.
 
+## Indexed query ownership
+
+Bulk query2family summary, storage conversion/materialization and provenance
+audit now build one operation-scoped query-ID priority index. Only complete
+filenames and underscore/dot boundaries are looked up; each file no longer scans
+every query ID. The scalar matcher and catalog-list API remain available.
+Overlapping IDs, arbitrary matcher priority, duplicates, Unicode and empty IDs
+retain scalar behavior. The index snapshots its catalog and caches no filenames.
+
+Linux arm64 Docker `local/genegalleon:dev`, Python 3.12.14, base `40b78b4`, one
+warmup and three measured fresh processes: 3,003 IDs / 9,006 filename matches
+took 1.929 s to 0.0102 s (190×); a complete three-directory, 3,003-row summary
+took 1.502 s to 0.0619 s (24.2×). Result lists and complete TSV bytes match.
+Peak RSS increased about 0.4 MiB (about 75 MiB matching / 77 MiB summary).
+These are query-ownership workloads, not overall scientific-pipeline speedups.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query_matching.py \
+  --output /tmp/query-matching.json
+```
+
+Use `--support-root` with a complete baseline support tree for comparison.
+
 ## Verification
 
 `workflow_api.py capabilities` advertises
