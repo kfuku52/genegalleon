@@ -10,6 +10,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas
 
 
+def identifier_text(value):
+    """Keep numeric-looking and NA-like identifiers literal, while empty stays missing."""
+    return value if value else float("nan")
+
+
 def read_fasta_ids(path):
     ids = []
     opener = gzip.open if path.endswith(".gz") else open
@@ -40,7 +45,8 @@ def load_orthogroup_map(path, species_col):
         print("Required columns were not found in orthogroup file: Orthogroup, {}".format(species_col), flush=True)
         return None
 
-    tmp = pandas.read_csv(path, sep="\t", usecols=["Orthogroup", species_col], low_memory=False)
+    tmp = pandas.read_csv(path, sep="\t", usecols=["Orthogroup", species_col], low_memory=False,
+                          converters={"Orthogroup": identifier_text, species_col: identifier_text})
     tmp = tmp.dropna(subset=[species_col]).copy()
     if tmp.empty:
         return None
@@ -58,7 +64,8 @@ def load_uniprot(path):
         print("File not found: {}".format(path), flush=True)
         return None
     print("{}: Processing: {}".format(datetime.datetime.now(), path), flush=True)
-    return dedupe_gene_id_index(pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False))
+    return dedupe_gene_id_index(pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False,
+                                               converters={"gene_id": identifier_text}))
 
 
 def load_cdskit_localize(path):
@@ -66,7 +73,8 @@ def load_cdskit_localize(path):
         print("File not found: {}".format(path), flush=True)
         return None
     print("{}: Processing: {}".format(datetime.datetime.now(), path), flush=True)
-    tmp = pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False)
+    tmp = pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False,
+                          converters={"seq_id": identifier_text})
     if "seq_id" not in tmp.columns:
         print("seq_id column was not found in cdskit localize table: {}".format(path), flush=True)
         return None
@@ -90,13 +98,17 @@ def load_busco(path):
         "busco_orthodb_url",
         "busco_description",
     ]
-    tmp = pandas.read_csv(path, sep="\t", header=None, index_col=None, comment="#", low_memory=False, names=colnames)
+    tmp = pandas.read_csv(path, sep="\t", header=None, index_col=None, comment="#", low_memory=False, names=colnames,
+                          converters={"busco_sequence": identifier_text})
+    tmp = tmp.dropna(subset=["busco_sequence"]).copy()
     tmp["gene_id"] = tmp["busco_sequence"].astype(str).str.replace(":.*", "", regex=True)
     tmp = tmp.loc[tmp["gene_id"].notna() & (tmp["gene_id"] != ""), :].copy()
     if tmp.empty:
         return None
     agg_cols = [c for c in tmp.columns if c != "gene_id"]
-    tmp_agg = tmp.loc[:, ["gene_id"] + agg_cols].astype(str)
+    # Make the serialized missing-value spelling explicit before string joins;
+    # pandas string dtype can retain a missing scalar after astype(str).
+    tmp_agg = tmp.loc[:, ["gene_id"] + agg_cols].astype(str).fillna("nan")
     tmp_agg = tmp_agg.groupby("gene_id", as_index=False, sort=False)[agg_cols].agg("; ".join)
     return dedupe_gene_id_index(tmp_agg)
 
@@ -106,9 +118,9 @@ def load_fx2tab(path):
         print("File not found: {}".format(path), flush=True)
         return None
     print("{}: Processing: {}".format(datetime.datetime.now(), path), flush=True)
-    tmp = pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False)
-    tmp.columns = tmp.columns.str.replace("length", "cds_length")
-    tmp.columns = tmp.columns.str.replace("#id", "gene_id")
+    tmp = pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False,
+                          converters={"#id": identifier_text, "gene_id": identifier_text})
+    tmp = tmp.rename(columns={"length": "cds_length", "#id": "gene_id"})
     return dedupe_gene_id_index(tmp)
 
 
@@ -117,7 +129,8 @@ def load_gff_info(path):
         print("File not found: {}".format(path), flush=True)
         return None
     print("{}: Processing: {}".format(datetime.datetime.now(), path), flush=True)
-    return dedupe_gene_id_index(pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False))
+    return dedupe_gene_id_index(pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False,
+                                               converters={"gene_id": identifier_text}))
 
 
 def load_expression(path):
@@ -125,11 +138,12 @@ def load_expression(path):
         print("File not found: {}".format(path), flush=True)
         return None
     print("{}: Processing: {}".format(datetime.datetime.now(), path), flush=True)
-    tmp = pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False)
+    tmp = pandas.read_csv(path, sep="\t", header=0, index_col=None, low_memory=False,
+                          converters={0: identifier_text})
     if "Unnamed: 0" in tmp.columns:
-        tmp.columns = tmp.columns.str.replace("Unnamed: 0", "gene_id")
+        tmp = tmp.rename(columns={"Unnamed: 0": "gene_id"})
     else:
-        tmp.columns = tmp.columns.str.replace(tmp.columns[0], "gene_id")
+        tmp = tmp.rename(columns={tmp.columns[0]: "gene_id"})
     return dedupe_gene_id_index(tmp)
 
 
@@ -138,7 +152,8 @@ def load_mmseqs(path):
         print("File not found: {}".format(path), flush=True)
         return None
     print("{}: Processing: {}".format(datetime.datetime.now(), path), flush=True)
-    tmp = pandas.read_csv(path, sep="\t", header=None, index_col=None, low_memory=False)
+    tmp = pandas.read_csv(path, sep="\t", header=None, index_col=None, low_memory=False,
+                          converters={0: identifier_text})
     tmp.columns = [
         "gene_id",
         "lca_taxid",

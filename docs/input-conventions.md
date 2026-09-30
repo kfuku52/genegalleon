@@ -238,6 +238,12 @@ Expected layout:
 - remaining columns are tissues, stages, treatments, or other conditions,
 - pre-aggregated values are recommended when you want one value per condition.
 
+The CDS annotation merger reads gene IDs literally, including leading zeros
+and IDs such as `NA` or `nan`, while keeping normal missing-value handling for
+annotation values. It renames only the identifier header; condition names are
+preserved. BUSCO entries without a sequence ID are omitted, and missing BUSCO
+metadata is serialized as `nan` in aggregated annotations.
+
 Minimal example:
 
 ```tsv
