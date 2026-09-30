@@ -1196,16 +1196,26 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
         kind="mergesort",
     ).reset_index(drop=True)
 
+    groups = gene_records.groupby(["orthogroup", "gene_id"], sort=False)
+    branch_counts = groups["candidate_branch_id"].nunique().to_dict()
+    text_ids = gene_records["candidate_branch_id"].astype(str)
+    branch_ids = text_ids.groupby([gene_records["orthogroup"], gene_records["gene_id"]], sort=False).agg(
+        lambda ids: "; ".join(dict.fromkeys(ids.tolist()))
+    ).to_dict()
+    taxonomy_columns = [taxonomy_rank_column("recipient", rank) for rank in TAXONOMIC_RANKS]
+    taxonomy_columns.extend(taxonomy_rank_column("donor", rank) for rank in TAXONOMIC_RANKS)
+    taxonomy_columns.extend([taxonomy_lineage_column("recipient"), taxonomy_lineage_column("donor")])
     rows = []
-    for (_orthogroup, _gene_id), group in gene_records.groupby(["orthogroup", "gene_id"], sort=False):
-        top = group.iloc[0]
+    for values in groups.head(1).itertuples(index=False, name=None):
+        top = dict(zip(gene_records.columns, values, strict=True))
+        key = (top["orthogroup"], top["gene_id"])
         rows.append(
             {
                 "orthogroup": top["orthogroup"],
                 "gene_id": top["gene_id"],
                 "gene_taxon": top.get("gene_taxon", ""),
-                "candidate_branch_count": int(group["candidate_branch_id"].nunique()),
-                "candidate_branch_ids": "; ".join(dict.fromkeys(group["candidate_branch_id"].astype(str).tolist())),
+                "candidate_branch_count": int(branch_counts[key]),
+                "candidate_branch_ids": branch_ids[key],
                 "besthit_accession": top.get("besthit_accession", ""),
                 "besthit_organism": top.get("besthit_organism", ""),
                 "besthit_taxid": top.get("besthit_taxid", ""),
@@ -1218,16 +1228,7 @@ def aggregate_gene_records(gene_records: pandas.DataFrame) -> pandas.DataFrame:
                 "contamination_lca_taxid": top.get("contamination_lca_taxid", pandas.NA),
                 "contamination_lca_sciname": top.get("contamination_lca_sciname", ""),
                 "contamination_is_compatible_lineage": top.get("contamination_is_compatible_lineage", pandas.NA),
-                **{
-                    taxonomy_rank_column("recipient", rank): top.get(taxonomy_rank_column("recipient", rank), "")
-                    for rank in TAXONOMIC_RANKS
-                },
-                **{
-                    taxonomy_rank_column("donor", rank): top.get(taxonomy_rank_column("donor", rank), "")
-                    for rank in TAXONOMIC_RANKS
-                },
-                taxonomy_lineage_column("recipient"): top.get(taxonomy_lineage_column("recipient"), ""),
-                taxonomy_lineage_column("donor"): top.get(taxonomy_lineage_column("donor"), ""),
+                **{column: top.get(column, "") for column in taxonomy_columns},
             }
         )
     return pandas.DataFrame(rows, columns=GENE_OUTPUT_COLUMNS)

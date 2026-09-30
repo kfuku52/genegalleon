@@ -211,6 +211,9 @@ Candidate summaries index the first retained leaf taxon once per branch instead
 of filtering the leaf table for every candidate gene. Candidate order and
 duplicates, missing/absent taxa, first-leaf selection, evidence counts, lineage
 resolution and representative annotations remain unchanged.
+Gene aggregation computes group counts once, converts branch IDs once, uses
+tuple first rows and reuses taxonomy column names. Existing sort/tie policies,
+ID formatting, categorical group order and optional-column defaults are retained.
 
 Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `26a21cc`, same immutable
 image, one warmup and three measured fresh processes: two overlapping candidate
@@ -218,8 +221,10 @@ branches over 2,048 genes, reversed candidate order, an absent gene, mixed
 expression/intron/synteny evidence and contamination annotations. Branch and
 raw-gene summarization took 0.778 to 0.143 s (5.44×). Complete raw/final branch,
 gene and orthogroup tables, types and order match; median peak RSS stayed about
-204.5 MiB. Gene/orthogroup aggregation remained about 0.9 s and is outside this
-speedup. Timing excludes fixture construction, final fingerprints, SQLite reads,
+204.5 MiB. Further gene/orthogroup aggregation optimization (base `79dd19f`,
+same workload/runtime/repetitions) took 0.912 to 0.137 s (6.65×), with complete
+tables/types/order again matching. Corresponding median process peak RSS was
+204.4 to 191.8 MiB (6.2% less). Timing excludes fixture construction, final fingerprints, SQLite reads,
 scaffold context and plotting. The local taxonomy resolver has no database, so
 this does not measure NCBI lookup cost or the entire HGT stage.
 

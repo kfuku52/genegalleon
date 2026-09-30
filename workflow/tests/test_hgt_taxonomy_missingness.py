@@ -101,3 +101,33 @@ def test_candidate_taxa_keep_first_leaf_and_requested_gene_order(has_taxon, dtyp
         ["", "Other species", missing_taxon, "Host species", missing_taxon] if has_taxon else [""] * 5
     )
     assert records[3]["recipient_domain"] == ("Eukaryota" if has_taxon else "")
+
+
+@pytest.mark.parametrize("branch_type", [int, float, str])
+@pytest.mark.parametrize("categorical", [False, True])
+def test_gene_aggregation_keeps_ties_branch_types_and_optional_defaults(branch_type, categorical):
+    rows = pd.DataFrame([
+        dict(orthogroup="OG2", gene_id="NA", candidate_branch_id=branch_type(10), gene_taxon="ten"),
+        dict(orthogroup="OG2", gene_id="NA", candidate_branch_id=branch_type(2), gene_taxon="first two"),
+        dict(orthogroup="OG2", gene_id="NA", candidate_branch_id=branch_type(2), gene_taxon="later two"),
+        dict(orthogroup="OG1", gene_id="g", candidate_branch_id=branch_type(7), gene_taxon="one"),
+        dict(orthogroup=None, gene_id="excluded", candidate_branch_id=branch_type(1), gene_taxon="missing group"),
+    ], index=[6, 3, 5, 7, 1])
+    if categorical:
+        rows["orthogroup"] = pd.Categorical(rows.orthogroup, categories=["unused", "OG2", "OG1"])
+    output = scorer.aggregate_gene_records(rows)
+    assert output.columns.tolist() == scorer.GENE_OUTPUT_COLUMNS
+    assert output.orthogroup.tolist() == (["OG2", "OG1"] if categorical else ["OG1", "OG2"])
+    observed = output.set_index(["orthogroup", "gene_id"]).loc[("OG2", "NA")]
+    assert observed.gene_taxon == ("ten" if branch_type is str else "first two")
+    assert observed.candidate_branch_count == 2
+    assert observed.candidate_branch_ids == ("10; 2" if branch_type is str else "2.0; 10.0" if branch_type is float else "2; 10")
+    assert observed.besthit_accession == ""
+    assert pd.isna(observed.intron_supported)
+    assert not observed.expression_measured
+
+
+def test_gene_aggregation_does_not_accept_missing_branch_identity():
+    rows = pd.DataFrame([dict(orthogroup="OG1", gene_id="g", candidate_branch_id=pd.NA)])
+    with pytest.raises(TypeError):
+        scorer.aggregate_gene_records(rows)
