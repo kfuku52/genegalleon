@@ -125,6 +125,9 @@ run_orthogroup_method_comparison=1 # Plot comparison among orthogroup/species-tr
 run_single_copy_ortholog_decay_plot=1 # Log10 rarefaction curves with SD for all, selected, non-missing, and strictly single-copy orthogroups.
 
 # Genome-evolution workflow flags
+genome_evolution_mode="all" # all|synteny; synteny runs only pairwise synteny and its plots.
+run_pairwise_synteny=0 # Opt in to pairwise JCVI/MCscan in all mode; always enabled in synteny mode.
+synteny_plot_only=0 # Verify and reuse completed synteny analysis, then regenerate changed plots.
 run_self_fractionation_bias=0 # Incorporate completed mode=self kfFractBias array results by validating and building a multi-species summary.
 run_busco_dupaware_extract_fasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.
 run_busco_dupaware_mafft=0 # Align duplicate-aware BUSCO ortholog FASTA files with MAFFT.
@@ -204,6 +207,13 @@ orthogroup_decay_species_counts="auto" # Species-count values for single-copy or
 orthogroup_decay_seed=1 # Random seed for single-copy ortholog decay plotting.
 
 # Genome-evolution parameters
+synteny_pairs_file="" # Empty uses workspace/input/synteny_pairs.tsv; required columns: analysis_id,target_species,query_species.
+synteny_sequence_mode="auto" # auto prefers species_protein, otherwise translates species_cds; protein|cds select explicitly.
+synteny_cscore=0.7 # JCVI relative similarity filter, independently of existing analyses.
+synteny_min_anchors=4 # Minimum anchor count in a JCVI syntenic block.
+synteny_search_distance=20 # JCVI gene-rank distance used to join anchors.
+synteny_minimum_mapping_fraction=1 # Required FASTA identifier mapping fraction before isoform selection.
+synteny_plot_formats="pdf,svg,png" # Comma-separated output formats.
 self_fractionation_bias_table="" # Empty uses workspace/input/fractionation_bias_pairs.tsv; self analyses must first be run as gg_fractionation_bias array tasks.
 min_gene_orthogroup_grampa=5 # Minimum gene count required for GRAMPA-ready orthogroups.
 max_gene_orthogroup_grampa=50 # Maximum gene count allowed for GRAMPA-ready orthogroups.

@@ -286,6 +286,12 @@ the six published outputs are replaced as one recoverable transaction.
 
 ### `gg_genome_evolution_entrypoint.sh`
 
+Opt-in JCVI/MCscan pairwise synteny produces chromosome ribbon plots and
+dotplots from matched GFF and protein/CDS inputs. `genome_evolution_mode=synteny`
+runs only this independent stage; `run_pairwise_synteny=1` adds it in normal
+mode. See [pairwise genome synteny](pairwise-synteny.md) for inputs, plotting,
+and provenance-aware resume.
+
 Purpose:
 
 - unified genome-evolution entrypoint that serially runs:

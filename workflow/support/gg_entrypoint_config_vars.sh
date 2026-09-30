@@ -313,6 +313,16 @@ EOF
       ;;
     gg_genome_evolution_entrypoint.sh)
       cat <<'EOF'
+genome_evolution_mode
+run_pairwise_synteny
+synteny_plot_only
+synteny_pairs_file
+synteny_sequence_mode
+synteny_cscore
+synteny_min_anchors
+synteny_search_distance
+synteny_minimum_mapping_fraction
+synteny_plot_formats
 run_species_taxonomy
 taxonomy_species_tree
 taxonomy_ranks

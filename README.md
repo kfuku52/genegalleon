@@ -105,6 +105,7 @@ Detailed guides are split by topic:
 - [Input Conventions](docs/input-conventions.md)
 - [Reliable Input Downloads](docs/download-reliability.md)
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
+- [Pairwise Genome Synteny](docs/pairwise-synteny.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
 - [Input-Aware Resource Planning](docs/adaptive-resources.md)
 - [Site Runtime Profiles](docs/site-runtime-profiles.md)

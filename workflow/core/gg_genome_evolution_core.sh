@@ -20,6 +20,27 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
+genome_evolution_mode="${genome_evolution_mode:-all}"
+run_pairwise_synteny="${run_pairwise_synteny:-0}"
+synteny_plot_only="${synteny_plot_only:-0}"
+synteny_pairs_file="${synteny_pairs_file:-}"
+synteny_sequence_mode="${synteny_sequence_mode:-auto}"
+synteny_cscore="${synteny_cscore:-0.7}"
+synteny_min_anchors="${synteny_min_anchors:-4}"
+synteny_search_distance="${synteny_search_distance:-20}"
+synteny_minimum_mapping_fraction="${synteny_minimum_mapping_fraction:-1}"
+synteny_plot_formats="${synteny_plot_formats:-pdf,svg,png}"
+case "${genome_evolution_mode}" in
+  all) ;;
+  synteny) run_pairwise_synteny=1 ;;
+  *) echo "genome_evolution_mode must be all or synteny" >&2; exit 2 ;;
+esac
+for synteny_flag in run_pairwise_synteny synteny_plot_only; do
+  case "${!synteny_flag}" in
+    0|1) ;;
+    *) echo "${synteny_flag} must be 0 or 1" >&2; exit 2 ;;
+  esac
+done
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"
 taxonomy_ranks="${taxonomy_ranks:-all}"
@@ -126,6 +147,61 @@ fi
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
+
+# Synteny-only execution calls this independent stage before species-tree setup
+# and never refreshes, clears or archives the existing tree/OrthoFinder outputs.
+run_pairwise_synteny_stage() (
+  local scratch_root work_dir plan_file phase argument needs_update effective_policy
+  local -a contract_args=()
+  gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" pairwise_synteny || exit $?
+  trap 'gg_stage_transaction_lock_release' EXIT
+  [[ -n "${synteny_pairs_file}" ]] || synteny_pairs_file="${gg_workspace_input_dir}/synteny_pairs.tsv"
+  scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/pairwise_synteny") || exit 1
+  ensure_dir "${scratch_root}"
+  work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
+  plan_file="${work_dir}/plan.json"
+  python "${gg_support_dir}/pairwise_synteny.py" plan \
+    --workspace "${gg_workspace_dir}" --pairs "${synteny_pairs_file}" \
+    --sequence-mode "${synteny_sequence_mode}" --genetic-code "${genetic_code}" \
+    --cscore "${synteny_cscore}" --min-anchors "${synteny_min_anchors}" \
+    --distance "${synteny_search_distance}" --minimum-mapping-fraction "${synteny_minimum_mapping_fraction}" \
+    --formats "${synteny_plot_formats}" --outfile "${plan_file}"
+  for phase in analysis plots; do
+    python "${gg_support_dir}/pairwise_synteny.py" contract --plan "${plan_file}" --phase "${phase}" > "${work_dir}/contract.args"
+    contract_args=()
+    while IFS= read -r -d '' argument; do contract_args+=("${argument}"); done < "${work_dir}/contract.args"
+    needs_update=0
+    effective_policy="${artifact_stale_policy:-stop}"
+    if [[ "${phase}" == analysis && ${synteny_plot_only} -eq 1 && "${effective_policy}" == reuse ]]; then
+      effective_policy=stop
+    fi
+    artifact_stale_policy="${effective_policy}" gg_artifact_prepare_stage needs_update run_pairwise_synteny "${contract_args[@]}" || exit $?
+    if [[ ${needs_update} -eq 1 ]]; then
+      if [[ "${phase}" == analysis && ${synteny_plot_only} -eq 1 ]]; then
+        echo "Synteny plot-only requires a complete, current analysis; run with synteny_plot_only=0 first." >&2
+        exit 3
+      fi
+      gg_step_start "Pairwise synteny ${phase}"
+      python "${gg_support_dir}/pairwise_synteny.py" "${phase}" --plan "${plan_file}" \
+        --output "${work_dir}/${phase}" --cpus "${GG_TASK_CPUS}"
+      python "${gg_support_dir}/pairwise_synteny.py" verify --plan "${plan_file}"
+      mv_out_bundle "${work_dir}/${phase}" "${gg_workspace_output_dir}/genome_evolution/synteny/${phase}"
+      gg_artifact_record "${contract_args[@]}"
+    else
+      gg_step_skip "Pairwise synteny ${phase} (current artifacts)"
+    fi
+  done
+  if [[ ${delete_tmp_dir:-1} -eq 1 ]]; then rm -rf -- "${work_dir}"; fi
+  echo "Pairwise synteny outputs: ${gg_workspace_output_dir}/genome_evolution/synteny"
+)
+if [[ "${genome_evolution_mode}" == synteny ]]; then
+  run_pairwise_synteny_stage
+  exit 0
+fi
+if [[ ${synteny_plot_only} -eq 1 && ${run_pairwise_synteny} -eq 0 ]]; then
+  echo "synteny_plot_only requires genome_evolution_mode=synteny or run_pairwise_synteny=1" >&2
+  exit 2
+fi
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
 delete_tmp_dir=${delete_tmp_dir:-1}
@@ -2760,6 +2836,8 @@ fi
 
 # shellcheck shell=bash
 # Sourced by gg_genome_evolution_core.sh.
+
+if [[ ${run_pairwise_synteny} -eq 1 ]]; then run_pairwise_synteny_stage; fi
 
 task="BUSCO analysis of species-wise input files"
 run_shared_species_busco_stage
