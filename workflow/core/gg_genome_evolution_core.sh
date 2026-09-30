@@ -4982,10 +4982,16 @@ fi
 
 task="Orthogroup method comparison"
 disable_if_no_input_file "run_orthogroup_method_comparison" "${file_orthofinder_done_marker}"
+# OrthoFinder 3 writes the flat clustering memberships in Orthogroups.txt;
+# the comparison needs their totals, not a replacement HOG count table.
+file_orthogroup_comparison_input="${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
+if [[ ! -s "${file_orthogroup_comparison_input}" && -s "${dir_orthofinder_og}/Orthogroups.txt" ]]; then
+  file_orthogroup_comparison_input="${dir_orthofinder_og}/Orthogroups.txt"
+fi
 orthogroup_comparison_needs_update=0
 gg_artifact_contract_init orthogroup_comparison_provenance_args "orthogroup_method_comparison" "all_species" "${genome_evolution_provenance_dir}/orthogroup_method_comparison.json"
 orthogroup_comparison_provenance_args+=(
-  --input "orthogroup_counts=${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
+  --input "orthogroup_counts=${file_orthogroup_comparison_input}"
   --input "hog_counts=${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"
   --output "plot=${file_orthogroup_method_comparison}"
 )
@@ -4994,7 +5000,7 @@ if [[ ${orthogroup_comparison_needs_update} -eq 1 && ${run_orthogroup_method_com
   gg_step_start "${task}"
 
   if python "${gg_support_dir}/orthogroup_method_comparison.py" \
-    --orthofinder_og_genecount "${dir_orthofinder_og}/Orthogroups.GeneCount.tsv" \
+    --orthofinder_og_genecount "${file_orthogroup_comparison_input}" \
     --orthofinder_hog_genecount "${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"; then
     exit_code=0
   else
