@@ -134,6 +134,39 @@ def test_missing_input_is_not_zero_support(tmp_path):
     assert genes.host_scaffold_phylum_compatible_fraction.isna().all()
 
 
+@pytest.mark.parametrize('index', [
+    pd.Index([27, 7, 52, 12, 99], name='gene_row'),
+    pd.Index(['a', 'a', 'b', 'c', 'a'], name='gene_row'),
+    pd.Index([float('nan'), float('nan'), 1, 2, float('nan')], name='gene_row'),
+    pd.MultiIndex.from_tuples([('a', 1), ('a', 2), ('b', 2), ('c', 3), ('a', 3)], names=['x', 'y']),
+])
+def test_bulk_gene_context_preserves_ordered_scalar_update_semantics(tmp_path, monkeypatch, index):
+    branches, genes, tree = fixture_context(tmp_path)
+    genes.index = index
+    genes['host_scaffold_status'] = 'stale'
+    original = genes.copy(deep=True)
+
+    def scalar_updates(frame, rows, columns):
+        for label, row in zip(frame.index, rows, strict=True):
+            for column, value in row.items():
+                frame.at[label, column] = value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(scaffold, '_apply_context_rows', scalar_updates)
+        expected = scaffold.attach_context(branches, genes, tmp_path, tree)
+    actual = scaffold.attach_context(branches, genes, tmp_path, tree)
+    for before, after in zip(expected, actual, strict=True):
+        pd.testing.assert_frame_equal(before, after)
+    pd.testing.assert_frame_equal(genes, original)
+
+
+def test_bulk_context_retains_rejection_of_nonunique_tuple_index(tmp_path):
+    branches, genes, tree = fixture_context(tmp_path)
+    genes.index = pd.MultiIndex.from_tuples([('a', 1), ('a', 1), ('b', 2), ('c', 3), ('a', 1)])
+    with pytest.raises(ValueError, match='Invalid call for scalar access'):
+        scaffold.attach_context(branches, genes, tmp_path, tree)
+
+
 def test_per_species_files_and_duplicate_rejection(tmp_path):
     branches, genes, tree = fixture_context(tmp_path)
     combined = tmp_path / "all_gene_taxonomy.tsv"

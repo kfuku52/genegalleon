@@ -236,6 +236,35 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_s
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## HGT host-scaffold context
+
+Gene context is assigned by column rather than by individual cell. Shared
+scaffold totals are referenced without copying each metric dictionary per gene.
+Per-species input streaming, strict taxonomy-table validation, rank missingness,
+union-of-candidate-loci background exclusion and recipient-only branch pooling
+are unchanged. Output column types, row/index order and scalar duplicate-index
+update behavior are retained.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `1ce15e2`, same immutable
+image, one warmup and three measured fresh processes: two species with 2,048
+taxonomy genes each, seven ranks, 64 total scaffolds, 2,050 candidate gene rows
+and 33 candidate branches. Complete attachment, including file reads, strict
+validation, full/background composition and branch pooling, took 1.520 to
+0.782 s (1.94×). Complete branch/gene TSV contents, types and index/order match.
+Median process peak RSS was 102.7 to 103.0 MiB (about 0.3 MiB more). The fixture
+includes shared isoform loci, reused IDs across species, missing mappings and
+unresolved recipients. Timing excludes fixture construction and fingerprinting;
+peak RSS includes both. No taxonomy database lookup, candidate discovery or
+full HGT-stage speedup is measured.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_scaffold_context.py \
+  --output scaffold-context.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,
