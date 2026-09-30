@@ -98,6 +98,12 @@ Empty protein files, duplicate IDs within a file, and prohibited characters are
 rejected. The species identity still comes from the filename; retain compatible
 IDs for downstream annotation joins.
 
+Representative-gene annotation and orthogroup selection retain literal protein
+and family IDs, including `001`, `NA`, `NULL`, and `nan`, through length tables,
+membership/count tables and BLAST/MMseqs hit joins. Empty ID fields remain
+missing; numeric count/length inference and missing annotation titles are
+unchanged.
+
 Important behavior:
 
 - in `input_sequence_mode="protein"`, GeneGalleon uses `species_protein`

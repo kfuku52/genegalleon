@@ -168,6 +168,19 @@ def get_species_protein_files(dir_species_protein):
     return sorted(files)
 
 
+def _literal_identifier(value):
+    return value if value else numpy.nan
+
+
+def _load_orthogroup_table(path, *, gene_membership=False):
+    columns = pandas.read_csv(path, header=0, sep="\t", nrows=0).columns
+    identifiers = [col for col in columns if gene_membership or col == "Orthogroup" or col.startswith("geneid_")]
+    return pandas.read_csv(
+        path, header=0, sep="\t", low_memory=False,
+        converters={col: _literal_identifier for col in identifiers},
+    )
+
+
 def get_concatenated_fx2tab(args):
     species_protein_files = get_species_protein_files(args.dir_species_protein)
     if len(species_protein_files) == 0:
@@ -187,7 +200,10 @@ def get_concatenated_fx2tab(args):
     fx2tab_stdout = run_command(command_fx2tab, tool_name="seqkit", capture_output=True)
     if fx2tab_stdout is None or len(fx2tab_stdout) == 0:
         return pandas.DataFrame(columns=["#id", "length"])
-    return pandas.read_csv(io.StringIO(fx2tab_stdout.decode("utf8")), sep="\t", header=0, low_memory=False)
+    return pandas.read_csv(
+        io.StringIO(fx2tab_stdout.decode("utf8")), sep="\t", header=0, low_memory=False,
+        converters={"#id": _literal_identifier},
+    )
 
 
 def get_df_gc_original(df_og_original, df_gc_original, fx2tab, args):
@@ -322,6 +338,7 @@ def _load_besthit_table(path_out):
             low_memory=False,
             usecols=[0, 1],
             names=["qseqid", "stitle"],
+            converters={"qseqid": _literal_identifier},
         )
     except (pandas.errors.EmptyDataError, ValueError):
         return pandas.DataFrame(columns=["qseqid", "stitle"])
@@ -490,9 +507,9 @@ def prepare_annotation(args):
         os.remove(quartile_path)
     print("Generating {}".format(quartile_path))
     file_og_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.tsv")
-    df_og_original = pandas.read_csv(file_og_in, header=0, sep="\t", low_memory=False)
+    df_og_original = _load_orthogroup_table(file_og_in, gene_membership=True)
     file_genecount_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.GeneCount.tsv")
-    df_gc_original = pandas.read_csv(file_genecount_in, header=0, sep="\t", low_memory=False)
+    df_gc_original = _load_orthogroup_table(file_genecount_in)
     df_gc_original_quartile = get_df_gc_original(df_og_original, df_gc_original, fx2tab, args)
     df_gc_original_quartile.to_csv(quartile_path, sep="\t", index=False)
     df_gc_original_annotated = annotate_representative_genes(df_gc_original_quartile, args)
@@ -502,7 +519,7 @@ def prepare_annotation(args):
 
 def select_orthogroups(args, file_genecount_in):
     file_genecount_out = os.path.join(args.dir_orthofinder_og, "Orthogroups.GeneCount.selected.tsv")
-    df_gc_original = pandas.read_csv(file_genecount_in, header=0, sep="\t", low_memory=False)
+    df_gc_original = _load_orthogroup_table(file_genecount_in)
     print("Number of orthogroups in Orthogroups.GeneCount.tsv: {:,}".format(df_gc_original.shape[0]))
     is_big_enough = df_gc_original["Total"] >= args.min_gene_num
     is_small_enough = df_gc_original["Total"] <= args.max_gene_num
@@ -552,7 +569,7 @@ def select_orthogroups(args, file_genecount_in):
 
     file_og_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.tsv")
     file_og_out = os.path.join(args.dir_orthofinder_og, "Orthogroups.selected.tsv")
-    df_og_original = pandas.read_csv(file_og_in, header=0, sep="\t", low_memory=False)
+    df_og_original = _load_orthogroup_table(file_og_in, gene_membership=True)
     print("Number of orthogroups in Orthogroups.tsv: {:,}".format(df_og_original.shape[0]))
     df_og = df_og_original.loc[(df_og_original["Orthogroup"].isin(df_gc["Orthogroup"])), :]
     df_og = df_og.reset_index(drop=True)
