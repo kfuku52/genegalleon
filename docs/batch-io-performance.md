@@ -318,6 +318,32 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_s
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## HGT host-scaffold classification
+
+Isoform disagreement is determined with one grouped distinct-label count rather
+than constructing a small table for each locus/rank. The same scaffold,
+count-unit, locus and rank boundaries are retained, including agreement at one
+rank and disagreement at another. Input filtering, taxonomy validation, locus
+counting, missing-group behavior and scaffold composition are unchanged.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `5e07d5d`, same immutable
+image, one warmup and three measured fresh processes: 2,048 input genes over
+32 scaffolds and seven ranks, including shared isoforms, conflicts, missing
+taxonomy, absent coordinates and trans-splicing. Complete classification and
+aggregation took 0.441 to 0.0758 s (5.82×). All 14,161 gene/rank rows and 224
+scaffold/rank rows, types, columns, order and index match; inputs remain unchanged.
+Median process peak RSS was 84.3 to 82.7 MiB. The local rank resolver returns
+fixed lineages; this excludes NCBI database lookup, file parsing, fixture
+construction and fingerprints, and is not a full HGT-stage measurement.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_scaffold_construction.py \
+  --output scaffold-construction.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## HGT host-scaffold context
 
 Gene context is assigned by column rather than by individual cell. Shared

@@ -247,9 +247,8 @@ def build_tables(gff_info, taxonomy, species, host_taxid, resolver, loci=None):
     # A locus on multiple scaffolds cannot be treated as single-scaffold evidence.
     if (genes.groupby(["count_unit", "locus_id"]).scaffold.nunique() > 1).any():
         raise ValueError("GFF locus maps to multiple scaffolds")
-    for _, group in genes.groupby(["scaffold", "count_unit", "locus_id", "rank"]):
-        if group.label.nunique() != 1:
-            genes.loc[group.index, "label"] = "unresolved"
+    conflicts = genes.groupby(["scaffold", "count_unit", "locus_id", "rank"]).label.transform("nunique").gt(1)
+    genes.loc[conflicts, "label"] = "unresolved"
     summaries = []
     for (scaffold, rank), group in genes.groupby(["scaffold", "rank"], sort=True):
         loci_group = group.drop_duplicates(["count_unit", "locus_id"])

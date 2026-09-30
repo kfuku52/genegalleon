@@ -65,6 +65,32 @@ def test_conflicting_isoforms_are_unresolved():
         scaffold.build_tables(pd.concat([gff, gff.assign(chromosome="other")]), tax, "Host_species", 3, scaffold.RankResolver(Ncbi()))
 
 
+def test_isoform_conflicts_keep_rank_and_count_unit_boundaries():
+    gff = pd.DataFrame({'gene_id': ['a', 'b', 'L'], 'chromosome': ['s'] * 3,
+                        'gff_transcript_id': ['t1', 't2', '']})
+    tax = pd.DataFrame({'gene_id': ['a', 'b', 'L'], 'lca_taxid': [3, 5, 3]})
+    genes, summaries = scaffold.build_tables(
+        gff, tax, 'Host_species', 3, scaffold.RankResolver(Ncbi()), {'t1': 'L', 't2': 'L'})
+    # The two isoforms agree at domain, disagree at phylum, and remain
+    # independent of the CDS-ID counting unit with the same literal locus ID.
+    assert genes.loc[genes['rank'].eq('domain'), 'label'].tolist() == ['compatible'] * 3
+    phylum = genes.loc[genes['rank'].eq('phylum')]
+    assert phylum.label.tolist() == ['unresolved', 'unresolved', 'compatible']
+    summary = summaries.loc[summaries['rank'].eq('phylum')].iloc[0]
+    assert summary.total_count == 2
+    assert summary.unresolved_count == 1
+    assert summary.compatible_count == 1
+    assert summary.cds_id_count == 1
+
+
+def test_missing_locus_group_retains_original_labels():
+    gff = pd.DataFrame({'gene_id': ['a'], 'chromosome': ['s'], 'gff_transcript_id': ['t']})
+    tax = pd.DataFrame({'gene_id': ['a'], 'lca_taxid': [3]})
+    genes, _summaries = scaffold.build_tables(
+        gff, tax, 'Host_species', 3, scaffold.RankResolver(Ncbi()), {'t': float('nan')})
+    assert genes.loc[genes['rank'].eq('phylum'), 'label'].tolist() == ['compatible']
+
+
 def test_explicit_gff3_and_gtf_loci(tmp_path):
     path = tmp_path / "input.gff"
     path.write_text("s\tx\tgene\t1\t9\t.\t+\t.\tID=g\n"
