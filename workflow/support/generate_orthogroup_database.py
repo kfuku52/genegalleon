@@ -3,6 +3,7 @@
 
 import argparse
 import atexit
+import csv
 import datetime
 import glob
 import io
@@ -14,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
@@ -117,18 +119,24 @@ def require_sqlalchemy():
 
 
 def read_header_columns(file_path, store=None, logical_subdir=None, logical_name=None):
+    """Read one logical TSV header, retaining duplicate and quoted names.
+
+    Match the data reader's quoting/BOM rules, including embedded tabs/newlines
+    and literal whitespace in column names. Do not use pandas here: its automatic
+    duplicate renaming would hide invalid input schemas.
     """
-    Read the first line of a TSV file and return column names.
-    """
-    if store is None:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as file_handle:
-            header_line = file_handle.readline().strip()
-    else:
-        with store.open_binary(logical_subdir, logical_name) as file_handle:
-            header_line = file_handle.readline().decode("utf-8", errors="replace").strip()
-    if not header_line:
-        return []
-    return header_line.split("\t")
+    with ExitStack() as stack:
+        if store is None:
+            file_handle = stack.enter_context(open(file_path, "r", encoding="utf-8-sig", errors="replace", newline=""))
+        else:
+            binary = stack.enter_context(store.open_binary(logical_subdir, logical_name))
+            file_handle = stack.enter_context(io.TextIOWrapper(binary, encoding="utf-8-sig", errors="replace", newline=""))
+        return next(csv.reader(file_handle, delimiter="\t"), [])
+
+
+def duplicate_columns(columns):
+    """Return the same sorted duplicates without recounting each wide column."""
+    return sorted(column for column, count in Counter(columns).items() if count > 1)
 
 
 def visible_entries(path):
@@ -220,9 +228,9 @@ def validate_csubst_scan_schemas(scan_dirs, store=None):
                 logical_subdir=logical_subdir,
                 logical_name=infile,
             )
-            duplicate_columns = sorted({col for col in header_columns if header_columns.count(col) > 1})
-            if duplicate_columns:
-                problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
+            duplicates = duplicate_columns(header_columns)
+            if duplicates:
+                problems.append(f"{file_path}: duplicate columns: {', '.join(duplicates)}")
                 continue
 
             header_set = frozenset(header_columns)
@@ -873,9 +881,9 @@ def _populate_database(args, parser, output_store):
                     logical_subdir=logical_subdir,
                     logical_name=infile,
                 )
-                duplicate_columns = sorted({column for column in infile_columns if infile_columns.count(column) > 1})
-                if duplicate_columns:
-                    schema_problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
+                duplicates = duplicate_columns(infile_columns)
+                if duplicates:
+                    schema_problems.append(f"{file_path}: duplicate columns: {', '.join(duplicates)}")
                 required_columns = set(STAT_TABLE_REQUIRED_COLUMNS.get(stat, set()))
                 if stat.startswith("cb"):
                     required_columns.update(name for name, _ in params["cutoff_stat"])

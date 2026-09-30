@@ -1,4 +1,5 @@
 import argparse
+import csv
 import gc
 import math
 import sqlite3
@@ -82,6 +83,84 @@ def test_read_header_columns_returns_tsv_header_columns(tmp_path):
     infile.write_text("col1\tcol2\tcol3\n1\t2\t3\n", encoding="utf-8")
 
     assert mod.read_header_columns(str(infile)) == ["col1", "col2", "col3"]
+
+
+@pytest.mark.parametrize('layout', ['files', 'store', 'zip'])
+@pytest.mark.parametrize('encoding', ['quoted', 'bom', 'quoted_bom'])
+def test_database_builder_accepts_encoded_headers(tmp_path, layout, encoding):
+    from workflow.support.gene_family_output_store import convert_storage_to_zip
+
+    root = tmp_path / 'families'
+    tree = root / 'stat_tree'
+    branch = root / 'stat_branch'
+    tree.mkdir(parents=True)
+    branch.mkdir()
+    optional = {'metric_plain': 1.25} if encoding == 'bom' else {
+        'metric\tα': 1.25, 'metric\nline': 2.5, 'quote"label': 4, ' spaced metric ': 1}
+    frames = [(stat_tree_frame(**optional), tree / 'OG0001_stat.tree.tsv'),
+              (stat_branch_frame(), branch / 'OG0001_stat.branch.tsv')]
+    for frame, path in frames:
+        frame.to_csv(path, sep='\t', index=False,
+                     quoting=csv.QUOTE_ALL if 'quoted' in encoding else csv.QUOTE_MINIMAL,
+                     encoding='utf-8-sig' if 'bom' in encoding else 'utf-8')
+        assert pandas.read_csv(path, sep='\t').columns.tolist() == frame.columns.tolist()
+    if layout == 'zip':
+        convert_storage_to_zip(root, 'orthogroup', ['OG0001'], lambda name: name.split('_')[0])
+    database = tmp_path / 'result.db'
+    command = [sys.executable, str(SCRIPT_PATH), '--dbpath', str(database),
+               '--dir_stat_tree', str(tree), '--dir_stat_branch', str(branch), '--ncpu', '1']
+    if layout != 'files':
+        command.extend(['--dir_gene_family', str(root)])
+    proc = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    with sqlite3.connect(database) as conn:
+        cursor = conn.execute('SELECT * FROM tree')
+        names = [column[0] for column in cursor.description]
+        row = dict(zip(names, cursor.fetchone(), strict=True))
+    assert row['orthogroup'] == 'OG0001'
+    for name, value in optional.items():
+        assert row[name] == value
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+@pytest.mark.parametrize('table', ['tree', 'scan'])
+@pytest.mark.parametrize('encoding', ['plain', 'quoted_bom'])
+def test_wide_duplicate_headers_remain_fatal_before_database_replacement(tmp_path, layout, table, encoding):
+    from workflow.support.gene_family_output_store import convert_storage_to_zip
+
+    mod = load_module()
+    root = tmp_path / 'families'
+    tree = root / 'stat_tree'
+    branch = root / 'stat_branch'
+    scan = root / 'csubst_scan'
+    for directory in (tree, branch, scan):
+        directory.mkdir(parents=True)
+    stat_tree_frame().to_csv(tree / 'OG0001_stat.tree.tsv', sep='\t', index=False)
+    stat_branch_frame().to_csv(branch / 'OG0001_stat.branch.tsv', sep='\t', index=False)
+    if table == 'tree':
+        path = tree / 'OG0001_stat.tree.tsv'
+        columns = sorted(mod.STAT_TABLE_REQUIRED_COLUMNS['tree'])
+    else:
+        path = scan / 'OG0001_csubst_scan.tsv'
+        columns = sorted(mod.CSUBST_SCAN_BASELINE_COLUMNS[mod.AA_CHANGE_TABLE])
+    columns += [f'optional_{i}' for i in range(2048)]
+    columns += ['repeated_z', 'repeated_α', 'repeated_z', 'repeated_a', 'repeated_a', 'repeated_α']
+    with path.open('w', encoding='utf-8-sig' if encoding == 'quoted_bom' else 'utf-8', newline='') as handle:
+        writer = csv.writer(handle, delimiter='\t', quoting=csv.QUOTE_ALL if encoding == 'quoted_bom' else csv.QUOTE_MINIMAL)
+        writer.writerow(columns)
+        writer.writerow(['1'] * len(columns))
+    if layout == 'zip':
+        convert_storage_to_zip(root, 'orthogroup', ['OG0001'], lambda name: name.split('_')[0])
+    database = tmp_path / 'published.db'
+    original = b'published database must survive duplicate header rejection'
+    database.write_bytes(original)
+    proc = subprocess.run([sys.executable, str(SCRIPT_PATH), '--dbpath', str(database), '--overwrite', '1',
+        '--dir_gene_family', str(root), '--dir_stat_tree', str(tree), '--dir_stat_branch', str(branch),
+        '--dir_csubst_aa_change', str(scan)], cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert 'duplicate columns: repeated_a, repeated_z, repeated_α' in proc.stderr
+    assert database.read_bytes() == original
+    assert not list(tmp_path.glob('.published.db.*.tmp'))
 
 
 def test_process_files_uses_single_read_csv_call(tmp_path, monkeypatch):

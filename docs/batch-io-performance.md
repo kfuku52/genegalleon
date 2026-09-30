@@ -27,6 +27,31 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## Wide-header validation
+
+Database and scan-schema preflight count each column name once, preserving
+sorted duplicate diagnostics and rejection before DB replacement. Duplicate
+checking no longer scans the full header for every column. The header reader
+now follows standard TSV quoting and UTF-8 BOM handling, matching the body
+reader. Quoted tabs/newlines, quotes and literal spaces in names are preserved;
+duplicates remain visible and fatal instead of being renamed by pandas.
+
+Linux arm64 Docker `local/genegalleon:dev`, Python 3.12.14, base `f6f68bf`, one
+warmup and three measured fresh processes: validating 128 scan headers with
+2,048 columns took 3.780 to 0.0466 s (81.1×) for raw files and 3.862 to 0.1304 s
+(29.6×) for ZIP-held files. Peak RSS stayed about 105 MiB raw / 107 MiB ZIP.
+The fixture includes one deliberate duplicate-column error; the complete sorted
+diagnostic matches. These measure strict schema preflight, not full DB creation.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_schema_validation.py \
+  --output /tmp/schema-validation.json
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_schema_validation.py \
+  --storage zip --output /tmp/schema-validation-zip.json
+```
+
+Use `--support-root` with a complete baseline support tree for comparison.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,
