@@ -330,7 +330,10 @@ def strip_species_label_terminal_suffixes(name):
 
 
 def extract_species_label(value, strip_extension=False):
-    name = Path(str(value or "")).name
+    name = str(value or "")
+    # A plain basename is unchanged by Path on both POSIX and Windows.
+    if type(name) is not str or name in ("", ".") or "/" in name or "\\" in name or ":" in name:
+        name = Path(name).name
     if strip_extension:
         name = strip_species_label_terminal_suffixes(name)
     parts = [part for part in name.split("_") if part != ""]

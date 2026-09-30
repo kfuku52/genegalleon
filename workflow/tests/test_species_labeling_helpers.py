@@ -1,5 +1,5 @@
 from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -307,6 +307,37 @@ def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
         mod.base_species_label("Cenchrus_americanus_x_Cenchrus_purpureus")
         == "Cenchrus_americanus_x_Cenchrus_purpureus"
     )
+
+
+@pytest.mark.parametrize("strip_extension", [False, True])
+@pytest.mark.parametrize("value,expected", [
+    ("Genus_species_gene1", "Genus_species"),
+    ("_Genus_species_gene1", "Genus_species"),
+    ("Dictyostelium_cf._discoideum_gene1", "Dictyostelium_cf._discoideum"),
+    ("Bacillus_subtilis_subsp._subtilis_gene1", "Bacillus_subtilis_subsp._subtilis"),
+    ("Citrus_×_limon_gene1", "Citrus_x_limon"),
+    ("dir/Genus_species_gene1", "Genus_species"),
+    ("dir//./Genus_species_gene1/", "Genus_species"),
+    ("Genus_species/.", "Genus_species"),
+    ("Genus_species//", "Genus_species"),
+    (Path("dir/Genus_species_gene1"), "Genus_species"),
+    ("", ""), (".", ""), ("..", ""), ("/", ""),
+    (None, ""), (False, ""), (0, ""),
+])
+def test_species_labeling_preserves_basename_and_path_labels(value, expected, strip_extension):
+    mod = load_module("species_labeling.py", "species_labeling_basename_module")
+    assert mod.extract_species_label(value, strip_extension=strip_extension) == expected
+
+
+@pytest.mark.parametrize("value", [
+    "Genus_species_gene1", "Genus_species/.", "dir/Genus_species_gene1/",
+    r"dir\Genus_species_gene1", r"C:\dir\Genus_species_gene1",
+    "C:Genus_species_gene1", r"\\server\share\Genus_species_gene1",
+])
+def test_species_labeling_preserves_windows_path_labels(monkeypatch, value):
+    mod = load_module("species_labeling.py", "species_labeling_windows_path_module")
+    monkeypatch.setattr(mod, "Path", PureWindowsPath)
+    assert mod.extract_species_label(value) == "Genus_species"
 
 
 def test_species_labeling_matches_species_label_exactly_after_suffix_stripping():

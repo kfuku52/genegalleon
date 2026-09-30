@@ -648,6 +648,15 @@ when removing the gene prefix gives a further 1.12× on the modern fixture:
 1.332 to 1.185 s against baseline `788aaf7`, with the same complete output
 fingerprints and near 154 MiB largest-child RSS. Qualified labels, normalized
 hybrid names and legacy suffix matching retain their original behavior.
+Avoiding Path construction for plain basenames gives a further 1.12× against
+baseline `21dc2e8`: 1.166 to 1.039 s on the modern fixture. Names with path
+separators or drive syntax, empty names and `.` still use Path; taxonomic parsing
+and suffix stripping are unchanged. The legacy/two-process fixture changed
+0.741 to 0.709 s (1.05×), and the small fixture 0.529 to 0.531 s (no gain).
+Complete fingerprints match in all three comparisons. Largest-child RSS was
+154 to 152 MiB for the modern fixture and near 147 MiB for legacy; no memory
+reduction is claimed. POSIX paths and Windows drive/UNC paths retain their
+basename semantics.
 Timing includes CLI startup, tree parsing, file reads, merges and writing the
 summary; fixture creation and fingerprints are excluded. It does not measure
 GRAMPA reconciliation or the full HGT workflow.
