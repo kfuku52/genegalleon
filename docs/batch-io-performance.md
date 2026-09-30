@@ -296,6 +296,9 @@ Empty IDs and missing trait values retain their prior missingness; numeric trait
 types are unchanged. Duplicate IDs, including repeated empty IDs, remain errors
 and consistently raise ValueError rather than failing while formatting the
 diagnostic. This is a parsing fix; no speedup is claimed.
+UniProt gene IDs, RPS-BLAST query IDs and expression row IDs use the same literal
+reading rule before branch joins. Only identifiers change: annotation missingness,
+numeric expression values, e-value types and hit-filter thresholds are retained.
 
 ## Wide-header validation
 
