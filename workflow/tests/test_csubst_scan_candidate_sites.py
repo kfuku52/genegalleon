@@ -123,6 +123,60 @@ def test_input_state_annotation_keeps_empty_schema_and_lookup_error_order():
         mod.annotate_candidate_input_state(frame, {"known": {"missing_required_inputs": [], "required_input_signature": "signature"}})
 
 
+@pytest.mark.parametrize("numeric_dtype", ["float32", "float64", "Float32"])
+@pytest.mark.parametrize("duplicate_metadata", [False, True])
+def test_candidate_identity_keeps_scalar_precision_nullable_types_and_exact_hashes(numeric_dtype, duplicate_metadata):
+    mod = load_module()
+    frame = pd.DataFrame({
+        "orthogroup": ["OG_001", "NA"], "trait": pd.Series(["aquatic", pd.NA], dtype="string"),
+        "state_change": ["A>V", "G>D"], "codon_site_alignment": pd.Series([9, 4], dtype="Int64"),
+        "from_state": pd.Series([0.1, float("nan")], dtype=numeric_dtype),
+        "to_state": pd.Series([1, 2], dtype="UInt64"), "_canonical_support_branch_ids": ["3,7", None],
+        "unused": pd.Categorical(["u", "v"]),
+    })
+    if duplicate_metadata:
+        frame = pd.concat([frame, frame[["unused"]]], axis=1)
+    frame.index = pd.Index([8, 8], name="source_row")
+    original = frame.copy(deep=True)
+    output = mod.assign_candidate_ids(frame, "no", "none")
+    if numeric_dtype == "float64":
+        first_id = "OG_001_site9_A_V_bffa70544fc05999"
+        first_key = "c5176013feda1aab58d957f5fdec9cc2507e576c433f599401f73de51f719f5c"
+    else:
+        first_id = "OG_001_site9_A_V_3bc868909033769b"
+        first_key = "c3494a1c7b77f5d57fb3cac19bf0663c0cd4c06ecead8449ba6b69b1f3b7e100"
+    expected_ids = [first_id, "NA_site4_G_D_8faacf8f38690d6d"]
+    expected_keys = [first_key, "af336d6fb3bf5090ac8403c06eb2d1d977e47d3f6cfed19b38caaac3360aec39"]
+    assert output["_candidate_id"].tolist() == expected_ids
+    assert output["_analysis_key"].tolist() == expected_keys
+    assert output["_cache_name"].tolist() == [f"{identifier}_{key[:16]}" for identifier, key in zip(expected_ids, expected_keys, strict=True)]
+    pd.testing.assert_frame_equal(output.drop(columns=["_candidate_id", "_analysis_key", "_cache_name"]), original)
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_candidate_identity_keeps_numeric_legacy_row_coercion():
+    mod = load_module()
+    frame = pd.DataFrame({"orthogroup": [1], "state_change": [2], "codon_site_alignment": [3], "unused": [0.5]})
+    output = mod.assign_candidate_ids(frame, "no", "none")
+    assert output["_candidate_id"].tolist() == ["1.0_site3_2.0_115c165d73c91d2d"]
+    assert output["_analysis_key"].tolist() == ["848090a1a470c3c8b6a0d18122aa9fdbe36a90f369df6f87888ad51bbffdb7a0"]
+
+
+def test_candidate_identity_keeps_duplicate_rejection_empty_schema_and_error_order():
+    mod = load_module()
+    empty = mod.assign_candidate_ids(pd.DataFrame(), "no", "none")
+    assert empty.empty and empty.columns.tolist() == ["_candidate_id", "_analysis_key", "_cache_name"]
+    with pytest.raises(KeyError, match="codon_site_alignment"):
+        mod.assign_candidate_ids(pd.DataFrame({"orthogroup": ["OG1"]}), "no", "none")
+    with pytest.raises(ValueError, match="cannot convert float NaN to integer"):
+        mod.assign_candidate_ids(pd.DataFrame({"orthogroup": ["OG1"], "codon_site_alignment": [float("nan")]}), "no", "none")
+    frame = pd.DataFrame({"orthogroup": ["OG1", "OG1"], "codon_site_alignment": [1, 1], "state_change": ["A>V", "A>V"]})
+    original = frame.copy(deep=True)
+    with pytest.raises(ValueError, match="Candidate IDs are not unique"):
+        mod.assign_candidate_ids(frame, "no", "none")
+    pd.testing.assert_frame_equal(frame, original)
+
+
 def write_summary(path, frame=None):
     if frame is None:
         frame = candidate_rows()

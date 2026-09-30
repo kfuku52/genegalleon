@@ -81,7 +81,7 @@ Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs. Add
 `--genes 32 --codons 32` for the short-sequence control.
 
-## CSUBST candidate input-state annotation
+## CSUBST candidate identity and input-state annotation
 
 Candidate input-state annotation reads compact tuples of its three needed
 identifier columns, retaining the existing row behavior for non-string IDs or
@@ -98,11 +98,25 @@ inputs and nondefault source-row indexes:
 | 8,192 candidates | 0.101 s | 0.0160 s | 6.32× |
 | 32 candidates / 32 families | 0.936 ms | 0.928 ms | No material gain |
 
+Candidate-ID assignment separately avoids per-row Series construction and named
+cell lookups when columns are unique/flat and orthogroup IDs are strings. It uses
+the same mixed array values as the original loop, preserving scalar precision,
+nullable values, identity JSON, analysis/cache hashes and duplicate rejection.
+Other inputs retain the original row coercion and error order. Compared with
+`cb9c3f2` using the same environment/process sampling and full identity fields:
+
+| Candidate-ID assignment | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| 8,192 candidates / 256 families | 0.278 s | 0.143 s | 1.94× |
+| 32 candidates / 32 families | 1.79 ms | 1.24 ms | 1.44× |
+
 Every output value, type, column and index/order matches; the input table remains
 unchanged. Large-case peak RSS stayed about 139 MiB, without an established memory
-saving. Timing includes copying and annotation but excludes fixture construction
-and fingerprinting; peak RSS includes both. This does not measure input discovery,
-artifact hashing, scientific scans, candidate-ID assignment or site analysis.
+saving (about 143–144 MiB with ID assignment). Timing includes copying and
+annotation but excludes fixture construction and fingerprinting; peak RSS includes
+both. This does not measure input discovery,
+artifact hashing, scientific scans or site analysis; the first table excludes ID
+assignment.
 
 ```bash
 bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_candidate_input_state.py \
@@ -112,6 +126,8 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_candi
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs. Add
 `--candidates 32 --families 32` for the small control.
+Add `--assign-ids` to measure ID assignment separately and fingerprint its complete
+output through subsequent input-state annotation.
 
 ## GFF transcript statistics
 

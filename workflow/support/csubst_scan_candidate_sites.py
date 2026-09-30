@@ -387,7 +387,12 @@ def assign_candidate_ids(frame, csubst_nonsyn_recode, pdb):
     candidate_ids = []
     analysis_keys = []
     cache_names = []
-    for _, row in frame.iterrows():
+    rows = (row for _, row in frame.iterrows())
+    if (frame.columns.is_unique and not isinstance(frame.columns, pd.MultiIndex)
+            and "orthogroup" in frame and all(type(value) is str for value in frame["orthogroup"])):
+        # String IDs keep iterrows' mixed object values without constructing a Series.
+        rows = (dict(zip(frame.columns, values, strict=True)) for values in frame.values)
+    for row in rows:
         identity = candidate_identity(row)
         identity_text = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         identity_digest = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:16]
