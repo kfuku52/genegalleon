@@ -110,6 +110,60 @@ def test_guard_capacity_fails_closed_instead_of_dropping_source_checks():
         memo.guard("two", 2, lambda: 2)
 
 
+def test_digest_capacity_fails_closed_even_for_concurrent_first_reads(tmp_path):
+    memo = AuditDigests(limit=1)
+    paths = []
+    for index in range(256):
+        path = tmp_path / str(index)
+        key = str(path.absolute()), None, False, None
+        if not paths or hash(key) % 256 != hash((str(paths[0].absolute()), None, False, None)) % 256:
+            path.write_bytes(b"abc")
+            paths.append(path)
+        if len(paths) == 2:
+            break
+    barrier = threading.Barrier(2)
+    def read(path):
+        first = True
+        def compute():
+            nonlocal first
+            if first:
+                first = False
+                barrier.wait(timeout=5)
+            return hashlib.sha256(path.read_bytes()).hexdigest(), 3
+        return memo.read(path, compute)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(read, path) for path in paths]
+        outcomes = []
+        for future in futures:
+            try:
+                outcomes.append(future.result())
+            except ValueError as exc:
+                outcomes.append(str(exc))
+    assert sum(isinstance(value, str) and "bounded capacity" in value for value in outcomes) == 1
+    assert len(memo.entries) == 1
+    memo.validate()
+
+
+def test_workspace_mutation_between_manifest_reads_cannot_rebind_digest(tmp_path, monkeypatch):
+    logical = fixture(tmp_path, families=2)
+    original = provenance.audit_manifest
+    def changing(payload, *args):
+        result = original(payload, *args)
+        if payload["family_id"] == "OG0000000":
+            shared = tmp_path / "shared.tsv"
+            shared.write_bytes(shared.read_bytes() + b"changed\n")
+            second = logical / "artifact_provenance/OG0000001.example.json"
+            updated = json.loads(second.read_text())
+            updated["inputs"][0]["sha256"] = hashlib.sha256(shared.read_bytes()).hexdigest()
+            updated["inputs"][0]["size_bytes"] = shared.stat().st_size
+            second.write_text(json.dumps(updated))
+        return result
+    monkeypatch.setattr(provenance, "audit_manifest", changing)
+    report = tmp_path / "audit.tsv"
+    assert provenance.audit(arguments(tmp_path, logical, report, workers=1)) == 1
+    assert "snapshot_identity\taudit_error" in report.read_text()
+
+
 @pytest.mark.parametrize("marker", [INDEX_EPOCH_FILE, INDEX_UPDATE_FILE])
 def test_store_snapshot_rejects_metadata_publication_or_interrupted_update(tmp_path, marker):
     store = GeneFamilyOutputStore(tmp_path)

@@ -124,18 +124,23 @@ class AuditDigests:
             before = signature(path)
             with self.lock:
                 previous = self.entries.get(key)
-                if previous is not None and previous[0] == before:
+                if previous is not None:
+                    if previous[0] != before:
+                        raise ValueError(f"Audit source changed during the audit: {path}")
                     self.cache_hits += 1
                     return previous[1]
+                if len(self.entries) >= self.limit:
+                    raise ValueError("Audit digest inventory exceeds its bounded capacity")
             members = directory_signature(path) if directory else None
             value = compute()
             if signature(path) != before or directory and directory_signature(path) != members:
                 raise ValueError(f"Audit source changed while hashing: {path}")
             with self.lock:
+                if key not in self.entries and len(self.entries) >= self.limit:
+                    raise ValueError("Audit digest inventory exceeds its bounded capacity")
                 self.bytes_hashed += int(value[1])
                 self.unique_sources += 1
-                if len(self.entries) < self.limit or key in self.entries:
-                    self.entries[key] = before, value, members, compute
+                self.entries[key] = before, value, members, compute
             return value
 
     def guard(self, key, identity, reader):

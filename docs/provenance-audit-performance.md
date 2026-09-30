@@ -13,7 +13,8 @@ archive-index scans. Raw/ZIP source selection, pending-index, symlink, tombstone
 and generation checks remain enforced. Thread pools and their submission windows
 are bounded; the default is up to four workers, capped by `GG_TASK_CPUS`.
 `--workers 1` selects serial operation. Run-scoped caches hold at most 250,000
-sources/guards; a guard-capacity overflow fails instead of dropping a check.
+sources/guards; either capacity overflow fails instead of dropping a check.
+Repeated reads reject a changed source identity instead of rebinding its digest.
 The audit holds up to eight ZIP readers per thread and closes them at the fence.
 
 ## Evidence, 2026-09-30
@@ -23,24 +24,27 @@ family table across 15 manifests. Each run uses Linux Python 3.12.14 in the same
 `local/genegalleon:dev` Docker runtime, limited to 4 CPUs/4 GiB. The baseline is
 GeneGalleon `63efea916bee99eeae98d2ae30ead62b374b91f4`. Separate warmups precede
 three measurements per version; baseline trials use an ABBAAB sequence.
-Run-scoped RAM caches start empty; the baseline retains its persistent digest
+Final candidate trials were repeated three times after the capacity and
+source-identity guards were tightened. Run-scoped RAM caches start empty; the
+baseline retains its persistent digest
 cache warmed by prior trials. The new full audit intentionally ignores those
 persistent digests. OS caches are not forcibly cleared.
 
 | Layout | Families / manifests | Baseline median | New median | Speedup |
 |---|---:|---:|---:|---:|
-| Raw | 1,000 / 15,000 | 45.54 s | 8.33 s | 5.47× |
-| ZIP | 300 / 4,500 | 90.91 s | 2.78 s | 32.66× |
-| Mixed raw/ZIP | 300 / 4,500 | 63.57 s | 3.17 s | 20.04× |
+| Raw | 1,000 / 15,000 | 45.54 s | 8.16 s | 5.58× |
+| ZIP | 300 / 4,500 | 90.91 s | 2.64 s | 34.44× |
+| Mixed raw/ZIP | 300 / 4,500 | 63.57 s | 2.55 s | 24.90× |
 
 Every baseline/candidate TSV SHA256 matches within its fixture. These are
 complete fixture audits; the fixture has no CSUBST branch data. Existing branch
 identity regressions exercise those unchanged scientific checks separately.
 These numbers are not an ETA for a running scientific job.
 
-Six 6,815-family / 102,225-manifest runs took 60.30–65.18 seconds with a maximum
+Seven 6,815-family / 102,225-manifest runs took 60.30–65.40 seconds with a maximum
 262.65 MiB peak RSS. Every TSV SHA256 matched. Instrumented atomic progress
-publication consumed at most 0.27% of wall time. Progress-on/off medians were
+publication consumed at most 0.27% of wall time. In the six paired trials,
+progress-on/off medians were
 64.33/61.77 seconds, with overlapping ranges: this jitter does not independently
 establish an end-to-end overhead bound. The 0.27% measurement covers snapshot
 publication rather than total filesystem traffic or all audit bookkeeping.
