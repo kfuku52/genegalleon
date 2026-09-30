@@ -577,6 +577,44 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_scaff
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Indexed FASTA output formatting
+
+Plain alphabetic sequence strings are emitted in 60-character slices instead
+of using a general paragraph wrapper. Headers and line endings are unchanged.
+Empty, gapped, whitespace-containing and other nonalphabetic sequences retain
+the original wrapping behavior, as do string subclasses. Index schema, search
+options, source order, decompression, storage budgets and integrity checks are
+unchanged.
+
+Linux arm64 Docker, Python 3.12.14, baseline `5c17333`, the same immutable image,
+one warmup and three measured fresh processes: 4,096 records of 1,536 characters
+each, interleaving DNA/protein, lowercase, gap/stop and whitespace cases:
+
+| Operation | Before | After | Speedup |
+| --- | ---: | ---: | ---: |
+| Record formatting to a text buffer | 0.417 s | 0.089 s | 4.69× |
+| Indexed extraction API including search, decompression and file output | 0.456 s | 0.115 s | 3.97× |
+
+Both complete output byte fingerprints match. Extraction uses reversed query
+order, case-insensitive variants, species prefixes and `require_all`; the real
+SQLite builder uses its default storage budgets. Source FASTA and database
+bytes remain unchanged and database integrity verification succeeds before
+and after extraction. Median process peak RSS was 46.9 to 47.7 MiB, including
+fixtures; no memory reduction is claimed. The 32-record/90-character control's
+extraction difference was only 0.590 to 0.401 ms. Timings exclude fixture/index
+construction and fingerprints. These are formatting and extraction API
+measurements, not complete CLI, store construction or scientific analysis runs.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_fasta_output.py \
+  --output fasta-output.json
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_fasta_output.py \
+  --records 32 --length 90 --output fasta-output-small.json
+```
+
+Use `--support-root` with a complete baseline support tree and the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## GRAMPA species-gene summary assignment
 
 The parsing CLI fills a temporary row/species object array and writes the

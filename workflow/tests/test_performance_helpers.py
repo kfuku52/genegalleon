@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -9,7 +10,10 @@ import subprocess
 import sys
 import time
 import zlib
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SUPPORT = REPO_ROOT / "workflow" / "support"
@@ -127,6 +131,42 @@ fi
         timeout=5,
     )
     assert result.returncode == 0, result.stderr
+
+
+def sequence_store_module():
+    spec = spec_from_file_location("sequence_store_formatting", SUPPORT / "fasta_sequence_store.py")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("length", [1, 59, 60, 61, 119, 120, 121, 1536])
+@pytest.mark.parametrize("motif", ["ACGTNacgtn", "MKWVTFISLLFLFSSAYS", "αβγδ"])
+def test_sequence_store_formatter_retains_header_sequence_and_sixty_character_lines(length, motif):
+    mod = sequence_store_module()
+    sequence = (motif * (length // len(motif) + 1))[:length]
+    handle = io.StringIO()
+    mod.write_record(handle, "Genus_species_gene1 description", sequence)
+    content = handle.getvalue()
+    lines = content.splitlines()
+    assert lines[0] == ">Genus_species_gene1 description"
+    assert "".join(lines[1:]) == sequence
+    assert all(len(line) == 60 for line in lines[1:-1])
+    assert 1 <= len(lines[-1]) <= 60
+    assert content.endswith("\n")
+
+
+@pytest.mark.parametrize(("sequence", "body"), [
+    ("", "\n"), ("    ", "\n"),
+    ("A" * 48 + "-" + "B" * 30, "A" * 48 + "-\n" + "B" * 30 + "\n"),
+    ("AC GT\t NN\nAA", "AC GT    NN AA\n"),
+    ("A" * 59 + "*" + "B" * 61, "A" * 59 + "*\n" + "B" * 60 + "\nB\n"),
+    ("A" * 59 + "1" + "B" * 61, "A" * 59 + "1\n" + "B" * 60 + "\nB\n"),
+])
+def test_sequence_store_formatter_retains_legacy_empty_gap_and_whitespace_bytes(sequence, body):
+    handle = io.StringIO()
+    sequence_store_module().write_record(handle, "header description", sequence)
+    assert handle.getvalue() == ">header description\n" + body
 
 
 def test_fasta_sequence_store_reuses_index_and_extracts_query_variants(tmp_path: Path):
