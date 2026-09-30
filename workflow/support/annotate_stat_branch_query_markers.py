@@ -219,11 +219,8 @@ def best_blast_sources_by_node(tip_names, query_blast_path, min_query_blast_cove
 
     out = {}
     for node_name, group in best.groupby("node_name", sort=False):
-        group = group.sort_values(
-            by=["qacc", "qjointcov_num", "evalue_sort", "bitscore_sort"],
-            ascending=[True, False, True, False],
-            kind="mergesort",
-        )
+        # Best hits have unique qacc values and grouping preserves the global
+        # qacc order above, including aligned metric/source lists.
         out[node_name] = {
             "query_ids": unique_preserve_order(group["qacc"].astype(str).tolist()),
             "evalues": [format_float(x) for x in group["evalue_num"].tolist()],

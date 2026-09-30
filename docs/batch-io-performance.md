@@ -152,14 +152,15 @@ once. Each tip checks suffixes at the existing underscore, hyphen and dot
 boundaries. Exact sources retain priority, gene-list sources retain catalog
 order, and FASTA IDs still require exact matching. Branch annotation reads the
 node/tip columns directly rather than constructing Series for every branch.
-BLAST filtering, best-hit selection and marker columns are unchanged.
+Best-hit groups retain the existing global query order without sorting again
+per node. BLAST filtering, best-hit selection and marker columns are unchanged.
 
 Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `5f8cf15`, same immutable
 image, one warmup and three measured fresh processes: 4,096 tips plus four edge
 controls, 512 base query IDs plus overlapping suffixes and exact FASTA IDs,
 internal branches and competing BLAST hits. Direct source matching took 1.704
-to 0.0315 s (54.0×); complete 4,613-row branch annotation, including input/output
-and BLAST processing, took 1.818 to 0.0877 s (20.7×). Complete direct-source
+to 0.0283 s (60.3×); complete 4,613-row branch annotation, including input/output
+and BLAST processing, took 1.818 to 0.0506 s (35.9×). Complete direct-source
 maps, output TSV bytes and reported marker count match. Median peak RSS was
 about 78.8 / 78.6 MiB. Fixture construction/fingerprinting are excluded from
 timing and included in peak RSS. Gains for smaller query catalogs will differ;
