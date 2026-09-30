@@ -961,6 +961,11 @@ def filename2sciname(file_name):
     return sci_name
 
 
+def gff_sequence_identifier(value):
+    """Keep contig names literal, without changing empty-field missingness."""
+    return value if value else numpy.nan
+
+
 def read_gff_table(gff_path):
     try:
         return pandas.read_csv(
@@ -970,6 +975,7 @@ def read_gff_table(gff_path):
             comment="#",
             low_memory=False,
             quoting=3,
+            converters={0: gff_sequence_identifier},
         )
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()

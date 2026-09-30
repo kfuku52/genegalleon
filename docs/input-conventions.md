@@ -120,6 +120,10 @@ start/end bounds. Identical blocks are counted once. Conflicting equal-length
 transcripts, mixed coordinate systems, or duplicate gene summaries are errors;
 they must not multiply rows in the downstream branch table.
 
+GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
+remain unchanged when read and must match the reference FASTA headers. Numeric
+coordinates and other columns retain their usual type and missing-value handling.
+
 Prefer one annotation source per species. Where a workflow retains multiple
 sources, `gg_gene_evolution` passes its read-only FASTA sequence store to
 `gff2genestat.py --sequence-store`. The requested identifier and sequence must

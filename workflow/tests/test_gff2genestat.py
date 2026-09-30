@@ -18,6 +18,57 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('seqids', [['001', '002'], ['NA', 'NULL', 'nan', '001']])
+def test_gff_sequence_identifiers_remain_literal_through_genomic_extraction(tmp_path, compressed, seqids):
+    import gzip
+
+    from workflow.support.cds_resolution import extract_genomic_candidates
+    from workflow.support.gff2genestat import read_gff_table
+
+    name = 'Plant_species.gff' + ('.gz' if compressed else '')
+    path = tmp_path / name
+    text = ''.join(f'{seqid}\ts\tCDS\t1\t9\t.\t+\t0\tID=g{i};Parent=g{i}\n'
+                   for i, seqid in enumerate(seqids))
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    table = read_gff_table(str(path))
+    assert table[0].tolist() == seqids
+    assert table[3].tolist() == [1] * len(seqids)
+    assert table[4].tolist() == [9] * len(seqids)
+    assert table[7].tolist() == [0] * len(seqids)
+    assert table[5].tolist() == ['.'] * len(seqids)
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    output_columns = OUT_COLS + ['feature_block_sequences', 'feature_block_strands']
+    identifiers = [f'Plant_species_g{i}' for i in range(len(seqids))]
+    traits = process_single_gff(name, str(tmp_path), identifiers, 'CDS', 'longest', columns, output_columns)
+    assert traits.chromosome.tolist() == seqids
+    assert traits.feature_block_sequences.tolist() == seqids
+    genome = tmp_path / 'genome.fa'
+    genome.write_text(''.join(f'>{seqid}\nATGAAATAA\n' for seqid in seqids))
+    assert extract_genomic_candidates(traits, genome) == {identifier: 'ATGAAATAA' for identifier in identifiers}
+
+
+def test_gff_identifier_conversion_keeps_other_missing_values_and_numeric_columns(tmp_path):
+    from workflow.support.gff2genestat import read_gff_table
+
+    path = tmp_path / 'table.gff'
+    path.write_text('\ts\tCDS\t1\t9\tNA\t+\t0\tID=a\n'
+                    '001\ts\tCDS\t10\t18\t\t+\t.\tID=b\n'
+                    'chr1\ts\tCDS\t19\t27\t2.5\t+\t2\tID=c\n')
+    table = read_gff_table(str(path))
+    assert pandas.isna(table.at[0, 0])
+    assert table.loc[1:, 0].tolist() == ['001', 'chr1']
+    assert table[3].tolist() == [1, 10, 19]
+    assert table[4].tolist() == [9, 18, 27]
+    assert table[5].isna().tolist() == [True, True, False]
+    assert table.at[2, 5] == 2.5
+    assert table[7].tolist() == ['0', '.', '2']
+
+
 def test_longest_selects_one_transcript_before_summarizing():
     gff = pandas.DataFrame(
         [
