@@ -174,6 +174,35 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Seeded single-copy ortholog decay
+
+Repeated decay calculations use cumulative Boolean intersections instead of
+integer counters for all-present/all-single-copy metrics. When permutations
+reuse more columns than a complete table pass, species-major presence and
+single-copy masks are computed once. Small partial runs avoid that full-table
+work. Species permutations, seed handling, requested count order, all/selected
+metrics and summary/plot formats remain unchanged; input arrays are untouched.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `dff3b95`, same immutable
+image, one warmup and three measured fresh processes: 8,192 orthogroups, 64
+species, 128 permutations, five requested subset sizes; selected mode also
+includes 4,096 selected orthogroups. Calculation plus summary took 0.133 to
+0.0216 s (6.13×) in all mode and 0.163 to 0.0265 s (6.17×) in selected mode.
+Every seeded replicate value and complete summary TSV/type/order matches.
+Median process peak RSS was 78.6 to 79.9 MiB (about 1.3 MiB more). Cached masks
+use two Boolean bytes per all-table cell plus one per selected-table cell;
+cumulative state uses less space than the previous integer counters.
+Fixture construction/fingerprinting are excluded from timing and included in
+peak RSS. These measurements exclude file parsing and figure rendering/export.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_ortholog_decay.py \
+  --output ortholog-decay.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,

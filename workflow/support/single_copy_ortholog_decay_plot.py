@@ -150,29 +150,39 @@ def calculate_decay(counts, species_counts, replicates, seed, selected_counts=No
     num_metrics = 4 if selected_counts is not None else 3
     values = numpy.zeros((replicates, len(species_counts), num_metrics), dtype=numpy.float64)
     rng = numpy.random.default_rng(seed)
+    # Cache comparisons only when the requested permutations reuse more
+    # columns than a complete pass; small partial runs avoid full-matrix work.
+    cache_masks = replicates * max_species_count > num_species
+    present_by_species = numpy.greater_equal(counts.T, 1, order="C") if cache_masks else None
+    single_by_species = numpy.equal(counts.T, 1, order="C") if cache_masks else None
+    selected_by_species = (
+        numpy.greater_equal(selected_counts.T, 1, order="C")
+        if cache_masks and selected_counts is not None else None
+    )
 
     for replicate in range(replicates):
         species_order = rng.permutation(num_species)
         present_seen = numpy.zeros(num_orthogroups, dtype=bool)
-        present_count = numpy.zeros(num_orthogroups, dtype=numpy.int32)
-        single_count = numpy.zeros(num_orthogroups, dtype=numpy.int32)
+        all_present = numpy.ones(num_orthogroups, dtype=bool)
+        all_single = numpy.ones(num_orthogroups, dtype=bool)
         if selected_counts is not None:
             selected_present_seen = numpy.zeros(selected_counts.shape[0], dtype=bool)
 
         for position in range(1, max_species_count + 1):
-            current_counts = counts[:, species_order[position - 1]]
-            present = current_counts >= 1
+            species = species_order[position - 1]
+            present = present_by_species[species] if cache_masks else counts[:, species] >= 1
+            single = single_by_species[species] if cache_masks else counts[:, species] == 1
             present_seen |= present
-            present_count += present
-            single_count += current_counts == 1
+            all_present &= present
+            all_single &= single
             if selected_counts is not None:
-                selected_present_seen |= selected_counts[:, species_order[position - 1]] >= 1
+                selected_present_seen |= selected_by_species[species] if cache_masks else selected_counts[:, species] >= 1
 
             summary_index = species_count_to_index.get(position)
             if summary_index is None:
                 continue
-            strict_single_copy = int((single_count == position).sum())
-            non_missing = int((present_count == position).sum())
+            strict_single_copy = int(all_single.sum())
+            non_missing = int(all_present.sum())
             all_observed = int(present_seen.sum())
             if selected_counts is None:
                 values[replicate, summary_index, :] = [strict_single_copy, non_missing, all_observed]

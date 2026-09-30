@@ -98,6 +98,41 @@ def test_decay_metrics_are_nested_for_all_species_count(tmp_path):
     assert observed["all_observed"] == (4.0, 0.0)
 
 
+@pytest.mark.parametrize("layout", ["C", "F", "sliced"])
+@pytest.mark.parametrize("selected", ["none", "subset", "empty"])
+@pytest.mark.parametrize("replicates,sizes", [(1, [1]), (1, [3, 1, 4]), (7, [3, 1, 4])])
+def test_seeded_decay_matches_direct_species_subset_counts(layout, selected, replicates, sizes):
+    mod = load_module()
+    np = mod.numpy
+    original = np.array([[1, 1, 1, 1], [1, 2, 0, 1], [0, 0, 0, 0], [2, 2, 2, 2], [1, 0, 1, 0]])
+    if layout == "F":
+        counts = np.asfortranarray(original)
+    elif layout == "sliced":
+        expanded = np.zeros((len(original), 8), dtype=original.dtype)
+        expanded[:, ::2] = original
+        counts = expanded[:, ::2]
+    else:
+        counts = original.copy()
+    chosen = None if selected == "none" else counts[::2] if selected == "subset" else counts[:0]
+    counts.setflags(write=False)
+    if chosen is not None:
+        chosen.setflags(write=False)
+    expected = np.zeros((replicates, len(sizes), 3 if chosen is None else 4))
+    rng = np.random.default_rng(918)
+    for trial in range(replicates):
+        order = rng.permutation(counts.shape[1])
+        for index, size in enumerate(sizes):
+            subset = counts[:, order[:size]]
+            metrics = [int((subset == 1).all(axis=1).sum()), int((subset >= 1).all(axis=1).sum())]
+            if chosen is not None:
+                metrics.append(int((chosen[:, order[:size]] >= 1).any(axis=1).sum()))
+            metrics.append(int((subset >= 1).any(axis=1).sum()))
+            expected[trial, index, :] = metrics
+    observed = mod.calculate_decay(counts, sizes, replicates, seed=918, selected_counts=chosen)
+    np.testing.assert_array_equal(observed, expected)
+    np.testing.assert_array_equal(counts, original)
+
+
 def test_run_writes_summary_and_plot(tmp_path):
     mod = load_module()
     path = tmp_path / "Orthogroups.GeneCount.tsv"
