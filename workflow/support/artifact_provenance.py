@@ -58,6 +58,7 @@ CHUNK_SIZE = 1024 * 1024
 MANIFEST_SUBDIR = "artifact_provenance"
 _LOGICAL_OBSERVATION_STORE = contextvars.ContextVar("genegalleon_logical_observation_store", default=None)
 _RUNTIME_SUPPORT_ROOT = contextvars.ContextVar("genegalleon_runtime_support_root", default=None)
+_DIGEST_OBSERVATION = contextvars.ContextVar("genegalleon_digest_observation", default=None)
 DEFAULT_REQUIRED_STEP_SUBDIRS = {
     "iqtree_anc": "iqtree_anc",
     "csubst": "csubst_b",
@@ -105,12 +106,58 @@ def _runtime_path(path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def logical_observation(args):
+def digest_observation():
+    """Share content reads within one query, then rehash every unique source.
+
+    Never reuse persistent digests as read-only verification evidence. Nested
+    preflights share the outer query's final content fence, not an older result.
+    """
+    existing = _DIGEST_OBSERVATION.get()
+    if existing is not None:
+        yield existing
+        return
+    memo = AuditDigests()
+    previous = digest_cache()
+    configure_digest_cache(None)
+    token = _DIGEST_OBSERVATION.set(memo)
+    try:
+        yield memo
+        without_digest_reuse(memo.validate)
+    finally:
+        _DIGEST_OBSERVATION.reset(token)
+        configure_digest_cache(previous.database if previous is not None else None)
+
+
+def without_digest_reuse(compute):
+    token = _DIGEST_OBSERVATION.set(None)
+    try:
+        return compute()
+    finally:
+        _DIGEST_OBSERVATION.reset(token)
+
+
+def scoped_digest_reader(compute):
+    # AuditDigests performs final reads in worker threads. Carry the explicit
+    # immutable runtime mapping, logical store and read-only observation into
+    # those reads; a thread's empty Context would lose ZIP-backed paths.
+    context = contextvars.copy_context()
+    return lambda: context.copy().run(without_digest_reuse, compute)
+
+
+@contextlib.contextmanager
+def logical_observation(args, store=None):
     """Read the same logical bytes runtime materialization would provide."""
-    store = GeneFamilyOutputStore(args.logical_root, family_filter=args.family_id)
+    existing = _LOGICAL_OBSERVATION_STORE.get()
+    if store is None and existing is not None and (
+            existing.root == args.logical_root.resolve() and existing.family_filter == args.family_id):
+        store = existing
+    shared = store is not None
+    if shared and (store.root != args.logical_root.resolve() or store.family_filter != args.family_id):
+        raise ProvenanceError("Logical observation store does not match the contract")
+    store = store or GeneFamilyOutputStore(args.logical_root, family_filter=args.family_id)
     token = _LOGICAL_OBSERVATION_STORE.set(store)
     try:
-        with read_only_observation():
+        with read_only_observation(), (contextlib.nullcontext() if shared else store.read_snapshot()):
             yield
     finally:
         _LOGICAL_OBSERVATION_STORE.reset(token)
@@ -126,7 +173,7 @@ def observation_artifact(path):
         return None
     if len(relative.parts) != 2 or ".." in relative.parts:
         return None
-    return store.artifact(*relative.parts)
+    return store.source_artifact(*relative.parts)
 
 
 def declared_path_exists(path):
@@ -228,6 +275,23 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
     observe_path(path)
     if path.is_symlink():
         raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is not None:
+        compute = scoped_digest_reader(lambda: sha256_path(path)[:2])
+        if path.is_file() or path.is_dir():
+            directory = path.is_dir()
+            digest, size = memo.read(path, compute, directory=directory)
+            return digest, size, "directory" if directory else "file"
+        artifact = observation_artifact(path)
+        if artifact is not None:
+            store = _LOGICAL_OBSERVATION_STORE.get()
+            memo.guard((str(path), "logical_source"), _audit_artifact_identity(artifact),
+                       scoped_digest_reader(lambda: _audit_artifact_identity(
+                           store.source_artifact(artifact.subdir, artifact.name))))
+            digest, size = memo.read(artifact.zip_path, compute, member=artifact.member_name)
+            return digest, size, "file"
+        memo.guard((str(path), "absent"), os.path.lexists(path), lambda: os.path.lexists(path))
+        raise FileNotFoundError(path)
     if path.is_file():
         digest, size = cached_sha256_file(path)
         return digest, size, "file"
@@ -355,26 +419,38 @@ def describe_optional_paths(
 
 
 def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
+    return _gene_family_collection_digest(root)
+
+
+def _store_artifact_digest(store, artifact):
+    if not observing_files() and artifact.sha256 and artifact.size is not None:
+        return artifact.sha256, artifact.size
+    if artifact.live_path is not None and not observing_files():
+        return sha256_path(artifact.live_path)[:2]
+    with store.open_binary(artifact.subdir, artifact.name) as handle:
+        return sha256_stream(handle)
+
+
+def _gene_family_collection_digest(root, subdir=None):
     store = GeneFamilyOutputStore(root)
     digest = hashlib.sha256()
     total_size = 0
     member_count = 0
-    for subdir in store.logical_subdirs():
-        if subdir == MANIFEST_SUBDIR:
-            continue
-        for artifact in store.artifacts(subdir):
-            artifact_digest = artifact.sha256
-            artifact_size = artifact.size
-            if observing_files() or not artifact_digest or artifact_size is None:
-                with store.open_binary(artifact.subdir, artifact.name) as handle:
-                    artifact_digest, artifact_size = sha256_stream(handle)
-            logical_path = artifact.logical_path.encode("utf-8")
-            digest.update(len(logical_path).to_bytes(8, "big"))
-            digest.update(logical_path)
-            digest.update(bytes.fromhex(str(artifact_digest)))
-            digest.update(int(artifact_size).to_bytes(8, "big"))
-            total_size += int(artifact_size)
-            member_count += 1
+    with store.read_snapshot():
+        subdirs = [subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]
+        for selected in subdirs:
+            for name in store.file_names(selected):
+                artifact = store.source_artifact(selected, name)
+                if artifact is None:
+                    raise FileNotFoundError(store.root / selected / name)
+                artifact_digest, artifact_size = _store_artifact_digest(store, artifact)
+                logical_path = artifact.logical_path.encode("utf-8")
+                digest.update(len(logical_path).to_bytes(8, "big"))
+                digest.update(logical_path)
+                digest.update(bytes.fromhex(str(artifact_digest)))
+                digest.update(int(artifact_size).to_bytes(8, "big"))
+                total_size += int(artifact_size)
+                member_count += 1
     return digest.hexdigest(), total_size, member_count
 
 
@@ -390,24 +466,7 @@ def gene_family_subdir_digest(root: Path, subdir: str) -> tuple[str, int, int]:
         raise ProvenanceError(f"Unsafe gene-family logical subdirectory: {subdir!r}")
     if not root.is_dir() or root.is_symlink():
         raise FileNotFoundError(root)
-    store = GeneFamilyOutputStore(root)
-    digest = hashlib.sha256()
-    total_size = 0
-    member_count = 0
-    for artifact in store.artifacts(subdir):
-        artifact_digest = artifact.sha256
-        artifact_size = artifact.size
-        if observing_files() or not artifact_digest or artifact_size is None:
-            with store.open_binary(artifact.subdir, artifact.name) as handle:
-                artifact_digest, artifact_size = sha256_stream(handle)
-        logical_path = artifact.logical_path.encode("utf-8")
-        digest.update(len(logical_path).to_bytes(8, "big"))
-        digest.update(logical_path)
-        digest.update(bytes.fromhex(str(artifact_digest)))
-        digest.update(int(artifact_size).to_bytes(8, "big"))
-        total_size += int(artifact_size)
-        member_count += 1
-    return digest.hexdigest(), total_size, member_count
+    return _gene_family_collection_digest(root, subdir)
 
 
 def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str, int]:
@@ -429,14 +488,11 @@ def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str
     if not root.is_dir() or root.is_symlink():
         raise FileNotFoundError(root)
     store = GeneFamilyOutputStore(root)
-    artifact = store.artifact(subdir, name)
-    if artifact is None:
-        raise FileNotFoundError(root / subdir / name)
-    artifact_digest = artifact.sha256
-    artifact_size = artifact.size
-    if observing_files() or not artifact_digest or artifact_size is None:
-        with store.open_binary(artifact.subdir, artifact.name) as handle:
-            artifact_digest, artifact_size = sha256_stream(handle)
+    with store.read_snapshot():
+        artifact = store.source_artifact(subdir, name)
+        if artifact is None:
+            raise FileNotFoundError(root / subdir / name)
+        artifact_digest, artifact_size = _store_artifact_digest(store, artifact)
     return str(artifact_digest), int(artifact_size)
 
 
@@ -811,6 +867,10 @@ def load_manifest(path: Path) -> dict[str, object]:
         raise ProvenanceError(f"Provenance manifest must contain a JSON object: {path}")
     if type(payload.get("schema_version")) is not int:
         raise ProvenanceError(f"Provenance schema_version must be an integer: {path}")
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is not None:
+        memo.guard((str(path.absolute()), "manifest_content"), payload,
+                   scoped_digest_reader(lambda: load_manifest(path)))
     return payload
 
 
@@ -1203,6 +1263,14 @@ def _audit_manifest_identity(store, name):
 def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
     """Reuse runtime directory hashing as well as archive-aware file reads."""
     if memo is not None:
+        # Logical metadata excludes directories, FIFOs and symlinks. For an
+        # optional output recorded absent, their physical presence still must
+        # follow the original type/presence checks, never become "missing".
+        if entry.get("state") == "absent":
+            path = resolve_reference(entry, logical_root, workspace_root)
+            observe_path(path)
+            if os.path.lexists(path):
+                return audit_entry_digest(entry, store, logical_root, workspace_root)
         if entry.get("scope") == "logical" and entry.get("artifact_type") not in {"directory", "logical_directory"}:
             raw = str(entry.get("path", ""))
             pure = PurePosixPath(raw)
@@ -1213,7 +1281,7 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
                 return artifact, _audit_artifact_identity(artifact)
             artifact, identity = memo.resolve((str(logical_root), raw), resolve_source)
             memo.guard((str(logical_root), raw), identity,
-                       lambda: _audit_artifact_identity(store.source_artifact(*pure.parts)))
+                       scoped_digest_reader(lambda: _audit_artifact_identity(store.source_artifact(*pure.parts))))
             if artifact is None:
                 raise FileNotFoundError(logical_root / raw)
             return memo.read(artifact.live_path or artifact.zip_path,
@@ -1224,8 +1292,9 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
         if not path.exists():
             memo.guard((str(path), "absent"), os.path.lexists(path), lambda: os.path.lexists(path))
             return audit_entry_digest(entry, store, logical_root, workspace_root)
-        return memo.read(path, lambda: audit_entry_digest(entry, store, logical_root, workspace_root),
-                         directory=path.is_dir(), constraint=(entry.get("artifact_type"), entry.get("member_count")))
+        return memo.read(path, scoped_digest_reader(
+            lambda: audit_entry_digest(entry, store, logical_root, workspace_root)), directory=path.is_dir(),
+            constraint=(entry.get("artifact_type"), entry.get("member_count")) if path.is_dir() else None)
     artifact_type = entry.get("artifact_type")
     if entry.get("state") == "absent":
         path = resolve_reference(entry, logical_root, workspace_root)

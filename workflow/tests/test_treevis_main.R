@@ -615,6 +615,46 @@ run_tree_plot_trait_case(include_expression = FALSE)
 run_tree_plot_trait_case(include_expression = TRUE)
 run_tree_plot_trait_case(include_expression = TRUE, heatmap_transform = "log2")
 
+# Plot input reuse must preserve parsed values, reject changed sources and keep
+# a missing optional file optional. Evaluate just the actual reader definitions.
+test_file_arg <- grep('^--file=', commandArgs(), value=TRUE)
+repo_root <- normalizePath(file.path(dirname(sub('^--file=', '', test_file_arg[[1]])), '..', '..'), mustWork=TRUE)
+plot_script <- file.path(repo_root, 'workflow/support/stat_branch2tree_plot.r')
+reader_env <- new.env(parent=globalenv())
+for (expr in parse(plot_script)) {
+  if (is.call(expr) && is.symbol(expr[[1]]) && as.character(expr[[1]]) %in% c('=', '<-') &&
+      is.symbol(expr[[2]]) && as.character(expr[[2]]) %in% c('plot_input_cache', 'plot_input_signature', 'read_plot_input')) {
+    eval(expr, envir=reader_env)
+  }
+}
+reader_dir <- tempfile('treevis-reader-')
+dir.create(reader_dir)
+domain_file <- file.path(reader_dir, 'domain.tsv')
+writeLines(c('qacc\tsacc\tqstart\tqend', 'g1\tPF0001\t1\t2'), domain_file)
+domain_reads <- 0L
+reader_env$read.table <- function(...) {
+  domain_reads <<- domain_reads + 1L
+  utils::read.table(...)
+}
+domain_first <- reader_env$read_plot_input(domain_file, 'domain')
+domain_second <- reader_env$read_plot_input(domain_file, 'domain')
+stopifnot(identical(domain_first, domain_second), domain_reads == 1L)
+fasta_file <- file.path(reader_dir, 'alignment.fa')
+writeLines(c('>g1', 'ACGTACGT', '>g2', 'ACGTTCGT'), fasta_file)
+stopifnot(identical(reader_env$read_plot_input(fasta_file, 'alignment'), ape::read.FASTA(fasta_file, type='DNA')))
+stopifnot(identical(reader_env$read_plot_input(fasta_file, 'alignment'), ape::read.FASTA(fasta_file, type='DNA')))
+stopifnot(is.null(reader_env$read_plot_input(file.path(reader_dir, 'absent.tsv'), 'domain')))
+writeLines(c('qacc\tsacc\tqstart\tqend', 'g1\tPF0001\t1\t200'), domain_file)
+changed <- try(reader_env$read_plot_input(domain_file, 'domain'), silent=TRUE)
+stopifnot(inherits(changed, 'try-error'), grepl('changed during rendering', as.character(changed)))
+profile_file <- file.path(reader_dir, 'missing-ggimage.Rprofile')
+writeLines("requireNamespace <- function(package, ...) if (package == 'ggimage') FALSE else base::requireNamespace(package, ...)", profile_file)
+missing_dependency <- suppressWarnings(system2('Rscript', shQuote(plot_script),
+  env=c('GG_TREE_PLOT_CHECK_GGIMAGE=1', paste0('R_PROFILE_USER=', shQuote(profile_file))), stdout=TRUE, stderr=TRUE))
+stopifnot(identical(attr(missing_dependency, 'status'), 42L))
+stopifnot(any(grepl('ggimage package is unavailable', missing_dependency, fixed=TRUE)))
+unlink(reader_dir, recursive=TRUE)
+
 # 11) enhance_branch_table: one subroot support should be masked.
 b_min <- data.frame(
   branch_id = c(3, 1, 2),

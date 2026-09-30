@@ -6627,12 +6627,6 @@ for tree_plot_input_index in "${!tree_plot_input_files[@]}"; do
   fi
 done
 gg_artifact_prepare_stage tree_plot_needs_update run_tree_plot "${tree_plot_provenance_args[@]}" || exit $?
-if [[ ${run_tree_plot} -eq 1 ]]; then
-  if ! Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
-    echo "ggimage package is unavailable. Disabling run_tree_plot."
-    run_tree_plot=0
-  fi
-fi
 if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
   gg_step_start "${task}"
 
@@ -6758,7 +6752,7 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     tree_plot_panel_args+=("--panel${panel_index}=sequence_similarity,${file_og_trimmed_aln_analysis},${input_sequence_mode},${treevis_sequence_similarity_width_mm},${genetic_code}")
   fi
 
-  TREEVIS_SPECIES_PARSER="${species_label_parser}" \
+  if GG_TREE_PLOT_CHECK_GGIMAGE=1 TREEVIS_SPECIES_PARSER="${species_label_parser}" \
   Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
     --stat_branch="${file_og_stat_branch}" \
     --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
@@ -6774,16 +6768,25 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     --long_branch_cap_ratio="${treevis_long_branch_cap_ratio}" \
     --long_branch_tail_shrink="${treevis_long_branch_tail_shrink}" \
     --long_branch_max_fraction="${treevis_long_branch_max_fraction}" \
-    --protein_convergence="100,100,yes,3-${csubst_max_arity},${cb_path},${csubst_cutoff_stat}"
+    --protein_convergence="100,100,yes,3-${csubst_max_arity},${cb_path},${csubst_cutoff_stat}"; then
 
-  if [[ -e "df_fimo.tsv" ]]; then
-    mv_out "df_fimo.tsv" "${file_og_fimo_collapsed}"
+    if [[ -e "df_fimo.tsv" ]]; then
+      mv_out "df_fimo.tsv" "${file_og_fimo_collapsed}"
+    fi
+    mv_out stat_branch2tree_plot.pdf "${file_og_tree_plot}"
+    gg_artifact_record \
+      "${tree_plot_provenance_args[@]}" \
+      --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
+      --diagnostic "container_image=${gg_container_image_path:-unknown}"
+  else
+    tree_plot_status=$?
+    if [[ ${tree_plot_status} -eq 42 ]]; then
+      run_tree_plot=0
+      gg_step_skip "${task}"
+    else
+      exit "${tree_plot_status}"
+    fi
   fi
-  mv_out stat_branch2tree_plot.pdf "${file_og_tree_plot}"
-  gg_artifact_record \
-    "${tree_plot_provenance_args[@]}" \
-    --diagnostic "genegalleon_version=${GG_VERSION:-${SINGULARITYENV_GG_VERSION:-${APPTAINERENV_GG_VERSION:-unknown}}}" \
-    --diagnostic "container_image=${gg_container_image_path:-unknown}"
 else
   gg_step_skip "${task}"
 fi

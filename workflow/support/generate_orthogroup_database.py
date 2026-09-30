@@ -356,11 +356,12 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
     """
     options = dict(sep="\t", header=0, usecols=filtered_cols, low_memory=True)
 
-    if chunksize is not None and store is None:
+    if chunksize is not None:
         # Count physical line breaks in a bounded small-file buffer. They are
         # an upper bound on CSV rows, including quoted multiline fields. This
         # avoids constructing a chunk reader for the usual small family TSVs.
-        with open(file_path, "rb") as handle:
+        input_source = open(file_path, "rb") if store is None else store.open_binary(logical_subdir, logical_name)
+        with input_source as handle:
             small_file = handle.read(256 * 1024 + 1)
         if len(small_file) <= 256 * 1024 and small_file.count(b"\n") + small_file.count(b"\r") <= chunksize:
             yield pd.read_csv(io.BytesIO(small_file), **options)
@@ -695,6 +696,25 @@ def main():
 
 
 def populate_database(args, parser):
+    output_store = GeneFamilyOutputStore(args.dir_gene_family) if args.dir_gene_family else None
+    # Reuse ZIP readers and fence the complete input generation. Publication
+    # must follow the final fence, so a concurrent producer cannot publish a
+    # database assembled from different archive generations.
+    with ExitStack() as stack:
+        if output_store is not None:
+            stack.enter_context(output_store.read_snapshot())
+        db_path, final_db_path, mode, publish = _populate_database(args, parser, output_store)
+    if publish:
+        if mode == "create":
+            os.link(db_path, final_db_path)
+            os.unlink(db_path)
+        else:
+            os.replace(db_path, final_db_path)
+        logger.info("Published completed database atomically: %s", final_db_path)
+    logger.info("All database operations completed and engine disposed.")
+
+
+def _populate_database(args, parser, output_store):
     configure_logging()
     require_sqlalchemy()
     logger.info("Starting the orthogroup database generation script.")
@@ -713,7 +733,6 @@ def populate_database(args, parser):
         params["cutoff_stat"] = parse_cutoff_stat(params["cutoff_stat"])
     except ValueError as exc:
         parser.error(str(exc))
-    output_store = GeneFamilyOutputStore(params["dir_gene_family"]) if params["dir_gene_family"] else None
 
     cb_categories = [cat.strip() for cat in args.cb_categories.split(",")]
     all_cb_categories = [
@@ -966,7 +985,7 @@ def populate_database(args, parser):
             for infile in files:
                 file_path = os.path.join(indirs[stat], infile)
                 logical_subdir = logical_store_subdir(indirs[stat])
-                artifact = None if output_store is None else output_store.artifact(logical_subdir, infile)
+                artifact = None if output_store is None else output_store.source_artifact(logical_subdir, infile)
                 file_size = (
                     os.path.getsize(file_path)
                     if output_store is None
@@ -1127,15 +1146,7 @@ def populate_database(args, parser):
 
     # Dispose engine to close all connections
     engine.dispose()
-    if replace_database_on_success:
-        if params["mode"] == "create":
-            # Do not overwrite a destination that appeared during the build.
-            os.link(db_path, final_db_path)
-            os.unlink(db_path)
-        else:
-            os.replace(db_path, final_db_path)
-        logger.info("Published completed database atomically: %s", final_db_path)
-    logger.info("All database operations completed and engine disposed.")
+    return db_path, final_db_path, params["mode"], replace_database_on_success
 
 
 if __name__ == "__main__":

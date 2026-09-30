@@ -1,3 +1,4 @@
+import argparse
 import gc
 import math
 import sqlite3
@@ -20,6 +21,47 @@ def load_module():
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_changed_archive_generation_cannot_publish_database(tmp_path, monkeypatch):
+    mod = load_module()
+    root = tmp_path / 'families'
+    root.mkdir()
+    database = tmp_path / 'published.db'
+    database.write_bytes(b'existing database')
+    private = tmp_path / 'build.db'
+    private.write_bytes(b'new database')
+    def build(args, parser, store):
+        store.archive_root.mkdir()
+        (store.archive_root / 'index.epoch').write_text('changed')
+        return private, database, 'replace', True
+    monkeypatch.setattr(mod, '_populate_database', build)
+    with pytest.raises(RuntimeError, match='Archive changed'):
+        mod.populate_database(argparse.Namespace(dir_gene_family=str(root)), None)
+    assert database.read_bytes() == b'existing database'
+    assert private.read_bytes() == b'new database'
+
+
+@pytest.mark.parametrize('chunksize', [1, 2, 100])
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+def test_archive_chunk_reader_matches_whole_file_types_without_metadata_digest(tmp_path, chunksize, monkeypatch, layout):
+    mod = load_module()
+    root = tmp_path / 'families'
+    path = root / 'stat_branch/OG0001_stat.branch.tsv'
+    path.parent.mkdir(parents=True)
+    path.write_text('number\tlabel\tboolean\n1\t001\tNA\n2.5\t002\tTrue\n3\tlater-text\tFalse\n')
+    expected = pandas.concat(list(mod.read_csv_chunks(str(path), ['number', 'label', 'boolean'],
+                                                     chunksize, None, None, None)), ignore_index=True)
+    if layout == 'zip':
+        archive_completed_outputs(root, 'orthogroup', {'OG0001'}, lambda name: name.split('_')[0])
+    store = mod.GeneFamilyOutputStore(root)
+    def reject(*args):
+        raise AssertionError('TSV reader must not request content hashes')
+    monkeypatch.setattr(store, 'artifact', reject)
+    chunks = list(mod.read_csv_chunks(str(path), ['number', 'label', 'boolean'], chunksize,
+                                      store, 'stat_branch', path.name))
+    assert all(len(chunk) <= chunksize for chunk in chunks)
+    pandas.testing.assert_frame_equal(pandas.concat(chunks, ignore_index=True), expected)
 
 
 def stat_tree_frame(**extra_columns):

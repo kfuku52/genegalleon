@@ -1,4 +1,5 @@
 """Full-audit consistency, progress protocol and bounded reuse regressions."""
+import argparse
 import concurrent.futures
 import hashlib
 import importlib
@@ -21,6 +22,145 @@ AuditDigests, AuditProgress = runtime.AuditDigests, runtime.AuditProgress
 source_identity, validate_observation = runtime.source_identity, runtime.validate_observation
 ArchiveStoreError, GeneFamilyOutputStore = store_module.ArchiveStoreError, store_module.GeneFamilyOutputStore
 INDEX_EPOCH_FILE, INDEX_UPDATE_FILE = store_module.INDEX_EPOCH_FILE, store_module.INDEX_UPDATE_FILE
+
+
+def test_query_digest_session_rehashes_unique_sources_and_never_reuses_across_queries(tmp_path, monkeypatch):
+    path = tmp_path / 'source'
+    path.write_bytes(b'abc')
+    original = provenance.cached_sha256_file
+    calls = []
+    def compute(source):
+        calls.append(source)
+        return original(source)
+    monkeypatch.setattr(provenance, 'cached_sha256_file', compute)
+    with provenance.digest_observation():
+        first = provenance.sha256_path(path)
+        assert provenance.sha256_path(path) == first
+        assert len(calls) == 1
+    assert len(calls) == 2  # final content fence
+    with provenance.digest_observation():
+        assert provenance.sha256_path(path) == first
+    assert len(calls) == 4
+
+
+def test_query_final_content_fence_rejects_change_even_with_unchanged_signature(tmp_path, monkeypatch):
+    path = tmp_path / 'source'
+    path.write_bytes(b'abc')
+    fixed = runtime.signature(path)
+    monkeypatch.setattr(runtime, 'signature', lambda path: fixed)
+    with pytest.raises(ValueError, match='content changed before publication'):
+        with provenance.digest_observation():
+            provenance.sha256_path(path)
+            path.write_bytes(b'xyz')
+
+
+def test_query_digest_session_restores_persistent_cache_on_error(tmp_path):
+    provenance.configure_digest_cache(tmp_path / 'cache.db')
+    previous = provenance.digest_cache().database
+    try:
+        with pytest.raises(RuntimeError):
+            with provenance.digest_observation():
+                assert provenance.digest_cache() is None
+                raise RuntimeError('interrupted query')
+        assert provenance.digest_cache().database == previous
+        assert provenance._DIGEST_OBSERVATION.get() is None
+    finally:
+        provenance.configure_digest_cache(None)
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+def test_whole_store_fingerprint_reads_each_content_once_without_metadata_hashing(tmp_path, monkeypatch, layout):
+    logical = fixture(tmp_path)
+    for subdir, name in [('stat_branch', 'OG0000000_stat.branch.tsv'), ('alignment', 'OG0000000.fa')]:
+        path = logical / subdir / name
+        path.parent.mkdir()
+        path.write_bytes(b'actual source content\n')
+    if layout == 'zip':
+        catalog = tmp_path / 'families.txt'
+        catalog.write_text('OG0000000\n')
+        subprocess.run([sys.executable, str(SUPPORT / 'gene_family_output_store.py'),
+            'convert-storage', '--root', str(logical), '--mode', 'orthogroup', '--to', 'zip',
+            '--family-id-file', str(catalog), '--progress-interval', '0'], check=True, capture_output=True)
+    expected = provenance.gene_family_store_digest(logical)
+    def reject(*args):
+        raise AssertionError('metadata lookup must not hash contents')
+    monkeypatch.setattr(store_module, '_sha256_path', reject)
+    reads = []
+    original = provenance.sha256_stream
+    def read(handle):
+        reads.append(1)
+        return original(handle)
+    monkeypatch.setattr(provenance, 'sha256_stream', read)
+    with store_module.read_only_observation():
+        actual = provenance.gene_family_store_digest(logical)
+    assert actual == expected
+    assert expected[2] == 2
+    assert len(reads) == expected[2]
+
+
+@pytest.mark.parametrize('kind', ['directory', 'fifo', 'symlink'])
+def test_memo_cannot_classify_existing_optional_output_as_absent(tmp_path, kind):
+    root = tmp_path / 'logical'
+    path = root / 'optional/OG0000000.tsv'
+    path.parent.mkdir(parents=True)
+    if kind == 'directory':
+        path.mkdir()
+    elif kind == 'fifo':
+        os.mkfifo(path)
+    else:
+        path.symlink_to(tmp_path / 'missing')
+    entry = {'label': 'optional', 'scope': 'logical', 'path': 'optional/OG0000000.tsv',
+             'artifact_type': 'file', 'state': 'absent'}
+    payload = {'schema_version': 1, 'inputs': [], 'outputs': [], 'optional_outputs': [entry]}
+    status, _ = provenance.audit_manifest(payload, GeneFamilyOutputStore(root), root, tmp_path, AuditDigests())
+    assert status == ('unexpected_optional_output' if kind == 'directory' else 'invalid_manifest')
+
+
+@pytest.mark.parametrize('with_attempt', [False, True])
+@pytest.mark.parametrize('empty_archive_state', [False, True])
+def test_verify_common_input_is_read_once_then_fenced_and_attempt_bound(tmp_path, monkeypatch, with_attempt, empty_archive_state):
+    import workflow_api as api
+    workspace = tmp_path
+    root = workspace / 'output/orthogroup'
+    source = workspace / 'source'
+    source.write_bytes(b'source')
+    output = root / 'stat_branch/OG0000000.tsv'
+    output.parent.mkdir(parents=True)
+    output.write_text('output')
+    attempt = workspace / ('a' * 32)
+    attempt.mkdir()
+    started = time.time_ns()
+    monkeypatch.setenv('GG_OBSERVATION_ATTEMPT_DIR', str(attempt))
+    for step in ['one', 'two']:
+        argv = ['--manifest', str(root / f'artifact_provenance/OG0000000.{step}.json'),
+            '--workspace-root', str(workspace), '--logical-root', str(root), '--family-id', 'OG0000000',
+            '--step', step, '--input', f'source={source}', '--output', f'output={output}']
+        assert provenance.dispatch(['record', *argv]) == 0
+    (attempt / 'run.json').write_text(json.dumps({'schema': 'genegalleon-observation-v1',
+        'attempt_id': attempt.name, 'workflow': 'gg_gene_evolution', 'started_at_ns': started,
+        'finished_at_ns': time.time_ns(), 'execution_state': 'exited', 'execution_accepted': True,
+        'exit_code': 0, 'accepted_exit_codes': [0]}))
+    original = provenance.sha256_stream
+    reads = []
+    def read(handle):
+        if getattr(handle, 'name', None) == str(source):
+            reads.append(1)
+        return original(handle)
+    monkeypatch.setattr(provenance, 'sha256_stream', read)
+    args = argparse.Namespace(root=root, workspace_root=workspace, family_id='OG0000000',
+        require_step=['one', 'two'], manifest=[], profile=None, include_queue=False,
+        recorded_workspace_root=None, attempt=attempt if with_attempt else None)
+    state = GeneFamilyOutputStore(root).archive_root
+    if empty_archive_state:
+        state.mkdir()
+    before = sorted(str(path.relative_to(workspace)) for path in workspace.rglob('*'))
+    with store_module.read_only_observation():
+        result = api.verify(args)
+    assert result['completion_state'] == 'verified_declared_steps'
+    assert len(reads) == 2
+    assert before == sorted(str(path.relative_to(workspace)) for path in workspace.rglob('*'))
+    if with_attempt:
+        assert all(row['attempt_bound'] for row in result['contracts'])
 
 
 def fixture(root, families=8):

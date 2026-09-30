@@ -318,7 +318,13 @@ an earlier input changes while later outputs are being checked. This check uses
 filesystem metadata and does not claim a globally atomic snapshot or protection
 against changes after the final check. Inspected store inputs are hashed from
 their actual bytes, including ZIP members, rather than accepting indexed hashes
-alone. This adds I/O proportional to the declared inputs being verified.
+alone. `verify` and each `preflight` contract share content digests only within
+their current query and recompute every reused source digest before returning. Filesystem
+identities, manifest content, optional absence, family states and exact attempt
+receipts remain checked. Persistent digests cannot replace those content reads.
+ZIP readers are reused under an initial/final archive-generation fence; the API
+still writes no lock files. See [remaining I/O optimizations](remaining-io-performance.md)
+for measurements and reproduction commands.
 
 ## Inspect the effective runtime record
 

@@ -309,12 +309,12 @@ def relocate_contract(args, workspace_root):
         setattr(args, name, values)
 
 
-def preflight_step(argv, workspace_root=None, stale_policy=None):
+def preflight_step(argv, workspace_root=None, stale_policy=None, *, store=None):
     with provenance.runtime_support_root(Path(__file__).resolve().parent):
-        return _preflight_step(argv, workspace_root, stale_policy)
+        return _preflight_step(argv, workspace_root, stale_policy, store=store)
 
 
-def _preflight_step(argv, workspace_root=None, stale_policy=None):
+def _preflight_step(argv, workspace_root=None, stale_policy=None, *, store=None):
     if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
         raise ValueError("each contract must be a list of provenance needs-run arguments")
     if any(value.split("=", 1)[0] in {"--dry-run", "--help", "-h"} for value in argv):
@@ -331,12 +331,11 @@ def _preflight_step(argv, workspace_root=None, stale_policy=None):
         args.stale_policy = stale_policy
     if workspace_root or stale_policy is not None:
         argv = contract_arguments(args)
-    with provenance.logical_observation(args):
+    with provenance.logical_observation(args, store), provenance.digest_observation():
         return inspect_preflight_step(args, argv)
 
 
 def inspect_preflight_step(args, argv):
-    provenance.configure_digest_cache(None)
     before = None
     if provenance.declared_path_exists(args.manifest):
         before = provenance.load_manifest(args.manifest)
@@ -433,7 +432,7 @@ def verify_terminal_profile(store, family):
         for subdir, suffix in (("stat_branch", "_stat.branch.tsv"), ("stat_tree", "_stat.tree.tsv"),
                                ("tree_plot", "_tree_plot.pdf")):
             name = family + suffix
-            artifact = store.artifact(subdir, name)
+            artifact = store.source_artifact(subdir, name)
             if artifact is None:
                 raise ValueError(f"missing terminal artifact: {subdir}/{name}")
             with store.open_binary(subdir, name) as handle:
@@ -472,9 +471,15 @@ def verify(args):
     if args.profile and not {"summary_statistics", "tree_plot"}.issubset(args.require_step):
         raise ValueError("terminal profile requires summary_statistics and tree_plot contracts")
     store = GeneFamilyOutputStore(root, family_filter=args.family_id)
+    observation = argparse.Namespace(logical_root=root, family_id=args.family_id)
+    with store.read_snapshot(), provenance.logical_observation(observation, store), provenance.digest_observation() as memo:
+        return _verify(args, store, memo)
+
+
+def _verify(args, store, memo):
+    root, workspace = args.root.absolute(), args.workspace_root.absolute()
     family_before = store.family_observation(args.family_id)
     rows = []
-    provenance.configure_digest_cache(None)
     if len(set(args.require_step)) != len(args.require_step):
         raise ValueError("duplicate required steps")
     manifest_names = dict(provenance.parse_unique_pairs(args.manifest, "--manifest"))
@@ -482,18 +487,22 @@ def verify(args):
         raise ValueError("manifest overrides must name a required step")
     for step in args.require_step:
         name = manifest_names.get(step, f"{args.family_id}.{step}.json")
-        artifact = store.artifact(provenance.MANIFEST_SUBDIR, name)
+        artifact = store.source_artifact(provenance.MANIFEST_SUBDIR, name)
         if artifact is None:
             rows.append({"step": step, "state": "unverified", "error_code": "evidence_missing",
                          "detail": "no matching manifest; this does not imply failure or require a rerun"})
             continue
-        payload = provenance.read_manifest_from_store(store, artifact.name)
+        payload = provenance.read_manifest_from_store(store, artifact.name, artifact)
+        identity = provenance._audit_artifact_identity(artifact), hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        memo.guard((str(root), provenance.MANIFEST_SUBDIR, name), identity,
+                   provenance.scoped_digest_reader(lambda name=name: provenance._audit_manifest_identity(store, name)))
         if payload.get("family_id") != args.family_id or payload.get("step") != step:
             raise ValueError("manifest identity does not match the requested family/step")
         if not payload.get("outputs") and not payload.get("optional_outputs"):
             outcome, reason = "invalid_manifest", "no declared outputs"
         else:
-            outcome, reason = provenance.audit_manifest(payload, store, root, workspace)
+            outcome, reason = provenance.audit_manifest(payload, store, root, workspace, memo)
         diagnostics = payload.get("diagnostics", {})
         if not isinstance(diagnostics, dict):
             raise ValueError("invalid manifest diagnostics")
@@ -538,7 +547,7 @@ def verify(args):
                              and type(receipt.get("observed_at_ns")) is int
                              and run["started_at_ns"] <= receipt["observed_at_ns"] <= run.get("finished_at_ns", -1))
                     if valid:
-                        valid = preflight_step(contract_arguments(declared))["state"] == "verified_current"
+                        valid = preflight_step(contract_arguments(declared), store=store)["state"] == "verified_current"
                 except (SystemExit, KeyError, OSError, ValueError, TypeError):
                     valid = False
             row["attempt_bound"] = valid

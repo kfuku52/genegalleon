@@ -2,6 +2,14 @@
 cli_args = commandArgs(trailingOnly = TRUE)
 args = cli_args
 
+# The workflow used to start another R process for this optional dependency.
+# Keep its skip behavior, but check in the rendering process before loading R
+# packages. Direct invocations retain their existing dependency behavior.
+if (Sys.getenv('GG_TREE_PLOT_CHECK_GGIMAGE') == '1' && !requireNamespace('ggimage', quietly=TRUE)) {
+  cat('ggimage package is unavailable. Disabling run_tree_plot.\n')
+  quit(status=42)
+}
+
 options(lifecycle_verbosity = 'quiet')
 suppressWarnings(suppressPackageStartupMessages(library(ape, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(cowplot, quietly = TRUE)))
@@ -13,6 +21,27 @@ suppressWarnings(suppressPackageStartupMessages(library(xml2, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(rkftools, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(genegalleon.treevis)))
 options(stringsAsFactors = FALSE)
+plot_input_cache = new.env(parent=emptyenv())
+plot_input_signature = function(path) file.info(path)[, c('size', 'mtime', 'ctime'), drop=FALSE]
+read_plot_input = function(path, kind) {
+  if (is.na(path) || !file.exists(path)) return(NULL)
+  path = normalizePath(path, mustWork=TRUE)
+  key = paste(kind, path, sep=':')
+  before = plot_input_signature(path)
+  if (exists(key, envir=plot_input_cache, inherits=FALSE)) {
+    cached = get(key, envir=plot_input_cache, inherits=FALSE)
+    if (!identical(before, cached$signature)) stop('Plot input changed during rendering: ', path)
+    return(cached$value)
+  }
+  value = if (kind == 'domain') {
+    read.table(path, sep='\t', header=TRUE, stringsAsFactors=FALSE, comment.char='', quote='', check.name=FALSE)
+  } else {
+    ape::read.FASTA(path, type='DNA')
+  }
+  if (!identical(before, plot_input_signature(path))) stop('Plot input changed while reading: ', path)
+  assign(key, list(path=path, signature=before, value=value), envir=plot_input_cache)
+  return(value)
+}
 script_file_arg = grep('^--file=', commandArgs(), value = TRUE)
 if (length(script_file_arg) > 0) {
   script_dir = dirname(normalizePath(sub('^--file=', '', script_file_arg[[1]]), winslash = '/', mustWork = FALSE))
@@ -249,7 +278,7 @@ domain_specs = panel_specs[grepl('^domain', panel_specs)]
 if (length(domain_specs) > 0) {
   path_rpsblast = strsplit(domain_specs[[1]], ',')[[1]][2]
   if (file.exists(path_rpsblast)) {
-    df_rpsblast = read.table(path_rpsblast, sep = '\t', header = TRUE, stringsAsFactors = FALSE, comment.char = '', quote = '', check.name = FALSE)
+    df_rpsblast = read_plot_input(path_rpsblast, 'domain')
   }
 }
 for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
@@ -359,7 +388,7 @@ for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
     path_rpsblast = domain_params[2]
     show_domain_introns = length(domain_params) >= 3 && domain_params[3] == 'yes'
     if (file.exists(path_rpsblast)) {
-      df_rpsblast = read.table(path_rpsblast, sep = '\t', header = TRUE, stringsAsFactors = FALSE, comment.char = '', quote = '', check.name = FALSE)
+      df_rpsblast = read_plot_input(path_rpsblast, 'domain')
     } else {
       df_rpsblast = NULL
     }
@@ -369,12 +398,12 @@ for (col in unlist(args[grep("^panel[0-9]+$", names(args))])) {
     path_seqs = alignment_params[2]
     path_seqs_untrim = ifelse(length(alignment_params) >= 3, alignment_params[3], NA)
     if (file.exists(path_seqs)) {
-      seqs = ape::read.FASTA(path_seqs, type = 'DNA')
+      seqs = read_plot_input(path_seqs, 'alignment')
     } else {
       seqs = NULL
     }
     if (!is.na(path_seqs_untrim) && file.exists(path_seqs_untrim)) {
-      seqs_untrim = ape::read.FASTA(path_seqs_untrim, type = 'DNA')
+      seqs_untrim = read_plot_input(path_seqs_untrim, 'alignment')
     } else {
       seqs_untrim = NULL
     }
@@ -477,6 +506,11 @@ if ('domain' %in% names(g)) {
     cp$layers = cp$layers[c(setdiff(seq_along(cp$layers), domain_layer), domain_layer)]
 }
 cat('Writing the plot pdf and svg.\n')
+for (key in ls(plot_input_cache, all.names=TRUE)) {
+  cached = get(key, envir=plot_input_cache, inherits=FALSE)
+  if (!identical(cached$signature, plot_input_signature(cached$path)))
+    stop('Plot input changed before publication: ', cached$path)
+}
 extensions = c('.pdf')
 for (extension in extensions) {
   cowplot::save_plot(
