@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas
+import pytest
 
 from workflow.support.gene_family_output_store import (
     GeneFamilyOutputStore,
@@ -24,6 +25,66 @@ def load_module(name: str):
 def write_stat_branch(path: Path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     pandas.DataFrame(rows).to_csv(path, sep="\t", index=False)
+
+
+def test_long_table_keeps_order_missing_values_and_matrix_inputs():
+    mod = load_module("gene_family_presence_absence.py")
+    counts = pandas.DataFrame({'A': pandas.array([pandas.NA, 2], dtype='Int64'),
+                               'B': pandas.array([1, 0], dtype='Int64')},
+                              index=['Species_one', 'Species_two'])
+    presence = pandas.DataFrame({'B': pandas.array([0, 1], dtype='Int64'),
+                                 'A': pandas.array([1, pandas.NA], dtype='Int64')},
+                                index=['Species_two', 'Species_one'])
+    before = (counts.copy(deep=True), presence.copy(deep=True))
+    result = mod.build_long_table(counts, presence, ['Species_two', 'Species_one', 'Species_two'],
+                                 ['B', 'A'], {'A': 'complete'}, 'orthogroup')
+    columns = ['species', 'species_display', 'species_order', 'query', 'query_order',
+               'family_id', 'family_order', 'mode', 'copy_number', 'presence', 'status']
+    expected = pandas.DataFrame([
+        ['Species_two', 'Species two', 3, 'A', 2, 'A', 2, 'orthogroup', 2, 1, 'complete'],
+        ['Species_one', 'Species one', 2, 'A', 2, 'A', 2, 'orthogroup', pandas.NA, pandas.NA, 'complete'],
+        ['Species_two', 'Species two', 3, 'A', 2, 'A', 2, 'orthogroup', 2, 1, 'complete'],
+        ['Species_two', 'Species two', 3, 'B', 1, 'B', 1, 'orthogroup', 0, 0, 'unknown'],
+        ['Species_one', 'Species one', 2, 'B', 1, 'B', 1, 'orthogroup', 1, 1, 'unknown'],
+        ['Species_two', 'Species two', 3, 'B', 1, 'B', 1, 'orthogroup', 0, 0, 'unknown'],
+    ], columns=columns)
+    pandas.testing.assert_frame_equal(result, expected)
+    pandas.testing.assert_frame_equal(counts, before[0])
+    pandas.testing.assert_frame_equal(presence, before[1])
+
+
+@pytest.mark.parametrize('dtype', ['int64', 'float64', 'Int64', 'UInt64'])
+def test_long_table_keeps_numeric_column_types(dtype):
+    mod = load_module("gene_family_presence_absence.py")
+    frame = pandas.DataFrame({'A': pandas.array([0, 3], dtype=dtype)}, index=['a', 'b'])
+    result = mod.build_long_table(frame, frame, ('b', 'a'), ['A'], {}, 'query2family')
+    expected = pandas.DataFrame({'value': [frame.loc['b', 'A'], frame.loc['a', 'A']]})['value']
+    for column in ('copy_number', 'presence'):
+        pandas.testing.assert_series_equal(result[column], expected.rename(column))
+
+
+@pytest.mark.parametrize('duplicate_axis', ['index', 'columns', 'multiindex'])
+def test_long_table_keeps_ambiguous_scalar_lookup_values(duplicate_axis):
+    mod = load_module("gene_family_presence_absence.py")
+    if duplicate_axis == 'columns':
+        counts = pandas.DataFrame([[1, 2]], columns=['A', 'A'], index=['a'])
+    elif duplicate_axis == 'multiindex':
+        counts = pandas.DataFrame({'A': [1, 2]}, index=pandas.MultiIndex.from_tuples([('a', 1), ('a', 2)]))
+    else:
+        counts = pandas.DataFrame({'A': [1, 2]}, index=['a', 'a'])
+    result = mod.build_long_table(counts, counts, ['a'], ['A'], {}, 'orthogroup')
+    for column in ('copy_number', 'presence'):
+        pandas.testing.assert_series_equal(result.at[0, column], counts.loc['a', 'A'])
+
+
+def test_long_table_preserves_first_missing_key_and_empty_schema():
+    mod = load_module("gene_family_presence_absence.py")
+    counts = pandas.DataFrame({'A': [1]}, index=['first'])
+    presence = pandas.DataFrame({'B': [1]}, index=['first'])
+    with pytest.raises(KeyError, match='A'):
+        mod.build_long_table(counts, presence, ['first', 'missing'], ['A'], {}, 'orthogroup')
+    result = mod.build_long_table(counts, presence, [], ['A'], {}, 'orthogroup')
+    assert result.shape == (0, 0)
 
 
 def test_query2family_presence_absence_counts_leaf_species(tmp_path: Path):

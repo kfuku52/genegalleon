@@ -27,6 +27,30 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## Family presence/absence tables
+
+Long-table construction reads each unique matrix column once and reuses species
+display names within one operation. Family-major order, requested species order,
+missing values and column types remain unchanged. Ambiguous axes and missing
+labels retain the original scalar lookup behavior and first error.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `a41fa93`, same immutable
+image, one warmup and three measured fresh processes: 2,048 families × 64 species
+produced 131,072 rows in 2.642 to 0.405 s (6.52×). Every seventh family lacks its
+branch output and retains missing copy/presence values. Complete table values,
+columns/types/order and source matrices match. Median process peak RSS fell
+from 228.8 to 212.7 MiB (7.1% less). Timing excludes fixture construction and
+fingerprinting; peak RSS includes both. This measures long-table construction,
+not branch-file reading, plotting or the complete summary stage.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_presence_absence.py \
+  --output presence-absence.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## GFF transcript statistics
 
 Longest-transcript selection collects row positions and builds one result table,
