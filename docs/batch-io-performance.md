@@ -49,8 +49,9 @@ and read them back without reparsing CSV. RAM stays chunk-bounded. Any dtype
 promotion retains the original second CSV pass, preserving leading zeros,
 nullable Boolean values, missingness, quoted tabs and multiline fields. Spools
 are private temporary files and are removed on success, error or iterator close.
-The extra disk writes are the main tradeoff; mixed-type files cannot claim this
-parse saving.
+Spooling stops and cached chunks are discarded once a dtype change makes reuse
+impossible. The extra disk writes are the main tradeoff; mixed-type files cannot
+claim this parse saving.
 
 ## PDF worker
 
@@ -60,14 +61,18 @@ R process, reusing loaded packages. The plan is a JSON array:
 ```json
 [{"id":"OG0000001","cwd":"/workspace/scratch","output":"/workspace/result.pdf",
   "args":["--stat_branch=/workspace/stat.branch.tsv",
-          "--panel_widths_mm=tree:60","--panel1=tree,bl_rooted,no,no,L"]}]
+          "--max_delta_intron_present=-0.5","--panel_widths_mm=tree:60",
+          "--panel1=tree,bl_rooted,no,no,L","--show_branch_id=no",
+          "--event_method=species_overlap","--species_color_table=PLACEHOLDER",
+          "--pie_chart_value_transformation=identity","--long_branch_display=no"]}]
 ```
 
 Supply absolute input file paths. Each job uses a fresh environment, input cache
 and scratch directory. Graphics devices, options and the optional species parser
 are reset between jobs; garbage collection bounds retained family data. Input
-file content/signatures are fenced before atomic PDF publication. An individual
-render failure preserves its prior output and does not contaminate later jobs.
+file content/signatures and the exact cached renderer source bytes are fenced
+before atomic PDF publication. An individual render failure preserves its prior
+output and does not contaminate later jobs.
 IDs and output paths must be unique. `PLAN.json.results.json` reports ordered
 per-job exit codes, including 42 for unavailable optional ggimage, with
 `completion_evidence=false`. The process exits nonzero if any job fails.
@@ -88,14 +93,17 @@ workload or production completion-rate claim is involved.
 | Workload | Before median | After median | Ratio |
 | --- | ---: | ---: | ---: |
 | 16 families, five declarations each, shared 64 MiB source | 0.971 s | 0.125 s | 7.77× |
-| Eight tree PDFs, separate R processes versus one worker | 8.327 s | 2.769 s | 3.01× |
+| Eight tree PDFs, separate R processes versus one worker | 9.188 s | 2.887 s | 3.18× |
 | 128 audited families, 32 MiB alignments, complete DB/record pipeline | 1.164 s | 1.019 s | 1.14× |
-| One 131,072-row TSV, 24 numeric metrics, complete DB build | 1.381 s | 1.258 s | 1.10× |
+| One 131,072-row TSV, 24 numeric metrics, complete DB build | 1.413 s | 1.390 s | 1.02× |
 
-The many-small-file DB control changed 2.153 to 2.129 s, too little to claim a
-meaningful gain. API parent peak RSS was about 108 MiB before/after. PDF worker
-peak RSS increased about 10 MiB (229 to 239 MiB); a warmed R namespace remains
-resident. Uniform large-file DB peak RSS stayed about 134 MiB. The combined audited DB
+PDF and DB timings were rerun after adding the renderer source fence and early
+spool disposal. The many-small-file DB control changed 2.128 to 2.236 s; an earlier
+run changed 2.153 to 2.129 s. Large-file DB gains also varied from 1.10× to 1.02×,
+so removing the second CSV parse does not establish a reliable overall DB gain.
+API parent peak RSS was about 108 MiB before/after. PDF worker peak RSS increased
+about 11 MiB (229 to 240 MiB); a warmed R namespace remains resident. Uniform
+large-file DB peak RSS stayed about 134 MiB. The combined audited DB
 child retained about 13 MiB more (118 to 131 MiB) because both audit and DB
 modules remain loaded; the parent fixture process used less memory.
 Verification decisions/contracts, sorted SQLite schema/rows, recorded input

@@ -896,6 +896,27 @@ def test_promoted_tsv_preserves_original_lexemes_and_quoted_multiline(tmp_path):
     assert str(frames[0]['flag'].dtype) == 'boolean'
 
 
+def test_mixed_tsv_discards_spool_before_reparsing_original_values(tmp_path, monkeypatch):
+    mod = load_module()
+    path = tmp_path / 'mixed.tsv'
+    path.write_text('label\n001\ntext\n003\nmore\n005\n')
+    cached = []
+    original_pickle = mod.pd.DataFrame.to_pickle
+    original_read = mod.pd.read_csv
+    def save(frame, target, **kwargs):
+        cached.append(Path(target))
+        return original_pickle(frame, target, **kwargs)
+    def read(*args, **kwargs):
+        if 'dtype' in kwargs:
+            assert cached and not any(target.exists() for target in cached)
+        return original_read(*args, **kwargs)
+    monkeypatch.setattr(mod.pd.DataFrame, 'to_pickle', save)
+    monkeypatch.setattr(mod.pd, 'read_csv', read)
+    frames = list(mod.read_csv_chunks(path, ['label'], 1, None, None, None))
+    assert len(cached) == 1
+    assert pandas.concat(frames)['label'].tolist() == ['001', 'text', '003', 'more', '005']
+
+
 @pytest.mark.parametrize('layout', ['raw', 'zip'])
 def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, monkeypatch, layout):
     sys.path.insert(0, str(SCRIPT_PATH.parent))

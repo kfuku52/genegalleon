@@ -17,7 +17,14 @@ for (job in jobs) {
 if (anyDuplicated(vapply(jobs, function(job) job$id, '')) ||
     anyDuplicated(vapply(jobs, function(job) job$output, ''))) stop('Duplicate plot job/output')
 script_dir = dirname(normalizePath(sub('^--file=', '', grep('^--file=', commandArgs(), value=TRUE)[[1]])))
-expressions = parse(file.path(script_dir, 'stat_branch2tree_plot.r'))
+renderer_path = file.path(script_dir, 'stat_branch2tree_plot.r')
+renderer_bytes = function() {
+  size = file.info(renderer_path)$size
+  if (is.na(size) || size > 4 * 1024 * 1024) stop('Invalid renderer source size')
+  readBin(renderer_path, 'raw', n=size + 1)
+}
+source_bytes = renderer_bytes()
+expressions = parse(text=rawToChar(source_bytes))
 render = function(job) {
   before_dir = getwd()
   before_options = options()
@@ -42,10 +49,12 @@ render = function(job) {
     gc(verbose=FALSE)
   })
   result = tryCatch({
+    if (!identical(source_bytes, renderer_bytes())) stop('Renderer source changed during batch')
     tokens = unlist(strsplit(sub('^[^=]*=', '', unlist(job$args, use.names=FALSE)), ',', fixed=TRUE))
     paths = unique(tokens[startsWith(tokens, '/') & file.exists(tokens) & !dir.exists(tokens)])
-    relative_files = tokens[!startsWith(tokens, '/') & file.exists(file.path(job$cwd, tokens))]
-    if (length(relative_files)) stop('Batch input file arguments must be absolute')
+    stat_arg = grep('^--stat_branch=', unlist(job$args, use.names=FALSE), value=TRUE)
+    if (length(stat_arg) != 1 || !startsWith(sub('^--stat_branch=', '', stat_arg), '/'))
+      stop('Batch stat_branch must use one absolute path')
     identities = function() list(info=file.info(paths)[,c('size','mtime','ctime'),drop=FALSE], md5=tools::md5sum(paths))
     before_inputs = identities()
     setwd(scratch)
@@ -56,6 +65,7 @@ render = function(job) {
     env = new.env(parent=globalenv())
     env$.gg_tree_plot_args = unlist(job$args, use.names=FALSE)
     eval(expressions, envir=env)
+    if (!identical(source_bytes, renderer_bytes())) stop('Renderer source changed before publication')
     if (!identical(before_inputs, identities())) stop('Plot input changed before publication')
     output = file.path(scratch, 'stat_branch2tree_plot.pdf')
     if (!file.exists(output) || file.info(output)$size <= 0) stop('Renderer produced no PDF')

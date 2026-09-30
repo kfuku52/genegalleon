@@ -423,12 +423,19 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
         # reparses the original lexemes: casting 001 to text would lose zeros.
         frame_count = 0
         first_dtypes = first.dtypes.to_dict()
-        same_types = True
+        same_types = first_dtypes == dtypes
         def save_frame(frame):
             nonlocal frame_count, same_types
             frame_count += 1
+            reusable = same_types
             same_types = same_types and frame.dtypes.to_dict() == first_dtypes
-            frame.to_pickle(Path(spool) / str(frame_count), protocol=5)
+            if same_types:
+                frame.to_pickle(Path(spool) / str(frame_count), protocol=5)
+            elif reusable:
+                # Once promotion is required, the original CSV must be read
+                # again. Release earlier chunks and stop writing unusable data.
+                for cached in Path(spool).iterdir():
+                    cached.unlink()
         save_frame(first)
         save_frame(second)
         merge_types(second)
