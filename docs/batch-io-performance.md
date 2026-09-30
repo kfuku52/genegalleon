@@ -70,7 +70,8 @@ R process, reusing loaded packages. The plan is a JSON array:
 Supply absolute input file paths. Each job uses a fresh environment, input cache
 and scratch directory. Graphics devices, options and the optional species parser
 are reset between jobs; garbage collection bounds retained family data. Input
-file content/signatures and the exact cached renderer source bytes are fenced
+file content/signatures (including comma-containing filenames) and the exact
+cached renderer source bytes are fenced
 before atomic PDF publication. An individual render failure preserves its prior
 output and does not contaminate later jobs.
 IDs and output paths must be unique. `PLAN.json.results.json` reports ordered
@@ -93,7 +94,7 @@ workload or production completion-rate claim is involved.
 | Workload | Before median | After median | Ratio |
 | --- | ---: | ---: | ---: |
 | 16 families, five declarations each, shared 64 MiB source | 0.971 s | 0.125 s | 7.77× |
-| Eight tree PDFs, separate R processes versus one worker | 9.188 s | 2.887 s | 3.18× |
+| Eight tree PDFs, separate R processes versus one worker | 9.188 s | 2.796 s | 3.29× |
 | 128 audited families, 32 MiB alignments, complete DB/record pipeline | 1.164 s | 1.019 s | 1.14× |
 | One 131,072-row TSV, 24 numeric metrics, complete DB build | 1.413 s | 1.390 s | 1.02× |
 

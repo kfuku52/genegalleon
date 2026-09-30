@@ -5,6 +5,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
@@ -55,22 +57,24 @@ def test_batch_render_matches_cli_and_recovers_from_one_family_error(tmp_path):
 
 
 
-def test_batch_rejects_renderer_source_change_before_pdf_publication(tmp_path):
+@pytest.mark.parametrize('changed', ['renderer', 'stat_branch'])
+def test_batch_rejects_source_or_input_change_before_pdf_publication(tmp_path, changed):
     import shutil
     copied = tmp_path/'support'
     copied.mkdir()
     for name in ('stat_branch2tree_plot.r','tree_plot_batch.r'):
         shutil.copy2(SUPPORT/name, copied/name)
-    stat = tmp_path/'stat.tsv'
+    stat = tmp_path/'stat,branch.tsv'
     stat.write_text('branch_id\tparent\tsister\tchild1\tchild2\tnode_name\tbl_rooted\tso_event\tso_event_parent\n'
         '4\t-999\t-999\t2\t3\troot\t0\tS\tS\n2\t4\t3\t0\t1\tn4\t1\tS\tS\n'
         '0\t2\t1\t\t\tg1\t1\tL\tS\n1\t2\t0\t\t\tg2\t1\tL\tS\n3\t4\t2\t\t\tg3\t2\tL\tS\n')
     renderer = copied/'stat_branch2tree_plot.r'
+    target = renderer if changed == 'renderer' else stat
     profile = tmp_path/'profile.R'
     profile.write_text("setHook(packageEvent('cowplot','onLoad'), function(...) {\n"
         " ns=asNamespace('cowplot'); original=get('save_plot',ns); unlockBinding('save_plot',ns)\n"
         " assign('save_plot',function(...) { result=original(...); cat('# changed\\n',file="+
-        json.dumps(str(renderer))+",append=TRUE); result },ns); lockBinding('save_plot',ns)\n})\n")
+        json.dumps(str(target))+",append=TRUE); result },ns); lockBinding('save_plot',ns)\n})\n")
     output = tmp_path/'preserve.pdf'
     output.write_bytes(b'existing PDF')
     plan = tmp_path/'mutation.json'
@@ -85,5 +89,6 @@ def test_batch_rejects_renderer_source_change_before_pdf_publication(tmp_path):
     assert result.returncode == 1, result.stderr.decode()
     receipts = json.loads(Path(str(plan)+'.results.json').read_text())
     assert receipts['results'][0]['exit_code'] == 1
-    assert 'Renderer source changed before publication' in receipts['results'][0]['detail']
+    expected = 'Renderer source' if changed == 'renderer' else 'Plot input'
+    assert expected+' changed before publication' in receipts['results'][0]['detail']
     assert output.read_bytes() == b'existing PDF'

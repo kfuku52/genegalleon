@@ -50,7 +50,13 @@ render = function(job) {
   })
   result = tryCatch({
     if (!identical(source_bytes, renderer_bytes())) stop('Renderer source changed during batch')
-    tokens = unlist(strsplit(sub('^[^=]*=', '', unlist(job$args, use.names=FALSE)), ',', fixed=TRUE))
+    values = sub('^[^=]*=', '', unlist(job$args, use.names=FALSE))
+    tokens = unlist(lapply(values, function(value) {
+      # A complete existing file is one argument, even when its name contains
+      # commas. Split panel/convergence lists only after that exact-path check.
+      if (startsWith(value, '/') && file.exists(value) && !dir.exists(value)) value
+      else strsplit(value, ',', fixed=TRUE)[[1]]
+    }), use.names=FALSE)
     paths = unique(tokens[startsWith(tokens, '/') & file.exists(tokens) & !dir.exists(tokens)])
     stat_arg = grep('^--stat_branch=', unlist(job$args, use.names=FALSE), value=TRUE)
     if (length(stat_arg) != 1 || !startsWith(sub('^--stat_branch=', '', stat_arg), '/'))
