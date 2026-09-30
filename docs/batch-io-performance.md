@@ -585,6 +585,10 @@ maps, gene order, missing-tree blanks and final merges are unchanged. Species
 names that collide with detailed-table fields or duplicate names retain the
 original labelled writes.
 
+The ordered gene-tree filename list is read literally: names `NA`, `NULL`,
+`nan`, and `001` remain filenames. Empty fields retain their missing-value
+behavior.
+
 Linux arm64 Docker, Python 3.12.14/pandas 3.0.6, baseline `3a05dd0`, the same
 immutable image, one warmup and three measured fresh processes:
 

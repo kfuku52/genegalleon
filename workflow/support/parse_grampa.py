@@ -245,7 +245,10 @@ def main():
     print("{} MUL trees were found.".format(out.shape[0]))
 
     print("Adding the original file names of gene trees")
-    gtname = pandas.read_csv(args.sorted_gene_tree_file_names, sep="\t", header=None, names=["file_name"], dtype=str)
+    gtname = pandas.read_csv(
+        args.sorted_gene_tree_file_names, sep="\t", header=None, names=["file_name"], dtype=str,
+        keep_default_na=False, na_values=[""],
+    )
     gtname["gene_tree"] = "GT-" + pandas.Series([str(i + 1) for i in range(gtname.shape[0])])
 
     print("Writing output table")

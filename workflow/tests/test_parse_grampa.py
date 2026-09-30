@@ -56,7 +56,8 @@ def test_grampa_repeated_maps_keep_order_and_missing_tree_blanks(tmp_path, ncpu,
     assert [path.read_bytes() for path in (det, out, trees, names)] == original
 
 
-def test_parse_grampa_writes_summary_with_species_gene_columns(tmp_path):
+@pytest.mark.parametrize("file_name", ["gene_tree_1.nwk", "NA", "NULL", "nan", "001", ""])
+def test_parse_grampa_writes_summary_with_species_gene_columns(tmp_path, file_name):
     grampa_det = tmp_path / "grampa.det.tsv"
     grampa_out = tmp_path / "grampa.out.tsv"
     gene_trees = tmp_path / "gene_trees.nwk"
@@ -68,7 +69,7 @@ def test_parse_grampa_writes_summary_with_species_gene_columns(tmp_path):
     )
     grampa_out.write_text("MT-1\tH1\tH2\t(sp1_sp1,sp2_sp2);\t7\n")
     gene_trees.write_text("(geneA_sp1_sp1,geneB_sp2_sp2);\n")
-    sorted_names.write_text("gene_tree_1.nwk\n")
+    sorted_names.write_text(file_name + "\n")
 
     completed = subprocess.run(
         [
@@ -92,10 +93,11 @@ def test_parse_grampa_writes_summary_with_species_gene_columns(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr
 
-    out = pandas.read_csv(tmp_path / "grampa_summary.tsv", sep="\t")
+    out = pandas.read_csv(tmp_path / "grampa_summary.tsv", sep="\t", dtype={"file_name": str}, keep_default_na=False)
     assert out.shape[0] == 1
     assert out.loc[0, "gene_tree"] == "GT-1"
     assert out.loc[0, "mul_tree"] == "MT-1"
+    assert out.loc[0, "file_name"] == file_name
     assert out.loc[0, "sp1_sp1"] == "geneA"
     assert out.loc[0, "sp2_sp2"] == "geneB"
 
