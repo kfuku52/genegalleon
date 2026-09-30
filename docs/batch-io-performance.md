@@ -577,6 +577,44 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_scaff
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## GRAMPA species-gene summary assignment
+
+The parsing CLI fills a temporary row/species object array and writes the
+species columns once. Gene-tree parsing and ordered process results, repeated
+maps, gene order, missing-tree blanks and final merges are unchanged. Species
+names that collide with detailed-table fields or duplicate names retain the
+original labelled writes.
+
+Linux arm64 Docker, Python 3.12.14/pandas 3.0.6, baseline `3a05dd0`, the same
+immutable image, one warmup and three measured fresh processes:
+
+| Complete CLI fixture | Before | After | Speedup |
+| --- | ---: | ---: | ---: |
+| Modern format, 2,048 trees, 32 species, one process | 4.740 s | 1.335 s | 3.55× |
+| Legacy format, 1,024 trees, 32 species, two processes | 2.910 s | 0.793 s | 3.67× |
+
+Both fixtures contain two interleaved maps per tree, mixed prefix/suffix gene
+labels and a detailed record without an input tree. Complete output bytes,
+inferred column types, progress text (except start/end timestamps), stderr and
+source fingerprints match. The largest child process peaked near 154 MiB for
+the modern fixture and 147 MiB for the legacy fixture on both versions; no
+memory reduction is claimed, and this is not summed process-tree memory.
+A 32-tree/four-species fixture took 0.556 to 0.532 s, dominated by startup;
+no reliable speedup is claimed for that small case.
+Timing includes CLI startup, tree parsing, file reads, merges and writing the
+summary; fixture creation and fingerprints are excluded. It does not measure
+GRAMPA reconciliation or the full HGT workflow.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_grampa_summary.py \
+  --output grampa-summary.json
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_grampa_summary.py \
+  --trees 1024 --format legacy --cpus 2 --output grampa-summary-legacy.json
+```
+
+Use `--support-root` with a complete baseline support tree and the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,

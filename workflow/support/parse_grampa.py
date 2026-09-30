@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import ete4
+import numpy
 import pandas
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -108,6 +109,19 @@ def update_det_with_species_genes(det, gt_id, species_names, species_gene_map, r
     det.loc[row_indices, species_names] = [species_gene_map[species_name] for species_name in species_names]
 
 
+def _assign_species_genes(det, species_names, row_indices_by_gt, summaries, *, allow_batch):
+    if not allow_batch:
+        for gt_id, species_gene_map in summaries:
+            update_det_with_species_genes(det, gt_id, species_names, species_gene_map, row_indices_by_gt)
+        return
+    values = numpy.full((len(det), len(species_names)), "", dtype=object)
+    for gt_id, species_gene_map in summaries:
+        row_indices = row_indices_by_gt.get(gt_id)
+        if row_indices is not None:
+            values[row_indices, :] = [species_gene_map[species_name] for species_name in species_names]
+    det.loc[:, species_names] = values
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--grampa_det", metavar="PATH", default="", type=str, help="Path used by --grampa_det.")
@@ -166,6 +180,12 @@ def main():
     st = load_tree(newick_or_path=args.species_tree, parser=0)
     species_names = sorted(list(st.leaf_names()))
     species_names, species_set, species_suffixes = build_species_matcher(species_names)
+    # Colliding/duplicate species columns retain the existing labelled writes.
+    allow_batch = (
+        bool(species_names) and len(set(species_names)) == len(species_names)
+        and det.columns.is_unique and det.index.equals(pandas.RangeIndex(len(det)))
+        and not any(name in det.columns for name in species_names)
+    )
     det.loc[:, species_names] = ""
     print("{} species were found.".format(len(species_names)))
 
@@ -182,17 +202,21 @@ def main():
             initializer=_init_worker,
             initargs=(species_names,),
         ) as executor:
-            for gt_id, species_gene_map in executor.map(summarize_gene_tree, tasks):
-                update_det_with_species_genes(det, gt_id, species_names, species_gene_map, row_indices_by_gt)
+            _assign_species_genes(
+                det, species_names, row_indices_by_gt, executor.map(summarize_gene_tree, tasks),
+                allow_batch=allow_batch,
+            )
     else:
-        for task in tasks:
-            gt_id, species_gene_map = summarize_gene_tree(
+        summaries = (
+            summarize_gene_tree(
                 task,
                 species_names=species_names,
                 species_set=species_set,
                 species_suffixes=species_suffixes,
             )
-            update_det_with_species_genes(det, gt_id, species_names, species_gene_map, row_indices_by_gt)
+            for task in tasks
+        )
+        _assign_species_genes(det, species_names, row_indices_by_gt, summaries, allow_batch=allow_batch)
 
     print("Processing grampa out file")
     out = read_grampa_out(args.grampa_out)
