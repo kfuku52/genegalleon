@@ -33,6 +33,26 @@ def write_kftools_stub(stub_root):
     (package_dir / "kfog.py").write_text("", encoding="utf-8")
 
 
+@pytest.mark.parametrize("identifiers", [("001", "1"), ("NA", "NULL", "nan")])
+def test_character_gff_literal_tip_names_join(tmp_path, identifiers):
+    tree = tmp_path / "rooted.nwk"
+    tree.write_text("(" + ",".join(f"{name}:1" for name in identifiers) + ")root;\n")
+    traits = tmp_path / "traits.tsv"
+    traits.write_text("gene_id\tnum_intron\n" + "".join(
+        f"{name}\t{i}" + "\n" for i, name in enumerate(identifiers)))
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(tree), "--character_gff", str(traits),
+    ], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t", converters={"node_name": str})
+    tips = branches.set_index("node_name")
+    assert [tips.loc[name, "num_intron"] for name in identifiers] == list(range(len(identifiers)))
+
+
 def test_no_significant_pfam_hits_preserve_branch_table_schema(tmp_path):
     rooted_tree = tmp_path / "rooted.nwk"
     rooted_tree.write_text("(Species_A_gene1:1,Species_B_gene2:1)n0;\n", encoding="utf-8")

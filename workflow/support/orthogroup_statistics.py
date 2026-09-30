@@ -888,8 +888,10 @@ def flatten_trait_variable_stats(df, key_prefix):
 
 
 def load_gff_gene_traits(path):
-    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None)
-    duplicates = sorted(traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"].astype(str).unique())
+    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None,
+                             converters={"gene_id": lambda value: value if value else numpy.nan})
+    duplicate_ids = traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"]
+    duplicates = sorted({str(value) for value in duplicate_ids})
     if duplicates:
         raise ValueError("GFF gene traits must be unique before branch join: {}".format(", ".join(duplicates[:20])))
     return traits.rename(columns={"gene_id": "node_name", "feature_size": "intron_feature_size"})
