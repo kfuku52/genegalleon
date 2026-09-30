@@ -299,6 +299,8 @@ diagnostic. This is a parsing fix; no speedup is claimed.
 UniProt gene IDs, RPS-BLAST query IDs and expression row IDs use the same literal
 reading rule before branch joins. Only identifiers change: annotation missingness,
 numeric expression values, e-value types and hit-filter thresholds are retained.
+Expression files with sample-only headers retain pandas' inferred gene index;
+the literal-ID fix for NA-like names uses an explicit first ID column.
 
 ## Wide-header validation
 

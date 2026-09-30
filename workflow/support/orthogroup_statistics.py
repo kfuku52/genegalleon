@@ -1723,7 +1723,8 @@ def main():
         try:
             df_exp = pandas.read_csv(params["expression"], sep="\t",
                                      converters={0: lambda value: value if value else numpy.nan})
-            df_exp = df_exp.set_index(df_exp.columns[0])
+            if isinstance(df_exp.index, pandas.RangeIndex):
+                df_exp = df_exp.set_index(df_exp.columns[0])
         except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError, pandas.errors.EmptyDataError) as exc:
             print("Failed to read {}".format(params["expression"]))
             print("Reason: {}".format(exc))

@@ -89,6 +89,26 @@ def test_branch_annotations_join_literal_tip_names(tmp_path, identifiers, source
         assert branches["title"].isna().all()
 
 
+def test_expression_preserves_implicit_gene_index(tmp_path):
+    identifiers = ("Genus_species_gene1", "Other_species_gene2")
+    tree = tmp_path / "rooted.nwk"
+    tree.write_text("(" + ",".join(f"{name}:1" for name in identifiers) + ")root;\n")
+    table = tmp_path / "expression.tsv"
+    # Sample-only headers already make pandas infer the leading gene index.
+    table.write_text("tissue1\ttissue2\nGenus_species_gene1\t1\t3\nOther_species_gene2\t2\t4\n")
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(tree), "--expression", str(table),
+    ], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t").set_index("node_name")
+    assert [branches.loc[name, "expression_tissue1"] for name in identifiers] == [1, 2]
+    assert [branches.loc[name, "expression_tissue2"] for name in identifiers] == [3, 4]
+
+
 def test_no_significant_pfam_hits_preserve_branch_table_schema(tmp_path):
     rooted_tree = tmp_path / "rooted.nwk"
     rooted_tree.write_text("(Species_A_gene1:1,Species_B_gene2:1)n0;\n", encoding="utf-8")
