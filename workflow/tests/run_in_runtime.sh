@@ -98,7 +98,9 @@ if ! has_docker_runtime; then
   echo "Docker is unavailable; cannot use GG_TEST_RUNTIME=docker." >&2
   exit 1
 fi
-if ! docker image inspect "${docker_image}" >/dev/null 2>&1; then
+# Resolve once so freshness inspection and execution use the same image even
+# when another build changes the requested tag in between.
+if ! docker_image_id="$(docker image inspect --format '{{.Id}}' "${docker_image}" 2>/dev/null)"; then
   cat >&2 <<EOF
 GeneGalleon Docker image was not found: ${docker_image}
 
@@ -107,6 +109,11 @@ Build the current repository with:
 EOF
   exit 1
 fi
+if [[ ! "${docker_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "Docker returned an invalid image identity for ${docker_image}: ${docker_image_id}" >&2
+  exit 1
+fi
+docker_image="${docker_image_id}"
 
 bash "${repo_root}/container/scripts/check_runtime_freshness.sh" --docker "${docker_image}"
 

@@ -67,6 +67,9 @@ repository-owned moving upstream revisions. Upstream resolution is cached for on
 normal focused checks do not repeatedly query every repository. A mismatch
 fails with the rebuild command instead of silently using an old `nwkit`,
 `csubst`, or other source snapshot.
+Docker validation resolves the selected image to its immutable ID before
+inspection and execution, so another build replacing its tag cannot change
+the runtime being checked.
 
 Use `GG_RUNTIME_FRESHNESS=always` to force a new upstream resolution or
 `GG_RUNTIME_FRESHNESS=off` for an intentional offline check with a known older
