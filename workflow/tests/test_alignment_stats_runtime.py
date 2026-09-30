@@ -20,7 +20,9 @@ def test_summary_statistics_follow_column_names_not_input_order(tmp_path, reader
     spec = importlib.util.spec_from_file_location(reader, ROOT / f'workflow/support/{reader}.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    families = ['HOG0000010', 'HOG0000020'] if reader.startswith('orthogroup') else ['query_a', 'query_a.b']
+    count = 137 if ncpu > 1 else 2  # Cross multiple bounded I/O windows.
+    families = ([f'HOG{i:07d}' for i in range(count)] if reader.startswith('orthogroup')
+                else ['query_a', 'query_a.b', *[f'query{i}' for i in range(count-2)]])
     columns = module._alignment_stats_columns()
     root = tmp_path / 'output'
     directory = root / 'alignment_stats_original'
@@ -42,7 +44,7 @@ def test_summary_statistics_follow_column_names_not_input_order(tmp_path, reader
     kwargs = {'query_id_matchers': matchers} if matchers is not None else {}
     if storage != 'files':
         kwargs.update(store=GeneFamilyOutputStore(root), logical_subdir='alignment_stats_original')
-    result = module.get_alignment_stats(pandas.DataFrame({'Total': [2, 2]}, index=families),
+    result = module.get_alignment_stats(pandas.DataFrame({'Total': [2] * count}, index=families),
                                        str(directory), 'original', ncpu=ncpu, **kwargs)
     for family, row in expected.items():
         for column, value in row.items():

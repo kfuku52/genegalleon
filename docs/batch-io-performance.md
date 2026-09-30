@@ -27,6 +27,32 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_query
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## Alignment-statistics I/O
+
+Both summary readers keep at most eight pending reads per configured worker,
+consume completion notifications and discard completed futures. They retain
+their original worker count, named-column mapping and failure behavior. Inventory
+and output tables still require memory proportional to the number of families;
+only queued/completed task retention is bounded. Queued work is cancelled on
+failure or iterator close, and active I/O finishes before the executor exits.
+
+Linux arm64 Docker `local/genegalleon:dev`, Python 3.12.14, base `e56c314`, four
+workers, one warmup and three measured fresh processes: 10,000 raw statistics
+TSVs took 7.01 s to 6.30 s (1.11×), with median peak RSS 110.2 to 98.7 MiB
+(10.5% less). A 1,000-family query2family ZIP fixture took 1.05 to 1.04 s with
+about 99 MiB RSS on both versions; no speedup is established for that smaller
+workload. Complete result TSV bytes match for both fixtures. Fixture generation
+is excluded from time, but included in process peak RSS.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_alignment_summary.py \
+  --output /tmp/alignment-summary.json
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_alignment_summary.py \
+  --reader query2family --storage zip --families 1000 --output /tmp/alignment-summary-zip.json
+```
+
+Use `--support-root` with a complete baseline support tree for comparison.
+
 ## Verification
 
 `workflow_api.py capabilities` advertises
