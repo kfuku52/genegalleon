@@ -1130,11 +1130,12 @@ def summarize_candidate_branch(
         synteny_vals = pandas.to_numeric(matched_leaf_rows["synteny_support_score"], errors="coerce")
         synteny_by_gene = dict(zip(matched_leaf_rows["node_name"], synteny_vals, strict=True))
 
+    taxon_by_gene = (
+        dict(zip(matched_leaf_rows["node_name"], map(str, matched_leaf_rows["taxon"]), strict=True))
+        if "taxon" in matched_leaf_rows.columns else {}
+    )
     for gene_id in candidate_genes:
-        leaf_match = matched_leaf_rows.loc[matched_leaf_rows["node_name"] == gene_id, :]
-        gene_taxon = ""
-        if not leaf_match.empty and "taxon" in leaf_match.columns:
-            gene_taxon = str(leaf_match.iloc[0]["taxon"])
+        gene_taxon = taxon_by_gene.get(gene_id, "")
         besthit_info = besthit_per_gene.get(gene_id, {})
         contamination_info = contamination_per_gene.get(gene_id, {})
         recipient_taxonomy = resolve_taxonomy_annotation(gene_taxon, "", taxonomy_resolver)

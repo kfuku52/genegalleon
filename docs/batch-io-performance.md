@@ -205,6 +205,32 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_ortho
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## HGT candidate branch summaries
+
+Candidate summaries index the first retained leaf taxon once per branch instead
+of filtering the leaf table for every candidate gene. Candidate order and
+duplicates, missing/absent taxa, first-leaf selection, evidence counts, lineage
+resolution and representative annotations remain unchanged.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `26a21cc`, same immutable
+image, one warmup and three measured fresh processes: two overlapping candidate
+branches over 2,048 genes, reversed candidate order, an absent gene, mixed
+expression/intron/synteny evidence and contamination annotations. Branch and
+raw-gene summarization took 0.778 to 0.143 s (5.44×). Complete raw/final branch,
+gene and orthogroup tables, types and order match; median peak RSS stayed about
+204.5 MiB. Gene/orthogroup aggregation remained about 0.9 s and is outside this
+speedup. Timing excludes fixture construction, final fingerprints, SQLite reads,
+scaffold context and plotting. The local taxonomy resolver has no database, so
+this does not measure NCBI lookup cost or the entire HGT stage.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_summary.py \
+  --output hgt-summary.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,

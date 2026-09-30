@@ -77,3 +77,27 @@ def test_unmeasured_intron_remains_missing_in_tree_evidence():
     assert pd.isna(genes.iloc[0].intron_supported)
     annotated = annotator.annotate_leaf_rows(leaves, genes, "OG1")
     assert pd.isna(annotated.iloc[0].hgt_Intron)
+
+
+@pytest.mark.parametrize("has_taxon", [True, False])
+@pytest.mark.parametrize("dtype", [None, object])
+def test_candidate_taxa_keep_first_leaf_and_requested_gene_order(has_taxon, dtype):
+    branch = pd.Series(dict(orthogroup="OG1", branch_id=3, node_name="n",
+                            gene_labels="missing; NA; g2; g1; g2", generax_event="H"))
+    leaves = pd.DataFrame([
+        dict(node_name="g1", taxon="Host species"),
+        dict(node_name="g1", taxon="Other species"),
+        dict(node_name="g2", taxon=pd.NA),
+        dict(node_name="NA", taxon="Other species"),
+    ], dtype=dtype)
+    missing_taxon = str(leaves.loc[2, "taxon"])
+    if not has_taxon:
+        leaves = leaves.drop(columns="taxon")
+    summary, records = scorer.summarize_candidate_branch(branch, leaves, pd.DataFrame(), [], resolver())
+    assert summary["candidate_gene_count"] == 5
+    assert summary["matched_leaf_count"] == 3
+    assert [row["gene_id"] for row in records] == ["missing", "NA", "g2", "g1", "g2"]
+    assert [row["gene_taxon"] for row in records] == (
+        ["", "Other species", missing_taxon, "Host species", missing_taxon] if has_taxon else [""] * 5
+    )
+    assert records[3]["recipient_domain"] == ("Eukaryota" if has_taxon else "")
