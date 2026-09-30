@@ -53,6 +53,39 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_gff_s
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## CDS validation and source selection
+
+CDS admission checks ambiguous bases once over the exact existing internal
+codon span. It still excludes the first incomplete codon and terminal codon;
+empty stop/dual-coding codon sets avoid unnecessary membership scans. Genetic
+codes, padding, phase constraints, stop counts, error precedence and selection
+policy are unchanged. Source and selected-sequence hashes remain identical.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `a5bb48b`, same immutable
+image, one warmup and three measured fresh processes: 1,024 genes with 500 body
+codons (normally 1,506 bases), including whitespace/lowercase, internal stops,
+ambiguity, missing supplied sequences, extensions, partial CDS and disagreeing
+sources:
+
+| CDS workload | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| Unconstrained admission, including CDSKit padding | 0.281 s | 0.214 s | 1.31× |
+| Admission with explicit GFF phases | 0.127 s | 0.0590 s | 2.15× |
+| Complete supplied/genomic two-source selection | 0.420 s | 0.301 s | 1.40× |
+
+Every acceptance/rejection, selected source, reason, padded sequence and record
+hash matches. Median process peak RSS stayed about 99 MiB. Timing excludes
+fixture construction and JSON fingerprints; peak RSS includes both. These
+measurements exclude GFF/genome parsing and artifact verification/publication.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_cds_evaluation.py \
+  --output cds-evaluation.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Wide-header validation
 
 Database and scan-schema preflight count each column name once, preserving
