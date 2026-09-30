@@ -71,13 +71,14 @@ def _extract_query_id(file_name, query_id_matchers):
 
 def _read_alignment_stats_file(file_path, query_id, alignment_stats_cols):
     tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
-    return query_id, tmp.iloc[0].to_list()
+    # usecols filters columns but retains their order in the input header.
+    return query_id, tmp.loc[:, alignment_stats_cols].iloc[0].to_list()
 
 
 def _read_alignment_stats_store_file(store, subdir, file_name, query_id, alignment_stats_cols):
     with store.open_binary(subdir, file_name) as handle:
         tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
-    return query_id, tmp.iloc[0].to_list()
+    return query_id, tmp.loc[:, alignment_stats_cols].iloc[0].to_list()
 
 
 def get_alignment_stats(
