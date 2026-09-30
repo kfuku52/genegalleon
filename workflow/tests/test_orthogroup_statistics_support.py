@@ -1,6 +1,7 @@
 import sys
 import types
 from importlib.util import module_from_spec, spec_from_file_location
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,45 @@ def add_branch_ids(tree):
     for branch_id, node in enumerate(tree.traverse()):
         node.add_prop("branch_id", branch_id)
     return tree
+
+
+def test_canonical_split_matches_size_then_lexicographic_definition_in_both_orientations():
+    module = load_module()
+    tips = ('AA', 'a', 'gene.1', 'gene_001', 'NA', 'None', 'ä')
+    all_tips = frozenset(tips)
+    for count in range(len(tips) + 1):
+        for selected in combinations(tips, count):
+            side = frozenset(selected)
+            other = all_tips - side
+            choices = [(len(part), tuple(sorted(part))) for part in (side, other)]
+            expected = None if min(len(side), len(other)) < 2 else min(choices)[1]
+            assert module._canonical_internal_split(selected, all_tips) == expected
+            assert module._canonical_internal_split(other, all_tips) == expected
+
+
+def test_canonical_split_retains_behavior_for_tips_outside_catalog():
+    module = load_module()
+    all_tips = frozenset(['a', 'b', 'c', 'd'])
+    assert module._canonical_internal_split(['outside_y', 'outside_x'], all_tips) == ('outside_x', 'outside_y')
+    assert module._canonical_internal_split(['outside_y', 'a', 'outside_x'], all_tips) == ('a', 'outside_x', 'outside_y')
+
+
+@pytest.mark.parametrize('name', [None, ''])
+def test_support_mapping_rejects_missing_leaf_name(name):
+    module = load_module()
+    tree = module.ete4.PhyloTree()
+    tree.add_child(name='a')
+    tree.add_child(name=name)
+    add_branch_ids(tree)
+    with pytest.raises(ValueError, match='empty leaf label'):
+        module.map_internal_support_by_split(tree, tree, require_support=True)
+
+
+def test_literal_none_leaf_label_is_retained():
+    module = load_module()
+    tree = module.new_tree('((None,a),(NA,b));', format=1)
+    tips, _descendants = module._tree_descendant_tip_sets(tree)
+    assert tips == frozenset(['None', 'a', 'NA', 'b'])
 
 
 def test_species_mapping_clone_handles_observed_deep_tree_without_recursion():

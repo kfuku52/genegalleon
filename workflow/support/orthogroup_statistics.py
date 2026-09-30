@@ -203,7 +203,7 @@ def clone_tree_for_species_mapping(tree):
 def _tree_descendant_tip_sets(tree):
     """Return descendant-tip sets and reject duplicate/empty leaf labels."""
 
-    leaf_names = [str(leaf.name) for leaf in iter_leaves(tree)]
+    leaf_names = [str(leaf.name) if leaf.name is not None else "" for leaf in iter_leaves(tree)]
     if any(not name for name in leaf_names):
         raise ValueError("Tree contains an empty leaf label.")
     duplicate_names = sorted(name for name, count in Counter(leaf_names).items() if count > 1)
@@ -223,16 +223,20 @@ def _canonical_internal_split(descendant_tips, all_tips):
     """Return an orientation-independent key for a non-trivial tree edge."""
 
     side_a = frozenset(descendant_tips)
-    side_b = frozenset(all_tips.difference(side_a))
-    if len(side_a) < 2 or len(side_b) < 2:
+    if len(side_a) < 2:
         return None
-    ordered_a = tuple(sorted(side_a))
-    ordered_b = tuple(sorted(side_b))
+    # The complement has at least len(all_tips) - len(side_a) members. If
+    # that already exceeds side_a, neither its construction nor sort is needed.
+    if 2 * len(side_a) < len(all_tips):
+        return tuple(sorted(side_a))
+    side_b = frozenset(all_tips.difference(side_a))
+    if len(side_b) < 2:
+        return None
     if len(side_a) < len(side_b):
-        return ordered_a
+        return tuple(sorted(side_a))
     if len(side_b) < len(side_a):
-        return ordered_b
-    return min(ordered_a, ordered_b)
+        return tuple(sorted(side_b))
+    return min(tuple(sorted(side_a)), tuple(sorted(side_b)))
 
 
 def _internal_split_nodes(tree):

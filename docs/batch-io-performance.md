@@ -238,6 +238,41 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_ortho
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Unrooted branch-support mapping
+
+Canonical split keys use the same smaller-side and lexicographic tie rules.
+A cardinality bound avoids constructing a provably larger complement, and only
+the selected side is sorted when sizes differ. Leaf uniqueness, topology/leaf
+set agreement, complete support coverage, root-edge consistency and support
+range checks are retained. Missing leaf names are rejected rather than converted
+into the literal string `"None"`; a real leaf named `"None"` remains valid.
+
+Linux arm64 Docker, Python 3.12.14, base `989e44b`, same immutable image, one
+warmup and three measured fresh processes. Two trees have identical topology
+with reversed child order, explicit support and deterministic branch IDs:
+
+| Complete mapping workload | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| Balanced tree, 2,048 tips | 0.931 s | 0.0145 s | 64.3× |
+| Comb tree, 1,024 tips | 0.208 s | 0.0681 s | 3.05× |
+
+Every mapped branch value and diagnostic matches, and input trees are unchanged.
+Median process peak RSS stayed about 148.5 MiB (balanced) / 167.7 MiB (comb).
+Deep trees still require quadratic descendant-set storage; that cost is not
+removed. Timing includes both trees' validation, split construction, support
+checks and final mapping; it excludes fixture construction/import, fingerprints,
+tree inference, support estimation and the rest of branch-statistics generation.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_support_mapping.py \
+  --output support-mapping-balanced.json
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_support_mapping.py \
+  --shape comb --tips 1024 --output support-mapping-comb.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## HGT candidate branch summaries
 
 Candidate summaries index the first retained leaf taxon once per branch instead
