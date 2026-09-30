@@ -707,6 +707,53 @@ def test_structure_reporting_keeps_prior_updates_before_later_length_error():
     assert frame.structure_status.tolist() == ['length_compatible', 'unchecked']
 
 
+@pytest.mark.parametrize('missing_size', [False, True])
+def test_structure_reporting_looks_up_sequence_before_invalid_size(missing_size):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    frame = pandas.DataFrame({'gene_id': ['absent']})
+    if not missing_size:
+        frame['feature_size'] = float('nan')
+    with pytest.raises(KeyError, match='absent'):
+        mark_incompatible_structures(frame, [])
+
+
+def test_structure_reporting_keeps_empty_and_missing_gene_column_behavior():
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    empty = pandas.DataFrame({'feature_size': []})
+    original = empty.copy()
+    mark_incompatible_structures(empty, [])
+    pandas.testing.assert_frame_equal(empty, original)
+    with pytest.raises(AttributeError, match='gene_id'):
+        mark_incompatible_structures(pandas.DataFrame({'feature_size': [6]}), [])
+
+
+@pytest.mark.parametrize('duplicate', ['gene_id', 'feature_size'])
+def test_structure_reporting_preserves_duplicate_needed_column_errors(duplicate):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    columns = ['gene_id', 'gene_id', 'feature_size'] if duplicate == 'gene_id' else ['gene_id', 'feature_size', 'feature_size']
+    values = ['a', 'b', 6] if duplicate == 'gene_id' else ['a', 6, 6]
+    with pytest.raises(TypeError):
+        mark_incompatible_structures(pandas.DataFrame([values], columns=columns), [('a', 'a', 'ATGAAA')])
+
+
+@pytest.mark.parametrize('legacy_case', ['extra_duplicate_columns', 'numeric_identifiers'])
+def test_structure_reporting_keeps_legacy_supported_rows(legacy_case):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    if legacy_case == 'extra_duplicate_columns':
+        frame = pandas.DataFrame([['a', 6, 1, 2], ['b', 6, 3, 4]],
+                                  columns=['gene_id', 'feature_size', 'metadata', 'metadata'])
+    else:
+        frame = pandas.DataFrame({'gene_id': [1, 2], 'feature_size': [6.0, 6.0]})
+    original = frame.copy(deep=True)
+    mark_incompatible_structures(frame, [(gene, gene, 'ATGAAA') for gene in frame.gene_id])
+    assert frame.structure_status.tolist() == ['length_compatible', 'length_compatible']
+    pandas.testing.assert_frame_equal(frame.drop(columns='structure_status'), original)
+
+
 @pytest.mark.parametrize('strand,attributes,expected', [
     ('+', 'partial=true;start_range=.,10', '5prime'),
     ('+', 'partial=true;end_range=20,.', '3prime'),

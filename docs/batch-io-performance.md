@@ -138,6 +138,8 @@ Sequence/coordinate compatibility reporting updates scalar cells directly,
 retaining collection/MultiIndex selection behavior. Exact length and terminal-N
 checks, mismatch reasons, cleared coordinates/structure fields, value types,
 gene order and partial updates before a later error remain unchanged.
+With unique columns and string gene IDs, iteration reads compact tuples of the
+two needed columns; legacy inputs retain their original row/error behavior.
 
 Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `efebae1`, same immutable
 image, one warmup and three measured fresh processes:
@@ -147,6 +149,15 @@ image, one warmup and three measured fresh processes:
 | 4,096 genes, 2,925 compatible / 1,171 mismatched | 1.056 s | 0.233 s | 4.53× |
 | 4,096 genes, all compatible | 0.246 s | 0.0758 s | 3.25× |
 | 32 genes, mixed lengths | 10.4 ms | 3.27 ms | 3.18× |
+
+The subsequent tuple iteration change, compared separately with the scalar-cell
+implementation in `d886351`, used the same image and process sampling:
+
+| Further row-iteration improvement | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| 4,096 genes, 2,925 compatible / 1,171 mismatched | 0.244 s | 0.165 s | 1.48× |
+| 4,096 genes, all compatible | 0.0743 s | 0.0224 s | 3.32× |
+| 32 genes, mixed lengths | 3.19 ms | 2.61 ms | 1.22× |
 
 Complete tables, columns/types, indexes/order and input sequence records match.
 Process peak RSS stayed about 90 MiB (86 MiB for the small control), with no

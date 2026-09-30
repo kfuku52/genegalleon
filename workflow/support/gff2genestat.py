@@ -1066,7 +1066,11 @@ def cds_length_is_compatible_with_partial(row, observed):
 def mark_incompatible_structures(traits, records):
     """Keep sequence evidence separate from unsupported coordinate assignments."""
     sequences = {identifier: sequence for identifier, _header, sequence in records}
-    for index, row in traits.iterrows():
+    rows = traits.iterrows()
+    if (traits.columns.is_unique and 'gene_id' in traits and 'feature_size' in traits
+            and all(type(value) is str for value in traits['gene_id'])):
+        rows = ((row.Index, row) for row in traits[['gene_id', 'feature_size']].itertuples())
+    for index, row in rows:
         sequence = sequences[row.gene_id]
         size = int(row.feature_size)
         tail = sequence[size:]
