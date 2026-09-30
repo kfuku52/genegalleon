@@ -260,7 +260,7 @@ STAT_TREE_RESULT_COLUMNS = (
 
 
 def _read_header(path: Path) -> list[str]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
         header = next(csv.reader(handle, delimiter="\t"), None)
     if not header:
         raise ValueError(f"TSV input has no header: {path}")

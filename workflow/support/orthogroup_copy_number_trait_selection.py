@@ -50,7 +50,7 @@ def family_mapping(text, traits):
 
 
 def read_table(path):
-    with open(path, encoding="utf-8") as handle:
+    with open(path, encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         header = next(reader, [])
         if not header or any(not name.strip() for name in header) or len(header) != len(set(header)):

@@ -52,6 +52,23 @@ def test_malformed_species_table_is_rejected(tmp_path, text):
         selection_module().load_species_table(path)
 
 
+@pytest.mark.parametrize('header', ['species\tspecies', '"species"\tspecies', '\tx'])
+def test_bom_headers_cannot_hide_malformed_copy_selection_tables(tmp_path, header):
+    path = tmp_path / 'traits.tsv'
+    path.write_text(header + '\na\t1\n', encoding='utf-8-sig')
+    with pytest.raises(ValueError, match='unique and non-empty'):
+        selection_module().read_table(path)
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])
+def test_copy_selection_preserves_quoted_bom_headers_and_missing_text(tmp_path, encoding):
+    path = tmp_path / 'traits.tsv'
+    path.write_text('"species"\t"trait\tx"\na\tNA\n', encoding=encoding)
+    frame = selection_module().read_table(path)
+    assert frame.columns.tolist() == ['species', 'trait\tx']
+    assert frame.iloc[0].tolist() == ['a', 'NA']
+
+
 def test_copy_selection_mixed_families_and_rollback(tmp_path):
     rng = np.random.default_rng(52)
     leaves = [f"sp{i}" for i in range(18)]

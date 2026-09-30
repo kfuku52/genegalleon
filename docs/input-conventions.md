@@ -338,6 +338,11 @@ unordered categorical variables; numeric-coded categories must be listed in
 `rsc_categorical_predictors`. Ordered factors use
 `rsc_ordered_predictors="TRAIT=LOW|MIDDLE|HIGH"`.
 
+Trait-table header validation follows TSV quoting and treats a UTF-8 BOM as
+an encoding marker. Duplicate headers are rejected before pandas can rename
+them. The trait-schema sidecar remains bound to the original table bytes,
+including its BOM and line endings.
+
 One row per species is sufficient for ordinary trait data. Repeated species
 rows are accepted by the unified stage only when `rsc_predictor_biological_id` names a column
 that identifies independent predictor measurements. Technical-replicate and

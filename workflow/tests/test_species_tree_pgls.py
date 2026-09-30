@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import math
 import tracemalloc
 
@@ -14,9 +15,30 @@ from workflow.support.species_tree_pgls import (
     _parse_aggregations,
     _parse_methods,
     _prune_tree_to_family_species,
+    _read_tsv,
     aggregate_species_expression,
     summarize_for_stat_tree,
 )
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])
+@pytest.mark.parametrize('header', ['a\ta', '"a"\ta', 'z\ta\tz\ta'])
+def test_duplicate_tsv_headers_are_rejected_before_column_mangling(tmp_path, encoding, header):
+    path = tmp_path / 'expression.tsv'
+    path.write_text(header + '\n' + '\t'.join(['1'] * len(header.split('\t'))) + '\n', encoding=encoding)
+    with pytest.raises(ValueError, match='TSV input has duplicate columns:'):
+        _read_tsv(path)
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])
+@pytest.mark.parametrize('compressed', [False, True])
+def test_tsv_header_preflight_keeps_quoted_columns_and_gzip_support(tmp_path, encoding, compressed):
+    path = tmp_path / ('expression.tsv.gz' if compressed else 'expression.tsv')
+    payload = '"leaf_name"\t"trait\tx"\t"trait""quote"\nNA\t1\t2\n'.encode(encoding)
+    path.write_bytes(gzip.compress(payload) if compressed else payload)
+    frame = _read_tsv(path)
+    assert frame.columns.tolist() == ['leaf_name', 'trait\tx', 'trait"quote']
+    assert frame.iloc[0].tolist() == ['NA', '1', '2']
 
 
 def test_method_and_aggregation_selection_are_explicit():

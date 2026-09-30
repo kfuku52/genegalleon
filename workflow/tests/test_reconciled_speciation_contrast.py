@@ -30,6 +30,27 @@ def test_header_rejects_duplicates_before_pandas_renames_them(tmp_path):
         mod.read_tsv(path)
 
 
+@pytest.mark.parametrize('header', ['a\ta', '"a"\ta', '\ta'])
+def test_bom_header_does_not_hide_duplicate_or_empty_names(tmp_path, header):
+    mod = load_module()
+    path = tmp_path / 'traits.tsv'
+    path.write_text(header + '\n1\t2\n', encoding='utf-8-sig')
+    expected = 'empty column name' if header.startswith('\t') else r'duplicate column names \(a\)'
+    with pytest.raises(ValueError, match=expected):
+        mod.read_tsv(path)
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])
+def test_valid_quoted_tsv_header_matches_body_columns(tmp_path, encoding):
+    mod = load_module()
+    path = tmp_path / 'traits.tsv'
+    path.write_text('"species"\t"trait\tx"\t"trait""quote"\nNA\t1\t2\n', encoding=encoding)
+    header = mod._read_header(path)
+    frame = mod.read_tsv(path)
+    assert header == frame.columns.tolist() == ['species', 'trait\tx', 'trait"quote']
+    assert frame.iloc[0].tolist() == ['NA', '1', '2']
+
+
 @pytest.mark.parametrize('selection', ['all', 'z, a, z, a'])
 def test_trait_selection_keeps_sorted_duplicate_diagnostics(selection):
     mod = load_module()
