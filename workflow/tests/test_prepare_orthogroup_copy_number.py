@@ -101,6 +101,13 @@ def test_prepare_orthogroup_copy_number_reports_nonnumeric_counts(tmp_path):
     assert "sp2" in proc.stderr
 
 
+def test_duplicate_species_diagnostics_precede_missing_count_columns(tmp_path):
+    proc = _run_prepare(tmp_path, 'besthit_0.95\tOrthogroup\tother\nhit\tOG1\t1\n',
+                        '(z:1,a:1,b:1,z:1,a:1);\n')
+    assert proc.returncode != 0
+    assert proc.stderr.strip() == 'ERROR: Dated species tree has duplicate leaf label(s): a, z'
+
+
 def test_genome_evolution_wires_trait_pgls_without_requiring_cafe():
     core = read_text(GENOME_EVOLUTION_CORE)
     prep_condition = (

@@ -16,6 +16,7 @@ import json
 import math
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -263,7 +264,7 @@ def _read_header(path: Path) -> list[str]:
         header = next(csv.reader(handle, delimiter="\t"), None)
     if not header:
         raise ValueError(f"TSV input has no header: {path}")
-    duplicates = sorted({name for name in header if header.count(name) > 1})
+    duplicates = sorted(name for name, count in Counter(header).items() if count > 1)
     if duplicates:
         raise ValueError(f"TSV input has duplicate column names ({', '.join(duplicates)}): {path}")
     if any(name == "" for name in header):
@@ -304,10 +305,11 @@ def _parse_csv_names(value: str, available: Sequence[str], option: str) -> list[
         selected = [item.strip() for item in str(value).split(",")]
         if any(item == "" for item in selected):
             raise ValueError(f"{option} contains an empty column name")
-    duplicates = sorted({name for name in selected if selected.count(name) > 1})
+    duplicates = sorted(name for name, count in Counter(selected).items() if count > 1)
     if duplicates:
         raise ValueError(f"{option} contains duplicates: {', '.join(duplicates)}")
-    missing = [name for name in selected if name not in available]
+    available_names = set(available)
+    missing = [name for name in selected if name not in available_names]
     if missing:
         raise ValueError(f"{option} selects columns not present in the input: {', '.join(missing)}")
     if not selected:

@@ -22,6 +22,24 @@ def write_tsv(path: Path, rows: list[dict[str, object]]) -> None:
     pandas.DataFrame(rows).to_csv(path, sep="\t", index=False)
 
 
+def test_header_rejects_duplicates_before_pandas_renames_them(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'traits.tsv'
+    path.write_text('z\ta\tz\ta\n1\t2\t3\t4\n')
+    with pytest.raises(ValueError, match=r'duplicate column names \(a, z\)'):
+        mod.read_tsv(path)
+
+
+@pytest.mark.parametrize('selection', ['all', 'z, a, z, a'])
+def test_trait_selection_keeps_sorted_duplicate_diagnostics(selection):
+    mod = load_module()
+    with pytest.raises(ValueError, match='--traits contains duplicates: a, z'):
+        mod._parse_csv_names(selection, ['z', 'a', 'z', 'a'], '--traits')
+    assert mod._parse_csv_names('z, a', ('a', 'z'), '--traits') == ['z', 'a']
+    with pytest.raises(ValueError, match='not present in the input: z, a'):
+        mod._parse_csv_names('z, a', ('other',), '--traits')
+
+
 def test_prepare_converts_wide_expression_replicates_without_false_pairing(tmp_path: Path):
     mod = load_module()
     expression = tmp_path / "expression.tsv"

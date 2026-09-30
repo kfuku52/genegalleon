@@ -6,6 +6,7 @@ import datetime
 import os
 import sys
 import time
+from collections import Counter
 
 import ete4
 import numpy
@@ -64,7 +65,7 @@ def load_species_tree(path):
     leaf_names = list(tree.leaf_names())
     if not leaf_names:
         fail(f"Dated species tree has no leaf labels: {path}")
-    duplicated_leaf_names = sorted({leaf for leaf in leaf_names if leaf_names.count(leaf) > 1})
+    duplicated_leaf_names = sorted(leaf for leaf, count in Counter(leaf_names).items() if count > 1)
     if duplicated_leaf_names:
         fail("Dated species tree has duplicate leaf label(s): " + ", ".join(duplicated_leaf_names[:20]))
     return tree, leaf_names

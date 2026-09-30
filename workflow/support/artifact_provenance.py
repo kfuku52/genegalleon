@@ -26,6 +26,7 @@ import stat
 import sys
 import tempfile
 import zipfile
+from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Iterable
 
@@ -215,7 +216,7 @@ def parse_key_value(raw: str, option: str) -> tuple[str, str]:
 def parse_unique_pairs(values: Iterable[str], option: str) -> list[tuple[str, str]]:
     pairs = [parse_key_value(value, option) for value in values]
     keys = [key for key, _ in pairs]
-    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    duplicates = sorted(key for key, count in Counter(keys).items() if count > 1)
     if duplicates:
         raise ProvenanceError(f"Duplicate {option} key(s): {', '.join(duplicates)}")
     return pairs
@@ -737,11 +738,11 @@ def build_contract(
     input_labels = [label for label, _path in input_pairs + store_pairs + logical_input_pairs]
     input_labels.extend(label for label, _root, _subdir in store_subdir_pairs)
     input_labels.extend(label for label, _root, _subdir, _name in store_artifact_pairs)
-    duplicate_input_labels = sorted({label for label in input_labels if input_labels.count(label) > 1})
+    duplicate_input_labels = sorted(label for label, count in Counter(input_labels).items() if count > 1)
     if duplicate_input_labels:
         raise ProvenanceError(f"Duplicate input key(s): {', '.join(duplicate_input_labels)}")
     output_labels = [label for label, _path in output_pairs + logical_output_pairs + optional_output_pairs]
-    duplicate_output_labels = sorted({label for label in output_labels if output_labels.count(label) > 1})
+    duplicate_output_labels = sorted(label for label, count in Counter(output_labels).items() if count > 1)
     if duplicate_output_labels:
         raise ProvenanceError(f"Duplicate output key(s): {', '.join(duplicate_output_labels)}")
     parameters = normalized_parameters(args.parameter)

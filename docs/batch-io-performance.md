@@ -78,6 +78,38 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_schem
 
 Use `--support-root` with a complete baseline support tree for comparison.
 
+## Declaration, trait and species-tree validation
+
+Provenance declaration keys, trait headers/selections and copy-number species
+labels are counted once instead of rescanning each list for every value. Trait
+selection also builds one available-name set. Sorted duplicate diagnostics,
+selection order, error precedence and rejection before artifact reads remain
+unchanged; file hashing and content/completion checks are retained.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `3013667`, same immutable
+image, one warmup and three measured fresh processes:
+
+| Synthetic validation workload | Before median | After median | Ratio |
+| --- | ---: | ---: | ---: |
+| 4,096 input declarations, full contract plus cross-kind duplicate failure | 0.578 s | 0.132 s | 4.38× |
+| Four-row / 4,096-column trait TSV, read and valid/duplicate selections | 0.404 s | 0.0292 s | 13.8× |
+| 4,096-leaf species tree, valid and duplicate-label validation | 0.236 s | 0.0168 s | 14.1× |
+
+Complete contract, trait TSV, selections, Newick/leaf order and diagnostics
+match. Combined median process peak RSS was about 160.6 MiB before/after.
+The declarations reference one small shared source, so this measures declaration
+scaling rather than bulk content hashing. Fixture construction and fingerprints
+are excluded from timing and included in peak RSS. These large validation
+fixtures do not establish full analysis speedups or gains for small inputs.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_declaration_validation.py \
+  --output declaration-validation.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,
