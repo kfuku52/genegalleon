@@ -1,8 +1,10 @@
+import csv
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from shell_static_helpers import read_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +67,74 @@ def test_prepare_orthogroup_copy_number_filters_and_writes_matrix(tmp_path):
     assert "OG1" in matrix.read_text(encoding="utf-8")
     assert "OG_TOO_WIDE" not in matrix.read_text(encoding="utf-8")
     assert "OG_TOO_WIDE" in removed.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize('identifiers', [['001', '1'], ['NA', 'NULL', 'nan', '001', '1']])
+def test_copy_number_preparation_retains_literal_orthogroup_identifiers(tmp_path, identifiers):
+    source = 'besthit_0.95\tOrthogroup\tsp1\tsp2\tsp3\tsp4\n'
+    source += ''.join(f'hit\t{identifier}\t1\t2\t3\t4\n' for identifier in identifiers)
+    proc = _run_prepare(tmp_path, source, '((sp1:1,sp2:1):1,(sp3:1,sp4:1):1);\n')
+    assert proc.returncode == 0, proc.stderr
+    output = tmp_path / 'orthogroup_copy_number/orthogroup_copy_number.tsv'
+    with output.open(newline='') as handle:
+        rows = list(csv.DictReader(handle, delimiter='\t'))
+    assert [row['Orthogroup'] for row in rows] == identifiers
+    assert all([row[column] for column in ['sp1', 'sp2', 'sp3', 'sp4']] == ['1', '2', '3', '4'] for row in rows)
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_copy_number_identifier_reader_keeps_numeric_types_and_metadata_missingness(tmp_path, compressed):
+    import gzip
+
+    import pandas
+
+    from workflow.support.prepare_orthogroup_copy_number import load_gene_count_table
+
+    path = tmp_path / ('counts.tsv.gz' if compressed else 'counts.tsv')
+    source = 'besthit_0.95\tOrthogroup\tsp1\tsp2\nNA\t001\t1\t2.5\nhit\t1\t3\t4.5\n'
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(source)
+    else:
+        path.write_text(source)
+    original = path.read_bytes()
+    frame = load_gene_count_table(str(path))
+    assert frame.Orthogroup.tolist() == ['001', '1']
+    assert frame.sp1.dtype == 'int64' and frame.sp2.dtype == 'float64'
+    assert frame.sp1.tolist() == [1, 3] and frame.sp2.tolist() == [2.5, 4.5]
+    assert pandas.isna(frame.at[0, 'besthit_0.95']) and frame.at[1, 'besthit_0.95'] == 'hit'
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize('empty_id', ['', ' '])
+def test_copy_number_identifier_reader_still_rejects_empty_ids(tmp_path, empty_id):
+    from workflow.support.prepare_orthogroup_copy_number import load_gene_count_table
+
+    path = tmp_path / 'counts.tsv'
+    path.write_text(f'besthit_0.95\tOrthogroup\tsp1\nhit\t{empty_id}\t1\n')
+    with pytest.raises(SystemExit, match='contains empty Orthogroup IDs'):
+        load_gene_count_table(str(path))
+
+
+def test_copy_number_identifier_reader_still_rejects_actual_duplicate_ids(tmp_path):
+    from workflow.support.prepare_orthogroup_copy_number import load_gene_count_table
+
+    path = tmp_path / 'counts.tsv'
+    path.write_text('besthit_0.95\tOrthogroup\tsp1\nhit\t001\t1\nhit\t001\t2\n')
+    with pytest.raises(SystemExit, match='contains duplicate Orthogroup IDs: 001'):
+        load_gene_count_table(str(path))
+
+
+@pytest.mark.parametrize('count, message', [('NA', 'non-numeric copy numbers'), ('-1', 'negative copy numbers')])
+def test_copy_number_identifier_fix_keeps_copy_number_validation(tmp_path, count, message):
+    from workflow.support.prepare_orthogroup_copy_number import get_species_count_table, load_gene_count_table
+
+    path = tmp_path / 'counts.tsv'
+    path.write_text(f'besthit_0.95\tOrthogroup\tsp1\nhit\tNA\t{count}\n')
+    frame = load_gene_count_table(str(path))
+    assert frame.Orthogroup.tolist() == ['NA']
+    with pytest.raises(SystemExit, match=message):
+        get_species_count_table(frame, ['sp1'])
 
 
 def test_prepare_orthogroup_copy_number_reports_missing_tree_species(tmp_path):

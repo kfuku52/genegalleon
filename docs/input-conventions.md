@@ -343,6 +343,14 @@ For each family, both species-tree comparators prune the global species tree
 and trait table to the species represented by reconciled gene tips; unrelated
 species therefore do not make an otherwise complete family fail.
 
+### Orthogroup copy-number tables
+
+Copy-number preparation reads `Orthogroup` IDs literally. `001` and `1` identify
+different families; `NA`, `NULL`, and `nan` are valid ID text. Empty or actually
+duplicated IDs remain errors. Species counts and annotation values retain their
+normal numeric and missing-value handling. Downstream copy-number trait matrices
+preserve these family labels.
+
 ### `workspace/input/species_trait/species_trait.tsv`
 
 The first column contains species labels matching the species tree. Remaining

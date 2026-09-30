@@ -35,10 +35,15 @@ def load_tree(newick_or_path, parser=1):
     return ete4.PhyloTree(newick_or_path, parser=parser)
 
 
+def orthogroup_identifier(value):
+    """Preserve literal family IDs while keeping empty fields missing."""
+    return value if value else numpy.nan
+
+
 def load_gene_count_table(path):
     require_input_file(path, "Orthogroup gene-count table")
     try:
-        genecount_df = pandas.read_csv(path, sep="\t")
+        genecount_df = pandas.read_csv(path, sep="\t", converters={"Orthogroup": orthogroup_identifier})
     except Exception as exc:
         fail(f"Could not read orthogroup gene-count table {path}: {exc}")
     if genecount_df.empty:

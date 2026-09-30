@@ -86,6 +86,13 @@ writeLines(
 
 tree <- load_tree_normalized(tree_file)
 copy_matrix <- load_orthogroup_copy_number_matrix(copy_number_file, tree, family_ids = "OG1 OG10", max_families = "all")
+literal_copy_file <- file.path(tmp, "literal_copy.tsv")
+literal_families <- c("NA", "NULL", "nan", "001", "1")
+writeLines(c("besthit_0.95\tOrthogroup\tsp1\tsp2\tsp3\tsp4",
+             paste0("hit\t", literal_families, "\t1\t2\t3\t4")), literal_copy_file)
+literal_copy_matrix <- load_orthogroup_copy_number_matrix(literal_copy_file, tree)
+stopifnot(identical(colnames(literal_copy_matrix), literal_families))
+stopifnot(identical(unname(literal_copy_matrix[, 1]), c(1, 2, 3, 4)))
 stopifnot(identical(colnames(copy_matrix), c("OG1", "OG10")))
 stopifnot(identical(rownames(copy_matrix), c("sp1", "sp2", "sp3", "sp4")))
 stopifnot(identical(as.numeric(copy_matrix[, "OG1"]), c(1, 2, 3, 4)))
