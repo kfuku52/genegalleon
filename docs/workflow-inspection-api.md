@@ -26,6 +26,15 @@ CLI usage errors return argparse's usual status 2 on stderr. Consumers must
 check the schema and command-specific coverage, and reject unsupported schemas.
 Additional object fields may be added without changing the schema identifier.
 
+Optional `progress=step-progress-v1` returns bounded `progress_evidence` and
+`audit_result_evidence` within exact attempt records. The full provenance audit
+reports current-phase counts/ETA, separate heartbeat/advancement times, source
+closure and report hashes, status counts and exit code. Readers must validate
+attempt/source identities and must not treat audit completion as workflow or
+database completion. Existing attempts without these files remain supported.
+See [audit performance and progress](provenance-audit-performance.md) for the
+protocol, safeguards and reproducible measurements.
+
 ## Record new attempts, optionally
 
 ```bash

@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 os.environ.pop("GG_CONTENT_DIGEST_CACHE", None)
 import artifact_provenance as provenance
 import producer_graph
+from artifact_audit_runtime import validate_observation
 from gene_family_output_store import GeneFamilyOutputStore, archive_queue_status, read_only_observation
 from workflow_observation import contract_arguments, read_regular_json, strict_json_loads
 
@@ -125,6 +126,7 @@ def capabilities(_args):
         "status_pages": "attempt-pages-v1",
         "verify": "family-provenance-v1", "runtime": "registered-config-v1",
         "errors": "owned-boundary-codes-v1",
+        "progress": "step-progress-v1",
     }, provenance_schema_versions=[provenance.SCHEMA_VERSION],
         verify_workspace_relocation="explicit-recorded-workspace-root-v1",
         verify_profiles=["gene-evolution-terminal-v1"],
@@ -199,6 +201,16 @@ def attempt_observation(directory):
             "family_id", "step", "operation", "exit_code", "observed_at_ns", "manifest_sha256")},
             "receipt_sha256": digest(receipt), "workspace_root": receipt.get("workspace_root")})
     record.update(error_evidence=errors, contract_evidence=contracts)
+    for prefix, field, result in (("progress-", "progress_evidence", False),
+                                  ("result-", "audit_result_evidence", True)):
+        evidence = []
+        for path in inventory(directory, pattern=prefix, limit=64):
+            if path.name != prefix + "artifact_audit.json":
+                raise ValueError("unsupported step observation filename")
+            evidence.append(validate_observation(read_regular_json(path, 65536), record["attempt_id"],
+                            result=result, started_at_ns=record["started_at_ns"]))
+        if evidence:
+            record[field] = evidence
     if len(json.dumps(record, sort_keys=True, allow_nan=False).encode()) > MAX_JSON_BYTES:
         raise ValueError("one attempt observation exceeds size bound")
     return record

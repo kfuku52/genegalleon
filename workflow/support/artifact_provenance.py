@@ -9,6 +9,7 @@ retained as diagnostics and intentionally do not invalidate artifacts.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import contextvars
 import csv
@@ -32,11 +33,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from artifact_audit_runtime import AuditDigests, AuditProgress, source_identity
+from artifact_audit_runtime import signature as audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
 from content_digest_cache import configure as configure_digest_cache
 from fasta_sequence_contract import SequenceContractError, validate_fasta, validate_fasta_stream
 from gene_family_output_store import (
+    ArchiveStoreError,
     GeneFamilyOutputStore,
     query_id_from_name,
     query_id_matchers,
@@ -1139,9 +1143,16 @@ def record(args: argparse.Namespace) -> int:
     return 0
 
 
-def read_manifest_from_store(store: GeneFamilyOutputStore, name: str) -> dict[str, object]:
+def read_manifest_from_store(store: GeneFamilyOutputStore, name: str, artifact=None) -> dict[str, object]:
     try:
-        with store.open_binary(MANIFEST_SUBDIR, name) as handle:
+        live_path = artifact.live_path if artifact is not None else None
+        # The fenced store has resolved the source/parent. Keep descriptor type
+        # and symlink checks without resolving that same source a second time.
+        stream = (os.fdopen(os.open(live_path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb")
+                  if live_path is not None else store.open_binary(MANIFEST_SUBDIR, name))
+        with stream as handle:
+            if live_path is not None and not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ProvenanceError("Provenance manifest source must be a regular file")
             payload = strict_json_loads(handle.read())
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         raise ProvenanceError(f"Failed to read logical provenance manifest {name}: {exc}") from exc
@@ -1174,8 +1185,47 @@ def open_reference(
         yield handle
 
 
-def audit_entry_digest(entry, store, logical_root, workspace_root):
+def _audit_artifact_identity(artifact):
+    if artifact is None:
+        return None
+    path = artifact.live_path or artifact.zip_path
+    return (str(path), audit_signature(path), artifact.member_name, artifact.generation)
+
+
+def _audit_manifest_identity(store, name):
+    artifact = store.source_artifact(MANIFEST_SUBDIR, name)
+    identity = _audit_artifact_identity(artifact)
+    payload = read_manifest_from_store(store, name, artifact)
+    payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return identity, payload_hash
+
+
+def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
     """Reuse runtime directory hashing as well as archive-aware file reads."""
+    if memo is not None:
+        if entry.get("scope") == "logical" and entry.get("artifact_type") not in {"directory", "logical_directory"}:
+            raw = str(entry.get("path", ""))
+            pure = PurePosixPath(raw)
+            if len(pure.parts) != 2 or pure.is_absolute() or ".." in pure.parts:
+                raise ProvenanceError(f"Unsafe logical provenance path: {raw!r}")
+            def resolve_source():
+                artifact = store.source_artifact(*pure.parts)
+                return artifact, _audit_artifact_identity(artifact)
+            artifact, identity = memo.resolve((str(logical_root), raw), resolve_source)
+            memo.guard((str(logical_root), raw), identity,
+                       lambda: _audit_artifact_identity(store.source_artifact(*pure.parts)))
+            if artifact is None:
+                raise FileNotFoundError(logical_root / raw)
+            return memo.read(artifact.live_path or artifact.zip_path,
+                             lambda: audit_entry_digest(entry, store, logical_root, workspace_root),
+                             member=artifact.member_name)
+        path = resolve_reference(entry, logical_root, workspace_root)
+        # Absent optional outputs retain the exact existing missing/type rules.
+        if not path.exists():
+            memo.guard((str(path), "absent"), os.path.lexists(path), lambda: os.path.lexists(path))
+            return audit_entry_digest(entry, store, logical_root, workspace_root)
+        return memo.read(path, lambda: audit_entry_digest(entry, store, logical_root, workspace_root),
+                         directory=path.is_dir(), constraint=(entry.get("artifact_type"), entry.get("member_count")))
     artifact_type = entry.get("artifact_type")
     if entry.get("state") == "absent":
         path = resolve_reference(entry, logical_root, workspace_root)
@@ -1203,6 +1253,7 @@ def audit_manifest(
     store: GeneFamilyOutputStore,
     logical_root: Path,
     workspace_root: Path,
+    memo=None,
 ) -> tuple[str, str]:
     if type(payload.get("schema_version")) is not int or payload["schema_version"] != SCHEMA_VERSION:
         return "invalid_manifest", f"unsupported schema_version={payload.get('schema_version')!r}"
@@ -1249,7 +1300,7 @@ def audit_manifest(
                     return "changed_input", label
                 continue
             try:
-                digest, size = audit_entry_digest(entry, store, logical_root, workspace_root)
+                digest, size = audit_entry_digest(entry, store, logical_root, workspace_root, memo)
             except FileNotFoundError:
                 return f"missing_{collection_name[:-1]}", label
             except Exception as exc:
@@ -1268,7 +1319,7 @@ def audit_manifest(
         if state not in {"present", "absent"}:
             return "invalid_manifest", f"optional output {label!r} has invalid state={state!r}"
         try:
-            digest, size = audit_entry_digest(entry, store, logical_root, workspace_root)
+            digest, size = audit_entry_digest(entry, store, logical_root, workspace_root, memo)
         except FileNotFoundError:
             if state == "absent":
                 continue
@@ -1324,6 +1375,7 @@ def branch_identity_rows(
     store: GeneFamilyOutputStore,
     mode: str,
     query_matcher_list=None,
+    progress=None,
 ) -> list[dict[str, str]]:
     iqtree_by_family = {
         family_id: artifact
@@ -1348,7 +1400,10 @@ def branch_identity_rows(
                 "manifest": "",
             }
         ]
-    for family_id in sorted(set(iqtree_by_family).intersection(stat_by_family)):
+    families = sorted(set(iqtree_by_family).intersection(stat_by_family))
+    if progress:
+        progress.phase("branch_identity", len(families))
+    for family_id in families:
         iqtree_artifact = iqtree_by_family[family_id]
         stat_artifact = stat_by_family[family_id]
         try:
@@ -1386,13 +1441,45 @@ def branch_identity_rows(
                 "manifest": "",
             }
         )
+        if progress:
+            progress.advance()
     return rows
 
 
 def audit(args: argparse.Namespace) -> int:
+    workers = getattr(args, "workers", 1)
+    interval = getattr(args, "progress_interval", 10)
+    memo = AuditDigests()
+    source_sha256 = source_identity(SCRIPT_DIR)
+    previous_cache = digest_cache()
+    previous_path = previous_cache.database if previous_cache is not None else None
+    configure_digest_cache(None)
+    try:
+        with AuditProgress(args.output_tsv.with_suffix(args.output_tsv.suffix + ".progress.json"),
+                           interval=interval, attempt_dir=os.environ.get("GG_OBSERVATION_ATTEMPT_DIR"),
+                           workers=workers, source_sha256=source_sha256) as progress:
+            return _audit(args, memo, progress, workers)
+    finally:
+        configure_digest_cache(previous_path)
+
+
+def _audit(args, memo, progress, workers):
+    logical_root = args.logical_root.absolute()
+    store = GeneFamilyOutputStore(logical_root)
+    rows = []
+    inventory_digest = hashlib.sha256()
+    try:
+        with store.read_snapshot():
+            _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest)
+    except (OSError, ValueError, ArchiveStoreError) as exc:
+        rows.append({"family_id": "-", "step": "snapshot_identity", "status": "audit_error",
+                     "reason": str(exc), "manifest": ""})
+    return _publish_audit(args, memo, progress, rows, inventory_digest)
+
+
+def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_digest):
     logical_root = args.logical_root.absolute()
     workspace_root = args.workspace_root.absolute()
-    store = GeneFamilyOutputStore(logical_root)
     query_matcher_list = None
     if args.mode == "query2family" and args.query_dir is not None:
         if not args.query_dir.is_dir():
@@ -1400,32 +1487,49 @@ def audit(args: argparse.Namespace) -> int:
         query_matcher_list = query_id_matchers(
             sorted(path.name for path in args.query_dir.iterdir() if path.is_file() and not path.name.startswith("."))
         )
-    rows: list[dict[str, str]] = []
     manifested_steps: set[tuple[str, str]] = set()
-    if MANIFEST_SUBDIR in store.logical_subdirs():
-        for artifact in store.artifacts(MANIFEST_SUBDIR):
-            try:
-                payload = read_manifest_from_store(store, artifact.name)
-                family_id = str(payload.get("family_id", ""))
-                step = str(payload.get("step", ""))
-                if not family_id or not step:
-                    raise ProvenanceError("family_id and step are required")
-                status, reason = audit_manifest(payload, store, logical_root, workspace_root)
-                manifested_steps.add((family_id, step))
-            except Exception as exc:
-                family_id = artifact_family_id(artifact, args.mode, query_matcher_list) or "-"
-                step = "unknown"
-                status, reason = "invalid_manifest", str(exc)
-            rows.append(
-                {
-                    "family_id": family_id,
-                    "step": step,
-                    "status": status,
-                    "reason": reason,
-                    "manifest": artifact.logical_path,
-                }
-            )
+    def inspect_manifest(name):
+        family_id = infer_orthogroup_id(name) or "-"
+        step = "unknown"
+        payload_hash = "invalid"
+        try:
+            artifact = store.source_artifact(MANIFEST_SUBDIR, name)
+            identity = _audit_artifact_identity(artifact)
+            payload = read_manifest_from_store(store, name, artifact)
+            payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            memo.guard((str(logical_root), MANIFEST_SUBDIR, name),
+                       (identity, payload_hash),
+                       lambda: _audit_manifest_identity(store, name))
+            family_id = str(payload.get("family_id", ""))
+            step = str(payload.get("step", ""))
+            if not family_id or not step:
+                raise ProvenanceError("family_id and step are required")
+            status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo)
+        except Exception as exc:
+            family_id, step = infer_orthogroup_id(name) or "-", "unknown"
+            if args.mode == "query2family" and query_matcher_list:
+                family_id = query_id_from_name(name, query_matcher_list) or "-"
+            status, reason = "invalid_manifest", str(exc)
+        row = {"family_id": family_id, "step": step, "status": status, "reason": reason,
+               "manifest": f"{MANIFEST_SUBDIR}/{name}"}
+        return row, payload_hash
 
+    if MANIFEST_SUBDIR in store.logical_subdirs():
+        names = store.file_names(MANIFEST_SUBDIR)
+        memo.guard((str(logical_root), "manifest_inventory"), tuple(names),
+                   lambda: tuple(store.file_names(MANIFEST_SUBDIR)))
+        progress.phase("manifest_hash", len(names))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            for offset in range(0, len(names), workers * 8):
+                batch = names[offset:offset + workers * 8]
+                for name, (row, payload_hash) in zip(batch, executor.map(inspect_manifest, batch), strict=True):
+                    rows.append(row)
+                    if row["step"] != "unknown":
+                        manifested_steps.add((row["family_id"], row["step"]))
+                    inventory_digest.update(name.encode() + b"\0" + payload_hash.encode())
+                    progress.advance(metrics=memo.metrics())
+
+    progress.phase("legacy_inventory")
     for step, subdir in parse_required_step_subdirs(args.require_step_for_subdir).items():
         if subdir not in store.logical_subdirs():
             continue
@@ -1444,8 +1548,17 @@ def audit(args: argparse.Namespace) -> int:
             )
 
     if args.check_csubst_branches:
-        rows.extend(branch_identity_rows(store, args.mode, query_matcher_list))
+        rows.extend(branch_identity_rows(store, args.mode, query_matcher_list, progress))
 
+    progress.phase("source_revalidation")
+    try:
+        memo.validate(workers=workers, progress=progress)
+    except (OSError, ValueError) as exc:
+        rows.append({"family_id": "-", "step": "snapshot_identity", "status": "audit_error",
+                     "reason": str(exc), "manifest": ""})
+
+def _publish_audit(args, memo, progress, rows, inventory_digest):
+    progress.phase("report", len(rows))
     rows.sort(key=lambda row: (row["family_id"], row["step"], row["status"]))
     args.output_tsv.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output_tsv.with_name(f".{args.output_tsv.name}.tmp-{os.getpid()}")
@@ -1481,7 +1594,11 @@ def audit(args: argparse.Namespace) -> int:
             f"{row['family_id']}\t{row['step']}\t{row['status']}\t{row['reason']}",
             file=sys.stderr,
         )
-    return 1 if failures else 0
+    status = 1 if failures else 0
+    progress.advance(len(rows), memo.metrics())
+    progress.finish(status=status, rows=rows, report=args.output_tsv,
+                    inventory_sha256=inventory_digest.hexdigest(), metrics=memo.metrics())
+    return status
 
 
 def add_contract_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1585,6 +1702,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Require a manifest for every family represented in the logical subdirectory",
     )
     audit_parser.add_argument("--check-csubst-branches", action="store_true")
+    audit_parser.add_argument("--workers", type=int, choices=range(1, 65),
+                              default=max(1, min(4, int(os.environ.get("GG_TASK_CPUS", "1")))))
+    audit_parser.add_argument("--progress-interval", type=float, default=10,
+                              help="Atomic progress update interval in seconds; 0 disables progress writes")
     audit_parser.add_argument(
         "--stale-policy",
         choices=("stop", "reuse", "rebuild"),

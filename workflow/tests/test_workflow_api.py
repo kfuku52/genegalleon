@@ -325,6 +325,28 @@ def test_status_detects_receipt_declaration_changes(project, tmp_path):
     assert len(second["records"]) == 1
 
 
+def test_audit_progress_and_result_are_read_only_exact_attempt_deltas(project, tmp_path):
+    workspace, root, *_rest, argv, _plan = project
+    assert cli(PROVENANCE, "record", *argv).returncode == 0
+    directory = tmp_path / "observations"
+    report = tmp_path / "audit.tsv"
+    assert cli(OBSERVER, "--directory", directory, "--workflow", "gg_gene_summary", "--",
+               sys.executable, PROVENANCE, "audit", "--logical-root", root, "--workspace-root", workspace,
+               "--mode", "orthogroup", "--output-tsv", report).returncode == 0
+    before = snapshot(directory)
+    response = query("status", "--directory", directory)
+    record = response["records"][0]
+    assert record["progress_evidence"][0]["state"] == "completed"
+    assert record["audit_result_evidence"][0]["exit_code"] == 0
+    assert snapshot(directory) == before
+    path = next(directory.glob("*/progress-*.json"))
+    progress = json.loads(path.read_text())
+    progress["attempt_id"] = "f" * 32
+    path.write_text(json.dumps(progress))
+    unavailable = query("status", "--directory", directory, "--since", response["next_cursor"])
+    assert unavailable["complete"] is False and unavailable["next_cursor"] is None
+
+
 def test_boolean_receipt_exit_code_cannot_bind_attempt(project, tmp_path):
     *_, argv, _plan = project
     directory = tmp_path / "observations"

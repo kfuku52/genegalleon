@@ -797,6 +797,8 @@ class GeneFamilyOutputStore:
         self._index_catalog: Optional[dict] = None
         self._cache_epoch: Optional[str] = None
         self._index_update_active = False
+        self._read_snapshot_epoch: Optional[str] = None
+        self._snapshot_zip_readers: Dict[threading.Thread, OrderedDict] = {}
         self._cache_lock = threading.RLock()
         self._zip_reader_cache: weakref.WeakKeyDictionary[
             threading.Thread,
@@ -804,6 +806,8 @@ class GeneFamilyOutputStore:
         ] = weakref.WeakKeyDictionary()
 
     def _assert_no_pending_index_update(self) -> None:
+        if self._read_snapshot_epoch is not None:
+            return
         marker = self.archive_root / INDEX_UPDATE_FILE
         if marker.is_symlink():
             raise ArchiveStoreError(f"Symlinked archive index update markers are not supported: {marker}")
@@ -1110,7 +1114,72 @@ class GeneFamilyOutputStore:
             raise ArchiveStoreError(f"Archive index contains an invalid SHA256 digest: {logical_path}")
         return artifact
 
+    @contextlib.contextmanager
+    def read_snapshot(self) -> Iterator[None]:
+        """Fence one complete read operation instead of checking each member.
+
+        Maintenance remains excluded by the producer lock. Concurrent producer
+        publication invalidates the operation at the final index fence; callers
+        must publish their result only after this context has exited.
+        """
+        if self._read_snapshot_epoch is not None:
+            raise ArchiveStoreError("Nested store read snapshots are unsupported")
+        with producer_read_lock(self.archive_root):
+            self._refresh_if_index_changed()
+            expected = self._read_index_epoch()
+            self._read_snapshot_epoch = expected
+            try:
+                yield
+            finally:
+                self._read_snapshot_epoch = None
+                for readers in self._snapshot_zip_readers.values():
+                    for archive, _users in readers.values():
+                        archive.close()
+                self._snapshot_zip_readers.clear()
+            self._assert_no_pending_index_update()
+            if self._read_index_epoch() != expected:
+                self._reset_cache()
+                raise ArchiveStoreError("Archive changed during the full audit; retry the audit")
+
+    def _read_lock(self):
+        return (contextlib.nullcontext() if self._read_snapshot_epoch is not None
+                else producer_read_lock(self.archive_root))
+
+    @contextlib.contextmanager
+    def _snapshot_zip_reader(self, path: Path):
+        # A bounded per-thread pool avoids reparsing a large central directory
+        # when an audit alternates provenance manifests and output archives.
+        cached = False
+        with self._cache_lock:
+            readers = self._snapshot_zip_readers.setdefault(threading.current_thread(), OrderedDict())
+            entry = readers.pop(path, None)
+            if entry is None:
+                if len(readers) >= 8:
+                    for old_path, (old_archive, users) in list(readers.items()):
+                        if users == 0:
+                            readers.pop(old_path)
+                            old_archive.close()
+                            break
+                archive = zipfile.ZipFile(path, "r")
+                if len(readers) < 8:
+                    readers[path] = archive, 1
+                    cached = True
+            else:
+                archive, users = entry
+                readers[path] = archive, users + 1
+                cached = True
+        try:
+            yield archive
+        finally:
+            if cached:
+                with self._cache_lock:
+                    readers[path] = archive, readers[path][1] - 1
+            else:
+                archive.close()
+
     def _read_index_epoch(self) -> str:
+        if self._read_snapshot_epoch is not None:
+            return self._read_snapshot_epoch
         epoch_path = self.archive_root / INDEX_EPOCH_FILE
         if epoch_path.is_symlink():
             raise ArchiveStoreError(f"Symlinked archive index epochs are not supported: {epoch_path}")
@@ -1804,13 +1873,17 @@ class GeneFamilyOutputStore:
         return sorted(subdirs)
 
     def logical_subdirs(self) -> List[str]:
-        with producer_read_lock(self.archive_root):
+        with self._read_lock():
             return sorted({LEGACY_SUBDIR_ALIASES.get(subdir, subdir) for subdir in self._logical_subdirs_unlocked()})
 
-    def _live_artifact(self, subdir: str, name: str) -> Optional[Artifact]:
+    def _live_artifact(self, subdir: str, name: str, *, include_digest: bool = True) -> Optional[Artifact]:
         logical_path = _safe_logical_path(subdir, name)
         live_path = self.root / subdir / name
-        if not live_path.is_file() or live_path.is_symlink() or live_path.parent.is_symlink() or live_path.name.startswith("."):
+        try:
+            metadata = live_path.lstat()
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        if not stat.S_ISREG(metadata.st_mode) or live_path.parent.is_symlink() or live_path.name.startswith("."):
             return None
         return Artifact(
             logical_path=logical_path,
@@ -1818,9 +1891,9 @@ class GeneFamilyOutputStore:
             name=name,
             generation=sys.maxsize,
             live_path=live_path,
-            size=live_path.stat().st_size,
-            mtime_ns=live_path.stat().st_mtime_ns,
-            sha256=_sha256_path(live_path),
+            size=metadata.st_size,
+            mtime_ns=metadata.st_mtime_ns,
+            sha256=_sha256_path(live_path) if include_digest else None,
         )
 
     def _latest_tombstone(self, subdir: str, name: str) -> Optional[Tuple[int, str]]:
@@ -1853,15 +1926,17 @@ class GeneFamilyOutputStore:
         self,
         subdir: str,
         name: str,
+        *,
+        include_digest: bool = True,
     ) -> Optional[Artifact]:
         observe_path(self.root / _safe_logical_path(subdir, name))
-        live_artifact = self._live_artifact(subdir, name)
+        live_artifact = self._live_artifact(subdir, name, include_digest=include_digest)
         if live_artifact is not None:
             return live_artifact
         return self._archived_artifact_unchecked(subdir, name)
 
-    def _artifact_unchecked(self, subdir: str, name: str) -> Optional[Artifact]:
-        artifact = self._physical_artifact_unchecked(subdir, name)
+    def _artifact_unchecked(self, subdir: str, name: str, *, include_digest: bool = True) -> Optional[Artifact]:
+        artifact = self._physical_artifact_unchecked(subdir, name, include_digest=include_digest)
         if artifact is not None:
             return artifact
         requested_logical_path = _safe_logical_path(subdir, name)
@@ -1869,6 +1944,7 @@ class GeneFamilyOutputStore:
             artifact = self._physical_artifact_unchecked(
                 legacy_subdir,
                 legacy_name,
+                include_digest=include_digest,
             )
             if artifact is None:
                 continue
@@ -1884,9 +1960,19 @@ class GeneFamilyOutputStore:
         return None
 
     def artifact(self, subdir: str, name: str) -> Optional[Artifact]:
-        with producer_read_lock(self.archive_root):
+        with self._read_lock():
             self._refresh_if_index_changed()
             return self._artifact_unchecked(subdir, name)
+
+    def source_artifact(self, subdir: str, name: str) -> Optional[Artifact]:
+        """Resolve current raw/ZIP source metadata without hashing live content.
+
+        Content consumers still read/verify bytes themselves. All index, pending
+        update, live-override, tombstone and legacy-path guards remain shared.
+        """
+        with self._read_lock():
+            self._refresh_if_index_changed()
+            return self._artifact_unchecked(subdir, name, include_digest=False)
 
     def _physical_file_names_unlocked(
         self,
@@ -1957,11 +2043,11 @@ class GeneFamilyOutputStore:
         return sorted(names)
 
     def file_names(self, subdir: str) -> List[str]:
-        with producer_read_lock(self.archive_root):
+        with self._read_lock():
             return self._file_names_unlocked(subdir)
 
     def artifacts(self, subdir: str) -> List[Artifact]:
-        with producer_read_lock(self.archive_root):
+        with self._read_lock():
             self._refresh_if_index_changed()
             return [
                 artifact
@@ -1981,11 +2067,11 @@ class GeneFamilyOutputStore:
         *,
         _producer_locked: bool = False,
     ) -> Iterator[BinaryIO]:
-        lock_context = contextlib.nullcontext() if _producer_locked else producer_read_lock(self.archive_root)
+        lock_context = contextlib.nullcontext() if _producer_locked else self._read_lock()
         with lock_context:
             with self._cache_lock:
                 self._refresh_if_index_changed()
-                artifact = self._artifact_unchecked(subdir, name)
+                artifact = self._artifact_unchecked(subdir, name, include_digest=False)
             if artifact is None:
                 raise FileNotFoundError(self.root / subdir / name)
             if artifact.live_path is not None:
@@ -1998,6 +2084,11 @@ class GeneFamilyOutputStore:
             assert artifact.member_name is not None
             if artifact.zip_path.is_symlink() or artifact.zip_path.parent.is_symlink():
                 raise ArchiveStoreError(f"Symlinked ZIP shards are not supported: {artifact.zip_path}")
+            if self._read_snapshot_epoch is not None:
+                with self._snapshot_zip_reader(artifact.zip_path) as archive:
+                    with archive.open(artifact.member_name, "r") as handle:
+                        yield handle
+                return
             thread = threading.current_thread()
             cached_reader = False
             with self._cache_lock:
@@ -2457,6 +2548,8 @@ class GeneFamilyOutputStore:
             self._cache_epoch = None
 
     def _refresh_if_index_changed(self) -> None:
+        if self._read_snapshot_epoch is not None:
+            return
         self._assert_no_pending_index_update()
         epoch = self._read_index_epoch()
         with self._cache_lock:
