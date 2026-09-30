@@ -652,6 +652,41 @@ def test_prepare_combines_paired_responses_with_mixed_replication(tmp_path: Path
     assert unpaired["leaf"].eq("NA").all()
 
 
+def test_expression_observation_order_and_missingness_with_literal_headers(tmp_path: Path):
+    mod = load_module()
+    expression = tmp_path / "expression.tsv"
+    samples = tmp_path / "samples.tsv"
+    write_tsv(expression, [
+        {"gene id": " A_g1 ", "root: measurement_1": "1", "root: measurement_2": "NA", "leaf.mean_1": "10", "leaf.mean_2": "NA"},
+        {"gene id": " B_g1 ", "root: measurement_1": "2", "root: measurement_2": "3", "leaf.mean_1": "NA", "leaf.mean_2": "20"},
+        {"gene id": " C_g1 ", "root: measurement_1": "NA", "root: measurement_2": "4", "leaf.mean_1": "30", "leaf.mean_2": "NA"},
+    ])
+    write_tsv(samples, [
+        {"column": "leaf.mean_2", "response": " leaf.mean ", "biological_id": " bio2 ", "technical_id": "tech2", "batch": "B2"},
+        {"column": "root: measurement_2", "response": " root: measurement ", "biological_id": " bio2 ", "technical_id": "tech2", "batch": "B2"},
+        {"column": "leaf.mean_1", "response": " leaf.mean ", "biological_id": " bio1 ", "technical_id": "tech1", "batch": "B1"},
+        {"column": "root: measurement_1", "response": " root: measurement ", "biological_id": " bio1 ", "technical_id": "tech1", "batch": "B1"},
+    ])
+    args = mod.build_parser().parse_args([
+        "prepare", "--expression", str(expression), "--sample-metadata", str(samples),
+        "--species-traits", str(tmp_path / "unused.tsv"),
+        *[token for name in ("expression", "species-traits", "analysis-plan", "metadata")
+          for token in (f"--{name}-output", str(tmp_path / f"{name}.out.tsv"))],
+    ])
+    frame, metadata = mod._prepare_expression(args)
+    assert frame.columns.tolist() == ["leaf_name", "leaf.mean", "root: measurement", "biological_id", "technical_id", "batch"]
+    assert list(frame.itertuples(index=False, name=None)) == [
+        ("A_g1", "10", "1", "bio1", "tech1", "B1"),
+        ("B_g1", "20", "3", "bio2", "tech2", "B2"),
+        ("B_g1", "NA", "2", "bio1", "tech1", "B1"),
+        ("C_g1", "NA", "4", "bio2", "tech2", "B2"),
+        ("C_g1", "30", "NA", "bio1", "tech1", "B1"),
+    ]
+    assert metadata["responses"] == "leaf.mean,root: measurement"
+    assert metadata["status"] == "ready"
+    assert metadata["response_sampling_uncertainty"] == "yes"
+
+
 def test_prepare_header_only_expression_is_not_estimable(tmp_path: Path):
     mod = load_module()
     (tmp_path / "expression.tsv").write_text("gene\texpression\n", encoding="utf-8")

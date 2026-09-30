@@ -110,6 +110,41 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_decla
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Expression replicate preparation
+
+Raw expression preparation compiles observation metadata and source-column
+positions once, then reads tuple rows. Missingness checks also avoid creating
+one pandas Series per gene. Gene/observation order, literal column names,
+pairing, technical IDs, batches, skipped-response reasons and numeric validation
+remain unchanged. Known-SE and unreplicated output formats remain compatible.
+
+Linux arm64 Docker, Python 3.12.14, pandas 3.0.6, base `49a966b`, same immutable
+image, one warmup and three measured fresh processes: 3,000 genes, eight retained
+responses and three replicates, plus constant/missing-leaf control responses:
+
+| Preparation workload | Before median | After median | Ratio | Median peak RSS before/after |
+| --- | ---: | ---: | ---: | ---: |
+| Automatic independent replicates, 64,166 output rows | 0.429 s | 0.0904 s | 4.75× | 99.5 / 99.2 MiB |
+| Explicit paired replicates with technical IDs/batches, 8,823 rows | 0.381 s | 0.0655 s | 5.82× | 81.5 / 81.4 MiB |
+
+Complete TSV contents, column types/order and metadata match. Fixtures include
+awkward literal headers, reversed sample metadata, partial missingness and
+entirely missing observations. Timing includes input reads and expression
+validation/conversion; it excludes fixture construction, result fingerprinting,
+predictor preparation, output publication and model fitting. Process peak RSS
+includes construction and fingerprinting. These are preparation measurements,
+not whole-analysis speedups.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_expression_formatting.py \
+  --case unpaired --output expression-unpaired.json
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_expression_formatting.py \
+  --case paired --output expression-paired.json
+```
+
+Use `--support-root` with a complete baseline support tree and keep the same
+`GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
+
 ## Alignment-statistics I/O
 
 Both summary readers keep at most eight pending reads per configured worker,

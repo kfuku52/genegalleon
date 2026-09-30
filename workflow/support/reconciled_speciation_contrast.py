@@ -467,11 +467,13 @@ def _prepare_expression(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
     retained: list[str] = []
     for response in responses:
         response_columns = [str(row["column"]) for row in selected_rows if str(row["response"]).strip() == response]
-        observed_by_leaf = expression[response_columns].apply(
-            lambda row: any(not _is_missing(value) for value in row), axis=1
-        )
-        numeric = _numeric_nonmissing(expression[response_columns].to_numpy().ravel(), response)
-        if not observed_by_leaf.all():
+        response_values = expression[response_columns]
+        observed_by_leaf = [
+            any(not _is_missing(value) for value in row)
+            for row in response_values.itertuples(index=False, name=None)
+        ]
+        numeric = _numeric_nonmissing(response_values.to_numpy().ravel(), response)
+        if not all(observed_by_leaf):
             skipped.append(f"{response}:missing_leaf_values")
         elif len(set(numeric)) < 2:
             skipped.append(f"{response}:constant_or_empty")
@@ -649,24 +651,29 @@ def _prepare_expression(args: argparse.Namespace) -> tuple[pandas.DataFrame, dic
                 )
         existing.append(mapping)
 
-    for _, expression_row in expression.iterrows():
-        leaf_name = str(expression_row[leaf_column]).strip()
-        for (biological, technical), mappings in observation_groups.items():
-            row: dict[str, object] = {column: "NA" for column in output_columns}
+    column_positions = {column: position for position, column in enumerate(expression.columns)}
+    observations = []
+    for (biological, technical), mappings in observation_groups.items():
+        template: dict[str, object] = dict.fromkeys(output_columns, "NA")
+        template["biological_id"] = biological
+        if has_technical:
+            template["technical_id"] = technical
+        if has_batch:
+            template["batch"] = _metadata_value(mappings[0], "batch")
+        sources = [(column_positions[str(mapping["column"])], str(mapping["response"]).strip()) for mapping in mappings]
+        observations.append((template, sources))
+
+    for expression_row in expression.itertuples(index=False, name=None):
+        leaf_name = str(expression_row[column_positions[leaf_column]]).strip()
+        for template, sources in observations:
+            row = template.copy()
             row["leaf_name"] = leaf_name
-            row["biological_id"] = biological
-            if has_technical:
-                row["technical_id"] = technical
-            if has_batch:
-                row["batch"] = _metadata_value(mappings[0], "batch")
             observed = False
-            for mapping in mappings:
-                source = str(mapping["column"])
-                value = expression_row[source]
+            for position, response in sources:
+                value = expression_row[position]
                 if _is_missing(value):
                     continue
                 observed = True
-                response = str(mapping["response"]).strip()
                 row[response] = value
             if observed:
                 output_rows.append(row)
