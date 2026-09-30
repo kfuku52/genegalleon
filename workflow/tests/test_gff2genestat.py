@@ -66,6 +66,37 @@ def test_longest_selection_preserves_group_order_extra_dtypes_and_input():
     pandas.testing.assert_frame_equal(frame, original)
 
 
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_transcript_blocks_retains_extension_types_duplicate_rows_and_optional_attributes(strand):
+    from workflow.support.gff2genestat import transcript_blocks
+
+    frame = pandas.DataFrame({'sequence': ['chr1'] * 3, 'strand': [strand] * 3,
+                             'start': pandas.Series([31, 1, 31], dtype='Int64'),
+                             'end': pandas.Series([39, 9, 39], dtype='Int64')})
+    frame.index = [9, 9, 2]
+    original = frame.copy(deep=True)
+    expected = [('chr1', strand, 1, 9), ('chr1', strand, 31, 39)]
+    if strand == '-':
+        expected.reverse()
+    assert transcript_blocks(frame, 'g') == (expected, 'cis')
+    pandas.testing.assert_frame_equal(frame, original)
+    # Duplicate unused columns are accepted by the existing helper.
+    unused = pandas.DataFrame({'unused': [1, 2, 3]}, index=frame.index)
+    extra = pandas.concat([frame, unused, unused], axis=1)
+    assert transcript_blocks(extra, 'g') == (expected, 'cis')
+
+
+def test_transcript_blocks_keeps_missing_and_duplicate_coordinate_column_errors():
+    from workflow.support.gff2genestat import transcript_blocks
+
+    frame = pandas.DataFrame({'sequence': ['chr1'], 'strand': ['+'], 'start': [1], 'end': [9]})
+    with pytest.raises(KeyError, match='end.*not in index'):
+        transcript_blocks(frame.drop(columns='end'), 'g')
+    duplicate = pandas.concat([frame, frame[['sequence']]], axis=1)
+    with pytest.raises(ValueError, match='too many values to unpack'):
+        transcript_blocks(duplicate, 'g')
+
+
 @pytest.mark.parametrize('phase', ['1', 'invalid'])
 def test_duplicate_cds_coordinates_retain_every_phase_record(phase):
     from workflow.support.gff2genestat import attach_transcript_structure

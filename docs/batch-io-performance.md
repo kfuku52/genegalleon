@@ -46,6 +46,14 @@ Time excludes fixture construction and result fingerprinting; process peak RSS
 includes both. This does not measure GFF download, file parsing or sequence
 resolution.
 
+A further pass (base `04dc6dd`, same workload/runtime/repetitions) iterates
+coordinate columns directly rather than constructing a small coordinate frame
+and tuple iterator for each gene. Missing/duplicate-column behavior and coordinate
+casts remain unchanged. Complete selection → structure → summary time fell from
+0.686 to 0.433 s (1.58×); structure validation alone fell from 0.592 to 0.336 s.
+Selected/annotated/final table fingerprints and warnings match. Median process
+peak RSS was 98.9 to 99.3 MiB, with no material memory saving established.
+
 ```bash
 bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_gff_summary.py \
   --output /tmp/gff-summary.json

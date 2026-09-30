@@ -621,7 +621,13 @@ def transcript_ids(attributes, gene_id):
 
 
 def transcript_blocks(frame, gene_id):
-    fields = frame[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None)
+    columns = ["sequence", "strand", "start", "end"]
+    if frame.columns.is_unique and all(column in frame for column in columns):
+        fields = zip(*(frame[column] for column in columns), strict=True)
+    else:
+        # Retain the existing missing/duplicate-column behavior without making
+        # a coordinate DataFrame for every normally formed gene group.
+        fields = frame[columns].itertuples(index=False, name=None)
     attributes = frame["attributes"] if "attributes" in frame else [""] * len(frame)
     return ordered_annotated_blocks(((*block, attr) for block, attr in zip(fields, attributes, strict=True)), gene_id)
 
