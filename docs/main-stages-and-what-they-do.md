@@ -1,5 +1,8 @@
 # Main Stages and What They Do
 
+Subgenome retention and expression contrasts are available as an optional
+standalone genome-evolution mode; see [Subgenome Dominance](subgenome-dominance.md).
+
 ### `gg_input_generation_entrypoint.sh`
 
 Purpose:

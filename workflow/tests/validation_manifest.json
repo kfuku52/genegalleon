@@ -30,6 +30,7 @@
     "test_csubst_scan_runtime_integration.py",
     "test_owned_runtime_contracts.py",
     "test_smudgeplot_runtime.py",
+    "test_subgenome_dominance_runtime.py",
     "test_get_promoter_fasta_runtime.py",
     "test_rsc_runtime_integration.py",
     "test_pgls_multiplicity.py",

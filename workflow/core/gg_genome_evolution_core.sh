@@ -22,6 +22,10 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
 genome_evolution_mode="${genome_evolution_mode:-all}"
 run_pairwise_synteny="${run_pairwise_synteny:-0}"
+run_subgenome_dominance="${run_subgenome_dominance:-0}"
+subgenome_manifest="${subgenome_manifest:-}"
+subgenome_bootstrap_replicates="${subgenome_bootstrap_replicates:-2000}"
+subgenome_seed="${subgenome_seed:-1}"
 synteny_plot_only="${synteny_plot_only:-0}"
 synteny_pairs_file="${synteny_pairs_file:-}"
 synteny_sequence_mode="${synteny_sequence_mode:-auto}"
@@ -40,9 +44,10 @@ synteny_ds_color_max="${synteny_ds_color_max:-2}"
 case "${genome_evolution_mode}" in
   all) ;;
   synteny) run_pairwise_synteny=1 ;;
-  *) echo "genome_evolution_mode must be all or synteny" >&2; exit 2 ;;
+  subgenome) run_subgenome_dominance=1 ;;
+  *) echo "genome_evolution_mode must be all, synteny or subgenome" >&2; exit 2 ;;
 esac
-for synteny_flag in run_pairwise_synteny synteny_plot_only; do
+for synteny_flag in run_pairwise_synteny synteny_plot_only run_subgenome_dominance; do
   case "${!synteny_flag}" in
     0|1) ;;
     *) echo "${synteny_flag} must be 0 or 1" >&2; exit 2 ;;
@@ -216,6 +221,39 @@ run_pairwise_synteny_stage() (
   if [[ ${delete_tmp_dir:-1} -eq 1 ]]; then rm -rf -- "${work_dir}"; fi
   echo "Pairwise synteny outputs: ${gg_workspace_output_dir}/genome_evolution/synteny"
 )
+run_subgenome_dominance_stage() (
+  local scratch_root work_dir plan_file argument needs_update
+  local -a contract_args=()
+  gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" subgenome_dominance || exit $?
+  trap 'gg_stage_transaction_lock_release' EXIT
+  [[ -n "${subgenome_manifest}" ]] || subgenome_manifest="${gg_workspace_input_dir}/subgenome_analyses.tsv"
+  scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/subgenome_dominance") || exit 1
+  ensure_dir "${scratch_root}"
+  work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
+  plan_file="${work_dir}/plan.json"
+  python "${gg_support_dir}/subgenome_dominance.py" plan \
+    --workspace "${gg_workspace_dir}" --manifest "${subgenome_manifest}" \
+    --replicates "${subgenome_bootstrap_replicates}" --seed "${subgenome_seed}" --outfile "${plan_file}"
+  python "${gg_support_dir}/subgenome_dominance.py" contract --plan "${plan_file}" > "${work_dir}/contract.args"
+  while IFS= read -r -d '' argument; do contract_args+=("${argument}"); done < "${work_dir}/contract.args"
+  needs_update=0
+  gg_artifact_prepare_stage needs_update run_subgenome_dominance "${contract_args[@]}" || exit $?
+  if [[ ${needs_update} -eq 1 ]]; then
+    gg_step_start "Subgenome retention and expression contrasts"
+    python "${gg_support_dir}/subgenome_dominance.py" run --plan "${plan_file}" --output "${work_dir}/results"
+    python "${gg_support_dir}/subgenome_dominance.py" verify --plan "${plan_file}"
+    mv_out_bundle "${work_dir}/results" "${gg_workspace_output_dir}/genome_evolution/subgenome_dominance"
+    gg_artifact_record "${contract_args[@]}"
+  else
+    gg_step_skip "Subgenome contrasts (current artifacts)"
+  fi
+  if [[ ${delete_tmp_dir:-1} -eq 1 ]]; then rm -rf -- "${work_dir}"; fi
+  echo "Subgenome outputs: ${gg_workspace_output_dir}/genome_evolution/subgenome_dominance"
+)
+if [[ "${genome_evolution_mode}" == subgenome ]]; then
+  run_subgenome_dominance_stage
+  exit 0
+fi
 if [[ "${genome_evolution_mode}" == synteny ]]; then
   run_pairwise_synteny_stage
   exit 0
@@ -226,6 +264,9 @@ if [[ ${synteny_plot_only} -eq 1 && ${run_pairwise_synteny} -eq 0 ]]; then
 fi
 # shellcheck disable=SC1090
 source "${gg_support_dir}/gg_busco.sh"
+if [[ ${run_subgenome_dominance} -eq 1 ]]; then
+  run_subgenome_dominance_stage
+fi
 delete_tmp_dir=${delete_tmp_dir:-1}
 if [[ -z "${self_fractionation_bias_table}" ]]; then
   self_fractionation_bias_table="${gg_workspace_input_dir}/fractionation_bias_pairs.tsv"

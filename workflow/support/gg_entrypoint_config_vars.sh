@@ -319,6 +319,10 @@ EOF
       cat <<'EOF'
 genome_evolution_mode
 run_pairwise_synteny
+run_subgenome_dominance
+subgenome_manifest
+subgenome_bootstrap_replicates
+subgenome_seed
 synteny_plot_only
 synteny_pairs_file
 synteny_sequence_mode
