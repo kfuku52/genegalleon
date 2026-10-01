@@ -40,12 +40,85 @@ its default is `0`. Scheduler resource directives are unchanged.
 
 Optional pair-table columns are `target_fasta`, `target_gff`, `query_fasta`,
 `query_gff`, `target_feature`, `target_attribute`, `query_feature`,
-`query_attribute`, `target_seqids`, and `query_seqids`. Paths are absolute or
+`query_attribute`, `target_seqids`, `query_seqids`, `target_cds`, `query_cds`,
+`target_genome`, `query_genome`, `target_sizes`, and `query_sizes`.
+CDS columns supply optional paths for dS coloring. Paths are absolute or
 workspace-relative. Multiple same-species source files require explicit paths;
 explicit FASTA paths also require `synteny_sequence_mode=protein` or `cds`.
 GFF feature/attribute overrides must be supplied together. Seqids are exact,
 comma-separated chromosome names in the desired ribbon display order.
-Unlisted chromosomes remain in the analysis and full-genome dotplot.
+Unlisted chromosomes remain in the analysis and can appear in the dotplot if
+they meet its physical-length filter.
+
+The dotplot includes only scaffold/chromosome lengths **at least 1,000,000 bp**
+by default (`synteny_dotplot_min_length=1000000`). Supply genome FASTA paths
+in `*_genome`, or chromosome-size tables in `*_sizes` (two whitespace-separated
+columns: exact seqid and positive length; `.fai` files also work). Do not supply
+both for the same side. Otherwise a unique matching FASTA in `species_genome`
+is used, or GFF `##sequence-region seqid 1 length` declarations. GFFs must
+declare the whole sequence span for this use; partial regions need assembly
+FASTA/size inputs. Missing lengths are errors, never estimated from gene counts
+or the last annotated gene; they are checked before dS alignment starts.
+Set the minimum to `0` explicitly to disable this
+display-only filter. The analysis and dS estimates still cover all anchors.
+
+`synteny_dotplot_sort=homoeolog` (default) places supported 2×2 chromosome
+groups next to each other on both axes. Groups must have unique anchors in all
+four chromosome comparisons; a deterministic greedy search prioritizes their
+harmonic-mean support, with ribbon order breaking ties. Weak cross-connections
+remain visible. This is a display heuristic, not a biological homoeology/WGD
+test or a globally optimal grouping. `karyotype` follows the ribbon order,
+appending unlisted eligible chromosomes in BED order; `none` preserves BED
+order. No mode reverses chromosomes or changes within-chromosome gene order.
+`dotplot_order.json` records the groups, lengths, order and excluded anchor
+counts; `dotplot_display.tsv` records each chromosome's length and selection.
+
+The default `synteny_karyotype_sort=both_length` reorders both ribbon tracks
+to reduce the sum of **ribbon width × connection length**. `target_length`
+fixes the query order and reorders the target; `query_length` fixes the target
+and reorders the query. Width is the mean of the two endpoint widths in JCVI
+gene-rank display coordinates; length
+is the straight line between their centers, measured on the 20×8-inch canvas.
+All displayed blocks contribute, including secondary connections. Chromosome
+gene counts, JCVI gaps, and block positions within chromosomes are included,
+so this is not simply a strongest-partner ordering. The objective does not
+minimize crossing count or the arc length of the decorative Bézier curves.
+
+For either fixed-track mode with up to 20 moving chromosomes, exact subset
+dynamic programming finds the global minimum of this fixed-track objective,
+to floating-point precision.
+The start position depends only on the widths of the preceding subset, allowing
+the solver to avoid enumerating all permutations. Exact cost ties prefer input
+order. For more than 20 chromosomes, bounded adjacent-swap improvement avoids
+exponential resource use; this is explicitly recorded as **not globally optimal**.
+Use an explicit main-chromosome seqid list when exact optimization is needed.
+
+For `both_length`, small problems enumerate one track and solve the other
+exactly (at most 2,000,000 combined work units). Larger problems, including
+18×18 chromosomes, use six deterministic multistart alternating searches;
+each track update is exact when it has at most 20 chromosomes. Joint global
+optimality is **not guaranteed** for this bounded search. The reported result
+cannot be worse than the initial one-track optimum. Inspect the recorded
+objective and solver status rather than interpreting the order as ancestry.
+
+`target` and `query` retain the earlier dominant-partner heuristic: unique lifted
+anchor-pair counts choose the strongest fixed partner, then mean partner gene
+rank and input order break ties; chromosomes with no displayed partner go last.
+`none` preserves the supplied lists or natural order. In every mode the lists
+select the displayed chromosomes; all ribbons, chromosome orientations, gene
+order and analysis are unchanged. The dotplot can follow this ordering using
+`synteny_dotplot_sort=karyotype`. `karyotype_order.json`
+records the input/final orders, solver, objective values and optimality status
+(or anchor support for the dominant-partner heuristic).
+
+For Triphyophyllum (target) versus Ancistrocladus (query), list `scaffold1`
+through `scaffold18` explicitly in the pair table's `query_seqids` and use:
+
+```bash
+GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \
+GG_GENOME_EVOLUTION_SYNTENY_KARYOTYPE_SORT=both_length \
+  bash workflow/gg_genome_evolution_entrypoint.sh
+```
 
 FASTA IDs match GFF attributes exactly or after removal of the exact species
 prefix. Ambiguous matches fail. The annotation mapper bundled in kfFractBias
@@ -69,27 +142,72 @@ Outputs are under `workspace/output/genome_evolution/synteny/`:
 | Directory | Contents |
 | --- | --- |
 | `analysis/<analysis_id>/` | BED and protein inputs, ID maps, seed/lifted anchors, `anchors.tsv`, `blocks.tsv`, `summary.json`, commands and logs |
+| `ds/<analysis_id>/` | Optional CDSKIT `ds.tsv`, audited codon alignments (`aligned_pairs.tsv.gz`) and method/source summary |
 | `plots/<analysis_id>/` | `karyotype` and `dotplot` in PDF/SVG/PNG, `display.tsv`, reproducible layout/seqids and copied plotting inputs |
 
 Both plots use **gene rank**, rather than physical chromosome length. BED/block
 coordinates use 0-based, half-open intervals. Ribbons are colored by the target
-chromosome; dotplot colors distinguish block orientation. Chromosome labels and
+chromosome; dotplot colors distinguish block orientation by default. Chromosome labels and
 their original orientation are preserved; natural ordering puts Chr2 before
 Chr10. Display exclusions are recorded, and the dotplot retains every anchor
-without downsampling. Short/unplaced scaffolds are included by default, so
-fragmented assemblies may require an explicit ribbon seqid list for readability.
+between its eligible chromosomes without downsampling. The 1 Mbp filter does
+not change ribbon selection; fragmented assemblies may still need an explicit
+ribbon seqid list for readability. Full plotting inputs are retained alongside
+separate filtered/reordered `dotplot.*.bed` and `dotplot.anchors` files.
+
+Dotplot PDFs have a total page width of 3.6 inches, including labels and margins,
+and a square physical plot area (not equal x/y data units). X-axis chromosome
+labels are vertical; all text is 8 pt Helvetica, with italic species names and
+upright `(gene rank)` suffixes.
+The layout is fitted without scaling the text. PNG/SVG typography and ribbon
+plots are unchanged.
 
 The summary records source hashes, selected/unmapped gene counts, syntenic gene
 fractions, block/anchor counts, genetic codes, algorithm parameters, tool versions
 and annotation-mapper identity. A run with no blocks fails before publication.
-Analysis and plots have separate standard artifact-provenance contracts and
+Analysis, optional dS estimation and plots have separate standard artifact-provenance contracts and
 recoverable bundle publication. A stage lock prevents concurrent runs from
 mixing analysis and plots. Completed analysis is retained if a plot fails.
+
+## Dotplot colored by dS
+
+```bash
+GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \
+GG_GENOME_EVOLUTION_SYNTENY_DOTPLOT_COLOR=ds \
+GG_GENOME_EVOLUTION_SYNTENY_DS_COLOR_MAX=2 \
+  bash workflow/gg_genome_evolution_entrypoint.sh
+```
+
+This requires a runtime containing CDSKIT's `dnds` command and MAFFT; an older
+runtime fails explicitly. There is no alternate estimator fallback. CDS sources
+must translate exactly to the selected synteny proteins. CDS-mode inputs are
+reused; protein-mode inputs use `species_cds` or explicit `target_cds`/`query_cds`.
+Both species must use the same genetic code for this pairwise estimator.
+ID-map headers and original IDs must be unique: identical protein translations
+cannot justify swapping distinct synonymous CDS variants. Malformed dS tables,
+unknown result statuses, and mismatched report/codon-semantics versions are errors,
+not missing biological evidence.
+
+Each unique lifted-anchor gene pair is aligned by MAFFT in protein space and
+back-translated with CDSKIT. Native batched YN00 uses equal path weights
+(`weighting=0`), pair-specific F3x4 frequencies and kappa. Missing/gapped codons
+are removed jointly. Alignment and estimator batch workers use the allocated
+CPUs; BLAS/OpenMP threads within the dS process are limited to one per worker
+to avoid nested parallelism. Unestimable or saturated distances are `NA` and
+appear in gray, never as zero. All anchors on eligible chromosomes remain visible,
+including those above the color limit; the upper limit clips colors only.
+`dotplot_ds.json` records counts.
+Missing chromosome lengths or no anchors passing the physical-length filter
+stop the run before alignment/dS estimation; completed synteny analysis is retained.
+These pairwise distances are not a codeml likelihood analysis or a WGD test.
 
 ## Redraw and resume
 
 An unchanged rerun reuses both analysis and plots. A changed display order or
-output format invalidates only the plots. Use this after changing `*_seqids`:
+output format invalidates only the plots. Sorting-setting changes also affect
+only plots, as do separate assembly FASTA/size inputs and dotplot filter/order
+settings. Changing the annotation GFF still invalidates analysis.
+Use this after changing `*_seqids` or `synteny_karyotype_sort`:
 
 ```bash
 GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \
@@ -99,7 +217,11 @@ artifact_stale_policy=rebuild \
   bash workflow/gg_genome_evolution_entrypoint.sh
 ```
 
-Plot-only requires a complete, current analysis. Changed FASTA/GFF inputs or
+Plot-only requires a complete, current analysis and, for dS coloring, a current
+dS stage. It never starts alignment or dS estimation. A changed dS color limit
+invalidates only plots; changing CDS or estimator source invalidates dS and plots,
+without rerunning an otherwise current protein-based synteny analysis.
+Changed FASTA/GFF inputs or
 analysis settings cannot silently use the previous analysis. The normal
 `artifact_stale_policy=stop` stops on drift; an explicitly selected `rebuild`
 regenerates the affected stage. Plot-only does not rebuild analysis. Review
@@ -107,3 +229,5 @@ regenerates the affected stage. Plot-only does not rebuild analysis. Review
 
 For plot-only, stale analysis is rejected even with `artifact_stale_policy=reuse`.
 Input hashes are rechecked before publication to detect changes during a run.
+This guard includes the pair table without adding its byte hash to every phase's
+cache key, so a subsequent display-only table edit still reuses scientific analysis.

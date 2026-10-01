@@ -2,9 +2,11 @@ import csv
 import json
 import os
 import random
+import re
 import subprocess
 from pathlib import Path
 
+import pytest
 from Bio.Data import CodonTable
 from PIL import Image
 
@@ -14,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE = REPO_ROOT / "workflow/core/gg_genome_evolution_core.sh"
 
 
-def write_genome(workspace, species, mode, chromosomes):
+def write_genome(workspace, species, mode, chromosomes, seed_offsets=None):
     sequence_dir = workspace / "input" / f"species_{mode}"
     annotation_dir = workspace / "input/species_gff"
     sequence_dir.mkdir(parents=True, exist_ok=True)
@@ -24,12 +26,14 @@ def write_genome(workspace, species, mode, chromosomes):
     codons = {}
     for codon, aa in CodonTable.standard_dna_table.forward_table.items():
         codons.setdefault(aa, codon)
-    for chromosome, reverse in chromosomes:
+    for chromosome_index, (chromosome, reverse) in enumerate(chromosomes):
+        gff.append(f"##sequence-region {chromosome} 1 2000000")
         indices = list(range(8))
         if reverse:
             indices.reverse()
         for position, index in enumerate(indices):
-            rng = random.Random(1729 + index)
+            offset = 0 if seed_offsets is None else seed_offsets[chromosome_index]
+            rng = random.Random(1729 + offset + index)
             protein = "M" + "".join(rng.choice("ACDEFGHIKLMNPQRSTVWY") for _ in range(160))
             identifier = f"{chromosome}_g{index}"
             fasta_identifier = species + "_" + identifier if mode == "protein" else identifier
@@ -47,6 +51,170 @@ def run_core(workspace, **overrides):
            "GG_ARRAY_TASK_ID": "1", "GG_JOB_ID": "synteny_test", "GG_TASK_CPUS": "1", "GG_MEM_PER_CPU_GB": "8",
            "genome_evolution_mode": "synteny", "artifact_stale_policy": "stop", **overrides}
     return subprocess.run(["bash", str(CORE)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=180)
+
+
+def test_ds_stage_uses_cdskit_reuses_analysis_and_has_independent_cache(tmp_path):
+    workspace = tmp_path / "workspace"
+    for species in ("Triphyophyllum_peltatum", "Ancistrocladus_abbreviatus"):
+        for mode in ("protein", "cds"):
+            write_genome(workspace, species, mode, (("Chr1", False),))
+    (workspace / "input/synteny_pairs.tsv").write_text(
+        "analysis_id\ttarget_species\tquery_species\n"
+        "pair\tTriphyophyllum_peltatum\tAncistrocladus_abbreviatus\n")
+    result = run_core(workspace, synteny_karyotype_sort="none", synteny_plot_formats="png")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/synteny"
+    analysis = root / "analysis/pair"
+    analysis_mtime = (analysis / "commands.json").stat().st_mtime_ns
+    anchors = (analysis / "target.query.lifted.anchors").read_bytes()
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_only="1", artifact_stale_policy="rebuild")
+    assert result.returncode != 0
+    assert "current ds" in result.stderr
+    assert not (root / "ds").exists()
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_formats="png", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    ds = root / "ds/pair"
+    metadata = json.loads((root / "plots/pair/dotplot_ds.json").read_text())
+    summary = json.loads((ds / "summary.json").read_text())
+    assert summary["tools"]["method"] == "YN00_weighting0_F3x4"
+    assert metadata["anchor_count"] == json.loads((analysis / "summary.json").read_text())["anchor_count"]
+    assert metadata["downsampled"] is metadata["filtered_by_dS"] is False
+    assert (analysis / "commands.json").stat().st_mtime_ns == analysis_mtime
+    ds_mtime = (ds / "ds.tsv").stat().st_mtime_ns
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_ds_color_max="1",
+                      synteny_plot_only="1", synteny_plot_formats="png", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (ds / "ds.tsv").stat().st_mtime_ns == ds_mtime
+    assert json.loads((root / "plots/pair/dotplot_ds.json").read_text())["color_range"] == [0, 1]
+    cds = workspace / "input/species_cds/Triphyophyllum_peltatum.cds.fa"
+    original = cds.read_text()
+    assert "GCT" in original
+    cds.write_text(original.replace("GCT", "GCC", 1))
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_only="1", artifact_stale_policy="rebuild")
+    assert result.returncode != 0
+    assert (ds / "ds.tsv").stat().st_mtime_ns == ds_mtime
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_formats="png", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (ds / "ds.tsv").stat().st_mtime_ns != ds_mtime
+    assert (analysis / "commands.json").stat().st_mtime_ns == analysis_mtime
+    assert (analysis / "target.query.lifted.anchors").read_bytes() == anchors
+
+
+def test_ds_renderer_retains_missing_and_over_limit_anchors(tmp_path):
+    from workflow.support.pairwise_synteny_ds import render_ds_dotplot
+    plots, ds = tmp_path / "plots", tmp_path / "ds"
+    plots.mkdir()
+    ds.mkdir()
+    (plots / "target.bed").write_text("chr1\t0\t10\ta\nchr1\t10\t20\tb\nchr1\t20\t30\tc\n")
+    (plots / "query.bed").write_text("chr2\t0\t10\td\nchr2\t10\t20\te\nchr2\t20\t30\tf\n")
+    (plots / "target.query.lifted.anchors").write_text("###\na d 10\nb e 10\nc f 10\n")
+    (ds / "ds.tsv").write_text("pair_id\tdS\tstatus\na|d\t0.5\tok\nb|e\t4\tok\nc|f\t\tsaturated\n")
+    render_ds_dotplot(plots, ds, {"target_species": "Target_species", "query_species": "Query_species"}, "png", 2)
+    metadata = json.loads((plots / "dotplot_ds.json").read_text())
+    assert metadata["anchor_count"] == 3
+    assert metadata["above_color_max_count"] == metadata["missing_count"] == 1
+    assert metadata["filtered_by_dS"] is False
+    with Image.open(plots / "dotplot.png") as image:
+        image.verify()
+
+
+@pytest.mark.parametrize("color", ["ds", "orientation"])
+def test_dotplot_pdf_3p6inch_square_helvetica8_vertical_chromosomes_and_italic_species(tmp_path, monkeypatch, color):
+    from matplotlib.figure import Figure
+    from matplotlib.text import Text
+
+    from workflow.support.pairwise_synteny_ds import render_ds_dotplot
+
+    plots, ds = tmp_path / "plots", tmp_path / "ds"
+    plots.mkdir()
+    ds.mkdir()
+    (plots / "target.bed").write_text("chr1\t0\t10\ta\nchr1\t10\t20\tb\nchr1\t20\t30\tc\n")
+    (plots / "query.bed").write_text("chr2\t0\t10\td\nchr2\t10\t20\te\nchr2\t20\t30\tf\nchr2\t30\t40\tg\n")
+    (plots / "target.query.lifted.anchors").write_text("###\na d 10\nb e 10\nc f 10\n")
+    (ds / "ds.tsv").write_text("pair_id\tdS\tstatus\na|d\t0.5\tok\nb|e\t4\tok\nc|f\t\tsaturated\n")
+    pair = {"target_species": "Target_species", "query_species": "Query_species"}
+    saved = Figure.savefig
+    observations = []
+
+    def inspect_save(figure, *args, **kwargs):
+        figure.canvas.draw()
+        axes = figure.axes[1]
+        box = axes.get_window_extent()
+        assert box.width == pytest.approx(box.height, rel=1e-10)
+        assert axes.get_xlim() == (0, 3)
+        assert axes.get_ylim() == (4, 0)
+        assert len(axes.collections[0].get_offsets()) == 3
+        texts = [text for text in figure.findobj(Text) if text.get_visible() and text.get_text()]
+        assert texts
+        assert all(text.get_fontsize() == 8 and text.get_fontfamily() == ["Helvetica"] for text in texts)
+        assert axes.get_xlabel() == "Target species"
+        assert axes.get_ylabel() == "Query species"
+        assert axes.xaxis.label.get_fontstyle() == axes.yaxis.label.get_fontstyle() == "italic"
+        units = [text for text in texts if text.get_text().strip() == "(gene rank)"]
+        assert len(units) == 2 and all(text.get_fontstyle() == "normal" for text in units)
+        assert all(text.get_text().startswith(" ") for text in units)
+        assert all(sum(text.get_position()) > 2 for text in units)
+        labels = [text for text in figure.axes[0].texts if text.get_text() == "chr1"]
+        assert len(labels) == 1 and labels[0].get_rotation() == 90
+        observations.append(box.width / box.height)
+        return saved(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", inspect_save)
+    if color == "ds":
+        render_ds_dotplot(plots, ds, pair, "pdf", 2)
+    else:
+        from workflow.support.pairwise_synteny_dotplot import render_orientation_pdf
+
+        render_orientation_pdf(plots, pair, filtered=False)
+    assert observations == pytest.approx([1])
+    pdf = (plots / "dotplot.pdf").read_bytes()
+    media_box = re.search(rb"/MediaBox\s*\[([^]]+)\]", pdf)
+    assert media_box is not None
+    x0, _, x1, _ = map(float, media_box.group(1).split())
+    assert x1 - x0 == pytest.approx(3.6 * 72, abs=1e-7)
+    assert b"/BaseFont /Helvetica" in pdf
+    assert b"/BaseFont /Helvetica-Oblique" in pdf
+    assert b"/Subtype /Type3" not in pdf
+
+
+def test_ds_cds_mapping_rejects_translation_mismatch_and_ambiguous_alias(tmp_path):
+    from workflow.support.pairwise_synteny_ds import load_cds
+
+    (tmp_path / "target.pep").write_text(">gene\nMA\n")
+    (tmp_path / "target.id_map.tsv").write_text(
+        "original_id\tjcvi_id\tstatus\nSpecies_gene\tgene\tselected\n")
+    cds = tmp_path / "cds.fa"
+    cds.write_text(">gene\nATGGCTTAA\n")
+    assert load_cds(cds, tmp_path, "target", "Species", 1)["gene"] == ("ATGGCT", "MA")
+    cds.write_text(">gene\nATGGTT\n")
+    with pytest.raises(ValueError, match="translation differs"):
+        load_cds(cds, tmp_path, "target", "Species", 1)
+    cds.write_text(">gene\nATGGCT\n>Species_gene\nATGGCT\n")
+    with pytest.raises(ValueError, match="one matching CDS"):
+        load_cds(cds, tmp_path, "target", "Species", 1)
+    cds.write_text(">gene\nATGTAAGCT\n")
+    with pytest.raises(ValueError, match="internal stop"):
+        load_cds(cds, tmp_path, "target", "Species", 1)
+
+
+@pytest.mark.parametrize("defect", ["duplicate_header", "repeated_original"])
+def test_dS_id_map_cannot_silently_assign_another_genes_synonymous_variant(tmp_path, defect):
+    from workflow.support.pairwise_synteny_ds import load_cds
+
+    analysis, sources = write_small_ds_analysis(tmp_path)
+    # Equal translations cannot reveal an accidental swap of synonymous CDS.
+    sources[0].write_text(">gene1\nATGGCT\n>gene2\nATGGCC\n")
+    if defect == "duplicate_header":
+        text = ("original_id\tjcvi_id\tstatus\toriginal_id\n"
+                "gene1\tTarget_species_gene1\tselected\tgene2\n"
+                "gene2\tTarget_species_gene2\tselected\tgene2\n")
+    else:
+        text = ("original_id\tjcvi_id\tstatus\n"
+                "gene1\tTarget_species_gene1\tselected\n"
+                "gene1\tTarget_species_gene2\tselected\n")
+    (analysis / "target.id_map.tsv").write_text(text)
+    with pytest.raises(ValueError, match="ID.map|[Dd]uplicate"):
+        load_cds(sources[0], analysis, "target", "Target_species", 1)
 
 
 def test_synteny_only_generates_real_plots_preserves_other_stages_and_reuses_analysis(tmp_path):
@@ -120,6 +288,32 @@ def test_plot_only_without_completed_analysis_does_not_publish(tmp_path):
     assert not (workspace / "output/genome_evolution/synteny/analysis").exists()
 
 
+def test_sort_redraws_one_track_without_changing_analysis_or_dotplot_inputs(tmp_path):
+    workspace = tmp_path / "workspace"
+    write_genome(workspace, "Target_species", "protein", (("T1", False), ("T2", False)), (0, 100))
+    write_genome(workspace, "Query_species", "protein", (("Q1", False), ("Q2", False)), (100, 0))
+    (workspace / "input/synteny_pairs.tsv").write_text("analysis_id\ttarget_species\tquery_species\npair\tTarget_species\tQuery_species\n")
+    result = run_core(workspace, synteny_plot_formats="png", synteny_karyotype_sort="none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/synteny"
+    analysis = root / "analysis/pair"
+    plots = root / "plots/pair"
+    analysis_mtime = (analysis / "commands.json").stat().st_mtime_ns
+    inputs = {name: (plots / name).read_bytes() for name in ("target.bed", "query.bed", "target.query.lifted.anchors")}
+    assert (plots / "seqids").read_text() == "T1,T2\nQ1,Q2\n"
+    for mode, expected in (("target", "T2,T1\nQ1,Q2\n"), ("query", "T1,T2\nQ2,Q1\n"),
+                           ("target_length", "T2,T1\nQ1,Q2\n"), ("query_length", "T1,T2\nQ2,Q1\n")):
+        result = run_core(workspace, synteny_plot_only="1", synteny_plot_formats="png",
+                          synteny_karyotype_sort=mode, artifact_stale_policy="rebuild")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (analysis / "commands.json").stat().st_mtime_ns == analysis_mtime
+        assert (plots / "seqids").read_text() == expected
+        assert all((plots / name).read_bytes() == value for name, value in inputs.items())
+        ordering = json.loads((plots / "karyotype_order.json").read_text())
+        assert ordering["mode"] == mode
+        assert ordering["orientation_changed"] is False
+
+
 def test_normal_genome_evolution_can_opt_in_to_pairwise_stage(tmp_path):
     workspace = tmp_path / "workspace"
     write_genome(workspace, "Target_species", "protein", (("Chr1", False),))
@@ -131,3 +325,318 @@ def test_normal_genome_evolution_can_opt_in_to_pairwise_stage(tmp_path):
     root = workspace / "output/genome_evolution/synteny"
     assert (root / "analysis/pair/summary.json").is_file()
     assert (root / "plots/pair/karyotype.png").is_file()
+
+
+def test_weighted_layout_matches_real_jcvi_track_coordinates_including_shared_starts(tmp_path):
+    import matplotlib.pyplot as plt
+    from jcvi.graphics.karyotype import Karyotype
+    from kffractbias.io import read_bed
+
+    from workflow.support.pairwise_synteny_layout import offsets, track_geometry
+
+    bed = tmp_path / "genes.bed"
+    selected = [f"chr{i}" for i in range(18)]
+    bed.write_text("".join(f"{sid}\t0\t10\t{sid}_g2\n{sid}\t0\t20\t{sid}_g10\n" for sid in selected))
+    (tmp_path / "seqids").write_text(",".join(selected) + "\n")
+    (tmp_path / "layout").write_text(f"0.7,0.12,0.92,0,,Example,top,{bed},top\n")
+    widths, ranks, ratio, gap = track_geometry(selected, read_bed(bed))
+    starts = offsets(selected, widths, gap)
+    figure, axes = plt.subplots(figsize=(20, 8))
+    native = Karyotype(axes, str(tmp_path / "seqids"), str(tmp_path / "layout"), plot_label=False).tracks[0]
+    assert native.gap == pytest.approx(gap)
+    assert native.ratio == pytest.approx(ratio)
+    for sid in selected:
+        for suffix in ("g2", "g10"):
+            gene = f"{sid}_{suffix}"
+            assert native.get_coords(gene)[0] == pytest.approx(starts[sid] + ratio * ranks[gene])
+    plt.close(figure)
+
+
+def write_small_ds_analysis(tmp_path):
+    analysis = tmp_path / "analysis"
+    analysis.mkdir()
+    sources = []
+    for side, species in (("target", "Target_species"), ("query", "Query_species")):
+        sources.append(tmp_path / f"{side}.cds.fa")
+        sources[-1].write_text(">gene1\nATGGCT\n>gene2\nATGGCT\n")
+        (analysis / f"{side}.pep").write_text(f">{species}_gene1\nMA\n>{species}_gene2\nMA\n")
+        (analysis / f"{side}.id_map.tsv").write_text(
+            "original_id\tjcvi_id\tstatus\n" + "".join(f"gene{i}\t{species}_gene{i}\tselected\n" for i in (1, 2)))
+    (analysis / "target.query.lifted.anchors").write_text(
+        "###\nTarget_species_gene1 Query_species_gene1 10\nTarget_species_gene2 Query_species_gene2 10\n")
+    return analysis, sources
+
+
+@pytest.mark.parametrize("collision", ["cds", "symlink", "hardlink", "analysis"])
+def test_codon_alignment_output_cannot_overwrite_inputs(tmp_path, collision):
+    from workflow.support.pairwise_synteny_ds import prepare_pairs
+
+    analysis, sources = write_small_ds_analysis(tmp_path)
+    original = sources[0].read_bytes()
+    output = tmp_path / "output.tsv"
+    if collision == "cds":
+        output = sources[0]
+    elif collision == "symlink":
+        output.symlink_to(sources[0])
+    elif collision == "hardlink":
+        os.link(sources[0], output)
+    else:
+        output = analysis / "new-output.tsv"
+    with pytest.raises(ValueError, match="Input and output"):
+        prepare_pairs(analysis, sources, ("Target_species", "Query_species"), 1, output)
+    assert sources[0].read_bytes() == original
+
+
+def test_failed_codon_alignment_preserves_existing_output(tmp_path, monkeypatch):
+    from workflow.support import pairwise_synteny_ds as ds
+
+    analysis, sources = write_small_ds_analysis(tmp_path)
+    output = tmp_path / "pairs.tsv"
+    output.write_text("previous complete result\n")
+    calls = []
+    def fail_second(pair, sequences, code):
+        calls.append(pair)
+        if len(calls) == 2:
+            raise RuntimeError("alignment failed")
+        return dict(zip(ds.PAIR_COLUMNS, ("a|b", "a", "b", "ATGGCT", "ATGGCT"), strict=True))
+    monkeypatch.setattr(ds, "align_pair", fail_second)
+    with pytest.raises(RuntimeError, match="alignment failed"):
+        ds.prepare_pairs(analysis, sources, ("Target_species", "Query_species"), 1, output)
+    assert output.read_text() == "previous complete result\n"
+    assert list(tmp_path.glob(".pairs.tsv.*.tmp")) == []
+
+
+@pytest.mark.parametrize("stdout,message", [
+    (">target\nX\n>target\nX\n>query\nX\n", "Invalid MAFFT"),
+    (">target\nA\n>query\nX\n", "changed a protein"),
+])
+def test_alignment_rejects_duplicate_ids_and_changed_unknown_residues(tmp_path, monkeypatch, stdout, message):
+    from types import SimpleNamespace
+
+    from workflow.support import pairwise_synteny_ds as ds
+
+    monkeypatch.setattr(ds.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=stdout))
+    with pytest.raises(ValueError, match=message):
+        ds.align_pair(("a", "b"), [{"a": ("NNN", "X")}, {"b": ("NNN", "X")}], 1)
+
+
+@pytest.mark.parametrize("sequence", ["ATGſCT", "ATG---", "ATG?CT"])
+def test_cds_loader_rejects_nonascii_and_aligned_or_invalid_raw_cds(tmp_path, sequence):
+    from workflow.support.pairwise_synteny_ds import load_cds
+
+    path = tmp_path / "cds.fa"
+    path.write_text(">gene\n" + sequence + "\n")
+    with pytest.raises(ValueError, match="alphabet"):
+        load_cds(path, tmp_path, "target", "Species", 1)
+
+
+@pytest.mark.parametrize("code,sequence,protein", [(27, "ATGTGA", "MW"), (28, "ATGTAA", "MQ"), (31, "ATGTAG", "ME")])
+def test_dS_loader_preserves_dual_meaning_code_sense_codons(tmp_path, code, sequence, protein):
+    from workflow.support.pairwise_synteny_ds import load_cds
+
+    (tmp_path / "target.pep").write_text(">gene\n" + protein + "\n")
+    (tmp_path / "target.id_map.tsv").write_text("original_id\tjcvi_id\tstatus\ngene\tgene\tselected\n")
+    cds = tmp_path / "cds.fa"
+    cds.write_text(">gene\n" + sequence + "\n")
+    assert load_cds(cds, tmp_path, "target", "Species", code)["gene"] == (sequence, protein)
+
+
+@pytest.mark.parametrize("row", ["a|b\t\tok\n", "a|b\tNaN\tok\n", "a|b\t1\tsaturated\n", "a|b\t-1\tok\n", "a|b\t1\n"])
+def test_dS_report_rejects_inconsistent_values_and_malformed_rows(tmp_path, row):
+    from workflow.support.pairwise_synteny_ds import read_ds
+
+    path = tmp_path / "ds.tsv"
+    path.write_text("pair_id\tdS\tstatus\n" + row)
+    with pytest.raises(ValueError):
+        read_ds(path)
+
+
+@pytest.mark.parametrize("text", [
+    "pair_id\tdS\tstatus\na|b\t\tunknown\n",
+    "pair_id\tdS\tstatus\n \t\tsaturated\n",
+    "pair_id\tdS\tstatus\t\na|b\t0\tok\t\n",
+    'pair_id\tdS\tstatus\n"a|b\t0\tok\n',
+])
+def test_dS_report_does_not_hide_corrupt_evidence_as_missing(tmp_path, text):
+    from workflow.support.pairwise_synteny_ds import read_ds
+
+    path = tmp_path / "ds.tsv"
+    path.write_text(text)
+    with pytest.raises((ValueError, csv.Error)):
+        read_ds(path)
+
+
+def test_length_source_change_redraws_dS_only_and_failed_filter_preserves_plots(tmp_path):
+    workspace = tmp_path / "workspace"
+    for species in ("Target_species", "Query_species"):
+        for mode in ("protein", "cds"):
+            write_genome(workspace, species, mode, (("Chr1", False), ("Chr2", False)), seed_offsets=(0, 1000))
+    sizes = workspace / "input/target.sizes"
+    sizes.write_text("Chr1\t999999\nChr2\t1000000\n")
+    (workspace / "input/synteny_pairs.tsv").write_text(
+        "analysis_id\ttarget_species\tquery_species\ttarget_sizes\n"
+        "pair\tTarget_species\tQuery_species\tinput/target.sizes\n")
+    options = {"synteny_plot_formats": "png", "synteny_dotplot_color": "ds", "synteny_karyotype_sort": "none"}
+    result = run_core(workspace, **options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/synteny"
+    analysis_mtime = (root / "analysis/pair/commands.json").stat().st_mtime_ns
+    ds_mtime = (root / "ds/pair/ds.tsv").stat().st_mtime_ns
+    plot = root / "plots/pair"
+    before = json.loads((plot / "dotplot_ds.json").read_text())
+    assert before["anchor_count"] == 8
+    assert json.loads((root / "ds/pair/summary.json").read_text())["unique_anchor_pairs"] == 16
+    sizes.write_text("Chr1\t1000000\nChr2\t1000000\n")
+    result = run_core(workspace, **options, synteny_plot_only="1", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((plot / "dotplot_ds.json").read_text())["anchor_count"] == 16
+    assert (root / "analysis/pair/commands.json").stat().st_mtime_ns == analysis_mtime
+    assert (root / "ds/pair/ds.tsv").stat().st_mtime_ns == ds_mtime
+    previous = (plot / "dotplot.png").read_bytes()
+    result = run_core(workspace, **options, synteny_plot_only="1", synteny_dotplot_min_length="3000000", artifact_stale_policy="rebuild")
+    assert result.returncode != 0
+    assert "No anchors connect" in result.stderr
+    assert (plot / "dotplot.png").read_bytes() == previous
+    assert (root / "ds/pair/ds.tsv").stat().st_mtime_ns == ds_mtime
+
+
+@pytest.mark.parametrize("defect", ["wrong_pair", "duplicate_pair", "wrong_code", "wrong_method", "missing_column",
+                                    "wrong_schema", "wrong_semantics", "unknown_status"])
+def test_dS_stage_checks_report_identity_not_just_row_count(tmp_path, monkeypatch, defect):
+    import cdskit.dnds
+    from cdskit.codonutil import CODON_SEMANTICS_VERSION
+    from cdskit.tsvio import TSV_REPORT_SCHEMA_VERSION
+
+    from workflow.support import pairwise_synteny_ds as ds
+
+    analysis = tmp_path / "output/genome_evolution/synteny/analysis/pair"
+    analysis.mkdir(parents=True)
+    (analysis / "target.query.lifted.anchors").write_text("###\na b 10\nc d 10\n")
+    sources = {side: {"fasta": str(tmp_path / f"{side}.fa"), "genetic_code": 1} for side in ("target", "query")}
+    plan = {"workspace": str(tmp_path), "ds_tools": {}, "pairs": [
+        {"analysis_id": "pair", "target_species": "Target_species", "query_species": "Query_species", "ds": sources}]}
+    def fake_prepare(analysis, paths, species, code, output, cpus):
+        output.write_text("audit\n")
+        return 2
+    def bad_report(args):
+        columns = list(cdskit.dnds.REPORT_COLUMNS)
+        if defect == "missing_column":
+            columns.remove("method")
+        with Path(args.outfile).open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns, delimiter="\t")
+            writer.writeheader()
+            for index, pair in enumerate(("a|b", "c|d")):
+                row = dict.fromkeys(columns, "")
+                row.update(pair_id="unexpected" if defect == "wrong_pair" and index else "a|b" if defect == "duplicate_pair" else pair,
+                           dS="" if defect == "unknown_status" else "0",
+                           status="unknown" if defect == "unknown_status" else "ok",
+                           codon_table="2" if defect == "wrong_code" else "1",
+                           schema_version="invalid" if defect == "wrong_schema" else TSV_REPORT_SCHEMA_VERSION,
+                           codon_semantics_version="invalid" if defect == "wrong_semantics" else CODON_SEMANTICS_VERSION)
+                if "method" in columns:
+                    row["method"] = "unknown" if defect == "wrong_method" else cdskit.dnds.METHOD
+                writer.writerow(row)
+    monkeypatch.setattr(ds, "prepare_pairs", fake_prepare)
+    monkeypatch.setattr(cdskit.dnds, "dnds_main", bad_report)
+    with pytest.raises(ValueError):
+        ds.estimate_ds(plan, tmp_path / "ds", 1)
+    assert not (tmp_path / "ds/pair/summary.json").exists()
+
+
+def test_real_2x2_dotplots_filter_short_scaffolds_and_share_color_mode_order(tmp_path):
+    workspace = tmp_path / "workspace"
+    chromosomes = tuple((f"Chr{i}", i == 4) for i in range(1, 6))
+    for species, offsets in (("Target_species", (0, 1000, 0, 1000, 5000)),
+                             ("Query_species", (1000, 0, 1000, 0, 5000))):
+        for mode in ("protein", "cds"):
+            write_genome(workspace, species, mode, chromosomes, offsets)
+        gff = workspace / f"input/species_gff/{species}.gff3"
+        gff.write_text(gff.read_text().replace("##sequence-region Chr5 1 2000000", "##sequence-region Chr5 1 999999"))
+    (workspace / "input/synteny_pairs.tsv").write_text(
+        "analysis_id\ttarget_species\tquery_species\n"
+        "pair\tTarget_species\tQuery_species\n")
+    options = {"synteny_plot_formats": "png,svg", "synteny_karyotype_sort": "none"}
+    result = run_core(workspace, **options)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = workspace / "output/genome_evolution/synteny"
+    plots = root / "plots/pair"
+    metadata = json.loads((plots / "dotplot_order.json").read_text())
+    assert metadata["display_order"] == {"target": ["Chr1", "Chr3", "Chr2", "Chr4"],
+                                         "query": ["Chr2", "Chr4", "Chr1", "Chr3"]}
+    assert metadata["anchor_count"] == 64
+    assert metadata["excluded_anchor_count"] == 8
+    assert len(metadata["groups"]) == 2
+    assert "Chr5" not in (plots / "dotplot.target.bed").read_text()
+    assert "Chr5" not in (plots / "dotplot.query.bed").read_text()
+    assert "Chr5" in (plots / "target.bed").read_text()
+    assert "Chr5" in (plots / "seqids").read_text()
+    orientation = (plots / "dotplot.png").read_bytes()
+    bed_order = [(plots / f"dotplot.{side}.bed").read_bytes() for side in ("target", "query")]
+    result = run_core(workspace, **options, synteny_dotplot_color="ds", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads((plots / "dotplot_ds.json").read_text())["anchor_count"] == 64
+    assert json.loads((root / "ds/pair/summary.json").read_text())["unique_anchor_pairs"] == 72
+    assert [(plots / f"dotplot.{side}.bed").read_bytes() for side in ("target", "query")] == bed_order
+    assert (plots / "dotplot.png").read_bytes() != orientation
+    with Image.open(plots / "dotplot.png") as image:
+        image.verify()
+
+
+def test_missing_chromosome_lengths_stop_before_dS_alignment(tmp_path):
+    workspace = tmp_path / "workspace"
+    for species in ("Target_species", "Query_species"):
+        for mode in ("protein", "cds"):
+            write_genome(workspace, species, mode, (("Chr1", False),))
+        gff = workspace / f"input/species_gff/{species}.gff3"
+        gff.write_text(gff.read_text().replace("##sequence-region Chr1 1 2000000\n", ""))
+    (workspace / "input/synteny_pairs.tsv").write_text(
+        "analysis_id\ttarget_species\tquery_species\npair\tTarget_species\tQuery_species\n")
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_formats="png")
+    assert result.returncode != 0
+    assert "Missing physical chromosome lengths" in result.stderr
+    root = workspace / "output/genome_evolution/synteny"
+    assert (root / "analysis/pair/summary.json").exists()
+    assert not (root / "ds").exists()
+    assert not (root / "plots").exists()
+
+
+def test_no_eligible_anchors_stop_before_dS_alignment(tmp_path):
+    workspace = tmp_path / "workspace"
+    for species in ("Target_species", "Query_species"):
+        for mode in ("protein", "cds"):
+            write_genome(workspace, species, mode, (("Chr1", False),))
+    (workspace / "input/synteny_pairs.tsv").write_text(
+        "analysis_id\ttarget_species\tquery_species\npair\tTarget_species\tQuery_species\n")
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_formats="png",
+                      synteny_dotplot_min_length="3000000")
+    assert result.returncode != 0
+    assert "No anchors connect" in result.stderr
+    root = workspace / "output/genome_evolution/synteny"
+    assert (root / "analysis/pair/summary.json").exists()
+    assert not (root / "ds").exists()
+    assert not (root / "plots").exists()
+
+
+def test_dS_workers_do_not_multiply_the_allocated_cpu_budget_with_blas_threads(tmp_path):
+    workspace = tmp_path / "workspace"
+    for species in ("Target_species", "Query_species"):
+        for mode in ("protein", "cds"):
+            write_genome(workspace, species, mode, (("Chr1", False),))
+    (workspace / "input/synteny_pairs.tsv").write_text(
+        "analysis_id\ttarget_species\tquery_species\npair\tTarget_species\tQuery_species\n")
+    report = tmp_path / "thread_environment.tsv"
+    startup = tmp_path / "sitecustomize.py"
+    startup.write_text('''import os
+import sys
+from pathlib import Path
+
+if sys.argv[0].endswith("pairwise_synteny.py") and sys.argv[1:2] == ["ds"]:
+    names = ("GG_TASK_CPUS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+    Path(os.environ["GG_TEST_THREAD_REPORT"]).write_text("\\t".join(os.environ.get(name, "") for name in names) + "\\n")
+''')
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_plot_formats="png",
+                      GG_TASK_CPUS="2", OMP_NUM_THREADS="2", OPENBLAS_NUM_THREADS="2",
+                      MKL_NUM_THREADS="2", NUMEXPR_NUM_THREADS="2",
+                      PYTHONPATH=str(tmp_path), GG_TEST_THREAD_REPORT=str(report))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert report.read_text().strip().split("\t") == ["2", "1", "1", "1", "1"]

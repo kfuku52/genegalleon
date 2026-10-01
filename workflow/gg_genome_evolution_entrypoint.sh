@@ -214,6 +214,11 @@ synteny_min_anchors=4 # Minimum anchor count in a JCVI syntenic block.
 synteny_search_distance=20 # JCVI gene-rank distance used to join anchors.
 synteny_minimum_mapping_fraction=1 # Required FASTA identifier mapping fraction before isoform selection.
 synteny_plot_formats="pdf,svg,png" # Comma-separated output formats.
+synteny_karyotype_sort="both_length" # both_length moves both tracks; target_length|query_length fix the opposite track; target|query use dominant partners; none preserves input order.
+synteny_dotplot_color="orientation" # orientation|ds; ds requires matching CDS and the CDSKIT dnds estimator.
+synteny_dotplot_min_length=1000000 # Dotplot includes only scaffold/chromosome assembly lengths >= this many bp; 0 disables filtering.
+synteny_dotplot_sort="homoeolog" # homoeolog places supported 2x2 chromosome groups together; karyotype follows ribbon order; none preserves BED order.
+synteny_ds_color_max=2 # Upper dS color limit only; values are clipped for display, never filtered.
 self_fractionation_bias_table="" # Empty uses workspace/input/fractionation_bias_pairs.tsv; self analyses must first be run as gg_fractionation_bias array tasks.
 min_gene_orthogroup_grampa=5 # Minimum gene count required for GRAMPA-ready orthogroups.
 max_gene_orthogroup_grampa=50 # Maximum gene count allowed for GRAMPA-ready orthogroups.

@@ -227,6 +227,26 @@ def test_registered_config_vars_are_consumed_by_core_or_shared_runtime():
         )
 
 
+def test_pairwise_synteny_sort_defaults_to_weighted_length_and_is_forwarded_to_plan():
+    entrypoint = read_text(WORKFLOW_DIR / "gg_genome_evolution_entrypoint.sh")
+    core = read_text(WORKFLOW_DIR / "core/gg_genome_evolution_core.sh")
+    registry = read_text(WORKFLOW_DIR / "support/gg_entrypoint_config_vars.sh")
+    assert 'synteny_karyotype_sort="both_length"' in entrypoint
+    assert 'synteny_karyotype_sort="${synteny_karyotype_sort:-both_length}"' in core
+    assert '--karyotype-sort "${synteny_karyotype_sort}"' in core
+    assert "\nsynteny_karyotype_sort\n" in registry
+    assert "\nsynteny_dotplot_color\n" in registry
+    assert "\nsynteny_dotplot_min_length\n" in registry
+    assert "\nsynteny_dotplot_sort\n" in registry
+    assert 'synteny_dotplot_min_length=1000000' in entrypoint
+    assert 'synteny_dotplot_sort="homoeolog"' in entrypoint
+    assert '--dotplot-min-length "${synteny_dotplot_min_length}"' in core
+    assert '--dotplot-sort "${synteny_dotplot_sort}"' in core
+    assert "\nsynteny_ds_color_max\n" in registry
+    assert '--dotplot-color "${synteny_dotplot_color}"' in core
+    assert '--ds-color-max "${synteny_ds_color_max}"' in core
+
+
 def test_entrypoints_use_active_scheduler_directives_in_header_template():
     entrypoints = sorted(WORKFLOW_DIR.glob("gg_*_entrypoint.sh"))
     assert entrypoints, "No entrypoint scripts were found."

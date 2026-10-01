@@ -323,6 +323,11 @@ synteny_min_anchors
 synteny_search_distance
 synteny_minimum_mapping_fraction
 synteny_plot_formats
+synteny_karyotype_sort
+synteny_dotplot_color
+synteny_dotplot_min_length
+synteny_dotplot_sort
+synteny_ds_color_max
 run_species_taxonomy
 taxonomy_species_tree
 taxonomy_ranks

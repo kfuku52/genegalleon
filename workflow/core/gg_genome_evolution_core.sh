@@ -30,6 +30,11 @@ synteny_min_anchors="${synteny_min_anchors:-4}"
 synteny_search_distance="${synteny_search_distance:-20}"
 synteny_minimum_mapping_fraction="${synteny_minimum_mapping_fraction:-1}"
 synteny_plot_formats="${synteny_plot_formats:-pdf,svg,png}"
+synteny_karyotype_sort="${synteny_karyotype_sort:-both_length}"
+synteny_dotplot_color="${synteny_dotplot_color:-orientation}"
+synteny_dotplot_min_length="${synteny_dotplot_min_length:-1000000}"
+synteny_dotplot_sort="${synteny_dotplot_sort:-homoeolog}"
+synteny_ds_color_max="${synteny_ds_color_max:-2}"
 case "${genome_evolution_mode}" in
   all) ;;
   synteny) run_pairwise_synteny=1 ;;
@@ -153,6 +158,8 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 run_pairwise_synteny_stage() (
   local scratch_root work_dir plan_file phase argument needs_update effective_policy
   local -a contract_args=()
+  local -a phases=(analysis)
+  local -a execution_env=()
   gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" pairwise_synteny || exit $?
   trap 'gg_stage_transaction_lock_release' EXIT
   [[ -n "${synteny_pairs_file}" ]] || synteny_pairs_file="${gg_workspace_input_dir}/synteny_pairs.tsv"
@@ -165,24 +172,35 @@ run_pairwise_synteny_stage() (
     --sequence-mode "${synteny_sequence_mode}" --genetic-code "${genetic_code}" \
     --cscore "${synteny_cscore}" --min-anchors "${synteny_min_anchors}" \
     --distance "${synteny_search_distance}" --minimum-mapping-fraction "${synteny_minimum_mapping_fraction}" \
-    --formats "${synteny_plot_formats}" --outfile "${plan_file}"
-  for phase in analysis plots; do
+    --formats "${synteny_plot_formats}" --karyotype-sort "${synteny_karyotype_sort}" \
+    --dotplot-color "${synteny_dotplot_color}" --dotplot-min-length "${synteny_dotplot_min_length}" \
+    --dotplot-sort "${synteny_dotplot_sort}" --ds-color-max "${synteny_ds_color_max}" --outfile "${plan_file}"
+  if [[ "${synteny_dotplot_color}" == ds ]]; then phases+=(ds); fi
+  phases+=(plots)
+  for phase in "${phases[@]}"; do
     python "${gg_support_dir}/pairwise_synteny.py" contract --plan "${plan_file}" --phase "${phase}" > "${work_dir}/contract.args"
     contract_args=()
     while IFS= read -r -d '' argument; do contract_args+=("${argument}"); done < "${work_dir}/contract.args"
     needs_update=0
     effective_policy="${artifact_stale_policy:-stop}"
-    if [[ "${phase}" == analysis && ${synteny_plot_only} -eq 1 && "${effective_policy}" == reuse ]]; then
+    if [[ "${phase}" != plots && ${synteny_plot_only} -eq 1 && "${effective_policy}" == reuse ]]; then
       effective_policy=stop
     fi
     artifact_stale_policy="${effective_policy}" gg_artifact_prepare_stage needs_update run_pairwise_synteny "${contract_args[@]}" || exit $?
     if [[ ${needs_update} -eq 1 ]]; then
-      if [[ "${phase}" == analysis && ${synteny_plot_only} -eq 1 ]]; then
-        echo "Synteny plot-only requires a complete, current analysis; run with synteny_plot_only=0 first." >&2
+      if [[ "${phase}" != plots && ${synteny_plot_only} -eq 1 ]]; then
+        echo "Synteny plot-only requires a complete, current ${phase}; run with synteny_plot_only=0 first." >&2
         exit 3
       fi
       gg_step_start "Pairwise synteny ${phase}"
-      python "${gg_support_dir}/pairwise_synteny.py" "${phase}" --plan "${plan_file}" \
+      execution_env=()
+      if [[ "${phase}" == ds ]]; then
+        # CDSKIT already distributes batches across GG_TASK_CPUS workers.
+        # Keep each worker's BLAS/OpenMP work serial instead of multiplying
+        # the scheduler allocation by the number of batch workers.
+        execution_env=(env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1)
+      fi
+      "${execution_env[@]}" python "${gg_support_dir}/pairwise_synteny.py" "${phase}" --plan "${plan_file}" \
         --output "${work_dir}/${phase}" --cpus "${GG_TASK_CPUS}"
       python "${gg_support_dir}/pairwise_synteny.py" verify --plan "${plan_file}"
       mv_out_bundle "${work_dir}/${phase}" "${gg_workspace_output_dir}/genome_evolution/synteny/${phase}"
