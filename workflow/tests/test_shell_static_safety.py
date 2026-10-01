@@ -1362,7 +1362,7 @@ def test_orthofinder_core_result_publication_replaces_existing_trees_transaction
     core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
     start = core.index("    orthofinder_all_outputs=(")
     end = core.index(
-        '    orthofinder_output_directory_cleanup "${dir_orthofinder}/core"',
+        '  else\n    echo "The number of species',
         start,
     )
     block = core[start:end]

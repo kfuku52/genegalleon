@@ -353,6 +353,17 @@ Main outputs:
 Temporary protein FASTA files are created under `workspace/downloads/tmp/` and removed automatically after orthogroup-related steps finish.
 When `workspace/input/species_genetic_code/species_genetic_code.tsv` is present, it overrides the global `genetic_code` on a per-species basis during CDS-to-protein translation; species missing from the table still use the default `genetic_code`.
 
+After the complete OrthoFinder result is validated, published, and recorded,
+GeneGalleon deletes `WorkingDirectory/` and `core/WorkingDirectory/` to reduce
+filesystem inode use. In a two-round analysis, the core working directory remains
+available until `--assign` completes. Failed runs retain their working data;
+normal downstream analyses use the retained result tables and curated inputs.
+This cleanup prevents later OrthoFinder restarts or species additions from reusing
+the deleted internal data. Such analyses require a fresh OrthoFinder run from the
+original inputs. Previously completed workspaces are not modified merely by
+updating the workflow source. A later run with the OrthoFinder stage enabled
+also finishes cleanup when it reuses validated, completed results.
+
 Notable defaults:
 
 - `orthogroup_table="HOG"`

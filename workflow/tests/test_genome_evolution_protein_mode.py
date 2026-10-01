@@ -341,6 +341,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --core)
+      test -s "$2/WorkingDirectory/clusters_OrthoFinder0_id_pairs.txt"
+      test -s "$2/WorkingDirectory/Sequences_ids/OG0000001.fa"
+      printf 'checked\n' > "${{capture_dir}}/assign_core_working_directory.txt"
       output_dir="$(dirname "$2")"
       shift 2
       ;;
@@ -360,10 +363,26 @@ fi
 results_dir="${{output_dir}}/Results_${{run_name}}"
 mkdir -p \
   "${{results_dir}}/Orthogroups" \
-  "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups"
+  "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups" \
+  "${{results_dir}}/WorkingDirectory/Sequences_ids" \
+  "${{results_dir}}/WorkingDirectory/Alignments_ids" \
+  "${{results_dir}}/WorkingDirectory/Trees_ids" \
+  "${{results_dir}}/Orthogroup_Sequences" \
+  "${{results_dir}}/MultipleSequenceAlignments" \
+  "${{results_dir}}/Resolved_Gene_Trees" \
+  "${{results_dir}}/Species_Tree"
+printf '>0_0\nMPEP\n' > "${{results_dir}}/WorkingDirectory/Sequences_ids/OG0000001.fa"
+printf '>0_0\nM-PEP\n' > "${{results_dir}}/WorkingDirectory/Alignments_ids/OG0000001.fa"
+printf '(0_0:1,1_0:1);\n' > "${{results_dir}}/WorkingDirectory/Trees_ids/OG0000001.txt"
+printf '>gene1\nMPEP\n' > "${{results_dir}}/Orthogroup_Sequences/OG0000001.fa"
+printf '>gene1\nM-PEP\n' > "${{results_dir}}/MultipleSequenceAlignments/OG0000001.fa"
+printf '(gene1:1,gene2:1);\n' > "${{results_dir}}/Resolved_Gene_Trees/OG0000001_tree.txt"
+printf '(species1:1,species2:1);\n' > "${{results_dir}}/Species_Tree/SpeciesTree_rooted.txt"
 if [[ "${{run_name}}" == "core" ]]; then
-  mkdir -p "${{results_dir}}/WorkingDirectory"
   printf '0_0 1_0\n' > "${{results_dir}}/WorkingDirectory/clusters_OrthoFinder0_id_pairs.txt"
+fi
+if [[ "${{GG_TEST_ORTHOFINDER_FAIL_RUN:-}}" == "${{run_name}}" ]]; then
+  exit 9
 fi
 input_capture="${{capture_dir}}/input_files_${{run_name}}.txt"
 proteins_capture="${{capture_dir}}/proteins_${{run_name}}.fasta"
@@ -405,6 +424,9 @@ with (orthogroups_dir / "Orthogroups.GeneCount.tsv").open("w", encoding="utf-8",
     handle.write("\\t".join(["Orthogroup", *species, "Total"]) + "\\n")
     handle.write("\\t".join(["OG0000001", *(["1"] * len(species)), str(len(species))]) + "\\n")
 PY
+if [[ "${{GG_TEST_ORTHOFINDER_MISSING_HOG:-0}}" == "1" ]]; then
+  rm -- "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv"
+fi
 """,
     )
 
@@ -911,6 +933,134 @@ def _run_core(
         env=env,
         check=False,
     )
+
+
+def _prepare_orthofinder_cleanup_inputs(tmp_path: Path) -> Path:
+    workspace = tmp_path / "workspace"
+    proteins = workspace / "input/species_protein"
+    proteins.mkdir(parents=True)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        (proteins / f"{species}_pep.fa").write_text(f">{species}_gene1\nMPEP\n")
+    return workspace
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("core_limit", [1, 50])
+def test_orthofinder_completion_removes_working_data_and_reuses_retained_results(tmp_path: Path, core_limit):
+    workspace = _prepare_orthofinder_cleanup_inputs(tmp_path)
+    foreign = workspace / "output/other_stage/WorkingDirectory/keep.fa"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_bytes(b"keep unrelated data\n")
+    env = {"max_orthofinder_core_species": str(core_limit)}
+
+    first = _run_core(tmp_path, env)
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    public = workspace / "output/orthofinder"
+    result_dirs = [public, public / "core"] if core_limit == 1 else [public]
+    for directory in result_dirs:
+        assert not (directory / "WorkingDirectory").exists()
+        assert (directory / "Orthogroups/Orthogroups.tsv").is_file()
+        assert (directory / "Orthogroup_Sequences/OG0000001.fa").read_bytes() == b">gene1\nMPEP\n"
+        assert (directory / "MultipleSequenceAlignments/OG0000001.fa").read_bytes() == b">gene1\nM-PEP\n"
+        assert (directory / "Resolved_Gene_Trees/OG0000001_tree.txt").read_bytes() == b"(gene1:1,gene2:1);\n"
+        assert (directory / "Species_Tree/SpeciesTree_rooted.txt").read_bytes() == b"(species1:1,species2:1);\n"
+    assert (public / "hog2og/README.txt").is_file()
+    if core_limit == 1:
+        assert (tmp_path / "capture/assign_core_working_directory.txt").read_text() == "checked\n"
+    calls = (tmp_path / "capture/orthofinder_args.txt").read_bytes()
+    # Simulate a process stopping after completion was recorded, leaving
+    # internal files behind. The next audited reuse must finish cleanup.
+    for directory in result_dirs:
+        working = directory / "WorkingDirectory"
+        working.mkdir()
+        (working / "leftover.txt").write_bytes(b"leftover internal data\n")
+    second = _run_core(tmp_path, env)
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert (tmp_path / "capture/orthofinder_args.txt").read_bytes() == calls
+    assert foreign.read_bytes() == b"keep unrelated data\n"
+    assert sorted(workspace.rglob("WorkingDirectory")) == [foreign.parent]
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize(
+    ("core_limit", "fail_run", "missing_hog", "working_count"),
+    [(50, "main", "0", 1), (1, "core", "0", 1), (1, "all", "0", 2),
+     (50, "", "1", 1), (1, "", "1", 2)],
+)
+def test_orthofinder_failure_retains_working_data(tmp_path: Path, core_limit, fail_run, missing_hog, working_count):
+    workspace = _prepare_orthofinder_cleanup_inputs(tmp_path)
+    failed = _run_core(tmp_path, {
+        "max_orthofinder_core_species": str(core_limit),
+        "GG_TEST_ORTHOFINDER_FAIL_RUN": fail_run,
+        "GG_TEST_ORTHOFINDER_MISSING_HOG": missing_hog,
+    })
+
+    assert failed.returncode != 0
+    assert "Removing OrthoFinder WorkingDirectory" not in failed.stdout
+    assert not (workspace / "output/orthofinder/hog2og/README.txt").exists()
+    assert not (workspace / "output/orthofinder/Orthogroups/Orthogroups.tsv").exists()
+    working_dirs = list(workspace.rglob("WorkingDirectory"))
+    assert len(working_dirs) == working_count
+    for directory in working_dirs:
+        assert (directory / "Sequences_ids/OG0000001.fa").read_bytes() == b">0_0\nMPEP\n"
+        assert (directory / "Alignments_ids/OG0000001.fa").is_file()
+        assert (directory / "Trees_ids/OG0000001.txt").is_file()
+
+
+@pytest.mark.parametrize("record_exit", [0, 6])
+def test_orthofinder_cleanup_waits_for_completion_record(tmp_path: Path, record_exit):
+    public = tmp_path / "orthofinder"
+    working_dirs = [public / "WorkingDirectory", public / "core/WorkingDirectory"]
+    for directory in working_dirs:
+        directory.mkdir(parents=True)
+        (directory / "keep.txt").write_bytes(b"working data\n")
+    text = CORE_PATH.read_text()
+    function_start = text.index("orthofinder_output_directory_cleanup() {")
+    function_end = text.index("\n}\n", function_start) + 3
+    completion_start = text.index('  gg_artifact_record "${orthofinder_provenance_args[@]}"')
+    completion_end = text.index("\nelse\n", completion_start)
+    command = (
+        "set -u; "
+        f"{text[function_start:function_end]}\n"
+        "remove_empty_subdirs() { :; }\n"
+        f"gg_artifact_record() {{ return {record_exit}; }}\n"
+        f"dir_orthofinder={shlex.quote(str(public))}; GG_TASK_CPUS=1; orthofinder_provenance_args=();\n"
+        f"{text[completion_start:completion_end]}"
+    )
+    completed = subprocess.run([BASH_FOR_TESTS, "-c", command], capture_output=True, text=True)
+
+    assert completed.returncode == record_exit, completed.stdout + completed.stderr
+    for directory in working_dirs:
+        if record_exit:
+            assert (directory / "keep.txt").read_bytes() == b"working data\n"
+        else:
+            assert not directory.exists()
+
+
+@pytest.mark.parametrize("link_level", ["result_directory", "working_directory"])
+def test_orthofinder_cleanup_rejects_symlinked_working_directory(tmp_path: Path, link_level):
+    foreign = tmp_path / "foreign/WorkingDirectory"
+    foreign.mkdir(parents=True)
+    (foreign / "keep.txt").write_bytes(b"keep foreign data\n")
+    public = tmp_path / "orthofinder"
+    if link_level == "result_directory":
+        public.symlink_to(foreign.parent, target_is_directory=True)
+    else:
+        public.mkdir()
+        (public / "WorkingDirectory").symlink_to(foreign, target_is_directory=True)
+    text = CORE_PATH.read_text()
+    start = text.index("orthofinder_output_directory_cleanup() {")
+    end = text.index("\n}\n", start) + 3
+    command = f'{text[start:end]}\northofinder_output_directory_cleanup {shlex.quote(str(public))}'
+
+    completed = subprocess.run([BASH_FOR_TESTS, "-c", command], capture_output=True, text=True)
+
+    assert completed.returncode != 0
+    assert "Refusing to remove a symlinked" in completed.stderr
+    assert (public if link_level == "result_directory" else public / "WorkingDirectory").is_symlink()
+    assert (foreign / "keep.txt").read_bytes() == b"keep foreign data\n"
 
 
 @pytest.mark.skipif(

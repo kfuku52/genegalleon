@@ -2024,6 +2024,19 @@ optimize_astral_tree_branch_lengths() {
 orthofinder_output_directory_cleanup() {
   local target_dir=$1
   local _threads=${2:-1}
+  local working_dir="${target_dir}/WorkingDirectory"
+  # Call only after the complete all-species result has been validated,
+  # published, and recorded. The core run still needs this data for --assign.
+  if [[ -L "${target_dir}" || -L "${working_dir}" ]]; then
+    echo "Refusing to remove a symlinked OrthoFinder WorkingDirectory: ${working_dir}" >&2
+    return 1
+  fi
+  if [[ -d "${working_dir}" ]]; then
+    echo "Removing OrthoFinder WorkingDirectory after validated completion: ${working_dir}"
+    if ! rm -rf -- "${working_dir}"; then
+      return 1
+    fi
+  fi
   if [[ -d "${target_dir}" ]]; then
     remove_empty_subdirs "${target_dir}"
   fi
@@ -4775,7 +4788,6 @@ PY
     if [[ ${#orthofinder_result_dirs[@]} -gt 0 ]]; then
       rm -rf -- "${orthofinder_result_dirs[@]}"
     fi
-    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}"
   else
     echo "The number of species (${num_sp}) is less than or equal to the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 1 round."
@@ -4816,8 +4828,6 @@ PY
     mv_out_bundle "${orthofinder_publication_pairs[@]}"
     rm -rf -- "${dir_orthofinder}/main"
   fi
-
-  orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}"
 
   orthofinder_version=$(detect_orthofinder_version)
   if [[ -n "${orthofinder_version}" ]]; then
@@ -4869,9 +4879,17 @@ PY
   file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
   file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
   file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
+  gg_artifact_record "${orthofinder_provenance_args[@]}" || exit $?
+  orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}" || exit $?
+  orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}" || exit $?
   echo "OrthoFinder finished successfully."
-  gg_artifact_record "${orthofinder_provenance_args[@]}"
 else
+  # A previous process may have stopped after recording completion but before
+  # removing all working data. Retry cleanup only for an enabled, audited stage.
+  if [[ ${run_orthofinder} -eq 1 && ${orthofinder_needs_update} -eq 0 && -s "${file_orthofinder_done_marker}" ]]; then
+    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}" || exit $?
+    orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}" || exit $?
+  fi
   gg_step_skip "${task}"
 fi
 
