@@ -286,6 +286,12 @@ the six published outputs are replaced as one recoverable transaction.
 
 ### `gg_genome_evolution_entrypoint.sh`
 
+`genome_evolution_mode=species_tree` runs the standard species-tree, dating,
+plotting and taxonomy stages, using their existing flags and provenance checks.
+It stops before OrthoFinder and preserves orthogroup/genome-evolution outputs.
+Use this mode to propagate a reviewed rooting change without changing the
+selected orthogroup catalog; dependent gene analyses still require regeneration.
+
 Opt-in JCVI/MCscan pairwise synteny produces chromosome ribbon plots and
 dotplots from matched GFF and protein/CDS inputs. `genome_evolution_mode=synteny`
 runs only this independent stage; `run_pairwise_synteny=1` adds it in normal

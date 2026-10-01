@@ -208,6 +208,8 @@ def main():
         query_ids = hits['qseqid'].dropna().drop_duplicates().tolist()
 
     out = pandas.DataFrame(index=pandas.Index(query_ids, name='gene_id'))
+    # No-hit searches still join descriptions/metadata through this key.
+    out['sprot_best'] = ''
 
     if hits.shape[0] > 0:
         hit_map = hits.loc[:, ['qseqid', 'sseqid', 'coverage', 'pident', 'evalue']].set_index('qseqid')

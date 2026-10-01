@@ -944,6 +944,35 @@ def _prepare_orthofinder_cleanup_inputs(tmp_path: Path) -> Path:
     return workspace
 
 
+def test_species_tree_mode_preserves_orthogroups_and_skips_later_requested_stages(tmp_path):
+    workspace = tmp_path / "workspace"
+    proteins = workspace / "input/species_protein"
+    proteins.mkdir(parents=True)
+    (proteins / "Arabidopsis_thaliana_pep.fa").write_text(
+        ">Arabidopsis_thaliana_g1\nMPEPTIDE\n", encoding="utf-8")
+    saved = {}
+    for directory in ("orthofinder", "genome_evolution"):
+        path = workspace / "output" / directory
+        path.mkdir(parents=True)
+        for name, content in (("user-output", b"preserve this"),
+                              (".shared_protein_input_signature", b"legacy source stamp")):
+            target = path / name
+            target.write_bytes(content)
+            saved[target] = content, target.stat().st_mtime_ns
+    result = _run_core(tmp_path, {
+        "genome_evolution_mode": "species_tree", "artifact_stale_policy": "rebuild",
+        "undated_species_tree": "astral_pep", "species_tree_rooting": "outgroup,Arabidopsis_thaliana",
+        "run_orthofinder": "1", "run_og_selection": "1", "run_pairwise_synteny": "1",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Species-tree stages finished" in result.stdout
+    assert not (tmp_path / "capture/orthofinder_args.txt").exists()
+    assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in saved} == saved
+    for directory in ("orthofinder", "genome_evolution"):
+        assert set((workspace / "output" / directory).iterdir()) == {
+            path for path in saved if path.parent.name == directory}
+
+
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("core_limit", [1, 50])
 def test_orthofinder_completion_removes_working_data_and_reuses_retained_results(tmp_path: Path, core_limit):

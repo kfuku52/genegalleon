@@ -31,9 +31,9 @@ synteny_search_distance="${synteny_search_distance:-20}"
 synteny_minimum_mapping_fraction="${synteny_minimum_mapping_fraction:-1}"
 synteny_plot_formats="${synteny_plot_formats:-pdf,svg,png}"
 case "${genome_evolution_mode}" in
-  all) ;;
+  all|species_tree) ;;
   synteny) run_pairwise_synteny=1 ;;
-  *) echo "genome_evolution_mode must be all or synteny" >&2; exit 2 ;;
+  *) echo "genome_evolution_mode must be all, species_tree or synteny" >&2; exit 2 ;;
 esac
 for synteny_flag in run_pairwise_synteny synteny_plot_only; do
   case "${!synteny_flag}" in
@@ -2748,8 +2748,10 @@ species_tree_materialize_managed_directories_for_files_mode
 if [[ "${species_tree_output_storage}" == "zip" ]]; then
   species_tree_archive_managed_directories
 fi
-refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
-refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
+if [[ "${genome_evolution_mode}" != "species_tree" ]]; then
+  refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
+  refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
+fi
 GG_GENOME_PARALLEL_JOBS=${GG_TASK_CPUS}
 if [[ "${genome_parallel_jobs}" != "auto" ]]; then
   if [[ ! "${genome_parallel_jobs}" =~ ^[0-9]+$ || ${genome_parallel_jobs} -lt 1 ]]; then
@@ -2850,7 +2852,7 @@ fi
 # shellcheck shell=bash
 # Sourced by gg_genome_evolution_core.sh.
 
-if [[ ${run_pairwise_synteny} -eq 1 ]]; then run_pairwise_synteny_stage; fi
+if [[ "${genome_evolution_mode}" == "all" && ${run_pairwise_synteny} -eq 1 ]]; then run_pairwise_synteny_stage; fi
 
 task="BUSCO analysis of species-wise input files"
 run_shared_species_busco_stage
@@ -4353,6 +4355,11 @@ if [[ ${delete_tmp_dir} -eq 1 ]]; then
     echo "Removing tmp directory: ${dir_tmp}"
     rm -rf -- "${dir_tmp}"
   fi
+fi
+
+if [[ "${genome_evolution_mode}" == "species_tree" ]]; then
+  echo "Species-tree stages finished; orthogroup and genome-evolution stages were not requested."
+  exit 0
 fi
 
 # Orthogroup inference

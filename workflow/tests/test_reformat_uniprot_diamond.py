@@ -10,6 +10,34 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "reformat_unipro
 
 
 @pytest.mark.parametrize('with_query_fasta', [False, True])
+@pytest.mark.parametrize('with_metadata', [False, True])
+def test_no_hits_preserve_queries_and_empty_annotations(tmp_path, with_query_fasta, with_metadata):
+    from workflow.support.reformat_uniprot_diamond import OUTPUT_COLUMNS
+
+    hits = tmp_path / 'hits.tsv'
+    hits.write_text('')
+    queries = tmp_path / 'queries.fa'
+    queries.write_text('>NA\nMKT\n>001\nAAA\n')
+    reference = tmp_path / 'uniprot.fa'
+    reference.write_text('>P1 Protein kinase\nMKT\n')
+    metadata = tmp_path / 'metadata.tsv'
+    metadata.write_text('accession\tgene_name_primary\nP1\tKIN1\n')
+    output = tmp_path / 'annotations.tsv'
+    command = [sys.executable, str(SCRIPT_PATH), '--diamond_tsv', str(hits),
+               '--uniprot_fasta', str(reference), '--outfile', str(output)]
+    if with_query_fasta:
+        command += ['--query_fasta', str(queries)]
+    if with_metadata:
+        command += ['--uniprot_meta_tsv', str(metadata)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    actual = pandas.read_csv(output, sep='\t', dtype=str, keep_default_na=False)
+    assert actual.columns.tolist() == OUTPUT_COLUMNS
+    assert actual.gene_id.tolist() == (['NA', '001'] if with_query_fasta else [])
+    assert actual.drop(columns='gene_id').eq('').all().all()
+
+
+@pytest.mark.parametrize('with_query_fasta', [False, True])
 @pytest.mark.parametrize('compressed', [False, True])
 def test_diamond_annotations_preserve_literal_query_and_subject_ids(tmp_path, with_query_fasta, compressed):
     genes = ['NA', 'NULL', 'nan', '001']
