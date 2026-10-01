@@ -1,5 +1,9 @@
 # Species dating: parallel MCMC and advisory diagnostics
 
+Saved dated trees can be redrawn with spelled-out interval legends, geological
+period backgrounds and dataset-labelled BUSCO panels. See
+[Dated-tree presentation](dated-tree-presentation.md).
+
 Species dating runs four independently initialized MCMCtree chains, with separate
 burn-in and distinct explicit seeds. `mcmc_parallel_jobs=4` runs all four
 concurrently when at least four CPUs are allocated. The workflow caps concurrent

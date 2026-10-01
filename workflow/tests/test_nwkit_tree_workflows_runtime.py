@@ -16,6 +16,135 @@ def run(*args):
     return subprocess.run([str(value) for value in args], capture_output=True, text=True)
 
 
+def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    tree = tmp_path / "tree.nwk"
+    tree.write_text("((A_a:10,B_b:10):140,C_c:150)[&95%HPD={145,155}];")
+    summary = tmp_path / "annotation_summary.tsv"
+    summary.write_text(
+        "Species\tbusco_cds_single\tbusco_cds_duplicated\tbusco_cds_fragmented\tbusco_cds_missing\tbusco_cds_total\tbusco_cds_lineage\n"
+        "A a\t8\t1\t0\t1\t10\tembryophyta_odb12\n"
+        "C c\t6\t2\t1\t1\t10\tembryophyta_odb12\n"
+        "B b\t7\t0\t2\t1\t10\tembryophyta_odb12\n"
+    )
+    plot, report = tmp_path / "plot.svg", tmp_path / "report.json"
+    result = run(
+        sys.executable,
+        SUPPORT / "plot_dated_tree.py",
+        "--infile",
+        tree,
+        "--outfile",
+        plot,
+        "--busco-summary",
+        summary,
+        "--layout-report",
+        report,
+        "--geological-background",
+        "period",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    texts = [item.text for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}text")]
+    assert "95% highest posterior density intervals" in texts
+    assert "Number of BUSCO genes" in texts and "(embryophyta_odb12)" in texts
+    data = json.loads(report.read_text())
+    assert data["geological_label_placement"] == "above_tree"
+    assert len(data["geological_labels"]) == len(data["geological_intervals"])
+    for period, label in zip(data["geological_intervals"], data["geological_labels"], strict=True):
+        assert label["name"] == period["name"]
+        assert texts.count(period["name"]) == 1
+        assert label["anchor_Ma"] == (period["young_Ma"] + period["old_Ma"]) / 2
+        assert label["bbox_points"][1] > data["tree_plot_bbox_points"][3]
+    colours = {p["name"]: tuple(int(p["colour"][i:i + 2], 16) / 255 for i in (1, 3, 5))
+               for p in data["geological_intervals"]}
+    assert sum((a - b) ** 2 for a, b in zip(colours["Neogene"], colours["Quaternary"], strict=True)) > 0.25 ** 2
+    assert data["credible_interval_count"] == 1
+    assert data["busco_counts"]["C_c"] == [6, 2, 1, 1]
+    assert data["tip_y_coordinates"] == {"A_a": 2, "B_b": 1, "C_c": 0}
+    assert data["geological_intervals"][-1]["young_Ma"] == 143.1
+    assert data["all_ages_Ma"][0]["mean"] == 150
+    assert data["all_ages_Ma"][0]["low"] == 145
+    assert data["all_ages_Ma"][0]["high"] == 155
+    assert tree.read_text().endswith("[&95%HPD={145,155}];")
+
+
+def test_dated_tree_busco_header_discovery_and_mixed_dataset_rejection(tmp_path):
+    sys.path.insert(0, str(SUPPORT))
+    from dated_tree_presentation import read_busco
+
+    summary_dir = tmp_path / "annotation_summary"
+    summary_dir.mkdir()
+    summary = summary_dir / "annotation_summary.tsv"
+    summary.write_text(
+        "Species\tbusco_cds_single\tbusco_cds_duplicated\tbusco_cds_fragmented\tbusco_cds_missing\tbusco_cds_total\n"
+        "A\t1\t0\t0\t0\t1\nB\t1\t0\t0\t0\t1\n"
+    )
+    results = tmp_path / "species_cds_busco_full"
+    results.mkdir()
+    for species in "AB":
+        (results / (species + ".busco.full.tsv")).write_text(
+            "# The lineage dataset is: embryophyta_odb12 (number of BUSCOs: 1)\n"
+        )
+    counts, dataset, sources = read_busco(summary, ["A", "B"])
+    assert dataset == "embryophyta_odb12" and len(sources) == 2 and counts["A"] == [1, 0, 0, 0]
+    (results / "B.busco.full.tsv").write_text("# The lineage dataset is: embryophyta_odb10\n")
+    tree, plot, report = tmp_path / "tree.nwk", tmp_path / "plot.pdf", tmp_path / "report.json"
+    tree.write_text("(A:10,B:10);")
+    plot.write_bytes(b"old plot")
+    report.write_text("old report")
+    result = run(
+        sys.executable,
+        SUPPORT / "plot_dated_tree.py",
+        "--infile",
+        tree,
+        "--outfile",
+        plot,
+        "--busco-summary",
+        summary,
+        "--layout-report",
+        report,
+    )
+    assert result.returncode != 0 and "Mixed BUSCO" in result.stderr
+    assert plot.read_bytes() == b"old plot" and report.read_text() == "old report"
+
+
+def test_dated_tree_geological_header_handles_narrow_periods_on_deep_time_tree(tmp_path):
+    tree, plot, report = tmp_path / "tree.nwk", tmp_path / "plot.svg", tmp_path / "report.json"
+    tree.write_text("(A:4500,B:4500);")
+    result = run(sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", tree, "--outfile", plot,
+                 "--geological-background", "period", "--layout-report", report)
+    assert result.returncode == 0, result.stdout + result.stderr
+    data = json.loads(report.read_text())
+    assert len(data["geological_labels"]) == 13
+    assert any(abs(label["horizontal_offset_points"]) > 1 for label in data["geological_labels"])
+    boxes = [label["bbox_points"] for label in data["geological_labels"]]
+    assert all(box[1] > data["tree_plot_bbox_points"][3] for box in boxes)
+    for index, box in enumerate(boxes):
+        assert all(box[2] <= other[0] or box[0] >= other[2] for other in boxes[index + 1:])
+    assert tree.read_text() == "(A:4500,B:4500);"
+
+
+@pytest.mark.parametrize("background, has_periods", [("none", False), (None, True)])
+def test_dated_tree_layout_report_selects_presentation_with_optional_background(tmp_path, background, has_periods):
+    tree, plot, report = tmp_path / "tree.nwk", tmp_path / "plot.pdf", tmp_path / "report.json"
+    tree.write_text("(A:10,B:10);")
+    command = [
+        sys.executable,
+        SUPPORT / "plot_dated_tree.py",
+        "--infile",
+        tree,
+        "--outfile",
+        plot,
+        "--layout-report",
+        report,
+    ]
+    if background is not None:
+        command.extend(["--geological-background", background])
+    result = run(*command)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert bool(json.loads(report.read_text())["geological_intervals"]) is has_periods
+
+
 @pytest.mark.parametrize("text", [
     "(A:1,B:1)", "(A:1,B:1);garbage", "(A:1,B:1);(C:1,D:1);", "();",
     "(A:1,B:1));", "#NEXUS\nBEGIN TREES;\nEND;", "(A:-1,B:1);",

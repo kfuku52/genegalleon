@@ -1204,6 +1204,8 @@ gg_artifact_add_input_if_present summary_provenance_args "species_genome_fx2tab"
 gg_artifact_add_input_if_present summary_provenance_args "species_trait" "${file_summary_species_trait}"
 gg_artifact_add_input_if_present summary_provenance_args "orthogroup_gene_count" "${file_summary_orthogroup_gene_count}"
 summary_provenance_args+=(
+  --input "adapter=${gg_support_dir}/annotation_summary.r"
+  --input "busco_plot_metadata=${gg_support_dir}/busco_plot_metadata.r"
   --output "summary=${file_multispecies_summary}"
   --parameter "min_og_species=auto"
 )

@@ -1,0 +1,544 @@
+"""Publication panels for saved dated trees, parsed and validated by NWKIT.
+
+Geological boundaries: ICS International Chronostratigraphic Chart 2026/06,
+https://stratigraphy.org/ICSchart/ChronostratChart2026-06.pdf . Precambrian is
+shown as a single broad interval. Colours are a light presentation palette.
+"""
+
+import csv
+import hashlib
+import json
+import math
+import re
+from pathlib import Path
+
+STATUS = ("single", "duplicated", "fragmented", "missing")
+STATUS_LABELS = ("Single-copy", "Duplicated", "Fragmented", "Missing")
+STATUS_COLOURS = ("#000000", "#B22222", "#666666", "#CCCCCC")
+GEOLOGICAL_DATA = Path(__file__).with_name("geological_periods.tsv")
+GEOLOGICAL_SOURCE = "https://stratigraphy.org/ICSchart/ChronostratChart2026-06.pdf"
+
+
+def species_key(value):
+    return str(value).strip().replace(" ", "_")
+
+
+def read_busco(summary, species, results=None, prefix="busco_cds"):
+    with Path(summary).open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    by_species = {}
+    for row in rows:
+        key = species_key(row.get("Species", row.get("species", "")))
+        if not key or key in by_species:
+            raise ValueError("Missing or duplicate species in BUSCO summary.")
+        by_species[key] = row
+    datasets, counts, sources = {}, {}, {}
+    for name in species:
+        key = species_key(name)
+        if key not in by_species:
+            raise ValueError(f"Missing BUSCO counts for {name}.")
+        row = by_species[key]
+        raw = [row.get(prefix + "_" + status, "") for status in STATUS]
+        if not all(re.fullmatch(r"[0-9]+", value) for value in raw):
+            raise ValueError(f"Invalid BUSCO counts for {name}.")
+        values = list(map(int, raw))
+        total = row.get(prefix + "_total", "")
+        if not re.fullmatch(r"[0-9]+", total) or sum(values) != int(total) or int(total) <= 0:
+            raise ValueError(f"BUSCO counts do not sum to the positive total for {name}.")
+        counts[name] = values
+        datasets[name] = row.get(prefix + "_lineage", "").strip()
+    if results is None and not all(datasets.values()):
+        stem = "species_cds" if prefix == "busco_cds" else "species_genome"
+        for parent in Path(summary).resolve().parents[:3]:
+            for suffix in ("_busco_short", "_busco_full"):
+                candidate = parent / (stem + suffix)
+                if candidate.is_dir():
+                    results = candidate
+                    break
+            if results is not None:
+                break
+    if results is not None:
+        paths = sorted(Path(results).glob("*busco.short.txt")) + sorted(Path(results).glob("*busco.full.tsv"))
+        for path in paths:
+            key = species_key(re.sub(r"\.busco\.(short\.txt|full\.tsv)$", "", path.name))
+            matched = [name for name in species if species_key(name) == key]
+            if not matched:
+                continue
+            with path.open(encoding="utf-8") as handle:
+                header = "".join(line for _, line in zip(range(30), handle, strict=False))
+            found = set(re.findall(r"lineage dataset is:\s*(\S+)", header, flags=re.IGNORECASE))
+            if len(found) > 1:
+                raise ValueError(f"Conflicting BUSCO dataset metadata in {path}.")
+            if found:
+                name = matched[0]
+                dataset = found.pop()
+                if datasets[name] and datasets[name] != dataset:
+                    raise ValueError(f"Conflicting BUSCO datasets for {name}.")
+                datasets[name] = dataset
+                sources[name] = str(path.resolve())
+    known = {dataset for dataset in datasets.values() if dataset}
+    if len(known) > 1:
+        raise ValueError("Mixed BUSCO lineage datasets cannot share a completeness axis.")
+    totals = {sum(values) for values in counts.values()}
+    if len(totals) != 1:
+        raise ValueError("BUSCO totals differ between species; a shared percentage axis would be misleading.")
+    dataset = next(iter(known)) if known and all(datasets.values()) else None
+    return counts, dataset, sources
+
+
+def geological_intervals(max_age):
+    if not math.isfinite(max_age) or not 0 < max_age <= 4567:
+        raise ValueError("Geological background requires ages between 0 and 4567 Ma.")
+    with GEOLOGICAL_DATA.open(encoding="utf-8", newline="") as handle:
+        records = list(csv.DictReader(handle, delimiter="\t"))
+    return [
+        {**row, "young_Ma": float(row["young_Ma"]), "old_Ma": min(max_age, float(row["old_Ma"]))}
+        for row in records
+        if float(row["young_Ma"]) < max_age
+    ]
+
+
+def interval_label(nodes):
+    intervals = {
+        (str(node.props.get("age_ci_kind", "")).upper(), node.props.get("age_ci_level"))
+        for node in nodes
+        if node.props.get("age_ci_low") is not None
+    }
+    if not intervals:
+        return None
+    labels = []
+    for kind, level in sorted(intervals, key=str):
+        percentage = f"{100 * float(level):g}% " if level is not None else ""
+        description = {"HPD": "highest posterior density intervals", "ETI": "equal-tailed credible intervals"}.get(
+            kind, "credible intervals"
+        )
+        labels.append(percentage + description)
+    return "; ".join(labels)
+
+
+def render_dated_tree(
+    infile,
+    outfile,
+    *,
+    busco_summary=None,
+    busco_results=None,
+    busco_prefix="busco_cds",
+    geological_background="period",
+    figure_width=7.2,
+    figure_height=None,
+    font_family="Helvetica",
+    font_size=8,
+    tip_order=None,
+    tip_annotations=None,
+    node_ages="none",
+    age_clades=None,
+    layout_report=None,
+):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import nwkit
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import MaxNLocator
+    from nwkit.file_paths import validate_distinct_output_paths, validate_outputs_do_not_replace_inputs
+    from nwkit.output_transaction import output_transaction
+    from nwkit.time_tree import infer_node_ages_from_branch_lengths, prepare_time_tree_annotations
+    from nwkit.util import read_tree
+
+    outfile = Path(outfile)
+    inputs = [("tree", infile)] + [
+        (name, value)
+        for name, value in [
+            ("busco_summary", busco_summary),
+            ("tip_order", tip_order),
+            ("tip_annotations", tip_annotations),
+            ("age_clades", age_clades),
+        ]
+        if value is not None
+    ]
+    outputs = [("plot", outfile)] + ([("layout_report", layout_report)] if layout_report else [])
+    validate_distinct_output_paths(outputs)
+    validate_outputs_do_not_replace_inputs(inputs, outputs)
+    if outfile.suffix.lower() not in {".pdf", ".svg", ".png"}:
+        raise ValueError("Presentation plots support PDF, SVG and PNG.")
+    if min(figure_width, font_size) <= 0 or not all(math.isfinite(value) for value in [figure_width, font_size]):
+        raise ValueError("Figure width and font size must be finite and positive.")
+    tree = read_tree(str(infile), "auto", True, rooted="yes")
+    prepare_time_tree_annotations(tree)
+    if any("age" not in node.props for node in tree.traverse()):
+        infer_node_ages_from_branch_lengths(tree)
+    leaves = list(tree.leaves())
+    species = [leaf.name for leaf in leaves]
+    order = species
+    if tip_order:
+        with Path(tip_order).open(encoding="utf-8") as handle:
+            order = [row["species_id"] for row in csv.DictReader(handle, delimiter="\t")]
+        if len(order) != len(species) or set(order) != set(species):
+            raise ValueError("Tip order must contain each tree species exactly once.")
+        ranks = {name: rank for rank, name in enumerate(order)}
+        for node in tree.traverse(strategy="postorder"):
+            if not node.is_leaf:
+                node.children.sort(key=lambda child: min(ranks[name] for name in child.leaf_names()))
+        if list(tree.leaf_names()) != order:
+            raise ValueError("Requested tip order is not compatible with the topology.")
+    styles = {}
+    if tip_annotations:
+        with Path(tip_annotations).open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle, delimiter="\t"):
+                name = row["species_id"]
+                if name not in species or name in styles:
+                    raise ValueError("Unknown or duplicate tip annotation.")
+                styles[name] = row
+    selected = set()
+    if age_clades:
+        with Path(age_clades).open(encoding="utf-8") as handle:
+            selected = {
+                frozenset(row["descendant_species"].split(",")) for row in csv.DictReader(handle, delimiter="\t")
+            }
+        actual = {frozenset(node.leaf_names()) for node in tree.traverse() if not node.is_leaf}
+        if not selected <= actual:
+            raise ValueError("A requested age label is not an internal clade in the tree.")
+    nodes = list(tree.traverse())
+    count = len(species)
+    ys = {leaf: count - 1 - order.index(leaf.name) for leaf in leaves}
+    for node in tree.traverse(strategy="postorder"):
+        if not node.is_leaf:
+            ys[node] = (ys[node.children[0]] + ys[node.children[-1]]) / 2
+    max_age = max(float(node.props.get("age_ci_high", node.props["age"])) for node in nodes)
+    if geological_background == "period" and max_age > 4567:
+        raise ValueError("Geological background requires ages between 0 and 4567 Ma.")
+    max_age = (
+        min(4567, math.ceil(max_age / 10) * 10) if geological_background == "period" else math.ceil(max_age / 10) * 10
+    )
+    if max_age <= 0:
+        raise ValueError("A dated tree must span positive time.")
+    periods = geological_intervals(max_age) if geological_background == "period" else []
+    counts, dataset, dataset_sources = (
+        read_busco(busco_summary, species, busco_results, busco_prefix) if busco_summary else ({}, None, {})
+    )
+    inputs.extend(("BUSCO metadata", source) for source in dataset_sources.values())
+    validate_outputs_do_not_replace_inputs(inputs, outputs)
+    height = figure_height if figure_height is not None else max(3.8, 1.9 + count * 0.24)
+    if not math.isfinite(height) or height < 2.5 or figure_width < 4:
+        raise ValueError("Presentation plots need a width of at least 4 and a height of at least 2.5 inches.")
+    plt.rcParams.update(
+        {"font.family": font_family, "font.size": font_size, "pdf.fonttype": 42, "svg.fonttype": "none"}
+    )
+    figure = plt.figure(figsize=(figure_width, height))
+    try:
+        header_height = 0.45
+        if periods:
+            renderer = figure.canvas.get_renderer()
+            properties = FontProperties(family=font_family, size=font_size)
+            header_height = max(
+                header_height,
+                max(renderer.get_text_width_height_descent(p["name"], properties, False)[0] for p in periods)
+                / figure.dpi
+                + 0.23,
+            )
+        bottom, top = 1.15 / height, 1 - header_height / height
+        if (top - bottom) * height < 1:
+            raise ValueError("Figure is too short for the geological names and tree; increase its height.")
+        label_width = max(len(name.replace("_", " ")) for name in species) * font_size * 0.52 / 72 + 0.13
+        right = 0.71 if counts else 0.97
+        tree_right = right - label_width / figure_width
+        if (tree_right - 0.06) * figure_width < 1:
+            raise ValueError("Figure is too narrow for the tip labels and panels.")
+        axis = figure.add_axes([0.06, bottom, tree_right - 0.06, top - bottom])
+        labels = figure.add_axes([tree_right + 0.02, bottom, label_width / figure_width, top - bottom], sharey=axis)
+        labels.set_xlim(0, 1)
+        labels.axis("off")
+        axis.set_ylim(-0.6, count - 0.4)
+        axis.set_xlim(max_age, 0)
+        axis.set_xticks([value for value in MaxNLocator(nbins=5).tick_values(0, max_age) if 0 <= value <= max_age])
+        axis.set_yticks([])
+        axis.spines[["left", "right", "top"]].set_visible(False)
+        axis.set_xlabel("Divergence time (Ma)")
+        axis.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
+        period_texts = []
+        for period in periods:
+            axis.axvspan(period["young_Ma"], period["old_Ma"], color=period["colour"], zorder=-5)
+            text = axis.annotate(
+                period["name"],
+                xy=((period["young_Ma"] + period["old_Ma"]) / 2, 1),
+                xycoords=("data", "axes fraction"),
+                xytext=(0, 5),
+                textcoords="offset points",
+                rotation=90,
+                ha="center",
+                va="bottom",
+                fontsize=font_size,
+                annotation_clip=False,
+            )
+            text.set_gid("geological-period-" + period["name"])
+            period_texts.append(text)
+        if period_texts:
+            # Spread crowded names within the header while retaining their
+            # original time anchors. A short leader connects a shifted name.
+            figure.canvas.draw()
+            renderer = figure.canvas.get_renderer()
+            ordered = list(reversed(period_texts))
+            widths = [text.get_window_extent(renderer).width for text in ordered]
+            gap = 2 * figure.dpi / 72
+            left, right = axis.bbox.x0 - max(widths) / 2, axis.bbox.x1 + max(widths) / 2
+            if sum(widths) + gap * (len(widths) - 1) > right - left:
+                raise ValueError("Geological period names need more space; increase figure width.")
+            anchors = [axis.transData.transform((text.xy[0], 0))[0] for text in ordered]
+            centres = []
+            cursor = left
+            for anchor, width in zip(anchors, widths, strict=True):
+                centre = max(anchor, cursor + width / 2)
+                centres.append(centre)
+                cursor = centre + width / 2 + gap
+            cursor = right
+            for index in range(len(ordered) - 1, -1, -1):
+                centres[index] = min(centres[index], cursor - widths[index] / 2)
+                cursor = centres[index] - widths[index] / 2 - gap
+            for text, centre, anchor in zip(ordered, centres, anchors, strict=True):
+                offset = (centre - anchor) * 72 / figure.dpi
+                text.set_position((offset, 5))
+                if abs(offset) > 0.25:
+                    axis.annotate(
+                        "",
+                        xy=text.xy,
+                        xycoords=("data", "axes fraction"),
+                        xytext=(offset, 4),
+                        textcoords="offset points",
+                        annotation_clip=False,
+                        arrowprops={"arrowstyle": "-", "color": "#777777", "lw": 0.4, "shrinkA": 0, "shrinkB": 0},
+                    )
+        branches = []
+        for node in nodes:
+            x, y = float(node.props["age"]), ys[node]
+            if not node.is_leaf:
+                points = [(x, ys[child]) for child in node.children]
+                branches.append(((x, min(point[1] for point in points)), (x, max(point[1] for point in points))))
+            if not node.is_root:
+                branches.append(((float(node.up.props["age"]), y), (x, y)))
+        for first, second in branches:
+            axis.plot([first[0], second[0]], [first[1], second[1]], color="#202020", lw=0.7, zorder=2)
+        interval_count = 0
+        for node in nodes:
+            if node.props.get("age_ci_low") is not None:
+                low, high = float(node.props["age_ci_low"]), float(node.props["age_ci_high"])
+                axis.plot([low, high], [ys[node]] * 2, color="#D55E00", lw=1.2, alpha=0.8, zorder=3)
+                axis.plot(
+                    [low, high], [ys[node]] * 2, linestyle="none", marker="|", markersize=3, color="#D55E00", zorder=3
+                )
+                interval_count += 1
+        tip_texts = []
+        for leaf in leaves:
+            style = styles.get(leaf.name, {})
+            tip_texts.append(
+                labels.text(
+                    0,
+                    ys[leaf],
+                    leaf.name.replace("_", " "),
+                    va="center",
+                    style="italic",
+                    weight=style.get("font_weight", "normal"),
+                    color=style.get("colour", "#202020"),
+                    fontsize=font_size,
+                )
+            )
+        age_texts = []
+        for node in nodes:
+            if node.is_leaf or not (
+                node_ages == "all" or (node_ages == "root" and node.is_root) or frozenset(node.leaf_names()) in selected
+            ):
+                continue
+            text = axis.annotate(
+                f"{float(node.props['age']):.1f}",
+                xy=(float(node.props["age"]), ys[node]),
+                xytext=(2, 3),
+                textcoords="offset points",
+                fontsize=font_size,
+                zorder=4,
+            )
+            age_texts.append(text)
+        # Choose a nearby label position that clears the branches and earlier
+        # age labels. Keep an explicit leader when extra separation is needed.
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        branch_pixels = [(axis.transData.transform(a), axis.transData.transform(b)) for a, b in branches]
+        occupied = []
+        for text in age_texts:
+            placed = False
+            for dx, dy, align in [
+                (2, 3, "left"),
+                (-2, 3, "right"),
+                (2, -10, "left"),
+                (-2, -10, "right"),
+                (2, 12, "left"),
+                (-2, 12, "right"),
+                (2, -19, "left"),
+                (-2, -19, "right"),
+            ]:
+                text.set_position((dx, dy))
+                text.set_ha(align)
+                figure.canvas.draw()
+                box = text.get_window_extent(renderer).padded(figure.dpi / 72)
+                crosses = any(
+                    (
+                        min(a[0], b[0]) < box.x1
+                        and max(a[0], b[0]) > box.x0
+                        and min(a[1], b[1]) < box.y1
+                        and max(a[1], b[1]) > box.y0
+                    )
+                    for a, b in branch_pixels
+                )
+                if (
+                    not crosses
+                    and not any(box.overlaps(other) for other in occupied)
+                    and axis.bbox.contains(box.x0, box.y0)
+                    and axis.bbox.contains(box.x1, box.y1)
+                ):
+                    occupied.append(box)
+                    placed = True
+                    if abs(dy) > 10:
+                        axis.annotate(
+                            "",
+                            xy=text.xy,
+                            xytext=(dx, dy),
+                            textcoords="offset points",
+                            arrowprops={"arrowstyle": "-", "color": "#888888", "lw": 0.35, "shrinkA": 4, "shrinkB": 1},
+                        )
+                    break
+            if not placed:
+                raise ValueError(
+                    "Age labels cannot fit without overlap; increase figure size or select fewer labelled clades."
+                )
+        busco_axis_label = None
+        if counts:
+            bars = figure.add_axes([0.76, bottom, 0.21, top - bottom], sharey=axis)
+            total = sum(next(iter(counts.values())))
+            for leaf in leaves:
+                left = 0
+                for value, colour in zip(counts[leaf.name], STATUS_COLOURS, strict=True):
+                    bars.barh(ys[leaf], value, left=left, height=0.62, color=colour, edgecolor="none")
+                    left += value
+            bars.set_xlim(0, total)
+            bars.set_xticks(
+                [
+                    value
+                    for value in MaxNLocator(nbins=3, integer=True, steps=[1, 2, 5, 10]).tick_values(0, total)
+                    if 0 <= value <= total
+                ]
+            )
+            bars.set_yticks([])
+            bars.spines[["left", "right", "top"]].set_visible(False)
+            bars.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
+            busco_axis_label = "Number of BUSCO genes" + (f"\n({dataset})" if dataset else "")
+            bars.set_xlabel(busco_axis_label)
+            percent = bars.twiny()
+            percent.set_xlim(0, 100)
+            percent.set_xticks([0, 50, 100])
+            percent.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
+            percent.spines[["left", "right", "bottom"]].set_visible(False)
+        handles = []
+        credible_label = interval_label(nodes)
+        if credible_label:
+            handles.append(Line2D([0], [0], color="#D55E00", lw=1.2, label=credible_label))
+        if counts:
+            handles.extend(
+                Patch(facecolor=colour, label=name) for colour, name in zip(STATUS_COLOURS, STATUS_LABELS, strict=True)
+            )
+        if handles:
+            figure.legend(
+                handles=handles,
+                loc="lower center",
+                bbox_to_anchor=(0.5, 0.3 / height),
+                ncol=len(handles),
+                frameon=False,
+                fontsize=font_size,
+                handlelength=1,
+                columnspacing=0.9,
+                handletextpad=0.35,
+            )
+        if periods:
+            figure.text(
+                0.06,
+                0.1 / height,
+                "Geological periods: ICS 2026/06."
+                + (" Precambrian shown as one interval." if any(p["name"] == "Precambrian" for p in periods) else ""),
+                fontsize=font_size,
+            )
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        period_boxes = [text.get_window_extent(renderer) for text in period_texts]
+        if any(a.overlaps(b) for i, a in enumerate(period_boxes) for b in period_boxes[i + 1 :]):
+            raise ValueError("Geological period names overlap; increase figure width.")
+        for text in figure.findobj(matplotlib.text.Text):
+            if text.get_visible() and text.get_text():
+                box = text.get_window_extent(renderer)
+                if box.x0 < 0 or box.y0 < 0 or box.x1 > figure.bbox.x1 + 0.5 or box.y1 > figure.bbox.y1 + 0.5:
+                    raise ValueError(
+                        f"Text extends outside the figure: {text.get_text()!r}; increase its width or height."
+                    )
+        if (
+            counts
+            and max(text.get_window_extent(renderer).x1 for text in tip_texts) + 4 * figure.dpi / 72 > bars.bbox.x0
+        ):
+            raise ValueError("Species labels extend into the BUSCO panel; increase figure width.")
+        report = {
+            "renderer": "genegalleon_dated_tree_presentation",
+            "nwkit_version": nwkit.__version__,
+            "input_sha256": hashlib.sha256(Path(infile).read_bytes()).hexdigest(),
+            "species_order": order,
+            "credible_interval_count": interval_count,
+            "credible_interval_label": credible_label,
+            "mean_age_label_count": len(age_texts),
+            "geological_background": geological_background,
+            "geological_source": GEOLOGICAL_SOURCE if periods else None,
+            "geological_intervals": periods,
+            "geological_label_placement": "above_tree" if periods else None,
+            "tree_plot_bbox_points": [float(value) * 72 / figure.dpi for value in axis.bbox.extents],
+            "geological_labels": [
+                {
+                    "name": text.get_text(),
+                    "anchor_Ma": text.xy[0],
+                    "rotation_degrees": 90,
+                    "horizontal_offset_points": text.get_position()[0],
+                    "bbox_points": [
+                        float(value) * 72 / figure.dpi for value in text.get_window_extent(renderer).extents
+                    ],
+                }
+                for text in period_texts
+            ],
+            "busco_dataset": dataset,
+            "busco_dataset_sources": dataset_sources,
+            "busco_axis_label": busco_axis_label,
+            "busco_counts": counts,
+            "tip_y_coordinates": {leaf.name: ys[leaf] for leaf in leaves},
+            "all_ages_Ma": [
+                {
+                    "descendant_species": sorted(node.leaf_names()),
+                    "mean": node.props["age"],
+                    "low": float(node.props["age_ci_low"]) if node.props.get("age_ci_low") is not None else None,
+                    "high": float(node.props["age_ci_high"]) if node.props.get("age_ci_high") is not None else None,
+                }
+                for node in nodes
+                if not node.is_leaf
+            ],
+            "figure_size_inches": [figure_width, height],
+            "font_size_points": font_size,
+            "inference": "Saved tree and age intervals reused without inference.",
+        }
+        paths = [Path(target) for _, target in outputs]
+        with output_transaction(paths, create_parents=True) as staged:
+            metadata = {"Creator": "GeneGalleon / NWKIT " + nwkit.__version__}
+            if outfile.suffix == ".pdf":
+                metadata.update(CreationDate=None, ModDate=None)
+            elif outfile.suffix == ".svg":
+                metadata["Date"] = None
+            else:
+                metadata = None
+            figure.savefig(staged[outfile], format=outfile.suffix[1:], dpi=300, metadata=metadata)
+            if layout_report:
+                Path(staged[Path(layout_report)]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        return report
+    finally:
+        plt.close(figure)

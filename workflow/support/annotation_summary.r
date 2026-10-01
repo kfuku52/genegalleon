@@ -24,6 +24,7 @@ cat('arguments:\n')
 args = rkftools::get_parsed_args(args, print=TRUE)
 
 source(file.path(script_dir, 'species_label_utils.r'), local = TRUE)
+source(file.path(script_dir, 'busco_plot_metadata.r'), local = TRUE)
 
 font_size = 8
 args[['font_size']] = font_size
@@ -187,10 +188,12 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
     species_keys = gg_species_label_from_filename(files)
     gg_stop_on_duplicate_species_keys(species_keys, files, paste(outbase, 'BUSCO files'))
     species_labels = setNames(gg_species_display_from_key(species_keys), files)
+    lineage_by_species = setNames(rep(NA_character_, length(files)), species_labels)
     for (file in files) {
         file_path = file.path(dir_busco, file)
         sp = species_labels[[file]]
         all_lines <- readLines(file_path)
+        lineage_by_species[[sp]] <- gg_busco_lineage_from_header(all_lines)
         header_line <- grep("^# Busco id", all_lines, value = TRUE)
         if (length(header_line) == 0) {
             cat('Skipping BUSCO file without a # Busco id header:', file_path, '\n')
@@ -248,7 +251,9 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
     pf = as.character(safe_percent(df3[['Fragmented']], df3[['Total']]))
     pm = as.character(safe_percent(df3[['Missing']], df3[['Total']]))
     df3[,'Summary'] = paste0('C:',pc,'%[S:',ps,'%,D:',pd,'%],F:',pf,'%,M:',pm,'%,n:',df3[['Total']])
-    df3 = df3[,c('Species','Summary','Single','Duplicated','Fragmented','Missing','Total')]
+    df3[,'Lineage'] = unname(lineage_by_species[df3[['Species']]])
+    busco_axis_label = gg_busco_axis_label(df3[['Lineage']])
+    df3 = df3[,c('Species','Summary','Single','Duplicated','Fragmented','Missing','Total','Lineage')]
     colnames(df3) = paste0(outbase, '_', tolower(colnames(df3)))
     colnames(df3)[1] = 'Species'
     df_out = merge(df_out, df3, by='Species', all=TRUE, sort=TRUE)
@@ -276,7 +281,7 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
     p = p + geom_bar(position='stack', stat='identity')
     p = p + scale_fill_manual(values=colors)
     p = p + theme_linedraw(base_size=font_size)
-    p = p + xlab('Number of BUSCO single-copy genes')
+    p = p + xlab(busco_axis_label)
     p = p + guides(colour=guide_legend(nrow=6, byrow=FALSE))
     p = p + scale_x_continuous(limits=c(0, num_busco_gene), sec.axis=sec_axis(trans=~./num_busco_gene*100, name='%'))
     p = p + theme(

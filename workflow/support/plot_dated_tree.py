@@ -73,8 +73,73 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--infile", required=True, type=Path)
     parser.add_argument("--outfile", required=True, type=Path)
+    parser.add_argument(
+        "--busco-summary", type=Path, help="Annotation summary TSV with BUSCO counts and lineage metadata."
+    )
+    parser.add_argument(
+        "--busco-results",
+        type=Path,
+        help="BUSCO full/short-result directory for legacy summaries without lineage metadata.",
+    )
+    parser.add_argument("--busco-prefix", default="busco_cds")
+    parser.add_argument(
+        "--geological-background",
+        choices=["none", "period"],
+        help="Use the publication renderer with an optional ICS geological background.",
+    )
+    parser.add_argument("--figure-width", type=float)
+    parser.add_argument("--figure-height", type=float)
+    parser.add_argument("--font-family")
+    parser.add_argument("--font-size", type=float)
+    parser.add_argument("--tip-order", type=Path, help="TSV with species_id in top-to-bottom order.")
+    parser.add_argument("--tip-annotations", type=Path, help="TSV: species_id, colour, font_weight.")
+    parser.add_argument("--node-ages", choices=["none", "root", "all"], default="none")
+    parser.add_argument(
+        "--age-clades", type=Path, help="TSV: descendant_species, comma-separated exact clades to label."
+    )
+    parser.add_argument("--layout-report", type=Path)
     args = parser.parse_args()
-    draw_dated_tree(args.infile, args.outfile)
+    if args.busco_results is not None and args.busco_summary is None:
+        parser.error("--busco-results requires --busco-summary")
+    if (
+        args.geological_background is not None
+        or args.busco_summary is not None
+        or args.node_ages != "none"
+        or args.age_clades is not None
+        or any(
+            value is not None
+            for value in (
+                args.figure_width,
+                args.figure_height,
+                args.font_family,
+                args.font_size,
+                args.tip_order,
+                args.tip_annotations,
+                args.layout_report,
+            )
+        )
+    ):
+        from dated_tree_presentation import render_dated_tree
+
+        render_dated_tree(
+            args.infile,
+            args.outfile,
+            busco_summary=args.busco_summary,
+            busco_results=args.busco_results,
+            busco_prefix=args.busco_prefix,
+            geological_background=args.geological_background or "period",
+            figure_width=args.figure_width if args.figure_width is not None else 7.2,
+            figure_height=args.figure_height,
+            font_family=args.font_family if args.font_family is not None else "Helvetica",
+            font_size=args.font_size if args.font_size is not None else 8,
+            tip_order=args.tip_order,
+            tip_annotations=args.tip_annotations,
+            node_ages=args.node_ages,
+            age_clades=args.age_clades,
+            layout_report=args.layout_report,
+        )
+    else:
+        draw_dated_tree(args.infile, args.outfile)
 
 
 if __name__ == "__main__":

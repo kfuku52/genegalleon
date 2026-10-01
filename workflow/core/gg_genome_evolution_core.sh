@@ -3772,6 +3772,8 @@ gg_artifact_contract_init species_tree_busco_plot_provenance_args "species_tree_
 species_tree_busco_plot_provenance_args+=(
   --input "undated_tree=${file_undated_species_tree}"
   --input "busco_directory=${dir_species_busco_full}"
+  --input "adapter=${gg_support_dir}/annotation_summary.r"
+  --input "busco_plot_metadata=${gg_support_dir}/busco_plot_metadata.r"
   --output "pdf=${file_species_tree_busco_cds_pdf}"
   --output "svg=${file_species_tree_busco_cds_svg}"
   --output "summary=${file_species_tree_busco_summary}"
@@ -4317,7 +4319,10 @@ gg_artifact_contract_init dated_tree_plot_provenance_args "species_tree_dated_pl
 dated_tree_plot_provenance_args+=(
   --input "dated_tree=${dated_tree_plot_input}"
   --input "adapter=${gg_support_dir}/plot_dated_tree.py"
-  --parameter "engine=nwkit_draw"
+  --input "presentation=${gg_support_dir}/dated_tree_presentation.py"
+  --input "geological_periods=${gg_support_dir}/geological_periods.tsv"
+  --parameter "engine=genegalleon_dated_tree_presentation"
+  --parameter "geological_background=period"
   --parameter "nwkit_identity=${genome_nwkit_identity}"
   --parameter "branch_length_unit=Ma"
   --output "plot=${file_plot_mcmctree_pdf}"
@@ -4331,7 +4336,8 @@ if [[ ${dated_tree_plot_needs_update} -eq 1 && ${run_plot_mcmctreer} -eq 1 ]]; t
 
   python "${gg_support_dir}/plot_dated_tree.py" \
     --infile "${dated_tree_plot_input}" \
-    --outfile "tmp.plot_mcmctreer.pdf" || exit $?
+    --outfile "tmp.plot_mcmctreer.pdf" \
+    --geological-background period || exit $?
   dated_tree_plot_publish_args=("tmp.plot_mcmctreer.pdf" "${file_plot_mcmctree_pdf}")
   if [[ -s "${file_dated_species_tree}" ]]; then
     cp -- "tmp.plot_mcmctreer.pdf" "tmp.dated_species_tree.summary.pdf" || exit $?

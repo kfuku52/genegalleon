@@ -1625,6 +1625,8 @@ run_multispecies_summary_stage() {
   gg_artifact_contract_init summary_provenance_args "input_generation_multispecies_summary" "all_species" "${input_generation_provenance_dir}/multispecies_summary.json"
   summary_provenance_args+=(
     --input "species_busco_full=${species_busco_full_dir}"
+    --input "adapter=${gg_support_dir}/annotation_summary.r"
+    --input "busco_plot_metadata=${gg_support_dir}/busco_plot_metadata.r"
     --output "summary=${file_multispecies_summary}"
     --parameter "min_og_species=auto"
     --parameter "include_fx2tab=${run_cds_fx2tab}"
