@@ -59,9 +59,8 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
         assert label["anchor_Ma"] == (period["young_Ma"] + period["old_Ma"]) / 2
         assert label["bbox_points"][1] > data["tree_plot_bbox_points"][3]
         assert label["bbox_points"][1] - data["tree_plot_bbox_points"][3] == pytest.approx(4)
-    colours = {p["name"]: tuple(int(p["colour"][i:i + 2], 16) / 255 for i in (1, 3, 5))
-               for p in data["geological_intervals"]}
-    assert sum((a - b) ** 2 for a, b in zip(colours["Neogene"], colours["Quaternary"], strict=True)) > 0.25 ** 2
+    colours = [p["colour"] for p in data["geological_intervals"]]
+    assert colours == (["#F7F7F7", "#E7E7E7"] * len(colours))[:len(colours)]
     assert data["credible_interval_count"] == 1
     assert data["busco_counts"]["C_c"] == [6, 2, 1, 1]
     assert data["tip_y_coordinates"] == {"A_a": 2, "B_b": 1, "C_c": 0}

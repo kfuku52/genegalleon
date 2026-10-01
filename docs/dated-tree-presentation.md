@@ -4,11 +4,12 @@ The dated-species-tree workflow adds geological-period backgrounds using the
 ICS International Chronostratigraphic Chart [2026/06](https://stratigraphy.org/ICSchart/ChronostratChart2026-06.pdf).
 Boundaries are plotted on the same absolute Ma axis as the saved tree, without
 changing ages or intervals. Precambrian is shown as one broad interval. The
-bundled table has a light presentation palette; numerical boundaries are source
-data and do not represent new dating constraints.
+bundled table defaults to alternating very light grey (`#F7F7F7`) and light grey
+(`#E7E7E7`) backgrounds; numerical boundaries are source data and do not represent
+new dating constraints.
 Full period names appear vertically above their corresponding background bands
-in the tree panel, without a separate geological legend. Neogene uses an ochre
-background and Quaternary uses blue so the adjacent bands remain distinguishable.
+in the tree panel, without a separate geological legend. The two greys alternate
+across all periods so adjacent bands remain distinguishable.
 On deep-time trees, crowded names spread within the header with short leaders
 to their original bands, preserving the time scale.
 

@@ -2,7 +2,7 @@
 
 Geological boundaries: ICS International Chronostratigraphic Chart 2026/06,
 https://stratigraphy.org/ICSchart/ChronostratChart2026-06.pdf . Precambrian is
-shown as a single broad interval. Colours are a light presentation palette.
+shown as a single broad interval. Backgrounds alternate between two light greys.
 """
 
 import csv
