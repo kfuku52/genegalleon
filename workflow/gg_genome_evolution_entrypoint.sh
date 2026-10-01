@@ -215,6 +215,8 @@ synteny_search_distance=20 # JCVI gene-rank distance used to join anchors.
 synteny_minimum_mapping_fraction=1 # Required FASTA identifier mapping fraction before isoform selection.
 synteny_plot_formats="pdf,svg,png" # Comma-separated output formats.
 synteny_karyotype_sort="both_length" # both_length moves both tracks; target_length|query_length fix the opposite track; target|query use dominant partners; none preserves input order.
+synteny_karyotype_color="chromosome" # chromosome|homoeolog; optional homoeolog gives supported 2x2 groups the same soft color.
+synteny_karyotype_scale="shared" # shared uses the same width per gene and one scale bar for both species; independent normalizes each track separately.
 synteny_dotplot_color="orientation" # orientation|ds; ds requires matching CDS and the CDSKIT dnds estimator.
 synteny_dotplot_min_length=1000000 # Dotplot includes only scaffold/chromosome assembly lengths >= this many bp; 0 disables filtering.
 synteny_dotplot_sort="homoeolog" # homoeolog places supported 2x2 chromosome groups together; karyotype follows ribbon order; none preserves BED order.

@@ -240,7 +240,15 @@ def render_ds_dotplot(directory, ds_directory, pair, fmt, color_max, filtered=Fa
     from jcvi.formats.bed import Bed
     from jcvi.graphics.dotplot import plot_breaks_and_labels
     from matplotlib.colors import Normalize
-    from matplotlib.lines import Line2D
+    from matplotlib.offsetbox import AnnotationBbox, DrawingArea, HPacker, TextArea
+    from matplotlib.patches import Rectangle
+
+    try:
+        from pairwise_synteny_dotplot import save_pdf_dotplot
+        from pairwise_synteny_style import MISSING_COLOR, STYLE, ds_colormap
+    except ImportError:
+        from .pairwise_synteny_dotplot import save_pdf_dotplot
+        from .pairwise_synteny_style import MISSING_COLOR, STYLE, ds_colormap
 
     _fields, _rows, lookup = read_ds(ds_directory / "ds.tsv")
     prefix = "dotplot." if filtered else ""
@@ -265,8 +273,7 @@ def render_ds_dotplot(directory, ds_directory, pair, fmt, color_max, filtered=Fa
     root = fig.add_axes((0, 0, 1, 1), frameon=False)
     root.set_axis_off()
     ax = fig.add_axes((0.1, 0.1, 0.8, 0.8))
-    cmap = plt.get_cmap("viridis").copy()
-    cmap.set_bad("#b0b0b0")
+    cmap = ds_colormap()
     scatter = ax.scatter(data[:, 0], data[:, 1], c=np.ma.masked_invalid(data[:, 2]),
                          cmap=cmap, norm=Normalize(vmin=0, vmax=color_max, clip=True),
                          s=2, edgecolors="none", linewidths=0, plotnonfinite=True)
@@ -278,22 +285,37 @@ def render_ds_dotplot(directory, ds_directory, pair, fmt, color_max, filtered=Fa
                           chpf=False, usetex=False, sepcolor="#b0b0b0")
     cax = fig.add_axes((0.3, 0.015, 0.4, 0.016))
     fig.colorbar(scatter, cax=cax, orientation="horizontal", extend="max" if np.any(data[:, 2] > color_max) else "neither")
-    cax.set_xlabel("dS (CDSKIT YN00; upper limit is display clipping only)", fontsize=10)
+    # Plain-text pieces preserve actual Helvetica/Helvetica-Oblique in PDFs;
+    # mathtext would substitute a different font for the italic dS token.
+    def compound_label(parts, xy, xycoords, alignment):
+        children = [TextArea(part, textprops={"fontsize": 8, "fontfamily": "Helvetica", "color": "black"})
+                    for part in parts]
+        return AnnotationBbox(HPacker(children=children, align="baseline", pad=0, sep=0),
+                              xy, xycoords=xycoords, box_alignment=alignment,
+                              frameon=False, annotation_clip=False)
+
+    cax.set_xlabel("", fontsize=8)
+    colorbar_label = compound_label(["dS", "(CDSKIT YN00)"], (0, 0), cax.xaxis.label, (0.5, 1))
+    cax.add_artist(colorbar_label)
     missing = int(np.isnan(data[:, 2]).sum())
-    root.legend(handles=[Line2D([], [], marker="o", linestyle="", color="#b0b0b0",
-                                label=f"Unestimable / saturated: {missing:,} pairs")],
-                loc="upper left", bbox_to_anchor=(0.09, 0.988), frameon=False, fontsize=9)
-    root.text(0.5, 1.02, f"Pairwise synteny colored by dS ({len(points):,} gene pairs)", ha="center", fontsize=15)
-    if fmt == "pdf":
-        try:
-            from pairwise_synteny_dotplot import save_pdf_dotplot
-        except ImportError:
-            from .pairwise_synteny_dotplot import save_pdf_dotplot
-        save_pdf_dotplot(fig, root, ax, pair, directory / "dotplot.pdf", colorbar_ax=cax)
-    else:
-        fig.savefig(directory / f"dotplot.{fmt}", format=fmt, dpi=300, bbox_inches="tight")
+    square = DrawingArea(6, 6, 0, 0)
+    square.add_artist(Rectangle((0, 0), 6, 6, facecolor=MISSING_COLOR, edgecolor="none"))
+    missing_label = TextArea(f"Unestimable / saturated\n{missing:,} pairs",
+                            textprops={"fontsize": 8, "fontfamily": "Helvetica", "color": "black"})
+    missing_legend = AnnotationBbox(HPacker(children=[square, missing_label], align="center", pad=0, sep=4),
+                                   (1, 0.5), xycoords=cax.transAxes, xybox=(8, 0),
+                                   boxcoords="offset points", box_alignment=(0, 0.5),
+                                   frameon=False, annotation_clip=False)
+    cax.add_artist(missing_legend)
+    title = compound_label(["Pairwise synteny colored by", "dS", f"({len(points):,} gene pairs)"],
+                           (0.5, 1.02), root.transAxes, (0.5, 0))
+    root.add_artist(title)
+    with matplotlib.rc_context(STYLE):
+        save_pdf_dotplot(fig, root, ax, pair, directory / f"dotplot.{fmt}", colorbar_ax=cax,
+                         fmt=fmt, missing_legend=missing_legend,
+                         rich_title=title, rich_colorbar_label=colorbar_label)
     plt.close(fig)
-    metadata = {"coordinate_system": "gene_rank", "color": "dS", "cmap": "viridis", "color_range": [0, color_max],
+    metadata = {"coordinate_system": "gene_rank", "color": "dS", "cmap": cmap.name, "color_range": [0, color_max],
                 "anchor_count": len(points), "missing_count": missing, "above_color_max_count": int(np.sum(data[:, 2] > color_max)),
                 "downsampled": False, "filtered_by_dS": False, "ds_source": str(ds_directory / "ds.tsv")}
     (directory / "dotplot_ds.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")

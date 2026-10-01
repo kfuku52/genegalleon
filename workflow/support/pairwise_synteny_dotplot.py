@@ -8,39 +8,43 @@ from pathlib import Path
 
 try:
     from fasta_sequence_store import open_text
+    from pairwise_synteny_style import SOFT_COLORS, STYLE, style_text
 except ImportError:
     from .fasta_sequence_store import open_text
+    from .pairwise_synteny_style import SOFT_COLORS, STYLE, style_text
 
 
-def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None):
+def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None, fmt="pdf", missing_legend=None,
+                     rich_title=None, rich_colorbar_label=None):
     """3.6-inch PDF page; square plot box and unscaled 8-point typography."""
     import matplotlib
     from matplotlib.backends.backend_pdf import RendererPdf
     from matplotlib.text import Text
     from matplotlib.transforms import Bbox
 
-    settings = {"pdf.use14corefonts": True, "text.usetex": False, "font.family": "Helvetica",
-                "font.size": 8, "axes.labelsize": 8, "axes.titlesize": 8,
-                "xtick.labelsize": 8, "ytick.labelsize": 8, "legend.fontsize": 8}
-    with matplotlib.rc_context(settings):
+    with matplotlib.rc_context(STYLE):
         # JCVI's chromosome labels use the fixed 0.1..0.9 figure coordinates.
         # A square canvas keeps them aligned with this square 0.8 x 0.8 box.
         fig.set_size_inches(6, 6)
         ax.set_box_aspect(1)
+        # JCVI hides numeric tick marks. Restore them on the bottom/left,
+        # pointing away from the plot even when the y axis is inverted.
+        ax.tick_params(axis="both", which="major", direction="out", length=3, width=0.8,
+                       colors="black", bottom=True, left=True, top=False, right=False,
+                       labelbottom=True, labelleft=True, labeltop=False, labelright=False)
         for text in root.texts:
             if text.get_rotation() == 45:
                 text.set_rotation(90)
         ax.set_xlabel(pair["target_species"].replace("_", " "))
         ax.set_ylabel(pair["query_species"].replace("_", " "))
-        for text in fig.findobj(Text):
-            text.set_fontfamily("Helvetica")
-            text.set_fontsize(8)
-            text.set_fontweight("normal")
-            text.set_fontstyle("normal")
-            text.set_usetex(False)
-            text.set_parse_math(False)
+        style_text(fig)
         ax.xaxis.label.set_fontstyle("italic")
         ax.yaxis.label.set_fontstyle("italic")
+        for label in (rich_title, rich_colorbar_label):
+            if label is not None:
+                for text in label.findobj(Text):
+                    if text.get_text() == "dS":
+                        text.set_fontstyle("italic")
         # Separate plain-text artists retain real Helvetica/Helvetica-Oblique;
         # mathtext would substitute other fonts. Artist-relative annotations
         # follow the labels even when savefig translates the cropped page.
@@ -60,6 +64,9 @@ def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None):
         props = units_x.get_fontproperties()
         spacing = (renderer.get_text_width_height_descent("x x", props, False)[0]
                    - renderer.get_text_width_height_descent("xx", props, False)[0])
+        for label in (rich_title, rich_colorbar_label):
+            if label is not None:
+                label.offsetbox.sep = spacing
         suffix_width = spacing + renderer.get_text_width_height_descent(
             "(gene rank)", units_x.get_fontproperties(), False)[0]
         units_x.set_position((spacing, 0))
@@ -80,6 +87,8 @@ def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None):
                 legend.set_bbox_to_anchor((0.09, 1 + shift))
                 top = legend.get_window_extent(renderer).y1
             title_y = (top + 6) / (size * 72)
+            if rich_title is not None:
+                rich_title.xy = (0.5, title_y)
             if root.title.get_text():
                 root.set_title(root.title.get_text(), y=title_y)
             for text in root.texts:
@@ -88,9 +97,16 @@ def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None):
                     text.set_verticalalignment("bottom")
             if colorbar_ax is not None:
                 bottom = min(ax.xaxis.label.get_window_extent(renderer).y0,
-                             units_x.get_window_extent(renderer).y0) / 72
-                colorbar_ax.set_position((0.3, (bottom - 0.08 - 6 / 72) / size,
-                                          0.4, 0.08 / size))
+                             units_x.get_window_extent(renderer).y0)
+                legend_width = missing_legend.get_window_extent(renderer).width if missing_legend is not None else 0
+                available = ax.bbox.width - legend_width - 8
+                bar_width = max(36, available) if missing_legend is not None else ax.bbox.width * 0.5
+                # The gray square and the quantitative bar share one centerline.
+                colorbar_ax.set_position((ax.bbox.x0 / (size * 72), (bottom - 23) / (size * 72),
+                                          bar_width / (size * 72), 6 / (size * 72)))
+                # The compound label follows the native empty axis label's
+                # updated anchor in every output backend, including PNG at 300 dpi.
+                colorbar_ax.get_tightbbox(renderer)
             return fig.get_tightbbox(renderer)
 
         try:
@@ -108,12 +124,12 @@ def save_pdf_dotplot(fig, root, ax, pair, output, colorbar_ax=None):
             box = layout(low)
             page = Bbox.from_bounds((box.x0 + box.x1 - width) / 2,
                                     box.y0 - padding, width, box.height + 2 * padding)
-            fig.savefig(output, format="pdf", dpi=300, bbox_inches=page)
+            fig.savefig(output, format=fmt, dpi=300, bbox_inches=page)
         finally:
             fig.set_dpi(original_dpi)
 
 
-def render_orientation_pdf(directory, pair, filtered=True):
+def render_orientation_pdf(directory, pair, filtered=True, fmt="pdf"):
     """Keep JCVI's orientation palette/anchors while applying PDF typography."""
     import os
 
@@ -122,7 +138,7 @@ def render_orientation_pdf(directory, pair, filtered=True):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from jcvi.formats.bed import Bed
-    from jcvi.graphics.dotplot import Palette, dotplot, set1
+    from jcvi.graphics.dotplot import Palette, dotplot
 
     prefix = "dotplot." if filtered else ""
     beds = [Bed(str(directory / f"{prefix}{side}.bed"), sorted=False) for side in ("target", "query")]
@@ -139,17 +155,18 @@ def render_orientation_pdf(directory, pair, filtered=True):
             count += 1
     if not count:
         raise ValueError("No anchors to render")
-    palette = Palette.from_block_orientation(str(anchors), *beds)
+    palette = Palette.from_block_orientation(str(anchors), *beds,
+                                             forward_color=SOFT_COLORS[0], reverse_color=SOFT_COLORS[3])
     fig = plt.figure(figsize=(6, 6))
     root = fig.add_axes((0, 0, 1, 1), frameon=False)
     ax = fig.add_axes((0.1, 0.1, 0.8, 0.8))
     try:
         dotplot(str(anchors), *beds, fig, root, ax, palette=palette, sample_number=count,
-                minfont=4, chpf=False, usetex=False, sepcolor=set1[8],
+                minfont=4, chpf=False, usetex=False, sepcolor="#b0b0b0",
                 title="Pairwise synteny (gene rank)")
         if len(ax.collections[0].get_offsets()) != count:
             raise ValueError("The renderer discarded an anchor")
-        save_pdf_dotplot(fig, root, ax, pair, directory / "dotplot.pdf")
+        save_pdf_dotplot(fig, root, ax, pair, directory / f"dotplot.{fmt}", fmt=fmt)
     finally:
         plt.close(fig)
 

@@ -234,7 +234,15 @@ def test_pairwise_synteny_sort_defaults_to_weighted_length_and_is_forwarded_to_p
     assert 'synteny_karyotype_sort="both_length"' in entrypoint
     assert 'synteny_karyotype_sort="${synteny_karyotype_sort:-both_length}"' in core
     assert '--karyotype-sort "${synteny_karyotype_sort}"' in core
+    assert 'synteny_karyotype_color="chromosome"' in entrypoint
+    assert 'synteny_karyotype_color="${synteny_karyotype_color:-chromosome}"' in core
+    assert '--karyotype-color "${synteny_karyotype_color}"' in core
+    assert 'synteny_karyotype_scale="shared"' in entrypoint
+    assert 'synteny_karyotype_scale="${synteny_karyotype_scale:-shared}"' in core
+    assert '--karyotype-scale "${synteny_karyotype_scale}"' in core
     assert "\nsynteny_karyotype_sort\n" in registry
+    assert "\nsynteny_karyotype_color\n" in registry
+    assert "\nsynteny_karyotype_scale\n" in registry
     assert "\nsynteny_dotplot_color\n" in registry
     assert "\nsynteny_dotplot_min_length\n" in registry
     assert "\nsynteny_dotplot_sort\n" in registry

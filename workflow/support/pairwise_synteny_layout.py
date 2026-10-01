@@ -34,6 +34,23 @@ def track_geometry(seqids, genes):
     return widths, ranks, ratio, gap
 
 
+def pair_track_geometry(selected, genomes, scale_mode="shared"):
+    """Left-aligned tracks, optionally using the same width per gene."""
+    if scale_mode not in {"shared", "independent"}:
+        raise ValueError("karyotype-scale must be shared or independent")
+    if len(selected) != 2 or len(genomes) != 2:
+        raise ValueError("Pairwise geometry requires exactly two tracks")
+    geometry = [track_geometry(seqids, genes) for seqids, genes in zip(selected, genomes, strict=True)]
+    if scale_mode == "shared":
+        ratio = min(track[2] for track in geometry)
+        scaled = []
+        for seqids, genes, (_, ranks, _, gap) in zip(selected, genomes, geometry, strict=True):
+            counts = Counter(g.seqid for g in genes)
+            scaled.append(({sid: counts[sid] * ratio for sid in seqids}, ranks, ratio, gap))
+        geometry = scaled
+    return geometry
+
+
 def offsets(order, widths, gap):
     result = {}
     position = XSTART
@@ -102,11 +119,11 @@ def minimize_order(order, widths, gap, cost, exact_limit=EXACT_LIMIT):
                     "objective_before": before, "objective_after": objective(result)}
 
 
-def order_by_ribbon_length(selected, genomes, simple, moving):
+def order_by_ribbon_length(selected, genomes, simple, moving, scale_mode="shared"):
     if moving is None:
-        return order_both_by_ribbon_length(selected, genomes, simple)
+        return order_both_by_ribbon_length(selected, genomes, simple, scale_mode)
     fixed = 1 - moving
-    geometry = [track_geometry(seqids, genes) for seqids, genes in zip(selected, genomes, strict=True)]
+    geometry = pair_track_geometry(selected, genomes, scale_mode)
     widths, ranks, ratio, gap = geometry[moving]
     fixed_widths, fixed_ranks, fixed_ratio, fixed_gap = geometry[fixed]
     fixed_offsets = offsets(selected[fixed], fixed_widths, fixed_gap)
@@ -144,6 +161,8 @@ def order_by_ribbon_length(selected, genomes, simple, moving):
                 "weight": "mean_endpoint_width", "length": "straight_centerline_inches",
                 "figsize_inches": list(FIGSIZE), "xstart": XSTART, "xend": XEND,
                 "track_distance": TRACK_DISTANCE, "gaps": [g[3] for g in geometry],
+                "scale_mode": scale_mode, "track_ratios": [g[2] for g in geometry],
+                "track_spans": [sum(g[0].values()) + (len(g[0]) - 1) * g[3] for g in geometry],
                 "displayed_block_count": sum(map(len, connections.values())),
                 "orientation_changed": False, "input_order": dict(zip(("target", "query"), selected, strict=True)),
                 "display_order": dict(zip(("target", "query"), result, strict=True)), **solver}
@@ -152,7 +171,7 @@ def order_by_ribbon_length(selected, genomes, simple, moving):
     return result, metadata
 
 
-def order_both_by_ribbon_length(selected, genomes, simple):
+def order_both_by_ribbon_length(selected, genomes, simple, scale_mode="shared"):
     """Optimize both tracks, recording the limits of a bounded joint search."""
     original = [list(order) for order in selected]
     indices = [{sid: i for i, sid in enumerate(order)} for order in original]
@@ -160,7 +179,7 @@ def order_both_by_ribbon_length(selected, genomes, simple):
     def key(orders):
         return tuple(tuple(indices[side][sid] for sid in order) for side, order in enumerate(orders))
 
-    best, metadata = order_by_ribbon_length(original, genomes, simple, 0)
+    best, metadata = order_by_ribbon_length(original, genomes, simple, 0, scale_mode)
     before = metadata["objective_before"]
     best_value = metadata["objective_after"]
     solves = 1
@@ -183,7 +202,7 @@ def order_both_by_ribbon_length(selected, genomes, simple):
         for order in permutations(original[fixed]):
             start = [list(track) for track in original]
             start[fixed] = list(order)
-            candidate, info = order_by_ribbon_length(start, genomes, simple, 1 - fixed)
+            candidate, info = order_by_ribbon_length(start, genomes, simple, 1 - fixed, scale_mode)
             solves += 1
             consider(candidate, info)
         solver, optimal, starts, rounds = "exact_joint_permutation_subset_dp", True, 1, None
@@ -200,7 +219,7 @@ def order_both_by_ribbon_length(selected, genomes, simple):
             for _ in range(rounds):
                 prior = [list(track) for track in current]
                 for moving in (restart % 2, 1 - restart % 2):
-                    current, info = order_by_ribbon_length(current, genomes, simple, moving)
+                    current, info = order_by_ribbon_length(current, genomes, simple, moving, scale_mode)
                     solves += 1
                     consider(current, info)
                 value = info["objective_after"]

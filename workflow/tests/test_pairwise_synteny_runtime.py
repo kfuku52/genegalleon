@@ -86,6 +86,18 @@ def test_ds_stage_uses_cdskit_reuses_analysis_and_has_independent_cache(tmp_path
     assert result.returncode == 0, result.stdout + result.stderr
     assert (ds / "ds.tsv").stat().st_mtime_ns == ds_mtime
     assert json.loads((root / "plots/pair/dotplot_ds.json").read_text())["color_range"] == [0, 1]
+    style_file = root / "plots/pair/karyotype_style.json"
+    style = json.loads(style_file.read_text())
+    assert style["scale_mode"] == "shared" and style["scale_bar_count"] == 1
+    assert style["track_ratios"][0] == style["track_ratios"][1]
+    result = run_core(workspace, synteny_dotplot_color="ds", synteny_ds_color_max="1",
+                      synteny_plot_only="1", synteny_plot_formats="png",
+                      synteny_karyotype_scale="independent", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (analysis / "commands.json").stat().st_mtime_ns == analysis_mtime
+    assert (ds / "ds.tsv").stat().st_mtime_ns == ds_mtime
+    style = json.loads(style_file.read_text())
+    assert style["scale_mode"] == "independent" and style["scale_bar_count"] == 2
     cds = workspace / "input/species_cds/Triphyophyllum_peltatum.cds.fa"
     original = cds.read_text()
     assert "GCT" in original
@@ -119,8 +131,13 @@ def test_ds_renderer_retains_missing_and_over_limit_anchors(tmp_path):
 
 
 @pytest.mark.parametrize("color", ["ds", "orientation"])
-def test_dotplot_pdf_3p6inch_square_helvetica8_vertical_chromosomes_and_italic_species(tmp_path, monkeypatch, color):
+@pytest.mark.parametrize("fmt", ["pdf", "svg", "png"])
+def test_dotplot_pdf_3p6inch_square_helvetica8_vertical_chromosomes_and_italic_species(tmp_path, monkeypatch, color, fmt):
+    from matplotlib.colors import to_rgba
     from matplotlib.figure import Figure
+    from matplotlib.lines import TICKDOWN, TICKLEFT
+    from matplotlib.offsetbox import AnnotationBbox, DrawingArea
+    from matplotlib.patches import Rectangle
     from matplotlib.text import Text
 
     from workflow.support.pairwise_synteny_ds import render_ds_dotplot
@@ -144,29 +161,70 @@ def test_dotplot_pdf_3p6inch_square_helvetica8_vertical_chromosomes_and_italic_s
         assert axes.get_xlim() == (0, 3)
         assert axes.get_ylim() == (4, 0)
         assert len(axes.collections[0].get_offsets()) == 3
+        for axis, marker in ((axes.xaxis, TICKDOWN), (axes.yaxis, TICKLEFT)):
+            ticks = axis.get_major_ticks()
+            assert ticks
+            for tick in ticks:
+                assert tick.tick1line.get_visible() and not tick.tick2line.get_visible()
+                assert tick.tick1line.get_marker() == marker
+                assert tick.tick1line.get_markersize() == 3
+                assert to_rgba(tick.tick1line.get_markeredgecolor()) == to_rgba("black")
+                label_box = tick.label1.get_window_extent()
+                if axis is axes.xaxis:
+                    assert label_box.y1 < box.y0
+                else:
+                    assert label_box.x1 < box.x0
         texts = [text for text in figure.findobj(Text) if text.get_visible() and text.get_text()]
         assert texts
         assert all(text.get_fontsize() == 8 and text.get_fontfamily() == ["Helvetica"] for text in texts)
+        assert all(to_rgba(text.get_color()) == to_rgba("black") for text in texts)
         assert axes.get_xlabel() == "Target species"
         assert axes.get_ylabel() == "Query species"
         assert axes.xaxis.label.get_fontstyle() == axes.yaxis.label.get_fontstyle() == "italic"
+        italic = [text for text in texts if text.get_fontstyle() == "italic"]
+        ds_tokens = [text for text in texts if text.get_text() == "dS"]
+        assert len(ds_tokens) == (2 if color == "ds" else 0)
+        assert len(italic) == 2 + len(ds_tokens)
+        assert all(text.get_fontstyle() == "italic" for text in ds_tokens)
         units = [text for text in texts if text.get_text().strip() == "(gene rank)"]
         assert len(units) == 2 and all(text.get_fontstyle() == "normal" for text in units)
         assert all(text.get_text().startswith(" ") for text in units)
         assert all(sum(text.get_position()) > 2 for text in units)
         labels = [text for text in figure.axes[0].texts if text.get_text() == "chr1"]
         assert len(labels) == 1 and labels[0].get_rotation() == 90
+        if color == "ds":
+            from workflow.support.pairwise_synteny_style import MISSING_COLOR, ds_colormap
+
+            cax = figure.axes[2]
+            legend = next(artist for artist in cax.artists
+                          if isinstance(artist, AnnotationBbox) and artist.xycoords is cax.transAxes)
+            assert legend.xy == (1, 0.5) and legend.xycoords is cax.transAxes
+            square = next(child for child in legend.offsetbox.get_children() if isinstance(child, DrawingArea))
+            patch = next(child for child in square.get_children() if isinstance(child, Rectangle))
+            assert patch.get_width() == patch.get_height() == 6
+            assert patch.get_facecolor() == to_rgba(MISSING_COLOR)
+            assert axes.collections[0].cmap.name == "genegalleon_ds"
+            assert axes.collections[0].get_facecolors() == pytest.approx(
+                ds_colormap()([0.25, 1.0, float("nan")]))
         observations.append(box.width / box.height)
         return saved(figure, *args, **kwargs)
 
     monkeypatch.setattr(Figure, "savefig", inspect_save)
     if color == "ds":
-        render_ds_dotplot(plots, ds, pair, "pdf", 2)
+        render_ds_dotplot(plots, ds, pair, fmt, 2)
     else:
         from workflow.support.pairwise_synteny_dotplot import render_orientation_pdf
 
-        render_orientation_pdf(plots, pair, filtered=False)
+        render_orientation_pdf(plots, pair, filtered=False, fmt=fmt)
     assert observations == pytest.approx([1])
+    if fmt == "png":
+        with Image.open(plots / "dotplot.png") as image:
+            image.verify()
+        return
+    if fmt == "svg":
+        svg = (plots / "dotplot.svg").read_text()
+        assert svg.count(">dS</text>") == (2 if color == "ds" else 0)
+        return
     pdf = (plots / "dotplot.pdf").read_bytes()
     media_box = re.search(rb"/MediaBox\s*\[([^]]+)\]", pdf)
     assert media_box is not None
@@ -175,6 +233,139 @@ def test_dotplot_pdf_3p6inch_square_helvetica8_vertical_chromosomes_and_italic_s
     assert b"/BaseFont /Helvetica" in pdf
     assert b"/BaseFont /Helvetica-Oblique" in pdf
     assert b"/Subtype /Type3" not in pdf
+    if color == "ds":
+        from pypdf import PdfReader
+        from pypdf.generic import ContentStream
+
+        reader = PdfReader(plots / "dotplot.pdf")
+        page = reader.pages[0]
+        fonts = page["/Resources"]["/Font"]
+        tokens, current_font = [], None
+        for operands, operation in ContentStream(page.get_contents(), reader).operations:
+            if operation == b"Tf":
+                current_font = fonts[operands[0]]["/BaseFont"]
+                assert float(operands[1]) == 8
+            elif operation == b"Tj" and str(operands[0]) == "dS":
+                tokens.append(current_font)
+        assert tokens == ["/Helvetica-Oblique", "/Helvetica-Oblique"]
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "svg", "png"])
+@pytest.mark.parametrize("scale_mode", ["shared", "independent"])
+@pytest.mark.parametrize("with_legend", [False, True])
+def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_track_scales(tmp_path, monkeypatch, fmt, scale_mode, with_legend):
+    from jcvi.formats.bed import Bed
+    from kffractbias.io import read_bed
+    from matplotlib.colors import to_rgba
+    from matplotlib.figure import Figure
+    from matplotlib.offsetbox import AnnotationBbox, DrawingArea
+    from matplotlib.patches import Polygon
+    from matplotlib.text import Text
+
+    from workflow.support.pairwise_synteny_karyotype import chromosome_colors, render_karyotype
+
+    seqids = ["chromosome_with_a_long_label1", "chromosome_with_a_long_label2"]
+    (tmp_path / "target.bed").write_text("".join(f"{seqids[i // 3]}\t{i * 100}\t{i * 100 + 10}\tt{i}\n" for i in range(6)))
+    (tmp_path / "query.bed").write_text("".join(f"scaffold{3 if i < 5 else 16}\t{i * 100}\t{i * 100 + 10}\tq{i}\n" for i in range(10)))
+    (tmp_path / "seqids").write_text(",".join(seqids) + "\nscaffold3,scaffold16\n")
+    (tmp_path / "layout").write_text(
+        f"0.7,0.12,0.92,0,,Target species (gene rank),top,{tmp_path / 'target.bed'},top\n"
+        f"0.3,0.12,0.92,0,,Query species (gene rank),bottom,{tmp_path / 'query.bed'},bottom\n"
+        f"e,0,1,{tmp_path / 'colored.simple'}\n")
+    (tmp_path / "colored.simple").write_text("#88afc4*t0 t2 q0 q4 5 +\n")
+    genomes = [read_bed(tmp_path / f"{side}.bed") for side in ("target", "query")]
+    colors = chromosome_colors([seqids, ["scaffold3", "scaffold16"]], genomes, tmp_path / "unused")
+    analysis = None
+    if with_legend:
+        analysis = tmp_path / "analysis"
+        (analysis / "logs").mkdir(parents=True)
+        (analysis / "summary.json").write_text(json.dumps({"parameters": {
+            "cscore": 0.7, "min_anchors": 4, "distance": 20, "quota": None}}))
+        (analysis / "logs/01.mcscan.log").write_text(
+            "diamond blastp --evalue 1e-5 --outfmt 6\n"
+            "local dups filter (tandem_Nmax=10)\n0 new pairs found (dist=10).\n")
+    pair = {"target_species": "Target_species", "query_species": "Query_species"}
+    bar_count = 1 if scale_mode == "shared" else 2
+    saved = Figure.savefig
+    observed = []
+
+    def inspect(figure, *args, **kwargs):
+        root = figure.axes[0]
+        figure.canvas.draw()
+        chromosomes = [patch for patch in root.patches if isinstance(patch, Polygon)]
+        assert len(chromosomes) == 8  # Four outlines and four coloured interiors.
+        for chromosome in chromosomes:
+            vertices = chromosome.get_xy()
+            assert len(vertices) == 5 and tuple(vertices[0]) == tuple(vertices[-1])
+            assert len({x for x, _ in vertices}) == len({y for _, y in vertices}) == 2
+        texts = [text for text in figure.findobj(Text) if text.get_visible() and text.get_text()]
+        assert texts and all(text.get_fontsize() == 8 and text.get_fontfamily() == ["Helvetica"] for text in texts)
+        assert all(to_rgba(text.get_color()) == to_rgba("black") for text in texts)
+        assert {text.get_text() for text in texts if text.get_fontstyle() == "italic"} == {"Target species", "Query species"}
+        assert sum(text.get_text() == "1 gene" for text in texts) == bar_count
+        assert len(root.lines) == bar_count
+        # Long chromosome labels put the scale bars outside the original axes.
+        # They must still be drawn and included in the cropped output page.
+        assert root.lines[-1].get_ydata()[0] < 0
+        if scale_mode == "independent":
+            assert root.lines[0].get_ydata()[0] > 1
+        for line, genes in zip(root.lines, (10,) if bar_count == 1 else (6, 10), strict=True):
+            assert line.get_xdata()[1] - line.get_xdata()[0] == pytest.approx(0.79 / genes)
+            assert line.get_clip_on() is False
+        assert all(text.get_annotation_clip() is False for text in root.texts if text.get_text() == "1 gene")
+        legends = [artist for artist in root.artists if isinstance(artist, AnnotationBbox)]
+        assert len(legends) == int(with_legend)
+        if with_legend:
+            symbol = next(child for child in legends[0].offsetbox.get_children() if isinstance(child, DrawingArea))
+            assert len(symbol.get_children()) == 3
+            assert "Connections: syntenic blocks (MCscan + liftover)" in "\n".join(text.get_text() for text in texts)
+            assert legends[0].get_window_extent().y1 < min(line.get_window_extent().y0 for line in root.lines)
+        assert kwargs["bbox_inches"].width == pytest.approx(7.2)
+        observed.append(True)
+        return saved(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", inspect)
+    style = render_karyotype(tmp_path, pair, fmt, colors, scale_mode, analysis)
+    assert observed == [True]
+    assert style["scale_unit"] == "genes" and style["scale_value"] == 1
+    assert style["scale_mode"] == scale_mode and style["scale_bar_count"] == bar_count
+    assert style["chromosome_style"] == "rectangular"
+    assert style["track_ratios"] == pytest.approx([0.79 / 10, 0.79 / 10] if bar_count == 1 else [0.79 / 6, 0.79 / 10])
+    assert [len(Bed(str(tmp_path / f"{side}.bed"))) for side in ("target", "query")] == [6, 10]
+    assert (style["connection_criteria"] is not None) == with_legend
+    if with_legend:
+        assert "|dx| + |dy| < 10 gene ranks" in style["connection_legend_text"]
+    output = tmp_path / f"karyotype.{fmt}"
+    if fmt == "pdf":
+        from pypdf import PdfReader
+
+        data = output.read_bytes()
+        media_box = re.search(rb"/MediaBox\s*\[([^]]+)\]", data)
+        x0, _, x1, _ = map(float, media_box.group(1).split())
+        assert x1 - x0 == pytest.approx(7.2 * 72, abs=1e-7)
+        assert b"/BaseFont /Helvetica-Oblique" in data and b"/Subtype /Type3" not in data
+        text = PdfReader(output).pages[0].extract_text()
+        assert text.count("1 gene") == bar_count
+        if with_legend:
+            assert "E <= 1e-5" in text and "C-score >= 0.7" in text
+            assert "gap <= 20 gene ranks / genome" in text and "no quota; no dS filter" in text
+    elif fmt == "svg":
+        assert "Helvetica" in output.read_text()
+    else:
+        with Image.open(output) as image:
+            image.verify()
+
+
+def test_connection_legend_bounds_match_native_mcscan_and_liftover():
+    from jcvi.compara.synteny import synteny_liftover, synteny_scan
+
+    # Single linkage can span much more than 20 ranks, but each link is bounded
+    # inclusively on both axes. Four hits to one subject are not four NR anchors.
+    assert len(synteny_scan([(i * 20, i * 20, 1) for i in range(4)], 20, 20, 4)) == 1
+    assert not synteny_scan([(i * 21, i * 20, 1) for i in range(4)], 20, 20, 4)
+    assert not synteny_scan([(i * 20, 0, 1) for i in range(4)], 20, 20, 4)
+    lifted = synteny_liftover([(9, 0, 1), (10, 0, 1), (0, 9, 1), (6, 4, 1)], [(0, 0)], 10)
+    assert {tuple(point[:2]) for point, _ in lifted} == {(9, 0), (0, 9)}
 
 
 def test_ds_cds_mapping_rejects_translation_mismatch_and_ambiguous_alias(tmp_path):
@@ -235,6 +426,10 @@ def test_synteny_only_generates_real_plots_preserves_other_stages_and_reuses_ana
     summary = json.loads((analysis / "summary.json").read_text())
     assert summary["syntenic_genes"] == [8, 16]
     assert summary["parameters"]["quota"] is None
+    style = json.loads((plots / "karyotype_style.json").read_text())
+    assert style["connection_criteria"]["seed_cscore"] == summary["parameters"]["cscore"]
+    assert style["connection_criteria"]["protein_evalue"] == 1e-5
+    assert "Connections: syntenic blocks (MCscan + liftover)" in style["connection_legend_text"]
     assert summary["target"]["source"]["mode"] == "protein"
     assert summary["query"]["source"]["mode"] == "cds"
     with (analysis / "blocks.tsv").open() as handle:
@@ -245,7 +440,10 @@ def test_synteny_only_generates_real_plots_preserves_other_stages_and_reuses_ana
         assert (plots / f"{name}.pdf").read_bytes().startswith(b"%PDF")
         svg = (plots / f"{name}.svg").read_text()
         assert "<svg" in svg
-        assert all(f"<!-- {seqid} -->" in svg for seqid in ("Chr1", "Chr2", "Chr10"))
+        import xml.etree.ElementTree as ET
+
+        labels = {element.text for element in ET.fromstring(svg).iter() if element.tag.endswith("}text")}
+        assert {"Chr1", "Chr2", "Chr10"} <= labels
         with Image.open(plots / f"{name}.png") as image:
             image.verify()
     assert (plots / "seqids").read_text() == "Chr1\nChr2,Chr10\n"
@@ -350,6 +548,51 @@ def test_weighted_layout_matches_real_jcvi_track_coordinates_including_shared_st
             gene = f"{sid}_{suffix}"
             assert native.get_coords(gene)[0] == pytest.approx(starts[sid] + ratio * ranks[gene])
     plt.close(figure)
+
+
+@pytest.mark.parametrize("scale_mode", ["shared", "independent"])
+def test_pair_layout_matches_native_jcvi_coordinates_with_unequal_tracks(tmp_path, scale_mode):
+    import matplotlib.pyplot as plt
+    from jcvi.graphics.karyotype import Layout, Track
+    from kffractbias.io import read_bed
+
+    from workflow.support.pairwise_synteny_karyotype import scale_tracks
+    from workflow.support.pairwise_synteny_layout import offsets, pair_track_geometry
+
+    selected = [[f"t{i}" for i in range(18)], [f"q{i}" for i in range(3)]]
+    for side, seqids in zip(("target", "query"), selected, strict=True):
+        (tmp_path / f"{side}.bed").write_text("".join(
+            f"{sid}\t0\t10\t{sid}_g2\n{sid}\t0\t20\t{sid}_g10\n" for sid in seqids))
+    (tmp_path / "layout").write_text(
+        f"0.7,0.12,0.92,0,,Target,top,{tmp_path / 'target.bed'},top\n"
+        f"0.3,0.12,0.92,0,,Query,bottom,{tmp_path / 'query.bed'},bottom\n")
+    genomes = [read_bed(tmp_path / f"{side}.bed") for side in ("target", "query")]
+    geometry = pair_track_geometry(selected, genomes, scale_mode)
+    figure, axes = plt.subplots(figsize=(20, 8))
+    try:
+        layout = Layout(str(tmp_path / "layout"), generank=True, seed=1)
+        for entry, seqids in zip(layout, selected, strict=True):
+            entry.seqids, entry.rev = seqids, set()
+            entry.sizes = {sid: 2 for sid in seqids}
+        tracks = [Track(axes, entry, draw=False) for entry in layout]
+        scale_tracks(tracks, scale_mode)
+        for native, seqids, (widths, ranks, ratio, gap) in zip(tracks, selected, geometry, strict=True):
+            starts = offsets(seqids, widths, gap)
+            assert native.gap == pytest.approx(gap)
+            assert native.ratio == pytest.approx(ratio)
+            assert native.xend == pytest.approx(0.12 + sum(widths.values()) + (len(seqids) - 1) * gap)
+            for gene, rank in ranks.items():
+                sid = gene.rsplit("_", 1)[0]
+                assert native.get_coords(gene)[0] == pytest.approx(starts[sid] + ratio * rank)
+        if scale_mode == "shared":
+            assert tracks[0].ratio == tracks[1].ratio
+            assert tracks[1].xend < tracks[0].xend
+        else:
+            assert tracks[0].xend == tracks[1].xend == pytest.approx(0.92)
+        with pytest.raises(ValueError, match="karyotype-scale"):
+            scale_tracks(tracks, "bad")
+    finally:
+        plt.close(figure)
 
 
 def write_small_ds_analysis(tmp_path):

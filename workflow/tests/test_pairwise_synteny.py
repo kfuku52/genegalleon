@@ -1,6 +1,7 @@
 import argparse
 import csv
 import itertools
+import json
 import random
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import pytest
 
 from workflow.support import pairwise_synteny as synteny
 from workflow.support import pairwise_synteny_dotplot as dotplot
+from workflow.support import pairwise_synteny_karyotype as karyotype
 from workflow.support import pairwise_synteny_layout as layout
 
 
@@ -72,6 +74,55 @@ def test_source_discovery_rejects_multiple_annotation_releases(tmp_path):
         synteny.source_file(tmp_path, "", "species_gff", "Species_name", (".gff3",))
 
 
+def recorded_connection_analysis(tmp_path):
+    (tmp_path / "logs").mkdir()
+    synteny.write_json(tmp_path / "summary.json", {"parameters": {
+        "cscore": 0.85, "min_anchors": 6, "distance": 11, "quota": None}})
+    (tmp_path / "logs/01.mcscan.log").write_text(
+        "diamond blastp --evalue 2e-9 --outfmt 6\n"
+        "running the local dups filter (tandem_Nmax=7)\n"
+        "0 new pairs found (dist=5).\n")
+    return tmp_path
+
+
+def test_connection_legend_uses_recorded_nondefault_analysis_values(tmp_path):
+    criteria = karyotype.connection_criteria(recorded_connection_analysis(tmp_path))
+    assert criteria["protein_evalue"] == 2e-9
+    assert criteria["seed_cscore"] == 0.85
+    assert criteria["seed_min_unique_genes_per_genome"] == 6
+    assert criteria["chaining_max_gene_rank_gap_per_genome"] == 11
+    assert criteria["tandem_gene_rank_distance"] == 7
+    assert criteria["liftover_gene_rank_distance"] == 5
+    assert criteria["liftover_metric"] == "Manhattan" and criteria["liftover_bound"] == "strict"
+    assert criteria["quota"] is None and criteria["ds_filter"] is False
+    assert criteria["source_hashes"] == {str(path.resolve()): synteny.digest(path)
+                                         for path in (tmp_path / "summary.json", tmp_path / "logs/01.mcscan.log")}
+    text = karyotype.connection_legend_text(criteria)
+    assert "E <= 2e-9" in text and "C-score >= 0.85" in text
+    assert ">= 6 unique genes / genome" in text and "gap <= 11 gene ranks / genome" in text
+    assert "tandem distance = 7 gene ranks" in text and "|dx| + |dy| < 5 gene ranks" in text
+    assert "no quota; no dS filter" in text
+    criteria["quota"] = "2:2"
+    assert "quota = 2:2" in karyotype.connection_legend_text(criteria)
+
+
+@pytest.mark.parametrize("defect", ["evalue", "tandem", "liftover", "ambiguous", "invalid"])
+def test_connection_legend_refuses_unrecorded_or_invalid_thresholds(tmp_path, defect):
+    recorded_connection_analysis(tmp_path)
+    log_file = tmp_path / "logs/01.mcscan.log"
+    if defect == "ambiguous":
+        log_file.write_text(log_file.read_text() + "diamond blastp --evalue 1e-5\n")
+    elif defect == "invalid":
+        summary = json.loads((tmp_path / "summary.json").read_text())
+        summary["parameters"]["cscore"] = 2
+        synteny.write_json(tmp_path / "summary.json", summary)
+    else:
+        patterns = {"evalue": "--evalue", "tandem": "tandem_Nmax", "liftover": "new pairs found"}
+        log_file.write_text("\n".join(line for line in log_file.read_text().splitlines() if patterns[defect] not in line))
+    with pytest.raises(ValueError, match="Cannot annotate connections"):
+        karyotype.connection_criteria(tmp_path)
+
+
 def test_plan_rejects_duplicate_pair_ids_before_running_tools(tmp_path):
     pairs = tmp_path / "pairs.tsv"
     pairs.write_text("analysis_id\ttarget_species\tquery_species\na\tTarget_species\tQuery_species\na\tTarget_species\tQuery_species\n")
@@ -84,15 +135,28 @@ def test_plan_rejects_duplicate_pair_ids_before_running_tools(tmp_path):
 
 def test_plot_settings_do_not_change_analysis_contract(tmp_path):
     plan = {"workspace": str(tmp_path), "parameters": {}, "tools": {"jcvi": "example"}, "formats": ["pdf"],
+            "ds_tools": {"source_hashes": {}},
             "pairs": [{"analysis_id": "pair", "target_species": "Target_species", "query_species": "Query_species",
                        "target": {"fasta": "/input/t.fa", "gff": "/input/t.gff"},
                        "query": {"fasta": "/input/q.fa", "gff": "/input/q.gff"},
-                       "target_seqids": "", "query_seqids": ""}]}
+                       "target_seqids": "", "query_seqids": "",
+                       "ds": {"target": {"fasta": "/input/t.cds.fa", "genetic_code": 1},
+                              "query": {"fasta": "/input/q.cds.fa", "genetic_code": 1}}}]}
     before_analysis = synteny.contract_args(plan, "analysis")
+    before_ds = synteny.contract_args(plan, "ds")
     before_plots = synteny.contract_args(plan, "plots")
     plan["formats"] = ["png"]
     plan["pairs"][0]["query_seqids"] = "chr2,chr1"
     assert synteny.contract_args(plan, "analysis") == before_analysis
+    assert synteny.contract_args(plan, "plots") != before_plots
+    before_plots = synteny.contract_args(plan, "plots")
+    plan["karyotype_color"] = "homoeolog"
+    assert synteny.contract_args(plan, "analysis") == before_analysis
+    assert synteny.contract_args(plan, "plots") != before_plots
+    before_plots = synteny.contract_args(plan, "plots")
+    plan["karyotype_scale"] = "independent"
+    assert synteny.contract_args(plan, "analysis") == before_analysis
+    assert synteny.contract_args(plan, "ds") == before_ds
     assert synteny.contract_args(plan, "plots") != before_plots
     before_plots = synteny.contract_args(plan, "plots")
     plan.update(dotplot_sort="none", dotplot_min_length=2000000)
@@ -107,28 +171,58 @@ def test_plot_settings_do_not_change_analysis_contract(tmp_path):
         assert synteny.contract_args(plan, "plots") != before_plots
 
 
-def test_both_tracks_solver_matches_independent_joint_permutations(tmp_path):
+@pytest.mark.parametrize("scale_mode", ["shared", "independent"])
+@pytest.mark.parametrize("unequal", [False, True])
+def test_both_tracks_solver_matches_independent_joint_permutations(tmp_path, scale_mode, unequal):
     selected = [["m1", "m2", "m3"], ["q1", "q2", "q3"]]
-    genomes = [display_genes("m", tuple((sid, 10) for sid in selected[0])),
-               display_genes("q", tuple((sid, 10) for sid in selected[1]))]
-    blocks = [("mm1_0", "mm1_9", "qq3_0", "qq3_9"),
-              ("mm2_0", "mm2_9", "qq1_0", "qq1_9"),
-              ("mm3_0", "mm3_9", "qq2_0", "qq2_9")]
+    totals = ((6, 8, 10), (12, 18, 4)) if unequal else ((10, 10, 10), (10, 10, 10))
+    genomes = [display_genes(prefix, tuple(zip(seqids, counts, strict=True)))
+               for prefix, seqids, counts in zip(("m", "q"), selected, totals, strict=True)]
+    partners = [(selected[0][i], selected[1][j], totals[0][i] - 1, totals[1][j] - 1)
+                for i, j in ((0, 2), (1, 0), (2, 1))]
+    blocks = [(f"m{a}_0", f"m{a}_{count_a}", f"q{b}_0", f"q{b}_{count_b}")
+              for a, b, count_a, count_b in partners]
     simple = tmp_path / "blocks.simple"
     simple.write_text("\n".join(" ".join(block) + " 10 +" for block in blocks) + "\n")
-    ordered, metadata = synteny.order_karyotype(selected, genomes, tmp_path / "unused", "both_length", simple)
-    geometries = [layout.track_geometry(order, genes) for order, genes in zip(selected, genomes, strict=True)]
+    ordered, metadata = synteny.order_karyotype(selected, genomes, tmp_path / "unused", "both_length", simple, scale_mode)
+    geometries = layout.pair_track_geometry(selected, genomes, scale_mode)
     def independent(orders):
         positions = [layout.offsets(order, geometry[0], geometry[3]) for order, geometry in zip(orders, geometries, strict=True)]
-        width = geometries[0][2] * 9
-        partners = (("m1", "q3"), ("m2", "q1"), ("m3", "q2"))
-        return sum(width * ((20 * (positions[0][a] - positions[1][b])) ** 2 + 3.2 ** 2) ** 0.5 for a, b in partners)
+        total = 0
+        for a, b, count_a, count_b in partners:
+            width = (geometries[0][2] * count_a + geometries[1][2] * count_b) / 2
+            center_a = positions[0][a] + geometries[0][2] * count_a / 2
+            center_b = positions[1][b] + geometries[1][2] * count_b / 2
+            total += width * ((20 * (center_a - center_b)) ** 2 + 3.2 ** 2) ** 0.5
+        return total
     optimum = min(independent((a, b)) for a, b in itertools.product(itertools.permutations(selected[0]), itertools.permutations(selected[1])))
     assert independent(ordered) == pytest.approx(optimum, abs=1e-12)
     assert metadata["objective_after"] == pytest.approx(independent(ordered))
     assert metadata["globally_optimal"] is True
     assert metadata["fixed_side"] is None
-    assert ordered[1] != selected[1]
+    if not unequal:
+        assert ordered[1] != selected[1]
+    assert metadata["scale_mode"] == scale_mode
+    assert metadata["track_ratios"] == pytest.approx([g[2] for g in geometries])
+
+
+@pytest.mark.parametrize("scale_mode", ["shared", "independent"])
+def test_pair_geometry_uses_one_width_per_gene_only_in_shared_mode(scale_mode):
+    selected = [["t1", "t2"], [f"q{i}" for i in range(18)]]
+    genomes = [display_genes("t", (("t1", 8), ("t2", 8))),
+               display_genes("q", tuple((sid, 4) for sid in selected[1]))]
+    geometry = layout.pair_track_geometry(selected, genomes, scale_mode)
+    spans = [sum(widths.values()) + (len(widths) - 1) * gap for widths, _, _, gap in geometry]
+    assert max(spans) == pytest.approx(layout.XEND - layout.XSTART)
+    if scale_mode == "shared":
+        assert geometry[0][2] == geometry[1][2]
+        assert geometry[0][0]["t1"] == pytest.approx(2 * geometry[1][0]["q0"])
+        assert spans[0] < spans[1]
+    else:
+        assert spans == pytest.approx([0.8, 0.8])
+        assert geometry[0][2] != geometry[1][2]
+    with pytest.raises(ValueError, match="karyotype-scale"):
+        layout.pair_track_geometry(selected, genomes, "bad")
 
 
 def test_large_joint_search_is_bounded_deterministic_and_not_claimed_global(tmp_path, monkeypatch):
@@ -472,4 +566,46 @@ def test_pair_table_is_rechecked_before_publication_without_invalidating_display
     # The next complete run may still reuse its scientific analysis: a pair-table
     # byte fingerprint belongs to the run guard, not every phase's cache key.
     updated = synteny.build_plan(args)
+    assert updated["karyotype_scale"] == "shared"
     assert synteny.contract_args(updated, "analysis") == before
+
+
+def test_shared_homoeolog_colors_are_opt_in_and_cover_unlisted_chromosomes(tmp_path):
+    selected = [["t1", "t2"], ["q1", "q2"]]
+    genomes = [display_genes("T", (("t1", 1), ("t2", 1), ("hidden", 1))),
+               display_genes("Q", (("q1", 1), ("q2", 1)))]
+    anchors = tmp_path / "anchors"
+    anchors.write_text("###\n" + "".join(f"T{a}_0 Q{b}_0 10\n" for a in selected[0] for b in selected[1]))
+    default = karyotype.chromosome_colors(selected, genomes, anchors)
+    assert default["mode"] == "chromosome"
+    assert default["groups"] == []
+    assert default["chromosomes"]["target"]["t1"] != default["chromosomes"]["target"]["t2"]
+    assert "hidden" in default["chromosomes"]["target"]
+    paired = karyotype.chromosome_colors(selected, genomes, anchors, "homoeolog")
+    assert len(paired["groups"]) == 1
+    colors = {paired["chromosomes"][side][seqid] for side, track in zip(("target", "query"), selected, strict=True) for seqid in track}
+    assert len(colors) == 1
+    assert paired["chromosomes"]["target"]["hidden"] not in colors
+    assert default == karyotype.chromosome_colors([track[::-1] for track in selected], genomes, anchors)
+    with pytest.raises(ValueError, match="karyotype-color"):
+        karyotype.chromosome_colors(selected, genomes, anchors, "unknown")
+
+
+@pytest.mark.parametrize("totals,expected", [([3, 4], 1), ([60, 500], 10), ([600, 400], 50), ([18000, 23000], 2000)])
+def test_gene_scale_is_integral_and_uses_the_smaller_track(totals, expected):
+    assert karyotype.gene_scale(totals) == expected
+
+
+def test_dS_blue_palette_darkens_monotonically_and_stays_visible_on_white():
+    from matplotlib.colors import to_rgb
+
+    from workflow.support.pairwise_synteny_style import MISSING_COLOR, ds_colormap
+
+    cmap = ds_colormap()
+    rgb = np.asarray([cmap(x)[:3] for x in np.linspace(0, 1, 256)])
+    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    luminance = linear @ np.asarray((0.2126, 0.7152, 0.0722))
+    assert np.all(np.diff(luminance) < 0)
+    assert np.all(1.05 / (luminance + 0.05) >= 3)
+    assert np.all(rgb[:, 2] > rgb[:, 1]) and np.all(rgb[:, 1] > rgb[:, 0])
+    assert tuple(cmap(np.nan)[:3]) == to_rgb(MISSING_COLOR)

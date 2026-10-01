@@ -136,6 +136,16 @@ Default JCVI filters are `synteny_cscore=0.7`, `synteny_min_anchors=4`, and
 remain available, including duplications. The result alone does not establish
 whole-genome duplication or ancestral chromosome structure. Tandem-duplicate
 filtering follows JCVI's algorithm. Both seed and lifted anchors are retained.
+Karyotypes include a compact ribbon-symbol legend using the saved analysis
+parameters and execution log, not current/default settings. It reports the
+DIAMOND E-value threshold, seed C-score, tandem distance, minimum unique genes
+in each genome, maximum gene-rank chaining gap and liftover distance. The
+chaining distance is not a fixed sliding window or a limit on total block size.
+Liftover recruits original protein hits by Manhattan gene-rank distance, without
+reapplying the seed C-score filter. Ribbons have no dS filter, and only blocks
+whose endpoints are on displayed chromosomes are drawn. `karyotype_style.json`
+records the legend text, criteria and source hashes. Standalone rendering can
+supply `--analysis PATH`; without provenance it does not invent threshold values.
 
 Outputs are under `workspace/output/genome_evolution/synteny/`:
 
@@ -156,11 +166,43 @@ ribbon seqid list for readability. Full plotting inputs are retained alongside
 separate filtered/reordered `dotplot.*.bed` and `dotplot.anchors` files.
 
 Dotplot PDFs have a total page width of 3.6 inches, including labels and margins,
-and a square physical plot area (not equal x/y data units). X-axis chromosome
-labels are vertical; all text is 8 pt Helvetica, with italic species names and
-upright `(gene rank)` suffixes.
-The layout is fitted without scaling the text. PNG/SVG typography and ribbon
-plots are unchanged.
+and a square physical plot area (not equal x/y data units). Numeric major ticks
+point outwards from the bottom and left edges; their labels stay outside the
+plot area. X-axis chromosome labels are vertical; all text is 8 pt Helvetica,
+with italic species names and upright `(gene rank)` suffixes. The `dS` token in
+the dotplot title and colourbar label is also italic; the surrounding text
+remains upright.
+The layout is fitted without scaling the text. Both plots use black 8 pt
+Helvetica text and restrained soft palettes. Karyotypes italicise only species names.
+SVGs retain editable Helvetica text; raster previews use the available system
+font substitute if Helvetica is unavailable. Karyotype PDFs have a 7.2-inch page
+width and 0.06-inch outer padding. Original chromosome labels are vertical to
+avoid crowding; neither chromosome nor gene orientations change.
+All karyotype chromosomes have rectangular outlines and fills, including short
+chromosomes; their ends are never rounded according to chromosome length.
+Karyotypes use a **shared gene-count scale** by default
+(`synteny_karyotype_scale=shared`): one gene occupies the same physical width
+on both tracks, and a single scale bar serves both species. The largest track
+fills the available width; the shorter one is left-aligned and is not stretched
+to match it. Native chromosome gaps are preserved, so the scale measures
+chromosome gene counts, not inter-chromosome whitespace.
+Set `GG_GENOME_EVOLUTION_SYNTENY_KARYOTYPE_SCALE=independent` for the previous
+per-species normalization with one scale bar per track. These are not Mbp
+scales: both plots still use gene-rank coordinates.
+The ribbon-length objective uses the normalized 20:8 design geometry; fitting
+and cropping the page do not change the order or block endpoints. Its endpoint
+widths and positions use the selected shared/independent scaling mode.
+
+Chromosome ribbon colors are separate by default
+(`synteny_karyotype_color=chromosome`). Set
+`GG_GENOME_EVOLUTION_SYNTENY_KARYOTYPE_COLOR=homoeolog` to give each supported
+2x2 group a shared color on both tracks and their ribbons. Grouping is based on
+displayed chromosomes, independently of the dotplot's physical-length filter,
+and does not reorder either track. This is opt-in display grouping, not a
+biological homoeology call. `karyotype_colors.json` records the full color map;
+`karyotype_style.json` records the scaling mode, scale unit/value, number of
+scale bars, track gene counts and track ratios. Changing the scaling mode
+invalidates only plots, not the analysis or dS estimates.
 
 The summary records source hashes, selected/unmapped gene counts, syntenic gene
 fractions, block/anchor counts, genetic codes, algorithm parameters, tool versions
@@ -194,8 +236,13 @@ back-translated with CDSKIT. Native batched YN00 uses equal path weights
 are removed jointly. Alignment and estimator batch workers use the allocated
 CPUs; BLAS/OpenMP threads within the dS process are limited to one per worker
 to avoid nested parallelism. Unestimable or saturated distances are `NA` and
-appear in gray, never as zero. All anchors on eligible chromosomes remain visible,
+appear in gray, never as zero. A gray square and the missing-pair count sit
+directly beside the colorbar at the same vertical centerline. All anchors on
+eligible chromosomes remain visible,
 including those above the color limit; the upper limit clips colors only.
+The continuous dS palette runs from muted medium blue to dark blue (higher dS
+is darker), with no pale yellow. Every colour in the scale has at least 3:1
+contrast against the white background, keeping small points visible.
 `dotplot_ds.json` records counts.
 Missing chromosome lengths or no anchors passing the physical-length filter
 stop the run before alignment/dS estimation; completed synteny analysis is retained.
@@ -207,7 +254,8 @@ An unchanged rerun reuses both analysis and plots. A changed display order or
 output format invalidates only the plots. Sorting-setting changes also affect
 only plots, as do separate assembly FASTA/size inputs and dotplot filter/order
 settings. Changing the annotation GFF still invalidates analysis.
-Use this after changing `*_seqids` or `synteny_karyotype_sort`:
+Use this after changing `*_seqids`, `synteny_karyotype_sort`, or
+`synteny_karyotype_scale`:
 
 ```bash
 GG_GENOME_EVOLUTION_GENOME_EVOLUTION_MODE=synteny \

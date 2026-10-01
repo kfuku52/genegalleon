@@ -24,11 +24,13 @@ from kffractbias.io import annotation_to_genes, natural_key, select_isoforms, wr
 try:
     from fasta_sequence_store import fasta_records
     from pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
+    from pairwise_synteny_karyotype import chromosome_colors
     from pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
     from species_labeling import extract_species_label
 except ImportError:  # package imports in tests
     from .fasta_sequence_store import fasta_records
     from .pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
+    from .pairwise_synteny_karyotype import chromosome_colors
     from .pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
     from .species_labeling import extract_species_label
 
@@ -36,7 +38,6 @@ REQUIRED = ("analysis_id", "target_species", "query_species")
 OPTIONAL = tuple(f"{side}_{field}" for side in ("target", "query") for field in
                  ("fasta", "gff", "feature", "attribute", "seqids", "cds", "genome", "sizes"))
 FASTA_SUFFIXES = (".fa", ".fas", ".fasta", ".fna", ".faa")
-COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
 
 
 def digest(path):
@@ -95,6 +96,12 @@ def build_plan(args):
     ds_color_max = getattr(args, "ds_color_max", 2.0)
     minimum_length = getattr(args, "dotplot_min_length", 1_000_000)
     dotplot_sort = getattr(args, "dotplot_sort", "homoeolog")
+    karyotype_color = getattr(args, "karyotype_color", "chromosome")
+    if karyotype_color not in {"chromosome", "homoeolog"}:
+        raise ValueError("karyotype-color must be chromosome or homoeolog")
+    karyotype_scale = getattr(args, "karyotype_scale", "shared")
+    if karyotype_scale not in {"shared", "independent"}:
+        raise ValueError("karyotype-scale must be shared or independent")
     if minimum_length < 0 or dotplot_sort not in {"karyotype", "homoeolog", "none"}:
         raise ValueError("dotplot-min-length must be nonnegative; dotplot-sort must be karyotype, homoeolog or none")
     if dotplot_color not in {"orientation", "ds"} or not math.isfinite(ds_color_max) or ds_color_max <= 0:
@@ -200,6 +207,9 @@ def build_plan(args):
               str(pairs_file.resolve()): pairs_digest}
     dotplot_source = Path(__file__).with_name("pairwise_synteny_dotplot.py").resolve()
     inputs[str(dotplot_source)] = digest(dotplot_source)
+    for helper in ("pairwise_synteny_karyotype.py", "pairwise_synteny_style.py", "pairwise_synteny_layout.py"):
+        path = Path(__file__).with_name(helper).resolve()
+        inputs[str(path)] = digest(path)
     reader_source = Path(__file__).with_name("fasta_sequence_store.py").resolve()
     inputs[str(reader_source)] = digest(reader_source)
     if code_digest is not None:
@@ -227,7 +237,8 @@ def build_plan(args):
         "parameters": {"cscore": args.cscore, "min_anchors": args.min_anchors, "distance": args.distance,
                        "minimum_mapping_fraction": args.minimum_mapping_fraction, "quota": None,
                        "isoform_policy": "longest"},
-        "formats": formats, "karyotype_sort": args.karyotype_sort,
+        "formats": formats, "karyotype_sort": args.karyotype_sort, "karyotype_color": karyotype_color,
+        "karyotype_scale": karyotype_scale,
         "dotplot_color": dotplot_color, "ds_color_max": ds_color_max, "ds_tools": ds_tools,
         "dotplot_min_length": minimum_length, "dotplot_sort": dotplot_sort,
         "tools": tool_identity(), "input_hashes": inputs, "schema_version": 1,
@@ -270,11 +281,15 @@ def contract_args(plan, phase):
         result.extend(("--input", f"analysis={phase_root(plan, 'analysis')}"))
         result.extend(("--input", f"layout_implementation={Path(__file__).with_name('pairwise_synteny_layout.py').resolve()}"))
         result.extend(("--input", f"dotplot_implementation={Path(__file__).with_name('pairwise_synteny_dotplot.py').resolve()}"))
+        for helper in ("pairwise_synteny_karyotype.py", "pairwise_synteny_style.py"):
+            result.extend(("--input", f"{helper}={Path(__file__).with_name(helper).resolve()}"))
         for pair in plan["pairs"]:
             for side, source in pair.get("dotplot_lengths", {}).items():
                 result.extend(("--input", f"{pair['analysis_id']}.{side}.lengths={source['path']}"))
         parameters = {"formats": plan["formats"], "coordinate_system": "gene_rank",
                       "karyotype_sort": plan.get("karyotype_sort", "both_length"), "karyotype_figsize": list(FIGSIZE),
+                      "karyotype_color": plan.get("karyotype_color", "chromosome"),
+                      "karyotype_scale": plan.get("karyotype_scale", "shared"),
                       "pairs": [{k: pair[k] for k in ("analysis_id", "target_seqids", "query_seqids")} for pair in plan["pairs"]],
                       "jcvi": plan["tools"]["jcvi"]}
         parameters.update(dotplot_color=plan.get("dotplot_color", "orientation"), ds_color_max=plan.get("ds_color_max", 2.0))
@@ -423,22 +438,24 @@ def selected_seqids(value, genes):
     return selected
 
 
-def order_karyotype(selected, genomes, anchors, mode, simple=None):
+def order_karyotype(selected, genomes, anchors, mode, simple=None, scale_mode="shared"):
     """Order chromosomes without changing chromosome or gene orientations."""
     if mode not in {"none", "target", "query", "target_length", "query_length", "both_length"}:
         raise ValueError("karyotype-sort must be none, target, query, target_length, query_length or both_length")
+    if scale_mode not in {"shared", "independent"}:
+        raise ValueError("karyotype-scale must be shared or independent")
     if mode.endswith("_length"):
         if simple is None:
             raise ValueError("Ribbon-length sorting requires the JCVI simple blocks")
         moving = None if mode == "both_length" else (0 if mode == "target_length" else 1)
-        ordered, metadata = order_by_ribbon_length(selected, genomes, simple, moving)
+        ordered, metadata = order_by_ribbon_length(selected, genomes, simple, moving, scale_mode)
         metadata["mode"] = mode
         return ordered, metadata
     ordered = [list(seqids) for seqids in selected]
     metadata = {"mode": mode, "method": "input_order" if mode == "none" else "dominant_anchor_partner",
                 "input_order": dict(zip(("target", "query"), selected, strict=True)),
                 "display_order": dict(zip(("target", "query"), ordered, strict=True)),
-                "orientation_changed": False, "chromosomes": []}
+                "orientation_changed": False, "scale_mode": scale_mode, "chromosomes": []}
     if mode == "none":
         return ordered, metadata
     moving = 0 if mode == "target" else 1
@@ -499,13 +516,17 @@ def render(plan, output):
         genomes = [read_bed(directory / f"{side}.bed") for side in ("target", "query")]
         selected = [selected_seqids(pair[f"{side}_seqids"], genes) for side, genes in zip(("target", "query"), genomes, strict=True)]
         selected, ordering = order_karyotype(selected, genomes, directory / "target.query.lifted.anchors",
-                                            plan.get("karyotype_sort", "both_length"), directory / "target.query.screened.simple")
+                                            plan.get("karyotype_sort", "both_length"), directory / "target.query.screened.simple",
+                                            plan.get("karyotype_scale", "shared"))
         write_json(directory / "karyotype_order.json", ordering)
         dotplot = prepare_dotplot(directory, pair, genomes, selected, plan.get("dotplot_min_length", 1_000_000),
                                   plan.get("dotplot_sort", "homoeolog"))
         write_json(directory / "dotplot_order.json", dotplot)
         target_by_id = {gene.gene_id: gene.seqid for gene in genomes[0]}
-        colors = {seqid: COLORS[index % len(COLORS)] for index, seqid in enumerate(sorted(set(target_by_id.values()), key=natural_key))}
+        color_map = chromosome_colors(selected, genomes, directory / "target.query.lifted.anchors",
+                                      plan.get("karyotype_color", "chromosome"))
+        write_json(directory / "karyotype_colors.json", color_map)
+        colors = color_map["chromosomes"]["target"]
         with (directory / "colored.simple").open("w", encoding="utf-8") as handle:
             for line in (directory / "target.query.screened.simple").read_text(encoding="utf-8").splitlines():
                 if line.strip():
@@ -522,26 +543,23 @@ def render(plan, output):
                    for seqid, count in sorted(Counter(g.seqid for g in genes).items(), key=lambda item: natural_key(item[0]))))
         commands = []
         for fmt in plan["formats"]:
-            common = ["--notex", f"--format={fmt}", "--seed=1"]
             if plan.get("dotplot_color") == "ds":
                 try:
                     from pairwise_synteny_ds import render_ds_dotplot
                 except ImportError:
                     from .pairwise_synteny_ds import render_ds_dotplot
                 render_ds_dotplot(directory, phase_root(plan, "ds") / pair["analysis_id"], pair, fmt, plan["ds_color_max"], filtered=True)
-            elif fmt == "pdf":
+            else:
                 try:
                     from pairwise_synteny_dotplot import render_orientation_pdf
                 except ImportError:
                     from .pairwise_synteny_dotplot import render_orientation_pdf
-                render_orientation_pdf(directory, pair)
-            else:
-                run_command([sys.executable, "-m", "jcvi.graphics.dotplot", "dotplot.anchors", "--nosort", "--nochpf", "--colororientation",
-                         "--qbed=dotplot.target.bed", "--sbed=dotplot.query.bed", f"--nmax={dotplot['anchor_count']}",
-                         f"--genomenames={pair['target_species'].replace('_', ' ')}_{pair['query_species'].replace('_', ' ')}",
-                         "--title=Pairwise synteny (gene rank)", "--style=white", f"--outfile=dotplot.{fmt}", *common], directory, commands, f"dotplot-{fmt}")
-            run_command([sys.executable, "-m", "jcvi.graphics.karyotype", "seqids", "layout", "--keep-chrlabels",
-                         f"--figsize={FIGSIZE[0]}x{FIGSIZE[1]}", f"--outfile=karyotype.{fmt}", *common], directory, commands, f"karyotype-{fmt}")
+                render_orientation_pdf(directory, pair, fmt=fmt)
+            run_command([sys.executable, str(Path(__file__).with_name("pairwise_synteny_karyotype.py").resolve()),
+                         "--directory", str(directory.resolve()), "--target-species", pair["target_species"],
+                         "--query-species", pair["query_species"], "--format", fmt,
+                         "--scale", plan.get("karyotype_scale", "shared"),
+                         "--analysis", str(source.resolve())], directory, commands, f"karyotype-{fmt}")
             for name in ("dotplot", "karyotype"):
                 if not (directory / f"{name}.{fmt}").is_file() or not (directory / f"{name}.{fmt}").stat().st_size:
                     raise ValueError(f"Missing or empty {name}.{fmt}")
@@ -593,6 +611,10 @@ def main(argv=None):
     planning.add_argument("--ds-color-max", type=float, default=2.0, help="Upper display color limit only; anchors are never filtered")
     planning.add_argument("--karyotype-sort", choices=("none", "target", "query", "target_length", "query_length", "both_length"), default="both_length",
                           help="Minimize width-weighted ribbon length (default both_length); target/query use dominant-anchor partners")
+    planning.add_argument("--karyotype-color", choices=("chromosome", "homoeolog"), default="chromosome",
+                          help="Soft chromosome colors (default); homoeolog shares supported 2x2 group colors")
+    planning.add_argument("--karyotype-scale", choices=("shared", "independent"), default="shared",
+                          help="Shared gene width and one scale bar (default); independent normalizes each track separately")
     planning.add_argument("--outfile", required=True, type=Path)
     contract = subparsers.add_parser("contract")
     contract.add_argument("--plan", required=True, type=Path)

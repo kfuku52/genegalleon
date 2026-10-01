@@ -324,6 +324,8 @@ synteny_search_distance
 synteny_minimum_mapping_fraction
 synteny_plot_formats
 synteny_karyotype_sort
+synteny_karyotype_color
+synteny_karyotype_scale
 synteny_dotplot_color
 synteny_dotplot_min_length
 synteny_dotplot_sort

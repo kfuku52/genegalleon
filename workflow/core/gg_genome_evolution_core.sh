@@ -31,6 +31,8 @@ synteny_search_distance="${synteny_search_distance:-20}"
 synteny_minimum_mapping_fraction="${synteny_minimum_mapping_fraction:-1}"
 synteny_plot_formats="${synteny_plot_formats:-pdf,svg,png}"
 synteny_karyotype_sort="${synteny_karyotype_sort:-both_length}"
+synteny_karyotype_color="${synteny_karyotype_color:-chromosome}"
+synteny_karyotype_scale="${synteny_karyotype_scale:-shared}"
 synteny_dotplot_color="${synteny_dotplot_color:-orientation}"
 synteny_dotplot_min_length="${synteny_dotplot_min_length:-1000000}"
 synteny_dotplot_sort="${synteny_dotplot_sort:-homoeolog}"
@@ -173,6 +175,8 @@ run_pairwise_synteny_stage() (
     --cscore "${synteny_cscore}" --min-anchors "${synteny_min_anchors}" \
     --distance "${synteny_search_distance}" --minimum-mapping-fraction "${synteny_minimum_mapping_fraction}" \
     --formats "${synteny_plot_formats}" --karyotype-sort "${synteny_karyotype_sort}" \
+    --karyotype-color "${synteny_karyotype_color}" \
+    --karyotype-scale "${synteny_karyotype_scale}" \
     --dotplot-color "${synteny_dotplot_color}" --dotplot-min-length "${synteny_dotplot_min_length}" \
     --dotplot-sort "${synteny_dotplot_sort}" --ds-color-max "${synteny_ds_color_max}" --outfile "${plan_file}"
   if [[ "${synteny_dotplot_color}" == ds ]]; then phases+=(ds); fi
