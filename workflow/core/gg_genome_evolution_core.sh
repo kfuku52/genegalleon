@@ -936,6 +936,7 @@ run_shared_species_omark_stage() {
   local missing_omark_outputs=0
   local omark_needs_update=0
   local -a omark_provenance_args=()
+  local -a omamer_query_files=()
 
   if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
     return 0
@@ -1044,8 +1045,19 @@ run_shared_species_omark_stage() {
     gg_step_start "${task}: ${protein_file}"
     ensure_dir "${omark_outdir}"
     if [[ ! -s "${omamer_out}" ]]; then
-      omamer_query="${omark_outdir}/${sp_ub}.query.fa"
+      # Derived search input is computation scratch, not an OMArk result.
+      # Keep it outside the directory fingerprinted by the summary stage.
+      if [[ -L "${dir_tmp}/omamer_queries" ]]; then
+        echo "Refusing symlinked OMAmer query scratch." >&2
+        exit 1
+      fi
+      omamer_query="${dir_tmp}/omamer_queries/${sp_ub}.query.fa"
+      if [[ -L "${omamer_query}" ]]; then
+        echo "Refusing symlinked OMAmer query input: ${omamer_query}" >&2
+        exit 1
+      fi
       stage_species_protein_fasta "${protein_full}" "${omamer_query}"
+      omamer_query_files+=("${omamer_query}")
       omamer search \
         --db "${omark_db_file}" \
         --query "${omamer_query}" \
@@ -1068,6 +1080,9 @@ run_shared_species_omark_stage() {
     fi
   done
   gg_artifact_record "${omark_provenance_args[@]}"
+  if [[ ${delete_tmp_dir} -eq 1 && ${#omamer_query_files[@]} -gt 0 ]]; then
+    rm -f -- "${omamer_query_files[@]}"
+  fi
   echo "$(date): End: ${task}"
 }
 
@@ -2356,7 +2371,6 @@ if [[ -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
 fi
 dir_sp_protein_input="$(species_protein_input_dir_path)"
 file_species_genetic_code="$(species_genetic_code_table_path)"
-file_species_genetic_code_resolved="${gg_workspace_downloads_dir}/tmp/species_genetic_code.resolved.tsv"
 dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
 annotation_species_resolved=""
 annotation_species_candidates=()
@@ -2396,6 +2410,7 @@ dir_concat_iqtree_dna="${dir_species_tree}/concatenated_iqtree_dna"
 dir_concat_iqtree_pep="${dir_species_tree}/concatenated_iqtree_pep"
 dir_mcmctree2="${dir_species_tree}/mcmctree_main"
 dir_tmp=$(gg_task_tmp_path "${dir_species_tree}/tmp") || exit 1
+file_species_genetic_code_resolved="${dir_tmp}/species_genetic_code.resolved.tsv"
 dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"
 
 species_tree_managed_directory_paths=(

@@ -670,6 +670,7 @@ fi
 mkdir -p "$(dirname "${{outfile}}")"
 printf '%s\\n' "${{db}}" >> "${{capture_dir}}/omamer_db_paths.txt"
 printf '%s\\n' "${{query}}" >> "${{capture_dir}}/omamer_queries.txt"
+if [[ ${{GG_TEST_OMAMER_EXIT:-0}} != 0 ]]; then exit "${{GG_TEST_OMAMER_EXIT}}"; fi
 printf '# query\\thog\\tscore\\n%s\\tHOG:0000001\\t100\\n' "$(basename "${{query}}")" > "${{outfile}}"
 """,
     )
@@ -677,6 +678,7 @@ printf '# query\\thog\\tscore\\n%s\\tHOG:0000001\\t100\\n' "$(basename "${{query
     _write_executable(
         bin_dir / "omark",
         """#!/usr/bin/env python3
+import os
 import pathlib
 import sys
 
@@ -707,6 +709,8 @@ def main():
 
     outdir_path = pathlib.Path(outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("GG_TEST_OMARK_EXIT", "0") != "0":
+        raise SystemExit(int(os.environ["GG_TEST_OMARK_EXIT"]))
     base = pathlib.Path(omamer_file).stem
     (outdir_path / f"{base}.sum").write_text(
         "#The selected clade was Viridiplantae\\n"
@@ -2128,6 +2132,78 @@ def test_genome_evolution_omark_auto_downloads_database_and_summarizes_results(t
 
     omamer_db_paths = (tmp_path / "capture" / "omamer_db_paths.txt").read_text(encoding="utf-8").splitlines()
     assert omamer_db_paths == [str(runtime_db)]
+
+
+@pytest.mark.parametrize("mode", ["protein", "cds"])
+@pytest.mark.parametrize("delete_tmp", ["0", "1"])
+def test_omark_query_scratch_cleanup_and_result_reuse(tmp_path, mode, delete_tmp):
+    workspace = tmp_path / "workspace"
+    source = workspace / "input" / f"species_{mode}" / f"Arabidopsis_thaliana_{mode}.fa"
+    source.parent.mkdir(parents=True)
+    source.write_text(">Arabidopsis_thaliana_gene1\n" + ("ATGTAA\n" if mode == "cds" else "MPEPTIDE\n"))
+    db = tmp_path / "LUCA.h5"
+    db.write_text("fake database\n")
+    env = {"input_sequence_mode": mode, "run_species_omark": "1",
+           "run_build_species_omark_summary": "1", "run_orthofinder": "0",
+           "delete_tmp_dir": delete_tmp, "GG_OMARK_DB_URL": db.as_uri()}
+    first = _run_core(tmp_path, env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    query = Path((tmp_path / "capture/omamer_queries.txt").read_text().strip())
+    assert query.parent == workspace / "output/species_tree/tmp/omamer_queries"
+    assert query.exists() == (delete_tmp == "0")
+    assert not list((workspace / "output/genome_evolution/omark").rglob("*.query.fa"))
+    assert not (workspace / "downloads/tmp/species_genetic_code.resolved.tsv").exists()
+    if mode == "cds":
+        resolved = workspace / "output/species_tree/tmp/species_genetic_code.resolved.tsv"
+        assert resolved.exists() == (delete_tmp == "0")
+    results = {p: p.read_bytes() for p in (workspace / "output/genome_evolution").rglob("*")
+               if p.is_file()}
+    second = _run_core(tmp_path, env)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "Skipped OMArk:" in second.stdout
+    assert "Translation started:" not in second.stdout
+    assert (tmp_path / "capture/omamer_queries.txt").read_text().splitlines() == [str(query)]
+    assert all(p.read_bytes() == data for p, data in results.items())
+    assert source.read_text().startswith(">Arabidopsis_thaliana_gene1\n")
+
+
+@pytest.mark.parametrize("failed_tool", ["OMAMER", "OMARK"])
+def test_omark_failure_retains_query_scratch(tmp_path, failed_tool):
+    source = tmp_path / "workspace/input/species_protein/Arabidopsis_thaliana_pep.fa"
+    source.parent.mkdir(parents=True)
+    source.write_text(">Arabidopsis_thaliana_gene1\nMPEPTIDE\n")
+    db = tmp_path / "LUCA.h5"
+    db.write_text("fake database\n")
+    result = _run_core(tmp_path, {"run_species_omark": "1", "run_orthofinder": "0",
+                                 "GG_OMARK_DB_URL": db.as_uri(), f"GG_TEST_{failed_tool}_EXIT": "17"})
+    assert result.returncode != 0
+    query = Path((tmp_path / "capture/omamer_queries.txt").read_text().strip())
+    assert query.read_text().startswith(">Arabidopsis_thaliana_gene1\n")
+    assert not (tmp_path / "workspace/output/artifact_provenance/genome_evolution/omark.species.json").exists()
+
+
+@pytest.mark.parametrize("link_target", ["directory", "file"])
+def test_omark_rejects_symlinked_query_scratch(tmp_path, link_target):
+    source = tmp_path / "workspace/input/species_protein/Arabidopsis_thaliana_pep.fa"
+    source.parent.mkdir(parents=True)
+    source.write_text(">Arabidopsis_thaliana_gene1\nMPEPTIDE\n")
+    db = tmp_path / "LUCA.h5"
+    db.write_text("fake database\n")
+    foreign = tmp_path / "foreign/keep.fa"
+    foreign.parent.mkdir()
+    foreign.write_bytes(b"keep user data\n")
+    query_root = tmp_path / "workspace/output/species_tree/tmp/omamer_queries"
+    query_root.parent.mkdir(parents=True)
+    if link_target == "directory":
+        query_root.symlink_to(foreign.parent, target_is_directory=True)
+    else:
+        query_root.mkdir()
+        (query_root / "Arabidopsis_thaliana.query.fa").symlink_to(foreign)
+    result = _run_core(tmp_path, {"run_species_omark": "1", "run_orthofinder": "0",
+                                 "delete_tmp_dir": "0", "GG_OMARK_DB_URL": db.as_uri()})
+    assert result.returncode != 0
+    assert "Refusing symlinked OMAmer query" in result.stderr
+    assert foreign.read_bytes() == b"keep user data\n"
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
