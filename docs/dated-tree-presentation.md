@@ -27,12 +27,13 @@ Run this inside the GeneGalleon container. The legacy two-argument CLI remains
 available; `--geological-background none` selects the presentation renderer with
 an unshaded background. PDF and SVG remain vector outputs, and PNG is supported
 for previews. The default font is Helvetica 8 pt. The tree's Ma axis and the
-BUSCO percentage axis share the top edge of the panels. Age intervals are opaque
-and drawn behind tree branches. Species rows use 9 pt spacing with the default
+BUSCO gene-count axis share the bottom edge of the panels, while BUSCO percentages
+remain at the top. Geological names sit 4 pt above the tree panel. Age intervals
+are opaque and drawn behind tree branches. Species rows use 9 pt spacing with the default
 font, and the figure height is computed from the rows and header/footer text.
 `--row-spacing` sets spacing in points; `--figure-height` overrides the computed
 height. Use `--figure-width`, `--font-family` and `--font-size` for publication
-requirements. The default width remains 7.2 inches; widths down to 3.6 inches
+requirements. The default width is 4.8 inches; widths down to 3.6 inches
 are supported when the labels and panels fit. The renderer measures species
 labels to reserve their physical width and splits a crowded legend into two rows.
 

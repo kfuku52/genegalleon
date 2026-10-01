@@ -124,7 +124,7 @@ def render_dated_tree(
     busco_results=None,
     busco_prefix="busco_cds",
     geological_background="period",
-    figure_width=7.2,
+    figure_width=4.8,
     figure_height=None,
     row_spacing_points=None,
     font_family="Helvetica",
@@ -261,8 +261,8 @@ def render_dated_tree(
         )
         legend_rows = 2 if counts and credible_label and legend_points > width_points - 24 else int(bool(legend_labels))
         legend_row_points = font_size + 8
-        footer_points = (48 if counts else 6) + 20 + legend_rows * legend_row_points
-        period_offset = font_size * 3 + 7
+        footer_points = (48 if counts else font_size * 3 + 7) + 20 + legend_rows * legend_row_points
+        period_offset = 4
         header_points = max(30, (max(text_width(p["name"]) for p in periods) + period_offset + 8) if periods else 30)
         height = (
             figure_height
@@ -291,10 +291,10 @@ def render_dated_tree(
             ]
         )
         axis.set_yticks([])
-        axis.spines[["left", "right", "bottom"]].set_visible(False)
-        axis.spines["top"].set_linewidth(0.6)
-        axis.xaxis.tick_top()
-        axis.xaxis.set_label_position("top")
+        axis.spines[["left", "right", "top"]].set_visible(False)
+        axis.spines["bottom"].set_linewidth(0.6)
+        axis.xaxis.tick_bottom()
+        axis.xaxis.set_label_position("bottom")
         axis.set_xlabel("Divergence time (Ma)")
         axis.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
         period_texts = []
@@ -563,8 +563,8 @@ def render_dated_tree(
                 "zorder": interval_lines[0].get_zorder() if interval_lines else None,
                 "tree_zorder": branch_lines[0].get_zorder() if branch_lines else None,
             },
-            "tree_x_axis_position": "top",
-            "tree_x_axis_y_points": float(axis.bbox.y1) * 72 / figure.dpi,
+            "tree_x_axis_position": "bottom",
+            "tree_x_axis_y_points": float(axis.bbox.y0) * 72 / figure.dpi,
             "busco_percentage_axis_y_points": float(percent.bbox.y1) * 72 / figure.dpi if percent is not None else None,
             "busco_plot_bbox_points": [float(value) * 72 / figure.dpi for value in bars.bbox.extents]
             if bars is not None

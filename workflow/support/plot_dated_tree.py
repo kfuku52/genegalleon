@@ -130,7 +130,7 @@ def main():
             busco_results=args.busco_results,
             busco_prefix=args.busco_prefix,
             geological_background=args.geological_background or "period",
-            figure_width=args.figure_width if args.figure_width is not None else 7.2,
+            figure_width=args.figure_width if args.figure_width is not None else 4.8,
             figure_height=args.figure_height,
             row_spacing_points=args.row_spacing,
             font_family=args.font_family if args.font_family is not None else "Helvetica",

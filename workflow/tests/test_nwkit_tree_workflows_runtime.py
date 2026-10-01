@@ -58,6 +58,7 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
         assert texts.count(period["name"]) == 1
         assert label["anchor_Ma"] == (period["young_Ma"] + period["old_Ma"]) / 2
         assert label["bbox_points"][1] > data["tree_plot_bbox_points"][3]
+        assert label["bbox_points"][1] - data["tree_plot_bbox_points"][3] == pytest.approx(4)
     colours = {p["name"]: tuple(int(p["colour"][i:i + 2], 16) / 255 for i in (1, 3, 5))
                for p in data["geological_intervals"]}
     assert sum((a - b) ** 2 for a, b in zip(colours["Neogene"], colours["Quaternary"], strict=True)) > 0.25 ** 2
@@ -70,8 +71,10 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
     assert data["all_ages_Ma"][0]["high"] == 155
     assert data["figure_size_inches"][0] == width
     assert data["font_size_points"] == 8
-    assert data["tree_x_axis_position"] == "top"
-    assert data["tree_x_axis_y_points"] == data["busco_percentage_axis_y_points"]
+    assert data["tree_x_axis_position"] == "bottom"
+    assert data["tree_x_axis_y_points"] == data["busco_plot_bbox_points"][1]
+    assert data["tree_x_axis_y_points"] < data["busco_percentage_axis_y_points"]
+    assert data["mean_age_label_count"] == 0
     assert data["credible_interval_style"]["alpha"] is None
     assert data["credible_interval_style"]["zorder"] < data["credible_interval_style"]["tree_zorder"]
     groups = [item.attrib.get("id", "") for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}g")]
@@ -160,7 +163,7 @@ def test_dated_tree_layout_report_selects_presentation_with_optional_background(
     result = run(*command)
     assert result.returncode == 0, result.stdout + result.stderr
     assert bool(json.loads(report.read_text())["geological_intervals"]) is has_periods
-    assert json.loads(report.read_text())["figure_size_inches"][0] == 7.2
+    assert json.loads(report.read_text())["figure_size_inches"][0] == 4.8
 
 
 @pytest.mark.parametrize("text", [
