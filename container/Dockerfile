@@ -163,6 +163,18 @@ RUN source /opt/pg/source_branches.env \
       "${PAML_REPO_SHA:-${PAML_REPO_REF:-${GG_SOURCE_PAML_REPO_REF}}}" \
       /opt/pg/artifact
 
+FROM source-builder AS aster-build
+
+ARG ASTER_REPO_URL="https://github.com/chaoszhang/ASTER.git"
+ARG ASTER_REPO_REF=""
+ARG ASTER_REPO_SHA=""
+
+RUN source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh aster ASTER \
+      "${ASTER_REPO_URL}" \
+      "${ASTER_REPO_SHA:-${ASTER_REPO_REF:-${GG_SOURCE_ASTER_REPO_REF}}}" \
+      /opt/pg/artifact
+
 FROM source-builder AS iqtree-build
 
 ARG IQTREE_REPO_URL="https://github.com/iqtree/iqtree3.git"
@@ -242,6 +254,7 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=busco-build,source=/opt/pg/artifact,target=/tmp/artifacts/BUSCO \
  --mount=from=paml-build,source=/opt/pg/artifact,target=/tmp/artifacts/paml \
  --mount=from=iqtree-worker-build,source=/opt/pg/artifact,target=/tmp/artifacts/iqtree \
+ --mount=from=aster-build,source=/opt/pg/artifact,target=/tmp/artifacts/ASTER \
  --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \

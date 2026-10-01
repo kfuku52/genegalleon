@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ $# -lt 5 || $# -gt 6 ]]; then
-  echo "Usage: $0 python|r|paml SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
+  echo "Usage: $0 python|r|paml|aster SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
   exit 2
 fi
 kind="$1"
@@ -18,7 +18,7 @@ if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ || ! "${source_name}" =~ ^[A-Za-z][A-Za-z0-9]
   exit 2
 fi
 case "${kind}" in
-  python|r|paml) ;;
+  python|r|paml|aster) ;;
   *) echo "Unknown source artifact kind: ${kind}" >&2; exit 2 ;;
 esac
 if [[ ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -57,6 +57,21 @@ case "${kind}" in
     install -D -m 0755 "${binary}" "${output_dir}/rootfs/usr/local/bin/mcmctree"
     mkdir -p "${output_dir}/rootfs/opt/conda/bin"
     ln -s /usr/local/bin/mcmctree "${output_dir}/rootfs/opt/conda/bin/mcmctree"
+    ;;
+  aster)
+    g++ -std=gnu++17 -O2 -pthread "${work_dir}/source/src/astral-hybrid.cpp" \
+      -o "${work_dir}/astral-hybrid"
+    install -D -m 0755 "${work_dir}/astral-hybrid" "${output_dir}/rootfs/usr/local/bin/astral-hybrid"
+    mkdir -p "${output_dir}/rootfs/opt/conda/bin"
+    ln -s /usr/local/bin/astral-hybrid "${output_dir}/rootfs/opt/conda/bin/astral-hybrid"
+    # Ship the exact corresponding upstream source and portable build recipe.
+    share="${output_dir}/rootfs/usr/local/share/ASTER"
+    mkdir -p "${share}"
+    cp "${work_dir}/source/LICENSE" "${share}/LICENSE"
+    tar -czf "${share}/source.tar.gz" --exclude=.git -C "${work_dir}" source
+    cp "${script_dir}/build_source_artifact.sh" "${script_dir}/fetch_git_repo.sh" \
+      "${script_dir}/resolve_git_branch_sha.sh" "${share}/"
+    printf '%s\t%s\n' "${source_name}" "${revision}" > "${share}/source.tsv"
     ;;
 esac
 printf '%s\t%s\n' "${source_name}" "${revision}" > "${output_dir}/source.tsv"

@@ -74,7 +74,7 @@ the runtime being checked.
 Use `GG_RUNTIME_FRESHNESS=always` to force a new upstream resolution or
 `GG_RUNTIME_FRESHNESS=off` for an intentional offline check with a known older
 runtime. The latter is an explicit escape hatch and is not compatibility
-evidence. BUSCO, PAML and IQ-TREE remain accepted at the revisions embedded in the
+evidence. BUSCO, PAML, IQ-TREE and ASTER remain accepted at the revisions embedded in the
 runtime by default; set `GG_RUNTIME_FRESHNESS_SCOPE=all` to compare their
 branch tips as well. Scheduled publishing and CI runtime-cache keys always
 resolve all sources exactly.

@@ -15,6 +15,7 @@ PROGRAM_SHA_VARS = (
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
     "IQTREE_REPO_SHA",
+    "ASTER_REPO_SHA",
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
@@ -156,6 +157,7 @@ def test_native_apptainer_build_records_source_revisions():
         "BUSCO",
         "paml",
         "iqtree",
+        "ASTER",
         "kfFractBias",
         "kftools",
         "rkftools",
@@ -193,6 +195,7 @@ def test_shared_source_resolver_preserves_exact_overrides_and_owned_scope():
     assert "BUSCO\t" not in owned_sources.stdout
     assert "paml\t" not in owned_sources.stdout
     assert "iqtree\t" not in owned_sources.stdout
+    assert "ASTER\t" not in owned_sources.stdout
     assert "nwkit\t" in owned_sources.stdout
     assert "csubst\t" in owned_sources.stdout
 

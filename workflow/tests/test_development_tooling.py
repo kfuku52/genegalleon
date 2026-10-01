@@ -26,6 +26,7 @@ SOURCE_SHA_VARS = (
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
     "IQTREE_REPO_SHA",
+    "ASTER_REPO_SHA",
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
@@ -379,6 +380,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
     busco_sha = env.pop("BUSCO_REPO_SHA")
     paml_sha = env.pop("PAML_REPO_SHA")
     iqtree_sha = env.pop("IQTREE_REPO_SHA")
+    aster_sha = env.pop("ASTER_REPO_SHA")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -394,6 +396,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
         f"    printf 'BUSCO\\t%s\\n' '{busco_sha}'\n"
         f"    printf 'paml\\t%s\\n' '{paml_sha}'\n"
         f"    printf 'iqtree\\t%s\\n' '{iqtree_sha}'\n"
+        f"    printf 'ASTER\\t%s\\n' '{aster_sha}'\n"
         "    ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
