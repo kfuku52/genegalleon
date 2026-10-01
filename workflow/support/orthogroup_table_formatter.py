@@ -59,12 +59,6 @@ def run(args):
     start = time.time()
     print("Starting {} at {}".format(sys.argv[0], datetime.datetime.now()))
 
-    if os.path.exists(args.dir_out):
-        print("--out_dir exists already: {}".format(args.dir_out))
-    else:
-        print("Creating --out_dir: {}".format(args.dir_out))
-        os.makedirs(args.dir_out)
-
     df = pandas.read_csv(
         args.file_orthogroup_table,
         sep="\t",
@@ -87,6 +81,18 @@ def run(args):
         df.loc[:, species_cols] = df.loc[:, species_cols].apply(
             lambda col: col.astype(str).str.replace("*", "", regex=False).str.replace(",", ", ", regex=False)
         )
+
+    if df["Orthogroup"].eq("").any():
+        raise ValueError("Orthogroup table contains an empty family identity")
+    duplicates = df.loc[df["Orthogroup"].duplicated(), "Orthogroup"].unique()
+    if len(duplicates):
+        raise ValueError("Orthogroup table contains duplicate family identities: " + ", ".join(duplicates[:5]))
+
+    if os.path.exists(args.dir_out):
+        print("--out_dir exists already: {}".format(args.dir_out))
+    else:
+        print("Creating --out_dir: {}".format(args.dir_out))
+        os.makedirs(args.dir_out)
 
     outpath_og = os.path.join(args.dir_out, "Orthogroups.tsv")
     print("Writing: {}".format(outpath_og))

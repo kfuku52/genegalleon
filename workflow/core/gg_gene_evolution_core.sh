@@ -1509,7 +1509,20 @@ case "${mode_gene_evolution}" in
       echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
       exit 1
     fi
-    num_orthogroups=$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "${file_orthogroup_genecount_selected}")
+    if ! num_orthogroups=$(awk -F'\t' '
+      NR > 1 {
+        sub(/\r$/, "", $1)
+        if ($1 == "" || seen[$1]++) {
+          print "Invalid or duplicate orthogroup family identity at row " (NR - 1) ": " $1 > "/dev/stderr"
+          bad = 1
+          exit 1
+        }
+      }
+      END { if (!bad) print (NR > 0 ? NR - 1 : 0) }
+    ' "${file_orthogroup_genecount_selected}"); then
+      echo "Refusing to start gg_gene_evolution with an ambiguous orthogroup catalog." >&2
+      exit 1
+    fi
     if [[ ${num_orthogroups} -le 0 ]]; then
       echo "No orthogroup rows were found in: ${file_orthogroup_genecount_selected}"
       exit 1

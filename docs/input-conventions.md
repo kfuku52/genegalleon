@@ -357,6 +357,12 @@ duplicated IDs remain errors. Species counts and annotation values retain their
 normal numeric and missing-value handling. Downstream copy-number trait matrices
 preserve these family labels.
 
+The HOG table formatter, gene-evolution arrays, and gene-family archive catalogs
+also require unique, nonempty family IDs. Repeated IDs with different gene
+memberships are ambiguous and are rejected before publishing tables or starting
+family production. Repair the upstream catalog; do not merge or discard its
+distinct rows to satisfy this check.
+
 ### `workspace/input/species_trait/species_trait.tsv`
 
 The first column contains species labels matching the species tree. Remaining

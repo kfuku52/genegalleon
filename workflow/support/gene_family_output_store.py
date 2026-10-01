@@ -482,7 +482,19 @@ def orthogroup_ids_from_genecount(path: Path) -> List[str]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         next(reader, None)
-        return [row[0] for row in reader if row and row[0]]
+        families = []
+        seen = set()
+        for row in reader:
+            if not row:
+                continue
+            family = row[0]
+            if not family:
+                raise ValueError(f"Orthogroup gene-count table contains an empty family identity: {path}")
+            if family in seen:
+                raise ValueError(f"Orthogroup gene-count table contains duplicate family identity {family}: {path}")
+            seen.add(family)
+            families.append(family)
+        return families
 
 
 def family_context(

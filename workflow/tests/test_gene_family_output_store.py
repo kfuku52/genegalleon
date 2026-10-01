@@ -3750,3 +3750,20 @@ def test_lock_striping_and_metadata_optimization_reduce_legacy_lock_files(
     assert not (family_locks / "0f.lock").exists()
     assert not (family_locks / "ff.lock").exists()
     assert not (state_locks / "fe.lock").exists()
+
+
+@pytest.mark.parametrize("second_count", [1, 20])
+def test_duplicate_genecount_families_cannot_define_archive_identity(tmp_path, second_count):
+    catalog = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    catalog.write_text(f"Orthogroup\tTotal\nHOG0000004\t1\nHOG0000004\t{second_count}\n", encoding="utf-8")
+    before = catalog.read_bytes()
+    with pytest.raises(ValueError, match="duplicate family identity HOG0000004"):
+        family_context("orthogroup", genecount=catalog)
+    assert catalog.read_bytes() == before
+
+
+def test_empty_genecount_family_cannot_shift_array_identity(tmp_path):
+    catalog = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    catalog.write_text("Orthogroup\tTotal\n\t1\nHOG0000004\t2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty family identity"):
+        family_context("orthogroup", genecount=catalog)
