@@ -21,6 +21,7 @@ from .common import (
     parse_gff_attributes,
     sanitize_identifier,
 )
+from .genbank import _coge_export_transcript
 from .organelle import (
     count_organelle_gff_features,
     gff_data_line_is_organelle,
@@ -29,7 +30,7 @@ from .organelle import (
 )
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 5
+GFF_REPAIR_VERSION = 6
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -342,7 +343,25 @@ def rewrite_gff_attributes(attr_text, feature_type, id_mapping):
     return ";".join(rewritten), changed, reference_changes, 0
 
 
-def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=()):
+def canonicalize_coge_cds_attributes(parts, features, names):
+    attrs = parse_gff_attributes(parts[8])
+    if attrs.get("Parent") or not attrs.get("coge_fid"):
+        return parts[8], 0
+    transcript = _coge_export_transcript(attrs, parts[0], parts[6], features, names)
+    canonical = sanitize_identifier(apply_common_replacements(transcript))
+    rewritten, changed = [], 0
+    for field in parts[8].split(";"):
+        key, value, separator = split_attribute_field(field)
+        if key in ("Name", "CDS") and separator and normalize_raw_attribute_value(value) != canonical:
+            rewritten.append(key + "=" + quote(canonical, safe="._:-|"))
+            changed += 1
+        else:
+            rewritten.append(field)
+    return ";".join(rewritten), changed
+
+
+def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False):
+    coge_features, coge_names = {}, {}
     for line in iter_non_organelle_gff_lines(gff_path):
         stripped = line.rstrip("\n\r")
         newline = line[len(stripped) :]
@@ -354,7 +373,10 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             yield line
             continue
         feature_type = parts[2].strip().lower()
+        coge_changes = 0
         if feature_type == "cds":
+            if coge and parts[1].strip().lower() == "coge":
+                parts[8], coge_changes = canonicalize_coge_cds_attributes(parts, coge_features, coge_names)
             key = source_overlap_key(parts[8])
             marked = mark_source_overlap(parts[8], key in confirmed_overlaps)
             if marked != parts[8]:
@@ -365,10 +387,10 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             feature_type,
             id_mapping,
         )
-        if value_changes > 0 or normalized_bare > 0:
+        if value_changes > 0 or normalized_bare > 0 or coge_changes > 0:
             parts[8] = attributes
             counters["changed_lines"] += 1
-            counters["changed_values"] += value_changes
+            counters["changed_values"] += value_changes + coge_changes
             counters["changed_references"] += reference_changes
             counters["normalized_bare_attribute_lines"] += normalized_bare
             line = "\t".join(parts) + newline
@@ -411,12 +433,16 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     }
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
-        iter_repaired_gff_lines(gff_path, plan["id_mapping"], counters, confirmed_overlaps),
+        iter_repaired_gff_lines(
+            gff_path, plan["id_mapping"], counters, confirmed_overlaps,
+            coge=mode != "off" and (source_task or {}).get("provider") == "coge",
+        ),
     )
     status = (
         "repaired"
         if (
             len(plan["id_mapping"]) > 0
+            or counters["changed_values"] > 0
             or counters["normalized_bare_attribute_lines"] > 0
             or encoding_audit["invalid_utf8_bytes"] > 0
         )

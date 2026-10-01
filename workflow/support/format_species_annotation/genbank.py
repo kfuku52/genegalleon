@@ -285,6 +285,27 @@ def iter_gbff_coding_entries(path):
         )
 
 
+def _coge_export_transcript(attrs, seqid, strand, features, names):
+    """Keep a CoGe feature's exported exon IDs in one source CDS model."""
+    ids = attrs.get("coge_fid", ())
+    if not ids:
+        return ""
+    labels = attrs.get("Name", ())
+    cds_labels = attrs.get("CDS", ())
+    if (len(ids) != 1 or not str(ids[0]).isdigit() or len(labels) != 1
+            or not labels[0] or (cds_labels and cds_labels != labels)):
+        raise ValueError("Ambiguous CoGe CDS feature identity")
+    feature_id, transcript = ids[0], labels[0]
+    identity = (transcript, seqid, strand)
+    canonical_name = sanitize_identifier(apply_common_replacements(transcript))
+    if ((feature_id in features and features[feature_id] != identity)
+            or (canonical_name in names and names[canonical_name] != feature_id)):
+        raise ValueError("Conflicting CoGe CDS feature identity: " + str(feature_id))
+    features[feature_id] = identity
+    names[canonical_name] = feature_id
+    return transcript
+
+
 def derive_cds_records_from_gff_and_genome(task):
     gff_path = task.get("gff_path")
     genome_path = task.get("genome_path")
@@ -296,6 +317,7 @@ def derive_cds_records_from_gff_and_genome(task):
     cds_features_by_transcript = defaultdict(list)
     utr_features_by_transcript = defaultdict(list)
     gene_cache = {}
+    coge_features, coge_names = {}, {}
     organelle_seqids = gff_organelle_seqids(gff_path)
 
     with open_text(gff_path, "rt", errors="replace") as handle:
@@ -354,7 +376,12 @@ def derive_cds_records_from_gff_and_genome(task):
                 start, end = end, start
             transcript_ids = [value for value in parents if str(value).strip() != ""]
             if len(transcript_ids) == 0:
-                fallback_id = feature_id
+                fallback_id = ""
+                if task["provider"] == "coge" and _source.lower() == "coge":
+                    fallback_id = _coge_export_transcript(
+                        attrs, seqid, strand, coge_features, coge_names,
+                    )
+                fallback_id = fallback_id or feature_id
                 if fallback_id == "":
                     fallback_id = choose_first_gff_attribute(attrs, ("transcript_id", "protein_id", "Name"))
                 if fallback_id == "":

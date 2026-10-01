@@ -565,6 +565,7 @@ Manifest required columns:
   - for `provider=ddbj`, `id` can be a DDBJ BioProject accession (for example `PRJDB15739`), a WGS master accession (for example `BAAHMP000000000`), or a DDBJ BioProject URL.
     - the resolver follows the public DDBJ Search API to find the `insdc-master` accession, then downloads the anonymous-FTP WGS flatfile (`GBFF`) and derives genome/GFF/CDS from it.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
+    - parentless exported CDS fragments are joined using their stable `coge_fid` and exact source `Name`; conflicting names, chromosomes or strands are rejected. Safe GFF formatting normalizes their `Name` and `CDS` aliases with the same identifier rules as the derived CDS; collisions after normalization are rejected.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`), a GWH assembly show URL, or a GWH folder/index URL.
     - accession-only inputs first try the public GWH download tree and then fall back to `gwhSearch/api -> /Assembly/.../show` when directory listing is unavailable.
