@@ -77,8 +77,17 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
     assert data["mean_age_label_count"] == 0
     assert data["credible_interval_style"]["alpha"] is None
     assert data["credible_interval_style"]["zorder"] < data["credible_interval_style"]["tree_zorder"]
+    assert data["credible_interval_style"]["bar_capstyle"] == "butt"
+    assert data["credible_interval_style"]["cap_linewidth_points"] == data["credible_interval_style"]["bar_linewidth_points"]
     groups = [item.attrib.get("id", "") for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}g")]
     assert groups.index("age-interval-0") < groups.index("tree-branch-0")
+    svg_groups = {item.attrib.get("id"): item for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}g")}
+    bar = next(svg_groups["age-interval-0"].iter("{http://www.w3.org/2000/svg}path"))
+    bar_style = dict(entry.strip().split(": ", 1) for entry in bar.attrib["style"].split(";") if entry.strip())
+    assert bar_style.get("stroke-linecap", "butt") == "butt"
+    for cap in svg_groups["age-interval-cap-0"].iter("{http://www.w3.org/2000/svg}use"):
+        cap_style = dict(entry.strip().split(": ", 1) for entry in cap.attrib["style"].split(";") if entry.strip())
+        assert cap_style["stroke-width"] == bar_style["stroke-width"]
     for item in ET.parse(plot).iter():
         if item.attrib.get("id", "").startswith("age-interval-"):
             assert all("opacity" not in value for child in item.iter() for value in child.attrib.values())

@@ -367,9 +367,14 @@ def render_dated_tree(
         for node in nodes:
             if node.props.get("age_ci_low") is not None:
                 low, high = float(node.props["age_ci_low"]), float(node.props["age_ci_high"])
-                line = axis.plot([low, high], [ys[node]] * 2, color="#D55E00", lw=1.2, zorder=1)[0]
+                # Stop the bar at its exact bounds. Projecting line ends can
+                # otherwise extend beyond a thinner endpoint marker.
+                line = axis.plot(
+                    [low, high], [ys[node]] * 2, color="#D55E00", lw=1.2, solid_capstyle="butt", zorder=1
+                )[0]
                 caps = axis.plot(
-                    [low, high], [ys[node]] * 2, linestyle="none", marker="|", markersize=3, color="#D55E00", zorder=1
+                    [low, high], [ys[node]] * 2, linestyle="none", marker="|", markersize=3,
+                    markeredgewidth=1.2, color="#D55E00", zorder=1
                 )[0]
                 line.set_gid(f"age-interval-{interval_count}")
                 caps.set_gid(f"age-interval-cap-{interval_count}")
@@ -562,6 +567,9 @@ def render_dated_tree(
                 "alpha": interval_lines[0].get_alpha() if interval_lines else None,
                 "zorder": interval_lines[0].get_zorder() if interval_lines else None,
                 "tree_zorder": branch_lines[0].get_zorder() if branch_lines else None,
+                "bar_capstyle": interval_lines[0].get_solid_capstyle() if interval_lines else None,
+                "bar_linewidth_points": interval_lines[0].get_linewidth() if interval_lines else None,
+                "cap_linewidth_points": interval_lines[1].get_markeredgewidth() if interval_lines else None,
             },
             "tree_x_axis_position": "bottom",
             "tree_x_axis_y_points": float(axis.bbox.y0) * 72 / figure.dpi,
