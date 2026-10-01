@@ -300,6 +300,10 @@ run_genome_contamination_removal
 run_genome_fx2tab
 run_genome_mmseqs2taxonomy
 run_genomescope
+run_smudgeplot
+smudgeplot_kmer_length
+smudgeplot_lower_count
+smudgeplot_aggregation_distance
 run_collect_gff_info
 run_jcvi_dotplot
 run_multispecies_summary

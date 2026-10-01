@@ -20,7 +20,7 @@ GG_RUNTIME_FRESHNESS=daily  Resolve moving upstreams at most once per UTC day (d
 GG_RUNTIME_FRESHNESS=always Resolve moving upstreams on every check.
 GG_RUNTIME_FRESHNESS=off    Skip the freshness check for intentional offline use.
 GG_RUNTIME_FRESHNESS_SCOPE=owned checks repository-owned upstreams (default).
-GG_RUNTIME_FRESHNESS_SCOPE=all also checks BUSCO, PAML and IQ-TREE branch tips.
+GG_RUNTIME_FRESHNESS_SCOPE=all also checks BUSCO, PAML, IQ-TREE, FastK and Smudgeplot branch tips.
 
 --expected-hash SHA256 compares only the embedded runtime identity. CI uses
 this after restoring a cache entry and does not resolve moving branches again.
@@ -196,6 +196,8 @@ sha_variables=(
   KFFRACTBIAS_REPO_SHA
   KFTOOLS_REPO_SHA
   RKFTOOLS_REPO_SHA
+  FASTK_REPO_SHA
+  SMUDGEPLOT_REPO_SHA
 )
 resolution_variables=(
   "${sha_variables[@]}"
@@ -215,10 +217,14 @@ resolution_variables=(
   KFTOOLS_REPO_REF
   RKFTOOLS_REPO_URL
   RKFTOOLS_REPO_REF
+  FASTK_REPO_URL
+  FASTK_REPO_REF
+  SMUDGEPLOT_REPO_URL
+  SMUDGEPLOT_REPO_REF
 )
 override_fingerprint="$(
   for variable in "${resolution_variables[@]}"; do
-    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* ) ]]; then
+    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* ) ]]; then
       continue
     fi
     printf '%s=%s\n' "${variable}" "${!variable:-}"
@@ -292,6 +298,8 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       kfFractBias) variable=KFFRACTBIAS_REPO_SHA ;;
       kftools) variable=KFTOOLS_REPO_SHA ;;
       rkftools) variable=RKFTOOLS_REPO_SHA ;;
+      fastk) variable=FASTK_REPO_SHA ;;
+      smudgeplot) variable=SMUDGEPLOT_REPO_SHA ;;
       *)
         echo "Unknown source in runtime manifest: ${source_name}" >&2
         exit 1

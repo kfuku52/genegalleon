@@ -13,3 +13,5 @@ Validation artifacts produced at build time:
 - `/opt/pg/logs/runtime_validation_amd64.tsv` or `/opt/pg/logs/runtime_validation_arm64.tsv`
 - `/opt/pg/logs/failed_optional_*.txt`
 - `/opt/pg/logs/iqtree3_library_worker.json` and `iqtree3_library_validation.json`
+
+FastK (`FastK`, `Histex`, `Logex`, `Symmex`, `Fastrm`) and Smudgeplot are required on amd64 and arm64. Smudgeplot runs in `/opt/smudgeplot`, an isolated Python environment with NumPy >=2.0 for its weighted-percentile API, while the main scientific environment retains its existing NumPy constraints. Both tools follow the moving branches in `source_branches.env`.

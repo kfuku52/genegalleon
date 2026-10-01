@@ -41,6 +41,8 @@ jobs:
       kffractbias_repo_sha: ${{ steps.vars.outputs.kffractbias_repo_sha }}
       kftools_repo_sha: ${{ steps.vars.outputs.kftools_repo_sha }}
       rkftools_repo_sha: ${{ steps.vars.outputs.rkftools_repo_sha }}
+      fastk_repo_sha: ${{ steps.vars.outputs.fastk_repo_sha }}
+      smudgeplot_repo_sha: ${{ steps.vars.outputs.smudgeplot_repo_sha }}
 
     steps:
       - name: Checkout
@@ -109,6 +111,8 @@ jobs:
           kffractbias_repo_sha="${KFFRACTBIAS_REPO_SHA}"
           kftools_repo_sha="${KFTOOLS_REPO_SHA}"
           rkftools_repo_sha="${RKFTOOLS_REPO_SHA}"
+          fastk_repo_sha="${FASTK_REPO_SHA}"
+          smudgeplot_repo_sha="${SMUDGEPLOT_REPO_SHA}"
           source_revision_hash="$(
             printf '%s\n' \
               "${amalgkit_repo_sha}" \
@@ -121,6 +125,8 @@ jobs:
               "${kffractbias_repo_sha}" \
               "${kftools_repo_sha}" \
               "${rkftools_repo_sha}" \
+              "${fastk_repo_sha}" \
+              "${smudgeplot_repo_sha}" \
               | sha256sum | cut -c1-12
           )"
           immutable_tag="${date_tag}-${short_sha}-${source_revision_hash}"
@@ -146,6 +152,8 @@ jobs:
             echo "kffractbias_repo_sha=${kffractbias_repo_sha}"
             echo "kftools_repo_sha=${kftools_repo_sha}"
             echo "rkftools_repo_sha=${rkftools_repo_sha}"
+            echo "fastk_repo_sha=${fastk_repo_sha}"
+            echo "smudgeplot_repo_sha=${smudgeplot_repo_sha}"
           } >> "${GITHUB_OUTPUT}"
 
   build-platform:
@@ -199,6 +207,8 @@ jobs:
           KFFRACTBIAS_REPO_SHA: ${{ needs.prepare-release.outputs.kffractbias_repo_sha }}
           KFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.kftools_repo_sha }}
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.rkftools_repo_sha }}
+          FASTK_REPO_SHA: ${{ needs.prepare-release.outputs.fastk_repo_sha }}
+          SMUDGEPLOT_REPO_SHA: ${{ needs.prepare-release.outputs.smudgeplot_repo_sha }}
         run: |
           set -euo pipefail
           build_input_hash="$(bash container/scripts/compute_build_input_hash.sh "${GG_BUILD_SECURITY_REFRESH_EPOCH}")"
@@ -257,6 +267,8 @@ jobs:
             KFFRACTBIAS_REPO_SHA=${{ needs.prepare-release.outputs.kffractbias_repo_sha }}
             KFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.kftools_repo_sha }}
             RKFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.rkftools_repo_sha }}
+            FASTK_REPO_SHA=${{ needs.prepare-release.outputs.fastk_repo_sha }}
+            SMUDGEPLOT_REPO_SHA=${{ needs.prepare-release.outputs.smudgeplot_repo_sha }}
           # Consume the regular image-build cache, but do not block the release
           # SIF on a new cache export.
           cache-from: type=gha,scope=container-${{ steps.platform.outputs.pair }}

@@ -58,3 +58,9 @@ base	python
 base	pytest
 base	Rscript
 base	flock
+base	FastK
+base	Histex
+base	Logex
+base	Symmex
+base	Fastrm
+base	smudgeplot

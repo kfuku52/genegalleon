@@ -18,6 +18,8 @@ EXPECTED_SOURCES = {
     "kfFractBias",
     "kftools",
     "rkftools",
+    "fastk",
+    "smudgeplot",
 }
 
 

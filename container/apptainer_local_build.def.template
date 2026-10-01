@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
+From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023bb127baade7e8faca
 
 %files
     @@STAGING_ROOT@@/env /opt/pg/env
@@ -74,6 +74,12 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     rkftools_repo_ref_override="@@RKFTOOLS_REPO_REF@@"
     kftools_repo_sha="@@KFTOOLS_REPO_SHA@@"
     rkftools_repo_sha="@@RKFTOOLS_REPO_SHA@@"
+    fastk_repo_url="@@FASTK_REPO_URL@@"
+    fastk_repo_ref="@@FASTK_REPO_REF@@"
+    fastk_repo_sha="@@FASTK_REPO_SHA@@"
+    smudgeplot_repo_url="@@SMUDGEPLOT_REPO_URL@@"
+    smudgeplot_repo_ref="@@SMUDGEPLOT_REPO_REF@@"
+    smudgeplot_repo_sha="@@SMUDGEPLOT_REPO_SHA@@"
     testnh_tarball_sha256="@@TESTNH_TARBALL_SHA256@@"
     cafe5_tarball_sha256="@@CAFE5_TARBALL_SHA256@@"
 
@@ -153,6 +159,12 @@ From: mambaorg/micromamba:noble@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750b
     bash /opt/pg/scripts/build_source_artifact.sh r rkftools \
         "${rkftools_repo_url}" "${rkftools_repo_sha:-${rkftools_repo_ref_override:-${kfu52_repo_ref}}}" \
         "${artifact_root}/rkftools"
+    bash /opt/pg/scripts/build_source_artifact.sh fastk fastk \
+        "${fastk_repo_url}" "${fastk_repo_sha:-${fastk_repo_ref}}" \
+        "${artifact_root}/fastk"
+    bash /opt/pg/scripts/build_source_artifact.sh smudgeplot smudgeplot \
+        "${smudgeplot_repo_url}" "${smudgeplot_repo_sha:-${smudgeplot_repo_ref}}" \
+        "${artifact_root}/smudgeplot"
     bash /opt/pg/scripts/install_source_artifacts.sh "${artifact_root}"
     rm -rf -- "${artifact_root}"
     /opt/pg/scripts/install_helvetica_compat_font.sh base

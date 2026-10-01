@@ -217,6 +217,30 @@ RUN source /opt/pg/source_branches.env \
       "${RKFTOOLS_REPO_SHA:-${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}}" \
       /opt/pg/artifact
 
+FROM source-builder AS fastk-build
+
+ARG FASTK_REPO_URL="https://github.com/thegenemyers/FASTK.git"
+ARG FASTK_REPO_REF=""
+ARG FASTK_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh fastk fastk \
+      "${FASTK_REPO_URL}" \
+      "${FASTK_REPO_SHA:-${FASTK_REPO_REF:-${GG_SOURCE_FASTK_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM source-builder AS smudgeplot-build
+
+ARG SMUDGEPLOT_REPO_URL="https://github.com/KamilSJaron/smudgeplot.git"
+ARG SMUDGEPLOT_REPO_REF=""
+ARG SMUDGEPLOT_REPO_SHA=""
+
+RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.env \
+ && bash /opt/pg/scripts/build_source_artifact.sh smudgeplot smudgeplot \
+      "${SMUDGEPLOT_REPO_URL}" \
+      "${SMUDGEPLOT_REPO_SHA:-${SMUDGEPLOT_REPO_REF:-${GG_SOURCE_SMUDGEPLOT_REPO_REF}}}" \
+      /opt/pg/artifact
+
 FROM base AS runtime-system
 RUN bash /opt/pg/scripts/install_system_packages.sh runtime
 
@@ -245,6 +269,8 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=kffractbias-build,source=/opt/pg/artifact,target=/tmp/artifacts/kfFractBias \
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \
+ --mount=from=fastk-build,source=/opt/pg/artifact,target=/tmp/artifacts/fastk \
+ --mount=from=smudgeplot-build,source=/opt/pg/artifact,target=/tmp/artifacts/smudgeplot \
  bash /opt/pg/scripts/install_source_artifacts.sh /tmp/artifacts \
  && bash /opt/pg/scripts/install_helvetica_compat_font.sh base
 

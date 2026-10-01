@@ -18,6 +18,8 @@ PROGRAM_SHA_VARS = (
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
+    "FASTK_REPO_SHA",
+    "SMUDGEPLOT_REPO_SHA",
 )
 
 
@@ -316,13 +318,15 @@ def test_treevis_package_is_part_of_every_repository_owned_image_context():
 def test_container_build_paths_pin_the_same_base_image_digest():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     apptainer_template = (REPO_ROOT / "container" / "apptainer_local_build.def.template").read_text(encoding="utf-8")
-    base_pattern = re.compile(r"mambaorg/micromamba:noble@sha256:[0-9a-f]{64}")
+    base_pattern = re.compile(r"mambaorg/micromamba(?::noble)?@(sha256:[0-9a-f]{64})")
 
     docker_base = base_pattern.search(dockerfile)
     apptainer_base = base_pattern.search(apptainer_template)
     assert docker_base is not None
     assert apptainer_base is not None
-    assert docker_base.group(0) == apptainer_base.group(0)
+    assert docker_base.group(1) == apptainer_base.group(1)
+    # containers/image rejects references containing both a tag and a digest.
+    assert apptainer_base.group(0) == "mambaorg/micromamba@" + apptainer_base.group(1)
 
 
 def test_container_build_paths_include_archive_interoperability_commands():
@@ -400,3 +404,15 @@ def test_standard_environment_omits_superseded_explicit_dependencies():
     assert "r-grplasso" not in requirements
     assert "r-ape" in requirements
     assert "r-phytools" in requirements
+
+
+def test_smudgeplot_runtime_requires_its_complete_native_toolchain():
+    expected = {"FastK", "Histex", "Logex", "Symmex", "Fastrm", "smudgeplot"}
+    for filename in ("required_commands.tsv", "required_commands.arm64.tsv"):
+        entries = (REPO_ROOT / "container/spec" / filename).read_text().splitlines()
+        commands = {line.split("\t")[1] for line in entries if line.startswith("base\t")}
+        assert expected <= commands
+    installer = (REPO_ROOT / "container/scripts/build_source_artifact.sh").read_text()
+    assert "python -m venv /opt/smudgeplot" in installer
+    assert "pip install 'numpy>=2.0'" in installer
+    assert 'exec /opt/smudgeplot/bin/smudgeplot "$@"' in installer

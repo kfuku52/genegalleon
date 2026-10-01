@@ -30,6 +30,17 @@ Major scripts accept:
 - `.fa`, `.fas`, `.fasta`, `.fna`
 - `.fa.gz`, `.fas.gz`, `.fasta.gz`, `.fna.gz`
 
+### `workspace/input/species_dnaseq`
+
+For [Smudgeplot](smudgeplot.md), place each species' reads under
+`species_dnaseq/GENUS_SPECIES/`. The annotation workflow selects species from
+`species_cds`, so the directory label must match the CDS filename's species label.
+The stage recursively selects non-hidden `.fq`, `.fastq`, `.fq.gz` and
+`.fastq.gz` files, resolves symlinks and rejects duplicate or empty read files.
+Canonical input and output paths must have no whitespace or shell metacharacters
+because the native dependencies use paths in shell commands. Missing or empty
+read directories skip a new analysis; a requested rebuild requires FASTQ inputs.
+
 ### `workspace/input/species_cds`
 
 - one CDS FASTA per species,

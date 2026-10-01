@@ -10,3 +10,5 @@ libssl-dev
 libxml2-dev
 pkg-config
 zlib1g-dev
+libbz2-dev
+liblzma-dev

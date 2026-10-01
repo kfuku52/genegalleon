@@ -121,6 +121,10 @@ run_jcvi_dotplot=0 # Self-self synteny dotplot
 
 # DNA-seq workflow flags
 run_genomescope=0 # GenomeScope
+run_smudgeplot=0 # Reference-free k-mer pair structure with FastK and Smudgeplot
+smudgeplot_kmer_length=21 # Length of read k-mers counted by FastK.
+smudgeplot_lower_count="auto" # Set explicitly after inspecting the histogram for low-coverage reads.
+smudgeplot_aggregation_distance=2 # Smudgeplot local aggregation neighbourhood.
 
 # Summary workflow flags
 run_multispecies_summary=1 # Multi-species summary plots and tables

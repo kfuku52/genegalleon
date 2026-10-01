@@ -29,6 +29,8 @@ SOURCE_SHA_VARS = (
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
+    "FASTK_REPO_SHA",
+    "SMUDGEPLOT_REPO_SHA",
 )
 
 
@@ -318,6 +320,8 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
     busco_sha = env.pop("BUSCO_REPO_SHA")
     paml_sha = env.pop("PAML_REPO_SHA")
     iqtree_sha = env.pop("IQTREE_REPO_SHA")
+    fastk_sha = env.pop("FASTK_REPO_SHA")
+    smudgeplot_sha = env.pop("SMUDGEPLOT_REPO_SHA")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -333,6 +337,8 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
         f"    printf 'BUSCO\\t%s\\n' '{busco_sha}'\n"
         f"    printf 'paml\\t%s\\n' '{paml_sha}'\n"
         f"    printf 'iqtree\\t%s\\n' '{iqtree_sha}'\n"
+        f"    printf 'fastk\\t%s\\n' '{fastk_sha}'\n"
+        f"    printf 'smudgeplot\\t%s\\n' '{smudgeplot_sha}'\n"
         "    ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",

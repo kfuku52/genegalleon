@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ $# -lt 5 || $# -gt 6 ]]; then
-  echo "Usage: $0 python|r|paml SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
+  echo "Usage: $0 python|r|paml|fastk|smudgeplot SOURCE REPO_URL REVISION OUTPUT_DIR [MIRROR_URL]" >&2
   exit 2
 fi
 kind="$1"
@@ -18,7 +18,7 @@ if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ || ! "${source_name}" =~ ^[A-Za-z][A-Za-z0-9]
   exit 2
 fi
 case "${kind}" in
-  python|r|paml) ;;
+  python|r|paml|fastk|smudgeplot) ;;
   *) echo "Unknown source artifact kind: ${kind}" >&2; exit 2 ;;
 esac
 if [[ ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -48,6 +48,27 @@ case "${kind}" in
     mkdir -p "${library}"
     MAKEFLAGS="-j${jobs}" CMAKE_BUILD_PARALLEL_LEVEL="${jobs}" \
       micromamba run -n base R CMD INSTALL --library="${library}" "${work_dir}/source"
+    ;;
+  fastk)
+    make -C "${work_dir}/source/LIBDEFLATE" -j"${jobs}"
+    make -C "${work_dir}/source/HTSLIB" -j"${jobs}" libhts.a
+    make -C "${work_dir}/source" -j"${jobs}" all
+    mkdir -p "${output_dir}/rootfs/usr/local/bin"
+    make -C "${work_dir}/source" install DEST_DIR="${output_dir}/rootfs/usr/local/bin"
+    ;;
+  smudgeplot)
+    # Smudgeplot uses NumPy's weighted percentile API (introduced in 2.0).
+    # Isolate it from the NumPy 1.x stack required by PyMOL and ClipKIT.
+    micromamba run -n base python -m pip wheel --no-deps --no-build-isolation \
+      --wheel-dir "${work_dir}/wheels" "${work_dir}/source"
+    micromamba run -n base python -m venv /opt/smudgeplot
+    /opt/smudgeplot/bin/python -m pip install 'numpy>=2.0' "${work_dir}/wheels/"*.whl
+    /opt/smudgeplot/bin/python -m pip check
+    mkdir -p "${output_dir}/rootfs/opt" "${output_dir}/rootfs/usr/local/bin"
+    cp -a /opt/smudgeplot "${output_dir}/rootfs/opt/"
+    printf '#!/usr/bin/env bash\nexec /opt/smudgeplot/bin/smudgeplot "$@"\n' \
+      > "${output_dir}/rootfs/usr/local/bin/smudgeplot"
+    chmod 0755 "${output_dir}/rootfs/usr/local/bin/smudgeplot"
     ;;
   paml)
     make -C "${work_dir}/source/src" -j"${jobs}" mcmctree \

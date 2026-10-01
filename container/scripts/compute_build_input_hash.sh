@@ -84,6 +84,12 @@ kftools_ref="${KFTOOLS_REPO_REF:-${GG_SOURCE_KFTOOLS_REPO_REF}}"
 rkftools_ref="${RKFTOOLS_REPO_REF:-${GG_SOURCE_RKFTOOLS_REPO_REF}}"
 kftools_sha="${KFTOOLS_REPO_SHA:-}"
 rkftools_sha="${RKFTOOLS_REPO_SHA:-}"
+fastk_url="${FASTK_REPO_URL:-https://github.com/thegenemyers/FASTK.git}"
+fastk_ref="${FASTK_REPO_REF:-${GG_SOURCE_FASTK_REPO_REF}}"
+fastk_sha="${FASTK_REPO_SHA:-}"
+smudgeplot_url="${SMUDGEPLOT_REPO_URL:-https://github.com/KamilSJaron/smudgeplot.git}"
+smudgeplot_ref="${SMUDGEPLOT_REPO_REF:-${GG_SOURCE_SMUDGEPLOT_REPO_REF}}"
+smudgeplot_sha="${SMUDGEPLOT_REPO_SHA:-}"
 testnh_sha="${TESTNH_TARBALL_SHA256:-598337183d2cec9c61cd364fab255a270062844b0ba5172913f7cf97512c43e2}"
 cafe5_sha="${CAFE5_TARBALL_SHA256:-71871bdc74c2ffc7c1c0f4500f4742f2ff46a15cfaba78dc179d21bb1ba67ba8}"
 
@@ -136,6 +142,12 @@ context_digest="$(
     "rkftools_url=${rkftools_url}" \
     "rkftools_ref=${rkftools_ref}" \
     "rkftools_sha=${rkftools_sha}" \
+    "fastk_url=${fastk_url}" \
+    "fastk_ref=${fastk_ref}" \
+    "fastk_sha=${fastk_sha}" \
+    "smudgeplot_url=${smudgeplot_url}" \
+    "smudgeplot_ref=${smudgeplot_ref}" \
+    "smudgeplot_sha=${smudgeplot_sha}" \
     "testnh_sha=${testnh_sha}" \
     "cafe5_sha=${cafe5_sha}"
 } | sha256_stream

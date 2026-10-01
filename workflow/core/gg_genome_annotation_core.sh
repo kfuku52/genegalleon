@@ -21,6 +21,10 @@ cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
 cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
 cdskit_localize_no_model_download="${cdskit_localize_no_model_download:-0}"
 run_collect_gff_info="${run_collect_gff_info:-0}"
+run_smudgeplot="${run_smudgeplot:-0}"
+smudgeplot_kmer_length="${smudgeplot_kmer_length:-21}"
+smudgeplot_lower_count="${smudgeplot_lower_count:-auto}"
+smudgeplot_aggregation_distance="${smudgeplot_aggregation_distance:-2}"
 run_scaffold_taxonomy="${run_scaffold_taxonomy:-1}"
 scaffold_host_taxid="${scaffold_host_taxid:-}"
 if [[ -n "${scaffold_host_taxid}" && ! "${scaffold_host_taxid}" =~ ^[1-9][0-9]*$ ]]; then
@@ -154,6 +158,7 @@ file_sp_genome_mmseqs2taxonomy="${gg_workspace_output_dir}/species_genome_mmseqs
 file_sp_genome_contamination_removal_fasta="${gg_workspace_output_dir}/species_genome_contamination_removal_fasta/${sp_ub}_contamination_removal.fa.gz"
 file_sp_genome_contamination_removal_tsv="${gg_workspace_output_dir}/species_genome_contamination_removal_tsv/${sp_ub}_contamination_removal.tsv"
 file_sp_genomescope="${gg_workspace_output_dir}/species_dnaseq_genomescope/${sp_ub}_genomescope.zip"
+file_sp_smudgeplot="${gg_workspace_output_dir}/species_dnaseq_smudgeplot/${sp_ub}_smudgeplot.zip"
 file_sp_jcvi_dotplot="${gg_workspace_output_dir}/species_jcvi_dotplot/${sp_ub}_jcvi_dotplot.zip"
 file_multispecies_summary="${gg_workspace_output_dir}/annotation_summary/annotation_summary.tsv"
 dir_summary_species_tree="${gg_workspace_output_dir}/species_tree/species_tree_summary"
@@ -1046,6 +1051,66 @@ if [[ ${genomescope_needs_update} -eq 1 && ${run_genomescope} -eq 1 ]]; then
         --remove-source
       gg_artifact_record "${genomescope_provenance_args[@]}"
     fi
+  fi
+else
+  gg_step_skip "${task}"
+fi
+
+task="Smudgeplot"
+if [[ ! -d "${dir_sp_dnaseq}/${sp_ub}" ]]; then
+  echo "dir_sp_dnaseq/sp not found. Skipping ${task}"
+  run_smudgeplot=0
+fi
+smudgeplot_needs_update=0
+gg_artifact_contract_init smudgeplot_provenance_args "genome_annotation_smudgeplot" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.smudgeplot.json"
+fastq_files=()
+if [[ -d "${dir_sp_dnaseq}/${sp_ub}" ]] && \
+   [[ ${run_smudgeplot} -eq 1 || -e "${file_sp_smudgeplot}" || -s "${annotation_provenance_dir}/${sp_ub}.smudgeplot.json" ]]; then
+  # Use the same validated, canonical files for counting and provenance. A checked
+  # command and NUL-delimited paths preserve discovery errors and file boundaries.
+  smudgeplot_read_list="${dir_sp_tmp}/smudgeplot.reads.nul"
+  python "${gg_support_dir}/run_smudgeplot.py" --list-reads "${dir_sp_dnaseq}/${sp_ub}" > "${smudgeplot_read_list}"
+  while IFS= read -r -d '' fastq_file; do
+    fastq_files+=("${fastq_file}")
+    smudgeplot_provenance_args+=(--input "dna_read_${#fastq_files[@]}=${fastq_file}")
+  done < "${smudgeplot_read_list}"
+  rm -f -- "${smudgeplot_read_list}"
+fi
+smudgeplot_provenance_args+=(
+  --output "archive=${file_sp_smudgeplot}"
+  --parameter "kmer_length=${smudgeplot_kmer_length}"
+  --parameter "lower_count=${smudgeplot_lower_count}"
+  --parameter "aggregation_distance=${smudgeplot_aggregation_distance}"
+)
+gg_artifact_prepare_stage smudgeplot_needs_update run_smudgeplot "${smudgeplot_provenance_args[@]}" || exit $?
+if [[ ${smudgeplot_needs_update} -eq 1 && ${run_smudgeplot} -eq 1 ]]; then
+  gg_step_start "${task}"
+  if [[ ${#fastq_files[@]} -eq 0 ]]; then
+    echo "No FASTQ files were found in: ${dir_sp_dnaseq}/${sp_ub}. Skipping ${task}."
+    if [[ -e "${file_sp_smudgeplot}" || -s "${annotation_provenance_dir}/${sp_ub}.smudgeplot.json" ]]; then
+      echo "Cannot rebuild the existing Smudgeplot artifact without FASTQ inputs." >&2
+      exit 1
+    fi
+    gg_step_skip "${task}"
+  else
+    if [[ -e "${sp_ub}.smudgeplot" ]]; then
+      rm -rf -- "${sp_ub}.smudgeplot"
+    fi
+    python "${gg_support_dir}/run_smudgeplot.py" \
+      --reads "${fastq_files[@]}" \
+      --output-dir "${sp_ub}.smudgeplot" \
+      --kmer-length "${smudgeplot_kmer_length}" \
+      --lower-count "${smudgeplot_lower_count}" \
+      --aggregation-distance "${smudgeplot_aggregation_distance}" \
+      --threads "${GG_TASK_CPUS}" --memory-gb "${GG_MEM_TOOL_GB}" \
+      --title "${sp_ub//_/ }"
+    rm -f -- "${sp_ub}.smudgeplot.zip"
+    zip -rq "${sp_ub}.smudgeplot.zip" "${sp_ub}.smudgeplot"
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${sp_ub}.smudgeplot.zip" \
+      --destination "${file_sp_smudgeplot}" \
+      --expected-prefix "${sp_ub}.smudgeplot" --remove-source
+    gg_artifact_record "${smudgeplot_provenance_args[@]}"
   fi
 else
   gg_step_skip "${task}"
