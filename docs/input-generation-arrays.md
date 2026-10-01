@@ -12,6 +12,14 @@ not fetch missing reference files. `array_finalize`
 requires verified completion receipts for every planned species before publishing
 the merged species summary and resolved download manifest.
 
+For existing raw files, a manifest row can opt into `bind_local_sources=1`.
+Every supplied role must then use an absolute `file://` URL without an archive
+member. Prepare validates and binds the frozen source hashes directly; it does
+not create another raw-file copy. Workers and subsequent prepare checks reject
+changed/missing sources. CoGe GFF content checks still apply. Default rows retain
+the ordinary isolated staged-copy behavior. Keep bound files visible in the
+same container namespace until all workers and finalization finish.
+
 BUSCO lineage downloads are extracted into a temporary directory inside the
 workspace download cache and published only after BUSCO succeeds. An incomplete
 download remains there for diagnosis and is not treated as a ready lineage.

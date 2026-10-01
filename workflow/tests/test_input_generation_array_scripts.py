@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 PLAN_SCRIPT = SUPPORT_DIR / "plan_input_generation_tasks.py"
 RUN_TASK_SCRIPT = SUPPORT_DIR / "run_input_generation_task.py"
@@ -12,6 +14,79 @@ MERGE_SCRIPT = SUPPORT_DIR / "merge_input_generation_shards.py"
 STAGE_SCRIPT = SUPPORT_DIR / "stage_input_generation_downloads.py"
 REQUIRE_GENOMES_SCRIPT = SUPPORT_DIR / "validate_required_genomes.py"
 REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
+
+
+def test_bound_sources_preserve_formatted_outputs_without_raw_copy_and_reject_changes(tmp_path):
+    raw = tmp_path / "raw"
+    species = "Arabidopsis_thaliana"
+    write_direct_species_fixture(raw, species)
+    outputs = []
+    for mode in ("0", "1"):
+        root = tmp_path / mode
+        root.mkdir()
+        manifest = root / "manifest.tsv"
+        roles = {role: raw / species / (species + suffix) for role, suffix in
+                 (("cds", ".cds.fa"), ("gff", ".gff"), ("genome", ".genome.fa"))}
+        fields = ["provider", "id", "species_key", "bind_local_sources", *[r + "_url" for r in roles]]
+        with manifest.open("w") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
+            writer.writeheader()
+            writer.writerow({"provider": "direct", "id": "fixture", "species_key": species,
+                             "bind_local_sources": mode, **{r + "_url": p.as_uri() for r, p in roles.items()}})
+        plan = root / "plan.json"
+        planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                             "--download-dir", str(root / "downloads"), "--stage-downloads", "--outfile", str(plan))
+        assert planned.returncode == 0, planned.stderr
+        staged = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-gff", "--require-genome")
+        assert staged.returncode == 0, staged.stdout + staged.stderr
+        task = json.loads(Path(str(plan) + ".tasks/1.json").read_text())["task"]
+        if mode == "1":
+            assert all(task[r + "_path"] == str(p) for r, p in roles.items())
+            assert not (root / "downloads").exists()
+        else:
+            assert all(task[r + "_path"] != str(p) for r, p in roles.items())
+        args = ("--task-plan", str(plan), "--task-index", "1", "--species-cds-dir", str(root / "cds"),
+                "--species-gff-dir", str(root / "gff"), "--species-genome-dir", str(root / "genome"))
+        result = run_python(RUN_TASK_SCRIPT, *args)
+        assert result.returncode == 0, result.stdout + result.stderr
+        outputs.append({role: [(p.name, gzip.open(p, "rt").read()) for p in sorted((root / role).glob("*.gz"))]
+                        for role in roles})
+        assert all(outputs[-1].values())
+    assert outputs[0] == outputs[1]
+    roles["cds"].write_text(">changed\nATG\n")
+    rejected = run_python(RUN_TASK_SCRIPT, *args)
+    assert rejected.returncode != 0 and "Local manifest input changed" in rejected.stderr
+    restaged = run_python(STAGE_SCRIPT, "--task-plan", str(plan))
+    assert restaged.returncode != 0 and "Local manifest input changed" in restaged.stderr
+
+
+@pytest.mark.parametrize('invalid', ['html', 'header_only', 'corrupt_gzip', 'remote_role', 'archive_member'])
+def test_bound_coge_sources_do_not_bypass_payload_or_source_guards(tmp_path, invalid):
+    sys.path.insert(0, str(SUPPORT_DIR))
+    from input_generation_array_state import digest
+    from stage_input_generation_downloads import bound_local_manifest_task
+
+    cds, gff, genome = (tmp_path / name for name in ('cds.fa', 'source.gff', 'genome.fa'))
+    cds.write_text('>gene1\nATG\n')
+    genome.write_text('>chr1\nATG\n')
+    gff.write_text('##gff-version 3\nchr1\tCoGe\tCDS\t1\t3\t.\t+\t0\tID=c;Parent=t\n')
+    if invalid == 'html':
+        gff.write_text('<html>failure</html>')
+    elif invalid == 'header_only':
+        gff.write_text('##gff-version 3\n')
+    elif invalid == 'corrupt_gzip':
+        gff = tmp_path / 'source.gff.gz'
+        gff.write_bytes(gzip.compress(b'##gff-version 3\n')[:-5])
+    row = {'provider': 'coge', 'id': '123', 'species_key': 'Example_species', 'bind_local_sources': '1',
+           'cds_url': cds.as_uri(), 'gff_url': gff.as_uri(), 'genome_url': genome.as_uri()}
+    if invalid == 'remote_role':
+        row['genome_url'] = 'https://example.invalid/genome.fa'
+    elif invalid == 'archive_member':
+        row['gff_archive_member'] = 'source.gff'
+    task = {'provider': 'coge', 'species_key': 'Example_species', 'species_prefix': 'Example_species',
+            'manifest_row': row, 'input_sha256': {str(p): digest(p) for p in (cds, gff, genome)}}
+    with pytest.raises(ValueError):
+        bound_local_manifest_task(task)
 
 
 def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cache(tmp_path):
