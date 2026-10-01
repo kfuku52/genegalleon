@@ -56,9 +56,15 @@ def audit_source_overlaps(gff_path, task):
             groups[key].append(parts)
     candidates = {}
     for key, rows in groups.items():
-        if any(parse_gff_attributes(row[8]).get(name) for row in rows
-               for name in ("exception", "pseudo")):
-            continue  # Declared biological exceptions retain their own contract.
+        attributes = [parse_gff_attributes(row[8]) for row in rows]
+        exceptions = [tuple(attr.get("exception", ())) for attr in attributes]
+        # A low-quality-region note does not itself authorize overlaps. It can
+        # retain the same exact sequence proof as unannotated source overlaps.
+        # Other biological exceptions keep their dedicated interpretation.
+        if (any(attr.get("pseudo") for attr in attributes)
+                or len(set(exceptions)) != 1
+                or exceptions[0] not in ((), ("low-quality sequence region",))):
+            continue
         try:
             blocks = [(row[0], row[6], int(row[3]), int(row[4])) for row in rows]
         except ValueError:

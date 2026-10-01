@@ -263,3 +263,12 @@ nodes before increasing compute concurrency.
 See the [implementation review and validation limits](input-generation-array-review.md).
 
 Shared worker lock acquisition retries transient reader-registration contention for up to 30 seconds; exclusive phase and duplicate-worker locks remain nonblocking. A timeout leaves existing ownership untouched.
+
+
+Source CDS overlaps carrying a consistent `low-quality sequence region` note
+can receive the same complete genome-to-publisher-CDS proof as unannotated
+overlaps; their source quality note remains unchanged. Unproved, mixed, and
+other biological exceptions retain their strict existing checks. Pseudogene
+CDS length validation accepts only the formatter's exact terminal `N` padding
+to the next multiple of three. Genomic feature lengths stay unchanged, and
+pseudogenes do not acquire a coding phase or an inferred intron model.

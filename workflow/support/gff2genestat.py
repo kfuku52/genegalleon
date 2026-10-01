@@ -1025,11 +1025,13 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
 
 def validate_cds_lengths(traits, records):
     lengths = {}
+    sequences = {}
     for identifier, _header, sequence in records:
         sequence = sequence.upper()
         if not sequence or re.search(r"[^ACGTRYSWKMBDHVN?]", sequence):
             raise ValueError(f"CDS length validation requires ungapped nucleotide FASTA: {identifier}")
         lengths[identifier] = len(sequence)
+        sequences[identifier] = sequence
     mismatches = []
     for row in traits.itertuples(index=False):
         expected = int(row.feature_size)
@@ -1037,6 +1039,14 @@ def validate_cds_lengths(traits, records):
         if expected == observed:
             continue
         if cds_length_is_compatible_with_partial(row, observed):
+            continue
+        # The formatter pads non-triplet source CDS with terminal Ns. A
+        # declared pseudogene has no coding frame, so this exact padding does
+        # not alter its coordinates or establish a usable intron model.
+        padding = (-expected) % 3
+        if (getattr(row, "splice_mode", "") == "pseudogene" and padding
+                and observed == expected + padding
+                and sequences[row.gene_id][expected:] == "N" * padding):
             continue
         mismatches.append(f"{row.gene_id} (GFF={expected}, CDS={observed})")
     if mismatches:

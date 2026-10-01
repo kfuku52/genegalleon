@@ -188,3 +188,18 @@ def test_numbered_cross_contig_cds_preserves_source_order():
     ]:
         with pytest.raises(ValueError):
             ordered_annotated_blocks(damaged, 'g')
+
+
+@pytest.mark.parametrize("size", [1934, 2477, 2012, 1523])
+def test_pseudogene_accepts_only_formatter_terminal_codon_padding(size):
+    from workflow.support.gff2genestat import validate_cds_lengths
+    traits = pd.DataFrame([dict(gene_id="g", feature_size=size,
+                                splice_mode="pseudogene", cds_partial="none")])
+    padding = (-size) % 3
+    validate_cds_lengths(traits, [("g", "g", "A" * size + "N" * padding)])
+    for invalid in ("A" * (size + padding), "A" * size + "N" * (padding + 1)):
+        with pytest.raises(ValueError, match="does not match CDS length"):
+            validate_cds_lengths(traits, [("g", "g", invalid)])
+    traits["splice_mode"] = "cis"
+    with pytest.raises(ValueError, match="does not match CDS length"):
+        validate_cds_lengths(traits, [("g", "g", "A" * size + "N" * padding)])
