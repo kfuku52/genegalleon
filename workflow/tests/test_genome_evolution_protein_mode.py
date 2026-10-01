@@ -427,6 +427,10 @@ PY
 if [[ "${{GG_TEST_ORTHOFINDER_MISSING_HOG:-0}}" == "1" ]]; then
   rm -- "${{results_dir}}/Phylogenetic_Hierarchical_Orthogroups/N0.tsv"
 fi
+printf '2026-01-01 00:00:00 : Started OrthoFinder version 2.5.5\n' > "${{results_dir}}/Log.txt"
+if [[ "${{GG_TEST_ORTHOFINDER_INCOMPLETE_RUN:-}}" != "${{run_name}}" ]]; then
+  printf '2026-01-01 00:00:01 : OrthoFinder run completed\n' >> "${{results_dir}}/Log.txt"
+fi
 """,
     )
 
@@ -1042,6 +1046,25 @@ def test_orthofinder_failure_retains_working_data(tmp_path: Path, core_limit, fa
         assert (directory / "Trees_ids/OG0000001.txt").is_file()
 
 
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("core_limit,incomplete_run,working_count", [(50, "main", 1), (1, "core", 1), (1, "all", 2)])
+def test_orthofinder_zero_exit_without_native_completion_is_not_published(tmp_path, core_limit, incomplete_run, working_count):
+    workspace = _prepare_orthofinder_cleanup_inputs(tmp_path)
+    failed = _run_core(tmp_path, {
+        "max_orthofinder_core_species": str(core_limit),
+        "GG_TEST_ORTHOFINDER_INCOMPLETE_RUN": incomplete_run,
+    })
+
+    assert failed.returncode != 0
+    assert "OrthoFinder did not record native run completion" in failed.stderr
+    assert "OrthoFinder finished successfully" not in failed.stdout
+    assert not (workspace / "output/orthofinder/hog2og/README.txt").exists()
+    assert not (workspace / "output/artifact_provenance/genome_evolution/orthofinder.json").exists()
+    assert len(list(workspace.rglob("WorkingDirectory"))) == working_count
+    if incomplete_run == "core":
+        assert "--assign" not in (tmp_path / "capture/orthofinder_args.txt").read_text()
+
+
 @pytest.mark.parametrize("record_exit", [0, 6])
 def test_orthofinder_cleanup_waits_for_completion_record(tmp_path: Path, record_exit):
     public = tmp_path / "orthofinder"
@@ -1070,6 +1093,24 @@ def test_orthofinder_cleanup_waits_for_completion_record(tmp_path: Path, record_
             assert (directory / "keep.txt").read_bytes() == b"working data\n"
         else:
             assert not directory.exists()
+
+
+@pytest.mark.parametrize("log_text", [None, "", "Started OrthoFinder version 3.1.5\n", "OrthoFinder run completed incorrectly\n", "OrthoFinder run completed\n", "2026-01-01 00:00:01 : OrthoFinder run completed\n"])
+def test_orthofinder_native_completion_contract(tmp_path, log_text):
+    result_dir = tmp_path / "results"
+    result_dir.mkdir()
+    log = result_dir / "Log.txt"
+    if log_text is not None:
+        log.write_text(log_text)
+    text = CORE_PATH.read_text()
+    start = text.index("validate_orthofinder_run_completion() {")
+    end = text.index("orthofinder_supports_root_hog_equivalent() {", start)
+    command = text[start:end] + f"\nvalidate_orthofinder_run_completion {shlex.quote(str(result_dir))}"
+    result = subprocess.run([BASH_FOR_TESTS, "-c", command], capture_output=True, text=True)
+    complete = log_text in ("OrthoFinder run completed\n", "2026-01-01 00:00:01 : OrthoFinder run completed\n")
+    assert (result.returncode == 0) is complete
+    if log_text is not None:
+        assert log.read_text() == log_text
 
 
 @pytest.mark.parametrize("link_level", ["result_directory", "working_directory"])

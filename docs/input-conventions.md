@@ -363,6 +363,11 @@ memberships are ambiguous and are rejected before publishing tables or starting
 family production. Repair the upstream catalog; do not merge or discard its
 distinct rows to satisfy this check.
 
+New OrthoFinder runs must record `OrthoFinder run completed` in their native
+`Log.txt` before GeneGalleon publishes the results. An exit code of zero or a
+partially written N0 table does not establish completion. Incomplete staged
+results and `WorkingDirectory` are retained for diagnosis and upstream resume.
+
 ### `workspace/input/species_trait/species_trait.tsv`
 
 The first column contains species labels matching the species tree. Remaining

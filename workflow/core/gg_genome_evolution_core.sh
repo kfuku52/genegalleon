@@ -2078,6 +2078,17 @@ detect_orthofinder_version() {
   printf '%s\n' "${version}"
 }
 
+validate_orthofinder_run_completion() {
+  local result_dir=$1
+  local native_log="${result_dir}/Log.txt"
+  if [[ ! -f "${native_log}" || ! -s "${native_log}" || -L "${native_log}" ]] ||
+     ! awk '/(^| : )OrthoFinder run completed$/ { complete = 1 } END { exit !complete }' "${native_log}"; then
+    echo "OrthoFinder did not record native run completion: ${native_log}" >&2
+    echo "Retaining staged results and WorkingDirectory; incomplete results will not be published." >&2
+    return 1
+  fi
+}
+
 orthofinder_supports_root_hog_equivalent() {
   local version=$1
   local major minor
@@ -4755,6 +4766,7 @@ PY
       echo "OrthoFinder failed in the core-species run. Exiting."
       exit 1
     fi
+    validate_orthofinder_run_completion "${dir_orthofinder}/core/Results_core" || exit $?
     shopt -s nullglob
     orthofinder_core_clusters=("${dir_orthofinder}"/core/Results_core/WorkingDirectory/clusters_OrthoFinder*id_pairs.txt)
     shopt -u nullglob
@@ -4781,7 +4793,7 @@ PY
       echo "OrthoFinder failed in the all-species run. Exiting."
       exit 1
     fi
-
+    validate_orthofinder_run_completion "${dir_orthofinder}/core/Results_all" || exit $?
     shopt -s nullglob
     orthofinder_all_outputs=("${dir_orthofinder}"/core/Results_all/*)
     orthofinder_core_outputs=("${dir_orthofinder}"/core/Results_core/*)
@@ -4832,7 +4844,7 @@ PY
       echo "OrthoFinder failed in the all-species run. Exiting."
       exit 1
     fi
-
+    validate_orthofinder_run_completion "${dir_orthofinder}/main/Results_main" || exit $?
     shopt -s nullglob
     orthofinder_main_outputs=("${dir_orthofinder}"/main/Results_main/*)
     shopt -u nullglob
