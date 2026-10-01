@@ -30,6 +30,37 @@ def load_target_module():
     return module
 
 
+@pytest.mark.parametrize("marker", ["[&R]", "[&U]", "  [&r]  ", "[&R][&R]"])
+@pytest.mark.parametrize("from_file", [False, True])
+def test_statistics_reads_rooting_declarations_without_changing_tree_or_source(tmp_path, marker, from_file):
+    module = load_module()
+    text = '(("tip[&R]":0.123456789,B:2)inner:3[&&NHX:age=4:note=kept],C:4)root;'
+    original = marker + text
+    path = tmp_path / "species_tree.nwk"
+    path.write_text(original)
+    tree = module.new_tree(str(path) if from_file else original, format=1)
+    reference = module.new_tree(text, format=1)
+
+    def signature(candidate):
+        return [(node.name, dict(node.props), tuple(leaf.name for leaf in node.leaves()))
+                for node in candidate.traverse()]
+
+    assert signature(tree) == signature(reference)
+    assert path.read_text() == original
+
+
+def test_statistics_rejects_conflicting_rooting_declarations():
+    module = load_module()
+    with pytest.raises(ValueError, match="Conflicting"):
+        module.new_tree("[&R][&U](A:1,B:2)root;", format=1)
+
+
+def test_statistics_does_not_strip_unrecognized_tree_annotations():
+    module = load_module()
+    with pytest.raises(module.NewickError):
+        module.new_tree("[&not_rooted](A:1,B:2)root;", format=1)
+
+
 def test_dating_summary_keeps_conditional_interpretation_and_failed_interval(tmp_path):
     import json
 

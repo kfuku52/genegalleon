@@ -519,7 +519,9 @@ def verify(args):
         raise ValueError("terminal profile requires summary_statistics and tree_plot contracts")
     store = GeneFamilyOutputStore(root, family_filter=args.family_id)
     observation = argparse.Namespace(logical_root=root, family_id=args.family_id)
-    with store.read_snapshot(), provenance.logical_observation(observation, store), provenance.digest_observation() as memo:
+    with (provenance.runtime_support_root(Path(__file__).resolve().parent),
+          store.read_snapshot(), provenance.logical_observation(observation, store),
+          provenance.digest_observation() as memo):
         return _verify(args, store, memo)
 
 

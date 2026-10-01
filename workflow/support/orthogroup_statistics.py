@@ -17,6 +17,7 @@ import numpy
 import pandas
 from ete4.parser.newick import NewickError
 from kftools import kfog
+from nwkit.rooting_state import extract_rooting_token
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -107,6 +108,10 @@ def new_tree(newick_or_path, format=1, quoted_node_names=False):
     if isinstance(newick_or_path, str) and os.path.exists(newick_or_path):
         with open(newick_or_path, "r", encoding="utf-8") as handle:
             newick_or_path = handle.read().strip()
+    if isinstance(newick_or_path, str):
+        # Rooting declarations are document metadata, not ETE node NHX.
+        # NWKIT's reader removes only leading tokens; labels and NHX stay intact.
+        newick_or_path, _ = extract_rooting_token(newick_or_path)
     return ete4.PhyloTree(newick_or_path, parser=format)
 
 

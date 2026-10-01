@@ -60,6 +60,26 @@ def verify(project, *extra):
                  "--family-id", "OG0001", "--require-step", "summary_statistics", *extra)
 
 
+def test_verify_resolves_container_support_inputs_against_its_own_runtime(project):
+    workspace, _root, _source, _output, manifest, argv, _plan = project
+    helper = SUPPORT / "workflow_api.py"
+    assert cli(PROVENANCE, "record", *argv, "--input", f"helper={helper}").returncode == 0
+    payload = json.loads(manifest.read_text())
+    source = next(entry for entry in payload["inputs"] if entry["label"] == "helper")
+    source["scope"] = "absolute"
+    source["path"] = "/script/support/workflow_api.py"
+    manifest.write_text(json.dumps(payload))
+    before = snapshot(workspace)
+    assert verify(project)["completion_state"] == "verified_declared_steps"
+    assert snapshot(workspace) == before
+
+    source["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload))
+    result = verify(project)
+    assert result["completion_state"] == "unverified"
+    assert result["contracts"][0]["error_code"] == "changed_input"
+
+
 def test_capabilities_requires_no_project_or_controller():
     response = query("capabilities")
     assert response["schema"] == "genegalleon-api-v1"
