@@ -14,11 +14,24 @@ spec.loader.exec_module(comparison)
 
 def test_native_flat_memberships_match_legacy_totals(tmp_path):
     native = tmp_path / "Orthogroups.txt"
-    native.write_text("OG0000000: species_a_g1 species_a_g2 species_b_g1\n\nOG0000001: species_b_g2\n")
+    native.write_text("OG0000000: species_a_g1 species_a_g2 species_b_g1\n\n"
+                      "OG0000001: species_b_g2 species_b_g3\nOG0000002: species_a_g3\n")
     legacy = tmp_path / "Orthogroups.GeneCount.tsv"
-    legacy.write_text("Orthogroup\tspecies_a\tspecies_b\tTotal\nOG0000000\t2\t1\t3\nOG0000001\t0\t1\t1\n")
+    legacy.write_text("Orthogroup\tspecies_a\tspecies_b\tTotal\nOG0000000\t2\t1\t3\nOG0000001\t0\t2\t2\n")
     actual = comparison.read_gene_counts(native)
     expected = comparison.read_gene_counts(legacy)[["Orthogroup", "Total"]]
+    pandas.testing.assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize("singleton_first", [True, False])
+def test_reassigned_singletons_do_not_change_native_genecount_totals(tmp_path, singleton_first):
+    native = tmp_path / "Orthogroups.txt"
+    singleton = "OG0000000: reassigned_gene\n"
+    assigned = "OG0000001: reassigned_gene other_gene\n"
+    native.write_text((singleton + assigned if singleton_first else assigned + singleton)
+                      + "OG0000002: still_unassigned_gene\n")
+    actual = comparison.read_gene_counts(native)
+    expected = pandas.DataFrame([("OG0000001", 2)], columns=["Orthogroup", "Total"])
     pandas.testing.assert_frame_equal(actual, expected)
 
 
@@ -26,6 +39,7 @@ def test_native_flat_memberships_match_legacy_totals(tmp_path):
     "", "OG0000000:\n", "HOG0000000: a\n", "OG0000000 a\n",
     "OG0000000: a a\n", "OG0000000: a\nOG0000000: b\n",
     "OG0000000: a\nOG0000001: a\n",
+    "OG0000000: a b\nOG0000001: b c\n",
 ])
 def test_invalid_memberships_fail_closed(tmp_path, text):
     path = tmp_path / "Orthogroups.txt"

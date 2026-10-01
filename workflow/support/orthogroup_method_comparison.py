@@ -36,7 +36,7 @@ def build_arg_parser():
 
 
 def read_gene_counts(path):
-    """Read the totals used by the comparison without changing OG membership."""
+    """Read assigned-OG totals using OrthoFinder's native GeneCount semantics."""
     if Path(path).name != "Orthogroups.txt":
         return pandas.read_csv(path, sep="\t", header=0, low_memory=False)
 
@@ -54,13 +54,17 @@ def read_gene_counts(path):
             genes = members.split()
             if group in seen_groups:
                 raise ValueError(f"Duplicate orthogroup {group} at line {number}")
+            seen_groups.add(group)
+            # OrthoFinder's GeneCount table excludes single-gene groups, which
+            # are written separately to Orthogroups_UnassignedGenes.tsv.
+            if len(genes) == 1:
+                continue
             if len(set(genes)) != len(genes) or seen_genes.intersection(genes):
                 raise ValueError(f"Duplicate gene membership at line {number}")
-            seen_groups.add(group)
             seen_genes.update(genes)
             rows.append((group, len(genes)))
     if not rows:
-        raise ValueError("Orthogroups.txt has no orthogroups")
+        raise ValueError("Orthogroups.txt has no assigned orthogroups")
     return pandas.DataFrame(rows, columns=["Orthogroup", "Total"])
 
 
