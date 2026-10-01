@@ -494,6 +494,13 @@ Notes:
 - each formatted source GFF has a neighboring `*.gff.gz.repair.json` audit containing
   the old/new gene IDs, reasons, changed references, ambiguity/collision counts, and
   input/output fingerprints used for cache invalidation.
+- overlapping parts of one explicit CDS ID/Parent receive
+  `gg_source_overlap=confirmed` only when their ordered genome sequence exactly
+  matches a complete publisher CDS with the same feature identity. The repair
+  audit records source hashes, coordinates and matched CDS IDs. Missing evidence
+  or a mismatch leaves the overlap unconfirmed; normal strict validation still
+  rejects it. This marker does not assert ribosomal slippage or another biological
+  exception, and source-supplied markers are not trusted.
 - when taxonomy cache preparation succeeds, the generated
   `gg_input_generation_species.tsv` also includes:
   - `taxid`

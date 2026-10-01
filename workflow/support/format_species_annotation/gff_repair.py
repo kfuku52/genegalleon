@@ -27,8 +27,9 @@ from .organelle import (
     gff_organelle_seqids,
     iter_non_organelle_gff_lines,
 )
+from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 3
+GFF_REPAIR_VERSION = 4
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -88,7 +89,7 @@ def write_json_atomic(path, payload):
             tmp_path.unlink()
 
 
-def audit_matches_inputs(audit, mode, source_path, cds_path, output_path):
+def audit_matches_inputs(audit, mode, source_path, cds_path, output_path, source_task=None):
     if not isinstance(audit, dict):
         return False
     if int(audit.get("repair_version", 0) or 0) != GFF_REPAIR_VERSION:
@@ -106,7 +107,13 @@ def audit_matches_inputs(audit, mode, source_path, cds_path, output_path):
             return False
         if audit.get(key) != current:
             return False
-    return True
+    expected = source_overlap_input_fingerprints(source_task)
+    return audit.get("source_overlap_input_fingerprints", {}) == expected
+
+
+def source_overlap_input_fingerprints(task):
+    return {key: file_fingerprint(task[key]) for key in ("cds_path", "genome_path")
+            if task is not None and task.get(key) is not None}
 
 
 def read_formatted_cds_gene_ids(cds_path, species_prefix):
@@ -335,7 +342,7 @@ def rewrite_gff_attributes(attr_text, feature_type, id_mapping):
     return ";".join(rewritten), changed, reference_changes, 0
 
 
-def iter_repaired_gff_lines(gff_path, id_mapping, counters):
+def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=()):
     for line in iter_non_organelle_gff_lines(gff_path):
         stripped = line.rstrip("\n\r")
         newline = line[len(stripped) :]
@@ -347,6 +354,12 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters):
             yield line
             continue
         feature_type = parts[2].strip().lower()
+        if feature_type == "cds":
+            key = source_overlap_key(parts[8])
+            marked = mark_source_overlap(parts[8], key in confirmed_overlaps)
+            if marked != parts[8]:
+                parts[8] = marked
+                line = "\t".join(parts) + newline
         attributes, value_changes, reference_changes, normalized_bare = rewrite_gff_attributes(
             parts[8],
             feature_type,
@@ -362,7 +375,7 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters):
         yield line
 
 
-def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
+def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, source_task=None):
     mode = normalize_gff_repair_mode(mode)
     source_fingerprint = file_fingerprint(gff_path)
     cds_fingerprint = file_fingerprint(cds_path)
@@ -370,6 +383,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
     organelle_seqids = gff_organelle_seqids(gff_path)
     organelle_features_excluded = count_organelle_gff_features(gff_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
+    overlap_inputs = source_overlap_input_fingerprints(source_task)
+    confirmed_overlaps, overlap_audit = audit_source_overlaps(gff_path, source_task or {})
     plan = choose_gene_id_repairs(gff_path, cds_gene_ids) if mode != "off" else {
         "id_mapping": {},
         "repairs": [],
@@ -396,7 +411,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
     }
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
-        iter_repaired_gff_lines(gff_path, plan["id_mapping"], counters),
+        iter_repaired_gff_lines(gff_path, plan["id_mapping"], counters, confirmed_overlaps),
     )
     status = (
         "repaired"
@@ -415,6 +430,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode):
         "status": status,
         "species_prefix": species_prefix,
         "source_fingerprint": source_fingerprint,
+        "source_overlap_input_fingerprints": overlap_inputs,
+        "source_overlap": overlap_audit,
         "cds_fingerprint": cds_fingerprint,
         "output_fingerprint": file_fingerprint(output_path),
         "line_count": line_count,

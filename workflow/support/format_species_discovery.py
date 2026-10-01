@@ -982,6 +982,7 @@ def format_gff(
                 gff_path,
                 formatted_cds_path,
                 output_path,
+                source_task=task,
             ):
                 result = {"status": "skip", "output_path": output_path, "lines": 0}
                 result.update(repair_result_fields(audit, output_path))
@@ -1014,6 +1015,7 @@ def format_gff(
                 output_path=output_path,
                 species_prefix=task["species_prefix"],
                 mode=repair_mode,
+                source_task=task,
             )
             line_count = int(audit.get("line_count", 0) or 0)
             repair_fields = repair_result_fields(audit, output_path)

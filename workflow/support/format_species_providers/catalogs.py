@@ -148,12 +148,14 @@ def resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
     web_base = resolve_coge_web_base_url()
     api_base = resolve_coge_api_base_url()
 
-    gff_meta_url = "{}/GenomeInfo.pl?fname=get_gff&gid={}&id_type=name&cds=1&annos=0&nu=0&upa=0&chr=".format(
+    # Whole-genome exports omit the optional chromosome argument. Retain
+    # annotation metadata and avoid the legacy header-only export cache variant.
+    gff_meta_url = "{}/GenomeInfo.pl?fname=get_gff&gid={}&id_type=name&cds=1&annos=1&nu=0&upa=0".format(
         web_base, gid
     )
     gff_meta = fetch_json_with_headers(gff_meta_url, timeout, headers)
     gff_candidates = [str(item).strip() for item in gff_meta.get("files", []) if str(item).strip() != ""]
-    gff_url = gff_candidates[0] if len(gff_candidates) > 0 else ""
+    gff_url = urljoin(web_base + "/", gff_candidates[0]) if gff_candidates else ""
     gff_filename = str(gff_meta.get("file", "") or "").strip()
     if gff_url == "" and gff_filename != "":
         gff_url = "{}/api/v1/downloads/?gid={}&filename={}".format(web_base, gid, quote(gff_filename, safe=""))
@@ -167,7 +169,7 @@ def resolve_coge_download_urls_from_id(source_id, species_key, timeout, headers)
         )
 
     organism_name = str((genome_info.get("organism") or {}).get("name", "") or "")
-    inferred_species = parse_species_key_candidate(organism_name)
+    inferred_species = species_key or parse_species_key_candidate(organism_name)
     if inferred_species == "" and gff_filename != "":
         prefix = re.sub(r"[.]gid[0-9]+.*$", "", gff_filename, flags=re.IGNORECASE)
         inferred_species = parse_species_key_candidate(prefix.replace("_", " "))

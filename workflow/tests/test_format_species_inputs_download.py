@@ -581,7 +581,8 @@ def test_download_manifest_supports_coge_and_cngb_with_id_inference(tmp_path):
             encoding="utf-8",
         )
         gff_source.write_text(
-            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=AT1G01010\n",
+            "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=AT1G01010\n"
+            "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=AT1G01010\n",
             encoding="utf-8",
         )
         genome_source.write_text(

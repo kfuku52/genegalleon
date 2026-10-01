@@ -160,7 +160,8 @@ def test_download_manifest_recovers_stale_lock_file(tmp_path):
     cds_source = source_dir / "coge_cds.fa"
     gff_source = source_dir / "coge_gene.gff3"
     cds_source.write_text(">AT1G01010_t1\nATG\n", encoding="utf-8")
-    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n", encoding="utf-8")
+    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n"
+                          "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=AT1G01010\n", encoding="utf-8")
 
     manifest = tmp_path / "manifest.tsv"
     species_key = "Arabidopsis_thaliana"
@@ -223,7 +224,8 @@ def test_download_manifest_does_not_reclaim_fresh_foreign_lock_file(tmp_path):
     cds_source = source_dir / "coge_cds.fa"
     gff_source = source_dir / "coge_gene.gff3"
     cds_source.write_text(">AT1G01010_t1\nATG\n", encoding="utf-8")
-    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n", encoding="utf-8")
+    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n"
+                          "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=AT1G01010\n", encoding="utf-8")
 
     manifest = tmp_path / "manifest.tsv"
     species_key = "Arabidopsis_thaliana"
@@ -290,7 +292,8 @@ def test_download_manifest_resolves_urls_from_id_templates_for_non_ncbi(tmp_path
     cds_source = source_dir / (source_id_token + ".cds.fasta")
     gff_source = source_dir / (source_id_token + ".genes.gff3")
     cds_source.write_text(">AT1G01010_t1\nATG\n", encoding="utf-8")
-    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n", encoding="utf-8")
+    gff_source.write_text("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=AT1G01010\n"
+                          "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=AT1G01010\n", encoding="utf-8")
 
     manifest = tmp_path / "manifest.tsv"
     make_manifest(
@@ -369,7 +372,8 @@ def test_download_manifest_resolves_urls_from_id_for_all_non_ncbi_providers_via_
             ">geneA.t1\nATGAA\n>geneA.t2\nATGAAATTT\n",
             encoding="utf-8",
         )
-        gff_source.write_text("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=geneA\n", encoding="utf-8")
+        gff_source.write_text("chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=geneA\n"
+                              "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent=geneA\n", encoding="utf-8")
         genome_source.write_text(">chr1\nATGCATGC\n", encoding="utf-8")
         rows.append(
             {

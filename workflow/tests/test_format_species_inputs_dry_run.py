@@ -148,7 +148,8 @@ def test_auth_bearer_token_env_allows_download(tmp_path):
     cds_source = source_dir / "cds.fa"
     gff_source = source_dir / "gene.gff3"
     cds_source.write_text(">a\nATG\n", encoding="utf-8")
-    gff_source.write_text("scaf\tsrc\tgene\t1\t3\t.\t+\t.\tID=a\n", encoding="utf-8")
+    gff_source.write_text("scaf\tsrc\tgene\t1\t3\t.\t+\t.\tID=a\n"
+                          "scaf\tsrc\tCDS\t1\t3\t.\t+\t0\tID=cds1;Parent=a\n", encoding="utf-8")
 
     manifest = tmp_path / "manifest.tsv"
     make_manifest(
