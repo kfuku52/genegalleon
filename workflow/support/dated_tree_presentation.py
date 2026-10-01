@@ -126,6 +126,7 @@ def render_dated_tree(
     geological_background="period",
     figure_width=7.2,
     figure_height=None,
+    row_spacing_points=None,
     font_family="Helvetica",
     font_size=8,
     tip_order=None,
@@ -221,41 +222,79 @@ def render_dated_tree(
     )
     inputs.extend(("BUSCO metadata", source) for source in dataset_sources.values())
     validate_outputs_do_not_replace_inputs(inputs, outputs)
-    height = figure_height if figure_height is not None else max(3.8, 1.9 + count * 0.24)
-    if not math.isfinite(height) or height < 2.5 or figure_width < 4:
-        raise ValueError("Presentation plots need a width of at least 4 and a height of at least 2.5 inches.")
+    spacing = row_spacing_points if row_spacing_points is not None else max(font_size + 1, font_size * 1.12)
+    if not math.isfinite(spacing) or spacing < font_size:
+        raise ValueError("Row spacing must be finite and at least the font size, in points.")
+    if figure_width < 3.6 or (figure_height is not None and (not math.isfinite(figure_height) or figure_height < 2.5)):
+        raise ValueError("Presentation plots need a width of at least 3.6 and a height of at least 2.5 inches.")
     plt.rcParams.update(
         {"font.family": font_family, "font.size": font_size, "pdf.fonttype": 42, "svg.fonttype": "none"}
     )
-    figure = plt.figure(figsize=(figure_width, height))
+    figure = plt.figure(figsize=(figure_width, figure_height or 3))
     try:
-        header_height = 0.45
-        if periods:
-            renderer = figure.canvas.get_renderer()
-            properties = FontProperties(family=font_family, size=font_size)
-            header_height = max(
-                header_height,
-                max(renderer.get_text_width_height_descent(p["name"], properties, False)[0] for p in periods)
-                / figure.dpi
-                + 0.23,
+        renderer = figure.canvas.get_renderer()
+
+        def text_width(text, style="normal", weight="normal"):
+            properties = FontProperties(family=font_family, size=font_size, style=style, weight=weight)
+            return renderer.get_text_width_height_descent(text, properties, False)[0] * 72 / figure.dpi
+
+        width_points = figure_width * 72
+        left_points, right_points, gap_points = 12, 10, 6
+        label_points = (
+            max(
+                text_width(name.replace("_", " "), "italic", styles.get(name, {}).get("font_weight", "normal"))
+                for name in species
             )
-        bottom, top = 1.15 / height, 1 - header_height / height
-        if (top - bottom) * height < 1:
-            raise ValueError("Figure is too short for the geological names and tree; increase its height.")
-        label_width = max(len(name.replace("_", " ")) for name in species) * font_size * 0.52 / 72 + 0.13
-        right = 0.71 if counts else 0.97
-        tree_right = right - label_width / figure_width
-        if (tree_right - 0.06) * figure_width < 1:
+            + 2
+        )
+        available = width_points - left_points - right_points - label_points - gap_points * (2 if counts else 1)
+        bar_points = max(58, min(110, available * 0.27)) if counts else 0
+        tree_points = available - bar_points
+        if tree_points < 48:
             raise ValueError("Figure is too narrow for the tip labels and panels.")
-        axis = figure.add_axes([0.06, bottom, tree_right - 0.06, top - bottom])
-        labels = figure.add_axes([tree_right + 0.02, bottom, label_width / figure_width, top - bottom], sharey=axis)
+        credible_label = interval_label(nodes)
+        legend_labels = ([credible_label] if credible_label else []) + (list(STATUS_LABELS) if counts else [])
+        legend_points = (
+            sum(text_width(label) + font_size * 1.35 for label in legend_labels)
+            + max(0, len(legend_labels) - 1) * font_size * 0.9
+            + font_size * 0.8
+        )
+        legend_rows = 2 if counts and credible_label and legend_points > width_points - 24 else int(bool(legend_labels))
+        legend_row_points = font_size + 8
+        footer_points = (48 if counts else 6) + 20 + legend_rows * legend_row_points
+        period_offset = font_size * 3 + 7
+        header_points = max(30, (max(text_width(p["name"]) for p in periods) + period_offset + 8) if periods else 30)
+        height = (
+            figure_height
+            if figure_height is not None
+            else max(2.5, (header_points + footer_points + (count + 0.2) * spacing) / 72)
+        )
+        figure.set_size_inches(figure_width, height)
+        bottom, top = footer_points / (height * 72), 1 - header_points / (height * 72)
+        if (top - bottom) * height < 1:
+            if count > 6:
+                raise ValueError("Figure is too short for the geological names and tree; increase its height.")
+        axis = figure.add_axes([left_points / width_points, bottom, tree_points / width_points, top - bottom])
+        label_left = left_points + tree_points + gap_points
+        labels = figure.add_axes(
+            [label_left / width_points, bottom, label_points / width_points, top - bottom], sharey=axis
+        )
         labels.set_xlim(0, 1)
         labels.axis("off")
         axis.set_ylim(-0.6, count - 0.4)
         axis.set_xlim(max_age, 0)
-        axis.set_xticks([value for value in MaxNLocator(nbins=5).tick_values(0, max_age) if 0 <= value <= max_age])
+        axis.set_xticks(
+            [
+                value
+                for value in MaxNLocator(nbins=max(2, min(5, int(tree_points / 38)))).tick_values(0, max_age)
+                if 0 <= value <= max_age
+            ]
+        )
         axis.set_yticks([])
-        axis.spines[["left", "right", "top"]].set_visible(False)
+        axis.spines[["left", "right", "bottom"]].set_visible(False)
+        axis.spines["top"].set_linewidth(0.6)
+        axis.xaxis.tick_top()
+        axis.xaxis.set_label_position("top")
         axis.set_xlabel("Divergence time (Ma)")
         axis.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
         period_texts = []
@@ -265,7 +304,7 @@ def render_dated_tree(
                 period["name"],
                 xy=((period["young_Ma"] + period["old_Ma"]) / 2, 1),
                 xycoords=("data", "axes fraction"),
-                xytext=(0, 5),
+                xytext=(0, period_offset),
                 textcoords="offset points",
                 rotation=90,
                 ha="center",
@@ -299,13 +338,13 @@ def render_dated_tree(
                 cursor = centres[index] - widths[index] / 2 - gap
             for text, centre, anchor in zip(ordered, centres, anchors, strict=True):
                 offset = (centre - anchor) * 72 / figure.dpi
-                text.set_position((offset, 5))
+                text.set_position((offset, period_offset))
                 if abs(offset) > 0.25:
                     axis.annotate(
                         "",
                         xy=text.xy,
                         xycoords=("data", "axes fraction"),
-                        xytext=(offset, 4),
+                        xytext=(offset, period_offset - 1),
                         textcoords="offset points",
                         annotation_clip=False,
                         arrowprops={"arrowstyle": "-", "color": "#777777", "lw": 0.4, "shrinkA": 0, "shrinkB": 0},
@@ -318,16 +357,23 @@ def render_dated_tree(
                 branches.append(((x, min(point[1] for point in points)), (x, max(point[1] for point in points))))
             if not node.is_root:
                 branches.append(((float(node.up.props["age"]), y), (x, y)))
-        for first, second in branches:
-            axis.plot([first[0], second[0]], [first[1], second[1]], color="#202020", lw=0.7, zorder=2)
+        branch_lines = []
+        for index, (first, second) in enumerate(branches):
+            line = axis.plot([first[0], second[0]], [first[1], second[1]], color="#202020", lw=0.7, zorder=2)[0]
+            line.set_gid(f"tree-branch-{index}")
+            branch_lines.append(line)
         interval_count = 0
+        interval_lines = []
         for node in nodes:
             if node.props.get("age_ci_low") is not None:
                 low, high = float(node.props["age_ci_low"]), float(node.props["age_ci_high"])
-                axis.plot([low, high], [ys[node]] * 2, color="#D55E00", lw=1.2, alpha=0.8, zorder=3)
-                axis.plot(
-                    [low, high], [ys[node]] * 2, linestyle="none", marker="|", markersize=3, color="#D55E00", zorder=3
-                )
+                line = axis.plot([low, high], [ys[node]] * 2, color="#D55E00", lw=1.2, zorder=1)[0]
+                caps = axis.plot(
+                    [low, high], [ys[node]] * 2, linestyle="none", marker="|", markersize=3, color="#D55E00", zorder=1
+                )[0]
+                line.set_gid(f"age-interval-{interval_count}")
+                caps.set_gid(f"age-interval-cap-{interval_count}")
+                interval_lines.extend([line, caps])
                 interval_count += 1
         tip_texts = []
         for leaf in leaves:
@@ -367,7 +413,7 @@ def render_dated_tree(
         occupied = []
         for text in age_texts:
             placed = False
-            for dx, dy, align in [
+            positions = [
                 (2, 3, "left"),
                 (-2, 3, "right"),
                 (2, -10, "left"),
@@ -376,11 +422,19 @@ def render_dated_tree(
                 (-2, 12, "right"),
                 (2, -19, "left"),
                 (-2, -19, "right"),
-            ]:
+            ]
+            # Compact rows may leave space only between branch levels. Search
+            # nearby point offsets, retaining a leader for displaced labels.
+            positions.extend(
+                (dx, dy, align)
+                for distance in range(1, 49)
+                for dy in (distance, -distance)
+                for dx, align in ((2, "left"), (-2, "right"))
+            )
+            for dx, dy, align in positions:
                 text.set_position((dx, dy))
                 text.set_ha(align)
-                figure.canvas.draw()
-                box = text.get_window_extent(renderer).padded(figure.dpi / 72)
+                box = text.get_window_extent(renderer).padded(0.5 * figure.dpi / 72)
                 crosses = any(
                     (
                         min(a[0], b[0]) < box.x1
@@ -393,7 +447,8 @@ def render_dated_tree(
                 if (
                     not crosses
                     and not any(box.overlaps(other) for other in occupied)
-                    and axis.bbox.contains(box.x0, box.y0)
+                    and box.x0 >= axis.bbox.x0
+                    and box.y0 >= axis.bbox.y0 - 12 * figure.dpi / 72
                     and axis.bbox.contains(box.x1, box.y1)
                 ):
                     occupied.append(box)
@@ -409,11 +464,16 @@ def render_dated_tree(
                     break
             if not placed:
                 raise ValueError(
-                    "Age labels cannot fit without overlap; increase figure size or select fewer labelled clades."
+                    f"Age label {text.get_text()} Ma cannot fit without overlap; "
+                    "increase figure size or select fewer labelled clades."
                 )
         busco_axis_label = None
+        bars = percent = None
         if counts:
-            bars = figure.add_axes([0.76, bottom, 0.21, top - bottom], sharey=axis)
+            bar_left = label_left + label_points + gap_points
+            bars = figure.add_axes(
+                [bar_left / width_points, bottom, bar_points / width_points, top - bottom], sharey=axis
+            )
             total = sum(next(iter(counts.values())))
             for leaf in leaves:
                 left = 0
@@ -433,35 +493,43 @@ def render_dated_tree(
             bars.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
             busco_axis_label = "Number of BUSCO genes" + (f"\n({dataset})" if dataset else "")
             bars.set_xlabel(busco_axis_label)
+            if max(text_width(line) for line in busco_axis_label.splitlines()) > bar_points:
+                bars.xaxis.label.set_x(1)
+                bars.xaxis.label.set_ha("right")
             percent = bars.twiny()
             percent.set_xlim(0, 100)
             percent.set_xticks([0, 50, 100])
+            percent.set_xlabel("BUSCO genes (%)")
             percent.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
             percent.spines[["left", "right", "bottom"]].set_visible(False)
+            percent.spines["top"].set_linewidth(0.6)
         handles = []
-        credible_label = interval_label(nodes)
         if credible_label:
             handles.append(Line2D([0], [0], color="#D55E00", lw=1.2, label=credible_label))
         if counts:
             handles.extend(
                 Patch(facecolor=colour, label=name) for colour, name in zip(STATUS_COLOURS, STATUS_LABELS, strict=True)
             )
-        if handles:
-            figure.legend(
-                handles=handles,
-                loc="lower center",
-                bbox_to_anchor=(0.5, 0.3 / height),
-                ncol=len(handles),
-                frameon=False,
-                fontsize=font_size,
-                handlelength=1,
-                columnspacing=0.9,
-                handletextpad=0.35,
+        legend_groups = [handles[:1], handles[1:]] if legend_rows == 2 else ([handles] if handles else [])
+        legends = []
+        for index, group in enumerate(reversed(legend_groups)):
+            legends.append(
+                figure.legend(
+                    handles=group,
+                    loc="lower center",
+                    bbox_to_anchor=(0.5, (20 + index * legend_row_points) / (height * 72)),
+                    ncol=len(group),
+                    frameon=False,
+                    fontsize=font_size,
+                    handlelength=1,
+                    columnspacing=0.9,
+                    handletextpad=0.35,
+                )
             )
         if periods:
             figure.text(
-                0.06,
-                0.1 / height,
+                left_points / width_points,
+                5 / (height * 72),
                 "Geological periods: ICS 2026/06."
                 + (" Precambrian shown as one interval." if any(p["name"] == "Precambrian" for p in periods) else ""),
                 fontsize=font_size,
@@ -490,6 +558,23 @@ def render_dated_tree(
             "species_order": order,
             "credible_interval_count": interval_count,
             "credible_interval_label": credible_label,
+            "credible_interval_style": {
+                "alpha": interval_lines[0].get_alpha() if interval_lines else None,
+                "zorder": interval_lines[0].get_zorder() if interval_lines else None,
+                "tree_zorder": branch_lines[0].get_zorder() if branch_lines else None,
+            },
+            "tree_x_axis_position": "top",
+            "tree_x_axis_y_points": float(axis.bbox.y1) * 72 / figure.dpi,
+            "busco_percentage_axis_y_points": float(percent.bbox.y1) * 72 / figure.dpi if percent is not None else None,
+            "busco_plot_bbox_points": [float(value) * 72 / figure.dpi for value in bars.bbox.extents]
+            if bars is not None
+            else None,
+            "row_spacing_points": axis.bbox.height * 72 / figure.dpi / (count + 0.2),
+            "legend_rows": legend_rows,
+            "legend_bbox_points": [
+                [float(value) * 72 / figure.dpi for value in legend.get_window_extent(renderer).extents]
+                for legend in legends
+            ],
             "mean_age_label_count": len(age_texts),
             "geological_background": geological_background,
             "geological_source": GEOLOGICAL_SOURCE if periods else None,
@@ -525,6 +610,7 @@ def render_dated_tree(
             ],
             "figure_size_inches": [figure_width, height],
             "font_size_points": font_size,
+            "font_family": font_family,
             "inference": "Saved tree and age intervals reused without inference.",
         }
         paths = [Path(target) for _, target in outputs]

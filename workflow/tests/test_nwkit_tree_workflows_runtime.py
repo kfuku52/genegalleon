@@ -16,7 +16,8 @@ def run(*args):
     return subprocess.run([str(value) for value in args], capture_output=True, text=True)
 
 
-def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp_path):
+@pytest.mark.parametrize("width", [3.6, 4.8, 6.0, 7.2])
+def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp_path, width):
     import xml.etree.ElementTree as ET
 
     tree = tmp_path / "tree.nwk"
@@ -42,6 +43,8 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
         report,
         "--geological-background",
         "period",
+        "--figure-width",
+        width,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     texts = [item.text for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}text")]
@@ -65,6 +68,20 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
     assert data["all_ages_Ma"][0]["mean"] == 150
     assert data["all_ages_Ma"][0]["low"] == 145
     assert data["all_ages_Ma"][0]["high"] == 155
+    assert data["figure_size_inches"][0] == width
+    assert data["font_size_points"] == 8
+    assert data["tree_x_axis_position"] == "top"
+    assert data["tree_x_axis_y_points"] == data["busco_percentage_axis_y_points"]
+    assert data["credible_interval_style"]["alpha"] is None
+    assert data["credible_interval_style"]["zorder"] < data["credible_interval_style"]["tree_zorder"]
+    groups = [item.attrib.get("id", "") for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}g")]
+    assert groups.index("age-interval-0") < groups.index("tree-branch-0")
+    for item in ET.parse(plot).iter():
+        if item.attrib.get("id", "").startswith("age-interval-"):
+            assert all("opacity" not in value for child in item.iter() for value in child.attrib.values())
+    legend_boxes = data["legend_bbox_points"]
+    assert all(box[3] < other[1] or box[1] > other[3]
+               for index, box in enumerate(legend_boxes) for other in legend_boxes[index + 1:])
     assert tree.read_text().endswith("[&95%HPD={145,155}];")
 
 
@@ -143,6 +160,7 @@ def test_dated_tree_layout_report_selects_presentation_with_optional_background(
     result = run(*command)
     assert result.returncode == 0, result.stdout + result.stderr
     assert bool(json.loads(report.read_text())["geological_intervals"]) is has_periods
+    assert json.loads(report.read_text())["figure_size_inches"][0] == 7.2
 
 
 @pytest.mark.parametrize("text", [

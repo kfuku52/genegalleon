@@ -89,6 +89,7 @@ def main():
     )
     parser.add_argument("--figure-width", type=float)
     parser.add_argument("--figure-height", type=float)
+    parser.add_argument("--row-spacing", type=float, help="Adjacent-tip spacing in points (default: 9 with an 8-point font).")
     parser.add_argument("--font-family")
     parser.add_argument("--font-size", type=float)
     parser.add_argument("--tip-order", type=Path, help="TSV with species_id in top-to-bottom order.")
@@ -111,6 +112,7 @@ def main():
             for value in (
                 args.figure_width,
                 args.figure_height,
+                args.row_spacing,
                 args.font_family,
                 args.font_size,
                 args.tip_order,
@@ -130,6 +132,7 @@ def main():
             geological_background=args.geological_background or "period",
             figure_width=args.figure_width if args.figure_width is not None else 7.2,
             figure_height=args.figure_height,
+            row_spacing_points=args.row_spacing,
             font_family=args.font_family if args.font_family is not None else "Helvetica",
             font_size=args.font_size if args.font_size is not None else 8,
             tip_order=args.tip_order,
