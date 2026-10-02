@@ -632,8 +632,10 @@ def test_genome_evolution_core_builds_grampa_arguments_with_array():
     text = _read_text(script)
     assert 'h1_param="-h1 ' not in text
     assert "grampa_args=(" in text
-    assert 'grampa_args+=(-h1 "${grampa_h1_normalized}")' in text
-    assert 'grampa.py "${grampa_args[@]}"' in text
+    assert 'grampa_args+=(--h1 "${grampa_h1_normalized}")' in text
+    assert 'nwkit "${grampa_args[@]}"' in text
+    assert "grampa_args=(mul-reconcile" in text
+    assert 'grampa.py "${grampa_args[@]}"' not in text
 
 
 def test_genome_evolution_core_uses_option_safe_grep_for_orthogroup_id_removal():
@@ -927,7 +929,7 @@ def test_genome_evolution_uses_local_optional_grampa_and_go_target_parameters():
     core = _read_text(CORE_DIR / "gg_genome_evolution_core.sh")
 
     assert (
-        'grampa_h1="" # Optional GRAMPA H1 hypothesis. Leave empty to skip GRAMPA steps. Example: "2" or "x,y,z".'
+        'grampa_h1="" # H1 for native MUL-tree search; legacy name/numbering. Empty skips these steps. Example: "2" or "x,y,z".'
         in entrypoint
     )
     assert (

@@ -857,6 +857,12 @@ run_format_stage_single() {
   local existing_genome=()
   local format_needs_update=0
   local format_force_overwrite=${overwrite}
+  local format_work_dir=""
+  local format_cds_dir="${species_cds_dir}"
+  local format_gff_dir="${species_gff_dir}"
+  local format_genome_dir="${species_genome_dir}"
+  local format_summary_output="${species_summary_output}"
+  local format_resolved_output="${resolved_manifest_output}"
   local format_provenance_manifest="${input_generation_provenance_dir}/format.single.json"
   local -a format_provenance_args=()
 
@@ -935,10 +941,15 @@ run_format_stage_single() {
   gg_step_start "${task}"
   stage_format_status="running"
 
-  if [[ ${format_force_overwrite} -eq 1 && -s "${format_provenance_manifest}" ]]; then
-    echo "Clearing managed formatted-input outputs before provenance rebuild."
-    rm -rf -- "${species_cds_dir}" "${species_gff_dir}" "${species_genome_dir}"
-    rm -f -- "${species_summary_output}" "${resolved_manifest_output}"
+  if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    ensure_dir "${download_tmp_root}"
+    format_work_dir=$(mktemp -d "${download_tmp_root}/formatted-inputs.XXXXXX") || return $?
+    format_cds_dir="${format_work_dir}/species_cds"
+    format_gff_dir="${format_work_dir}/species_gff"
+    format_genome_dir="${format_work_dir}/species_genome"
+    format_summary_output="${format_work_dir}/species_summary.tsv"
+    format_resolved_output="${format_work_dir}/resolved_manifest.tsv"
+    echo "Staging formatted-input outputs before publication."
   fi
 
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
@@ -950,10 +961,10 @@ run_format_stage_single() {
   rm -f -- "${format_stats_file}"
   cmd=(python "${gg_support_dir}/format_species_inputs.py")
   cmd+=(--provider "${provider}")
-  cmd+=(--species-cds-dir "${species_cds_dir}")
-  cmd+=(--species-gff-dir "${species_gff_dir}")
-  cmd+=(--species-genome-dir "${species_genome_dir}")
-  cmd+=(--species-summary-output "${species_summary_output}")
+  cmd+=(--species-cds-dir "${format_cds_dir}")
+  cmd+=(--species-gff-dir "${format_gff_dir}")
+  cmd+=(--species-genome-dir "${format_genome_dir}")
+  cmd+=(--species-summary-output "${format_summary_output}")
   cmd+=(--stats-output "${format_stats_file}")
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
   cmd+=(--gff-repair-mode "${gff_repair_mode}")
@@ -961,7 +972,7 @@ run_format_stage_single() {
   if [[ -n "${download_manifest}" ]]; then
     cmd+=(--download-manifest "${download_manifest}")
     cmd+=(--download-dir "${download_dir}")
-    cmd+=(--resolved-manifest-output "${resolved_manifest_output}")
+    cmd+=(--resolved-manifest-output "${format_resolved_output}")
   fi
   if [[ -n "${input_dir}" ]]; then
     cmd+=(--input-dir "${input_dir}")
@@ -990,7 +1001,27 @@ run_format_stage_single() {
   fi
 
   echo "Running: ${cmd[*]}"
-  if "${cmd[@]}"; then
+  if (
+    trap 'if [[ -n "${format_work_dir}" ]]; then rm -rf -- "${format_work_dir}"; fi' EXIT
+    "${cmd[@]}" || exit $?
+    if [[ -n "${format_work_dir}" ]]; then
+      python "${gg_support_dir}/relocate_formatted_inputs.py" \
+        --mapping "${format_cds_dir}" "${species_cds_dir}" \
+        --mapping "${format_gff_dir}" "${species_gff_dir}" \
+        --mapping "${format_genome_dir}" "${species_genome_dir}" \
+        --summary "${format_summary_output}" || exit $?
+      local format_publish_args=(
+        "${format_cds_dir}" "${species_cds_dir}"
+        "${format_gff_dir}" "${species_gff_dir}"
+        "${format_genome_dir}" "${species_genome_dir}"
+        "${format_summary_output}" "${species_summary_output}"
+      )
+      if [[ -f "${format_resolved_output}" ]]; then
+        format_publish_args+=("${format_resolved_output}" "${resolved_manifest_output}")
+      fi
+      mv_out_bundle "${format_publish_args[@]}" || exit $?
+    fi
+  ); then
     cmd_status=0
   else
     cmd_status=$?

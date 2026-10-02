@@ -26,7 +26,6 @@ diamond
 # Keep unpinned to allow newer releases. Runtime stability is checked
 # in container/scripts/ensure_generax_stable.sh with automatic fallback.
 generax
-grampa
 hyphy
 # IQ-TREE CLI and library worker are built together from official source.
 jcvi

@@ -137,6 +137,10 @@ run_generax=0 # GeneRax off by default for local/smoke environments without MPI 
 reconciliation_duplication_cost=1.5 # Duplication weight for species-tree-assisted rooting.
 reconciliation_loss_cost=1 # Implied-loss weight for species-tree-assisted rooting.
 run_reconciliation=0 # Run NWKIT LCA reconciliation for RADTE and event statistics.
+run_wgd_ssd_classification=0 # Join full-species-tree WGD candidates and genomic evidence to duplication nodes.
+wgd_evidence_dir="" # Default: workspace/output/genome_evolution/wgd_ssd.
+wgd_proximal_distance=10 # Report nearby copies within this gene-rank distance; proximity alone is not SSD support.
+wgd_native_tree_likelihood=0 # Optional fixed-topology DL/WGD likelihood using supplied count-fit parameters.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with NWKIT; native or IQ-TREE sequence engine.
 
 # Trait and promoter workflow flags

@@ -3,15 +3,14 @@
 
 import argparse
 import datetime
-import os
 import re
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import ete4
 import numpy
 import pandas
+from nwkit.util import read_tree, read_tree_strings
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -21,10 +20,7 @@ from species_labeling import extract_species_label, strip_species_label
 
 
 def load_tree(newick_or_path, parser=0):
-    if isinstance(newick_or_path, str) and os.path.exists(newick_or_path):
-        with open(newick_or_path, "r", encoding="utf-8") as handle:
-            newick_or_path = handle.read().strip()
-    return ete4.PhyloTree(newick_or_path, parser=parser)
+    return read_tree(newick_or_path, parser, True, quiet=True)
 
 
 _WORKER_SPECIES_NAMES = None
@@ -60,9 +56,17 @@ def read_grampa_det(path):
 
 
 def read_grampa_out(path):
-    out_header = pandas.read_csv(path, sep="\t", header=0, nrows=0, low_memory=False, comment="#")
+    skipped = 0
+    with open(path) as handle:
+        for line in handle:
+            if not line.strip() or line.startswith("#"):
+                skipped += 1
+            else:
+                break
+    options = {"sep": "\t", "header": 0, "skiprows": skipped, "low_memory": False, "keep_default_na": False}
+    out_header = pandas.read_csv(path, nrows=0, **options)
     if set(MODERN_OUT_COLUMNS).issubset(out_header.columns.tolist()):
-        return pandas.read_csv(path, sep="\t", header=0, low_memory=False, comment="#", usecols=MODERN_OUT_COLUMNS)
+        return pandas.read_csv(path, usecols=MODERN_OUT_COLUMNS, **options)
     return None
 
 
@@ -194,8 +198,7 @@ def main():
     print("{} species were found.".format(len(species_names)))
 
     print("Processing grampa input gene trees")
-    with open(args.gene_trees, "r") as f:
-        gt_txts = f.read().splitlines()
+    gt_txts = read_tree_strings(args.gene_trees)
 
     row_indices_by_gt = det.groupby("gene_tree").indices
     tasks = [(i, gt_txt) for i, gt_txt in enumerate(gt_txts)]
@@ -249,10 +252,10 @@ def main():
     print("{} MUL trees were found.".format(out.shape[0]))
 
     print("Adding the original file names of gene trees")
-    gtname = pandas.read_csv(
-        args.sorted_gene_tree_file_names, sep="\t", header=None, names=["file_name"], dtype=str,
-        keep_default_na=False, na_values=[""],
-    )
+    with open(args.sorted_gene_tree_file_names) as handle:
+        gtname = pandas.DataFrame({"file_name": handle.read().splitlines()})
+    if len(gtname) != len(gt_txts):
+        raise ValueError("Gene-tree filenames and input trees have different lengths.")
     gtname["gene_tree"] = "GT-" + pandas.Series([str(i + 1) for i in range(gtname.shape[0])])
 
     print("Writing output table")

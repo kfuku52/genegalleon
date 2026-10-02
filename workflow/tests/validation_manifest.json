@@ -7,6 +7,10 @@
   },
   "runtime_python_files": [
     "test_presence_absence_runtime.py",
+    "test_native_mul_reconcile_runtime.py",
+    "test_wgd_ssd_runtime.py",
+    "test_wgd_ssd_contracts.py",
+    "test_wgd_ssd_gene_stage.py",
     "test_pairwise_synteny.py",
     "test_pairwise_synteny_runtime.py",
     "test_species_taxonomy_runtime.py",

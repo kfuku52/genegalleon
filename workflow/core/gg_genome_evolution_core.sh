@@ -22,6 +22,23 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_genome_evolution_entrypoint.sh.
 genome_evolution_mode="${genome_evolution_mode:-all}"
 run_pairwise_synteny="${run_pairwise_synteny:-0}"
+run_wgd_ssd="${run_wgd_ssd:-0}"
+wgd_genomes_file="${wgd_genomes_file:-}"
+wgd_species_tree="${wgd_species_tree:-}"
+wgd_counts_file="${wgd_counts_file:-}"
+wgd_members_file="${wgd_members_file:-}"
+wgd_count_bootstrap="${wgd_count_bootstrap:-199}"
+wgd_ks_bootstrap="${wgd_ks_bootstrap:-199}"
+wgd_seed="${wgd_seed:-1}"
+wgd_max_pairs="${wgd_max_pairs:-5000}"
+wgd_max_ks_families="${wgd_max_ks_families:-500}"
+wgd_max_count_families="${wgd_max_count_families:-10000}"
+wgd_diagonal_bound="${wgd_diagonal_bound:-300}"
+wgd_min_coverage="${wgd_min_coverage:-0.2}"
+wgd_min_blocks="${wgd_min_blocks:-3}"
+wgd_max_states="${wgd_max_states:-256}"
+wgd_max_iterations="${wgd_max_iterations:-200}"
+wgd_multiplicity="${wgd_multiplicity:-2}"
 run_subgenome_dominance="${run_subgenome_dominance:-0}"
 subgenome_manifest="${subgenome_manifest:-}"
 subgenome_bootstrap_replicates="${subgenome_bootstrap_replicates:-2000}"
@@ -49,9 +66,10 @@ case "${genome_evolution_mode}" in
   all|species_tree|orthogroups) ;;
   synteny) run_pairwise_synteny=1 ;;
   subgenome) run_subgenome_dominance=1 ;;
-  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, synteny or subgenome" >&2; exit 2 ;;
+  wgd) run_wgd_ssd=1 ;;
+  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, synteny, subgenome or wgd" >&2; exit 2 ;;
 esac
-for synteny_flag in run_pairwise_synteny synteny_plot_only run_subgenome_dominance; do
+for synteny_flag in run_pairwise_synteny synteny_plot_only run_subgenome_dominance run_wgd_ssd; do
   case "${!synteny_flag}" in
     0|1) ;;
     *) echo "${synteny_flag} must be 0 or 1" >&2; exit 2 ;;
@@ -278,6 +296,45 @@ run_subgenome_dominance_stage() (
   if [[ ${delete_tmp_dir:-1} -eq 1 ]]; then rm -rf -- "${work_dir}"; fi
   echo "Subgenome outputs: ${gg_workspace_output_dir}/genome_evolution/subgenome_dominance"
 )
+run_wgd_ssd_stage() (
+  local scratch_root work_dir plan_file argument needs_update
+  local -a contract_args=()
+  gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" wgd_ssd || exit $?
+  trap 'gg_stage_transaction_lock_release' EXIT
+  scratch_root=$(gg_task_tmp_path "${gg_workspace_output_dir}/tmp/wgd_ssd") || exit 1
+  ensure_dir "${scratch_root}"
+  work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
+  plan_file="${work_dir}/plan.json"
+  python "${gg_support_dir}/wgd_ssd.py" plan --workspace "${gg_workspace_dir}" \
+    --genomes "${wgd_genomes_file}" --species-tree "${wgd_species_tree}" \
+    --counts "${wgd_counts_file}" --members "${wgd_members_file}" \
+    --sequence-mode "${input_sequence_mode}" --genetic-code "${genetic_code}" \
+    --count-bootstrap "${wgd_count_bootstrap}" --ks-bootstrap "${wgd_ks_bootstrap}" --seed "${wgd_seed}" \
+    --max-pairs "${wgd_max_pairs}" --max-ks-families "${wgd_max_ks_families}" \
+    --max-count-families "${wgd_max_count_families}" --diagonal-bound "${wgd_diagonal_bound}" \
+    --min-coverage "${wgd_min_coverage}" --min-blocks "${wgd_min_blocks}" \
+    --max-states "${wgd_max_states}" --max-iterations "${wgd_max_iterations}" \
+    --multiplicity "${wgd_multiplicity}" --outfile "${plan_file}"
+  python "${gg_support_dir}/wgd_ssd.py" contract --plan "${plan_file}" > "${work_dir}/contract.args"
+  while IFS= read -r -d '' argument; do contract_args+=("${argument}"); done < "${work_dir}/contract.args"
+  needs_update=0
+  gg_artifact_prepare_stage needs_update run_wgd_ssd "${contract_args[@]}" || exit $?
+  if [[ ${needs_update} -eq 1 ]]; then
+    gg_step_start "Native WGD candidates and duplication-origin evidence"
+    env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+      python "${gg_support_dir}/wgd_ssd.py" run --plan "${plan_file}" --output "${work_dir}/results" --cpus "${GG_TASK_CPUS}"
+    python "${gg_support_dir}/wgd_ssd.py" verify --plan "${plan_file}"
+    mv_out_bundle "${work_dir}/results" "${gg_workspace_output_dir}/genome_evolution/wgd_ssd"
+    gg_artifact_record "${contract_args[@]}"
+  else
+    gg_step_skip "Native WGD candidates (current artifacts)"
+  fi
+  if [[ ${delete_tmp_dir:-1} -eq 1 ]]; then rm -rf -- "${work_dir}"; fi
+)
+if [[ "${genome_evolution_mode}" == wgd ]]; then
+  run_wgd_ssd_stage
+  exit 0
+fi
 if [[ "${genome_evolution_mode}" == subgenome ]]; then
   run_subgenome_dominance_stage
   exit 0
@@ -2277,144 +2334,100 @@ busco_species_tree_assisted_gene_tree_rooting() {
 }
 
 busco_grampa() {
-  indir=$1
-  outdir=$2
-  outfile=$3
-  ensure_dir "${outdir}"
-  local nwk_files=()
-  shopt -s nullglob
-  nwk_files=("${indir}"/*.nwk)
-  shopt -u nullglob
-  if [[ ${#nwk_files[@]} -eq 0 ]]; then
-    echo "Skipping Grampa because no rooted gene trees were found in: ${indir}"
-    return 0
-  fi
-  if [[ -e "./grampa_out" ]]; then
-    rm -rf -- "./grampa_out"
-  fi
-  nwkit drop --infile "${file_dated_species_tree}" --target 'intnode' --name 'yes' |
-    sed -e "s/_/-/g" \
-      > "grampa_input_species_tree.nwk"
+  (
+    local indir outdir outfile support_dir species_tree map_file="" work_dir prior_file
+    indir=$(gg_resolve_physical_path "$1") || return $?
+    outdir=$(gg_resolve_physical_path "$2") || return $?
+    ensure_dir "${outdir}" || return $?
+    outfile=$(gg_resolve_physical_path "$3") || return $?
+    support_dir=$(gg_resolve_physical_path "${gg_support_dir}") || return $?
+    species_tree=$(gg_resolve_physical_path "${file_dated_species_tree}") || return $?
+    if [[ -n "${species_label_map_tsv}" ]]; then
+      map_file=$(gg_resolve_physical_path "${species_label_map_tsv}") || return $?
+    fi
+    local nwk_files=()
+    shopt -s nullglob
+    shopt -u dotglob
+    nwk_files=("${indir}"/*.nwk)
+    if [[ ${#nwk_files[@]} -eq 0 ]]; then
+      for prior_file in "${outfile}" "${outdir}/best_mul_tree.nwk" \
+        "${outdir}/grampa_checknums.txt" "${outdir}/grampa_det.txt" "${outdir}/grampa_out.txt" \
+        "${outdir}/nwkit_mul_reconcile.json" "${outdir}/grampa_input_species_tree.nwk" \
+        "${outdir}/grampa_input_gene_trees.nwk" "${outdir}/busco_genetree_filenames.txt"; do
+        if [[ -e "${prior_file}" || -L "${prior_file}" ]]; then
+          echo "No rooted gene trees in ${indir}; preserving prior MUL results without recording them as current." >&2
+          return 1
+        fi
+      done
+      echo "Skipping NWKIT MUL reconciliation because no rooted gene trees were found in: ${indir}"
+      return 0
+    fi
+    ensure_dir "${dir_tmp:-.}" || return $?
+    work_dir=$(mktemp -d "${dir_tmp:-.}/tmp.mul-reconcile.XXXXXX") || return $?
+    work_dir=$(gg_resolve_physical_path "${work_dir}") || return $?
+    trap 'rm -rf -- "${work_dir}"' EXIT
+    cd "${work_dir}" || return $?
+    ensure_dir "./grampa_out" || return $?
+    local prepare_args=(--species-tree "${species_tree}"
+      --gene-tree-dir "${indir}"
+      --species-parser "${species_label_parser}"
+      --species-out "grampa_input_species_tree.nwk"
+      --genes-out "grampa_input_gene_trees.nwk"
+      --names-out "busco_genetree_filenames.txt")
+    if [[ -n "${species_label_regex}" ]]; then
+      prepare_args+=(--species-regex "${species_label_regex}")
+    fi
+    if [[ -n "${map_file}" ]]; then
+      prepare_args+=(--species-map-tsv "${map_file}")
+    fi
+    python "${support_dir}/prepare_mul_reconcile.py" "${prepare_args[@]}" || return $?
+    echo "Number of rooted gene trees passed to NWKIT MUL reconciliation: ${#nwk_files[@]}"
 
-  : > "grampa_input_gene_trees.nwk"
-  : > "busco_genetree_filenames.txt"
-  for nwk_file in "${nwk_files[@]}"; do
-    transformed_tree=$(
-      sed -E "s/([(,])([^_)(,:]+)_([^_)(,:]+)_([^)(,:]+)([)(,:])/\1\4|||\2\-\3\5/g" "${nwk_file}" |
-        sed -e "s/_/-/g" -e "s/|||/_/g" |
-        sed -E 's/\)([^():;,]+):/\):/g; s/\)([^():;,]+);/\);/g' |
-        tr -d '\r\n'
+    local grampa_args=(mul-reconcile
+      --species-tree "grampa_input_species_tree.nwk"
+      --infile "grampa_input_gene_trees.nwk"
+      --species-regex '^.*_([^_]+)$'
+      --outfile "./grampa_out/grampa-scores.txt"
+      --report "./grampa_out/grampa-detailed.txt"
+      --check-out "./grampa_out/grampa-checknums.txt"
+      --tree-out "./grampa_out/best_mul_tree.nwk"
+      --model-out "./grampa_out/nwkit_mul_reconcile.json"
+      --cpus "${GG_TASK_CPUS}"
     )
-    if [[ "${transformed_tree}" == *"("* && "${transformed_tree}" == *")"* && "${transformed_tree}" == *";"* ]]; then
-      printf "%s\n" "${transformed_tree}" >> "grampa_input_gene_trees.nwk"
-      printf "%s\n" "${nwk_file##*/}" >> "busco_genetree_filenames.txt"
+    if [[ -n "${grampa_h1}" ]]; then
+      local grampa_h1_normalized=${grampa_h1//_/-}
+      grampa_args+=(--h1 "${grampa_h1_normalized}")
     fi
-  done
 
-  valid_tree_count=$(awk 'NF>0{n++} END{print n+0}' "grampa_input_gene_trees.nwk")
-  if [[ ${valid_tree_count} -eq 0 ]]; then
-    echo "Skipping Grampa because no valid rooted gene trees were prepared from: ${indir}"
-    rm -f -- "grampa_input_species_tree.nwk" "grampa_input_gene_trees.nwk" "busco_genetree_filenames.txt"
-    return 0
-  fi
-  echo "Number of rooted gene trees passed to Grampa: ${valid_tree_count}"
+    nwkit "${grampa_args[@]}" || return $?
+    local grampa_det_file="./grampa_out/grampa-detailed.txt"
+    local grampa_out_file="./grampa_out/grampa-scores.txt"
+    local grampa_checknums_file="./grampa_out/grampa-checknums.txt"
 
-  grampa_args=(
-    -s "grampa_input_species_tree.nwk"
-    -g "grampa_input_gene_trees.nwk"
-    -o "./grampa_out"
-    -p "${GG_TASK_CPUS}"
-    -v -1
-    --maps
+    python "${support_dir}/parse_grampa.py" \
+      --grampa_det "${grampa_det_file}" \
+      --grampa_out "${grampa_out_file}" \
+      --gene_trees "./grampa_input_gene_trees.nwk" \
+      --species_tree "./grampa_input_species_tree.nwk" \
+      --ncpu "${GG_TASK_CPUS}" \
+      --sorted_gene_tree_file_names "./busco_genetree_filenames.txt" || return $?
+
+    if [[ -s "${grampa_checknums_file}" && -s "${grampa_det_file}" && -s "${grampa_out_file}" && -s "grampa_summary.tsv" ]]; then
+      mv_out_bundle \
+        "./grampa_out/best_mul_tree.nwk" "${outdir}/best_mul_tree.nwk" \
+        "${grampa_checknums_file}" "${outdir}/grampa_checknums.txt" \
+        "${grampa_det_file}" "${outdir}/grampa_det.txt" \
+        "${grampa_out_file}" "${outdir}/grampa_out.txt" \
+        "./grampa_out/nwkit_mul_reconcile.json" "${outdir}/nwkit_mul_reconcile.json" \
+        "./grampa_input_species_tree.nwk" "${outdir}/grampa_input_species_tree.nwk" \
+        "./grampa_input_gene_trees.nwk" "${outdir}/grampa_input_gene_trees.nwk" \
+        "./busco_genetree_filenames.txt" "${outdir}/busco_genetree_filenames.txt" \
+        "./grampa_summary.tsv" "${outfile}" || return $?
+    else
+      echo "NWKIT MUL reconciliation output files are missing." >&2
+      return 1
+    fi
   )
-  if [[ -n "${grampa_h1}" ]]; then
-    local grampa_h1_normalized=${grampa_h1//_/-}
-    grampa_h1_normalized=${grampa_h1_normalized//[[:space:]]/-}
-    grampa_args+=(-h1 "${grampa_h1_normalized}")
-  fi
-
-  grampa.py "${grampa_args[@]}"
-
-  grampa_filtered_file=""
-  if [[ -s "./grampa_out/grampa_trees_filtered.txt" ]]; then
-    grampa_filtered_file="./grampa_out/grampa_trees_filtered.txt"
-  elif [[ -s "./grampa_out/grampa-trees-filtered.txt" ]]; then
-    grampa_filtered_file="./grampa_out/grampa-trees-filtered.txt"
-  fi
-
-  if [[ -n "${grampa_filtered_file}" ]]; then
-    # Filtered gene trees are not analyzed by Grampa, but it does not disturb gene tree IDs.
-    # For example, if the 136th gene tree is filtered out, it is replaced with a placeholder text in grampa_trees_filtered.txt.
-    # And GT-136 does not appear in the Grampa outputs. Still, the 137th gene tree is labeled correctly as GT-137.
-    sed -e "s/$/;/" "${grampa_filtered_file}" > "grampa_input_gene_trees_filtered.nwk"
-  fi
-
-  grampa_det_file=""
-  grampa_out_file=""
-  grampa_checknums_file=""
-  for candidate in "./grampa_out/grampa_det.txt" "./grampa_out/grampa-detailed.txt"; do
-    if [[ -s "${candidate}" ]]; then
-      grampa_det_file="${candidate}"
-      break
-    fi
-  done
-  for candidate in "./grampa_out/grampa_out.txt" "./grampa_out/grampa-scores.txt"; do
-    if [[ -s "${candidate}" ]]; then
-      grampa_out_file="${candidate}"
-      break
-    fi
-  done
-  for candidate in "./grampa_out/grampa_checknums.txt" "./grampa_out/grampa-checknums.txt"; do
-    if [[ -s "${candidate}" ]]; then
-      grampa_checknums_file="${candidate}"
-      break
-    fi
-  done
-
-  if [[ -z "${grampa_det_file}" || -z "${grampa_out_file}" || -z "${grampa_checknums_file}" ]]; then
-    echo "Grampa output files are missing. Ending Grampa."
-    return 0
-  fi
-
-  python "${gg_support_dir}/parse_grampa.py" \
-    --grampa_det "${grampa_det_file}" \
-    --grampa_out "${grampa_out_file}" \
-    --gene_trees "./grampa_input_gene_trees.nwk" \
-    --species_tree "./grampa_input_species_tree.nwk" \
-    --ncpu "${GG_TASK_CPUS}" \
-    --sorted_gene_tree_file_names "./busco_genetree_filenames.txt"
-
-  if [[ -s "${grampa_checknums_file}" && -s "${grampa_det_file}" && -s "${grampa_out_file}" && -s "grampa_summary.tsv" ]]; then
-    if ! awk -F'\t' '/^The MUL-tree with the minimum parsimony score/ {print $NF; found=1} END{exit(found?0:1)}' "${grampa_out_file}" > "${outdir}/best_mul_tree.nwk"; then
-      awk -F'\t' '
-        /^MT-/ {
-          score = $NF + 0
-          if (!seen || score < best_score) {
-            best_score = score
-            best_tree = $(NF-1)
-            seen = 1
-          }
-        }
-        END {
-          if (seen) {
-            print best_tree
-          }
-        }
-      ' "${grampa_out_file}" > "${outdir}/best_mul_tree.nwk"
-    fi
-    cp_out "${grampa_checknums_file}" "${outdir}/grampa_checknums.txt"
-    cp_out "${grampa_det_file}" "${outdir}/grampa_det.txt"
-    cp_out "${grampa_out_file}" "${outdir}/grampa_out.txt"
-    if [[ -s "./grampa_input_gene_trees_filtered.nwk" ]]; then
-      mv_out "./grampa_input_gene_trees_filtered.nwk" "${outdir}"
-    fi
-    mv_out "./grampa_input_species_tree.nwk" "${outdir}"
-    mv_out "./grampa_input_gene_trees.nwk" "${outdir}"
-    mv_out "./grampa_summary.tsv" "${outfile}"
-    rm -rf -- "./grampa_out"
-  else
-    echo "Grampa output files are missing. Ending Grampa."
-  fi
 }
 
 
@@ -5153,6 +5166,7 @@ if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
   echo "Orthogroup inference and selection stages finished; later genome-evolution stages were not requested."
   exit 0
 fi
+if [[ ${run_wgd_ssd} -eq 1 ]]; then run_wgd_ssd_stage; fi
 
 task="Orthogroup method comparison"
 disable_if_no_input_file "run_orthogroup_method_comparison" "${file_orthofinder_done_marker}"
@@ -5848,15 +5862,30 @@ busco_grampa_dna_provenance_args+=(
   --input "rooted_tree_directory=${dir_busco_rooted_nwk_dna}"
   --input "species_tree=${file_dated_species_tree}"
   --optional-output "summary=${file_busco_grampa_dna}"
+  --optional-output "best_tree=${file_busco_grampa_dna%/*}/best_mul_tree.nwk"
+  --optional-output "checks=${file_busco_grampa_dna%/*}/grampa_checknums.txt"
+  --optional-output "detail=${file_busco_grampa_dna%/*}/grampa_det.txt"
+  --optional-output "scores=${file_busco_grampa_dna%/*}/grampa_out.txt"
+  --optional-output "model=${file_busco_grampa_dna%/*}/nwkit_mul_reconcile.json"
+  --optional-output "prepared_species=${file_busco_grampa_dna%/*}/grampa_input_species_tree.nwk"
+  --optional-output "prepared_genes=${file_busco_grampa_dna%/*}/grampa_input_gene_trees.nwk"
+  --optional-output "gene_names=${file_busco_grampa_dna%/*}/busco_genetree_filenames.txt"
   --parameter "h1=${grampa_h1}"
+  --parameter "engine=nwkit-mul-reconcile-v1" --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --input "input_adapter=${gg_support_dir}/prepare_mul_reconcile.py"
+  --input "summary_adapter=${gg_support_dir}/parse_grampa.py"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
   --parameter "maps=1"
   --parameter "absence_when_no_valid_gene_trees=valid"
 )
+if [[ -n "${species_label_map_tsv}" ]]; then
+  busco_grampa_dna_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
 gg_artifact_prepare_stage busco_grampa_dna_needs_update run_busco_dupaware_grampa_dna "${busco_grampa_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_dna_needs_update} -eq 1 && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -f -- "${file_busco_grampa_dna}"
-  busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}"
+  busco_grampa "${dir_busco_rooted_nwk_dna}" "$(dirname "${file_busco_grampa_dna}")" "${file_busco_grampa_dna}" || exit $?
   gg_artifact_record "${busco_grampa_dna_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -5870,15 +5899,30 @@ busco_grampa_pep_provenance_args+=(
   --input "rooted_tree_directory=${dir_busco_rooted_nwk_pep}"
   --input "species_tree=${file_dated_species_tree}"
   --optional-output "summary=${file_busco_grampa_pep}"
+  --optional-output "best_tree=${file_busco_grampa_pep%/*}/best_mul_tree.nwk"
+  --optional-output "checks=${file_busco_grampa_pep%/*}/grampa_checknums.txt"
+  --optional-output "detail=${file_busco_grampa_pep%/*}/grampa_det.txt"
+  --optional-output "scores=${file_busco_grampa_pep%/*}/grampa_out.txt"
+  --optional-output "model=${file_busco_grampa_pep%/*}/nwkit_mul_reconcile.json"
+  --optional-output "prepared_species=${file_busco_grampa_pep%/*}/grampa_input_species_tree.nwk"
+  --optional-output "prepared_genes=${file_busco_grampa_pep%/*}/grampa_input_gene_trees.nwk"
+  --optional-output "gene_names=${file_busco_grampa_pep%/*}/busco_genetree_filenames.txt"
   --parameter "h1=${grampa_h1}"
+  --parameter "engine=nwkit-mul-reconcile-v1" --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --input "input_adapter=${gg_support_dir}/prepare_mul_reconcile.py"
+  --input "summary_adapter=${gg_support_dir}/parse_grampa.py"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
   --parameter "maps=1"
   --parameter "absence_when_no_valid_gene_trees=valid"
 )
+if [[ -n "${species_label_map_tsv}" ]]; then
+  busco_grampa_pep_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
 gg_artifact_prepare_stage busco_grampa_pep_needs_update run_busco_dupaware_grampa_pep "${busco_grampa_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_pep_needs_update} -eq 1 && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -f -- "${file_busco_grampa_pep}"
-  busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}"
+  busco_grampa "${dir_busco_rooted_nwk_pep}" "$(dirname "${file_busco_grampa_pep}")" "${file_busco_grampa_pep}" || exit $?
   gg_artifact_record "${busco_grampa_pep_provenance_args[@]}"
 else
   gg_step_skip "${task}"
@@ -5894,16 +5938,31 @@ orthogroup_grampa_provenance_args+=(
   --input "species_tree=${file_dated_species_tree}"
   --input-gene-family-subdir "rooted_trees=${gg_workspace_output_dir}/orthogroup::rooted_tree"
   --optional-output "summary=${file_orthogroup_grampa}"
+  --optional-output "best_tree=${file_orthogroup_grampa%/*}/best_mul_tree.nwk"
+  --optional-output "checks=${file_orthogroup_grampa%/*}/grampa_checknums.txt"
+  --optional-output "detail=${file_orthogroup_grampa%/*}/grampa_det.txt"
+  --optional-output "scores=${file_orthogroup_grampa%/*}/grampa_out.txt"
+  --optional-output "model=${file_orthogroup_grampa%/*}/nwkit_mul_reconcile.json"
+  --optional-output "prepared_species=${file_orthogroup_grampa%/*}/grampa_input_species_tree.nwk"
+  --optional-output "prepared_genes=${file_orthogroup_grampa%/*}/grampa_input_gene_trees.nwk"
+  --optional-output "gene_names=${file_orthogroup_grampa%/*}/busco_genetree_filenames.txt"
   --parameter "min_gene_count=${min_gene_orthogroup_grampa}"
   --parameter "max_gene_count=${max_gene_orthogroup_grampa}"
   --parameter "h1=${grampa_h1}"
+  --parameter "engine=nwkit-mul-reconcile-v1" --parameter "nwkit_identity=${genome_nwkit_identity}"
+  --input "input_adapter=${gg_support_dir}/prepare_mul_reconcile.py"
+  --input "summary_adapter=${gg_support_dir}/parse_grampa.py"
+  --parameter "species_parser=${species_label_parser}"
+  --parameter "species_regex=${species_label_regex}"
   --parameter "maps=1"
   --parameter "absence_when_no_valid_gene_trees=valid"
 )
+if [[ -n "${species_label_map_tsv}" ]]; then
+  orthogroup_grampa_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+fi
 gg_artifact_prepare_stage orthogroup_grampa_needs_update run_orthogroup_grampa "${orthogroup_grampa_provenance_args[@]}" || exit $?
 if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 ]]; then
   gg_step_start "${task}"
-  rm -f -- "${file_orthogroup_grampa}"
 
   og_ids=()
   mapfile -t og_ids < <(
@@ -5955,7 +6014,7 @@ if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 
     done
   fi
   echo "Number of selected rooted trees: $(gg_find_file_basenames "${orthogroup_grampa_indir}" | wc -l)"
-  busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}"
+  busco_grampa "${orthogroup_grampa_indir}" "$(dirname "${file_orthogroup_grampa}")" "${file_orthogroup_grampa}" || exit $?
   cleanup_orthogroup_grampa_tmp
   trap - EXIT
   gg_artifact_record "${orthogroup_grampa_provenance_args[@]}"

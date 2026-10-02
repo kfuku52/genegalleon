@@ -11,14 +11,37 @@ from scipy import sparse
 
 from workflow.support.species_tree_pgls import (
     _aggregate_values,
+    _comparison_table,
     _native_status,
     _parse_aggregations,
     _parse_methods,
     _prune_tree_to_family_species,
+    _read_rsc_method_status,
     _read_tsv,
     aggregate_species_expression,
+    read_pgls_results,
     summarize_for_stat_tree,
 )
+
+
+@pytest.mark.parametrize("identifier", ["001", "1", "NA", "NULL", "nan"])
+def test_rsc_comparison_and_status_keep_literal_identifiers(tmp_path, identifier):
+    results = tmp_path / "results.tsv"
+    pandas.DataFrame([dict(tree_id=identifier, analysis_id=identifier, model_id=identifier,
+                           response="NA", source_term="NULL", term="nan", term_test="coefficient",
+                           p_value=float("nan"), coefficient=1.25)]).to_csv(results, sep="\t", index=False)
+    parsed = read_pgls_results(results)
+    assert parsed.iloc[0].tree_id == identifier
+    assert parsed.iloc[0].coefficient == 1.25
+    assert pandas.isna(parsed.iloc[0].p_value)
+    comparison = _comparison_table(results, pandas.DataFrame())
+    assert comparison.iloc[0].tree_id == identifier
+    assert comparison.iloc[0].response == "NA"
+    assert comparison.iloc[0].source_term == "NULL"
+    assert comparison.iloc[0].term == "nan"
+    status = tmp_path / "status.tsv"
+    pandas.DataFrame([dict(tree_id=identifier, status="ok", reason="", n_result_rows=1)]).to_csv(status, sep="\t", index=False)
+    assert _read_rsc_method_status(status, nwkit_version="test")[0]["tree_id"] == identifier
 
 
 @pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])

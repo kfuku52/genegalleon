@@ -550,7 +550,8 @@ Wrapper-specific note:
 
 Purpose:
 
-- BUSCO-based and orthogroup-based GRAMPA workflows,
+- BUSCO-based and orthogroup-based native NWKIT MUL-tree workflows
+  ([GRAMPA replacement](grampa-replacement.md)),
 - optional CAFE, orthogroup copy-number trait PGLS, and GO enrichment analyses.
 
 Main outputs:
@@ -560,7 +561,7 @@ Main outputs:
 Notable defaults:
 
 - duplicate-aware BUSCO genome-evolution substeps default to `0`,
-- `run_orthogroup_grampa=1`, but GRAMPA is auto-disabled unless rooted
+- `run_orthogroup_grampa=1`, but native MUL reconciliation is auto-disabled unless rooted
   orthogroup trees exist and `grampa_h1` is set,
 - `run_cafe=0`, `run_orthogroup_copy_number_trait_pgls=0`, and
   `run_go_enrichment=0` by default,
@@ -580,7 +581,7 @@ Notable defaults:
   trait correlations and optional PGLS sensitivity comparisons under
   `orthogroup_copy_number/quality_diagnostics/`; it defaults to `0` and never
   automatically excludes candidates. See [quality diagnostics](copy-number-quality-diagnostics.md),
-- `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips GRAMPA or GO enrichment only,
+- `grampa_h1` and `target_branch_go` default to empty strings; leaving them empty skips native MUL reconciliation or GO enrichment only,
 - GO target can be specified by species name or branch ID.
 - `go_enrichment_method="event"` retains the legacy analysis; the optional
   [CAFE branch-flag screen](go-enrichment.md) uses unmodified CAFE outputs

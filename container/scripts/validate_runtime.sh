@@ -129,8 +129,17 @@ if [[ "${nwkit_required}" -eq 1 ]]; then
     printf '%s\t%s\t%s\t%s\n' "required" "base" "NWKIT reconciliation exports" "1" >> "${report_file}"
   else
     printf '%s\t%s\t%s\t%s\n' "required" "base" "NWKIT reconciliation exports" "0" >> "${report_file}"
-    echo "[validate_runtime] NWKIT lacks required optimal-root or LCA-loss exports; update NWKIT."
+    echo "[validate_runtime] NWKIT lacks required optimal-root, LCA-loss or MUL-reconciliation exports; update NWKIT."
     cat "${nwkit_log}"
+    required_failed=1
+  fi
+  wgd_log="$(dirname "${report_file}")/wgd_validation.txt"
+  if micromamba run -n base python "$(dirname "${BASH_SOURCE[0]}")/check_wgd_runtime.py" > "${wgd_log}" 2>&1; then
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "Native WGD contracts" "1" >> "${report_file}"
+  else
+    printf '%s\t%s\t%s\t%s\n' "required" "base" "Native WGD contracts" "0" >> "${report_file}"
+    echo "[validate_runtime] Native WGD dependency contracts failed; update the owning dependencies."
+    cat "${wgd_log}"
     required_failed=1
   fi
 fi

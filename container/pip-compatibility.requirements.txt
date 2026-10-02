@@ -13,7 +13,8 @@ defusedxml==0.7.1
 # module was removed in setuptools 83. Upgrade this only after genomepy no
 # longer requires norns while remaining compatible with mysql-connector 9.x.
 setuptools<83
-pypdf>=6.16.1
+pypdf>=6.19.0
+urllib3>=2.8.0
 
 # CSUBST structural-alphabet predictors (csubst[3di]); PyTorch is supplied by conda
 # and protobuf is installed above. Keep model weights out of the image.

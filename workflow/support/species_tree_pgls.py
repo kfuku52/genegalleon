@@ -77,6 +77,19 @@ MINIMAL_RESULT_COLUMNS = [
     "inference_status",
 ]
 
+PGLS_IDENTITY_COLUMNS = (
+    "tree_id", "analysis_method", "aggregation", "analysis_id", "model_id",
+    "response", "source_term", "term", "term_test", "response_level", "predictor_level",
+)
+
+
+def read_pgls_results(source) -> pandas.DataFrame:
+    """Preserve literal identifiers while retaining numeric missing-value parsing."""
+    return pandas.read_csv(
+        source, sep="\t", low_memory=False,
+        converters={column: str for column in PGLS_IDENTITY_COLUMNS},
+    )
+
 
 def _is_missing(value: object) -> bool:
     if pandas.isna(value):
@@ -787,7 +800,7 @@ def _comparison_table(
 ) -> pandas.DataFrame:
     frames: list[pandas.DataFrame] = []
     if rsc_path and rsc_path.is_file():
-        rsc = pandas.read_csv(rsc_path, sep="\t", low_memory=False)
+        rsc = read_pgls_results(rsc_path)
         if not rsc.empty:
             rsc.insert(0, "analysis_method", "rsc")
             rsc.insert(1, "aggregation", "gene_lineage_contrasts")
@@ -823,7 +836,7 @@ def _comparison_table(
 def _read_rsc_method_status(path: Path | None, nwkit_version: str = "") -> list[dict[str, object]]:
     if path is None or not path.is_file() or path.stat().st_size == 0:
         return []
-    status = pandas.read_csv(path, sep="\t", low_memory=False)
+    status = read_pgls_results(path)
     if status.empty:
         return []
     row = status.iloc[0]
@@ -974,7 +987,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
     out: dict[str, object] = {}
     status_file = Path(status_path)
     if status_file.is_file() and status_file.stat().st_size > 0:
-        status = pandas.read_csv(status_file, sep="\t", low_memory=False)
+        status = read_pgls_results(status_file)
         if {"analysis_method", "status"}.issubset(status.columns):
             for method in ("species_nwkit",):
                 selected = status.loc[status["analysis_method"].astype(str) == method]
@@ -985,7 +998,7 @@ def summarize_for_stat_tree(comparison_path: str | Path, status_path: str | Path
     comparison_file = Path(comparison_path)
     if not comparison_file.is_file() or comparison_file.stat().st_size == 0:
         return out
-    comparison = pandas.read_csv(comparison_file, sep="\t", low_memory=False)
+    comparison = read_pgls_results(comparison_file)
     out["pgls_comparison_num_result_rows"] = int(comparison.shape[0])
     if comparison.empty or "analysis_method" not in comparison:
         return out

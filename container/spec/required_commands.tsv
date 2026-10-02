@@ -13,7 +13,6 @@ base	diamond
 base	fastp
 base	fimo
 base	generax
-base	grampa.py
 base	iqtree3
 base	nwkit-iqtree-worker
 base	jellyfish

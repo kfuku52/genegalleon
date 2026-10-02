@@ -1,3 +1,4 @@
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -6,6 +7,24 @@ import pandas
 import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "parse_grampa.py"
+
+
+def test_modern_score_reader_preserves_na_and_comment_characters(tmp_path):
+    spec = importlib.util.spec_from_file_location("parse_grampa_reader", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    path = tmp_path / "scores.tsv"
+    path.write_text(
+        "# Reference preamble\n\n"
+        "mul.tree\th1.node\th2.node\tscore\tlabeled.tree\n"
+        "1\tNA\tX#Y\t0\t(NA,X#Y);\n"
+    )
+    row = module.read_grampa_out(path).iloc[0]
+    assert row["h1.node"] == "NA"
+    assert row["h2.node"] == "X#Y"
+    assert row["labeled.tree"] == "(NA,X#Y);"
+    assert row["score"] == 0
+
 
 
 @pytest.mark.parametrize("ncpu", [1, 2])
@@ -68,7 +87,7 @@ def test_parse_grampa_writes_summary_with_species_gene_columns(tmp_path, file_na
         "* GT-1 to MT-1\t2\t3\t5\t1\n"
     )
     grampa_out.write_text("MT-1\tH1\tH2\t(sp1_sp1,sp2_sp2);\t7\n")
-    gene_trees.write_text("(geneA_sp1_sp1,geneB_sp2_sp2);\n")
+    gene_trees.write_text("(geneA_sp1_sp1,\n geneB_sp2_sp2);\n")
     sorted_names.write_text(file_name + "\n")
 
     completed = subprocess.run(

@@ -30,6 +30,19 @@ def declared_context_inputs():
     ).splitlines()
 
 
+def test_native_mul_reconciliation_replaces_grampa_container_requirements():
+    for name in ("base.required.txt", "base.arm64.required.txt"):
+        required = (REPO_ROOT / "container/env" / name).read_text().splitlines()
+        assert "grampa" not in required
+    for name in ("required_commands.tsv", "required_commands.arm64.tsv"):
+        required = (REPO_ROOT / "container/spec" / name).read_text().splitlines()
+        assert "base\tgrampa.py" not in required
+        assert "base\tnwkit" in required
+    probe = (REPO_ROOT / "container/scripts/check_nwkit_reconciliation.py").read_text()
+    assert '"nwkit", "mul-reconcile"' in probe
+    assert 'check_mul_reconciliation(work)' in probe
+
+
 def test_program_source_defaults_are_moving_branches_not_commit_pins():
     dockerfile = (REPO_ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
     buildx = (REPO_ROOT / "container" / "buildx.sh").read_text(encoding="utf-8")
@@ -111,7 +124,7 @@ def test_container_build_paths_share_python_compatibility_constraints():
         "defusedxml",
     ):
         assert f"{package}==" in requirements
-    assert "pypdf>=6.16.1" in requirements
+    assert "pypdf>=6.19.0" in requirements
     assert "setuptools<83" in requirements
 
 

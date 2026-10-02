@@ -239,6 +239,10 @@ run_mapdnds
 run_mapdnds_parameter_estimation
 run_maxalign
 run_reconciliation
+run_wgd_ssd_classification
+wgd_evidence_dir
+wgd_proximal_distance
+wgd_native_tree_likelihood
 reconciliation_duplication_cost
 reconciliation_loss_cost
 run_orthogroup_extraction
@@ -328,6 +332,23 @@ EOF
       cat <<'EOF'
 genome_evolution_mode
 run_pairwise_synteny
+run_wgd_ssd
+wgd_genomes_file
+wgd_species_tree
+wgd_counts_file
+wgd_members_file
+wgd_count_bootstrap
+wgd_ks_bootstrap
+wgd_seed
+wgd_max_pairs
+wgd_max_ks_families
+wgd_max_count_families
+wgd_diagonal_bound
+wgd_min_coverage
+wgd_min_blocks
+wgd_max_states
+wgd_max_iterations
+wgd_multiplicity
 run_subgenome_dominance
 subgenome_manifest
 subgenome_bootstrap_replicates

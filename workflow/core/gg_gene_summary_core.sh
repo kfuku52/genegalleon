@@ -936,26 +936,29 @@ run_csubst_site_convergence_summary_for_source() {
     echo "Skipping convergent-site summary because its artifact provenance is current or stale reuse was requested."
     return 0
   fi
-  if [[ -d "${csubst_site_output_dir}" ]]; then
-    echo "Removing stale convergent-site output directory before rebuild: ${csubst_site_output_dir}"
-    rm -rf -- "${csubst_site_output_dir}"
-  fi
-  mkdir -p "${csubst_site_output_dir}"
   echo "Running convergent-site summary for gene_family_source=${gene_family_source}."
-  dir_orthogroup="${dir_gene_family}" \
-  dir_orthofinder="${csubst_site_orthofinder_dir}" \
-  dir_out="${csubst_site_output_dir}" \
-  file_trait="${csubst_site_trait_file}" \
-  arity_range="${csubst_site_arity_range}" \
-  trait="${csubst_site_trait}" \
-  skip_lower_order="${csubst_site_skip_lower_order}" \
-  min_fg_stem_ratio="${csubst_site_min_fg_stem_ratio}" \
-  min_OCNany2spe="${csubst_site_min_ocn_any2spe}" \
-  min_omegaCany2spe="${csubst_site_min_omega_c_any2spe}" \
-  min_OCNCoD="${csubst_site_min_ocn_cod}" \
-  max_per_K="${csubst_site_max_candidates_per_arity}" \
+  (
+    local csubst_site_work_dir
+    ensure_parent_dir "${csubst_site_output_dir}"
+    csubst_site_work_dir=$(mktemp -d "${csubst_site_output_dir}.rebuild.XXXXXX") || exit $?
+    trap 'rm -rf -- "${csubst_site_work_dir}"' EXIT
+    mkdir "${csubst_site_work_dir}/results" || exit $?
+    dir_orthogroup="${dir_gene_family}" \
+    dir_orthofinder="${csubst_site_orthofinder_dir}" \
+    dir_out="${csubst_site_work_dir}/results" \
+    file_trait="${csubst_site_trait_file}" \
+    arity_range="${csubst_site_arity_range}" \
+    trait="${csubst_site_trait}" \
+    skip_lower_order="${csubst_site_skip_lower_order}" \
+    min_fg_stem_ratio="${csubst_site_min_fg_stem_ratio}" \
+    min_OCNany2spe="${csubst_site_min_ocn_any2spe}" \
+    min_omegaCany2spe="${csubst_site_min_omega_c_any2spe}" \
+    min_OCNCoD="${csubst_site_min_ocn_cod}" \
+    max_per_K="${csubst_site_max_candidates_per_arity}" \
     csubst_nonsyn_recode="${csubst_site_nonsyn_recode}" \
-    bash "${gg_core_dir}/gg_convergent_sites_core.sh"
+      bash "${gg_core_dir}/gg_convergent_sites_core.sh" || exit $?
+    mv_out_bundle "${csubst_site_work_dir}/results" "${csubst_site_output_dir}" || exit $?
+  ) || return $?
   gg_artifact_record "${csubst_site_provenance_args[@]}"
 }
 

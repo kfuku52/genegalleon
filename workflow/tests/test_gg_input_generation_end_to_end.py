@@ -694,7 +694,7 @@ def test_provenance_rebuild_reuses_verified_download_cache(tmp_path: Path):
     manifest.write_text(json.dumps(payload))
 
     rebuilt = run()
-    assert "Clearing managed formatted-input outputs" in rebuilt.stdout
+    assert "Staging formatted-input outputs" in rebuilt.stdout
     assert "files downloaded=0" in rebuilt.stdout
     assert cached == {
         path: (path.read_bytes(), path.stat().st_mtime_ns) for path in cached
@@ -709,6 +709,67 @@ def test_provenance_rebuild_reuses_verified_download_cache(tmp_path: Path):
     explicit_refresh = run()
     assert "files downloaded=6" in explicit_refresh.stdout
     assert any(path.stat().st_mtime_ns != value[1] for path, value in cached.items())
+
+
+def test_failed_format_rebuild_preserves_all_outputs_and_success_relocates_metadata(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "atomic_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    env = _core_env(workspace, input_dir, fake_bin, "single")
+    env.update(overwrite="0", artifact_stale_policy="rebuild", run_validate_inputs="0",
+               run_cds_fx2tab="0", run_species_busco="0", run_multispecies_summary="0")
+    # Exercise configured output overrides as well as the normal summary path.
+    root = workspace / "output/input_generation"
+    for kind in ("species_cds", "species_gff", "species_genome"):
+        env[kind + "_dir"] = str(workspace / "custom" / kind)
+
+    def run():
+        return subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                              capture_output=True, text=True, timeout=180)
+
+    first = run()
+    assert first.returncode == 0, first.stdout + first.stderr
+    manifest = root / "artifact_provenance/format.single.json"
+    summary = root / "gg_input_generation_species.tsv"
+    output_paths = [path for kind in ("species_cds", "species_gff", "species_genome")
+                    for path in Path(env[kind + "_dir"]).rglob("*") if path.is_file()]
+    assert output_paths
+    assert summary.is_file()
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+              for path in [*output_paths, summary, manifest]}
+    absent = input_dir.with_name("temporarily_absent")
+    input_dir.rename(absent)
+    failed = run()
+    assert failed.returncode != 0, failed.stdout + failed.stderr
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}
+    absent.rename(input_dir)
+    # One species succeeds before the other fails: partial outputs stay private.
+    bad_cds = input_dir / "Oryza_sativa/Oryza_sativa.cds.fa"
+    bad_cds.write_bytes(b">gene1\nATGAAA\xff\n")
+    failed = run()
+    assert failed.returncode != 0, failed.stdout + failed.stderr
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}
+    import shutil
+
+    shutil.rmtree(bad_cds.parent)
+    succeeded = run()
+    assert succeeded.returncode == 0, succeeded.stdout + succeeded.stderr
+    for kind in ("species_cds", "species_gff", "species_genome"):
+        directory = Path(env[kind + "_dir"])
+        assert not list(directory.glob("Oryza_sativa*"))
+        assert list(directory.glob("Arabidopsis_thaliana*"))
+        for audit in directory.glob("*.json"):
+            assert "formatted-inputs." not in audit.read_text()
+    with summary.open(newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    for key in ("cds_output_path", "gff_output_path", "genome_output_path",
+                "gff_repair_audit_path", "cds_gff_grouping_audit_path"):
+        assert Path(rows[0][key]).is_file()
+        assert "formatted-inputs." not in rows[0][key]
+    assert manifest.read_bytes() != before[manifest][0]
+    assert not list(workspace.rglob("formatted-inputs.*"))
 
 
 def test_gg_input_generation_rejects_ambiguous_auto_discovered_manifests(tmp_path: Path):

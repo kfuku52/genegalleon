@@ -6,7 +6,12 @@ Never combine it with the native RSC bundle (which would count tests twice).
 
 import numpy as np
 import pandas as pd
-from species_tree_pgls import _adjust_association_p_values, _association_rows, _usable_association_rows
+from species_tree_pgls import (
+    _adjust_association_p_values,
+    _association_rows,
+    _usable_association_rows,
+    read_pgls_results,
+)
 
 PAIR_SCOPE = "all_families_methods_aggregations_by_response_predictor"
 REQUIRED = {"tree_id", "analysis_method", "aggregation", "analysis_id", "response", "source_term", "term", "term_test", "p_value"}
@@ -70,7 +75,7 @@ def write_association_table(engine, store, *, append=False):
             if not name.endswith(".tsv"):
                 continue
             with store.open_binary("pgls_comparison", name) as handle:
-                frame = pd.read_csv(handle, sep="\t", low_memory=False)
+                frame = read_pgls_results(handle)
             if not frame.empty:
                 frames.append(frame)
     frame = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame(columns=sorted(REQUIRED))

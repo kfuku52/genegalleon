@@ -126,6 +126,52 @@ def test_bh_matches_r_reference():
     assert adjust_associations(frame).p_value_global_bh.tolist() == pytest.approx([float(x) for x in expected.split()], abs=1e-12)
 
 
+@pytest.mark.parametrize("archived", [False, True])
+def test_literal_identifiers_survive_database_collection_and_append(tmp_path, archived):
+    import numpy as np
+    import sqlalchemy
+    from gene_family_output_store import archive_completed_outputs, query_id_extractor
+
+    identifiers = ["001", "1", "NA", "NULL", "nan"]
+    root = tmp_path / "query2family"
+    comparisons = root / "pgls_comparison"
+    comparisons.mkdir(parents=True)
+    data = pd.concat([rows().iloc[[0]]] * len(identifiers), ignore_index=True)
+    for column in ("tree_id", "analysis_id", "model_id", "response_level", "predictor_level"):
+        data[column] = identifiers
+    data["p_value"] = [.01, .04, np.nan, np.nan, .2]
+    for family, group in data.groupby("tree_id"):
+        group.to_csv(comparisons / f"{family}_comparison.tsv", sep="\t", index=False)
+        for directory, suffix in (("stat_tree", "_stat.tree.tsv"),
+                                  ("stat_branch", "_stat.branch.tsv"), ("tree_plot", "_tree_plot.pdf")):
+            target = root / directory / (family + suffix)
+            target.parent.mkdir(exist_ok=True)
+            target.write_text("complete\n")
+    if archived:
+        archive_completed_outputs(root, "query2family", identifiers, query_id_extractor(identifiers))
+        assert not list(comparisons.glob("*.tsv"))
+    engine = sqlalchemy.create_engine("sqlite://")
+    try:
+        write_association_table(engine, GeneFamilyOutputStore(root))
+        extra = data.iloc[[0]].copy()
+        extra["tree_id"] = "extra"
+        # Append a new batch only: existing rows belong to the database snapshot.
+        extra_root = tmp_path / "extra"
+        (extra_root / "pgls_comparison").mkdir(parents=True)
+        extra.to_csv(extra_root / "pgls_comparison/extra_comparison.tsv", sep="\t", index=False)
+        write_association_table(engine, GeneFamilyOutputStore(extra_root), append=True)
+        with engine.connect() as conn:
+            actual = pd.read_sql_query(sqlalchemy.text("SELECT * FROM pgls_association"), conn)
+        original = actual.set_index("tree_id").loc[identifiers]
+        assert len(actual) == 6
+        for column in ("analysis_id", "model_id", "response_level", "predictor_level"):
+            assert original[column].tolist() == identifiers
+        assert original.p_value.tolist() == pytest.approx(data.p_value.tolist(), nan_ok=True)
+        assert pd.isna(original.loc["NA", "p_value_global_bh"])
+    finally:
+        engine.dispose()
+
+
 def test_predictors_are_separate_but_levels_and_omnibus_share_a_pair():
     frame = pd.concat([rows().iloc[[0]]] * 4, ignore_index=True)
     frame["term"] = ["climate[dry]", "climate[wet]", "climate", "size"]

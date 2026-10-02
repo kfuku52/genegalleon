@@ -332,6 +332,7 @@ COPY container/spec /opt/pg/spec
 COPY container/scripts/validate_runtime.sh /opt/pg/scripts/validate_runtime.sh
 COPY container/scripts/check_iqtree_library.py /opt/pg/scripts/check_iqtree_library.py
 COPY container/scripts/check_nwkit_reconciliation.py /opt/pg/scripts/check_nwkit_reconciliation.py
+COPY container/scripts/check_wgd_runtime.py /opt/pg/scripts/check_wgd_runtime.py
 COPY container/scripts/check_csubst_3di.py /opt/pg/scripts/check_csubst_3di.py
 COPY container/scripts/post_install_notes.sh /opt/pg/scripts/post_install_notes.sh
 

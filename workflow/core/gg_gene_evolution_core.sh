@@ -22,6 +22,10 @@ species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TS
 reconciliation_duplication_cost="${reconciliation_duplication_cost:-1.5}"
 reconciliation_loss_cost="${reconciliation_loss_cost:-1}"
 run_reconciliation="${run_reconciliation:-0}"
+run_wgd_ssd_classification="${run_wgd_ssd_classification:-0}"
+wgd_evidence_dir="${wgd_evidence_dir:-}"
+wgd_proximal_distance="${wgd_proximal_distance:-10}"
+wgd_native_tree_likelihood="${wgd_native_tree_likelihood:-0}"
 cdskit_localize_model="${cdskit_localize_model:-latest}"
 cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
 cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
@@ -1789,6 +1793,7 @@ file_og_generax_xml="${dir_output_active}/generax_xml/${og_id}_generax.xml"
 file_og_rooted_tree="${dir_output_active}/rooted_tree/${og_id}_root.nwk"
 file_og_rooted_log="${dir_output_active}/rooted_tree_log/${og_id}_root.txt"
 file_og_reconciliation="${dir_output_active}/reconciliation/${og_id}_reconciliation.tsv"
+file_og_wgd_ssd="${dir_output_active}/wgd_ssd/${og_id}_wgd_ssd.zip"
 file_og_root_candidates="${dir_output_active}/root_candidates/${og_id}_roots.nwk"
 file_og_dated_tree="${dir_output_active}/dated_tree/${og_id}_dated.nwk"
 file_og_radte_prefix="${dir_output_active}/dated_tree_native/${og_id}_radte"
@@ -4109,6 +4114,57 @@ if [[ ${reconciliation_needs_update} -eq 1 && ${run_reconciliation} -eq 1 ]]; th
   gg_artifact_record "${reconciliation_provenance_args[@]}"
 else
   gg_step_skip "${task}"
+fi
+
+task="Duplication-origin evidence"
+case "${run_wgd_ssd_classification}" in
+  0|1) ;;
+  *) echo "run_wgd_ssd_classification must be 0 or 1" >&2; exit 2 ;;
+esac
+if [[ ${run_wgd_ssd_classification} -eq 1 ]]; then
+  case "${wgd_native_tree_likelihood:-0}" in
+    0|1) ;;
+    *) echo "wgd_native_tree_likelihood must be 0 or 1" >&2; exit 2 ;;
+  esac
+  [[ -n "${wgd_evidence_dir}" ]] || wgd_evidence_dir="${gg_workspace_output_dir}/genome_evolution/wgd_ssd"
+  if [[ "${wgd_evidence_dir}" != /* ]]; then wgd_evidence_dir="${gg_workspace_dir}/${wgd_evidence_dir}"; fi
+  wgd_ssd_needs_update=0
+  wgd_ssd_provenance_args=(
+    --manifest "${dir_output_active}/artifact_provenance/${og_id}.wgd_ssd.json"
+    --step wgd_ssd_classification --family-id "${og_id}"
+    --logical-root "${dir_output_active}" --workspace-root "${gg_workspace_dir}"
+    --input "rooted_tree=${file_og_rooted_tree_analysis}" --input "full_species_tree=${species_tree}"
+    --input "genome_evidence=${wgd_evidence_dir}" --input "implementation=${gg_support_dir}/wgd_ssd.py"
+    --input "evidence_rules=${gg_support_dir}/wgd_evidence.py"
+    --output "classification=${file_og_wgd_ssd}"
+    --parameter "species_parser=${species_label_parser}" --parameter "species_regex=${species_label_regex}"
+    --parameter "proximal_distance=${wgd_proximal_distance}" --parameter "nwkit_identity=${gene_nwkit_identity}"
+    --parameter "native_tree_likelihood=${wgd_native_tree_likelihood:-0}"
+  )
+  if [[ -n "${species_label_map_tsv}" ]]; then
+    wgd_ssd_provenance_args+=(--input "species_map=${species_label_map_tsv}")
+  fi
+  gg_artifact_prepare_stage wgd_ssd_needs_update run_wgd_ssd_classification "${wgd_ssd_provenance_args[@]}" || exit $?
+  if [[ ${wgd_ssd_needs_update} -eq 1 ]]; then
+    gg_step_start "Duplication-origin evidence"
+    wgd_work_dir=$(mktemp -d "${dir_tmp}/wgd_ssd.XXXXXX")
+    wgd_classify_args=(--gene-tree "${file_og_rooted_tree_analysis}" --species-tree "${species_tree}"
+      --evidence "${wgd_evidence_dir}" --family-id "${og_id}" --output "${wgd_work_dir}/${og_id}"
+      --species-parser "${species_label_parser}" --proximal-distance "${wgd_proximal_distance}"
+      --native-tree-likelihood "${wgd_native_tree_likelihood:-0}")
+    if [[ -n "${species_label_regex}" ]]; then wgd_classify_args+=(--species-regex "${species_label_regex}"); fi
+    if [[ -n "${species_label_map_tsv}" ]]; then wgd_classify_args+=(--species-map "${species_label_map_tsv}"); fi
+    python "${gg_support_dir}/wgd_ssd.py" classify "${wgd_classify_args[@]}"
+    (cd "${wgd_work_dir}" && python -m zipfile -c results.zip "./${og_id}") || exit $?
+    python "${gg_support_dir}/atomic_zip_publish.py" \
+      --source "${wgd_work_dir}/results.zip" \
+      --destination "${file_og_wgd_ssd}" \
+      --expected-prefix "${og_id}" --remove-source || exit $?
+    gg_artifact_record "${wgd_ssd_provenance_args[@]}"
+    if [[ ${delete_tmp_dir:-1} -eq 1 ]]; then rm -rf -- "${wgd_work_dir}"; fi
+  else
+    gg_step_skip "Duplication-origin evidence (current artifacts)"
+  fi
 fi
 
 task="Species-tree-guided divergence time estimation"
@@ -6863,12 +6919,7 @@ for file_from in "${file_params[@]}"; do
       gg_shared_lock_release "${lock_file}"
     }
     trap cleanup_parameter_copy_lock EXIT
-    filesize_from=$(stat -c%s "${file_from}")
-    filesize_to=0
-    if [[ -s "${file_to}" ]]; then
-      filesize_to=$(stat -c%s "${file_to}")
-    fi
-    if [[ ${filesize_from} -ne ${filesize_to} ]]; then
+    if ! cmp -s -- "${file_from}" "${file_to}"; then
       echo "Storing important files for record: ${file_to}"
       cp_out "${file_from}" "${file_to}"
     fi

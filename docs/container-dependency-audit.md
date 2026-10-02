@@ -35,7 +35,8 @@ use the official source artifact, whose revision is recorded separately.
 | `phytools`, `phangorn`, `igraph` | rkftools imports phytools; phytools imports phangorn; phangorn imports igraph. Annotation plots also load phytools. |
 | `missMDA` | `multispecies_transcriptome_summary.r` still calls `estim_ncpPCA` and `imputePCA`. |
 | ggplot2/ggtree, cowplot, svglite and related plotting packages | The packaged `genegalleon.treevis` API and other R plotting helpers remain active despite migration of some individual figures to NWKIT. |
-| GeneRax and GRAMPA | Their tree optimization and polyploidy analyses remain active. |
+| GeneRax | Its tree optimization remains active. |
+| GRAMPA | Removed from both architecture-specific Conda and required-command manifests. Stages use `nwkit mul-reconcile`, with an executed native contract probe required by runtime validation. See [replacement](grampa-replacement.md). |
 | NOTUNG | Removed: NWKIT supplies optimal D/L roots and LCA reconciliation TSVs, including implied losses. See [migration](notung-replacement.md). |
 
 ## Already removed by earlier migrations

@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -7,12 +8,12 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 
 
-def run_shell(script, *args, env=None):
+def run_shell(script, *args, env=None, timeout=15):
     return subprocess.run(
         ["bash", "-c", 'set -euo pipefail\nsource "$1/gg_util.sh"\n' + script,
          "audit", str(SUPPORT), *map(str, args)],
         env={"PATH": os.environ["PATH"], **(env or {})},
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=timeout,
     )
 
 
@@ -102,3 +103,109 @@ def test_slurm_memory_uses_allocation_and_respects_explicit_overrides(memory, ov
 def test_disabled_semaphore_preserves_command_status(tmp_path, status):
     result = run_shell('gg_run_with_shared_semaphore "$2" 0 audit bash -c "exit $3"', tmp_path, status)
     assert result.returncode == status, result.stderr
+
+
+@pytest.mark.parametrize("headers", [
+    ["Alpha_one_valid", "Beta_two_foreign"],
+    ["Beta_two_foreign", "Alpha_one_valid"],
+    ["Alpha_one_valid", "Alpha_one"],
+    ["Alpha_one_valid", "Alpha_one_"],
+    [],
+])
+def test_cds_validation_rejects_every_foreign_or_incomplete_identifier(tmp_path, headers):
+    directory = tmp_path / "cds"
+    directory.mkdir()
+    (directory / "Alpha_one.cds.fa").write_text("".join(f">{header}\nATGAAA\n" for header in headers))
+    result = run_shell('GG_TASK_CPUS=1\ncheck_species_cds_dir "$2"', directory, timeout=30)
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_cds_validation_accepts_all_valid_identifiers_and_reports_reader_failure(tmp_path):
+    directory = tmp_path / "cds"
+    directory.mkdir()
+    (directory / "Alpha_one.cds.fa").write_text(">Alpha_one_a\nATGAAA\n>Alpha_one_b\nATGCCC\n")
+    result = run_shell('GG_TASK_CPUS=1\ncheck_species_cds_dir "$2"', directory, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = run_shell('GG_TASK_CPUS=1\nseqkit() { return 23; }\nexport -f seqkit\ncheck_species_cds_dir "$2"', directory, timeout=30)
+    assert result.returncode != 0
+    assert "Failed to read CDS sequence names" in result.stdout
+
+
+def test_parameter_snapshot_updates_equal_size_edits_and_keeps_identical_files(tmp_path):
+    core = (SUPPORT.parent / "core/gg_gene_evolution_core.sh").read_text()
+    start = core.index("# Copy parameter files and codes to ")
+    end = core.index('\ncd "${gg_workspace_dir}"', start)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    traits, tree, pruned = [inputs / name for name in ("trait.tsv", "species.nwk", "pruned.nwk")]
+    traits.write_text("name\ttrait\nA\t0\n")
+    tree.write_text("(A:1,B:1);\n")
+    pruned.write_text("(A:1,B:1);\n")
+    saved = tmp_path / "parameters"
+    setup = "\n".join(f"{key}={shlex.quote(str(value))}" for key, value in {
+        "file_og_parameters_dir": saved, "file_sp_trait": traits,
+        "species_tree": tree, "species_tree_pruned": pruned,
+    }.items()) + "\n"
+    script = setup + core[start:end]
+    for _ in range(2):
+        result = run_shell(script, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        traits.write_text("name\ttrait\nA\t1\n")
+        tree.write_text("(A:2,B:1);\n")
+    assert (saved / traits.name).read_bytes() == traits.read_bytes()
+    assert (saved / tree.name).read_bytes() == tree.read_bytes()
+    before = {path: path.stat().st_mtime_ns for path in saved.iterdir() if path.is_file()}
+    result = run_shell(script, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert before == {path: path.stat().st_mtime_ns for path in before}
+
+
+def test_failed_site_summary_rebuild_preserves_completed_result_and_manifest(tmp_path):
+    core_text = (SUPPORT.parent / "core/gg_gene_summary_core.sh").read_text()
+    start = core_text.index("run_csubst_site_convergence_summary_for_source() {")
+    end = core_text.index("\n}\n", start) + 3
+    workspace = tmp_path / "workspace"
+    families = workspace / "output/query2family"
+    families.mkdir(parents=True)
+    trait = workspace / "input/trait.tsv"
+    trait.parent.mkdir()
+    trait.write_text("name\ttrait\nA\t0\n")
+    orthofinder = workspace / "output/orthofinder"
+    orthofinder.mkdir()
+    (orthofinder / "inputs.tsv").write_text("data\n")
+    child_dir = tmp_path / "child"
+    child_dir.mkdir()
+    child = child_dir / "gg_convergent_sites_core.sh"
+    child.write_text('set -euo pipefail\nprintf "valid\\n" > "$dir_out/prior.tsv"\n')
+    out = workspace / "output/summary/sites"
+    variables = dict(gg_workspace_dir=workspace, gg_workspace_input_dir=workspace / "input",
+                     gg_workspace_output_dir=workspace / "output", gg_support_dir=SUPPORT,
+                     gg_core_dir=child_dir, summary_output_dir=workspace / "output/summary",
+                     gene_family_source="query2family", dir_gene_family=families,
+                     csubst_site_output_dir=out, csubst_site_trait_file=trait,
+                     csubst_site_orthofinder_dir=orthofinder, artifact_stale_policy="rebuild",
+                     run_csubst_site_convergence_summary=1, csubst_site_arity_range=2,
+                     csubst_site_trait="all", csubst_site_skip_lower_order="yes",
+                     csubst_site_min_fg_stem_ratio=0, csubst_site_min_ocn_any2spe=1,
+                     csubst_site_min_omega_c_any2spe=1, csubst_site_min_ocn_cod=1,
+                     csubst_site_max_candidates_per_arity=1, csubst_site_nonsyn_recode="no")
+    setup = "\n".join(f"{key}={shlex.quote(str(value))}" for key, value in variables.items()) + "\n"
+    script = setup + core_text[start:end] + "\nrun_csubst_site_convergence_summary_for_source\n"
+    result = run_shell(script, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = workspace / "output/summary/artifact_provenance/query2family.csubst_site.json"
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in [out / "prior.tsv", manifest]}
+    trait.write_text("name\ttrait\nA\t1\n")
+    child.write_text('printf "partial\\n" > "$dir_out/partial.tsv"\nexit 23\n')
+    result = run_shell(script, timeout=60)
+    assert result.returncode == 23, result.stdout + result.stderr
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before}
+    assert not (out / "partial.tsv").exists()
+    assert not list(out.parent.glob("sites.rebuild.*"))
+    child.write_text('printf "new\\n" > "$dir_out/current.tsv"\n')
+    result = run_shell(script, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (out / "prior.tsv").exists()
+    assert (out / "current.tsv").read_text() == "new\n"
+    assert manifest.read_bytes() != before[manifest][0]
+    assert not list(out.parent.glob("sites.rebuild.*"))

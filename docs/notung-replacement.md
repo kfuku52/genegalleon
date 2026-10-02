@@ -1,8 +1,9 @@
 # NOTUNG replacement with NWKIT
 
 GeneGalleon no longer invokes or installs NOTUNG. Only its rooting and
-reconciliation paths are replaced. GeneRax, GRAMPA, SeqKit and other analysis
-programs retain their roles.
+reconciliation paths are replaced. GeneRax, SeqKit and other analysis
+programs retain their roles. The separate GRAMPA stages have since moved to
+[native NWKIT MUL-tree reconciliation](grampa-replacement.md).
 
 ## Configuration migration
 

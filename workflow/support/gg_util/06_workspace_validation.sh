@@ -137,25 +137,29 @@ check_species_cds_dir() {
   function check_single_species_cds () {
     local spfasta=$1
     local sp_ub
-    local first_header
-    local first_header_no_gt
-    local spfasta_startswith
+    local header
+    local sequence_id
     sp_ub=$(gg_species_name_from_path_or_dot "${spfasta}")
     local seq_names_file
     seq_names_file=$(gg_mktemp)
-    seqkit seq --name --threads 1 "${spfasta}" > "${seq_names_file}"
-    IFS= read -r first_header < "${seq_names_file}" || first_header=""
-    first_header=${first_header%%[[:space:]]*}
-    first_header_no_gt=${first_header}
-    spfasta_startswith=">${first_header_no_gt}"
-
-    if [[ "${first_header_no_gt}" != "${sp_ub}" && "${first_header_no_gt}" != "${sp_ub}_"* ]]; then
-      echo "Sequence names start with ${spfasta_startswith} but this is not consistent with the species name (${sp_ub}) parsed from the file name of ${spfasta}" >> "${error_log}"
+    if ! seqkit seq --name --threads 1 "${spfasta}" > "${seq_names_file}"; then
+      echo "Failed to read CDS sequence names: ${spfasta}" >> "${error_log}"
+      rm -f -- "${seq_names_file}"
+      return 0
     fi
+    while IFS= read -r header; do
+      sequence_id=${header%%[[:space:]]*}
+      if [[ "${sequence_id}" != "${sp_ub}_"* || "${sequence_id}" == "${sp_ub}_" ]]; then
+        echo "Sequence name >${sequence_id} is not consistent with the species name (${sp_ub}) and required gene identifier in ${spfasta}" >> "${error_log}"
+      fi
+    done < "${seq_names_file}"
 
     local num_all_seq
     local num_uniq_seq
     num_all_seq=$(wc -l < "${seq_names_file}" | tr -d '[:space:]')
+    if [[ ${num_all_seq} -eq 0 ]]; then
+      echo "No CDS sequences were found in: ${spfasta}" >> "${error_log}"
+    fi
     num_uniq_seq=$(LC_ALL=C sort -u "${seq_names_file}" | wc -l | tr -d '[:space:]')
     if [[ ${num_all_seq} -ne ${num_uniq_seq} ]]; then
       echo "Sequence names are not unique. # all seqs = ${num_all_seq} and # unique seqs = ${num_uniq_seq}" >> "${error_log}"

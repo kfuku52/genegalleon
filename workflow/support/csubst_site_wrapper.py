@@ -548,14 +548,16 @@ def load_site_output_manifest(site_dir):
 
 
 def resolve_manifest_output_path(site_dir, row):
+    # CSUBST supplies a path relative to the manifest alongside the absolute
+    # execution path. The relative reference survives staging and ZIP extraction.
+    output_file = str(row.get("output_file", "")).strip()
+    if output_file not in ("", "nan"):
+        return os.path.join(site_dir, output_file)
     output_path = str(row.get("output_path", "")).strip()
     if output_path not in ("", "nan"):
         if os.path.isabs(output_path):
             return output_path
         return os.path.join(site_dir, output_path)
-    output_file = str(row.get("output_file", "")).strip()
-    if output_file not in ("", "nan"):
-        return os.path.join(site_dir, output_file)
     return None
 
 

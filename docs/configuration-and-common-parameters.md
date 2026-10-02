@@ -180,7 +180,9 @@ For backward compatibility, a bare species-label list such as
 form is preferred for new configs.
 
 When `grampa_h1` or `target_branch_go` are left empty, GeneGalleon skips only the
-GRAMPA-related steps or the GO-enrichment step, respectively.
+native MUL-tree steps or the GO-enrichment step, respectively. The legacy
+GRAMPA setting names now select `nwkit mul-reconcile`; see
+[replacement and output compatibility](grampa-replacement.md).
 
 For duplicate-aware BUSCO genome-evolution steps, the canonical config names are
 the `run_busco_dupaware_*` flags exposed in

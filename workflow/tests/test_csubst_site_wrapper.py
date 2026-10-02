@@ -158,7 +158,7 @@ def test_resolve_site_output_dir_uses_current_csubst_namespace(tmp_path):
     assert out == str(expected)
 
 
-@pytest.mark.parametrize("with_manifest", [True, False])
+@pytest.mark.parametrize("with_manifest", [True, False, "relocated"])
 def test_resolve_site_artifacts_uses_manifest_or_current_names(tmp_path, with_manifest):
     mod = load_module()
     site_dir = tmp_path / "OG1_1_2" / "csubst_sites" / "csubst.branch_id1,2"
@@ -178,6 +178,11 @@ def test_resolve_site_artifacts_uses_manifest_or_current_names(tmp_path, with_ma
                 {"output_kind": "pymol_summary_pdf", "output_path": str(pymol_pdf), "file_exists": "Y"},
             ]
         ).to_csv(site_dir / "csubst.outputs.tsv", sep="\t", index=False)
+        if with_manifest == "relocated":
+            manifest = pandas.read_csv(site_dir / "csubst.outputs.tsv", sep="\t")
+            manifest["output_file"] = manifest["output_path"].map(lambda path: Path(path).name)
+            manifest["output_path"] = manifest["output_file"].map(lambda name: "/removed/staging/" + name)
+            manifest.to_csv(site_dir / "csubst.outputs.tsv", sep="\t", index=False)
 
     artifacts = mod.resolve_site_artifacts(str(tmp_path / "OG1_1_2"), "1,2")
 

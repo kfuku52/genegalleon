@@ -107,6 +107,8 @@ Detailed guides are split by topic:
 - [Reliable Input Downloads](docs/download-reliability.md)
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Pairwise Genome Synteny](docs/pairwise-synteny.md)
+- [Native WGD Candidates and Duplication Origins (experimental)](docs/wgd-ssd.md)
+- [GRAMPA Replacement with NWKIT MUL-Tree Reconciliation](docs/grampa-replacement.md)
 - [Scheduler and Array Semantics](docs/scheduler-and-array-semantics.md)
 - [Input-Aware Resource Planning](docs/adaptive-resources.md)
 - [Site Runtime Profiles](docs/site-runtime-profiles.md)
