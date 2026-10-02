@@ -322,7 +322,10 @@ run_pairwise_synteny
 run_subgenome_dominance
 subgenome_manifest
 subgenome_bootstrap_replicates
+subgenome_permutation_replicates
+subgenome_exact_max_states
 subgenome_seed
+subgenome_plot_config
 synteny_plot_only
 synteny_pairs_file
 synteny_sequence_mode

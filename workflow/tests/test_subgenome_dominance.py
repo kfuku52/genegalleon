@@ -1,4 +1,5 @@
 import csv
+import itertools
 import json
 
 import numpy as np
@@ -134,3 +135,79 @@ def test_expression_units_are_explicit(tmp_path):
     plan = sd.make_plan(tmp_path, manifest)
     result = sd.analyse(plan["analyses"][0], tmp_path / "out", 200, 1)
     assert result["expression_unit"] == "FPKM" and result["statistics"][1]["effect"] == 1
+
+
+def test_expression_stream_unchanged_by_retention_and_input_order(tmp_path):
+    plan = fixture_inputs(tmp_path / "input")
+    path = tmp_path / "input/expr.tsv"
+    rows = list(csv.DictReader(path.open(), delimiter="\t"))
+    for i, row in enumerate(rows):
+        if row["gene_id"].endswith("A"):
+            for column in ("leaf1", "leaf1tech", "leaf2"):
+                row[column] = str(i + 2.5)
+    sd.write_table(path, rows, rows[0].keys())
+    analysis = plan["analyses"][0]
+    first = sd.analyse(analysis, tmp_path / "first", 200, 7)
+    # Other metric removal and file row ordering must leave this comparison invariant.
+    sd.write_table(path, list(reversed(rows)), rows[0].keys())
+    samples = tmp_path / "input/samples.tsv"
+    lines = samples.read_text().splitlines()
+    samples.write_text("\n".join([lines[0], *reversed(lines[1:])]) + "\n")
+    second = sd.analyse({**analysis, "retention_file": ""}, tmp_path / "second", 200, 7)
+    def expr(result):
+        return [r for r in result["statistics"] if r["metric"].startswith("expression")]
+    assert expr(first) == expr(second)
+    assert sd.contrast_seed(7, "x", "metric", "G", "A", "B", "leaf", "bootstrap") != sd.contrast_seed(
+        7, "x", "metric", "G", "A", "B", "leaf", "permutation")
+
+
+@pytest.mark.parametrize("weights", [[0, 0, 0], [3, -3, 6, 0], [2, -1, 4, 2, -3, 1]])
+def test_integer_dp_matches_independent_exhaustive_null(weights):
+    observed = abs(sum(weights))
+    expected = sum(abs(sum(s * w for s, w in zip(signs, weights, strict=True))) >= observed
+                   for signs in itertools.product((-1, 1), repeat=len(weights))) / 2 ** len(weights)
+    result = sd.sign_flip(np.array(weights, dtype=float), np.random.default_rng(1), 100, 100)
+    assert result["test_method"] == "exact_integer_dp"
+    assert result["p_value"] == expected
+    assert result["null_draws"] == 2 ** len(weights)
+
+
+def test_more_than_sixteen_integer_blocks_are_exact():
+    result = sd.inference([1] * 30, [f"b{i}" for i in range(30)], 100, np.random.default_rng(1))
+    assert result["test_method"] == "exact_integer_dp"
+    assert result["p_value"] == 2 / 2 ** 30
+
+
+def test_noninteger_meet_in_middle_matches_exhaustive_null():
+    weights = np.array([.13, -.72, .49, .57, -.11, .38, .61, -.24, .16, .43, -.92, .55, .23, -.38, .69, .32, -.17])
+    signs = ((np.arange(2 ** len(weights))[:, None] >> np.arange(len(weights))) & 1) * 2 - 1
+    expected = np.mean(abs((signs * weights).sum(axis=1)) >= abs(weights.sum()) - 1e-12)
+    result = sd.sign_flip(weights, np.random.default_rng(1), 100, 512)
+    assert result["test_method"] == "exact_meet_in_middle"
+    assert result["p_value"] == expected
+
+
+def test_monte_carlo_stream_is_independent_of_bootstrap_and_block_order():
+    weights = np.linspace(-.48, 1.43, 38)
+    blocks = [f"b{i}" for i in range(len(weights))]
+    def run(values, block_ids, replicates):
+        return sd.inference(values, block_ids, replicates, np.random.default_rng(3),
+                            null_rng=np.random.default_rng(4), permutation_replicates=1000, exact_max_states=1)
+    first = run(weights, blocks, 200)
+    second = run(weights, blocks, 800)
+    reversed_rows = run(weights[::-1], blocks[::-1], 200)
+    assert first["test_method"] == "monte_carlo" and first["null_draws"] == 1000
+    assert first["p_value"] == second["p_value"]
+    assert first == reversed_rows
+    assert 0 <= first["mc_p_ci_low"] < first["mc_p_ci_high"] <= 1
+
+
+def test_plot_config_and_font_are_hashed_in_plan(tmp_path):
+    plan = fixture_inputs(tmp_path / "input")
+    config = tmp_path / "plot.json"
+    config.write_text('{"font_size": 8, "formats": ["pdf"]}')
+    changed = sd.make_plan(tmp_path, tmp_path / "input/manifest.tsv", plot_config=config)
+    assert str(config) in changed["input_hashes"]
+    assert changed["plot_config"]["formats"] == ["pdf"]
+    assert changed["permutation_replicates"] == 100000
+    assert changed["inference_version"] == 2 and plan["schema_version"] == 2

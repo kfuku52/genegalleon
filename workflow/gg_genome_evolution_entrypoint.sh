@@ -129,8 +129,11 @@ genome_evolution_mode="all" # all|synteny|subgenome; standalone modes leave tree
 run_pairwise_synteny=0 # Opt in to pairwise JCVI/MCscan in all mode; always enabled in synteny mode.
 run_subgenome_dominance=0 # Analyse independently assigned homoeologs and callable outgroup retention loci.
 subgenome_manifest="" # Default: workspace/input/subgenome_analyses.tsv; see docs/subgenome-dominance.md.
-subgenome_bootstrap_replicates=2000 # Nonoverlapping block bootstrap and Monte Carlo sign-flip replicates.
+subgenome_bootstrap_replicates=2000 # Nonoverlapping block bootstrap replicates for confidence intervals.
+subgenome_permutation_replicates=100000 # Null draws when exact block sign flips exceed the state ceiling.
+subgenome_exact_max_states=262144 # Maximum integer-DP states or entries per meet-in-the-middle half.
 subgenome_seed=1 # Reproducible random seed for subgenome statistics.
+subgenome_plot_config="" # Optional JSON styling and multi-species display filters; see docs/subgenome-dominance.md.
 synteny_plot_only=0 # Verify and reuse completed synteny analysis, then regenerate changed plots.
 run_self_fractionation_bias=0 # Incorporate completed mode=self kfFractBias array results by validating and building a multi-species summary.
 run_busco_dupaware_extract_fasta=0 # Extract duplicate-aware BUSCO ortholog FASTA files from genome annotations.

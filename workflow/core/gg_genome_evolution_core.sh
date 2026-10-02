@@ -25,7 +25,10 @@ run_pairwise_synteny="${run_pairwise_synteny:-0}"
 run_subgenome_dominance="${run_subgenome_dominance:-0}"
 subgenome_manifest="${subgenome_manifest:-}"
 subgenome_bootstrap_replicates="${subgenome_bootstrap_replicates:-2000}"
+subgenome_permutation_replicates="${subgenome_permutation_replicates:-100000}"
+subgenome_exact_max_states="${subgenome_exact_max_states:-262144}"
 subgenome_seed="${subgenome_seed:-1}"
+subgenome_plot_config="${subgenome_plot_config:-}"
 synteny_plot_only="${synteny_plot_only:-0}"
 synteny_pairs_file="${synteny_pairs_file:-}"
 synteny_sequence_mode="${synteny_sequence_mode:-auto}"
@@ -225,7 +228,7 @@ run_pairwise_synteny_stage() (
 )
 run_subgenome_dominance_stage() (
   local scratch_root work_dir plan_file argument needs_update
-  local -a contract_args=()
+  local -a contract_args=() plot_args=()
   gg_stage_transaction_lock_acquire "${gg_workspace_output_dir}/.gg_global_artifacts" subgenome_dominance || exit $?
   trap 'gg_stage_transaction_lock_release' EXIT
   [[ -n "${subgenome_manifest}" ]] || subgenome_manifest="${gg_workspace_input_dir}/subgenome_analyses.tsv"
@@ -233,9 +236,12 @@ run_subgenome_dominance_stage() (
   ensure_dir "${scratch_root}"
   work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
   plan_file="${work_dir}/plan.json"
+  [[ -z "${subgenome_plot_config}" ]] || plot_args=(--plot-config "${subgenome_plot_config}")
   python "${gg_support_dir}/subgenome_dominance.py" plan \
     --workspace "${gg_workspace_dir}" --manifest "${subgenome_manifest}" \
-    --replicates "${subgenome_bootstrap_replicates}" --seed "${subgenome_seed}" --outfile "${plan_file}"
+    --replicates "${subgenome_bootstrap_replicates}" --seed "${subgenome_seed}" \
+    --permutation-replicates "${subgenome_permutation_replicates}" --exact-max-states "${subgenome_exact_max_states}" \
+    "${plot_args[@]}" --outfile "${plan_file}"
   python "${gg_support_dir}/subgenome_dominance.py" contract --plan "${plan_file}" > "${work_dir}/contract.args"
   while IFS= read -r -d '' argument; do contract_args+=("${argument}"); done < "${work_dir}/contract.args"
   needs_update=0

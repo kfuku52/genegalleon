@@ -18,6 +18,21 @@ from pathlib import Path
 
 import numpy as np
 
+if __package__:
+    from . import subgenome_dominance_plot as plotting
+else:
+    import subgenome_dominance_plot as plotting
+
+INFERENCE_VERSION = 2
+DEFAULT_PERMUTATIONS = 100000
+DEFAULT_EXACT_STATES = 262144
+
+
+def contrast_seed(seed, analysis_id, metric, group, a, b, tissue, purpose):
+    """Stable streams independent of other contrasts and bootstrap draw counts."""
+    key = ["subgenome-contrast-v1", seed, analysis_id, metric, group, a, b, tissue, purpose]
+    return int.from_bytes(hashlib.sha256(json.dumps(key, ensure_ascii=True).encode()).digest()[:16], "big")
+
 
 def digest(path):
     h = hashlib.sha256()
@@ -48,11 +63,15 @@ def write_table(path, rows, fields):
         writer.writerows(rows)
 
 
-def make_plan(workspace, manifest, replicates=2000, seed=1):
+def make_plan(workspace, manifest, replicates=2000, seed=1,
+              permutation_replicates=DEFAULT_PERMUTATIONS, exact_max_states=DEFAULT_EXACT_STATES,
+              plot_config=None):
     workspace = Path(workspace).resolve()
     manifest = Path(manifest).resolve()
     if replicates < 100 or seed < 0:
         raise ValueError("Require at least 100 bootstrap replicates and a nonnegative seed")
+    if permutation_replicates < 100 or exact_max_states < 1:
+        raise ValueError("Require at least 100 null draws and a positive exact-state ceiling")
     analyses = table(manifest, ("analysis_id", "species", "mapping_file"))
     if not analyses or len({r["analysis_id"] for r in analyses}) != len(analyses):
         raise ValueError("Require unique, nonempty analysis IDs")
@@ -79,8 +98,12 @@ def make_plan(workspace, manifest, replicates=2000, seed=1):
         for flag in ("mapping_validated", "retention_validated"):
             if row.get(flag, "0") not in {"0", "1", ""}:
                 raise ValueError(f"{flag} must be 0 or 1")
-    return {"schema_version": 1, "workspace": str(workspace), "analyses": analyses,
+    config, plot_inputs = plotting.load_config(plot_config)
+    inputs.update(plot_inputs)
+    return {"schema_version": 2, "workspace": str(workspace), "analyses": analyses,
             "replicates": replicates, "seed": seed, "input_hashes": inputs,
+            "permutation_replicates": permutation_replicates, "exact_max_states": exact_max_states,
+            "plot_config": config, "inference_version": INFERENCE_VERSION,
             "numpy_version": np.__version__}
 
 
@@ -96,7 +119,8 @@ def contract_args(plan):
             "--step", "subgenome_dominance", "--family-id", "all_analyses",
             "--logical-root", str(workspace / "output/.gg_global_artifacts"), "--workspace-root", str(workspace),
             "--output", f"results={workspace / 'output/genome_evolution/subgenome_dominance'}",
-            "--input", f"implementation={Path(__file__).resolve()}"]
+            "--input", f"implementation={Path(__file__).resolve()}",
+            "--input", f"plot_implementation={Path(__file__).with_name('subgenome_dominance_plot.py').resolve()}"]
     for index, path in enumerate(sorted(plan["input_hashes"])):
         args.extend(("--input", f"source{index}={path}"))
     args.extend(("--parameter", "configuration=" + json.dumps(plan, sort_keys=True)))
@@ -126,33 +150,97 @@ def load_mapping(path):
     return genes, groups, scopes.pop()
 
 
-def inference(values, blocks, replicates, rng):
+def sign_sums(values):
+    sums = np.zeros(1)
+    for value in values:
+        sums = np.concatenate((sums - value, sums + value))
+    return sums
+
+
+def sign_flip(sums, rng, replicates, exact_max_states):
+    """The same two-sided block null, evaluated exactly when bounded."""
+    observed = abs(math.fsum(sums))
+    threshold = max(0, observed - 1e-12)
+    n = len(sums)
+    # Integral block sums allow exact dynamic programming without 2**n draws.
+    if all(float(s).is_integer() for s in sums):
+        weights = [abs(int(s)) for s in sums if s]
+        divisor = math.gcd(*weights) if weights else 1
+        weights = [w // divisor for w in weights]
+        if sum(weights) + 1 <= exact_max_states:
+            counts = {0: 1}
+            for weight in weights:
+                updated = counts.copy()
+                for subtotal, count in counts.items():
+                    updated[subtotal + weight] = updated.get(subtotal + weight, 0) + count
+                counts = updated
+            total = sum(weights)
+            extreme = sum(count for subtotal, count in counts.items()
+                          if abs(2 * subtotal - total) * divisor >= threshold)
+            return {"p_value": extreme / (1 << len(weights)), "test_method": "exact_integer_dp",
+                    "null_draws": 1 << n}
+    if n <= 16:
+        null = abs(sign_sums(sums))
+        return {"p_value": float(np.mean(null >= threshold)), "test_method": "exact_enumeration",
+                "null_draws": len(null)}
+    half = n // 2
+    if (1 << (n - half)) <= exact_max_states:
+        left, right = sign_sums(sums[:half]), np.sort(sign_sums(sums[half:]))
+        if threshold == 0:
+            extreme = 1 << n
+        else:
+            extreme = int(np.sum(np.searchsorted(right, -threshold - left, side="right"), dtype=np.int64))
+            extreme += int(np.sum(len(right) - np.searchsorted(right, threshold - left, side="left"), dtype=np.int64))
+        return {"p_value": extreme / (1 << n), "test_method": "exact_meet_in_middle", "null_draws": 1 << n}
+    extreme = 0
+    batch_size = max(1, min(4096, 1000000 // n))
+    for start in range(0, replicates, batch_size):
+        null = abs((rng.choice([-1, 1], (min(batch_size, replicates - start), n)) * sums).sum(axis=1))
+        extreme += int(np.count_nonzero(null >= threshold))
+    # Wilson interval for the sampled null tail probability, not biological uncertainty.
+    tail, z = extreme / replicates, 1.959963984540054
+    denominator = 1 + z * z / replicates
+    centre = (tail + z * z / (2 * replicates)) / denominator
+    radius = z * math.sqrt(tail * (1 - tail) / replicates + z * z / (4 * replicates ** 2)) / denominator
+    return {"p_value": (1 + extreme) / (replicates + 1), "test_method": "monte_carlo",
+            "null_draws": replicates, "mc_p_ci_low": max(0, centre - radius),
+            "mc_p_ci_high": min(1, centre + radius)}
+
+
+def inference(values, blocks, replicates, rng, *, null_rng=None,
+              permutation_replicates=DEFAULT_PERMUTATIONS, exact_max_states=DEFAULT_EXACT_STATES):
     """Locus-weighted mean, cluster bootstrap CI and block sign-flip null test.
 
     Input blocks must partition loci, and must be defined independently of bias.
     The CI describes loci conditional on the sampled tissues and annotation.
     """
     values = np.asarray(values, dtype=float)
+    if values.ndim != 1 or not np.isfinite(values).all():
+        raise ValueError("Inference requires finite one-dimensional values")
+    if replicates < 100 or permutation_replicates < 100 or exact_max_states < 1:
+        raise ValueError("Invalid resampling configuration")
+    if null_rng is None:
+        state = json.dumps(rng.bit_generator.state, sort_keys=True, default=lambda x: x.tolist())
+        null_rng = np.random.default_rng(int.from_bytes(hashlib.sha256(state.encode()).digest()[:16], "big"))
     grouped = defaultdict(list)
     for value, block in zip(values, blocks, strict=True):
         grouped[block].append(value)
-    result = {"n_loci": len(values), "n_blocks": len(grouped), "effect": float(values.mean()) if len(values) else None,
-              "ci_low": None, "ci_high": None, "p_value": None, "status": "insufficient_blocks"}
+    result = {"n_loci": len(values), "n_blocks": len(grouped),
+              "effect": math.fsum(values) / len(values) if len(values) else None,
+              "ci_low": None, "ci_high": None, "p_value": None, "status": "insufficient_blocks",
+              "test_method": "not_tested", "null_draws": 0, "bootstrap_replicates": 0,
+              "mc_p_ci_low": None, "mc_p_ci_high": None,
+              "n_nonzero_blocks": sum(math.fsum(v) != 0 for v in grouped.values())}
     if len(grouped) < 3:
         return result
-    sums = np.array([sum(v) for v in grouped.values()])
-    counts = np.array([len(v) for v in grouped.values()])
+    keys = sorted(grouped, key=lambda k: json.dumps(k, sort_keys=True))
+    sums = np.array([math.fsum(grouped[k]) for k in keys])
+    counts = np.array([len(grouped[k]) for k in keys])
     draws = rng.integers(0, len(sums), (replicates, len(sums)))
     estimates = sums[draws].sum(axis=1) / counts[draws].sum(axis=1)
     result["ci_low"], result["ci_high"] = map(float, np.quantile(estimates, [0.025, 0.975]))
-    observed = abs(sums.sum())
-    if len(sums) <= 16:
-        null = np.array([abs(np.dot(signs, sums)) for signs in itertools.product((-1, 1), repeat=len(sums))])
-        p = float(np.mean(null >= observed - 1e-12))
-    else:
-        null = abs((rng.choice([-1, 1], (replicates, len(sums))) * sums).sum(axis=1))
-        p = float((1 + np.sum(null >= observed - 1e-12)) / (replicates + 1))
-    result.update(p_value=p, status="estimated")
+    result.update(sign_flip(sums, null_rng, permutation_replicates, exact_max_states),
+                  status="estimated", bootstrap_replicates=replicates)
     return result
 
 
@@ -220,8 +308,8 @@ def expression_rows(analysis, genes):
             for tissue, biological in by_tissue.items():
                 ratios, positive_a, positive_b = [], 0, 0
                 for columns in biological.values():
-                    va = np.mean([expression[ga][c] for c in columns]) if ga in expression else None
-                    vb = np.mean([expression[gb][c] for c in columns]) if gb in expression else None
+                    va = math.fsum(expression[ga][c] for c in columns) / len(columns) if ga in expression else None
+                    vb = math.fsum(expression[gb][c] for c in columns) / len(columns) if gb in expression else None
                     positive_a += int(va is not None and va > 0)
                     positive_b += int(vb is not None and vb > 0)
                     if ga not in expression or gb not in expression:
@@ -238,7 +326,7 @@ def expression_rows(analysis, genes):
                 if len(ratios) == len(biological):
                     rows.append({"group_id": group, "pair_id": pair_id, "block_id": block,
                                  "subgenome_a": a, "subgenome_b": b, "tissue": tissue,
-                                 "log2_ratio": float(np.mean(ratios)), "biological_samples": len(ratios)})
+                                 "log2_ratio": math.fsum(ratios) / len(ratios), "biological_samples": len(ratios)})
     return rows, coverage
 
 
@@ -250,13 +338,22 @@ def adjust_p(rows):
         rows[i]["q_value"] = running
     for row in rows:
         row.setdefault("q_value", None)
+        row["multiple_testing_n"] = len(selected)
 
 
-def analyse(analysis, output, replicates, seed):
+def analyse(analysis, output, replicates, seed, permutation_replicates=DEFAULT_PERMUTATIONS,
+            exact_max_states=DEFAULT_EXACT_STATES, plot_config=None):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     genes, groups, scope = load_mapping(analysis["mapping_file"])
-    rng = np.random.default_rng(seed)
+    def infer(values, blocks, metric, group, a, b, tissue=""):
+        seeds = {purpose: contrast_seed(seed, analysis["analysis_id"], metric, group, a, b, tissue, purpose)
+                 for purpose in ("bootstrap", "permutation")}
+        result = inference(values, blocks, replicates, np.random.default_rng(seeds["bootstrap"]),
+                           null_rng=np.random.default_rng(seeds["permutation"]),
+                           permutation_replicates=permutation_replicates, exact_max_states=exact_max_states)
+        return {**result, "bootstrap_seed": str(seeds["bootstrap"]), "permutation_seed": str(seeds["permutation"]),
+                "inference_version": INFERENCE_VERSION}
     results = []
     if analysis["retention_file"]:
         loci = retention_rows(analysis["retention_file"], groups)
@@ -274,7 +371,8 @@ def analyse(analysis, output, replicates, seed):
                 called = [r for r in selected if r[a]["callable"] == r[b]["callable"] == "1"]
                 va = [int(r[a]["retained"]) for r in called]
                 vb = [int(r[b]["retained"]) for r in called]
-                result = inference(np.subtract(va, vb), [(r[a]["group_id"], r[a]["block_id"]) for r in called], replicates, rng)
+                result = infer(np.subtract(va, vb), [(r[a]["group_id"], r[a]["block_id"]) for r in called],
+                               "retention_difference", group, a, b)
                 results.append({"metric": "retention_difference", "group_id": group, "subgenome_a": a,
                                 "subgenome_b": b, "tissue": "", "n_opportunities": len(selected),
                                 "retained_a": sum(va), "retained_b": sum(vb), **result})
@@ -292,7 +390,8 @@ def analyse(analysis, output, replicates, seed):
                             (r["group_id"] == group or group == "ALL_GROUPS") and
                             (r["subgenome_a"], r["subgenome_b"], r["tissue"]) == (a, b, tissue)]),
                             "retained_a": None, "retained_b": None,
-                            **inference([r["log2_ratio"] for r in rows], [(r["group_id"], r["block_id"]) for r in rows], replicates, rng)})
+                            **infer([r["log2_ratio"] for r in rows], [(r["group_id"], r["block_id"]) for r in rows],
+                                    "expression_log2_ratio", group, a, b, tissue)})
         detection = defaultdict(list)
         for row in coverage:
             if not row["gene_ids_present"]:
@@ -305,15 +404,19 @@ def analyse(analysis, output, replicates, seed):
             results.append({"metric": "expression_detection_difference", "group_id": group, "subgenome_a": a,
                             "subgenome_b": b, "tissue": tissue, "n_opportunities": len(rows),
                             "retained_a": None, "retained_b": None,
-                            **inference(values, [(r["group_id"], r["block_id"]) for r in rows], replicates, rng)})
+                            **infer(values, [(r["group_id"], r["block_id"]) for r in rows],
+                                    "expression_detection_difference", group, a, b, tissue)})
     for metric in {r["metric"] for r in results}:
         adjust_p([r for r in results if r["metric"] == metric])
     fields = ("metric", "group_id", "subgenome_a", "subgenome_b", "tissue", "n_opportunities",
-              "retained_a", "retained_b", "n_loci", "n_blocks", "effect", "ci_low", "ci_high", "p_value", "q_value", "status")
+              "retained_a", "retained_b", "n_loci", "n_blocks", "effect", "ci_low", "ci_high", "p_value", "q_value", "status",
+              "test_method", "null_draws", "bootstrap_replicates", "n_nonzero_blocks", "mc_p_ci_low", "mc_p_ci_high",
+              "bootstrap_seed", "permutation_seed", "inference_version", "multiple_testing_n")
     write_table(output / "statistics.tsv", results, fields)
     write_table(output / "expression_pairs.tsv", expression, ("group_id", "pair_id", "block_id", "subgenome_a", "subgenome_b", "tissue", "log2_ratio", "biological_samples"))
     write_table(output / "expression_coverage.tsv", coverage, ("group_id", "pair_id", "block_id", "gene_a", "gene_b", "subgenome_a", "subgenome_b", "tissue", "biological_samples", "positive_samples", "positive_a_samples", "positive_b_samples", "gene_ids_present"))
-    summary = {"schema_version": 1, "analysis_id": analysis["analysis_id"], "species": analysis["species"],
+    summary = {"schema_version": 2, "analysis_id": analysis["analysis_id"], "species": analysis["species"],
+               "reference": analysis.get("reference", ""), "pair_set": analysis.get("pair_set", ""),
                "assignment_scope": scope, "mapped_genes": len(genes), "groups": len(groups),
                "genomewide_identity": "declared_independent" if scope == "global" else "unresolved",
                "retention_status": ("validated_callable_loci" if analysis.get("retention_validated") == "1" else "exploratory_syntelog_detection") if analysis["retention_file"] else "not_estimable_missing_callable_outgroup_loci",
@@ -322,50 +425,30 @@ def analyse(analysis, output, replicates, seed):
                "expression_ratio_status": "estimated" if expression else "not_estimable_no_positive_complete_pairs",
                "genomewide_dominance": "contrasts_available" if scope == "global" and results else "not_tested", "statistics": results,
                "inference": {"resampling": "nonoverlapping_block_bootstrap", "null_test": "block_sign_flip",
-                             "replicates": replicates, "seed": seed, "effect": "A minus B retention/detection fraction or mean log2(normalised_abundance_A/normalised_abundance_B)",
+                             "version": INFERENCE_VERSION, "replicates": replicates, "seed": seed,
+                             "permutation_replicates": permutation_replicates, "exact_max_states": exact_max_states,
+                             "rng_scheme": "sha256-contrast-v1; separate bootstrap/permutation streams",
+                             "point_unit": "group-specific subgenome contrast", "resampling_unit": "nonoverlapping block",
+                             "effect": "A minus B retention/detection fraction or mean log2(normalised_abundance_A/normalised_abundance_B)",
                              "ci_scope": "loci conditional on sampled tissues, mapping and annotation",
-                             "multiple_testing": "BH within each metric and analysis across groups, contrasts and tissues"}}
+                             "multiple_testing": "Benjamini–Hochberg within each metric and analysis across groups, contrasts and tissues"}}
     (output / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
-    if results:
-        plot(results, output, analysis["species"], analysis.get("expression_unit", "TPM"))
-        plot(results, output, analysis["species"], analysis.get("expression_unit", "TPM"), absolute=True)
+    if any(r["effect"] is not None and r["metric"] in (plot_config or {}).get("metrics", plotting.METRICS) for r in results):
+        plot(results, output, analysis["species"], analysis.get("expression_unit", "TPM"), config=plot_config, metadata=summary)
+        plot(results, output, analysis["species"], analysis.get("expression_unit", "TPM"), absolute=True,
+             config=plot_config, metadata=summary)
     return summary
 
 
-def plot(rows, output, species, unit="TPM", absolute=False):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    metrics = sorted({r["metric"] for r in rows})
-    fig, axes = plt.subplots(len(metrics), 1, figsize=(7.2, max(3, len(rows) * 0.22 + 1.4)), squeeze=False)
-    for axis, metric in zip(axes[:, 0], metrics, strict=True):
-        selected = [r for r in rows if r["metric"] == metric]
-        for y, row in enumerate(selected):
-            if row["effect"] is None:
-                continue
-            effect = abs(row["effect"]) if absolute else row["effect"]
-            axis.plot(effect, y, "o", color="#365d8d", markersize=4)
-            if row["ci_low"] is not None:
-                low, high = row["ci_low"], row["ci_high"]
-                if absolute:
-                    low, high = (0 if low <= 0 <= high else min(abs(low), abs(high))), max(abs(low), abs(high))
-                axis.plot([low, high], [y, y], color="#365d8d")
-        axis.set_yticks(range(len(selected)), [f"{r['group_id']} {r['subgenome_a']}/{r['subgenome_b']} {r['tissue']}".strip() for r in selected], fontsize=8)
-        axis.axvline(0, color="0.6", lw=0.8)
-        label = {"retention_difference": "Retention fraction difference",
-                         "expression_detection_difference": f"Expression detection fraction difference ({unit} > 0)",
-                         "expression_log2_ratio": f"Mean log2 {unit} ratio (A/B)"}[metric]
-        axis.set_xlabel("Absolute value: " + label if absolute else label)
-        axis.invert_yaxis()
-        axis.spines[["top", "right"]].set_visible(False)
-    subtitle = "Bias magnitudes; signed 95% intervals mapped under abs" if absolute else "Contrasts; 95% block bootstrap intervals"
-    fig.suptitle(species.replace("_", " ") + "\n" + subtitle, fontsize=11)
-    fig.tight_layout()
-    for extension in ("png", "svg"):
-        stem = "contrasts_absolute" if absolute else "contrasts"
-        fig.savefig(output / f"{stem}.{extension}", dpi=180)
-    plt.close(fig)
+def plot(rows, output, species, unit="TPM", absolute=False, *, config=None, metadata=None):
+    metadata = metadata or {"analysis_id": "contrast", "species": species, "expression_unit": unit}
+    context = {key: metadata[key] for key in ("analysis_id", "species", "expression_unit", "assignment_scope",
+                                             "reference", "pair_set", "retention_status") if key in metadata}
+    individual_config = dict(config or {})
+    individual_config.update(width_pt=individual_config.get("individual_width_pt"),
+                             height_pt=individual_config.get("individual_height_pt"))
+    return plotting.comparison_plot([{**context, "statistics": rows}], output, config=individual_config, absolute=absolute,
+                                    stem="contrasts_absolute" if absolute else "contrasts", apply_filters=False)
 
 
 def main():
@@ -376,15 +459,26 @@ def main():
     p.add_argument("--manifest", required=True)
     p.add_argument("--replicates", type=int, default=2000)
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--permutation-replicates", type=int, default=DEFAULT_PERMUTATIONS)
+    p.add_argument("--exact-max-states", type=int, default=DEFAULT_EXACT_STATES)
+    p.add_argument("--plot-config")
     p.add_argument("--outfile", required=True)
+    p = sub.add_parser("report", help="Render existing statistics without repeating inference")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--plot-config")
+    p.add_argument("--output", required=True)
     for command in ("contract", "verify", "run"):
         p = sub.add_parser(command)
         p.add_argument("--plan", required=True)
         if command == "run":
             p.add_argument("--output", required=True)
     args = parser.parse_args()
+    if args.command == "report":
+        plotting.report(args.manifest, args.output, args.plot_config)
+        return
     if args.command == "plan":
-        plan = make_plan(args.workspace, args.manifest, args.replicates, args.seed)
+        plan = make_plan(args.workspace, args.manifest, args.replicates, args.seed,
+                         args.permutation_replicates, args.exact_max_states, args.plot_config)
         Path(args.outfile).write_text(json.dumps(plan, indent=2) + "\n")
         return
     plan = json.loads(Path(args.plan).read_text())
@@ -394,7 +488,18 @@ def main():
     elif args.command == "run":
         output = Path(args.output)
         output.mkdir(parents=True, exist_ok=False)
-        summaries = [analyse(row, output / row["analysis_id"], plan["replicates"], plan["seed"]) for row in plan["analyses"]]
+        summaries = [analyse(row, output / row["analysis_id"], plan["replicates"], plan["seed"],
+                             plan.get("permutation_replicates", DEFAULT_PERMUTATIONS),
+                             plan.get("exact_max_states", DEFAULT_EXACT_STATES), plan.get("plot_config"))
+                     for row in plan["analyses"]]
+        available = [{**{k: s[k] for k in ("analysis_id", "species", "expression_unit", "assignment_scope",
+                                            "reference", "pair_set", "retention_status")},
+                      "statistics": s["statistics"]} for s in summaries
+                     if any(r["effect"] is not None for r in s["statistics"])]
+        if available:
+            for absolute in (False, True):
+                plotting.comparison_plot(available, output, config=plan.get("plot_config"), absolute=absolute,
+                                         input_hashes=plan["input_hashes"])
         verify_inputs(plan)
         (output / "run.json").write_text(json.dumps({"plan": plan, "summaries": summaries}, indent=2) + "\n")
 
