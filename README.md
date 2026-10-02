@@ -97,6 +97,7 @@ Detailed guides are split by topic:
 - [Common Workflow Recipes](docs/common-workflow-recipes.md)
 - [Gene-Tree Dating and OU Shifts](docs/gene-tree-dating.md)
 - [Gene-Family Outputs and Progress Monitoring](docs/gene-family-outputs-and-progress-monitoring.md)
+- [Presence/Absence Plots, Query Selection and Saved OG/HOG Anchors](docs/presence-absence.md)
 - [Species-Tree Stage ZIP Storage](docs/species-tree-stage-zip-storage.md)
 - [Migrating Legacy Unzipped Workspaces to ZIP Storage (audit, conversion, and rollback)](docs/workspace-storage-management.md)
 - [Example Plots](docs/example-plots.md)

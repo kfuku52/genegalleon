@@ -686,7 +686,10 @@ Notable defaults:
   central presence/copy-number glyph; use
   `rail` for the earlier right-edge layout, `glyph` for diamond/circle overlays,
   or `off` to hide evidence
-- `presence_absence_plot_width=7.2`; the plotter caps figure width at 7.2 inches
+- `presence_absence_plot_width=7.2` inches by default; increase it to keep large
+  query sets readable in one plot, or use `auto` for column-aware width
+- Optional closest-source query selection, saved OG/HOG manifests, display label
+  maps and focus rows are described in [Presence/Absence Plots](presence-absence.md).
 - `run_gene_family_database_build=0`, `run_csubst_scan_aa_change_summary=0`, `run_csubst_scan_candidate_sites=0`, `run_hgt_candidate_summary=0`, `run_hgt_summary_plots=0`, and `run_csubst_site_convergence_summary=0`
 - database, CSUBST scan AA-change summary, HGT, and CSUBST site convergence flags are valid for both sources and use the selected source's gene-family output directory,
 - `run_gene_family_database_build=1` assembles the selected source's SQLite DB from

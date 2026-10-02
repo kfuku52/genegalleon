@@ -29,19 +29,51 @@ parse_args <- function(argv) {
     if (!grepl("^--", arg)) {
       next
     }
-    kv <- strsplit(sub("^--", "", arg), "=", fixed = TRUE)[[1]]
-    key <- kv[[1]]
-    value <- if (length(kv) >= 2) paste(kv[-1], collapse = "=") else "1"
+    arg <- sub("^--", "", arg)
+    separator <- regexpr("=", arg, fixed = TRUE)[[1]]
+    key <- if (separator > 0) substr(arg, 1, separator - 1) else arg
+    value <- if (separator > 0) substring(arg, separator + 1) else "1"
     out[[key]] <- value
   }
   out
 }
 
 get_arg <- function(args, key, default = "") {
-  if (key %in% names(args) && nzchar(as.character(args[[key]]))) {
+  if (key %in% names(args)) {
     return(as.character(args[[key]]))
   }
   default
+}
+
+read_label_map <- function(path) {
+  if (!nzchar(path)) return(data.frame(kind = character(), id = character(), label = character()))
+  labels <- read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
+  if (!all(c("kind", "id", "label") %in% colnames(labels)) ||
+      any(!labels$kind %in% c("family", "column")) ||
+      any(is.na(labels$id) | !nzchar(labels$id) | is.na(labels$label) | !nzchar(labels$label)) ||
+      anyDuplicated(paste(labels$kind, labels$id, sep = "::"))) {
+    stop("--label_map requires unique kind/id and non-empty labels; kind=family|column")
+  }
+  labels
+}
+
+display_labels <- function(ids, kind, fallback = ids) {
+  selected <- label_map[label_map$kind == kind, , drop = FALSE]
+  index <- match(ids, selected$id)
+  result <- as.character(fallback)
+  result[!is.na(index)] <- selected$label[index[!is.na(index)]]
+  result
+}
+
+text_width_inches <- function(labels, size = font_size_pt) {
+  # A null device avoids persistent graphics files during font-metric measurement.
+  grDevices::pdf(NULL, family = "Helvetica")
+  on.exit(grDevices::dev.off())
+  vapply(as.character(labels), function(label) {
+    grid::convertWidth(grid::grobWidth(grid::textGrob(
+      label, gp = grid::gpar(fontsize = size)
+    )), "inches", valueOnly = TRUE) * 1.15
+  }, numeric(1))
 }
 
 has_nonempty_file <- function(file_path) {
@@ -678,7 +710,15 @@ out_pdf <- get_arg(args, "out_pdf")
 out_svg <- get_arg(args, "out_svg")
 value_mode <- get_arg(args, "value", "presence")
 tree_scale_mode <- get_arg(args, "tree_scale", "bar")
-plot_width <- as.numeric(get_arg(args, "width", "7.2"))
+plot_width_arg <- get_arg(args, "width", "7.2")
+plot_width <- if (identical(plot_width_arg, "auto")) 7.2 else as.numeric(plot_width_arg)
+label_map <- read_label_map(get_arg(args, "label_map"))
+focus_species <- gg_species_label_from_text(trimws(strsplit(get_arg(args, "focus_species"), ",", fixed = TRUE)[[1]]))
+focus_species <- focus_species[nzchar(focus_species)]
+legend_columns_arg <- get_arg(args, "legend_columns", "auto")
+if (!legend_columns_arg %in% c("auto", "1", "2", "3")) {
+  stop("--legend_columns must be auto, 1, 2, or 3")
+}
 plot_height_arg <- get_arg(args, "height", "auto")
 evidence_layout <- tolower(get_arg(args, "evidence_layout", "band"))
 glyph_mode <- has_nonempty_file(ortholog_column_path) && has_nonempty_file(ortholog_glyph_path)
@@ -737,7 +777,6 @@ evidence_layout_label <- if (identical(evidence_layout, "band")) {
 if (!is.finite(plot_width) || plot_width <= 0) {
   stop("Invalid --width: ", plot_width)
 }
-plot_width <- min(plot_width, 7.2)
 
 tree <- ape::read.tree(tree_path)
 tree_for_plot <- tree
@@ -1629,6 +1668,9 @@ tip_levels <- tip_levels[tip_levels %in% unique(as.character(source_df$species))
 if (length(tip_levels) == 0) {
   stop("No species overlap between tree tips and long table.")
 }
+if (length(setdiff(focus_species, tip_levels)) > 0) {
+  stop("--focus_species absent from plotted tips: ", paste(setdiff(focus_species, tip_levels), collapse = ", "))
+}
 tip_y_by_species <- stats::setNames(tip_df$y, as.character(tip_df$label))
 y_values <- unname(tip_y_by_species[tip_levels])
 y_limits <- c(min(y_values, na.rm = TRUE) - 0.55, max(y_values, na.rm = TRUE) + 0.55)
@@ -1636,6 +1678,7 @@ y_limits <- c(min(y_values, na.rm = TRUE) - 0.55, max(y_values, na.rm = TRUE) + 
 if (glyph_mode) {
   query_levels <- paste0("query_column_", as.numeric(ortholog_columns$column_order))
   query_plot_labels <- as.character(ortholog_columns$plot_label)
+  query_plot_labels <- display_labels(as.character(ortholog_columns$cds_fasta_id), "column", query_plot_labels)
   df <- expand.grid(species = tip_levels, query = query_levels, stringsAsFactors = FALSE)
   display_lookup <- unique(source_df[, c("species", "species_display"), drop = FALSE])
   display_lookup <- display_lookup[!duplicated(as.character(display_lookup$species)), , drop = FALSE]
@@ -1646,7 +1689,11 @@ if (glyph_mode) {
 } else {
   query_levels <- unique(as.character(df$query[order(df$query_order, df$query)]))
   query_plot_labels <- query_levels
+  query_plot_labels <- display_labels(query_levels, "family", query_plot_labels)
   df <- df[df$species %in% tip_levels & df$query %in% query_levels, , drop = FALSE]
+}
+if (identical(plot_width_arg, "auto")) {
+  plot_width <- max(7.2, 4.8 + length(query_levels) * 0.14)
 }
 df$species <- factor(as.character(df$species), levels = tip_levels)
 df$query <- factor(as.character(df$query), levels = query_levels)
@@ -1800,7 +1847,6 @@ if (glyph_mode) {
 }
 
 max_label_width <- max(nchar(as.character(label_df$species_display), type = "width"))
-max_query_width <- max(nchar(as.character(query_plot_labels), type = "width"))
 busco_df <- read_busco_summary_table(busco_table_path, tip_y_by_species)
 
 tree_width <- 10.5
@@ -2359,7 +2405,7 @@ if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
   query_tree_title_df$label <- if (single_family_plot) {
     ortholog_tree_label
   } else {
-    query_tree_title_df$family_id
+    display_labels(query_tree_title_df$family_id, "family")
   }
   family_column_count <- table(as.character(ortholog_columns$family_id))
   family_column_center <- tapply(
@@ -2380,7 +2426,7 @@ if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
     query_tree_title_df$title_angle == 90,
     pmax(
       0.65,
-      nchar(query_tree_title_df$label, type = "width") * 0.115 * layout_data_units_per_inch + 0.30
+      text_width_inches(query_tree_title_df$label) * layout_data_units_per_inch + 0.30
     ),
     0.35
   )
@@ -2404,7 +2450,7 @@ if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
   duplication_event_df$mapped_species_node <- as.character(
     duplication_event_df$mapped_species_node
   )
-  duplication_event_df$duplication_count <- 1L
+  duplication_event_df$duplication_count <- rep(1L, nrow(duplication_event_df))
   species_duplication_df <- data.frame()
   if (nrow(duplication_event_df) > 0) {
     species_duplication_df <- stats::aggregate(
@@ -2570,22 +2616,23 @@ y_ruler <- row_y_min - 0.85
 y_axis_label <- ifelse(dated_ruler_mode, row_y_min - 2.35, row_y_min - 1.95)
 query_label_gap <- 0.06
 y_query_label <- row_y_min - heatmap_cell_half - query_label_gap
-query_label_depth <- max(
-  2.6,
-  max_query_width * 0.115 * layout_data_units_per_inch + 0.40
-)
+query_label_depth <- max(2.6, max(text_width_inches(query_plot_labels)) * layout_data_units_per_inch + 0.40)
 y_legend <- min(row_y_min - 4.15, y_query_label - query_label_depth - 0.80)
 y_busco_axis <- row_y_min - 0.85
 y_busco_label <- row_y_min - 2.35
-y_min <- row_y_min - 6.70
+# The family-summary mode has no glyph legend rows to extend its bounds later.
+# Reserve the same complete rotated-label and legend depth in both modes.
+y_min <- min(row_y_min - 6.70, y_legend - 0.80)
 y_max <- row_y_max + 0.75
 duplication_family_key_title_df <- data.frame()
 duplication_count_key_df <- data.frame()
 duplication_count_key_title_df <- data.frame()
 if (nrow(duplication_family_key_df) > 0) {
+  duplication_family_key_df$label <- display_labels(
+    duplication_family_key_df$family_id, "family", duplication_family_key_df$label
+  )
   family_key_label_width <- max(
-    nchar(duplication_family_key_df$label, type = "width") *
-      0.115 * layout_data_units_per_inch,
+    text_width_inches(duplication_family_key_df$label, font_size_pt * 0.88) * layout_data_units_per_inch,
     na.rm = TRUE
   )
   family_key_two_column_width <- 0.42 + family_key_label_width + 0.35
@@ -2682,6 +2729,16 @@ if (glyph_mode) {
     ),
     stringsAsFactors = FALSE
   )
+  legend_cell_width <- 1.10 + max(text_width_inches(legend_df$label)) * layout_data_units_per_inch
+  legend_columns <- if (identical(legend_columns_arg, "auto")) {
+    max(1, min(3, floor((heatmap_right - heatmap_left) / legend_cell_width)))
+  } else {
+    as.integer(legend_columns_arg)
+  }
+  legend_index <- seq_len(nrow(legend_df)) - 1
+  legend_rows <- ceiling(nrow(legend_df) / legend_columns)
+  legend_df$x <- heatmap_left + 0.05 + floor(legend_index / legend_rows) * legend_cell_width
+  legend_df$y <- y_legend - (legend_index %% legend_rows) * 0.75
 } else if (value_mode == "presence") {
   legend_df <- data.frame(
     label = c("undetected", "detected"),
@@ -2935,7 +2992,75 @@ if (nrow(evidence_state_legend_df) > 0) {
   y_min <- min(y_min, min(evidence_state_legend_df$ymin, na.rm = TRUE) - 0.35)
 }
 
+# Legend text can widen a small matrix substantially. Resolve physical text
+# bounds first, then reserve rotated-label depth using the FINAL x scale.
+fit_text_right <- function(x, labels, offset = 0, size = font_size_pt) {
+  fraction <- text_width_inches(labels, size) / plot_width
+  if (any(fraction >= 1)) stop("Plot width is too small for legend text; increase --width")
+  max((x + offset + 0.15 - fraction * x_min) / (1 - fraction))
+}
+if (nrow(legend_df) > 0) {
+  x_max <- max(x_max, fit_text_right(legend_df$x, legend_df$label, 0.62))
+}
+for (legend_parts in list(
+  list(synteny_legend_title_df, 0), list(ufboot_legend_title_df, 0),
+  list(evidence_state_legend_title_df, 0), list(evidence_state_legend_df, 0.25),
+  list(busco_legend_df, 0.42), list(duplication_family_key_df, 0.42)
+)) {
+  if (nrow(legend_parts[[1]]) > 0) {
+    x_max <- max(x_max, fit_text_right(legend_parts[[1]]$x, legend_parts[[1]]$label, legend_parts[[2]]))
+  }
+}
+if (glyph_mode && nrow(legend_df) > 0) {
+  legend_column_index <- floor(legend_index / legend_rows)
+  legend_text_width <- text_width_inches(legend_df$label)
+  legend_max_text_width <- max(legend_text_width)
+  # Solve the coupled x scale/column spacing in physical inches. Reusing the
+  # pre-legend scale here would make columns overlap whenever a legend widens
+  # a small matrix.
+  fraction <- (legend_column_index * legend_max_text_width + legend_text_width) / plot_width
+  if (any(fraction >= 1)) stop("Plot width is too small for legend columns; reduce --legend_columns or increase --width")
+  x_max <- max(x_max, (
+    heatmap_left + 0.05 + legend_column_index * 1.10 + 0.62 + 0.15 - fraction * x_min
+  ) / (1 - fraction))
+  legend_df$x <- heatmap_left + 0.05 + legend_column_index * (
+    1.10 + legend_max_text_width * (x_max - x_min) / plot_width
+  )
+}
+final_data_units_per_inch <- (x_max - x_min) / plot_width
+final_label_depth <- max(2.6, max(text_width_inches(query_plot_labels)) * final_data_units_per_inch + 0.40)
+final_y_legend <- min(row_y_min - 4.15, y_query_label - final_label_depth - 0.80)
+if (final_y_legend < y_legend) {
+  legend_shift <- final_y_legend - y_legend
+  for (table_name in c(
+    "legend_df", "synteny_legend_df", "synteny_legend_title_df", "ufboot_legend_df",
+    "ufboot_legend_title_df", "evidence_state_legend_df", "evidence_state_swatch_df",
+    "evidence_state_legend_title_df", "busco_legend_df", "duplication_family_key_df",
+    "duplication_family_key_title_df", "duplication_count_key_df", "duplication_count_key_title_df"
+  )) {
+    table <- get(table_name)
+    for (field in intersect(c("y", "ymin", "ymax", "status_y", "status_yend"), colnames(table))) {
+      table[[field]] <- table[[field]] + legend_shift
+    }
+    assign(table_name, table)
+  }
+  y_legend <- final_y_legend
+  y_min <- y_min + legend_shift
+}
+if (nrow(query_tree_title_df) > 0) {
+  final_title_depth <- ifelse(query_tree_title_df$title_angle == 90,
+    pmax(0.65, text_width_inches(query_tree_title_df$label) * final_data_units_per_inch + 0.30), 0.35)
+  y_max <- max(y_max, max(query_tree_title_df$title_y + final_title_depth) + 0.20)
+}
+
 combined <- ggplot()
+if (length(focus_species) > 0) {
+  focus_df <- data.frame(y = unname(tip_y_by_species[focus_species]))
+  combined <- combined + geom_rect(
+    data = focus_df, aes(ymin = y - 0.45, ymax = y + 0.45),
+    xmin = tree_left, xmax = heatmap_right, fill = NA, color = "black", linewidth = 0.30
+  )
+}
 if (nrow(ci_plot_df) > 0) {
   combined <- combined +
     geom_segment(data = ci_plot_df, aes(x = xmin_plot, xend = xmax_plot, y = y, yend = y), linewidth = 0.8, color = hpd_color, alpha = 0.75, lineend = "butt")
