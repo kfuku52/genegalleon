@@ -163,7 +163,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
                                   color="black", linewidth=0.6, solid_capstyle="butt", clip_on=False)
                 text = root.annotate(f"{scale:,} {'gene' if scale == 1 else 'genes'}", (track.xstart + track.ratio * scale / 2, track.y),
                                      xytext=(0, 0), textcoords="offset points", ha="center",
-                                     va="bottom" if direction == 1 else "top", annotation_clip=False)
+                                     va="bottom", annotation_clip=False)
                 scale_lines.append((track, direction, line, text))
         legend = None
         if legend_text is not None:
@@ -216,10 +216,13 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
                 species_box = Bbox.union([species_labels[index].get_window_extent(renderer),
                                           unit_labels[index].get_window_extent(renderer)])
                 edge = species_box.y1 if direction == 1 else species_box.y0
-                y = (edge + direction * 12) / fig.bbox.height
+                # Keep the bottom scale label above its bar and below the
+                # species label, with room for the label's actual font height.
+                clearance = 12 if direction == 1 else max(12, text.get_window_extent(renderer).height + 5 + label_gap)
+                y = (edge + direction * clearance) / fig.bbox.height
                 line.set_ydata((y, y))
                 text.xy = (text.xy[0], y)
-                text.set_position((0, direction * 5))
+                text.set_position((0, 5))
             artists = [*root.patches, *root.lines, *root.texts]
             box = Bbox.union([artist.get_window_extent(renderer) for artist in artists if artist.get_visible()])
             if legend is not None:
@@ -247,6 +250,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             plt.close(fig)
     return {"coordinate_system": "gene_rank", "scale_mode": scale_mode, "scale_unit": "genes", "scale_value": scale,
             "scale_bar_count": len(scale_lines), "track_gene_counts": [track.total for track in tracks],
+            "scale_label_position": "above",
             "track_extents": [[track.xstart, track.xend] for track in tracks], "track_alignment": "left",
             "track_ratios": [track.ratio for track in tracks], "pdf_width_inches": 7.2,
             "font": "Helvetica", "font_size_pt": 8, "text_color": "black",

@@ -320,6 +320,13 @@ def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_tra
             assert gap == pytest.approx(4, abs=1e-7)
             species_boxes.append(species_box)
         assert root.lines[-1].get_window_extent(renderer).y0 < species_boxes[1].y0
+        for line in root.lines:
+            scale_label = next(text for text in root.texts if text.get_text() == "1 gene"
+                               and text.xy[1] == line.get_ydata()[0])
+            assert scale_label.get_window_extent(renderer).y0 > line.get_window_extent(renderer).y1
+        bottom_label = next(text for text in root.texts if text.get_text() == "1 gene"
+                            and text.xy[1] == root.lines[-1].get_ydata()[0])
+        assert species_boxes[1].y0 - bottom_label.get_window_extent(renderer).y1 >= 4 - 1e-7
         if scale_mode == "independent":
             assert root.lines[0].get_window_extent(renderer).y0 > species_boxes[0].y1
         for line, genes in zip(root.lines, (10,) if bar_count == 1 else (6, 10), strict=True):
@@ -342,6 +349,7 @@ def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_tra
     assert observed == [True]
     assert style["scale_unit"] == "genes" and style["scale_value"] == 1
     assert style["scale_mode"] == scale_mode and style["scale_bar_count"] == bar_count
+    assert style["scale_label_position"] == "above"
     assert style["chromosome_style"] == "rectangular"
     placement = style["species_label_layout"]
     assert [item["longest_chromosome_label"] for item in placement] == [seqids[0], "scaffold16"]

@@ -181,7 +181,8 @@ avoid crowding; neither chromosome nor gene orientations change.
 Each track positions its species label 4 pt beyond the outer edge of its own
 longest rendered chromosome/scaffold label. The measurement uses the actual
 font metrics and rotated label bounds, so long labels on one track do not
-create unused space on the other. Scale bars follow the species labels.
+create unused space on the other. Scale bars follow the species labels,
+with the gene-count text above each bar.
 All karyotype chromosomes have rectangular outlines and fills, including short
 chromosomes; their ends are never rounded according to chromosome length.
 Karyotypes use a **shared gene-count scale** by default
