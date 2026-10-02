@@ -23,7 +23,7 @@ if __package__:
 else:
     import subgenome_dominance_plot as plotting
 
-INFERENCE_VERSION = 2
+INFERENCE_VERSION = 3
 DEFAULT_PERMUTATIONS = 100000
 DEFAULT_EXACT_STATES = 262144
 
@@ -51,7 +51,8 @@ def table(path, required):
         if missing:
             raise ValueError(f"Missing columns {sorted(missing)}: {path}")
         rows = list(reader)
-    if any(None in row or any(row[k] is None or not row[k].strip() for k in required) for row in rows):
+    if any(None in row or any(v is None for v in row.values()) or
+           any(not row[k].strip() for k in required) for row in rows):
         raise ValueError(f"Incomplete required cells or malformed rows: {path}")
     return rows
 
@@ -63,15 +64,20 @@ def write_table(path, rows, fields):
         writer.writerows(rows)
 
 
+def validate_resampling(replicates, permutation_replicates, exact_max_states, seed=0):
+    for name, value, minimum in (("replicates", replicates, 100),
+                                 ("permutation_replicates", permutation_replicates, 100),
+                                 ("exact_max_states", exact_max_states, 1), ("seed", seed, 0)):
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+
+
 def make_plan(workspace, manifest, replicates=2000, seed=1,
               permutation_replicates=DEFAULT_PERMUTATIONS, exact_max_states=DEFAULT_EXACT_STATES,
               plot_config=None):
     workspace = Path(workspace).resolve()
     manifest = Path(manifest).resolve()
-    if replicates < 100 or seed < 0:
-        raise ValueError("Require at least 100 bootstrap replicates and a nonnegative seed")
-    if permutation_replicates < 100 or exact_max_states < 1:
-        raise ValueError("Require at least 100 null draws and a positive exact-state ceiling")
+    validate_resampling(replicates, permutation_replicates, exact_max_states, seed)
     analyses = table(manifest, ("analysis_id", "species", "mapping_file"))
     if not analyses or len({r["analysis_id"] for r in analyses}) != len(analyses):
         raise ValueError("Require unique, nonempty analysis IDs")
@@ -104,11 +110,13 @@ def make_plan(workspace, manifest, replicates=2000, seed=1,
             "replicates": replicates, "seed": seed, "input_hashes": inputs,
             "permutation_replicates": permutation_replicates, "exact_max_states": exact_max_states,
             "plot_config": config, "inference_version": INFERENCE_VERSION,
+            "implementation_hashes": {str(path): digest(path) for path in
+                                      (Path(__file__).resolve(), Path(plotting.__file__).resolve())},
             "numpy_version": np.__version__}
 
 
 def verify_inputs(plan):
-    for path, expected in plan["input_hashes"].items():
+    for path, expected in {**plan["input_hashes"], **plan.get("implementation_hashes", {})}.items():
         if digest(path) != expected:
             raise ValueError(f"Input changed during subgenome analysis: {path}")
 
@@ -159,8 +167,10 @@ def sign_sums(values):
 
 def sign_flip(sums, rng, replicates, exact_max_states):
     """The same two-sided block null, evaluated exactly when bounded."""
-    observed = abs(math.fsum(sums))
-    threshold = max(0, observed - 1e-12)
+    validate_resampling(100, replicates, exact_max_states)
+    sums = np.asarray(sums, dtype=float)
+    if sums.ndim != 1 or not np.isfinite(sums).all():
+        raise ValueError("Sign-flip test requires finite one-dimensional block sums")
     n = len(sums)
     # Integral block sums allow exact dynamic programming without 2**n draws.
     if all(float(s).is_integer() for s in sums):
@@ -168,6 +178,7 @@ def sign_flip(sums, rng, replicates, exact_max_states):
         divisor = math.gcd(*weights) if weights else 1
         weights = [w // divisor for w in weights]
         if sum(weights) + 1 <= exact_max_states:
+            observed = abs(sum(int(s) for s in sums))
             counts = {0: 1}
             for weight in weights:
                 updated = counts.copy()
@@ -176,9 +187,16 @@ def sign_flip(sums, rng, replicates, exact_max_states):
                 counts = updated
             total = sum(weights)
             extreme = sum(count for subtotal, count in counts.items()
-                          if abs(2 * subtotal - total) * divisor >= threshold)
+                          if abs(2 * subtotal - total) * divisor >= observed)
             return {"p_value": extreme / (1 << len(weights)), "test_method": "exact_integer_dp",
                     "null_draws": 1 << n}
+    # Scale before summation to avoid overflow; relative tolerance preserves
+    # near-ties without turning all small effects into null statistics of zero.
+    scale = max(abs(sums), default=0)
+    if scale:
+        sums = sums / scale
+    observed = abs(math.fsum(sums))
+    threshold = max(0, observed * (1 - 100 * np.finfo(float).eps))
     if n <= 16:
         null = abs(sign_sums(sums))
         return {"p_value": float(np.mean(null >= threshold)), "test_method": "exact_enumeration",
@@ -217,8 +235,7 @@ def inference(values, blocks, replicates, rng, *, null_rng=None,
     values = np.asarray(values, dtype=float)
     if values.ndim != 1 or not np.isfinite(values).all():
         raise ValueError("Inference requires finite one-dimensional values")
-    if replicates < 100 or permutation_replicates < 100 or exact_max_states < 1:
-        raise ValueError("Invalid resampling configuration")
+    validate_resampling(replicates, permutation_replicates, exact_max_states)
     if null_rng is None:
         state = json.dumps(rng.bit_generator.state, sort_keys=True, default=lambda x: x.tolist())
         null_rng = np.random.default_rng(int.from_bytes(hashlib.sha256(state.encode()).digest()[:16], "big"))
@@ -227,7 +244,8 @@ def inference(values, blocks, replicates, rng, *, null_rng=None,
         grouped[block].append(value)
     result = {"n_loci": len(values), "n_blocks": len(grouped),
               "effect": math.fsum(values) / len(values) if len(values) else None,
-              "ci_low": None, "ci_high": None, "p_value": None, "status": "insufficient_blocks",
+              "ci_low": None, "ci_high": None, "p_value": None,
+              "status": "insufficient_blocks" if len(values) else "not_estimable_no_loci",
               "test_method": "not_tested", "null_draws": 0, "bootstrap_replicates": 0,
               "mc_p_ci_low": None, "mc_p_ci_high": None,
               "n_nonzero_blocks": sum(math.fsum(v) != 0 for v in grouped.values())}
@@ -308,14 +326,14 @@ def expression_rows(analysis, genes):
             for tissue, biological in by_tissue.items():
                 ratios, positive_a, positive_b = [], 0, 0
                 for columns in biological.values():
-                    va = math.fsum(expression[ga][c] for c in columns) / len(columns) if ga in expression else None
-                    vb = math.fsum(expression[gb][c] for c in columns) / len(columns) if gb in expression else None
-                    positive_a += int(va is not None and va > 0)
-                    positive_b += int(vb is not None and vb > 0)
+                    va = log_mean_abundance([expression[ga][c] for c in columns]) if ga in expression else None
+                    vb = log_mean_abundance([expression[gb][c] for c in columns]) if gb in expression else None
+                    positive_a += int(va is not None)
+                    positive_b += int(vb is not None)
                     if ga not in expression or gb not in expression:
                         continue
-                    if va > 0 and vb > 0:
-                        ratios.append(float(np.log2(va / vb)))
+                    if va is not None and vb is not None:
+                        ratios.append(va - vb)
                 coverage.append({"group_id": group, "pair_id": pair_id, "subgenome_a": a, "subgenome_b": b,
                                  "tissue": tissue, "biological_samples": len(biological), "positive_samples": len(ratios),
                                  "gene_a": ga, "gene_b": gb, "block_id": block,
@@ -330,19 +348,32 @@ def expression_rows(analysis, genes):
     return rows, coverage
 
 
+def log_mean_abundance(values):
+    """Log2 of an arithmetic mean, without overflowing or underflowing the mean."""
+    scale = max(values)
+    if scale == 0:
+        return None
+    return math.log2(scale) + math.log2(math.fsum(v / scale for v in values) / len(values))
+
+
 def adjust_p(rows):
+    for row in rows:
+        p = row["p_value"]
+        if p is not None and (isinstance(p, bool) or not math.isfinite(p) or not 0 <= p <= 1):
+            raise ValueError("p_value must be finite and between zero and one")
+        row["q_value"] = None
     selected = [(i, row["p_value"]) for i, row in enumerate(rows) if row["p_value"] is not None]
     running = 1.0
     for rank, (i, p) in reversed(list(enumerate(sorted(selected, key=lambda item: item[1]), 1))):
         running = min(running, p * len(selected) / rank)
         rows[i]["q_value"] = running
     for row in rows:
-        row.setdefault("q_value", None)
         row["multiple_testing_n"] = len(selected)
 
 
 def analyse(analysis, output, replicates, seed, permutation_replicates=DEFAULT_PERMUTATIONS,
             exact_max_states=DEFAULT_EXACT_STATES, plot_config=None):
+    validate_resampling(replicates, permutation_replicates, exact_max_states, seed)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     genes, groups, scope = load_mapping(analysis["mapping_file"])
@@ -380,6 +411,10 @@ def analyse(analysis, output, replicates, seed, permutation_replicates=DEFAULT_P
     if analysis["expression_file"]:
         expression, coverage = expression_rows(analysis, genes)
         buckets = defaultdict(list)
+        for row in coverage:
+            buckets[(row["group_id"], row["subgenome_a"], row["subgenome_b"], row["tissue"])]
+            if scope == "global":
+                buckets[("ALL_GROUPS", row["subgenome_a"], row["subgenome_b"], row["tissue"])]
         for row in expression:
             buckets[(row["group_id"], row["subgenome_a"], row["subgenome_b"], row["tissue"])].append(row)
             if scope == "global":
@@ -426,6 +461,7 @@ def analyse(analysis, output, replicates, seed, permutation_replicates=DEFAULT_P
                "genomewide_dominance": "contrasts_available" if scope == "global" and results else "not_tested", "statistics": results,
                "inference": {"resampling": "nonoverlapping_block_bootstrap", "null_test": "block_sign_flip",
                              "version": INFERENCE_VERSION, "replicates": replicates, "seed": seed,
+                             "floating_null_comparison": "scaled block sums; 100 machine eps relative tolerance",
                              "permutation_replicates": permutation_replicates, "exact_max_states": exact_max_states,
                              "rng_scheme": "sha256-contrast-v1; separate bootstrap/permutation streams",
                              "point_unit": "group-specific subgenome contrast", "resampling_unit": "nonoverlapping block",
@@ -494,8 +530,7 @@ def main():
                      for row in plan["analyses"]]
         available = [{**{k: s[k] for k in ("analysis_id", "species", "expression_unit", "assignment_scope",
                                             "reference", "pair_set", "retention_status")},
-                      "statistics": s["statistics"]} for s in summaries
-                     if any(r["effect"] is not None for r in s["statistics"])]
+                      "statistics": s["statistics"]} for s in summaries]
         if available:
             for absolute in (False, True):
                 plotting.comparison_plot(available, output, config=plan.get("plot_config"), absolute=absolute,

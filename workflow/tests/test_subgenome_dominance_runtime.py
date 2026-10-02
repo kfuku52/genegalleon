@@ -58,3 +58,29 @@ def test_standalone_stage_reuse_and_stale_input_preserve_results(tmp_path):
     changed_style = run()
     assert changed_style.returncode != 0
     assert output.read_bytes() == rebuilt_bytes
+
+
+def test_standalone_stage_with_no_positive_expression_still_publishes(tmp_path):
+    workspace = tmp_path / "workspace"
+    fixture_inputs(workspace / "input")
+    (workspace / "input/manifest.tsv").rename(workspace / "input/subgenome_analyses.tsv")
+    expression = workspace / "input/expr.tsv"
+    lines = expression.read_text().splitlines()
+    expression.write_text(lines[0] + "\n" + "\n".join(
+        line.split("\t")[0] + "\t0\t0\t0" for line in lines[1:]) + "\n")
+    config = workspace / "input/plot.json"
+    config.write_text('{"metrics": ["expression_log2_ratio"], "formats": ["svg"]}')
+    env = {**os.environ, "gg_workspace_dir": str(workspace), "GG_COMMON_TMP_ROOT": "workspace",
+           "GG_ARRAY_TASK_ID": "1", "GG_JOB_ID": "subgenome_empty_test", "GG_TASK_CPUS": "1",
+           "GG_MEM_PER_CPU_GB": "2", "genome_evolution_mode": "subgenome", "artifact_stale_policy": "stop",
+           "subgenome_bootstrap_replicates": "100", "subgenome_plot_config": str(config)}
+    result = subprocess.run(["bash", str(REPO_ROOT / "workflow/core/gg_genome_evolution_core.sh")],
+                            cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = workspace / "output/genome_evolution/subgenome_dominance"
+    summary = json.loads((output / "fixture/summary.json").read_text())
+    row = next(r for r in summary["statistics"] if r["metric"] == "expression_log2_ratio")
+    assert row["n_opportunities"] == 12 and row["effect"] is row["p_value"] is None
+    comparison = json.loads((output / "comparison_absolute_provenance.json").read_text())
+    assert comparison["point_count"] == 0 and comparison["panels"][0]["status"] == "not_estimable"
+    assert (output / "comparison_absolute.svg").is_file() and (output / "run.json").is_file()

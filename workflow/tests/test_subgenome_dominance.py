@@ -210,4 +210,160 @@ def test_plot_config_and_font_are_hashed_in_plan(tmp_path):
     assert str(config) in changed["input_hashes"]
     assert changed["plot_config"]["formats"] == ["pdf"]
     assert changed["permutation_replicates"] == 100000
-    assert changed["inference_version"] == 2 and plan["schema_version"] == 2
+    assert changed["inference_version"] == 3 and plan["schema_version"] == 2
+
+
+@pytest.mark.parametrize("scale", [1e-300, 1e-14, 1, 1e10, 1e300])
+def test_sign_flip_is_scale_invariant_at_small_and_large_magnitudes(scale):
+    result = sd.sign_flip(np.full(17, .13 * scale), np.random.default_rng(1), 100, 512)
+    assert result["p_value"] == 2 / 2 ** 17
+
+
+def test_integer_null_avoids_float_sum_overflow():
+    result = sd.sign_flip(np.full(18, 1e308), np.random.default_rng(1), 100, 512)
+    assert result["test_method"] == "exact_integer_dp"
+    assert result["p_value"] == 2 / 2 ** 18
+
+
+def test_enumeration_and_meet_in_middle_match_independent_rational_null():
+    # Exact integer arithmetic provides the independent oracle for decimal weights.
+    integers = [13, -72, 49, 57, -11, 38, 61, -24, 16, 43, -92, 55, 23, -38, 69, 32, -17]
+    for n in (8, 17):
+        weights = integers[:n]
+        observed = abs(sum(weights))
+        expected = sum(abs(sum(s * w for s, w in zip(signs, weights, strict=True))) >= observed
+                       for signs in itertools.product((-1, 1), repeat=n)) / 2 ** n
+        for scale in (1e-14, .01, 1e12):
+            result = sd.sign_flip(np.array(weights) * scale, np.random.default_rng(1), 100, 512)
+            assert result["p_value"] == expected
+
+
+def test_monte_carlo_scaled_null_preserves_draws_and_probability():
+    weights = np.linspace(-.48, 1.43, 38)
+    results = [sd.sign_flip(weights * scale, np.random.default_rng(4), 2000, 1)
+               for scale in (1e-200, 1, 1e200)]
+    assert results[0] == results[1] == results[2]
+
+
+@pytest.mark.parametrize("a,b", [(1e300, 1e-300), (1e308, 1e308), (5e-324, 5e-324)])
+def test_expression_ratio_handles_finite_extreme_abundances(tmp_path, a, b):
+    import math
+    plan = fixture_inputs(tmp_path / "input")
+    path = tmp_path / "input/expr.tsv"
+    rows = list(csv.DictReader(path.open(), delimiter="\t"))
+    for row in rows:
+        if row["gene_id"] in {"g0A", "g0B"}:
+            value = a if row["gene_id"] == "g0A" else b
+            row.update({c: str(value) for c in ("leaf1", "leaf1tech", "leaf2")})
+    sd.write_table(path, rows, rows[0].keys())
+    genes, _, _ = sd.load_mapping(plan["analyses"][0]["mapping_file"])
+    expression, coverage = sd.expression_rows(plan["analyses"][0], genes)
+    assert expression[0]["log2_ratio"] == pytest.approx(math.log2(a) - math.log2(b))
+    assert coverage[0]["positive_samples"] == 2
+    assert sd.log_mean_abundance([5e-324, 0]) == -1075
+
+
+def test_zero_eligible_expression_contrasts_are_retained(tmp_path):
+    plan = fixture_inputs(tmp_path / "input")
+    path = tmp_path / "input/expr.tsv"
+    rows = list(csv.DictReader(path.open(), delimiter="\t"))
+    for row in rows:
+        row.update({c: "0" for c in ("leaf1", "leaf1tech", "leaf2")})
+    sd.write_table(path, rows, rows[0].keys())
+    result = sd.analyse(plan["analyses"][0], tmp_path / "out", 100, 1,
+                        plot_config={"metrics": ["expression_log2_ratio"], "formats": ["svg"]})
+    row = next(r for r in result["statistics"] if r["metric"] == "expression_log2_ratio")
+    assert row["n_opportunities"] == 12 and row["n_loci"] == row["n_blocks"] == 0
+    assert row["effect"] is row["ci_low"] is row["p_value"] is row["q_value"] is None
+    assert row["status"].startswith("not_estimable") and row["multiple_testing_n"] == 0
+
+
+def test_benjamini_hochberg_matches_independent_definition_and_resets_missing_q():
+    from fractions import Fraction
+    ps = [Fraction(1, 200), Fraction(1, 50), Fraction(1, 50), Fraction(1, 2), Fraction(0), Fraction(1)]
+    ordered = sorted(ps)
+    expected = {p: min(Fraction(1), *(q * len(ps) / rank for rank, q in enumerate(ordered, 1) if q >= p)) for p in ps}
+    rows = [{"p_value": float(p)} for p in ps] + [{"p_value": None, "q_value": .001}]
+    sd.adjust_p(rows)
+    for row, p in zip(rows, ps, strict=False):
+        assert row["q_value"] == pytest.approx(float(expected[p]))
+        assert row["multiple_testing_n"] == len(ps)
+    assert rows[-1]["q_value"] is None
+    assert rows[-1]["multiple_testing_n"] == len(ps)
+
+
+@pytest.mark.parametrize("p", [float("nan"), float("inf"), -.1, 1.1, True])
+def test_invalid_p_values_fail(p):
+    with pytest.raises(ValueError, match="p_value"):
+        sd.adjust_p([{"p_value": p}])
+
+
+@pytest.mark.parametrize("parameters", [{"replicates": True}, {"replicates": 100.0}, {"seed": -1},
+                                        {"permutation_replicates": 99}, {"exact_max_states": False}])
+def test_resampling_parameters_are_validated_before_planning(tmp_path, parameters):
+    fixture_inputs(tmp_path / "input")
+    with pytest.raises(ValueError, match="must be an integer"):
+        sd.make_plan(tmp_path, tmp_path / "input/manifest.tsv", **parameters)
+
+
+def test_implementation_guard_and_legacy_plan_compatibility(tmp_path):
+    plan = fixture_inputs(tmp_path / "input")
+    assert len(plan["implementation_hashes"]) == 2
+    sd.verify_inputs(plan)
+    implementation = tmp_path / "helper.py"
+    implementation.write_text("version one")
+    plan["implementation_hashes"] = {str(implementation): sd.digest(implementation)}
+    implementation.write_text("version two")
+    with pytest.raises(ValueError, match="Input changed"):
+        sd.verify_inputs(plan)
+    plan.pop("implementation_hashes")
+    sd.verify_inputs(plan)
+
+
+def test_short_optional_manifest_row_fails_cleanly(tmp_path):
+    fixture_inputs(tmp_path / "input")
+    path = tmp_path / "input/manifest.tsv"
+    path.write_text(path.read_text().replace("samples_file\n", "samples_file\treference\n"))
+    with pytest.raises(ValueError, match="malformed"):
+        sd.make_plan(tmp_path, path)
+
+
+def test_five_subgenomes_use_all_ten_independent_pairwise_contrasts(tmp_path):
+    plan = fixture_inputs(tmp_path / "input")
+    mapping = ["gene_id\tgroup_id\tsubgenome\tassignment_scope\tassignment_basis\tevidence"]
+    pairs = ["pair_id\tblock_id\tgene_id"]
+    retention = ["group_id\tblock_id\tlocus_id\tsubgenome\tcallable\tretained"]
+    expression = ["gene_id\tleaf1\tleaf1tech\tleaf2"]
+    for i in range(12):
+        for label in ("D", "R1", "R2", "R3", "R4"):
+            gene = f"g{i}{label}"
+            mapping.append(f"{gene}\tG\t{label}\tlocal\tcurated\tindependent_phasing")
+            pairs.append(f"p{i}\tb{i}\t{gene}")
+            retention.append(f"G\tb{i}\tl{i}\t{label}\t1\t{int(label == 'D')}")
+            value = 4 if label == "D" else 1
+            expression.append(f"{gene}\t{value}\t{value}\t{value}")
+    for name, rows in (("mapping", mapping), ("pairs", pairs), ("retention", retention), ("expr", expression)):
+        (tmp_path / f"input/{name}.tsv").write_text("\n".join(rows) + "\n")
+    result = sd.analyse(plan["analyses"][0], tmp_path / "output", 100, 1,
+                        plot_config={"formats": ["svg"], "metrics": list(sd.plotting.METRICS[:2])})
+    for metric, magnitude in (("retention_difference", 1), ("expression_log2_ratio", 2)):
+        rows = [r for r in result["statistics"] if r["metric"] == metric]
+        assert len(rows) == 10 and {r["multiple_testing_n"] for r in rows} == {10}
+        assert sum(r["q_value"] < .05 for r in rows) == 4
+        assert all(r["effect"] == (magnitude if r["subgenome_a"] == "D" else 0) for r in rows)
+        assert all(r["p_value"] == (2 / 4096 if r["subgenome_a"] == "D" else 1) for r in rows)
+    assert result["genomewide_identity"] == "unresolved" and result["genomewide_dominance"] == "not_tested"
+
+
+def test_missing_expression_id_is_not_counted_as_zero(tmp_path):
+    plan = fixture_inputs(tmp_path / "input")
+    path = tmp_path / "input/expr.tsv"
+    lines = path.read_text().splitlines()
+    path.write_text("\n".join(line for line in lines if not line.startswith("g0B\t")) + "\n")
+    result = sd.analyse(plan["analyses"][0], tmp_path / "output", 100, 1,
+                        plot_config={"formats": ["svg"]})
+    log_ratio, detection = result["statistics"][1:]
+    assert log_ratio["n_opportunities"] == 12 and log_ratio["n_loci"] == 11
+    assert detection["n_loci"] == 11 and detection["effect"] == 0
+    coverage = list(csv.DictReader((tmp_path / "output/expression_coverage.tsv").open(), delimiter="\t"))
+    assert coverage[0]["gene_ids_present"] == "0" and coverage[0]["positive_samples"] == "0"
