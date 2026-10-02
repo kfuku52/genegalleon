@@ -199,6 +199,7 @@ orthofinder_core_method="max-pd" # nwkit sample method for tree-aware OrthoFinde
 orthofinder_algorithm_threads="auto" # auto uses up to one eighth of GG_TASK_CPUS for memory-intensive analysis phases.
 orthofinder_memory_gb_per_thread=4 # Estimated memory per OrthoFinder analysis thread; also caps explicit thread requests.
 orthofinder_binary="orthofinder" # Command or executable path for the complete native OrthoFinder runtime.
+orthofinder_source_manifest="" # Optional immutable source inventory for an external native runtime; recorded as a hashed inference input.
 genome_parallel_jobs="auto" # Concurrent per-gene jobs; auto is capped by both CPU and tool memory.
 genome_parallel_memory_gb_per_job=2 # Estimated memory per concurrent per-gene job; increase for large alignments.
 min_percent_species_coverage=50 # Minimum percent species coverage required for orthogroup selection.

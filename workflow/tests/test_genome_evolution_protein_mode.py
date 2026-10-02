@@ -1054,6 +1054,50 @@ def test_complete_native_executable_override_is_used_for_version_and_inference(t
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("change", ["executable", "source_manifest"])
+def test_native_runtime_identity_invalidates_inference_without_changing_frozen_tree(tmp_path, change):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    custom = tmp_path / "complete native launcher"
+    _write_executable(custom, f'#!/bin/bash\nexec {shlex.quote(str(tmp_path / "bin/orthofinder"))} "$@"\n')
+    manifest = tmp_path / "native source inventory.json"
+    manifest.write_text('{"source_commit": "first"}\n')
+    env = {**config, "genome_evolution_mode": "orthogroups", "run_og_selection": "0",
+           "orthofinder_binary": str(custom), "orthofinder_source_manifest": str(manifest)}
+    first = _run_core(tmp_path, {**env, "artifact_stale_policy": "rebuild"})
+    assert first.returncode == 0, first.stdout + first.stderr
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    before = tree.read_bytes()
+    provenance = workspace / "output/artifact_provenance/genome_evolution/orthofinder.json"
+    record = json.loads(provenance.read_text())
+    assert record["parameters"]["orthofinder_binary"] == str(custom)
+    assert {entry["label"] for entry in record["inputs"]} >= {
+        "orthofinder_executable", "orthofinder_source_manifest"}
+    capture = tmp_path / "capture/orthofinder_args.txt"
+    capture.unlink()
+    if change == "executable":
+        custom.write_text(custom.read_text() + "# new complete native launcher\n")
+    else:
+        manifest.write_text('{"source_commit": "second"}\n')
+    stopped = _run_core(tmp_path, {**env, "artifact_stale_policy": "stop"})
+    assert stopped.returncode != 0
+    assert not capture.exists()
+    assert tree.read_bytes() == before
+    rebuilt = _run_core(tmp_path, {**env, "artifact_stale_policy": "rebuild"})
+    assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
+    assert capture.exists()
+    assert tree.read_bytes() == before
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_missing_native_source_inventory_stops_before_inference(tmp_path):
+    _prepare_orthofinder_cleanup_inputs(tmp_path)
+    result = _run_core(tmp_path, {"orthofinder_source_manifest": str(tmp_path / "missing.json")})
+    assert result.returncode != 0
+    assert "Missing OrthoFinder source manifest" in result.stderr
+    assert not (tmp_path / "capture/orthofinder_args.txt").exists()
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("core_limit", [1, 50])
 def test_orthofinder_completion_removes_working_data_and_reuses_retained_results(tmp_path: Path, core_limit):
     workspace = _prepare_orthofinder_cleanup_inputs(tmp_path)

@@ -88,6 +88,7 @@ orthofinder_core_method="${orthofinder_core_method:-max-pd}"
 orthofinder_algorithm_threads="${orthofinder_algorithm_threads:-auto}"
 orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
 orthofinder_binary="${orthofinder_binary:-orthofinder}"
+orthofinder_source_manifest="${orthofinder_source_manifest:-}"
 genome_parallel_jobs="${genome_parallel_jobs:-auto}"
 genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
@@ -4443,6 +4444,15 @@ elif [[ -s "${dir_species_tree_summary}/undated_species_tree.nwk" ]]; then
   orthofinder_provenance_args+=(--input "species_tree=${dir_species_tree_summary}/undated_species_tree.nwk")
 fi
 gg_artifact_add_input_if_present orthofinder_provenance_args "busco_short_summaries" "${dir_species_busco_short}"
+orthofinder_executable=$(command -v -- "${orthofinder_binary}" || true)
+gg_artifact_add_input_if_present orthofinder_provenance_args "orthofinder_executable" "${orthofinder_executable}"
+if [[ -n "${orthofinder_source_manifest}" ]]; then
+  if [[ ! -s "${orthofinder_source_manifest}" ]]; then
+    echo "Missing OrthoFinder source manifest: ${orthofinder_source_manifest}" >&2
+    exit 1
+  fi
+  orthofinder_provenance_args+=(--input "orthofinder_source_manifest=${orthofinder_source_manifest}")
+fi
 orthofinder_provenance_args+=(
   --output "orthogroups=${dir_orthofinder_og}"
   --output "root_hog_equivalent=${dir_orthofinder_hog2og}"
@@ -4451,6 +4461,7 @@ orthofinder_provenance_args+=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "msa_method=msa"
   --parameter "search_method=diamond"
+  --parameter "orthofinder_binary=${orthofinder_binary}"
   --parameter "max_core_species=${max_orthofinder_core_species}"
   --parameter "core_filters=${orthofinder_core_filters}"
   --parameter "core_rank=${orthofinder_core_rank}"

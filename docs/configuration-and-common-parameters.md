@@ -129,6 +129,11 @@ The same per-species BUSCO short summaries are also used by the two-round
 OrthoFinder core selector. By default, core species candidates must satisfy
 `busco_complete_pct:ge:80` and `num_seq:le:100000`; these rules are configured
 with `orthofinder_core_filters` in `workflow/gg_genome_evolution_entrypoint.sh`.
+`orthofinder_binary` selects a complete native executable. Its path and executable
+content participate in inference provenance. For an external source runtime,
+set `orthofinder_source_manifest` to its immutable source inventory; changing that
+inventory invalidates cached inference under the configured stale-artifact policy.
+An explicitly configured missing inventory stops before inference.
 When BUSCO completeness values are unavailable because the BUSCO stage was
 intentionally disabled, GeneGalleon keeps the size filter and logs a fallback
 message instead of failing solely on missing BUSCO metadata.
