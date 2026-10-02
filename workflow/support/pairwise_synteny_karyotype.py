@@ -136,6 +136,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         scale_lines, species_labels, unit_labels, chromosome_labels = [], [], [], []
         for side, track in zip(("target", "query"), tracks, strict=True):
             direction = 1 if side == "target" else -1
+            track_labels = []
             for sid in track.seqids:
                 start, length = track.offsets[sid], track.ratio * track.sizes[sid]
                 chromosome = HorizontalChromosome(root, start, start + length, track.y, height=0.012,
@@ -145,7 +146,8 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
                 label = root.annotate(sid, (start + length / 2, track.y), xytext=(0, direction * 5),
                                       textcoords="offset points", rotation=90, rotation_mode="anchor",
                                       ha="left" if direction == 1 else "right", va="center")
-                chromosome_labels.append(label)
+                track_labels.append(label)
+            chromosome_labels.append(track_labels)
             species = root.annotate(pair[f"{side}_species"].replace("_", " "),
                                     ((track.xstart + track.xend) / 2, track.y), xytext=(0, 0),
                                     textcoords="offset points", ha="center",
@@ -187,17 +189,34 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         space = (renderer.get_text_width_height_descent("x x", props, False)[0]
                  - renderer.get_text_width_height_descent("xx", props, False)[0])
         suffix = space + renderer.get_text_width_height_descent("(gene rank)", props, False)[0]
-        label_height = max(renderer.get_text_width_height_descent(label.get_text(), props, False)[0]
-                           for label in chromosome_labels)
+        label_gap = 4
+        label_layout = []
 
         def content(width):
             fig.set_size_inches(width, width * 0.4)
+            label_layout.clear()
             for index, track in enumerate(tracks):
                 direction = 1 if index == 0 else -1
-                species_labels[index].set_position((-suffix / 2, direction * (label_height + 14)))
+                labels = chromosome_labels[index]
+                boxes = [label.get_window_extent(renderer) for label in labels]
+                anchor_y = root.transData.transform((0, track.y))[1]
+                edge = max(box.y1 for box in boxes) if direction == 1 else min(box.y0 for box in boxes)
+                extent = direction * (edge - anchor_y)
+                species_labels[index].set_position((-suffix / 2, direction * (extent + label_gap)))
                 unit_labels[index].set_position((space, 0))
+                longest = max(labels, key=lambda label: renderer.get_text_width_height_descent(
+                    label.get_text(), label.get_fontproperties(), False)[0])
+                label_layout.append({"side": "target" if index == 0 else "query",
+                                     "longest_chromosome_label": longest.get_text(),
+                                     "chromosome_label_extent_pt": extent,
+                                     "species_offset_pt": direction * (extent + label_gap),
+                                     "species_label_gap_pt": label_gap})
             for track, direction, line, text in scale_lines:
-                y = track.y + direction * (label_height + 35) / (fig.get_figheight() * 72)
+                index = tracks.index(track)
+                species_box = Bbox.union([species_labels[index].get_window_extent(renderer),
+                                          unit_labels[index].get_window_extent(renderer)])
+                edge = species_box.y1 if direction == 1 else species_box.y0
+                y = (edge + direction * 12) / fig.bbox.height
                 line.set_ydata((y, y))
                 text.xy = (text.xy[0], y)
                 text.set_position((0, direction * 5))
@@ -232,6 +251,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             "track_ratios": [track.ratio for track in tracks], "pdf_width_inches": 7.2,
             "font": "Helvetica", "font_size_pt": 8, "text_color": "black",
             "species_font_style": "italic", "chromosome_label_rotation": 90,
+            "species_label_layout": label_layout,
             "chromosome_style": "rectangular",
             "connection_criteria": criteria, "connection_legend_text": legend_text}
 

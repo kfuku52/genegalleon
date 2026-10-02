@@ -256,6 +256,7 @@ def test_dotplot_pdf_3p6inch_square_helvetica8_vertical_chromosomes_and_italic_s
 def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_track_scales(tmp_path, monkeypatch, fmt, scale_mode, with_legend):
     from jcvi.formats.bed import Bed
     from kffractbias.io import read_bed
+    from matplotlib.backends.backend_pdf import RendererPdf
     from matplotlib.colors import to_rgba
     from matplotlib.figure import Figure
     from matplotlib.offsetbox import AnnotationBbox, DrawingArea
@@ -304,11 +305,23 @@ def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_tra
         assert {text.get_text() for text in texts if text.get_fontstyle() == "italic"} == {"Target species", "Query species"}
         assert sum(text.get_text() == "1 gene" for text in texts) == bar_count
         assert len(root.lines) == bar_count
-        # Long chromosome labels put the scale bars outside the original axes.
-        # They must still be drawn and included in the cropped output page.
-        assert root.lines[-1].get_ydata()[0] < 0
+        # Each species follows only its own track's longest rotated label.
+        # Measure with the same vector font metrics used for page fitting.
+        renderer = RendererPdf(None, 300, figure.get_figheight(), figure.get_figwidth())
+        species_boxes = []
+        for direction, species_name, chromosome_ids in (
+                (1, "Target species", seqids), (-1, "Query species", ["scaffold3", "scaffold16"])):
+            species = next(text for text in root.texts if text.get_text() == species_name)
+            species_box = species.get_window_extent(renderer)
+            label_boxes = [text.get_window_extent(renderer) for text in root.texts
+                           if text.get_text() in chromosome_ids]
+            gap = (species_box.y0 - max(box.y1 for box in label_boxes) if direction == 1
+                   else min(box.y0 for box in label_boxes) - species_box.y1)
+            assert gap == pytest.approx(4, abs=1e-7)
+            species_boxes.append(species_box)
+        assert root.lines[-1].get_window_extent(renderer).y0 < species_boxes[1].y0
         if scale_mode == "independent":
-            assert root.lines[0].get_ydata()[0] > 1
+            assert root.lines[0].get_window_extent(renderer).y0 > species_boxes[0].y1
         for line, genes in zip(root.lines, (10,) if bar_count == 1 else (6, 10), strict=True):
             assert line.get_xdata()[1] - line.get_xdata()[0] == pytest.approx(0.79 / genes)
             assert line.get_clip_on() is False
@@ -330,6 +343,10 @@ def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_tra
     assert style["scale_unit"] == "genes" and style["scale_value"] == 1
     assert style["scale_mode"] == scale_mode and style["scale_bar_count"] == bar_count
     assert style["chromosome_style"] == "rectangular"
+    placement = style["species_label_layout"]
+    assert [item["longest_chromosome_label"] for item in placement] == [seqids[0], "scaffold16"]
+    assert [item["species_label_gap_pt"] for item in placement] == [4, 4]
+    assert abs(placement[1]["species_offset_pt"]) < abs(placement[0]["species_offset_pt"])
     assert style["track_ratios"] == pytest.approx([0.79 / 10, 0.79 / 10] if bar_count == 1 else [0.79 / 6, 0.79 / 10])
     assert [len(Bed(str(tmp_path / f"{side}.bed"))) for side in ("target", "query")] == [6, 10]
     assert (style["connection_criteria"] is not None) == with_legend

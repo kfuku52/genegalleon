@@ -178,6 +178,10 @@ SVGs retain editable Helvetica text; raster previews use the available system
 font substitute if Helvetica is unavailable. Karyotype PDFs have a 7.2-inch page
 width and 0.06-inch outer padding. Original chromosome labels are vertical to
 avoid crowding; neither chromosome nor gene orientations change.
+Each track positions its species label 4 pt beyond the outer edge of its own
+longest rendered chromosome/scaffold label. The measurement uses the actual
+font metrics and rotated label bounds, so long labels on one track do not
+create unused space on the other. Scale bars follow the species labels.
 All karyotype chromosomes have rectangular outlines and fills, including short
 chromosomes; their ends are never rounded according to chromosome length.
 Karyotypes use a **shared gene-count scale** by default
@@ -201,7 +205,8 @@ displayed chromosomes, independently of the dotplot's physical-length filter,
 and does not reorder either track. This is opt-in display grouping, not a
 biological homoeology call. `karyotype_colors.json` records the full color map;
 `karyotype_style.json` records the scaling mode, scale unit/value, number of
-scale bars, track gene counts and track ratios. Changing the scaling mode
+scale bars, track gene counts, track ratios and per-track species-label placement.
+Changing the scaling mode
 invalidates only plots, not the analysis or dS estimates.
 
 The summary records source hashes, selected/unmapped gene counts, syntenic gene
