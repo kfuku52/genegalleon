@@ -33,6 +33,82 @@ def write_kftools_stub(stub_root):
     (package_dir / "kfog.py").write_text("", encoding="utf-8")
 
 
+@pytest.mark.parametrize("identifiers", [("001", "1"), ("NA", "NULL", "nan")])
+def test_character_gff_literal_tip_names_join(tmp_path, identifiers):
+    tree = tmp_path / "rooted.nwk"
+    tree.write_text("(" + ",".join(f"{name}:1" for name in identifiers) + ")root;\n")
+    traits = tmp_path / "traits.tsv"
+    traits.write_text("gene_id\tnum_intron\n" + "".join(
+        f"{name}\t{i}" + "\n" for i, name in enumerate(identifiers)))
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(tree), "--character_gff", str(traits),
+    ], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t", converters={"node_name": str})
+    tips = branches.set_index("node_name")
+    assert [tips.loc[name, "num_intron"] for name in identifiers] == list(range(len(identifiers)))
+
+
+@pytest.mark.parametrize("identifiers", [("001", "1"), ("NA", "NULL", "nan")])
+@pytest.mark.parametrize("source", ["uniprot", "rpsblast", "expression"])
+def test_branch_annotations_join_literal_tip_names(tmp_path, identifiers, source):
+    tree = tmp_path / "rooted.nwk"
+    tree.write_text("(" + ",".join(f"{name}:1" for name in identifiers) + ")root;\n")
+    table = tmp_path / "annotation.tsv"
+    if source == "uniprot":
+        table.write_text("gene_id\tannotation_score\ttitle\n" + "".join(
+            f"{name}\t{i + 1}\tNA\n" for i, name in enumerate(identifiers)))
+        column = "annotation_score"
+        expected = list(range(1, len(identifiers) + 1))
+    elif source == "rpsblast":
+        table.write_text("qacc\tstitle\tevalue\n" + "".join(
+            f"{name}\tdomain{i + 1}\t1e-10\n" for i, name in enumerate(identifiers)))
+        column = "pfam_domain"
+        expected = [f"domain{i + 1}" for i in range(len(identifiers))]
+    else:
+        table.write_text("gene_id\ttissue1\ttissue2\n" + "".join(
+            f"{name}\t{i + 1}\t{i + 3}\n" for i, name in enumerate(identifiers)))
+        column = "expression_tissue1"
+        expected = list(range(1, len(identifiers) + 1))
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(tree), "--" + source, str(table),
+    ], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t", converters={"node_name": str})
+    tips = branches.set_index("node_name")
+    assert [tips.loc[name, column] for name in identifiers] == expected
+    if source == "uniprot":
+        assert branches["title"].isna().all()
+
+
+def test_expression_preserves_implicit_gene_index(tmp_path):
+    identifiers = ("Genus_species_gene1", "Other_species_gene2")
+    tree = tmp_path / "rooted.nwk"
+    tree.write_text("(" + ",".join(f"{name}:1" for name in identifiers) + ")root;\n")
+    table = tmp_path / "expression.tsv"
+    # Sample-only headers already make pandas infer the leading gene index.
+    table.write_text("tissue1\ttissue2\nGenus_species_gene1\t1\t3\nOther_species_gene2\t2\t4\n")
+    stub_root = tmp_path / "stub_packages"
+    write_kftools_stub(stub_root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(stub_root), env.get("PYTHONPATH", ""))))
+    proc = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--rooted_tree", str(tree), "--expression", str(table),
+    ], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    branches = pandas.read_csv(tmp_path / "orthogroup.branch.tsv", sep="\t").set_index("node_name")
+    assert [branches.loc[name, "expression_tissue1"] for name in identifiers] == [1, 2]
+    assert [branches.loc[name, "expression_tissue2"] for name in identifiers] == [3, 4]
+
+
 def test_no_significant_pfam_hits_preserve_branch_table_schema(tmp_path):
     rooted_tree = tmp_path / "rooted.nwk"
     rooted_tree.write_text("(Species_A_gene1:1,Species_B_gene2:1)n0;\n", encoding="utf-8")

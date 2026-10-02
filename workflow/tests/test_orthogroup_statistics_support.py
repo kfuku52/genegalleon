@@ -61,6 +61,49 @@ def test_statistics_does_not_strip_unrecognized_tree_annotations():
         module.new_tree("[&not_rooted](A:1,B:2)root;", format=1)
 
 
+@pytest.mark.parametrize("identifiers", [("001", "1"), ("NA", "NULL", "nan")])
+def test_gff_gene_traits_preserve_literal_identifiers(tmp_path, identifiers):
+    import pandas as pd
+
+    module = load_module()
+    path = tmp_path / "gff.tsv"
+    path.write_text("gene_id\tfeature_size\tnum_intron\tscore\n" + "".join(
+        f"{name}\t{6 + i}\t{i}\tNA\n" for i, name in enumerate(identifiers)))
+    traits = module.load_gff_gene_traits(path)
+    merged = pd.DataFrame({"node_name": list(identifiers)}).merge(
+        traits, on="node_name", how="left", validate="one_to_one")
+    assert merged["node_name"].tolist() == list(identifiers)
+    assert merged["num_intron"].tolist() == list(range(len(identifiers)))
+    assert merged["intron_feature_size"].tolist() == list(range(6, 6 + len(identifiers)))
+    assert merged["score"].isna().all()
+    assert pd.api.types.is_integer_dtype(traits["num_intron"])
+
+
+@pytest.mark.parametrize("identifier", ["001", "NA", ""])
+def test_gff_join_rejects_duplicate_literal_gene_rows(tmp_path, identifier):
+    module = load_module()
+    path = tmp_path / "gff.tsv"
+    path.write_text(f"gene_id\tnum_intron\n{identifier}\t0\n{identifier}\t1\n")
+    with pytest.raises(ValueError, match="unique before branch join"):
+        module.load_gff_gene_traits(path)
+
+
+def test_gff_gene_traits_keep_missing_fields_and_numeric_types(tmp_path):
+    import pandas as pd
+
+    module = load_module()
+    path = tmp_path / "gff.tsv"
+    path.write_text("gene_id\tnum_intron\tscore\n\t0\tNA\nGenus_species_gene1\t\t1.5\n")
+    traits = module.load_gff_gene_traits(path)
+    assert pd.isna(traits.loc[0, "node_name"])
+    assert pd.isna(traits.loc[1, "num_intron"])
+    assert traits.loc[0, "num_intron"] == 0
+    assert pd.isna(traits.loc[0, "score"])
+    assert traits.loc[1, "score"] == 1.5
+    assert pd.api.types.is_float_dtype(traits["num_intron"])
+    assert pd.api.types.is_float_dtype(traits["score"])
+
+
 def test_dating_summary_keeps_conditional_interpretation_and_failed_interval(tmp_path):
     import json
 

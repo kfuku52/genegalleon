@@ -290,6 +290,18 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_asr_i
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+GFF gene-trait IDs are read literally before joining observed intron counts to
+branches: `001` and `1` remain distinct, and `NA`, `NULL` and `nan` are valid IDs.
+Empty IDs and missing trait values retain their prior missingness; numeric trait
+types are unchanged. Duplicate IDs, including repeated empty IDs, remain errors
+and consistently raise ValueError rather than failing while formatting the
+diagnostic. This is a parsing fix; no speedup is claimed.
+UniProt gene IDs, RPS-BLAST query IDs and expression row IDs use the same literal
+reading rule before branch joins. Only identifiers change: annotation missingness,
+numeric expression values, e-value types and hit-filter thresholds are retained.
+Expression files with sample-only headers retain pandas' inferred gene index;
+the literal-ID fix for NA-like names uses an explicit first ID column.
+
 ## Wide-header validation
 
 Database and scan-schema preflight count each column name once, preserving

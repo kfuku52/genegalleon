@@ -893,8 +893,10 @@ def flatten_trait_variable_stats(df, key_prefix):
 
 
 def load_gff_gene_traits(path):
-    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None)
-    duplicates = sorted(traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"].astype(str).unique())
+    traits = pandas.read_csv(path, sep="\t", header=0, index_col=None,
+                             converters={"gene_id": lambda value: value if value else numpy.nan})
+    duplicate_ids = traits.loc[traits["gene_id"].duplicated(keep=False), "gene_id"]
+    duplicates = sorted({str(value) for value in duplicate_ids})
     if duplicates:
         raise ValueError("GFF gene traits must be unique before branch join: {}".format(", ".join(duplicates[:20])))
     return traits.rename(columns={"gene_id": "node_name", "feature_size": "intron_feature_size"})
@@ -1660,7 +1662,8 @@ def main():
     if os.path.exists(params["cdskit_localize"]):
         node_left_merge_tables.append(load_cdskit_localize(params["cdskit_localize"]))
     if os.path.exists(params["uniprot"]):
-        df_tmp = pandas.read_csv(params["uniprot"], sep="\t", header=0, index_col=None, low_memory=False)
+        df_tmp = pandas.read_csv(params["uniprot"], sep="\t", header=0, index_col=None, low_memory=False,
+                                 converters={"gene_id": lambda value: value if value else numpy.nan})
         df_tmp = df_tmp.rename(columns={"gene_id": "node_name"})
         node_left_merge_tables.append(df_tmp)
     if os.path.exists(params["synteny"]):
@@ -1675,6 +1678,7 @@ def main():
             index_col=None,
             usecols=["qacc", "stitle", "evalue"],
             dtype={"stitle": "object"},
+            converters={"qacc": lambda value: value if value else numpy.nan},
         )
         df_tmp = df_tmp.loc[(df_tmp["evalue"] <= 0.05), :]
         df_tmp = df_tmp.loc[:, ["qacc", "stitle"]]
@@ -1722,7 +1726,10 @@ def main():
         col = "clade_min_expression_pearsoncor"
         df_branch.loc[:, col] = numpy.nan
         try:
-            df_exp = pandas.read_csv(params["expression"], sep="\t", index_col=0)
+            df_exp = pandas.read_csv(params["expression"], sep="\t",
+                                     converters={0: lambda value: value if value else numpy.nan})
+            if isinstance(df_exp.index, pandas.RangeIndex):
+                df_exp = df_exp.set_index(df_exp.columns[0])
         except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError, pandas.errors.EmptyDataError) as exc:
             print("Failed to read {}".format(params["expression"]))
             print("Reason: {}".format(exc))
