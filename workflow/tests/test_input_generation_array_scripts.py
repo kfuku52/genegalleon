@@ -3,6 +3,7 @@ import gzip
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -177,6 +178,9 @@ def test_unique_hash_batch_rejects_source_changed_after_its_read(tmp_path, monke
     def change_earlier_file(path):
         if path == str(second):
             before = first.stat()
+            # Linux can reuse a timestamp within one kernel clock tick. Cross
+            # that boundary so this test specifically exercises the ctime fence.
+            time.sleep(0.02)
             first.write_bytes(b'>chr1\nACG\n')
             state.os.utime(first, ns=(before.st_atime_ns, before.st_mtime_ns))
         return original_digest(path)
