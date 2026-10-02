@@ -981,6 +981,78 @@ def test_species_tree_mode_preserves_orthogroups_and_skips_later_requested_stage
             path for path in saved if path.parent.name == directory}
 
 
+def _prepare_audited_orthogroup_tree(tmp_path):
+    workspace = _prepare_orthofinder_cleanup_inputs(tmp_path)
+    # The fixture imports a summary tree and establishes its provenance through
+    # the standard species-tree entry path. It does not invent partial cached
+    # upstream producer directories with missing input/provenance contracts.
+    summary = workspace / "output/species_tree/species_tree_summary"
+    summary.mkdir(parents=True)
+    (summary / "undated_species_tree.nwk").write_text(
+        "(Arabidopsis_thaliana:0.1,Oryza_sativa:0.1);\n")
+    config = {"genome_evolution_mode": "species_tree",
+              "undated_species_tree": "astral_pep", "species_tree_output_storage": "files"}
+    result = _run_core(tmp_path, config)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return workspace, config
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_orthogroups_mode_preserves_tree_contracts_and_later_outputs(tmp_path):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    later = workspace / "output/genome_evolution/user-output"
+    later.parent.mkdir(parents=True)
+    later.write_bytes(b"preserve later scientific output")
+    saved = {p: p.read_bytes() for directory in (workspace / "output/species_tree",
+        workspace / "output/artifact_provenance/genome_evolution") for p in directory.rglob("*") if p.is_file()}
+    result = _run_core(tmp_path, {**config, "genome_evolution_mode": "orthogroups",
+        "artifact_stale_policy": "rebuild", "run_species_taxonomy": "1", "run_pairwise_synteny": "1",
+        "run_cafe": "1", "run_astral_pep": "1", "run_orthofinder": "1", "run_og_selection": "0"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Orthogroup inference and selection stages finished" in result.stdout
+    assert (workspace / "output/orthofinder/hog2og/README.txt").is_file()
+    assert (tmp_path / "capture/orthofinder_args.txt").is_file()
+    assert later.read_bytes() == b"preserve later scientific output"
+    assert all(path.read_bytes() == content for path, content in saved.items())
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("failure", ["missing_tree", "changed_tree", "changed_input", "missing_manifest", "reuse"])
+def test_orthogroups_mode_refuses_missing_or_stale_frozen_inputs_before_inference(tmp_path, failure):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    if failure == "missing_tree":
+        tree.unlink()
+    elif failure == "changed_tree":
+        tree.write_text("(Arabidopsis_thaliana:2,Oryza_sativa:2);\n")
+    elif failure == "changed_input":
+        protein = workspace / "input/species_protein/Arabidopsis_thaliana_pep.fa"
+        protein.write_text(protein.read_text() + ">Arabidopsis_thaliana_gene2\nMPEP\n")
+    elif failure == "missing_manifest":
+        (workspace / "output/artifact_provenance/genome_evolution/species_tree.undated_summary.json").unlink()
+    before = tree.read_bytes() if tree.exists() else None
+    result = _run_core(tmp_path, {**config, "genome_evolution_mode": "orthogroups",
+        "artifact_stale_policy": "reuse" if failure == "reuse" else "rebuild", "run_astral_pep": "1"})
+    assert result.returncode != 0
+    assert not (tmp_path / "capture/orthofinder_args.txt").exists()
+    assert (tree.read_bytes() if tree.exists() else None) == before
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_complete_native_executable_override_is_used_for_version_and_inference(tmp_path):
+    _prepare_orthofinder_cleanup_inputs(tmp_path)
+    custom = tmp_path / "complete native launcher"
+    capture = tmp_path / "native_override_calls.txt"
+    _write_executable(custom, f'#!/bin/bash\nprintf "%s\\n" "$*" >> {shlex.quote(str(capture))}\n'
+        f'exec {shlex.quote(str(tmp_path / "bin/orthofinder"))} "$@"\n')
+    result = _run_core(tmp_path, {"orthofinder_binary": str(custom)})
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = capture.read_text().splitlines()
+    assert "-v" in calls
+    assert any("-f" in shlex.split(call) for call in calls)
+    assert (tmp_path / "workspace/output/orthofinder/hog2og/README.txt").is_file()
+
+
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("core_limit", [1, 50])
 def test_orthofinder_completion_removes_working_data_and_reuses_retained_results(tmp_path: Path, core_limit):

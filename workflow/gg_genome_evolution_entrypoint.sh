@@ -125,7 +125,7 @@ run_orthogroup_method_comparison=1 # Plot comparison among orthogroup/species-tr
 run_single_copy_ortholog_decay_plot=1 # Log10 rarefaction curves with SD for all, selected, non-missing, and strictly single-copy orthogroups.
 
 # Genome-evolution workflow flags
-genome_evolution_mode="all" # all|species_tree|synteny; species_tree stops after tree/dating/taxonomy stages and preserves orthogroups; synteny runs only pairwise synteny and its plots.
+genome_evolution_mode="all" # all|species_tree|orthogroups|synteny; orthogroups audits existing tree contracts, runs inference/selection only, and stops before later genome analyses.
 run_pairwise_synteny=0 # Opt in to pairwise JCVI/MCscan in all mode; always enabled in synteny mode.
 synteny_plot_only=0 # Verify and reuse completed synteny analysis, then regenerate changed plots.
 run_self_fractionation_bias=0 # Incorporate completed mode=self kfFractBias array results by validating and building a multi-species summary.
@@ -198,6 +198,7 @@ orthofinder_core_rank="num_seq:asc,busco_complete_pct:desc" # Comma-separated nw
 orthofinder_core_method="max-pd" # nwkit sample method for tree-aware OrthoFinder core selection.
 orthofinder_algorithm_threads="auto" # auto uses up to one eighth of GG_TASK_CPUS for memory-intensive analysis phases.
 orthofinder_memory_gb_per_thread=4 # Estimated memory per OrthoFinder analysis thread; also caps explicit thread requests.
+orthofinder_binary="orthofinder" # Command or executable path for the complete native OrthoFinder runtime.
 genome_parallel_jobs="auto" # Concurrent per-gene jobs; auto is capped by both CPU and tool memory.
 genome_parallel_memory_gb_per_job=2 # Estimated memory per concurrent per-gene job; increase for large alignments.
 min_percent_species_coverage=50 # Minimum percent species coverage required for orthogroup selection.

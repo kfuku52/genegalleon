@@ -31,9 +31,9 @@ synteny_search_distance="${synteny_search_distance:-20}"
 synteny_minimum_mapping_fraction="${synteny_minimum_mapping_fraction:-1}"
 synteny_plot_formats="${synteny_plot_formats:-pdf,svg,png}"
 case "${genome_evolution_mode}" in
-  all|species_tree) ;;
+  all|species_tree|orthogroups) ;;
   synteny) run_pairwise_synteny=1 ;;
-  *) echo "genome_evolution_mode must be all, species_tree or synteny" >&2; exit 2 ;;
+  *) echo "genome_evolution_mode must be all, species_tree, orthogroups or synteny" >&2; exit 2 ;;
 esac
 for synteny_flag in run_pairwise_synteny synteny_plot_only; do
   case "${!synteny_flag}" in
@@ -87,6 +87,7 @@ orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:d
 orthofinder_core_method="${orthofinder_core_method:-max-pd}"
 orthofinder_algorithm_threads="${orthofinder_algorithm_threads:-auto}"
 orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
+orthofinder_binary="${orthofinder_binary:-orthofinder}"
 genome_parallel_jobs="${genome_parallel_jobs:-auto}"
 genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
@@ -147,6 +148,24 @@ fi
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
+
+# Orthogroup recovery audits existing sequence/tree contracts with stop policy.
+# A rebuild request may rebuild only the two requested orthogroup producers.
+orthogroup_requested_stale_policy="${artifact_stale_policy:-stop}"
+orthogroup_requested_legacy_policy="${artifact_legacy_policy:-adopt}"
+if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+  case "${orthogroup_requested_stale_policy}" in
+    stop|rebuild) ;;
+    *) echo "orthogroups mode requires artifact_stale_policy=stop or rebuild" >&2; exit 2 ;;
+  esac
+  while IFS= read -r config_name; do
+    if [[ "${config_name}" == run_* && "${config_name}" != run_orthofinder && "${config_name}" != run_og_selection ]]; then
+      printf -v "${config_name}" '%s' 0
+    fi
+  done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+  artifact_stale_policy=stop
+  artifact_legacy_policy=stop
+fi
 
 # Synteny-only execution calls this independent stage before species-tree setup
 # and never refreshes, clears or archives the existing tree/OrthoFinder outputs.
@@ -2059,7 +2078,7 @@ orthofinder_output_directory_cleanup() {
 
 detect_orthofinder_version() {
   local version_output version
-  version_output=$(orthofinder -v 2>&1 || true)
+  version_output=$("${orthofinder_binary}" -v 2>&1 || true)
   version_output=$(printf '%s\n' "${version_output}" | sed -E $'s/\x1B\\[[0-9;?]*[ -/]*[@-~]//g')
   version=$(printf '%s\n' "${version_output}" | awk '
     match($0, /[Oo]rtho[Ff]inder:?v?[[:space:]]*[0-9]+([.][0-9]+)*/) {
@@ -2770,11 +2789,15 @@ if species_tree_summary_generation_requested; then
 fi
 species_tree_recover_mixed_managed_directories
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
+if [[ "${genome_evolution_mode}" == "orthogroups" && ! -s "${file_undated_species_tree}" ]]; then
+  echo "orthogroups mode requires an existing audited undated species tree; run species_tree first." >&2
+  exit 3
+fi
 species_tree_materialize_managed_directories_for_files_mode
 if [[ "${species_tree_output_storage}" == "zip" ]]; then
   species_tree_archive_managed_directories
 fi
-if [[ "${genome_evolution_mode}" != "species_tree" ]]; then
+if [[ "${genome_evolution_mode}" == "all" ]]; then
   refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
   refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
 fi
@@ -4390,6 +4413,12 @@ fi
 
 # Orthogroup inference
 
+if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+  artifact_stale_policy="${orthogroup_requested_stale_policy}"
+  artifact_legacy_policy="${orthogroup_requested_legacy_policy}"
+  refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
+fi
+
 
 
 
@@ -4748,7 +4777,7 @@ PY
       orthofinder_core_species_tree_args=(-s "${file_orthofinder_core_species_tree}")
     fi
 
-    if orthofinder \
+    if "${orthofinder_binary}" \
       -t "${GG_TASK_CPUS}" \
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
@@ -4775,7 +4804,7 @@ PY
       exit 1
     fi
 
-    if orthofinder \
+    if "${orthofinder_binary}" \
       -t "${GG_TASK_CPUS}" \
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
@@ -4826,7 +4855,7 @@ PY
     echo "The number of species (${num_sp}) is less than or equal to the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 1 round."
 
-    if orthofinder \
+    if "${orthofinder_binary}" \
       -t "${GG_TASK_CPUS}" \
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
@@ -5030,6 +5059,11 @@ if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
   gg_artifact_record "${og_selection_provenance_args[@]}"
 else
   gg_step_skip "${task}"
+fi
+
+if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+  echo "Orthogroup inference and selection stages finished; later genome-evolution stages were not requested."
+  exit 0
 fi
 
 task="Orthogroup method comparison"

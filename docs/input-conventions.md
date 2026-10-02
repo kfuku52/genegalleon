@@ -368,6 +368,14 @@ New OrthoFinder runs must record `OrthoFinder run completed` in their native
 partially written N0 table does not establish completion. Incomplete staged
 results and `WorkingDirectory` are retained for diagnosis and upstream resume.
 
+`genome_evolution_mode="orthogroups"` runs standard inference and annotation/selection
+against an existing undated species tree, then stops before later genome analyses.
+Existing sequence and tree contracts are audited with stale/legacy policy `stop`;
+even a requested rebuild cannot enable those producers or adopt missing provenance.
+Only inference/selection use the requested `stop` or `rebuild` policy. Set
+`orthofinder_binary` to a qualified complete native executable when using an
+explicit dependency runtime; its default remains `orthofinder` on PATH.
+
 ### `workspace/input/species_trait/species_trait.tsv`
 
 The first column contains species labels matching the species tree. Remaining

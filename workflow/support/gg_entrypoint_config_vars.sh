@@ -381,6 +381,7 @@ copy_number_quality_correlation_method
 copy_number_quality_sensitivity
 orthofinder_core_filters
 orthofinder_algorithm_threads
+orthofinder_binary
 orthofinder_memory_gb_per_thread
 genome_parallel_jobs
 genome_parallel_memory_gb_per_job
