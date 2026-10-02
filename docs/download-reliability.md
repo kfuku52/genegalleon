@@ -14,6 +14,23 @@ query; concurrent writers and user quotas can still exhaust storage. Metadata is
 read from the GET response, avoiding HEAD-only failures or a duplicate request.
 Existing manifest resolution checks local source paths before download execution.
 
+CoGe GFF exports, including explicit manifest URLs and cached files, must contain
+CDS features. Their checks run before the corresponding sequence downloads;
+empty/header-only or gene-only exports fail without starting those transfers.
+Relative export URLs returned by CoGe are resolved against its web base.
+Whole-genome requests omit the optional chromosome argument and retain feature
+annotation metadata. This also avoids the legacy header-only export variant
+cached by CoGe; the returned payload still requires content validation.
+An HTTP attachment named `.gff` or `.gff3` with an HTML content type requires
+a GFF3 version header in the assembled body. Ordinary HTML responses and
+HTML bodies remain rejected; CoGe feature/CDS validation still follows.
+
+Each response has an elapsed-time limit of the larger of one hour and the socket
+timeout. `GG_DOWNLOAD_MAX_RESPONSE_SECONDS` sets another finite nonnegative
+limit; zero disables it. Incremental HTTP reads check the limit even when a
+server continuously trickles bytes. A pending read is also bounded by the socket
+timeout. Identified partials and the ordinary per-file retry budget are retained.
+
 A `.part.identity.json` sidecar records the strong ETag (or Last-Modified) and
 expected total size. Resume uses `If-Range`; a full response replaces the partial
 file, and inconsistent ranges cannot be appended. Legacy partials without a
@@ -78,6 +95,12 @@ omitted. `materialized` means a shared-cache copy with no new network download;
 These are transport outcomes, not species completion or workflow success;
 manifest cache skips before transport are not included. Compare counts within the
 same collection scope, rather than treating these events as all historical jobs.
+
+When the event directory is enabled, its `progress/` subdirectory contains one
+atomically updated record per response, written at start, every 60 seconds as
+reads return, and at body completion/failure. Records omit URLs and headers and
+report database, URL hash, bytes, elapsed time and update time. `reading`,
+`body-read` and `body-error` describe transport progress, not artifact validity.
 
 ## Validation
 

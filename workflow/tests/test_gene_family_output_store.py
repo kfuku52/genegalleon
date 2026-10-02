@@ -36,12 +36,41 @@ from workflow.support.gene_family_output_store import (
     optimize_archive_metadata,
     orthogroup_id_from_name,
     purge_archives,
+    query_id_extractor,
+    query_id_from_name,
+    query_id_matchers,
     repair_archive_index,
     run_cli,
     storage_conversion_status,
     storage_conversion_summary,
 )
 from workflow.support.shared_namespace_lock import acquire, release
+
+
+def test_indexed_query_ownership_matches_scalar_priority_and_boundaries():
+    import random
+    rng = random.Random(43)
+    identifiers = ['', 'A', 'A_B', 'A_B.extra', 'A.', 'β', 'β_γ']
+    identifiers += [''.join(rng.choices('ab_.', k=rng.randint(1, 12))) for _ in range(200)]
+    names = [identifier + suffix for identifier in identifiers
+             for suffix in ('', '_stat.branch.tsv', '.tree_plot.pdf', '-unrelated.tsv')]
+    names += ['unknown', 'AHA_tree_plot.pdf', 'βγ.pdf']
+    orders = [identifiers, query_id_matchers(identifiers), list(reversed(identifiers))]
+    for matchers in orders:
+        extract = query_id_extractor(matchers)
+        for name in names:
+            path = '/some/output/' + name
+            assert extract(path) == query_id_from_name(path, matchers)
+
+
+def test_indexed_query_ownership_snapshots_mutable_catalog():
+    matchers = ['A_B', 'A', 'B']
+    extract = query_id_extractor(matchers)
+    matchers.clear()
+    assert extract('A_B_stat.branch.tsv') == 'A_B'
+    assert extract('A_alignment.fa') == 'A'
+    assert extract('B_tree_plot.pdf') == 'B'
+    assert extract('UNKNOWN.pdf') is None
 
 
 def _write_family_outputs(root: Path, family_id: str, complete: bool = True):
@@ -3721,3 +3750,20 @@ def test_lock_striping_and_metadata_optimization_reduce_legacy_lock_files(
     assert not (family_locks / "0f.lock").exists()
     assert not (family_locks / "ff.lock").exists()
     assert not (state_locks / "fe.lock").exists()
+
+
+@pytest.mark.parametrize("second_count", [1, 20])
+def test_duplicate_genecount_families_cannot_define_archive_identity(tmp_path, second_count):
+    catalog = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    catalog.write_text(f"Orthogroup\tTotal\nHOG0000004\t1\nHOG0000004\t{second_count}\n", encoding="utf-8")
+    before = catalog.read_bytes()
+    with pytest.raises(ValueError, match="duplicate family identity HOG0000004"):
+        family_context("orthogroup", genecount=catalog)
+    assert catalog.read_bytes() == before
+
+
+def test_empty_genecount_family_cannot_shift_array_identity(tmp_path):
+    catalog = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    catalog.write_text("Orthogroup\tTotal\n\t1\nHOG0000004\t2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty family identity"):
+        family_context("orthogroup", genecount=catalog)

@@ -1,6 +1,7 @@
 import sys
 import types
 from importlib.util import module_from_spec, spec_from_file_location
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,37 @@ def load_target_module():
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("marker", ["[&R]", "[&U]", "  [&r]  ", "[&R][&R]"])
+@pytest.mark.parametrize("from_file", [False, True])
+def test_statistics_reads_rooting_declarations_without_changing_tree_or_source(tmp_path, marker, from_file):
+    module = load_module()
+    text = '(("tip[&R]":0.123456789,B:2)inner:3[&&NHX:age=4:note=kept],C:4)root;'
+    original = marker + text
+    path = tmp_path / "species_tree.nwk"
+    path.write_text(original)
+    tree = module.new_tree(str(path) if from_file else original, format=1)
+    reference = module.new_tree(text, format=1)
+
+    def signature(candidate):
+        return [(node.name, dict(node.props), tuple(leaf.name for leaf in node.leaves()))
+                for node in candidate.traverse()]
+
+    assert signature(tree) == signature(reference)
+    assert path.read_text() == original
+
+
+def test_statistics_rejects_conflicting_rooting_declarations():
+    module = load_module()
+    with pytest.raises(ValueError, match="Conflicting"):
+        module.new_tree("[&R][&U](A:1,B:2)root;", format=1)
+
+
+def test_statistics_does_not_strip_unrecognized_tree_annotations():
+    module = load_module()
+    with pytest.raises(module.NewickError):
+        module.new_tree("[&not_rooted](A:1,B:2)root;", format=1)
 
 
 def test_dating_summary_keeps_conditional_interpretation_and_failed_interval(tmp_path):
@@ -72,6 +104,45 @@ def add_branch_ids(tree):
     for branch_id, node in enumerate(tree.traverse()):
         node.add_prop("branch_id", branch_id)
     return tree
+
+
+def test_canonical_split_matches_size_then_lexicographic_definition_in_both_orientations():
+    module = load_module()
+    tips = ('AA', 'a', 'gene.1', 'gene_001', 'NA', 'None', 'ä')
+    all_tips = frozenset(tips)
+    for count in range(len(tips) + 1):
+        for selected in combinations(tips, count):
+            side = frozenset(selected)
+            other = all_tips - side
+            choices = [(len(part), tuple(sorted(part))) for part in (side, other)]
+            expected = None if min(len(side), len(other)) < 2 else min(choices)[1]
+            assert module._canonical_internal_split(selected, all_tips) == expected
+            assert module._canonical_internal_split(other, all_tips) == expected
+
+
+def test_canonical_split_retains_behavior_for_tips_outside_catalog():
+    module = load_module()
+    all_tips = frozenset(['a', 'b', 'c', 'd'])
+    assert module._canonical_internal_split(['outside_y', 'outside_x'], all_tips) == ('outside_x', 'outside_y')
+    assert module._canonical_internal_split(['outside_y', 'a', 'outside_x'], all_tips) == ('a', 'outside_x', 'outside_y')
+
+
+@pytest.mark.parametrize('name', [None, ''])
+def test_support_mapping_rejects_missing_leaf_name(name):
+    module = load_module()
+    tree = module.ete4.PhyloTree()
+    tree.add_child(name='a')
+    tree.add_child(name=name)
+    add_branch_ids(tree)
+    with pytest.raises(ValueError, match='empty leaf label'):
+        module.map_internal_support_by_split(tree, tree, require_support=True)
+
+
+def test_literal_none_leaf_label_is_retained():
+    module = load_module()
+    tree = module.new_tree('((None,a),(NA,b));', format=1)
+    tips, _descendants = module._tree_descendant_tip_sets(tree)
+    assert tips == frozenset(['None', 'a', 'NA', 'b'])
 
 
 def test_species_mapping_clone_handles_observed_deep_tree_without_recursion():
@@ -205,6 +276,77 @@ def test_reports_all_one_hundred_without_rejecting_a_valid_distribution():
     _mapped, diagnostics = mod.map_internal_support_by_split(rooted, support, support_max=100)
 
     assert diagnostics["all_support_100"] is True
+
+
+@pytest.mark.parametrize('newick', [
+    '(NA,None);',
+    '(a,b,c);',
+    '((ä,NA),(None,a));',
+    '(((a,b),c),(d,e,f));',
+    '((((a,b)),(c,d)),(e,f));',
+    '(a,(b,(c,(d,(e,(f,(g,h)))))));',
+])
+def test_full_support_mapping_matches_existing_split_keys_and_branch_order(newick):
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree(newick, format=1))
+    support = module.new_tree(newick, format=1)
+    for node in support.traverse():
+        if not module.node_is_leaf(node):
+            node.support = 75.0
+    _tips, legacy_nodes = module._internal_split_nodes(rooted)
+    expected = {node.props['branch_id']: 75.0
+                for nodes in legacy_nodes.values() for node in nodes}
+    mapped, diagnostics = module.map_internal_support_by_split(rooted, support, require_support=True)
+    assert list(mapped.items()) == list(expected.items())
+    assert diagnostics['internal_split_count'] == len(legacy_nodes)
+    assert diagnostics['supported_split_count'] == len(legacy_nodes)
+
+
+def test_topology_error_preserves_lexicographic_tuple_preview():
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('(((a,b),(c,d)),(e,f));', format=1))
+    support = module.new_unrooted_tree('((a,c)80,(b,d)90,(e,f)95);')
+    with pytest.raises(ValueError) as error:
+        module.map_internal_support_by_split(rooted, support)
+    assert str(error.value) == (
+        "Support and rooted trees have incompatible unrooted topologies: "
+        "only_in_rooted=2, only_in_support=2; "
+        "rooted_preview=[('a', 'b'), ('c', 'd')], "
+        "support_preview=[('a', 'c'), ('b', 'd')]"
+    )
+
+
+def test_partial_support_error_preserves_sorted_missing_splits():
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('(((a,b),(c,d)),(e,f));', format=1))
+    support = module.new_unrooted_tree('((a,b),(c,d)50,(e,f));')
+    with pytest.raises(ValueError) as error:
+        module.map_internal_support_by_split(rooted, support)
+    assert str(error.value) == (
+        "Support tree labels only a subset of its internal splits: "
+        "supported=1, total=3, missing_preview=[('a', 'b'), ('e', 'f')]"
+    )
+
+
+@pytest.mark.parametrize('value', [-1.0, float('nan'), float('inf'), 100.1])
+def test_support_mapping_retains_support_range_checks(value):
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('((a,b),(c,d));', format=1))
+    support = module.new_tree('((a,b),(c,d));', format=1)
+    for child in support.children:
+        child.support = value
+    with pytest.raises(ValueError, match='invalid support value|exceeds the expected maximum'):
+        module.map_internal_support_by_split(rooted, support, support_max=100)
+
+
+def test_support_mapping_retains_duplicate_root_edge_consistency_check():
+    module = load_module()
+    rooted = add_branch_ids(module.new_tree('((a,b),(c,d));', format=1))
+    support = module.new_tree('((a,b),(c,d));', format=1)
+    support.children[0].support = 80
+    support.children[1].support = 90
+    with pytest.raises(ValueError, match='carry different support values: \\[80.0, 90.0\\]'):
+        module.map_internal_support_by_split(rooted, support)
 
 
 def test_observed_intron_counts_survive_without_asr_and_merge_without_suffixes(tmp_path):

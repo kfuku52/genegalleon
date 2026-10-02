@@ -1,9 +1,35 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
 CORE_PATH = WORKFLOW_DIR / "core" / "gg_gene_evolution_core.sh"
 EXECUTION_RUNTIME_PATH = WORKFLOW_DIR / "support" / "gg_util" / "07_execution_runtime.sh"
+
+
+@pytest.mark.parametrize("rows,accepted", [
+    ("HOG0000004\t1\nHOG0000005\t20\n", True),
+    ("HOG0000004\t1\nHOG0000004\t20\n", False),
+    ("HOG0000004\t1\nHOG0000004\t1\n", False),
+    ("\t1\nHOG0000004\t20\n", False),
+])
+def test_orthogroup_array_catalog_is_unambiguous_before_production(tmp_path, rows, accepted):
+    catalog = tmp_path / "Orthogroups.GeneCount.selected.tsv"
+    catalog.write_text("Orthogroup\tTotal\n" + rows, encoding="utf-8")
+    text = CORE_PATH.read_text(encoding="utf-8")
+    start = text.index("    if ! num_orthogroups=$(awk -F")
+    end = text.index("    if [[ ${num_orthogroups} -le 0 ]]", start)
+    script = 'file_orthogroup_genecount_selected="$1"\n' + text[start:end] + '\nprintf "families=%s\\n" "$num_orthogroups"\n'
+    result = subprocess.run(["bash", "-c", script, "catalog-preflight", str(catalog)],
+                            text=True, capture_output=True, check=False)
+    if accepted:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "families=2\n"
+    else:
+        assert result.returncode != 0
+        assert "Refusing to start gg_gene_evolution with an ambiguous orthogroup catalog" in result.stderr
+        assert "families=" not in result.stdout
 
 
 def _orthogroup_extraction_preflight_source() -> str:

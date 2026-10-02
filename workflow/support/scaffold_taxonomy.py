@@ -7,7 +7,7 @@ Never infer origin from a best hit or treat an unresolved rank as compatible.
 import argparse
 import gzip
 import re
-from collections import Counter
+from collections import ChainMap, Counter
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote
@@ -247,9 +247,8 @@ def build_tables(gff_info, taxonomy, species, host_taxid, resolver, loci=None):
     # A locus on multiple scaffolds cannot be treated as single-scaffold evidence.
     if (genes.groupby(["count_unit", "locus_id"]).scaffold.nunique() > 1).any():
         raise ValueError("GFF locus maps to multiple scaffolds")
-    for _, group in genes.groupby(["scaffold", "count_unit", "locus_id", "rank"]):
-        if group.label.nunique() != 1:
-            genes.loc[group.index, "label"] = "unresolved"
+    conflicts = genes.groupby(["scaffold", "count_unit", "locus_id", "rank"]).label.transform("nunique").gt(1)
+    genes.loc[conflicts, "label"] = "unresolved"
     summaries = []
     for (scaffold, rank), group in genes.groupby(["scaffold", "rank"], sort=True):
         loci_group = group.drop_duplicates(["count_unit", "locus_id"])
@@ -276,6 +275,26 @@ def recipient_species(tree_path):
             raise ValueError(f"Ambiguous species-tree label: {label}")
         result[key] = {species_key(tip.name) for tip in node.get_terminals()}
     return result
+
+
+def _apply_context_rows(frame, rows, columns):
+    """Assign whole columns while retaining dtype and ordered index updates."""
+    if not frame.index.is_unique:
+        if any(not pd.api.types.is_scalar(label) for label in frame.index):
+            raise ValueError("Invalid call for scalar access (setting)!")
+        # Scalar .at updates affect every row with the same index label. Merge
+        # in input order so partial updates retain earlier values, including NA
+        # index labels, before applying the same result to all matching rows.
+        codes, _ = pd.factorize(frame.index, sort=False, use_na_sentinel=False)
+        merged = {}
+        for code, row in zip(codes, rows, strict=True):
+            merged.setdefault(code, {}).update(row)
+        rows = [merged[code] for code in codes]
+    for column in columns:
+        frame[column] = pd.Series(
+            [row.get(column, old) for row, old in zip(rows, frame[column], strict=True)],
+            index=frame.index, dtype=frame[column].dtype,
+        )
 
 
 def attach_context(branches, genes, directory, tree_path):
@@ -324,16 +343,18 @@ def attach_context(branches, genes, directory, tree_path):
                     prefix = f"host_scaffold_{'background_' if background else ''}{rank}_"
                     metrics.update({prefix + k: v for k, v in composition(selected.label, selected.count_unit).items()})
             scaffold_metrics[key] = metrics
-    for index, row in genes.iterrows():
-        record = lookup.get((species_key(row.gene_taxon), str(row.gene_id)))
+    gene_contexts = []
+    for taxon, gene_id in zip(genes.gene_taxon, genes.gene_id, strict=True):
+        record = lookup.get((species_key(taxon), str(gene_id)))
         if record is None:
-            genes.at[index, "host_scaffold_status"] = "gene_not_mapped"
+            gene_contexts.append({"host_scaffold_status": "gene_not_mapped"})
             continue
-        for key, value in scaffold_metrics[(record.species, record.scaffold)].items():
-            genes.at[index, key] = value
-        for key, value in {"status": "measured", "id": record.scaffold, "locus_id": record.locus_id,
-                           "count_unit": record.count_unit}.items():
-            genes.at[index, "host_scaffold_" + key] = value
+        gene_contexts.append(ChainMap(
+            {"host_scaffold_status": "measured", "host_scaffold_id": record.scaffold,
+             "host_scaffold_locus_id": record.locus_id, "host_scaffold_count_unit": record.count_unit},
+            scaffold_metrics[(record.species, record.scaffold)],
+        ))
+    _apply_context_rows(genes, gene_contexts, GENE_COLUMNS)
     recipients = recipient_species(tree_path)
     tree_species = set().union(*recipients.values())
     gene_groups = {key: group for key, group in genes.groupby("orthogroup")}

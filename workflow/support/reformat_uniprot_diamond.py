@@ -160,11 +160,21 @@ def init_output_frame(gene_ids):
     return out
 
 
+def _diamond_identifier(value):
+    """Keep identifier text literal while retaining missing empty fields."""
+    return value if value else float('nan')
+
+
 def load_best_diamond_hits(path):
     if (path == '') or (not os.path.exists(path)) or (os.path.getsize(path) == 0):
         return pandas.DataFrame(columns=DIAMOND_COLUMNS + ['coverage'])
 
-    df = pandas.read_csv(path, sep='\t', header=None, names=DIAMOND_COLUMNS, dtype=str, low_memory=False)
+    identifiers = ('qseqid', 'sseqid')
+    df = pandas.read_csv(
+        path, sep='\t', header=None, names=DIAMOND_COLUMNS, low_memory=False,
+        dtype={column: str for column in DIAMOND_COLUMNS if column not in identifiers},
+        converters=dict.fromkeys(identifiers, _diamond_identifier),
+    )
     if df.shape[0] == 0:
         return pandas.DataFrame(columns=DIAMOND_COLUMNS + ['coverage'])
 
@@ -198,6 +208,8 @@ def main():
         query_ids = hits['qseqid'].dropna().drop_duplicates().tolist()
 
     out = pandas.DataFrame(index=pandas.Index(query_ids, name='gene_id'))
+    # No-hit searches still join descriptions/metadata through this key.
+    out['sprot_best'] = ''
 
     if hits.shape[0] > 0:
         hit_map = hits.loc[:, ['qseqid', 'sseqid', 'coverage', 'pident', 'evalue']].set_index('qseqid')

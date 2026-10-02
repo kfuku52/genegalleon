@@ -37,6 +37,29 @@ def run_cli(*args):
     )
 
 
+@pytest.mark.parametrize('option,label,collection', [
+    ('--input-gene-family-store', 'rooted_tree', 'input'),
+    ('--input-logical-directory', 'rooted_tree', 'input'),
+    ('--output-logical-directory', 'stat_branch', 'output'),
+    ('--optional-output', 'stat_branch', 'output'),
+])
+def test_cross_kind_duplicate_labels_fail_before_missing_path_reads(tmp_path, option, label, collection):
+    manifest = tmp_path / 'manifest.json'
+    args = contract_args(tmp_path, manifest, tmp_path / 'missing-input', tmp_path / 'missing-output')
+    completed = run_cli('record', *args, option, f'{label}={tmp_path / "another-missing-path"}')
+    assert completed.returncode != 0
+    assert f'Duplicate {collection} key(s): {label}' in completed.stderr
+    assert not manifest.exists()
+
+
+def test_parameter_duplicates_keep_sorted_normalized_key_diagnostics(tmp_path):
+    args = contract_args(tmp_path, tmp_path / 'manifest.json', tmp_path / 'missing-input', tmp_path / 'missing-output')
+    completed = run_cli('record', *args, '--parameter', 'z=1', '--parameter', ' a =1',
+                        '--parameter', 'z=2', '--parameter', 'a=2')
+    assert completed.returncode != 0
+    assert 'Duplicate --parameter key(s): a, z' in completed.stderr
+
+
 def test_server_isolates_malformed_requests_and_continues():
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), "serve"],

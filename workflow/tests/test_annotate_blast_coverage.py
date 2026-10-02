@@ -1,3 +1,4 @@
+import gzip
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -5,6 +6,7 @@ from pathlib import Path
 
 import numpy
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "annotate_blast_coverage.py"
 
@@ -14,6 +16,51 @@ def load_module():
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize('headerless', [False, True])
+@pytest.mark.parametrize('compressed', [False, True])
+def test_blast_coverage_preserves_literal_identifiers(tmp_path, headerless, compressed):
+    mod = load_module()
+    columns = ['qacc', 'sacc', 'qstart', 'qend', 'sstart', 'send', 'qlen', 'slen']
+    genes = ['NA', 'NULL', 'nan', '001']
+    subjects = genes[::-1]
+    text = '' if headerless else '\t'.join(columns) + '\n'
+    text += ''.join(f'{gene}\t{subject}\t1\t10\t1\t10\t100\t200\n'
+                    for gene, subject in zip(genes, subjects, strict=True))
+    text += 'NA\t001\t11\t20\t20\t11\t100\t200\n'
+    path = tmp_path / ('input.tsv.gz' if compressed else 'input.tsv')
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    frame = mod.read_blast_table(path, columns if headerless else None)
+    assert frame.qacc.tolist() == genes + ['NA']
+    assert frame.sacc.tolist() == subjects + ['001']
+    assert str(frame.qstart.dtype) == 'int64'
+    output = tmp_path / 'coverage.tsv'
+    command = [sys.executable, str(SCRIPT_PATH), '--in', str(path), '--out', str(output)]
+    if headerless:
+        command += ['--outfmt-columns', ' '.join(columns)]
+    completed = subprocess.run(command, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    actual = pandas.read_csv(output, sep='\t', converters={'qacc': str, 'sacc': str})
+    assert actual.qacc.tolist() == genes
+    assert actual.sacc.tolist() == subjects
+    assert actual.num_hits.tolist() == [2, 1, 1, 1]
+    assert actual.qjointcov.tolist() == [0.2, 0.1, 0.1, 0.1]
+    assert actual.sjointcov.tolist() == [0.1, 0.05, 0.05, 0.05]
+
+
+def test_blast_reader_retains_missing_empty_accessions_and_numeric_values(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'missing.tsv'
+    path.write_text('qacc\tsacc\tpident\n\tNA\tNULL\n001\t\tNaN\n')
+    frame = mod.read_blast_table(path)
+    assert pandas.isna(frame.qacc.iloc[0]) and frame.qacc.iloc[1] == '001'
+    assert frame.sacc.iloc[0] == 'NA' and pandas.isna(frame.sacc.iloc[1])
+    assert frame.pident.isna().all()
 
 
 def test_multi_query_sparse_pairs_do_not_crash_and_compute_qjointcov():

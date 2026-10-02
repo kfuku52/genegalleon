@@ -5,7 +5,7 @@ import argparse
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy
@@ -15,7 +15,8 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
-from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore
+from gene_family_output_store import SHARED_OUTPUT_SUBDIRS, GeneFamilyOutputStore, query_id_extractor
+from parallel_io import bounded_results
 
 
 def build_arg_parser():
@@ -71,13 +72,14 @@ def _extract_query_id(file_name, query_id_matchers):
 
 def _read_alignment_stats_file(file_path, query_id, alignment_stats_cols):
     tmp = pandas.read_csv(file_path, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
-    return query_id, tmp.iloc[0].to_list()
+    # usecols filters columns but retains their order in the input header.
+    return query_id, tmp.loc[:, alignment_stats_cols].iloc[0].to_list()
 
 
 def _read_alignment_stats_store_file(store, subdir, file_name, query_id, alignment_stats_cols):
     with store.open_binary(subdir, file_name) as handle:
         tmp = pandas.read_csv(handle, sep="\t", header=0, usecols=alignment_stats_cols, nrows=1, low_memory=False)
-    return query_id, tmp.iloc[0].to_list()
+    return query_id, tmp.loc[:, alignment_stats_cols].iloc[0].to_list()
 
 
 def get_alignment_stats(
@@ -105,11 +107,12 @@ def get_alignment_stats(
     queued = []
     seen_query_ids = set()
     valid_query_ids = set(df.index.astype(str))
+    extract_query_id = query_id_extractor(query_id_matchers)
     for file in files:
         file_path = os.path.join(dir_alignment_stats, file)
         if store is None and not os.path.isfile(file_path):
             continue
-        query_id = _extract_query_id(file, query_id_matchers)
+        query_id = extract_query_id(file)
         if query_id is None:
             continue
         if query_id in seen_query_ids:
@@ -124,26 +127,15 @@ def get_alignment_stats(
     if ncpu > 1 and len(queued) > 1:
         max_workers = min(ncpu, len(queued))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(
-                    _read_alignment_stats_file,
-                    os.path.join(dir_alignment_stats, file),
-                    query_id,
-                    alignment_stats_cols,
-                )
-                if store is None
-                else executor.submit(
-                    _read_alignment_stats_store_file,
-                    store,
-                    logical_subdir,
-                    file,
-                    query_id,
-                    alignment_stats_cols,
-                )
-                for file, query_id in queued
-            ]
-            for future in as_completed(futures):
-                query_id, values = future.result()
+            if store is None:
+                reader = _read_alignment_stats_file
+                arguments = ((os.path.join(dir_alignment_stats, file), query_id, alignment_stats_cols)
+                             for file, query_id in queued)
+            else:
+                reader = _read_alignment_stats_store_file
+                arguments = ((store, logical_subdir, file, query_id, alignment_stats_cols)
+                             for file, query_id in queued)
+            for query_id, values in bounded_results(executor, reader, arguments, max_workers * 8):
                 result_rows.append((query_id, values))
                 counter += 1
     else:
@@ -182,6 +174,7 @@ def run(args):
         raise ValueError(f"Input query_gene directory is empty: {args.dir_query_gene}")
 
     query_id_matchers = _query_id_matchers(query_ids)
+    extract_query_id = query_id_extractor(query_id_matchers)
     df = pandas.DataFrame(index=query_ids)
     df.index.name = "query"
     store = GeneFamilyOutputStore(args.dir_query2family)
@@ -215,7 +208,7 @@ def run(args):
         query_ids_in_files = sorted(
             {
                 query_id
-                for query_id in (_extract_query_id(f, query_id_matchers) for f in files)
+                for query_id in (extract_query_id(f) for f in files)
                 if query_id is not None and query_id in valid_query_ids
             }
         )

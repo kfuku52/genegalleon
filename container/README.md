@@ -75,6 +75,12 @@ chmod +x container/buildx.sh
 IMAGE=ghcr.io/<your-org>/genegalleon TAG=20260211 MODE=push ./container/buildx.sh
 ```
 
+ASTER/wASTRAL follows its official moving branch and is compiled with portable
+GNU C++17 settings in both Docker and SIF builds. This includes upstream fixes
+for non-finite coalescent branch estimates; inference settings are unchanged.
+The source revision, license, source archive and build recipe are shipped with
+the native binary.
+
 Exact source commits and checksums can be overridden at build time:
 
 ```bash

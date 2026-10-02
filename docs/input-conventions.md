@@ -109,6 +109,12 @@ Empty protein files, duplicate IDs within a file, and prohibited characters are
 rejected. The species identity still comes from the filename; retain compatible
 IDs for downstream annotation joins.
 
+Representative-gene annotation and orthogroup selection retain literal protein
+and family IDs, including `001`, `NA`, `NULL`, and `nan`, through length tables,
+membership/count tables and BLAST/MMseqs hit joins. Empty ID fields remain
+missing; numeric count/length inference and missing annotation titles are
+unchanged.
+
 Important behavior:
 
 - in `input_sequence_mode="protein"`, GeneGalleon uses `species_protein`
@@ -130,6 +136,10 @@ unique CDS length, orders blocks in transcription direction, and reports genomic
 start/end bounds. Identical blocks are counted once. Conflicting equal-length
 transcripts, mixed coordinate systems, or duplicate gene summaries are errors;
 they must not multiply rows in the downstream branch table.
+
+GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
+remain unchanged when read and must match the reference FASTA headers. Numeric
+coordinates and other columns retain their usual type and missing-value handling.
 
 Prefer one annotation source per species. Where a workflow retains multiple
 sources, `gg_gene_evolution` passes its read-only FASTA sequence store to
@@ -234,6 +244,11 @@ MAKKIK...
 
 When using gene IDs rather than FASTA, keep the identifiers consistent with
 the headers in `workspace/input/species_cds`.
+BLAST coverage and query-marker accessions (`qacc` and `sacc`) retain literal
+text, including leading zeros and NA-like IDs. DIAMOND annotation also preserves
+literal query/subject identifiers (`qseqid` and `sseqid`). Empty accessions remain
+missing and are excluded from marker selection; numeric and annotation columns
+retain their normal missing-value handling.
 
 ### `workspace/input/species_expression`
 
@@ -248,6 +263,16 @@ Expected layout:
 - first column is gene ID,
 - remaining columns are tissues, stages, treatments, or other conditions,
 - pre-aggregated values are recommended when you want one value per condition.
+
+The CDS annotation merger reads gene IDs literally, including leading zeros
+and IDs such as `NA` or `nan`, while keeping normal missing-value handling for
+annotation values. It renames only the identifier header; condition names are
+preserved. BUSCO entries without a sequence ID are omitted, and missing BUSCO
+metadata is serialized as `nan` in aggregated annotations.
+
+Family expression matrices also read the first column as literal gene IDs,
+preserving leading zeros and IDs such as `NA`, `NULL`, and `nan`. Numeric trait
+columns retain their normal type inference and missing-value handling.
 
 Minimal example:
 
@@ -335,6 +360,33 @@ For each family, both species-tree comparators prune the global species tree
 and trait table to the species represented by reconciled gene tips; unrelated
 species therefore do not make an otherwise complete family fail.
 
+### Orthogroup copy-number tables
+
+Copy-number preparation reads `Orthogroup` IDs literally. `001` and `1` identify
+different families; `NA`, `NULL`, and `nan` are valid ID text. Empty or actually
+duplicated IDs remain errors. Species counts and annotation values retain their
+normal numeric and missing-value handling. Downstream copy-number trait matrices
+preserve these family labels.
+
+The HOG table formatter, gene-evolution arrays, and gene-family archive catalogs
+also require unique, nonempty family IDs. Repeated IDs with different gene
+memberships are ambiguous and are rejected before publishing tables or starting
+family production. Repair the upstream catalog; do not merge or discard its
+distinct rows to satisfy this check.
+
+New OrthoFinder runs must record `OrthoFinder run completed` in their native
+`Log.txt` before GeneGalleon publishes the results. An exit code of zero or a
+partially written N0 table does not establish completion. Incomplete staged
+results and `WorkingDirectory` are retained for diagnosis and upstream resume.
+
+`genome_evolution_mode="orthogroups"` runs standard inference and annotation/selection
+against an existing undated species tree, then stops before later genome analyses.
+Existing sequence and tree contracts are audited with stale/legacy policy `stop`;
+even a requested rebuild cannot enable those producers or adopt missing provenance.
+Only inference/selection use the requested `stop` or `rebuild` policy. Set
+`orthofinder_binary` to a qualified complete native executable when using an
+explicit dependency runtime; its default remains `orthofinder` on PATH.
+
 ### `workspace/input/species_trait/species_trait.tsv`
 
 The first column contains species labels matching the species tree. Remaining
@@ -342,6 +394,11 @@ columns are candidate expression-trait predictors. String-valued predictors are 
 unordered categorical variables; numeric-coded categories must be listed in
 `rsc_categorical_predictors`. Ordered factors use
 `rsc_ordered_predictors="TRAIT=LOW|MIDDLE|HIGH"`.
+
+Trait-table header validation follows TSV quoting and treats a UTF-8 BOM as
+an encoding marker. Duplicate headers are rejected before pandas can rename
+them. The trait-schema sidecar remains bound to the original table bytes,
+including its BOM and line endings.
 
 One row per species is sufficient for ordinary trait data. Repeated species
 rows are accepted by the unified stage only when `rsc_predictor_biological_id` names a column
@@ -467,6 +524,13 @@ Notes:
 - each formatted source GFF has a neighboring `*.gff.gz.repair.json` audit containing
   the old/new gene IDs, reasons, changed references, ambiguity/collision counts, and
   input/output fingerprints used for cache invalidation.
+- overlapping parts of one explicit CDS ID/Parent receive
+  `gg_source_overlap=confirmed` only when their ordered genome sequence exactly
+  matches a complete publisher CDS with the same feature identity. The repair
+  audit records source hashes, coordinates and matched CDS IDs. Missing evidence
+  or a mismatch leaves the overlap unconfirmed; normal strict validation still
+  rejects it. This marker does not assert ribosomal slippage or another biological
+  exception, and source-supplied markers are not trusted.
 - when taxonomy cache preparation succeeds, the generated
   `gg_input_generation_species.tsv` also includes:
   - `taxid`
@@ -520,6 +584,7 @@ Manifest required columns:
   - for `provider=ddbj`, `id` can be a DDBJ BioProject accession (for example `PRJDB15739`), a WGS master accession (for example `BAAHMP000000000`), or a DDBJ BioProject URL.
     - the resolver follows the public DDBJ Search API to find the `insdc-master` accession, then downloads the anonymous-FTP WGS flatfile (`GBFF`) and derives genome/GFF/CDS from it.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
+    - parentless exported CDS fragments are joined using their stable `coge_fid` and exact source `Name`; conflicting names, chromosomes or strands are rejected. Safe GFF formatting normalizes their `Name` and `CDS` aliases with the same identifier rules as the derived CDS; collisions after normalization are rejected.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`), a GWH assembly show URL, or a GWH folder/index URL.
     - accession-only inputs first try the public GWH download tree and then fall back to `gwhSearch/api -> /Assembly/.../show` when directory listing is unavailable.

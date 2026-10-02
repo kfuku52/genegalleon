@@ -52,7 +52,8 @@ def trait_filename_to_species_name(trait_file):
 
 
 def process_trait_file(trait_path, search_ids, id_map):
-    trait = pandas.read_csv(trait_path, sep="\t", header=0, comment="#")
+    # Identifiers are literal text; numeric traits retain normal NA/type inference.
+    trait = pandas.read_csv(trait_path, sep="\t", header=0, comment="#", converters={0: str})
     if trait.shape[0] == 0:
         return trait
     if trait.index.values[0] != 0:

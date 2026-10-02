@@ -29,6 +29,120 @@ def read_gzip_text(path):
         return handle.read()
 
 
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_format_gff_audits_complete_source_overlap_and_native_statistics(tmp_path, strand):
+    from workflow.support.format_species_annotation.common import reverse_complement
+
+    mod = load_format_module()
+    genome_text = "ATGAAACCCCGGG"
+    source_sequence = genome_text[:6] + genome_text[4:10]
+    if strand == "-":
+        source_sequence = reverse_complement(genome_text[4:10]) + reverse_complement(genome_text[:6])
+    source = tmp_path / "source.gff"
+    source.write_text(
+        f"chr1\tsrc\tgene\t1\t10\t.\t{strand}\t.\tID=gene1\n"
+        f"chr1\tsrc\tmRNA\t1\t10\t.\t{strand}\t.\tID=tx1;Parent=gene1\n"
+        f"chr1\tsrc\tCDS\t1\t6\t.\t{strand}\t0\tID=cds1;Parent=tx1;protein_id=P1\n"
+        f"chr1\tsrc\tCDS\t5\t10\t.\t{strand}\t0\tID=cds1;Parent=tx1;protein_id=P1\n")
+    source_cds, genome, formatted_cds = (tmp_path / name for name in ("source.fa", "genome.fa", "formatted.fa"))
+    source_cds.write_text(">P1\n" + source_sequence + "\n")
+    genome.write_text(">chr1\n" + genome_text + "\n")
+    formatted_cds.write_text(">Species_a_gene1\n" + source_sequence + "\n")
+    task = dict(provider="direct", species_prefix="Species_a", species_key="Species_a",
+                gff_path=source, cds_path=source_cds, genome_path=genome, gff_repair_mode="safe")
+    out = tmp_path / "gff"
+    out.mkdir()
+    result = mod.format_gff(task, out, False, False, formatted_cds_path=formatted_cds)
+    output = result["output_path"]
+    assert read_gzip_text(output).count("gg_source_overlap=confirmed") == 2
+    audit = json.loads(Path(str(output) + ".repair.json").read_text())
+    proof = audit["source_overlap"]["confirmed"][0]
+    assert proof["length"] == 12 and proof["source_cds_ids"] == ["P1"]
+    assert set(audit["source_overlap"]["inputs"]) == {"gff", "cds", "genome"}
+    completed = subprocess.run([sys.executable, str(SUPPORT_DIR / "gff2genestat.py"),
+                                "--dir_gff", str(out), "--seqfile", str(formatted_cds),
+                                "--outfile", str(tmp_path / "traits.tsv"), "--require-matches",
+                                "--validate-cds-length"], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert "source-overlap" in (tmp_path / "traits.tsv").read_text()
+    assert mod.format_gff(task, out, False, False, formatted_cds_path=formatted_cds)["status"] == "skip"
+    genome.write_text(">chr1\nTTGAAACCCCGGG\n")
+    refreshed = mod.format_gff(task, out, False, False, formatted_cds_path=formatted_cds)
+    assert refreshed["status"] == "write"
+    assert "gg_source_overlap" not in read_gzip_text(output)
+    completed = subprocess.run([sys.executable, str(SUPPORT_DIR / "gff2genestat.py"),
+                                "--dir_gff", str(out), "--seqfile", str(formatted_cds),
+                                "--outfile", str(tmp_path / "invalid.tsv"), "--require-matches"],
+                               capture_output=True, text=True)
+    assert completed.returncode != 0 and "Overlapping GFF feature blocks" in completed.stderr
+
+
+@pytest.mark.parametrize("annotation", ["low-quality sequence region", "low-quality%20sequence%20region"])
+def test_low_quality_region_overlap_requires_exact_publisher_sequence(tmp_path, annotation):
+    # Trema andersonii GCA_002914805.1, PON35900.1: the publisher
+    # duplicates one ambiguous base at 11412 and retains its quality warning.
+    mod = load_format_module()
+    source = tmp_path / "source.gff"
+    source.write_text(
+        "chr1\tsrc\tgene\t1\t8\t.\t+\t.\tID=gene1\n"
+        "chr1\tsrc\tmRNA\t1\t8\t.\t+\t.\tID=tx1;Parent=gene1\n"
+        f"chr1\tsrc\tCDS\t1\t4\t.\t+\t0\tID=cds1;Parent=tx1;protein_id=P1;exception={annotation}\n"
+        f"chr1\tsrc\tCDS\t4\t8\t.\t+\t2\tID=cds1;Parent=tx1;protein_id=P1;exception={annotation}\n")
+    cds, genome, formatted = [tmp_path / name for name in ("source.fa", "genome.fa", "formatted.fa")]
+    cds.write_text(">P1\nATGNNGTAA\n")
+    genome.write_text(">chr1\nATGNGTAA\n")
+    formatted.write_text(">Species_a_gene1\nATGNNGTAA\n")
+    task = dict(provider="direct", species_prefix="Species_a", species_key="Species_a",
+                gff_path=source, cds_path=cds, genome_path=genome, gff_repair_mode="safe")
+    out = tmp_path / "gff"
+    out.mkdir()
+    result = mod.format_gff(task, out, False, False, formatted_cds_path=formatted)
+    text = read_gzip_text(result["output_path"])
+    assert text.count("gg_source_overlap=confirmed") == 2
+    assert text.count("exception=" + annotation) == 2
+    completed = subprocess.run([sys.executable, str(SUPPORT_DIR / "gff2genestat.py"),
+                                "--dir_gff", str(out), "--seqfile", str(formatted),
+                                "--outfile", str(tmp_path / "traits.tsv"), "--require-matches",
+                                "--validate-cds-length"], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    assert "source-overlap" in (tmp_path / "traits.tsv").read_text()
+    cds.write_text(">P1\nATGNAGTAA\n")
+    result = mod.format_gff(task, out, False, False, formatted_cds_path=formatted)
+    assert "gg_source_overlap" not in read_gzip_text(result["output_path"])
+
+
+@pytest.mark.parametrize("exceptions", [
+    ("unknown exception", "unknown exception"),
+    ("low-quality sequence region", ""),
+    ("low-quality sequence region", "ribosomal slippage"),
+])
+def test_source_overlap_audit_does_not_override_other_exception_contracts(tmp_path, exceptions):
+    from workflow.support.format_species_annotation.source_overlap import audit_source_overlaps
+
+    source, cds, genome = [tmp_path / name for name in ("source.gff", "cds.fa", "genome.fa")]
+    source.write_text("".join(
+        f"chr1\tsrc\tCDS\t{start}\t{end}\t.\t+\t0\tID=cds1;Parent=tx1;protein_id=P1;exception={exception}\n"
+        for (start, end), exception in zip(((1, 4), (4, 8)), exceptions, strict=True)))
+    cds.write_text(">P1\nATGNNGTAA\n")
+    genome.write_text(">chr1\nATGNGTAA\n")
+    confirmed, _audit = audit_source_overlaps(source, {"cds_path": cds, "genome_path": genome})
+    assert not confirmed
+
+
+def test_source_overlap_marker_without_publisher_cds_is_removed(tmp_path):
+    mod = load_format_module()
+    source = tmp_path / "source.gff"
+    source.write_text(
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds1;Parent=tx1;gg_source_overlap=confirmed\n"
+        "chr1\tsrc\tCDS\t5\t10\t.\t+\t0\tID=cds1;Parent=tx1;gg_source_overlap=confirmed\n")
+    cds = tmp_path / "formatted.fa"
+    cds.write_text(">Species_a_tx1\nATGAAAAACCCC\n")
+    output = tmp_path / "out.gff.gz"
+    audit = mod.write_repaired_gff(source, cds, output, "Species_a", "safe")
+    assert not audit["source_overlap"]["confirmed"]
+    assert "gg_source_overlap" not in read_gzip_text(output)
+
+
 def reaumuria_fixture_text():
     return (
         "##gff-version 3\n"

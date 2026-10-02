@@ -108,17 +108,20 @@ def guarded_urlopen(request_or_url, *args, **kwargs):
             return limited_urlopen(request_or_url, *args, **kwargs)
         except HTTPError as exc:
             if exc.code not in (429, 503):
-                exc.close()
+                # The caller owns terminal errors, including their response
+                # bodies (for example BIEN's documented no-data JSON).
                 raise
             delay = retry_after_seconds(exc.headers.get("Retry-After"), attempt)
             try:
                 if limit_directory():
                     permit = getattr(exc.fp, "permit", None) or Admission(exc.geturl())
                     permit.cooldown(delay)
-            finally:
+            except BaseException:
                 exc.close()
+                raise
             if attempt == attempts - 1:
                 raise
+            exc.close()
             time.sleep(delay)
 
 

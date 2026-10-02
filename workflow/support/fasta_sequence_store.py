@@ -460,6 +460,10 @@ def read_patterns(path: Path) -> list[str]:
 
 def write_record(handle: TextIO, header: str, sequence: str) -> None:
     handle.write(f">{header}\n")
+    if type(sequence) is str and sequence.isalpha():
+        for offset in range(0, len(sequence), 60):
+            handle.write(sequence[offset:offset + 60] + "\n")
+        return
     for line in textwrap.wrap(sequence, width=60) or [""]:
         handle.write(f"{line}\n")
 

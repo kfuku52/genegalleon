@@ -12,10 +12,10 @@ SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
 # Library modules have no CLI: running them with --help only repeats imports.
 # Keep process-level checks for actual entrypoints, where parser construction
 # can fail before any functional test reaches the command.
-# These commands require kftools, which is not in the fast-lane environment.
-# Their dedicated statistics/tree tests cover behavior; do not fake the import
-# just to make --help succeed.
-RUNTIME_HELP_SCRIPTS = {"iqtree2mapnh.py", "orthogroup_statistics.py"}
+# These commands require kftools or kfFractBias, absent from the fast lane.
+# Their dedicated runtime tests cover behavior and CLI construction; do not
+# fake the imports just to make --help succeed.
+RUNTIME_HELP_SCRIPTS = {"iqtree2mapnh.py", "orthogroup_statistics.py", "pairwise_synteny.py"}
 SMOKE_HELP_SCRIPTS = sorted(
     script.name
     for script in SUPPORT_DIR.glob("*.py")

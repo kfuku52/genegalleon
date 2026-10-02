@@ -213,8 +213,7 @@ def _gene_context(
         else:
             matchers = FAMILY.query_id_matchers(family_ids)
 
-            def matcher(name: str) -> Optional[str]:
-                return FAMILY.query_id_from_name(name, matchers)
+            matcher = FAMILY.query_id_extractor(matchers)
 
         if not require_catalog or family_ids:
             return family_ids, matcher, []

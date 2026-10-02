@@ -80,3 +80,49 @@ def test_get_trait_matrix_keeps_species_with_colliding_gene_ids(tmp_path, ncpu, 
     )
     assert result.returncode == 0, result.stderr
     assert output.read_text() == "gene_id\troot\nSpecies_a_gene1\t11\nSpecies_b_gene1\t99\n"
+
+
+@pytest.mark.parametrize('ncpu', [1, 2])
+@pytest.mark.parametrize('qualified', [False, True])
+def test_trait_identifiers_keep_literal_na_words_and_leading_zeroes(tmp_path, ncpu, qualified):
+    import pandas as pd
+
+    genes = ['NA', '001', 'NULL', 'nan', '000']
+    traits = tmp_path / 'traits'
+    traits.mkdir()
+    expected_ids, expected_values = [], []
+    for species, offset in [('Species_a', 0), ('Species_b', 100)]:
+        lines = ['gene_id\tmeasurement\tmissing_value']
+        for i, gene in enumerate(genes):
+            name = species + '_' + gene
+            key = name if qualified else gene
+            lines.append(f'{key}\t{offset + i + 1}\tNA')
+            expected_ids.append(name)
+            expected_values.append(offset + i + 1)
+        lines.append('unmatched\t999\tNULL')
+        (traits / (species + '.tsv')).write_text('\n'.join(lines) + '\n')
+    fasta = tmp_path / 'genes.fa'
+    fasta.write_text(''.join(f'>{name}\nATG\n' for name in expected_ids))
+    output = tmp_path / 'traits.tsv'
+    result = subprocess.run([sys.executable, str(SCRIPT), '--dir_trait', str(traits),
+        '--seqfile', str(fasta), '--outfile', str(output), '--ncpu', str(ncpu)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    actual = pd.read_csv(output, sep='\t')
+    expected = pd.DataFrame({'gene_id': expected_ids, 'measurement': expected_values,
+                             'missing_value': [float('nan')] * len(expected_ids)})
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize('inferred_index', [False, True])
+def test_numeric_gene_identifiers_keep_zero_padding_and_trait_types(tmp_path, inferred_index):
+    from workflow.support.get_trait_matrix import process_trait_file
+
+    path = tmp_path / 'traits.tsv'
+    header = 'measurement\tmissing\n' if inferred_index else 'gene_id\tmeasurement\tmissing\n'
+    path.write_text(header + '001\t1\tNA\n000\t2\tNULL\n0\t3\tnan\n')
+    mapping = {gene: 'Species_a_' + gene for gene in ['001', '000', '0']}
+    result = process_trait_file(path, set(mapping), mapping)
+    assert result.gene_id.tolist() == list(mapping.values())
+    assert result.measurement.tolist() == [1, 2, 3]
+    assert str(result.measurement.dtype) == 'int64'
+    assert result['missing'].isna().all()

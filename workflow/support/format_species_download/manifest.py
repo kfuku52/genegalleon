@@ -315,7 +315,9 @@ def download_from_manifest(
         gff_filename = (row.get("gff_filename") or "").strip()
         gbff_filename = (row.get("gbff_filename") or "").strip()
         genome_filename = (row.get("genome_filename") or "").strip()
-        gff_validation = ""
+        # Explicit URLs and cached payloads have the same provider contract as
+        # URLs discovered by the resolver.
+        gff_validation = "coge_export_cds" if provider == "coge" else ""
         fernbase_confidence_mode_raw = (row.get(FERNBASE_CONFIDENCE_MODE_FIELD) or "").strip()
         resolved_ncbi = None
         oryza_minuta_bundle = None
@@ -783,6 +785,33 @@ def download_from_manifest(
                 }
             )
 
+    # Check CoGe annotations before starting potentially enormous sequence
+    # transfers. The resolver's remote preview is not a cache/content proof.
+    if not dry_run:
+        gff_jobs = [job for job in download_jobs if job["provider"] == "coge" and job["label"] == "GFF"]
+        if gff_jobs:
+            for result in run_download_jobs(gff_jobs, max(1, int(jobs)), headers, timeout, overwrite, lock_stale_seconds):
+                warnings.extend(result.get("warnings", []))
+                errors.extend(result.get("errors", []))
+                downloaded += int(result.get("downloaded", 0))
+                failed_downloads.extend(result.get("failed", []))
+        blocked_rows = set()
+        for row_id, row_info in row_target_paths.items():
+            if row_info["provider"] != "coge":
+                continue
+            gff_path = row_info["paths"].get("GFF")
+            if gff_path is None:
+                continue
+            try:
+                validate_coge_export_gff_file(gff_path, gid=row_info["source_id"])
+            except Exception as exc:
+                blocked_rows.add(row_id)
+                errors.append("[download:coge] {} invalid GFF export at {} ({})".format(
+                    row_info["species_key"], gff_path, exc))
+        download_jobs = [job for job in download_jobs
+                         if not (job["provider"] == "coge" and job["label"] == "GFF")
+                         and job["row_id"] not in blocked_rows]
+
     if len(download_jobs) > 0:
         max_workers = max(1, int(jobs))
         for result in run_download_jobs(download_jobs, max_workers, headers, timeout, overwrite, lock_stale_seconds):
@@ -792,23 +821,6 @@ def download_from_manifest(
             failed_downloads.extend(result.get("failed", []))
 
     if not dry_run:
-        for row_info in row_target_paths.values():
-            if row_info.get("gff_validation") != "coge_export_cds":
-                continue
-            gff_path = row_info.get("paths", {}).get("GFF")
-            if gff_path is None or not gff_path.exists() or gff_path.stat().st_size == 0:
-                continue
-            try:
-                validate_coge_export_gff_file(gff_path, gid=row_info.get("source_id", ""))
-            except Exception as exc:
-                errors.append(
-                    "[download:coge] {} invalid GFF export at {} ({})".format(
-                        row_info.get("species_key", ""),
-                        gff_path,
-                        exc,
-                    )
-                )
-
         for cleanup_path in cleanup_paths:
             try:
                 if cleanup_path.exists() and cleanup_path.is_file():

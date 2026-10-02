@@ -621,7 +621,13 @@ def transcript_ids(attributes, gene_id):
 
 
 def transcript_blocks(frame, gene_id):
-    fields = frame[["sequence", "strand", "start", "end"]].itertuples(index=False, name=None)
+    columns = ["sequence", "strand", "start", "end"]
+    if frame.columns.is_unique and all(column in frame for column in columns):
+        fields = zip(*(frame[column] for column in columns), strict=True)
+    else:
+        # Retain the existing missing/duplicate-column behavior without making
+        # a coordinate DataFrame for every normally formed gene group.
+        fields = frame[columns].itertuples(index=False, name=None)
     attributes = frame["attributes"] if "attributes" in frame else [""] * len(frame)
     return ordered_annotated_blocks(((*block, attr) for block, attr in zip(fields, attributes, strict=True)), gene_id)
 
@@ -636,11 +642,13 @@ def select_longest_transcripts(gff):
         for transcript in models:
             candidates.setdefault(transcript, []).append(index)
     annotated_rows = None
-    selected = []
+    selected_indices = []
+    selected_transcripts = []
     for gene_id, candidates in by_gene.items():
         if len(candidates) == 1:
             transcript, indices = next(iter(candidates.items()))
-            selected.append(gff.iloc[indices].assign(selected_transcript=transcript))
+            selected_indices.extend(indices)
+            selected_transcripts.extend([transcript] * len(indices))
             continue
         if annotated_rows is None:
             annotated_rows = list(gff[["sequence", "strand", "start", "end", "attributes"]].itertuples(index=False, name=None))
@@ -666,9 +674,21 @@ def select_longest_transcripts(gff):
                     ",".join(tied_transcripts),
                 )
             )
-        selected.append(gff.iloc[best_indices].assign(selected_transcript=tied_transcripts[0]))
-    return pandas.concat(selected, ignore_index=True) if selected else gff.assign(selected_transcript="")
+        selected_indices.extend(best_indices)
+        selected_transcripts.extend([tied_transcripts[0]] * len(best_indices))
+    if not selected_indices:
+        return gff.assign(selected_transcript="")
+    return gff.iloc[selected_indices].reset_index(drop=True).assign(selected_transcript=selected_transcripts)
 
+
+
+def _phase_column_values(column, dtype):
+    """Avoid a Series cast only when its values already have the target type."""
+    if dtype is str and all(type(value) is str for value in column):
+        return column
+    if dtype is int and column.dtype == numpy.dtype(int):
+        return column
+    return column.astype(dtype)
 
 
 def attach_transcript_structure(selected_cds, gff, phase_policy="strict", structure_policy="strict"):
@@ -726,12 +746,16 @@ def attach_transcript_structure(selected_cds, gff, phase_policy="strict", struct
         # are validated, including duplicate annotations.
         implied_phases = set()
         offset = 0
+        # Build the coordinate lookup once, retaining every duplicate phase row.
+        # Recasting and scanning all CDS rows for each block is unnecessary.
+        phases_by_block = {}
+        for sequence, strand, start, end, phase in zip(
+                _phase_column_values(cds["sequence"], str), _phase_column_values(cds["strand"], str),
+                _phase_column_values(cds["start"], int), _phase_column_values(cds["end"], int),
+                cds["phase"], strict=True):
+            phases_by_block.setdefault((sequence, strand, start, end), []).append(phase)
         for block in cds_blocks:
-            phase_rows = cds.loc[(cds["sequence"].astype(str) == block[0]) &
-                                 (cds["strand"].astype(str) == block[1]) &
-                                 (cds["start"].astype(int) == block[2]) &
-                                 (cds["end"].astype(int) == block[3]), "phase"]
-            for value in phase_rows:
+            for value in phases_by_block.get(block, []):
                 if pandas.isna(value) or str(value).strip() in {".", ""}:
                     continue
                 try:
@@ -937,6 +961,11 @@ def filename2sciname(file_name):
     return sci_name
 
 
+def gff_sequence_identifier(value):
+    """Keep contig names literal, without changing empty-field missingness."""
+    return value if value else numpy.nan
+
+
 def read_gff_table(gff_path):
     try:
         return pandas.read_csv(
@@ -946,6 +975,7 @@ def read_gff_table(gff_path):
             comment="#",
             low_memory=False,
             quoting=3,
+            converters={0: gff_sequence_identifier},
         )
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()
@@ -995,11 +1025,13 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
 
 def validate_cds_lengths(traits, records):
     lengths = {}
+    sequences = {}
     for identifier, _header, sequence in records:
         sequence = sequence.upper()
         if not sequence or re.search(r"[^ACGTRYSWKMBDHVN?]", sequence):
             raise ValueError(f"CDS length validation requires ungapped nucleotide FASTA: {identifier}")
         lengths[identifier] = len(sequence)
+        sequences[identifier] = sequence
     mismatches = []
     for row in traits.itertuples(index=False):
         expected = int(row.feature_size)
@@ -1007,6 +1039,14 @@ def validate_cds_lengths(traits, records):
         if expected == observed:
             continue
         if cds_length_is_compatible_with_partial(row, observed):
+            continue
+        # The formatter pads non-triplet source CDS with terminal Ns. A
+        # declared pseudogene has no coding frame, so this exact padding does
+        # not alter its coordinates or establish a usable intron model.
+        padding = (-expected) % 3
+        if (getattr(row, "splice_mode", "") == "pseudogene" and padding
+                and observed == expected + padding
+                and sequences[row.gene_id][expected:] == "N" * padding):
             continue
         mismatches.append(f"{row.gene_id} (GFF={expected}, CDS={observed})")
     if mismatches:
@@ -1042,30 +1082,36 @@ def cds_length_is_compatible_with_partial(row, observed):
 def mark_incompatible_structures(traits, records):
     """Keep sequence evidence separate from unsupported coordinate assignments."""
     sequences = {identifier: sequence for identifier, _header, sequence in records}
-    for index, row in traits.iterrows():
+    rows = traits.iterrows()
+    if (traits.columns.is_unique and 'gene_id' in traits and 'feature_size' in traits
+            and all(type(value) is str for value in traits['gene_id'])):
+        rows = ((row.Index, row) for row in traits[['gene_id', 'feature_size']].itertuples())
+    for index, row in rows:
         sequence = sequences[row.gene_id]
         size = int(row.feature_size)
         tail = sequence[size:]
         compatible = len(sequence) == size or (0 < len(tail) <= 2 and set(tail.upper()) <= {"N"})
         if compatible:
-            traits.loc[index, "structure_status"] = "length_compatible"
+            indexer = traits.at if pandas.api.types.is_scalar(index) else traits.loc
+            indexer[index, "structure_status"] = "length_compatible"
             continue
         disable_structure(traits, index, "cds_length_mismatch")
 
 
 def disable_structure(traits, index, reason):
+    indexer = traits.at if (pandas.api.types.is_scalar(index) and pandas.api.types.is_scalar(reason)) else traits.loc
     if "structure_status" not in traits or pandas.api.types.is_numeric_dtype(traits["structure_status"]):
         traits["structure_status"] = traits.get("structure_status", pandas.Series(index=traits.index, dtype=object)).astype(object)
-    traits.loc[index, "structure_status"] = reason
+    indexer[index, "structure_status"] = reason
     for column in ("feature_size", "num_intron", "cds_first_phase", "start", "end"):
         if column in traits:
-            traits.loc[index, column] = numpy.nan
+            indexer[index, column] = numpy.nan
     for column in ("intron_positions", "feature_blocks", "utr_blocks", "chromosome", "strand",
                    "feature_block_sequences", "feature_block_strands", "transcript_junction_positions"):
         if column in traits:
             if pandas.api.types.is_numeric_dtype(traits[column]):
                 traits[column] = traits[column].astype(object)
-            traits.loc[index, column] = ""
+            indexer[index, column] = ""
 
 
 def apply_cds_resolution(traits, records, directory):

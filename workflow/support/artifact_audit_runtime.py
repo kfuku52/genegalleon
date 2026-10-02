@@ -72,7 +72,7 @@ def validate_observation(value, attempt_id, *, result=False, started_at_ns=0):
         if value.get("total") is not None and integer("total") < completed:
             raise ValueError("Audit progress exceeds its total")
         if (value.get("phase") not in {"inventory", "manifest_hash", "legacy_inventory", "branch_identity",
-                                      "source_revalidation", "report"}
+                                      "source_revalidation", "database_build", "report"}
                 or value.get("state") not in {"running", "completed", "failed", "interrupted"}
                 or value.get("eta_scope") != "current-phase-only" or not 1 <= integer("workers", 64)):
             raise ValueError("Invalid audit progress phase or state")

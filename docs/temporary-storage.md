@@ -105,3 +105,46 @@ it. Choose workspace storage when retained intermediate files must remain
 accessible after the job; choose site-approved scratch explicitly when disposable
 local computation is desired. No performance improvement is claimed without a
 representative benchmark.
+
+## Retained files and legacy workspace cleanup
+
+Genome evolution stages derived OMAmer query FASTAs and the resolved genetic-code
+table inside the job's computation scratch. Successful OMArk output validation
+and provenance recording precede query deletion; `delete_tmp_dir=0` keeps query
+scratch for debugging. Failed searches retain it. OMArk summaries fingerprint
+the result directory, which contains no newly generated query FASTAs.
+
+Older workspaces can contain `output/genome_evolution/omark/<species>/<species>.query.fa`
+and `downloads/tmp/species_genetic_code.resolved.tsv`. Inventory these before
+cleanup. Verify retained inputs, complete `.omamer` and `.sum` results, and current
+provenance, and exclude running or queued consumers. Deleting a legacy query
+changes the OMArk directory fingerprint: preserve the old manifest and regenerate
+the summary contract from unchanged `.sum` files instead of ignoring a stale
+contract or rerunning OMAmer unnecessarily.
+
+Download `*.corrupt.*` quarantines can be removed after a good replacement is
+validated and diagnosis is finished. `.part` files remain resumable downloads.
+Provider `.archive_cache` ZIPs, configured getfastq caches, and `orthofinder/core`
+results are retained for reuse and require an explicit project-specific decision;
+ordinary scratch cleanup does not remove them. Input-generation task plans,
+completion receipts, and MCMCtree chain evidence must remain available.
+
+For an existing project's retired failed scratch, first list exact paths, owners,
+file counts, bytes and consumers. Reuse the existing gene-family `cleanup-tmp`
+and transcriptome retention guards where applicable. For other retired scratch,
+take and checksum-verify a recovery archive, recheck ownership, path identity and
+job inactivity, then remove only the inventoried paths. Do not apply wildcard
+deletion to `workspace/output`, `workspace/downloads`, or another user's data.
+
+Generate a read-only JSON inventory without launching a workflow:
+
+```bash
+python workflow/support/workspace_cleanup_inventory.py --workspace /absolute/project/workspace
+```
+
+For an older `gfe_data` layout, pass that directory with `--legacy-output-root`.
+The report distinguishes scratch, quarantines and retained results/caches, records
+foreign-owned entries and inaccessible paths, and never follows symlinks. It does
+not establish job inactivity or authorize deletion. Nested cache/quarantine records
+can overlap; do not sum their counts as independent storage. Configured external scratch
+and FASTQ caches must be inventoried separately at their recorded host paths.

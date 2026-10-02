@@ -792,20 +792,23 @@ translate_orthogroup_cds_to_protein_fasta() {
   rm -f -- "${translated_tmp}"
 }
 
-prepare_species_tree_pruned() {
+prepare_species_tree_pruned() (
   local task_local="Species tree pruning"
   local species_sequence_dir="${dir_sp_cds}"
   if [[ ! -s "${species_tree}" ]]; then
     echo "$(date): Warning: ${task_local}: source species tree was not found."
     echo "Missing: ${species_tree}"
-    return 1
-  fi
-
-  if [[ -s "${species_tree_pruned}" ]]; then
+    if [[ -s "${species_tree_pruned}" ]]; then
+      echo "Cannot verify the cached pruned species tree without its source." >&2
+      return 2
+    fi
     return 0
   fi
 
-  ensure_parent_dir "${species_tree_pruned}"
+  ensure_parent_dir "${species_tree_pruned}" || return $?
+  local lock_file="${species_tree_pruned}.lock"
+  gg_shared_lock_acquire "${lock_file}" "Species tree pruning" || return $?
+  trap 'gg_shared_lock_release "${lock_file}"' EXIT
 
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     species_sequence_dir="${dir_sp_protein_input}"
@@ -813,55 +816,66 @@ prepare_species_tree_pruned() {
 
   local sequence_files=()
   mapfile -t sequence_files < <(gg_find_fasta_files "${species_sequence_dir}" 1)
-  if [[ ${#sequence_files[@]} -eq 0 ]]; then
-    echo "$(date): ${task_local}: no species sequence files detected in ${species_sequence_dir}. Copying source species tree as-is."
-    cp_out "${species_tree}" "${species_tree_pruned}"
-    return 0
-  fi
-
   local cds_spp=()
   local sequence_file
   for sequence_file in "${sequence_files[@]}"; do
     cds_spp+=("$(gg_species_name_from_path "${sequence_file}")")
   done
-  mapfile -t cds_spp < <(printf '%s\n' "${cds_spp[@]}" | sed -e '/^[[:space:]]*$/d' | sort -u)
-  if [[ ${#cds_spp[@]} -eq 0 ]]; then
-    echo "$(date): ${task_local}: species names could not be parsed from species CDS files. Copying source tree."
-    cp_out "${species_tree}" "${species_tree_pruned}"
-    return 0
+  if [[ ${#cds_spp[@]} -gt 0 ]]; then
+    mapfile -t cds_spp < <(printf '%s\n' "${cds_spp[@]}" | sed -e '/^[[:space:]]*$/d' | sort -u)
+  fi
+  local keep_pattern=""
+  if [[ ${#cds_spp[@]} -gt 0 ]]; then
+    keep_pattern=$(
+      printf '%s\n' "${cds_spp[@]}" |
+        sed -e 's/[][(){}.^$+*?|\\-]/\\&/g' |
+        paste -sd'|' -
+    )
   fi
 
-  local keep_pattern
-  keep_pattern=$(
-    printf '%s\n' "${cds_spp[@]}" |
-      sed -e 's/[][(){}.^$+*?|\\-]/\\&/g' |
-      paste -sd'|' -
+  # Sequence contents do not affect pruning; the selected tip labels do.
+  # Never adopt a legacy cache whose source root/tip selection is unknown.
+  local artifact_legacy_policy=rebuild
+  local pruned_needs_update=0
+  local pruned_provenance_args=(
+    --manifest "${species_tree_pruned}.provenance.json"
+    --step "species_tree_pruned"
+    --family-id "shared_species_tree"
+    --logical-root "${dir_output_active}"
+    --workspace-root "${gg_workspace_dir}"
+    --input "source_tree=${species_tree}"
+    --output "pruned_tree=${species_tree_pruned}"
+    --parameter "keep_pattern=${keep_pattern}"
+    --parameter "input_sequence_mode=${input_sequence_mode}"
   )
-  if [[ -z "${keep_pattern}" ]]; then
-    echo "$(date): ${task_local}: keep-pattern is empty. Copying source tree."
-    cp_out "${species_tree}" "${species_tree_pruned}"
+  gg_artifact_set_needs_update pruned_needs_update "${pruned_provenance_args[@]}" || return $?
+  if [[ ${pruned_needs_update} -eq 0 ]]; then
     return 0
   fi
 
   local tmp_pruned="${species_tree_pruned}.tmp.$$"
-  if nwkit prune \
-    --infile "${species_tree}" \
-    --pattern "^(${keep_pattern})$" \
-    --invert-match yes \
-    --outfile "${tmp_pruned}"; then
-    if [[ -s "${tmp_pruned}" ]]; then
-      mv_out "${tmp_pruned}" "${species_tree_pruned}"
-    else
-      echo "$(date): ${task_local}: pruned tree is empty. Copying source tree."
-      rm -f -- "${tmp_pruned}"
-      cp_out "${species_tree}" "${species_tree_pruned}"
-    fi
+  if [[ -z "${keep_pattern}" ]]; then
+    echo "$(date): ${task_local}: no species sequence labels detected in ${species_sequence_dir}. Copying source species tree as-is."
+    cp_out "${species_tree}" "${tmp_pruned}" || return $?
   else
-    echo "$(date): ${task_local}: nwkit prune failed. Copying source tree."
-    rm -f -- "${tmp_pruned}"
-    cp_out "${species_tree}" "${species_tree_pruned}"
+    if ! nwkit prune \
+      --infile "${species_tree}" \
+      --pattern "^(${keep_pattern})$" \
+      --invert-match yes \
+      --outfile "${tmp_pruned}"; then
+      echo "${task_local}: pruning failed; refusing to reuse or publish an unverified tree." >&2
+      rm -f -- "${tmp_pruned}"
+      return 2
+    fi
   fi
-}
+  if [[ ! -s "${tmp_pruned}" ]]; then
+    echo "${task_local}: pruned tree is empty." >&2
+    rm -f -- "${tmp_pruned}"
+    return 2
+  fi
+  mv_out "${tmp_pruned}" "${species_tree_pruned}" || return $?
+  gg_artifact_record "${pruned_provenance_args[@]}" || return $?
+)
 
 cleanup_tmp_dir_on_normal_exit() {
   local exit_code=$?
@@ -1495,7 +1509,20 @@ case "${mode_gene_evolution}" in
       echo "Invalid GG_ARRAY_TASK_ID value (must be a positive integer): ${GG_ARRAY_TASK_ID}"
       exit 1
     fi
-    num_orthogroups=$(awk 'END { print (NR > 0 ? NR - 1 : 0) }' "${file_orthogroup_genecount_selected}")
+    if ! num_orthogroups=$(awk -F'\t' '
+      NR > 1 {
+        sub(/\r$/, "", $1)
+        if ($1 == "" || seen[$1]++) {
+          print "Invalid or duplicate orthogroup family identity at row " (NR - 1) ": " $1 > "/dev/stderr"
+          bad = 1
+          exit 1
+        }
+      }
+      END { if (!bad) print (NR > 0 ? NR - 1 : 0) }
+    ' "${file_orthogroup_genecount_selected}"); then
+      echo "Refusing to start gg_gene_evolution with an ambiguous orthogroup catalog." >&2
+      exit 1
+    fi
     if [[ ${num_orthogroups} -le 0 ]]; then
       echo "No orthogroup rows were found in: ${file_orthogroup_genecount_selected}"
       exit 1
@@ -1871,7 +1898,7 @@ fi
 
 
 
-prepare_species_tree_pruned || true
+prepare_species_tree_pruned || exit $?
 set_default_analysis_files
 
 
@@ -3787,6 +3814,7 @@ generax_provenance_args=(
   --input "trimmed_alignment=${file_og_trimmed_aln_analysis}"
   --input "starting_tree=${generax_starting_tree}"
   --input "species_tree=${species_tree_pruned}"
+  --input "species_tree_serializer=${gg_support_dir}/prepare_generax_species_tree.py"
   --output "generax_nwk=${file_og_generax_nwk}"
   --output "generax_xml=${file_og_generax_xml}"
   --output "generax_nhx=${file_og_generax_nhx}"
@@ -3795,6 +3823,7 @@ generax_provenance_args=(
   --parameter "rooting_mode=${generax_rooting_mode}"
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "genetic_code=${genetic_code}"
+  --parameter "species_tree_format=plain_rooted_newick"
 )
 gg_artifact_prepare_stage generax_needs_update run_generax "${generax_provenance_args[@]}" || exit $?
 if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
@@ -3809,6 +3838,10 @@ if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
     exit 1
   fi
   gg_step_start "${task}"
+
+  python "${gg_support_dir}/prepare_generax_species_tree.py" \
+    --input "${species_tree_pruned}" \
+    --output generax_input_species_tree.nwk
 
   if [[ "${input_sequence_mode}" == "protein" ]]; then
     assert_gene_evolution_aa_model_for_protein_mode "${task}"
@@ -3856,7 +3889,7 @@ if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
     mpiexec_args+=(--allow-run-as-root)
   fi
   "${mpi_env_args[@]}" "${mpiexec_args[@]}" generax \
-    --species-tree "${species_tree_pruned}" \
+    --species-tree generax_input_species_tree.nwk \
     --families generax_families.txt \
     --strategy "SPR" \
     --rec-model "${generax_rec_model}" \
@@ -3882,13 +3915,28 @@ if [[ ${generax_needs_update} -eq 1 && ${run_generax} -eq 1 ]]; then
         gg_shared_lock_release "${lock_file}"
       }
       trap cleanup_generax_tree_lock EXIT
-      if [[ ! -s "${species_tree_generax}" ]]; then
-        echo "copying GeneRax output species tree (first writer only)."
+      artifact_legacy_policy=rebuild
+      generax_species_needs_update=0
+      generax_species_provenance_args=(
+        --manifest "${species_tree_generax}.provenance.json"
+        --step "generax_species_tree"
+        --family-id "shared_species_tree"
+        --logical-root "${dir_output_active}"
+        --workspace-root "${gg_workspace_dir}"
+        --input "source_tree=${species_tree_pruned}"
+        --output "generax_species_tree=${species_tree_generax}"
+        --parameter "format=generax_v2"
+      )
+      gg_artifact_set_needs_update generax_species_needs_update "${generax_species_provenance_args[@]}" || exit $?
+      if [[ ${generax_species_needs_update} -eq 1 ]]; then
+        echo "copying GeneRax output species tree for the current source tree."
         cp_out "${generax_out_sptree}" "${species_tree_generax}"
+        gg_artifact_record "${generax_species_provenance_args[@]}" || exit $?
       fi
     ) || exit 1
-  elif [[ ! -s "${species_tree_generax}" ]]; then
-    echo "GeneRax species tree file was not found yet: ${generax_out_sptree}"
+  else
+    echo "GeneRax output species tree was not found: ${generax_out_sptree}" >&2
+    exit 1
   fi
   echo "copying GeneRax output gene tree."
   reconciled_base="./generax_${og_id}/reconciliations/family_1_reconciliated"

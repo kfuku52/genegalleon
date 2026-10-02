@@ -21,6 +21,7 @@
     "test_mcmctree_chains.py",
     "test_copy_number_quality_runtime.py",
     "test_nwkit_tree_workflows_runtime.py",
+    "test_generax_species_tree_runtime.py",
     "test_nwkit_reconciliation_runtime.py",
     "test_asr_intron_runtime.py",
     "test_native_tree_dating.py",
@@ -35,7 +36,8 @@
     "test_rsc_runtime_integration.py",
     "test_pgls_multiplicity.py",
     "test_fractionation_bias_integration.py",
-    "test_gbif_runtime_integration.py"
+    "test_gbif_runtime_integration.py",
+    "test_tree_plot_batch.py"
   ],
   "runtime_extra_python": [
     "workflow/tests/test_hgt_end_to_end.py",

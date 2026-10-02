@@ -18,6 +18,57 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('seqids', [['001', '002'], ['NA', 'NULL', 'nan', '001']])
+def test_gff_sequence_identifiers_remain_literal_through_genomic_extraction(tmp_path, compressed, seqids):
+    import gzip
+
+    from workflow.support.cds_resolution import extract_genomic_candidates
+    from workflow.support.gff2genestat import read_gff_table
+
+    name = 'Plant_species.gff' + ('.gz' if compressed else '')
+    path = tmp_path / name
+    text = ''.join(f'{seqid}\ts\tCDS\t1\t9\t.\t+\t0\tID=g{i};Parent=g{i}\n'
+                   for i, seqid in enumerate(seqids))
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    table = read_gff_table(str(path))
+    assert table[0].tolist() == seqids
+    assert table[3].tolist() == [1] * len(seqids)
+    assert table[4].tolist() == [9] * len(seqids)
+    assert table[7].tolist() == [0] * len(seqids)
+    assert table[5].tolist() == ['.'] * len(seqids)
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    output_columns = OUT_COLS + ['feature_block_sequences', 'feature_block_strands']
+    identifiers = [f'Plant_species_g{i}' for i in range(len(seqids))]
+    traits = process_single_gff(name, str(tmp_path), identifiers, 'CDS', 'longest', columns, output_columns)
+    assert traits.chromosome.tolist() == seqids
+    assert traits.feature_block_sequences.tolist() == seqids
+    genome = tmp_path / 'genome.fa'
+    genome.write_text(''.join(f'>{seqid}\nATGAAATAA\n' for seqid in seqids))
+    assert extract_genomic_candidates(traits, genome) == {identifier: 'ATGAAATAA' for identifier in identifiers}
+
+
+def test_gff_identifier_conversion_keeps_other_missing_values_and_numeric_columns(tmp_path):
+    from workflow.support.gff2genestat import read_gff_table
+
+    path = tmp_path / 'table.gff'
+    path.write_text('\ts\tCDS\t1\t9\tNA\t+\t0\tID=a\n'
+                    '001\ts\tCDS\t10\t18\t\t+\t.\tID=b\n'
+                    'chr1\ts\tCDS\t19\t27\t2.5\t+\t2\tID=c\n')
+    table = read_gff_table(str(path))
+    assert pandas.isna(table.at[0, 0])
+    assert table.loc[1:, 0].tolist() == ['001', 'chr1']
+    assert table[3].tolist() == [1, 10, 19]
+    assert table[4].tolist() == [9, 18, 27]
+    assert table[5].isna().tolist() == [True, True, False]
+    assert table.at[2, 5] == 2.5
+    assert table[7].tolist() == ['0', '.', '2']
+
+
 def test_longest_selects_one_transcript_before_summarizing():
     gff = pandas.DataFrame(
         [
@@ -39,6 +90,113 @@ def test_longest_selects_one_transcript_before_summarizing():
         assert out.iloc[0]["intron_positions"] == "200"
         assert out.iloc[0]["feature_blocks"] == "1-200;401-500"
         assert out.iloc[0]["feature_type"] == "CDS"
+
+
+def test_longest_selection_preserves_group_order_extra_dtypes_and_input():
+    from workflow.support.gff2genestat import select_longest_transcripts
+
+    frame = pandas.DataFrame({
+        'gene_id': ['b', 'a', 'b', 'a', 'b'], 'sequence': ['chr1'] * 5,
+        'strand': ['+'] * 5, 'start': pandas.Series([1, 100, 1, 200, 201], dtype='Int64'),
+        'end': [9, 108, 18, 208, 209],
+        'attributes': ['Parent=short', 'Parent=only', 'Parent=long', 'Parent=only', 'Parent=long'],
+        'annotation': pandas.Categorical(['x', 'y', 'y', 'x', 'x']),
+        'selected_transcript': ['stale'] * 5,
+    })
+    frame.index = pandas.Index([8, 8, 2, 5, 1], name='source_row')
+    original = frame.copy(deep=True)
+    selected = select_longest_transcripts(frame)
+    assert selected.gene_id.tolist() == ['b', 'b', 'a', 'a']
+    assert selected.start.tolist() == [1, 201, 100, 200]
+    assert selected.selected_transcript.tolist() == ['long', 'long', 'only', 'only']
+    assert selected.annotation.tolist() == ['y', 'x', 'y', 'x']
+    assert selected.start.dtype == original.start.dtype
+    assert selected.annotation.dtype == original.annotation.dtype
+    assert selected.selected_transcript.dtype == pandas.Series(['long']).dtype
+    assert selected.index.equals(pandas.RangeIndex(4))
+    pandas.testing.assert_frame_equal(frame, original)
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_transcript_blocks_retains_extension_types_duplicate_rows_and_optional_attributes(strand):
+    from workflow.support.gff2genestat import transcript_blocks
+
+    frame = pandas.DataFrame({'sequence': ['chr1'] * 3, 'strand': [strand] * 3,
+                             'start': pandas.Series([31, 1, 31], dtype='Int64'),
+                             'end': pandas.Series([39, 9, 39], dtype='Int64')})
+    frame.index = [9, 9, 2]
+    original = frame.copy(deep=True)
+    expected = [('chr1', strand, 1, 9), ('chr1', strand, 31, 39)]
+    if strand == '-':
+        expected.reverse()
+    assert transcript_blocks(frame, 'g') == (expected, 'cis')
+    pandas.testing.assert_frame_equal(frame, original)
+    # Duplicate unused columns are accepted by the existing helper.
+    unused = pandas.DataFrame({'unused': [1, 2, 3]}, index=frame.index)
+    extra = pandas.concat([frame, unused, unused], axis=1)
+    assert transcript_blocks(extra, 'g') == (expected, 'cis')
+
+
+def test_transcript_blocks_keeps_missing_and_duplicate_coordinate_column_errors():
+    from workflow.support.gff2genestat import transcript_blocks
+
+    frame = pandas.DataFrame({'sequence': ['chr1'], 'strand': ['+'], 'start': [1], 'end': [9]})
+    with pytest.raises(KeyError, match='end.*not in index'):
+        transcript_blocks(frame.drop(columns='end'), 'g')
+    duplicate = pandas.concat([frame, frame[['sequence']]], axis=1)
+    with pytest.raises(ValueError, match='too many values to unpack'):
+        transcript_blocks(duplicate, 'g')
+
+
+@pytest.mark.parametrize('coordinate_dtype', ['int64', 'int32', 'Int64', 'Float64', 'object', 'UInt64'])
+@pytest.mark.parametrize('numeric_sequence', [False, True])
+def test_phase_validation_preserves_non_native_coordinate_and_name_types(coordinate_dtype, numeric_sequence):
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({'gene_id': ['g'] * 2, 'selected_transcript': ['t'] * 2,
+                             'sequence': [123 if numeric_sequence else 'chr1'] * 2,
+                             'strand': ['+'] * 2, 'feature': ['CDS'] * 2,
+                             'start': pandas.Series(['1', '201'], dtype=coordinate_dtype),
+                             'end': pandas.Series(['90', '290'], dtype=coordinate_dtype),
+                             'phase': ['0', '0'], 'attributes': ['Parent=t'] * 2})
+    original = frame.copy(deep=True)
+    result = attach_transcript_structure(frame, frame)
+    assert result.phase_status.tolist() == ['consistent', 'consistent']
+    assert result.cds_first_phase.tolist() == [0, 0]
+    pandas.testing.assert_frame_equal(frame, original)
+    pandas.testing.assert_frame_equal(result[original.columns], original)
+
+
+def test_phase_validation_keeps_gene_local_error_order():
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    frame = pandas.DataFrame({'gene_id': ['first', 'second'], 'selected_transcript': ['t1', 't2'],
+                             'sequence': ['chr1'] * 2, 'strand': ['+'] * 2, 'feature': ['CDS'] * 2,
+                             'start': [1, 'invalid-coordinate'], 'end': [90, 290],
+                             'phase': ['invalid-phase', '0'], 'attributes': ['Parent=t1', 'Parent=t2']})
+    with pytest.raises(ValueError, match='Invalid CDS phase for first: invalid-phase'):
+        attach_transcript_structure(frame, frame)
+
+
+@pytest.mark.parametrize('phase', ['1', 'invalid'])
+def test_duplicate_cds_coordinates_retain_every_phase_record(phase):
+    from workflow.support.gff2genestat import attach_transcript_structure
+
+    cds = pandas.DataFrame({'gene_id': ['g', 'g'], 'selected_transcript': ['t', 't'],
+                           'sequence': ['chr1', 'chr1'], 'strand': ['+', '+'],
+                           'start': [1, 1], 'end': [9, 9], 'feature': ['CDS', 'CDS'],
+                           'phase': ['0', phase], 'attributes': ['Parent=t', 'Parent=t']})
+    error = 'Conflicting CDS phases' if phase == '1' else 'Invalid CDS phase'
+    with pytest.raises(ValueError, match=error):
+        attach_transcript_structure(cds, cds)
+    if phase == '1':
+        report = attach_transcript_structure(cds, cds, phase_policy='report')
+        assert report.phase_status.eq('conflicting').all()
+        assert report.cds_first_phase.isna().all()
+        assert report.phase.tolist() == ['0', '1']
+    else:
+        with pytest.raises(ValueError, match=error):
+            attach_transcript_structure(cds, cds, phase_policy='report')
 
 
 def test_longest_gtf_transcripts_do_not_merge_isoforms():
@@ -521,6 +679,130 @@ def test_cds_length_validation_rejects_wrong_transcript_and_preserves_missing():
         validate_cds_lengths(traits,records)
     with pytest.raises(ValueError,match='ungapped nucleotide'):
         validate_cds_lengths(traits,[('a','a','MKE')])
+
+
+@pytest.mark.parametrize('nullable', [False, True])
+@pytest.mark.parametrize('index_kind', ['integer', 'string', 'multiindex'])
+def test_structure_reporting_keeps_types_and_clears_exact_mismatch_fields(nullable, index_kind):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    numeric = {'feature_size': [6] * 8, 'num_intron': [1] * 8, 'cds_first_phase': [0] * 8,
+               'start': [1] * 8, 'end': [9] * 8}
+    text = {'intron_positions': '3', 'feature_blocks': '1-3;7-9', 'utr_blocks': '10-12',
+            'chromosome': 'chr1', 'strand': '+', 'feature_block_sequences': 'chr1;chr1',
+            'feature_block_strands': '+;+', 'transcript_junction_positions': ''}
+    traits = pandas.DataFrame({key: pandas.array(values, dtype='Int64' if nullable else 'int64')
+                               for key, values in numeric.items()})
+    for column, value in text.items():
+        traits[column] = value
+    traits['gene_id'] = list('abcdefgh')
+    traits['structure_status'] = 'unchecked'
+    traits['gff_transcript_id'] = [f'tx{i}' for i in range(8)]
+    traits['metadata'] = pandas.Categorical(['keep'] * 8)
+    if index_kind == 'integer':
+        traits.index = pandas.Index([i * 3 + 7 for i in range(8)], name='source')
+    elif index_kind == 'string':
+        traits.index = pandas.Index([f'row{i}' for i in range(8)], name='source')
+    else:
+        traits.index = pandas.MultiIndex.from_tuples([('chr1', i) for i in range(8)], names=['contig', 'source'])
+    expected = traits.copy(deep=True)
+    for column, values in numeric.items():
+        expected[column] = pandas.array(values[:3] + [pandas.NA if nullable else float('nan')] * 5,
+                                        dtype='Int64' if nullable else 'float64')
+    for column, value in text.items():
+        expected[column] = pandas.array([value] * 3 + [''] * 5, dtype=traits[column].dtype)
+    expected['structure_status'] = pandas.array(['length_compatible'] * 3 + ['cds_length_mismatch'] * 5,
+                                               dtype=traits.structure_status.dtype)
+    sequences = ['ATGAAA', 'ATGAAAN', 'ATGAAAnn', 'ATGAAANNN', 'ATGAAAA', 'ATGAA', 'ATGAAATT', '']
+    records = [(gene, gene, sequence) for gene, sequence in zip('abcdefgh', sequences, strict=True)]
+    original_records = list(records)
+    mark_incompatible_structures(traits, records)
+    pandas.testing.assert_frame_equal(traits, expected)
+    assert records == original_records
+
+
+@pytest.mark.parametrize('selector,selected', [('a', ['a']), (['a', 'c'], ['a', 'c']),
+                                              ([True, False, True], ['a', 'c'])])
+def test_disable_structure_keeps_scalar_and_collection_selectors(selector, selected):
+    from workflow.support.gff2genestat import disable_structure
+
+    frame = pandas.DataFrame({'feature_size': [6, 6, 6], 'chromosome': [1.0, 2.0, 3.0],
+                              'structure_status': [float('nan')] * 3, 'untouched': [4, 5, 6]}, index=['a', 'b', 'c'])
+    disable_structure(frame, selector, 'unsupported')
+    assert frame.loc[selected, 'feature_size'].isna().all()
+    assert frame.loc[selected, 'chromosome'].tolist() == [''] * len(selected)
+    assert frame.loc[selected, 'structure_status'].tolist() == ['unsupported'] * len(selected)
+    remaining = frame.index.difference(selected)
+    assert frame.loc[remaining, 'feature_size'].eq(6).all()
+    assert frame.untouched.tolist() == [4, 5, 6]
+    assert str(frame.structure_status.dtype) == str(frame.chromosome.dtype) == 'object'
+
+
+def test_disable_structure_preserves_duplicate_index_updates():
+    from workflow.support.gff2genestat import disable_structure
+
+    frame = pandas.DataFrame({'feature_size': [6, 9, 12], 'chromosome': ['chr1'] * 3}, index=['a', 'a', 'b'])
+    disable_structure(frame, 'a', 'unsupported')
+    assert frame.feature_size.iloc[:2].isna().all()
+    assert frame.chromosome.tolist() == ['', '', 'chr1']
+    assert frame.feature_size.iloc[2] == 12
+
+
+def test_structure_reporting_keeps_prior_updates_before_later_length_error():
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    frame = pandas.DataFrame({'gene_id': ['a', 'b'], 'feature_size': [6.0, float('nan')],
+                              'structure_status': ['unchecked', 'unchecked']}, index=[4, 7])
+    with pytest.raises(ValueError):
+        mark_incompatible_structures(frame, [('a', 'a', 'ATGAAA'), ('b', 'b', 'ATGAAA')])
+    assert frame.structure_status.tolist() == ['length_compatible', 'unchecked']
+
+
+@pytest.mark.parametrize('missing_size', [False, True])
+def test_structure_reporting_looks_up_sequence_before_invalid_size(missing_size):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    frame = pandas.DataFrame({'gene_id': ['absent']})
+    if not missing_size:
+        frame['feature_size'] = float('nan')
+    with pytest.raises(KeyError, match='absent'):
+        mark_incompatible_structures(frame, [])
+
+
+def test_structure_reporting_keeps_empty_and_missing_gene_column_behavior():
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    empty = pandas.DataFrame({'feature_size': []})
+    original = empty.copy()
+    mark_incompatible_structures(empty, [])
+    pandas.testing.assert_frame_equal(empty, original)
+    with pytest.raises(AttributeError, match='gene_id'):
+        mark_incompatible_structures(pandas.DataFrame({'feature_size': [6]}), [])
+
+
+@pytest.mark.parametrize('duplicate', ['gene_id', 'feature_size'])
+def test_structure_reporting_preserves_duplicate_needed_column_errors(duplicate):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    columns = ['gene_id', 'gene_id', 'feature_size'] if duplicate == 'gene_id' else ['gene_id', 'feature_size', 'feature_size']
+    values = ['a', 'b', 6] if duplicate == 'gene_id' else ['a', 6, 6]
+    with pytest.raises(TypeError):
+        mark_incompatible_structures(pandas.DataFrame([values], columns=columns), [('a', 'a', 'ATGAAA')])
+
+
+@pytest.mark.parametrize('legacy_case', ['extra_duplicate_columns', 'numeric_identifiers'])
+def test_structure_reporting_keeps_legacy_supported_rows(legacy_case):
+    from workflow.support.gff2genestat import mark_incompatible_structures
+
+    if legacy_case == 'extra_duplicate_columns':
+        frame = pandas.DataFrame([['a', 6, 1, 2], ['b', 6, 3, 4]],
+                                  columns=['gene_id', 'feature_size', 'metadata', 'metadata'])
+    else:
+        frame = pandas.DataFrame({'gene_id': [1, 2], 'feature_size': [6.0, 6.0]})
+    original = frame.copy(deep=True)
+    mark_incompatible_structures(frame, [(gene, gene, 'ATGAAA') for gene in frame.gene_id])
+    assert frame.structure_status.tolist() == ['length_compatible', 'length_compatible']
+    pandas.testing.assert_frame_equal(frame.drop(columns='structure_status'), original)
 
 
 @pytest.mark.parametrize('strand,attributes,expected', [

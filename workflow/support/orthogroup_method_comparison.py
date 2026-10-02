@@ -4,8 +4,10 @@
 import argparse
 import datetime
 import os
+import re
 import sys
 import time
+from pathlib import Path
 
 import pandas
 
@@ -19,7 +21,7 @@ def build_arg_parser():
         metavar="PATH",
         default="",
         type=str,
-        help="Path used by --orthofinder_og_genecount.",
+        help="Flat OG gene-count TSV or native Orthogroups.txt membership file.",
         required=True,
     )
     parser.add_argument(
@@ -31,6 +33,39 @@ def build_arg_parser():
         required=True,
     )
     return parser
+
+
+def read_gene_counts(path):
+    """Read assigned-OG totals using OrthoFinder's native GeneCount semantics."""
+    if Path(path).name != "Orthogroups.txt":
+        return pandas.read_csv(path, sep="\t", header=0, low_memory=False)
+
+    rows = []
+    seen_groups = set()
+    seen_genes = set()
+    with open(path) as stream:
+        for number, line in enumerate(stream, 1):
+            if not line.strip():
+                continue
+            match = re.fullmatch(r"(OG[0-9]+):\s*(\S+(?:\s+\S+)*)\s*", line.strip())
+            if match is None:
+                raise ValueError(f"Invalid Orthogroups.txt membership at line {number}")
+            group, members = match.groups()
+            genes = members.split()
+            if group in seen_groups:
+                raise ValueError(f"Duplicate orthogroup {group} at line {number}")
+            seen_groups.add(group)
+            # OrthoFinder's GeneCount table excludes single-gene groups, which
+            # are written separately to Orthogroups_UnassignedGenes.tsv.
+            if len(genes) == 1:
+                continue
+            if len(set(genes)) != len(genes) or seen_genes.intersection(genes):
+                raise ValueError(f"Duplicate gene membership at line {number}")
+            seen_genes.update(genes)
+            rows.append((group, len(genes)))
+    if not rows:
+        raise ValueError("Orthogroups.txt has no assigned orthogroups")
+    return pandas.DataFrame(rows, columns=["Orthogroup", "Total"])
 
 
 def get_pyplot():
@@ -52,10 +87,8 @@ def main():
     print("Starting {} at {}".format(sys.argv[0], datetime.datetime.now()))
 
     dfs = {}
-    dfs["OrthoFinder Orthogroup"] = pandas.read_csv(args.orthofinder_og_genecount, sep="\t", header=0, low_memory=False)
-    dfs["OrthoFinder Hierarchical orthogroup"] = pandas.read_csv(
-        args.orthofinder_hog_genecount, sep="\t", header=0, low_memory=False
-    )
+    dfs["OrthoFinder Orthogroup"] = read_gene_counts(args.orthofinder_og_genecount)
+    dfs["OrthoFinder Hierarchical orthogroup"] = read_gene_counts(args.orthofinder_hog_genecount)
     for key in dfs.keys():
         dfs[key] = dfs[key].sort_values(by="Total")
         dfs[key]["cumulative_num_gene"] = dfs[key]["Total"].cumsum()

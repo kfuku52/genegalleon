@@ -58,7 +58,8 @@ class Acquisition:
             # BIEN's documented no-observations response is distinct from a missing route.
             if not bien_empty or exc.code != 404:
                 raise
-            data = exc.read()
+            with exc:
+                data = exc.read()
             try:
                 payload = json.loads(data)
             except ValueError:

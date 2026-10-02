@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "orthogroup_table_formatter.py"
 
@@ -117,3 +118,36 @@ def test_hog2og_preserves_numeric_gene_ids_and_removes_only_leading_prefix(tmp_p
     ]
     assert orthogroups["numeric_species"].tolist() == ["101", "NA"]
     assert gene_counts["numeric_species"].tolist() == [1, 1]
+
+
+@pytest.mark.parametrize("second_id", ["N0.HOG0000004", "HOG0000004"])
+def test_duplicate_hog_identity_refuses_publication_and_preserves_outputs(tmp_path, second_id):
+    mod = load_module()
+    source = tmp_path / "N0.tsv"
+    source.write_text(
+        "HOG\tOG\tGene Tree Parent Clade\tspA\n"
+        "N0.HOG0000004\tOG0000002\tn116\tgene_a\n"
+        f"{second_id}\tOG0000003\tn333\tgene_b\n",
+        encoding="utf-8",
+    )
+    original = source.read_bytes()
+    out = tmp_path / "published"
+    out.mkdir()
+    previous = {name: b"previous verified output\n" for name in
+                ["Orthogroups.tsv", "Orthogroups.GeneCount.tsv", "README.txt"]}
+    for name, data in previous.items():
+        (out / name).write_bytes(data)
+    with pytest.raises(ValueError, match="duplicate family identities: HOG0000004"):
+        mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode="hog2og", dir_out=str(out)))
+    assert source.read_bytes() == original
+    assert {name: (out / name).read_bytes() for name in previous} == previous
+
+
+def test_empty_hog_identity_does_not_create_output_directory(tmp_path):
+    mod = load_module()
+    source = tmp_path / "N0.tsv"
+    source.write_text("HOG\tOG\tGene Tree Parent Clade\tspA\n\tOG1\tn1\tgene_a\n", encoding="utf-8")
+    out = tmp_path / "new_output"
+    with pytest.raises(ValueError, match="empty family identity"):
+        mod.run(SimpleNamespace(file_orthogroup_table=str(source), mode="hog2og", dir_out=str(out)))
+    assert not out.exists()

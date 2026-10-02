@@ -67,11 +67,14 @@ repository-owned moving upstream revisions. Upstream resolution is cached for on
 normal focused checks do not repeatedly query every repository. A mismatch
 fails with the rebuild command instead of silently using an old `nwkit`,
 `csubst`, or other source snapshot.
+Docker validation resolves the selected image to its immutable ID before
+inspection and execution, so another build replacing its tag cannot change
+the runtime being checked.
 
 Use `GG_RUNTIME_FRESHNESS=always` to force a new upstream resolution or
 `GG_RUNTIME_FRESHNESS=off` for an intentional offline check with a known older
 runtime. The latter is an explicit escape hatch and is not compatibility
-evidence. BUSCO, PAML and IQ-TREE remain accepted at the revisions embedded in the
+evidence. BUSCO, PAML, IQ-TREE and ASTER remain accepted at the revisions embedded in the
 runtime by default; set `GG_RUNTIME_FRESHNESS_SCOPE=all` to compare their
 branch tips as well. Scheduled publishing and CI runtime-cache keys always
 resolve all sources exactly.
@@ -408,8 +411,48 @@ workloads exercise bounded input buffering, not the peak memory of the global
 BH-FDR calculation or a production workload of arbitrary size.
 
 For verification, store fingerprints, raw/ZIP database input and PDF comparisons,
-see [remaining I/O performance](remaining-io-performance.md). Its benchmark also
+see [remaining I/O performance](remaining-io-performance.md) and
+[batch I/O performance](batch-io-performance.md). Its benchmark also
 checks equivalent logical outputs and separates parent/child peak RSS.
+
+## Input staging comparisons
+
+`workflow/benchmarks/benchmark_input_staging.py` generates a deterministic large
+genome, CDS, and gzip GFF, then measures planning, initial staging, resumed staging,
+and worker metadata preflight. It reports SHA-256 calls/bytes, wall time, peak RSS,
+and an exact combined fingerprint of plans, staged receipts/manifests, and worker
+metadata. It alternates baseline/current runs with one warmup and three measured
+trials; comparison fails if any fingerprint differs. Run without concurrent builds
+or tests. Provide a saved baseline support directory visible at the same path in
+the runtime, for example via `GENEGALLEON_DOCKER_EXTRA_BINDS`:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_input_staging.py \
+  --baseline-support /tmp/gg-baseline/workflow/support --genome-mib 1024 \
+  --output tmp/input-staging-comparison.json
+```
+
+Add `--alias-roles` to exercise CDS/genome roles sharing a file. These warm-cache
+synthetic comparisons do not establish production NAS throughput or whole-workflow
+speedup. Source mutation/replacement, conflicting receipts, gzip rejection, and
+formatted-output equivalence are covered by `test_input_generation_array_scripts.py`.
+
+On 2026-10-02, Docker Linux/arm64 with Python 3.12.14 compared baseline
+`0f9e3c9` against this change using 1.074 GB of raw fixtures and three alternating
+trials after warmup. Complete plan/receipt/metadata fingerprints matched across
+all measured runs. Median process peak RSS was 65.84 / 65.80 MiB before/after.
+
+| Phase | Before seconds | After seconds | Before SHA-256 GB | After SHA-256 GB |
+| --- | ---: | ---: | ---: | ---: |
+| Initial staging | 2.264 | 1.618 | 4.30 | 3.22 |
+| Resumed staging | 1.083 | 0.526 | 2.15 | 1.07 |
+| Worker metadata preflight | 1.027 | 0.520 | 2.15 | 1.07 |
+
+The initial-staging SHA-256 volume drops by 25%, and resumed staging/worker
+preflight by 50%. Planning with distinct role paths keeps the same read volume.
+These measurements exclude shared-resource downloads, formatting and BUSCO,
+and do not establish a production NAS or SIF speedup.
 
 ## Dependency-aware debug harness
 

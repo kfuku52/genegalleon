@@ -22,6 +22,45 @@ def write_tsv(path: Path, rows: list[dict[str, object]]) -> None:
     pandas.DataFrame(rows).to_csv(path, sep="\t", index=False)
 
 
+def test_header_rejects_duplicates_before_pandas_renames_them(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'traits.tsv'
+    path.write_text('z\ta\tz\ta\n1\t2\t3\t4\n')
+    with pytest.raises(ValueError, match=r'duplicate column names \(a, z\)'):
+        mod.read_tsv(path)
+
+
+@pytest.mark.parametrize('header', ['a\ta', '"a"\ta', '\ta'])
+def test_bom_header_does_not_hide_duplicate_or_empty_names(tmp_path, header):
+    mod = load_module()
+    path = tmp_path / 'traits.tsv'
+    path.write_text(header + '\n1\t2\n', encoding='utf-8-sig')
+    expected = 'empty column name' if header.startswith('\t') else r'duplicate column names \(a\)'
+    with pytest.raises(ValueError, match=expected):
+        mod.read_tsv(path)
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])
+def test_valid_quoted_tsv_header_matches_body_columns(tmp_path, encoding):
+    mod = load_module()
+    path = tmp_path / 'traits.tsv'
+    path.write_text('"species"\t"trait\tx"\t"trait""quote"\nNA\t1\t2\n', encoding=encoding)
+    header = mod._read_header(path)
+    frame = mod.read_tsv(path)
+    assert header == frame.columns.tolist() == ['species', 'trait\tx', 'trait"quote']
+    assert frame.iloc[0].tolist() == ['NA', '1', '2']
+
+
+@pytest.mark.parametrize('selection', ['all', 'z, a, z, a'])
+def test_trait_selection_keeps_sorted_duplicate_diagnostics(selection):
+    mod = load_module()
+    with pytest.raises(ValueError, match='--traits contains duplicates: a, z'):
+        mod._parse_csv_names(selection, ['z', 'a', 'z', 'a'], '--traits')
+    assert mod._parse_csv_names('z, a', ('a', 'z'), '--traits') == ['z', 'a']
+    with pytest.raises(ValueError, match='not present in the input: z, a'):
+        mod._parse_csv_names('z, a', ('other',), '--traits')
+
+
 def test_prepare_converts_wide_expression_replicates_without_false_pairing(tmp_path: Path):
     mod = load_module()
     expression = tmp_path / "expression.tsv"
@@ -611,6 +650,41 @@ def test_prepare_combines_paired_responses_with_mixed_replication(tmp_path: Path
     assert paired["leaf"].ne("NA").all()
     unpaired = observed[observed["biological_id"] == "sample2"]
     assert unpaired["leaf"].eq("NA").all()
+
+
+def test_expression_observation_order_and_missingness_with_literal_headers(tmp_path: Path):
+    mod = load_module()
+    expression = tmp_path / "expression.tsv"
+    samples = tmp_path / "samples.tsv"
+    write_tsv(expression, [
+        {"gene id": " A_g1 ", "root: measurement_1": "1", "root: measurement_2": "NA", "leaf.mean_1": "10", "leaf.mean_2": "NA"},
+        {"gene id": " B_g1 ", "root: measurement_1": "2", "root: measurement_2": "3", "leaf.mean_1": "NA", "leaf.mean_2": "20"},
+        {"gene id": " C_g1 ", "root: measurement_1": "NA", "root: measurement_2": "4", "leaf.mean_1": "30", "leaf.mean_2": "NA"},
+    ])
+    write_tsv(samples, [
+        {"column": "leaf.mean_2", "response": " leaf.mean ", "biological_id": " bio2 ", "technical_id": "tech2", "batch": "B2"},
+        {"column": "root: measurement_2", "response": " root: measurement ", "biological_id": " bio2 ", "technical_id": "tech2", "batch": "B2"},
+        {"column": "leaf.mean_1", "response": " leaf.mean ", "biological_id": " bio1 ", "technical_id": "tech1", "batch": "B1"},
+        {"column": "root: measurement_1", "response": " root: measurement ", "biological_id": " bio1 ", "technical_id": "tech1", "batch": "B1"},
+    ])
+    args = mod.build_parser().parse_args([
+        "prepare", "--expression", str(expression), "--sample-metadata", str(samples),
+        "--species-traits", str(tmp_path / "unused.tsv"),
+        *[token for name in ("expression", "species-traits", "analysis-plan", "metadata")
+          for token in (f"--{name}-output", str(tmp_path / f"{name}.out.tsv"))],
+    ])
+    frame, metadata = mod._prepare_expression(args)
+    assert frame.columns.tolist() == ["leaf_name", "leaf.mean", "root: measurement", "biological_id", "technical_id", "batch"]
+    assert list(frame.itertuples(index=False, name=None)) == [
+        ("A_g1", "10", "1", "bio1", "tech1", "B1"),
+        ("B_g1", "20", "3", "bio2", "tech2", "B2"),
+        ("B_g1", "NA", "2", "bio1", "tech1", "B1"),
+        ("C_g1", "NA", "4", "bio2", "tech2", "B2"),
+        ("C_g1", "30", "NA", "bio1", "tech1", "B1"),
+    ]
+    assert metadata["responses"] == "leaf.mean,root: measurement"
+    assert metadata["status"] == "ready"
+    assert metadata["response_sampling_uncertainty"] == "yes"
 
 
 def test_prepare_header_only_expression_is_not_estimable(tmp_path: Path):

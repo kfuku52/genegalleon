@@ -15,6 +15,7 @@ import json
 import math
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterable, Sequence
@@ -84,6 +85,13 @@ def _is_missing(value: object) -> bool:
 
 
 def _read_tsv(path: Path, *, allow_empty: bool = False) -> pandas.DataFrame:
+    # Read the header as data, before pandas can rename duplicate columns.
+    # This uses the same quoting, BOM and inferred-compression rules as the body.
+    header = pandas.read_csv(path, sep="\t", header=None, nrows=1, dtype=str,
+                             keep_default_na=False, na_filter=False).iloc[0].tolist()
+    duplicated = sorted(name for name, count in Counter(header).items() if count > 1)
+    if duplicated:
+        raise ValueError(f"TSV input has duplicate columns: {', '.join(duplicated)}")
     frame = pandas.read_csv(
         path,
         sep="\t",
@@ -93,9 +101,6 @@ def _read_tsv(path: Path, *, allow_empty: bool = False) -> pandas.DataFrame:
     )
     if frame.empty and not allow_empty:
         raise ValueError(f"TSV input has no rows: {path}")
-    if frame.columns.duplicated().any():
-        duplicated = frame.columns[frame.columns.duplicated()].tolist()
-        raise ValueError(f"TSV input has duplicate columns: {', '.join(duplicated)}")
     return frame
 
 

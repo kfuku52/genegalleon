@@ -26,6 +26,7 @@ SOURCE_SHA_VARS = (
     "BUSCO_REPO_SHA",
     "PAML_REPO_SHA",
     "IQTREE_REPO_SHA",
+    "ASTER_REPO_SHA",
     "KFFRACTBIAS_REPO_SHA",
     "KFTOOLS_REPO_SHA",
     "RKFTOOLS_REPO_SHA",
@@ -90,7 +91,8 @@ def test_version_helper_previews_and_updates_semver_atomically(tmp_path: Path):
     assert version_file.read_text(encoding="utf-8") == "1.2.4\n"
 
 
-def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
+@pytest.mark.parametrize("image_id", ["sha256:" + "a" * 64, "", "invalid-id"])
+def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path, image_id):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "python3").symlink_to(sys.executable)
@@ -102,7 +104,7 @@ def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
         f"printf '%s\\n' \"$*\" >> {docker_log!s}\n"
         'case "${1:-}" in\n'
         "  info) exit 0 ;;\n"
-        '  image) [[ "${2:-}" == inspect ]] && exit 0 ;;\n'
+        f'  image) [[ "${{2:-}}" == inspect ]] && printf "%s\\n" "{image_id}" && exit 0 ;;\n'
         "  run) exit 0 ;;\n"
         "esac\n"
         "exit 1\n",
@@ -121,12 +123,72 @@ def test_runtime_runner_dispatches_to_requested_docker_image(tmp_path: Path):
 
     completed = _run("bash", str(RUN_IN_RUNTIME), "python", "--version", env=env)
 
-    assert completed.returncode == 0, completed.stderr
     calls = docker_log.read_text(encoding="utf-8")
-    assert "image inspect local/genegalleon:test" in calls
+    assert "image inspect --format {{.Id}} local/genegalleon:test" in calls
+    if not image_id.startswith("sha256:"):
+        assert completed.returncode != 0
+        assert "invalid image identity" in completed.stderr
+        assert "run " not in calls
+        return
+    assert completed.returncode == 0, completed.stderr
     assert f"--user {os.getuid()}:{os.getgid()}" in calls
     assert f"--volume {REPO_ROOT}:{REPO_ROOT}" in calls
-    assert f"--workdir {REPO_ROOT} local/genegalleon:test python --version" in calls
+    assert f"--workdir {REPO_ROOT} {image_id} python --version" in calls
+
+
+@pytest.mark.parametrize("replace_at", ["freshness", "execution"])
+def test_runtime_runner_executes_the_image_checked_before_a_tag_replacement(tmp_path, replace_at):
+    root = tmp_path / "repo"
+    runner = root / "workflow/tests/run_in_runtime.sh"
+    runner.parent.mkdir(parents=True)
+    shutil.copy2(RUN_IN_RUNTIME, runner)
+    checker = root / "container/scripts/check_runtime_freshness.sh"
+    checker.parent.mkdir(parents=True)
+    checker.write_text(
+        '#!/bin/bash\nset -euo pipefail\n'
+        'case "$2" in\n'
+        '  local/genegalleon:test) cat "$TAG_STATE" > "$CHECKED_IMAGE" ;;\n'
+        '  "$ORIGINAL_IMAGE") printf "%s\\n" "$2" > "$CHECKED_IMAGE" ;;\n'
+        '  *) exit 1 ;;\n'
+        'esac\n'
+        'if [[ "$REPLACE_AT" == freshness ]]; then printf "%s\\n" "$REPLACEMENT_IMAGE" > "$TAG_STATE"; fi\n'
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        '#!/bin/bash\nset -euo pipefail\n'
+        'case "$1" in\n'
+        '  info) exit 0 ;;\n'
+        '  image) [[ "$2" == inspect ]] || exit 1\n'
+        '    if [[ "${3:-}" == --format ]]; then cat "$TAG_STATE"; fi\n'
+        '    exit 0 ;;\n'
+        '  run)\n'
+        '    if [[ "$REPLACE_AT" == execution ]]; then printf "%s\\n" "$REPLACEMENT_IMAGE" > "$TAG_STATE"; fi\n'
+        '    for arg in "$@"; do\n'
+        '      case "$arg" in\n'
+        '        local/genegalleon:test) cat "$TAG_STATE" > "$EXECUTED_IMAGE"; exit 0 ;;\n'
+        '        "$ORIGINAL_IMAGE") printf "%s\\n" "$arg" > "$EXECUTED_IMAGE"; exit 0 ;;\n'
+        '      esac\n'
+        '    done\n'
+        'esac\nexit 1\n'
+    )
+    docker.chmod(0o755)
+    original = "sha256:" + "a" * 64
+    state = tmp_path / "tag"
+    state.write_text(original + "\n")
+    checked, executed = tmp_path / "checked", tmp_path / "executed"
+    env = os.environ | {
+        "PATH": f"{bin_dir}:/usr/bin:/bin", "GG_TEST_RUNTIME": "docker",
+        "GG_CONTAINER_DOCKER_IMAGE": "local/genegalleon:test", "GG_RUNTIME_FRESHNESS": "daily",
+        "ORIGINAL_IMAGE": original, "REPLACEMENT_IMAGE": "sha256:" + "b" * 64,
+        "TAG_STATE": str(state), "CHECKED_IMAGE": str(checked), "EXECUTED_IMAGE": str(executed),
+        "REPLACE_AT": replace_at,
+    }
+    result = _run("bash", str(runner), "python", "--version", env=env)
+    assert result.returncode == 0, result.stderr
+    assert checked.read_text().strip() == original
+    assert executed.read_text().strip() == original
 
 
 @pytest.mark.parametrize("target", [None, "runtime"])
@@ -322,6 +384,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
     iqtree_sha = env.pop("IQTREE_REPO_SHA")
     fastk_sha = env.pop("FASTK_REPO_SHA")
     smudgeplot_sha = env.pop("SMUDGEPLOT_REPO_SHA")
+    aster_sha = env.pop("ASTER_REPO_SHA")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -339,6 +402,7 @@ def test_docker_runtime_freshness_uses_exact_runtime_hash_and_fails_closed(tmp_p
         f"    printf 'iqtree\\t%s\\n' '{iqtree_sha}'\n"
         f"    printf 'fastk\\t%s\\n' '{fastk_sha}'\n"
         f"    printf 'smudgeplot\\t%s\\n' '{smudgeplot_sha}'\n"
+        f"    printf 'ASTER\\t%s\\n' '{aster_sha}'\n"
         "    ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",

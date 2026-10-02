@@ -1,7 +1,10 @@
+import subprocess
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "merge_cds_annotation.py"
 
@@ -11,6 +14,82 @@ def load_module():
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize('reader', ['uniprot', 'cdskit_localize', 'gff_info', 'fx2tab', 'expression', 'mmseqs', 'busco'])
+@pytest.mark.parametrize('identifiers', [['001', '010'], ['NA', 'nan', 'None']])
+def test_annotation_loaders_preserve_lexical_identifiers(tmp_path, reader, identifiers):
+    mod = load_module()
+    path = tmp_path / 'annotation.tsv'
+    if reader == 'busco':
+        text = ''.join(f'B{i}\tComplete\t{gene}\t100\t200\tu\td\n' for i, gene in enumerate(identifiers))
+    elif reader == 'mmseqs':
+        text = ''.join(f'{gene}\t1\tspecies\tname\t1\t1\t1\t0.5\t1\n' for gene in identifiers)
+    else:
+        id_column = {'cdskit_localize': 'seq_id', 'fx2tab': '#id', 'expression': 'Identifier'}.get(reader, 'gene_id')
+        text = f'{id_column}\tmetric\n' + ''.join(f'{gene}\t7\n' for gene in identifiers)
+    path.write_text(text)
+    loaded = getattr(mod, 'load_' + reader)(str(path))
+    assert loaded.index.tolist() == identifiers
+    assert loaded.index.name == 'gene_id'
+
+
+def test_missing_busco_sequence_does_not_become_a_nan_gene(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'busco.tsv'
+    path.write_text('missing\tMissing\t\t\t\t\t\nreal\tComplete\tnan\t7\t9\tu\td\n')
+    result = mod.load_busco(str(path))
+    assert result.index.tolist() == ['nan']
+    assert result.loc['nan', 'busco_id'] == 'real'
+    path.write_text('missing\tMissing\t\t\t\t\t\n')
+    assert mod.load_busco(str(path)) is None
+
+
+def test_busco_missing_metadata_keeps_legacy_nan_text(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'busco.tsv'
+    path.write_text('B1\tComplete\tgeneA\t100\t200\t\t\nB2\tDuplicated\tgeneA\t\t210\turl\tdesc\n')
+    result = mod.load_busco(str(path))
+    assert result.loc['geneA', 'busco_score'] == '100.0; nan'
+    assert result.loc['geneA', 'busco_description'] == 'nan; desc'
+
+
+def test_expression_renames_only_the_identifier_header(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'expression.tsv'
+    path.write_text('Identifier\tIdentifier_score\n001\t7\n')
+    result = mod.load_expression(str(path))
+    assert result.columns.tolist() == ['Identifier_score']
+    assert result.loc['001', 'Identifier_score'] == 7
+
+
+def test_fx2tab_renames_only_the_exact_standard_headers(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'fx2tab.tsv'
+    path.write_text('#id\tlength\tlength_ratio\t#identity\n001\t99\t0.5\t7\n')
+    result = mod.load_fx2tab(str(path))
+    assert result.columns.tolist() == ['cds_length', 'length_ratio', '#identity']
+    assert result.loc['001', 'cds_length'] == 99
+
+
+def test_text_identifier_parsing_retains_missing_metadata(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'uniprot.tsv'
+    path.write_text('gene_id\tvalue\nNA\tNA\n001\t7\n')
+    result = mod.load_uniprot(str(path))
+    assert pandas.isna(result.loc['NA', 'value'])
+    assert result.loc['001', 'value'] == 7
+
+
+@pytest.mark.parametrize('identifiers', [['001', '010'], ['NA', 'nan', 'None']])
+def test_orthogroup_map_preserves_literal_member_and_group_ids(tmp_path, identifiers):
+    mod = load_module()
+    path = tmp_path / 'orthogroups.tsv'
+    path.write_text('Orthogroup\tSpecies\n' + ''.join(f'{gene}\t{gene}\n' for gene in identifiers)
+                    + 'empty\t\n')
+    result = mod.load_orthogroup_map(str(path), 'Species')
+    assert result.index.tolist() == identifiers
+    assert result.tolist() == identifiers
 
 
 def test_load_expression_sets_gene_id_index(tmp_path):
@@ -84,3 +163,34 @@ def test_join_if_available_accepts_preindexed_tables():
     assert out.index.tolist() == ["geneA", "geneB"]
     assert out.loc["geneA", "annotation"] == "hitA"
     assert pandas.isna(out.loc["geneB", "annotation"])
+
+
+@pytest.mark.parametrize('ncpu', [1, 2])
+def test_merge_cli_preserves_identifiers_and_exact_metric_names(tmp_path, ncpu):
+    ids = ['nan', '001', 'NA', 'None']
+    fasta = tmp_path / 'cds.fa'
+    fasta.write_text(''.join(f'>{gene}\nACGT\n' for gene in ids))
+    orthogroups = tmp_path / 'orthogroups.tsv'
+    orthogroups.write_text('Orthogroup\tSpecies\n' + ''.join(f'{gene}\t{gene}\n' for gene in ids))
+    uniprot = tmp_path / 'uniprot.tsv'
+    uniprot.write_text('gene_id\tuniprot_label\n' + ''.join(f'{gene}\tlabel{i}\n' for i, gene in enumerate(ids[::-1])))
+    expression = tmp_path / 'expression.tsv'
+    expression.write_text('Identifier\tIdentifier_score\n' + ''.join(f'{gene}\t7\n' for gene in ids))
+    fx2tab = tmp_path / 'fx2tab.tsv'
+    fx2tab.write_text('#id\tlength\tlength_ratio\n' + ''.join(f'{gene}\t99\t0.5\n' for gene in ids))
+    busco = tmp_path / 'busco.tsv'
+    busco.write_text(''.join(f'B{i}\tComplete\t{gene}\t100\t200\t\t\n' for i, gene in enumerate(ids)))
+    output = tmp_path / 'result.tsv'
+    subprocess.run([sys.executable, str(SCRIPT_PATH), '--cds_fasta', str(fasta), '--uniprot_tsv', str(uniprot),
+                    '--orthogroup_tsv', str(orthogroups), '--scientific_name', 'Species',
+                    '--expression_tsv', str(expression), '--fx2tab', str(fx2tab), '--busco_tsv', str(busco),
+                    '--out_tsv', str(output), '--ncpu', str(ncpu)], check=True, capture_output=True, text=True)
+    result = pandas.read_csv(output, sep='\t', keep_default_na=False, dtype={'gene_id': str})
+    assert result.gene_id.tolist() == ids
+    assert result.orthogroup.tolist() == ids
+    assert result.uniprot_label.tolist() == ['label3', 'label2', 'label1', 'label0']
+    assert result['Identifier_score'].tolist() == [7] * 4
+    assert result.cds_length.tolist() == [99] * 4
+    assert result.length_ratio.tolist() == [0.5] * 4
+    assert result.busco_id.tolist() == ['B0', 'B1', 'B2', 'B3']
+    assert result.busco_description.tolist() == ['nan'] * 4

@@ -1164,6 +1164,107 @@ def test_format_species_inputs_treats_softmasked_direct_fasta_as_genome(tmp_path
     assert "ATGAAATTT" in text
 
 
+def test_coge_export_reconstructs_complete_cds_from_fragment_ids(tmp_path):
+    mod = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">lcl|chr1\nATGCCCTAA\n>lcl|chr2\nTTACCCCAT\n")
+    gff = tmp_path / "export.gff"
+    gff.write_text("\n".join([
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t.\tID=gene1;Name=gene1;CDS=gene1;coge_fid=101",
+        "chr1\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=gene1.CDS2;Name=gene1;CDS=gene1;coge_fid=101",
+        "chr2\tCoGe\tCDS\t1\t3\t.\t-\t.\tID=gene2;Name=gene2;CDS=gene2;coge_fid=102",
+        "chr2\tCoGe\tCDS\t7\t9\t.\t-\t.\tID=gene2.CDS2;Name=gene2;CDS=gene2;coge_fid=102",
+        "",
+    ]))
+    records = list(mod.derive_cds_records_from_gff_and_genome({
+        "provider": "coge", "species_key": "Pinguicula_agnata",
+        "gff_path": gff, "genome_path": genome,
+    }))
+    assert records == [("gene1 [gene=gene1]", "ATGTAA"), ("gene2 [gene=gene2]", "ATGTAA")]
+
+
+@pytest.mark.parametrize("second", [
+    "chr2\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=gene1.CDS2;Name=gene1;CDS=gene1;coge_fid=101",
+    "chr1\tCoGe\tCDS\t7\t9\t.\t-\t.\tID=gene1.CDS2;Name=gene1;CDS=gene1;coge_fid=101",
+    "chr1\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=gene1.CDS2;Name=gene1;CDS=gene1;coge_fid=102",
+    "chr1\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=gene1.CDS2;Name=gene1;CDS=gene2;coge_fid=101",
+])
+def test_coge_export_rejects_conflicting_source_models(tmp_path, second):
+    mod = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">chr1\nATGCCCTAA\n>chr2\nATGCCCTAA\n")
+    gff = tmp_path / "export.gff"
+    gff.write_text(
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t.\tID=gene1;Name=gene1;CDS=gene1;coge_fid=101\n"
+        + second + "\n"
+    )
+    with pytest.raises(ValueError, match="CoGe CDS feature identity"):
+        list(mod.derive_cds_records_from_gff_and_genome({
+            "provider": "coge", "species_key": "Pinguicula_agnata",
+            "gff_path": gff, "genome_path": genome,
+        }))
+
+
+def test_non_coge_parentless_cds_preserves_distinct_feature_ids(tmp_path):
+    mod = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">chr1\nATGCCCTAA\n")
+    gff = tmp_path / "annotation.gff"
+    gff.write_text(
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t.\tID=gene1;Name=gene1;coge_fid=101\n"
+        "chr1\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=gene1.CDS2;Name=gene1;coge_fid=101\n"
+    )
+    records = list(mod.derive_cds_records_from_gff_and_genome({
+        "provider": "direct", "species_key": "Pinguicula_agnata",
+        "gff_path": gff, "genome_path": genome,
+    }))
+    assert len(records) == 2
+    assert [sequence for _, sequence in records] == ["ATG", "TAA"]
+
+
+def test_coge_canonical_source_names_match_formatted_cds_and_gff(tmp_path):
+    mod = load_module()
+    from validate_cds_gff_mapping import validate_single_species
+
+    genome, gff = tmp_path / "genome.fa", tmp_path / "export.gff"
+    genome.write_text(">lcl|chr1\nATGCCCTAA\n")
+    gff.write_text(
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t.\tID=model__1;Name=model__1;CDS=model__1;coge_fid=101\n"
+        "chr1\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=model__1.CDS2;Name=model__1;CDS=model__1;coge_fid=101\n"
+    )
+    task = dict(provider="coge", species_key="Pinguicula_agnata", species_prefix="Pinguicula_agnata",
+                gff_path=gff, genome_path=genome, gene_grouping_mode="rescue_overlap", gff_repair_mode="safe")
+    cds_dir, gff_dir = tmp_path / "cds", tmp_path / "gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    cds = mod.format_cds(task, cds_dir, False, False)
+    result = mod.format_gff(task, gff_dir, False, False, formatted_cds_path=cds["output_path"])
+    with gzip.open(cds["output_path"], "rt") as handle:
+        assert handle.read() == ">Pinguicula_agnata_model_1\nATGTAA\n"
+    with gzip.open(result["output_path"], "rt") as handle:
+        text = handle.read()
+    assert "ID=model__1.CDS2;Name=model_1;CDS=model_1;coge_fid=101" in text
+    assert text.count("\tCDS\t") == 2
+    mapping = validate_single_species(dict(index=1, species_prefix="Pinguicula_agnata",
+                                          cds_file=cds["output_path"], gff_file=result["output_path"], strict=True), 10)
+    assert mapping["ok"], mapping
+    audit = json.loads(Path(str(result["output_path"]) + ".repair.json").read_text())
+    assert audit["status"] == "repaired" and audit["changed_values"] == 4
+
+
+def test_coge_source_names_reject_canonical_collisions(tmp_path):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "export.gff"
+    genome.write_text(">chr1\nATGCCCTAA\n")
+    gff.write_text(
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t.\tID=model__1;Name=model__1;coge_fid=101\n"
+        "chr1\tCoGe\tCDS\t7\t9\t.\t+\t.\tID=model_1;Name=model_1;coge_fid=102\n"
+    )
+    task = dict(provider="coge", species_key="Pinguicula_agnata", gff_path=gff, genome_path=genome)
+    with pytest.raises(ValueError, match="Conflicting CoGe CDS feature identity"):
+        list(mod.derive_cds_records_from_gff_and_genome(task))
+
+
 def test_format_species_inputs_derives_cds_without_trimming_nonzero_phase(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"

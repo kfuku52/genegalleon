@@ -89,7 +89,8 @@ def test_dev_forwards_focused_arguments_through_the_container(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_docker = bin_dir / "docker"
-    fake_docker.write_text('#!/bin/bash\nif [[ "$1" == run ]]; then printf "%s\\n" "$@"; fi\n')
+    fake_docker.write_text('#!/bin/bash\nif [[ "$1" == run ]]; then printf "%s\\n" "$@"; '
+                           'elif [[ "$1" == image ]]; then printf "sha256:%064d\\n" 0; fi\n')
     fake_docker.chmod(0o755)
     env = os.environ | {
         "PATH": f"{bin_dir}:/usr/bin:/bin", "GG_TEST_RUNTIME": "docker",

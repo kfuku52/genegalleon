@@ -68,13 +68,15 @@ def evaluate(sequence, code=1, phase=None):
         tail = (-(head + len(sequence))) % 3
         padded = 'N' * head + sequence + 'N' * tail
     internal_codons = [padded[i:i + 3] for i in range(0, len(padded) - 3, 3)]
-    stop_count = sum(codon in stops for codon in internal_codons)
+    stop_count = sum(codon in stops for codon in internal_codons) if stops else 0
     reason = 'accepted'
     if stop_count:
         reason = 'premature_stop'
-    elif any(re.search('[^ACGT]', codon) for codon in internal_codons[1 if head else 0:]):
+    # Keep the exact codon span: omit only the first incomplete codon and the
+    # terminal codon, without performing a regex search for every codon.
+    elif re.search('[^ACGT]', padded[3 if head else 0:3 * len(internal_codons)]):
         reason = 'internal_ambiguous_bases'
-    elif any(codon in dual for codon in internal_codons):
+    elif dual and any(codon in dual for codon in internal_codons):
         reason = 'translation_uncertain'
     elif head and phase is None:
         zero_frames = []

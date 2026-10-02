@@ -28,7 +28,7 @@ def schema_payload(table_payload, trait_types):
 
 def read_table(table):
     payload = Path(table).read_bytes()
-    rows = list(csv.reader(io.StringIO(payload.decode("utf-8")), delimiter="\t", strict=True))
+    rows = list(csv.reader(io.StringIO(payload.decode("utf-8-sig"), newline=""), delimiter="\t", strict=True))
     if not rows or len(rows[0]) < 2:
         raise ValueError("Trait table requires a species column and at least one trait column.")
     header = rows[0]

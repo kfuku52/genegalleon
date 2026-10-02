@@ -60,6 +60,26 @@ def verify(project, *extra):
                  "--family-id", "OG0001", "--require-step", "summary_statistics", *extra)
 
 
+def test_verify_resolves_container_support_inputs_against_its_own_runtime(project):
+    workspace, _root, _source, _output, manifest, argv, _plan = project
+    helper = SUPPORT / "workflow_api.py"
+    assert cli(PROVENANCE, "record", *argv, "--input", f"helper={helper}").returncode == 0
+    payload = json.loads(manifest.read_text())
+    source = next(entry for entry in payload["inputs"] if entry["label"] == "helper")
+    source["scope"] = "absolute"
+    source["path"] = "/script/support/workflow_api.py"
+    manifest.write_text(json.dumps(payload))
+    before = snapshot(workspace)
+    assert verify(project)["completion_state"] == "verified_declared_steps"
+    assert snapshot(workspace) == before
+
+    source["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(payload))
+    result = verify(project)
+    assert result["completion_state"] == "unverified"
+    assert result["contracts"][0]["error_code"] == "changed_input"
+
+
 def test_capabilities_requires_no_project_or_controller():
     response = query("capabilities")
     assert response["schema"] == "genegalleon-api-v1"
@@ -940,3 +960,50 @@ def test_paged_status_has_a_payload_bound_independent_of_page_count(tmp_path):
     second = query("status", "--directory", directory, "--page-size", 512, "--page-cursor", first["next_cursor"])
     assert len(first["records"]) + len(second["records"]) == 4
     assert second["snapshot_complete"] is True
+
+
+def test_bounded_batch_matches_individual_verification_and_preserves_local_failures(project, tmp_path):
+    workspace, root, _, output, _, argv, _ = project
+    assert cli(PROVENANCE, 'record', *argv).returncode == 0
+    other = [token.replace('OG0001', 'OG0002') if 'OG0001' in token else token for token in argv]
+    second_output = Path(str(output).replace('OG0001', 'OG0002'))
+    second_source = root / 'rooted_tree/OG0002_root.nwk'
+    second_source.write_text('(A,B);\n')
+    second_output.write_text(output.read_text())
+    assert cli(PROVENANCE, 'record', *other).returncode == 0
+    plan = tmp_path / 'batch.json'
+    plan.write_text(json.dumps({'schema':'genegalleon-verify-batch-v1', 'requests':[
+        {'family_id':'OG0001'}, {'family_id':'OG0002'}]}))
+    before = snapshot(workspace)
+    result = query('verify', '--root', root, '--workspace-root', workspace,
+                   '--require-step', 'summary_statistics', '--batch-file', plan)
+    assert [row['completion_state'] for row in result['results']] == ['verified_declared_steps'] * 2
+    individual = verify(project)
+    for row in (individual, result['results'][0]):
+        row.pop('observed_at_ns')
+    assert individual == result['results'][0]
+    assert snapshot(workspace) == before
+    second_output.write_text('changed\n')
+    result = query('verify', '--root', root, '--workspace-root', workspace,
+                   '--require-step', 'summary_statistics', '--batch-file', plan)
+    assert [row['completion_state'] for row in result['results']] == ['verified_declared_steps', 'unverified']
+    plan.write_text(json.dumps({'schema':'genegalleon-verify-batch-v1', 'requests':[{'family_id':'OG0001'}]*33}))
+    assert cli(API, 'verify', '--root', root, '--workspace-root', workspace,
+               '--require-step', 'summary_statistics', '--batch-file', plan).returncode == 2
+
+
+def test_batch_final_fence_rejects_earlier_family_state_change(tmp_path, monkeypatch):
+    import argparse
+    sys.path.insert(0, str(SUPPORT))
+    import workflow_api as api
+    root = tmp_path / 'root'
+    root.mkdir()
+    states = {'OG0001':None, 'OG0002':None}
+    def check(args):
+        if args.family_id == 'OG0002':
+            states['OG0001'] = {'status':'failed'}
+        return {'family_observation':states[args.family_id]}
+    monkeypatch.setattr(api, 'verify', check)
+    monkeypatch.setattr(api.GeneFamilyOutputStore, 'family_observation', lambda self, family: states[family])
+    with pytest.raises(ValueError, match='Logical audit source changed'):
+        api.verify_many([argparse.Namespace(root=root, family_id=family) for family in states])

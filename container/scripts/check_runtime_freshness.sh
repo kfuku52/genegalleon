@@ -193,6 +193,7 @@ sha_variables=(
   BUSCO_REPO_SHA
   PAML_REPO_SHA
   IQTREE_REPO_SHA
+  ASTER_REPO_SHA
   KFFRACTBIAS_REPO_SHA
   KFTOOLS_REPO_SHA
   RKFTOOLS_REPO_SHA
@@ -209,8 +210,10 @@ resolution_variables=(
   BUSCO_REPO_REF
   PAML_REPO_URL
   IQTREE_REPO_URL
+  ASTER_REPO_URL
   PAML_REPO_REF
   IQTREE_REPO_REF
+  ASTER_REPO_REF
   KFFRACTBIAS_REPO_URL
   KFFRACTBIAS_REPO_REF
   KFTOOLS_REPO_URL
@@ -224,7 +227,7 @@ resolution_variables=(
 )
 override_fingerprint="$(
   for variable in "${resolution_variables[@]}"; do
-    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* ) ]]; then
+    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == ASTER_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* ) ]]; then
       continue
     fi
     printf '%s=%s\n' "${variable}" "${!variable:-}"
@@ -295,6 +298,7 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       BUSCO) variable=BUSCO_REPO_SHA ;;
       paml) variable=PAML_REPO_SHA ;;
       iqtree) variable=IQTREE_REPO_SHA ;;
+      ASTER) variable=ASTER_REPO_SHA ;;
       kfFractBias) variable=KFFRACTBIAS_REPO_SHA ;;
       kftools) variable=KFTOOLS_REPO_SHA ;;
       rkftools) variable=RKFTOOLS_REPO_SHA ;;

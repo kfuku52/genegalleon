@@ -4,6 +4,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,15 @@ from workflow.tests.test_genome_evolution_protein_mode import _run_core
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE = REPO_ROOT / "workflow/core/gg_genome_evolution_core.sh"
+
+
+def test_pairwise_synteny_help_uses_real_runtime_dependency(tmp_path):
+    script = REPO_ROOT / "workflow/support/pairwise_synteny.py"
+    result = subprocess.run([sys.executable, str(script), "--help"], cwd=tmp_path,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout.lower()
+    assert list(tmp_path.iterdir()) == []
 
 
 def write_genome(workspace, species, mode, chromosomes, seed_offsets=None):

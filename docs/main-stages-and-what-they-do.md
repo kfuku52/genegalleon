@@ -290,6 +290,12 @@ the six published outputs are replaced as one recoverable transaction.
 
 ### `gg_genome_evolution_entrypoint.sh`
 
+`genome_evolution_mode=species_tree` runs the standard species-tree, dating,
+plotting and taxonomy stages, using their existing flags and provenance checks.
+It stops before OrthoFinder and preserves orthogroup/genome-evolution outputs.
+Use this mode to propagate a reviewed rooting change without changing the
+selected orthogroup catalog; dependent gene analyses still require regeneration.
+
 Opt-in JCVI/MCscan pairwise synteny produces chromosome ribbon plots and
 dotplots from matched GFF and protein/CDS inputs. `genome_evolution_mode=synteny`
 runs only this independent stage; `run_pairwise_synteny=1` adds it in normal
@@ -356,6 +362,17 @@ Main outputs:
 
 Temporary protein FASTA files are created under `workspace/downloads/tmp/` and removed automatically after orthogroup-related steps finish.
 When `workspace/input/species_genetic_code/species_genetic_code.tsv` is present, it overrides the global `genetic_code` on a per-species basis during CDS-to-protein translation; species missing from the table still use the default `genetic_code`.
+
+After the complete OrthoFinder result is validated, published, and recorded,
+GeneGalleon deletes `WorkingDirectory/` and `core/WorkingDirectory/` to reduce
+filesystem inode use. In a two-round analysis, the core working directory remains
+available until `--assign` completes. Failed runs retain their working data;
+normal downstream analyses use the retained result tables and curated inputs.
+This cleanup prevents later OrthoFinder restarts or species additions from reusing
+the deleted internal data. Such analyses require a fresh OrthoFinder run from the
+original inputs. Previously completed workspaces are not modified merely by
+updating the workflow source. A later run with the OrthoFinder stage enabled
+also finishes cleanup when it reuses validated, completed results.
 
 Notable defaults:
 

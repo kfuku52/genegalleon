@@ -12,6 +12,22 @@ not fetch missing reference files. `array_finalize`
 requires verified completion receipts for every planned species before publishing
 the merged species summary and resolved download manifest.
 
+For existing raw files, a manifest row can opt into `bind_local_sources=1`.
+Every supplied role must then use an absolute `file://` URL without an archive
+member. Prepare validates and binds the frozen source hashes directly; it does
+not create another raw-file copy. Workers and subsequent prepare checks reject
+changed/missing sources. CoGe GFF content checks still apply. Default rows retain
+the ordinary isolated staged-copy behavior. Keep bound files visible in the
+same container namespace until all workers and finalization finish.
+
+SHA-256 checks read each unique path once within a verification phase, including
+roles sharing a file and original/staged references to bound sources. Preflight,
+binding, and publication remain independent full-content checks; later invocations
+never trust a persistent size/mtime hash cache. Worker preflight checks both the
+original plan and resolved receipt in one pass, rejecting conflicting hashes.
+Hashing checks the open file and current path identity to reject modifications or
+replacement during the read. Plan and receipt formats are unchanged.
+
 BUSCO lineage downloads are extracted into a temporary directory inside the
 workspace download cache and published only after BUSCO succeeds. An incomplete
 download remains there for diagnosis and is not treated as a ready lineage.
@@ -255,3 +271,12 @@ nodes before increasing compute concurrency.
 See the [implementation review and validation limits](input-generation-array-review.md).
 
 Shared worker lock acquisition retries transient reader-registration contention for up to 30 seconds; exclusive phase and duplicate-worker locks remain nonblocking. A timeout leaves existing ownership untouched.
+
+
+Source CDS overlaps carrying a consistent `low-quality sequence region` note
+can receive the same complete genome-to-publisher-CDS proof as unannotated
+overlaps; their source quality note remains unchanged. Unproved, mixed, and
+other biological exceptions retain their strict existing checks. Pseudogene
+CDS length validation accepts only the formatter's exact terminal `N` padding
+to the next multiple of three. Genomic feature lengths stay unchanged, and
+pseudogenes do not acquire a coding phase or an inferred intron model.

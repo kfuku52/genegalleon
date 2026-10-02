@@ -4,8 +4,93 @@ import sys
 from pathlib import Path
 
 import pandas
+import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "reformat_uniprot_diamond.py"
+
+
+@pytest.mark.parametrize('with_query_fasta', [False, True])
+@pytest.mark.parametrize('with_metadata', [False, True])
+def test_no_hits_preserve_queries_and_empty_annotations(tmp_path, with_query_fasta, with_metadata):
+    from workflow.support.reformat_uniprot_diamond import OUTPUT_COLUMNS
+
+    hits = tmp_path / 'hits.tsv'
+    hits.write_text('')
+    queries = tmp_path / 'queries.fa'
+    queries.write_text('>NA\nMKT\n>001\nAAA\n')
+    reference = tmp_path / 'uniprot.fa'
+    reference.write_text('>P1 Protein kinase\nMKT\n')
+    metadata = tmp_path / 'metadata.tsv'
+    metadata.write_text('accession\tgene_name_primary\nP1\tKIN1\n')
+    output = tmp_path / 'annotations.tsv'
+    command = [sys.executable, str(SCRIPT_PATH), '--diamond_tsv', str(hits),
+               '--uniprot_fasta', str(reference), '--outfile', str(output)]
+    if with_query_fasta:
+        command += ['--query_fasta', str(queries)]
+    if with_metadata:
+        command += ['--uniprot_meta_tsv', str(metadata)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    actual = pandas.read_csv(output, sep='\t', dtype=str, keep_default_na=False)
+    assert actual.columns.tolist() == OUTPUT_COLUMNS
+    assert actual.gene_id.tolist() == (['NA', '001'] if with_query_fasta else [])
+    assert actual.drop(columns='gene_id').eq('').all().all()
+
+
+@pytest.mark.parametrize('with_query_fasta', [False, True])
+@pytest.mark.parametrize('compressed', [False, True])
+def test_diamond_annotations_preserve_literal_query_and_subject_ids(tmp_path, with_query_fasta, compressed):
+    genes = ['NA', 'NULL', 'nan', '001']
+    subjects = ['001', 'nan', 'NULL', 'NA']
+
+    def write(name, text):
+        path = tmp_path / (name + ('.gz' if compressed else ''))
+        if compressed:
+            with gzip.open(path, 'wt') as handle:
+                handle.write(text)
+        else:
+            path.write_text(text)
+        return path
+
+    diamond = write('diamond.tsv', ''.join(f'{gene}\t{subject}\t90\t30\t1e-10\t200\t30\n'
+                                           for gene, subject in zip(genes, subjects, strict=True))
+                    + 'NA\tother\t95\t25\tNA\t190\t30\n')
+    fasta = write('queries.fa', ''.join(f'>{gene}\nMKT\n' for gene in genes))
+    uniprot = write('subjects.fa', ''.join(f'>{subject} desc_{subject}\nMKT\n' for subject in subjects))
+    metadata = write('metadata.tsv', 'accession\tgene_name_primary\n' + ''.join(
+        f'{subject}\tname_{subject}\n' for subject in subjects))
+    output = tmp_path / 'annotations.tsv'
+    command = [sys.executable, str(SCRIPT_PATH), '--diamond_tsv', str(diamond),
+               '--uniprot_fasta', str(uniprot), '--uniprot_meta_tsv', str(metadata), '--outfile', str(output)]
+    if with_query_fasta:
+        command += ['--query_fasta', str(fasta)]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ''
+    actual = pandas.read_csv(output, sep='\t', dtype=str, keep_default_na=False)
+    expected_genes = genes if with_query_fasta else sorted(genes)
+    assert actual.gene_id.tolist() == expected_genes
+    mapping = dict(zip(genes, subjects, strict=True))
+    for row in actual.itertuples():
+        subject = mapping[row.gene_id]
+        assert row.sprot_best == row.sprot_alias == subject
+        assert row.sprot_recname == 'desc_' + subject
+        assert row.gene_name_primary == 'name_' + subject
+        assert row.sprot_coverage == '100' and row.sprot_identity == '90'
+        assert row.sprot_evalue == '1.000e-10'
+
+
+def test_diamond_reader_keeps_empty_ids_and_numeric_na_handling(tmp_path):
+    from workflow.support.reformat_uniprot_diamond import load_best_diamond_hits
+
+    path = tmp_path / 'missing.tsv'
+    path.write_text('q1\t\tNA\tNULL\tnan\t\tNA\n'
+                    '\tP1\t90\t30\t1e-10\t200\t30\n')
+    result = load_best_diamond_hits(path)
+    first = result.loc[result.qseqid == 'q1'].iloc[0]
+    assert pandas.isna(first.sseqid)
+    assert result.qseqid.isna().sum() == 1
+    assert first[['pident', 'length', 'evalue', 'bitscore', 'qlen', 'coverage']].isna().all()
 
 
 def test_reformat_uniprot_diamond_adds_metadata_columns_except_rnammer(tmp_path):

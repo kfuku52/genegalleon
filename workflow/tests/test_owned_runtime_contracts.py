@@ -15,6 +15,7 @@ EXPECTED_SOURCES = {
     "BUSCO",
     "paml",
     "iqtree",
+    "ASTER",
     "kfFractBias",
     "kftools",
     "rkftools",

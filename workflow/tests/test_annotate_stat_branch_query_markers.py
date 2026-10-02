@@ -121,3 +121,67 @@ def test_existing_query_marker_columns_are_replaced(tmp_path):
     out = pandas.read_csv(outfile, sep="\t", dtype=str, keep_default_na=False)
     assert list(out.columns).count("query_marker") == 1
     assert "stale" not in set(out["query_marker"])
+
+
+def test_direct_sources_preserve_exact_priority_and_suffix_catalog_order(tmp_path):
+    mod = load_module()
+    query_gene = tmp_path / "genes.txt"
+    query_fasta = tmp_path / "query.fa"
+    query_gene.write_text("b\nprefix_b\nA−b\nb\nNA\n_b\n", encoding="utf-8")
+    query_fasta.write_text(">A-b description\nMAAA\n", encoding="utf-8")
+    tips = [" x_prefix_b ", "A−b", "prefix_b", "sp.b", "sp-b", "sp__b", "spb", "NA", "", "x_prefix_b_extra"]
+    assert mod.direct_query_sources_by_node(tips, query_gene, query_fasta) == {
+        " x_prefix_b ": ["b", "prefix_b"],
+        "A−b": ["A-b", "b"],
+        "prefix_b": ["prefix_b", "b"],
+        "sp.b": ["b"],
+        "sp-b": ["b"],
+        "sp__b": ["b", "_b"],
+        "NA": ["NA"],
+    }
+    # FASTA identifiers must remain exact matches even at an allowed separator.
+    assert mod.direct_query_sources_by_node(["A-b", "A−b", "species_A-b"], query_fasta) == {
+        "A-b": ["A-b"], "A−b": ["A-b"],
+    }
+
+
+def test_blast_preserves_literal_accessions_and_metadata_missingness(tmp_path):
+    mod = load_module()
+    blast = tmp_path / "blast.tsv"
+    blast.write_text(
+        "qacc\tsacc\tqjointcov\tmin_evalue\tnote\n"
+        "NA\tNULL\t0.90\t\tNA\n"
+        "00123\tnan\t0.80\t1e-4\t0007\n"
+        "\tnan\t1.00\t0\ttext\n"
+        "unrelated\t\t1.00\t0\ttext\n", encoding="utf-8",
+    )
+    table = mod.read_query_blast(blast)
+    assert table.qacc.tolist() == ["NA", "00123", "", "unrelated"]
+    assert table.sacc.tolist() == ["NULL", "nan", "nan", ""]
+    assert table.qjointcov.tolist() == ["0.90", "0.80", "1.00", "1.00"]
+    assert pandas.isna(table.note.iloc[0])
+    assert table.note.iloc[1] == "0007"
+    best = mod.best_blast_sources_by_node(["NULL", "nan"], blast)
+    assert best == {
+        "NULL": {"query_ids": ["NA"], "evalues": [""], "qjointcovs": ["0.9"], "bitscores": [""]},
+        "nan": {"query_ids": ["00123"], "evalues": ["0.0001"], "qjointcovs": ["0.8"], "bitscores": [""]},
+    }
+
+
+def test_best_hit_source_order_keeps_metrics_aligned_across_competing_nodes(tmp_path):
+    mod = load_module()
+    blast = tmp_path / "blast.tsv"
+    rows = [
+        {"qacc": "z", "sacc": "TipA", "qjointcov": 0.9, "min_evalue": 1e-5, "max_bitscore": 40},
+        {"qacc": "a", "sacc": "TipA", "qjointcov": 0.9, "min_evalue": 1e-8, "max_bitscore": 100},
+        {"qacc": "m", "sacc": "TipA", "qjointcov": 0.9, "min_evalue": 1e-6, "max_bitscore": 80},
+        {"qacc": "a", "sacc": "TipB", "qjointcov": 0.9, "min_evalue": 1e-7, "max_bitscore": 200},
+        {"qacc": "z", "sacc": "TipB", "qjointcov": 0.9, "min_evalue": 1e-5, "max_bitscore": 30},
+        {"qacc": "m", "sacc": "TipB", "qjointcov": 0.91, "min_evalue": 1e-4, "max_bitscore": 80},
+    ]
+    for ordered_rows in (rows, rows[::-1]):
+        pandas.DataFrame(ordered_rows).to_csv(blast, sep="\t", index=False)
+        assert mod.best_blast_sources_by_node(["TipA", "TipB"], blast) == {
+            "TipA": {"query_ids": ["a", "z"], "evalues": ["1e-08", "1e-05"], "qjointcovs": ["0.9", "0.9"], "bitscores": ["100", "40"]},
+            "TipB": {"query_ids": ["m"], "evalues": ["0.0001"], "qjointcovs": ["0.91"], "bitscores": ["80"]},
+        }

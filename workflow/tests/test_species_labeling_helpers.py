@@ -1,5 +1,6 @@
 from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
 
 import pytest
 
@@ -194,6 +195,45 @@ def test_parse_grampa_matches_prefix_labeled_qualified_species_gene_names():
     assert species_gene_map["Arabidopsis_thaliana"] == "gene2"
 
 
+def test_parse_grampa_preserves_qualified_and_normalized_prefix_gene_ids():
+    mod = load_module("parse_grampa.py", "parse_grampa_qualified_prefix_module")
+    species = (
+        "Genus_species", "Dictyostelium_cf._discoideum", "Bacillus_subtilis_subsp._subtilis",
+        "Citrus_x_limon", "Amoeba_sp._TAG", "Other_species",
+    )
+    genes = (
+        "Genus_species_gene1", "_Genus_species_gene2", "dir/Genus_species_gene3",
+        "Dictyostelium_cf._discoideum_gene4", "Bacillus_subtilis_subsp._subtilis_gene5",
+        "Citrus_x_limon_gene6", "Citrus_×_limon_gene7", "Amoeba_sp._TAG_gene8",
+        "gene9_Genus_species", "unmatched_gene", "gene10_Other_species",
+    )
+    ordered, species_set, suffixes = mod.build_species_matcher(species)
+    result = mod.summarize_gene_tree(
+        (0, "(" + ",".join(genes) + ");"), species_names=ordered,
+        species_set=species_set, species_suffixes=suffixes,
+    )
+    assert result == ("GT-1", {
+        "Genus_species": "gene1,_Genus_species_gene2,dir/Genus_species_gene3,gene9",
+        "Dictyostelium_cf._discoideum": "gene4", "Bacillus_subtilis_subsp._subtilis": "gene5",
+        "Citrus_x_limon": "gene6,Citrus_×_limon_gene7", "Amoeba_sp._TAG": "gene8",
+        "Other_species": "gene10",
+    })
+
+
+def test_parse_grampa_preserves_string_subclass_normalization(monkeypatch):
+    class FalseText(str):
+        def __bool__(self):
+            return False
+
+    mod = load_module("parse_grampa.py", "parse_grampa_string_subclass_module")
+    monkeypatch.setattr(mod, "load_tree", lambda **kwargs: SimpleNamespace(
+        leaf_names=lambda: [FalseText("Genus_species_gene1")]))
+    ordered, species_set, suffixes = mod.build_species_matcher(("",))
+    assert mod.summarize_gene_tree(
+        (0, "unused"), species_names=ordered, species_set=species_set, species_suffixes=suffixes,
+    ) == ("GT-1", {"": ""})
+
+
 def test_species_labeling_builds_qualified_labels_from_scientific_text():
     mod = load_module("species_labeling.py", "species_labeling_module")
 
@@ -267,6 +307,37 @@ def test_species_labeling_extracts_dotted_rank_labels_from_filenames():
         mod.base_species_label("Cenchrus_americanus_x_Cenchrus_purpureus")
         == "Cenchrus_americanus_x_Cenchrus_purpureus"
     )
+
+
+@pytest.mark.parametrize("strip_extension", [False, True])
+@pytest.mark.parametrize("value,expected", [
+    ("Genus_species_gene1", "Genus_species"),
+    ("_Genus_species_gene1", "Genus_species"),
+    ("Dictyostelium_cf._discoideum_gene1", "Dictyostelium_cf._discoideum"),
+    ("Bacillus_subtilis_subsp._subtilis_gene1", "Bacillus_subtilis_subsp._subtilis"),
+    ("Citrus_×_limon_gene1", "Citrus_x_limon"),
+    ("dir/Genus_species_gene1", "Genus_species"),
+    ("dir//./Genus_species_gene1/", "Genus_species"),
+    ("Genus_species/.", "Genus_species"),
+    ("Genus_species//", "Genus_species"),
+    (Path("dir/Genus_species_gene1"), "Genus_species"),
+    ("", ""), (".", ""), ("..", ""), ("/", ""),
+    (None, ""), (False, ""), (0, ""),
+])
+def test_species_labeling_preserves_basename_and_path_labels(value, expected, strip_extension):
+    mod = load_module("species_labeling.py", "species_labeling_basename_module")
+    assert mod.extract_species_label(value, strip_extension=strip_extension) == expected
+
+
+@pytest.mark.parametrize("value", [
+    "Genus_species_gene1", "Genus_species/.", "dir/Genus_species_gene1/",
+    r"dir\Genus_species_gene1", r"C:\dir\Genus_species_gene1",
+    "C:Genus_species_gene1", r"\\server\share\Genus_species_gene1",
+])
+def test_species_labeling_preserves_windows_path_labels(monkeypatch, value):
+    mod = load_module("species_labeling.py", "species_labeling_windows_path_module")
+    monkeypatch.setattr(mod, "Path", PureWindowsPath)
+    assert mod.extract_species_label(value) == "Genus_species"
 
 
 def test_species_labeling_matches_species_label_exactly_after_suffix_stripping():

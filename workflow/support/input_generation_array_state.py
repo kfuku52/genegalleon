@@ -10,6 +10,10 @@ import tempfile
 from pathlib import Path
 
 
+def _stat_identity(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def digest(path):
     result = hashlib.sha256()
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb") as handle:
@@ -19,9 +23,24 @@ def digest(path):
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             result.update(chunk)
         after = os.fstat(handle.fileno())
-        if (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        current = os.stat(path)
+        if _stat_identity(before) != _stat_identity(after) or _stat_identity(before) != _stat_identity(current):
             raise OSError("File changed while hashing: " + str(path))
     return result.hexdigest()
+
+
+def digest_paths(paths):
+    """Hash each path once within one verification boundary, never across stages."""
+    paths = list(dict.fromkeys(str(path) for path in paths))
+    before = {path: _stat_identity(os.stat(path)) for path in paths}
+    hashes = {path: digest(path) for path in paths}
+    # A source read early in the batch must not change while later files are
+    # being hashed. Metadata only fences this fresh full read; it never grants
+    # reuse of a checksum from an earlier phase or invocation.
+    for path in paths:
+        if _stat_identity(os.stat(path)) != before[path]:
+            raise OSError("File changed while hashing: " + path)
+    return hashes
 
 
 def atomic_json(path, value, immutable=False):
@@ -84,7 +103,10 @@ def frozen_input_hashes(plan_path, plan, index):
         cached = json.loads((Path(str(plan_path) + ".tasks") / (str(index) + ".json")).read_text())
         if cached.get("plan_sha256") != digest(plan_path) or cached.get("task_index") != index:
             raise ValueError("Resolved download cache belongs to another plan/task")
-        expected.update(cached["task"]["input_sha256"])
+        for source, value in cached["task"]["input_sha256"].items():
+            if source in expected and expected[source] != value:
+                raise ValueError("Resolved download cache source hash conflicts with the frozen plan: " + source)
+            expected[source] = value
     return expected
 
 

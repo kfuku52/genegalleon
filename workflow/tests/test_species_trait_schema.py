@@ -9,7 +9,7 @@ pytestmark = [pytest.mark.runtime, pytest.mark.integration]
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT))
-from species_trait_schema import schema_path, schema_payload, select_traits  # noqa: E402
+from species_trait_schema import read_table, schema_path, schema_payload, select_traits  # noqa: E402
 
 
 def test_declared_categories_are_excluded_even_when_numeric(tmp_path):
@@ -44,6 +44,31 @@ def test_malformed_table_rejected(tmp_path, text):
     table = tmp_path / "traits.tsv"
     table.write_text(text)
     with pytest.raises(ValueError):
+        select_traits(table)
+
+
+@pytest.mark.parametrize('header', ['species\tspecies', '"species"\tspecies', '\tx'])
+def test_bom_cannot_hide_duplicate_or_empty_trait_schema_headers(tmp_path, header):
+    table = tmp_path / 'traits.tsv'
+    table.write_text(header + '\na\t1\n', encoding='utf-8-sig')
+    with pytest.raises(ValueError, match='unique, non-empty and unpadded'):
+        select_traits(table)
+
+
+@pytest.mark.parametrize('encoding', ['utf-8', 'utf-8-sig'])
+@pytest.mark.parametrize('newline', ['\n', '\r\n', '\r'])
+def test_trait_schema_preserves_raw_hash_with_standard_tsv_encodings(tmp_path, encoding, newline):
+    table = tmp_path / 'traits.tsv'
+    payload = newline.join(['"species"\theight', 'a\t1', 'b\tNA', '']).encode(encoding)
+    table.write_bytes(payload)
+    schema_path(table).write_bytes(schema_payload(payload, {'height': 'numeric'}))
+    observed, header, rows = read_table(table)
+    assert observed == payload
+    assert header == ['species', 'height']
+    assert rows == [['a', '1'], ['b', 'NA']]
+    assert select_traits(table)[0]['status'] == 'selected'
+    table.write_bytes(payload.replace(b'a\t1', b'a\t2'))
+    with pytest.raises(ValueError, match='does not match the table content'):
         select_traits(table)
 
 

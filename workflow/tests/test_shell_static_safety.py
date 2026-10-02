@@ -1362,7 +1362,7 @@ def test_orthofinder_core_result_publication_replaces_existing_trees_transaction
     core = (WORKFLOW_DIR / "core" / "gg_genome_evolution_core.sh").read_text()
     start = core.index("    orthofinder_all_outputs=(")
     end = core.index(
-        '    orthofinder_output_directory_cleanup "${dir_orthofinder}/core"',
+        '  else\n    echo "The number of species',
         start,
     )
     block = core[start:end]
@@ -2340,7 +2340,8 @@ def test_gene_evolution_core_guards_array_task_id_range_before_input_indexing():
     assert "mapfile -t files < <(find \"${dir_genelist}\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)" in text
     assert 'files=( "${dir_genelist}"/* )' not in text
     assert 'if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then' in text
-    assert "num_orthogroups=$(awk 'END { print (NR > 0 ? NR - 1 : 0) }'" in text
+    assert "if ! num_orthogroups=$(awk -F'\\t'" in text
+    assert "END { if (!bad) print (NR > 0 ? NR - 1 : 0) }" in text
     assert "if [[ ${GG_ARRAY_TASK_ID} -gt ${num_orthogroups} ]]; then" in text
     assert "df=pandas.read_csv(sys.argv[1],sep='\\t',header=0); print(df.loc[int(sys.argv[2]),:].iloc[0])" not in text
     assert "og_id=$(awk -F'\\t' -v row=\"${GG_ARRAY_TASK_ID}\" 'NR == (row + 1) { print $1; exit }'" in text

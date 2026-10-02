@@ -4,6 +4,7 @@ import errno
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+from email.message import Message
 from http.client import IncompleteRead
 from pathlib import Path
 from urllib.error import HTTPError
@@ -229,6 +231,40 @@ def response_content_length(response):
     return value
 
 
+class DownloadBodyProgress:
+    """Private byte progress; a completed body is not a validated artifact."""
+
+    def __init__(self, url, partial_path, warnings, lock_context):
+        from format_species_network import request_database
+
+        directory = os.environ.get("GG_DOWNLOAD_EVENT_DIR", "").strip()
+        self.path = Path(directory) / "progress" / (uuid.uuid4().hex + ".json") if directory else None
+        self.partial_path = partial_path
+        self.warnings = warnings
+        self.lock_context = lock_context
+        self.started = time.monotonic()
+        self.last_record = float("-inf")
+        self.base = {"schema_version": 1, "database": request_database(url),
+                     "url_sha256": hashlib.sha256(str(url).encode()).hexdigest()}
+
+    def record(self, status, bytes_written, force=False):
+        now = time.monotonic()
+        if self.path is None or (not force and now - self.last_record < 60):
+            return
+        self.last_record = now
+        record = {**self.base, "status": status, "bytes": bytes_written,
+                  "elapsed_seconds": round(now - self.started, 3), "updated_at": time.time()}
+        temporary = self.path.with_suffix(".tmp")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(temporary, "w", encoding="utf-8") as out:
+                json.dump(record, out)
+                out.write("\n")
+            temporary.replace(self.path)
+        except OSError as exc:
+            self.warnings.append("{} could not record body progress ({})".format(self.lock_context, type(exc).__name__))
+
+
 def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_context):
     """Download sequential ranges, preserving only bytes from one representation."""
     identity_path = Path(str(partial_path) + ".identity.json")
@@ -254,7 +290,11 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
         chunk_size = max(0, int(os.environ.get("GG_DOWNLOAD_RANGE_CHUNK_BYTES", default_chunk)))
     except ValueError:
         chunk_size = default_chunk
+    max_seconds = float(os.environ.get("GG_DOWNLOAD_MAX_RESPONSE_SECONDS", max(3600, timeout)))
+    if not math.isfinite(max_seconds) or max_seconds < 0:
+        raise ValueError("GG_DOWNLOAD_MAX_RESPONSE_SECONDS must be finite and nonnegative")
     while True:
+        response_started = time.monotonic()
         resume_from = partial_path.stat().st_size if partial_path.exists() else 0
         current_headers = dict(request_headers)
         if resume_from or chunk_size:
@@ -265,7 +305,9 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
             current_headers["If-Range"] = validator
         try:
             # The outer file loop owns retries, including errors while reading bodies.
-            response_context = urlopen(Request(url, headers=current_headers), timeout=timeout, retry_attempts=1)
+            response_context = urlopen(Request(url, headers=current_headers),
+                                       timeout=min(timeout, max_seconds) if max_seconds else timeout,
+                                       retry_attempts=1)
         except HTTPError as exc:
             # A size alone cannot establish that a partial file is still current.
             if exc.code == 416 and resume_from:
@@ -278,8 +320,14 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
         with response_context as response:
             status = response_status_code(response)
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
-            if content_type in ("text/html", "application/xhtml+xml"):
-                raise ValueError("download returned an HTML page instead of a data file")
+            html_type = content_type in ("text/html", "application/xhtml+xml")
+            if html_type:
+                disposition = Message()
+                disposition["Content-Disposition"] = response.headers.get("Content-Disposition", "")
+                filename = disposition.get_filename() or ""
+                if (disposition.get_content_disposition() != "attachment"
+                        or not filename.lower().endswith((".gff", ".gff3"))):
+                    raise ValueError("download returned an HTML page instead of a data file")
             if response.headers.get("Content-Encoding", "identity").lower() not in ("", "identity"):
                 raise ValueError("download returned unsupported Content-Encoding")
             expected = response_content_length(response)
@@ -336,20 +384,43 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                 identity_tmp.write_text(json.dumps(identity))
                 identity_tmp.replace(identity_path)
                 response_bytes = 0
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    if expected is not None and response_bytes + len(chunk) > expected:
-                        raise ValueError("response exceeded declared length")
-                    out.write(chunk)
-                    response_bytes += len(chunk)
+                progress = DownloadBodyProgress(url, partial_path, warnings, lock_context)
+                progress.record("reading", resume_from, force=True)
+                body_ok = False
+                try:
+                    # HTTP read(n) can wait for all n bytes while a server
+                    # trickles data forever. read1 exposes each received block.
+                    read = getattr(response, "read1", response.read)
+                    while True:
+                        if max_seconds and time.monotonic() - response_started >= max_seconds:
+                            raise TimeoutError("download response exceeded elapsed-time limit")
+                        chunk = read(1024 * 1024)
+                        if max_seconds and time.monotonic() - response_started >= max_seconds:
+                            raise TimeoutError("download response exceeded elapsed-time limit")
+                        if not chunk:
+                            break
+                        if expected is not None and response_bytes + len(chunk) > expected:
+                            raise ValueError("response exceeded declared length")
+                        out.write(chunk)
+                        response_bytes += len(chunk)
+                        progress.record("reading", resume_from + response_bytes)
+                    body_ok = expected is None or response_bytes == expected
+                finally:
+                    progress.record("body-read" if body_ok else "body-error", resume_from + response_bytes, force=True)
                 out.flush()
                 os.fsync(out.fileno())
             if expected is not None and response_bytes != expected:
                 raise IncompleteRead(b"", max(0, expected - response_bytes))
             if status == 206 and partial_path.stat().st_size < total:
                 continue
+            if html_type:
+                # An attachment label alone never proves content. Check the
+                # assembled body, including resumed responses, before publishing.
+                with open(partial_path, "rb") as source:
+                    first_line = source.readline(128)
+                if re.fullmatch(rb"##gff-version[ \t]+3[ \t]*(?:\r?\n)?", first_line) is None:
+                    raise ValueError("HTML-typed attachment is not a GFF3 document")
+                warnings.append("{} accepted a GFF3 attachment with an HTML content type".format(lock_context))
             return
 
 

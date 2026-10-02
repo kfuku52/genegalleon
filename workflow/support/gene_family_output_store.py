@@ -443,6 +443,33 @@ def query_id_from_name(file_name: str, matchers: Sequence[str]) -> Optional[str]
     return None
 
 
+def query_id_extractor(matchers: Sequence[str]) -> Callable[[str], Optional[str]]:
+    """Snapshot matcher priority once; look up only valid filename boundaries.
+
+    Ordering, duplicates and empty IDs retain the scalar matcher's behavior.
+    No filename results or mutable caller-owned lists are cached.
+    """
+    ranks: Dict[str, int] = {}
+    for rank, query_id in enumerate(matchers):
+        ranks.setdefault(query_id, rank)
+    missing_rank = len(matchers)
+
+    def extract(file_name: str) -> Optional[str]:
+        basename = os.path.basename(file_name)
+        selected = basename if basename in ranks else None
+        best = ranks.get(basename, missing_rank)
+        for offset, character in enumerate(basename):
+            if character not in "_.":
+                continue
+            candidate = basename[:offset]
+            rank = ranks.get(candidate)
+            if rank is not None and rank < best:
+                selected, best = candidate, rank
+        return selected
+
+    return extract
+
+
 def query_ids_from_input_dir(path: Path) -> List[str]:
     if not path.is_dir():
         raise FileNotFoundError(f"Input query_gene directory was not found: {path}")
@@ -455,7 +482,19 @@ def orthogroup_ids_from_genecount(path: Path) -> List[str]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
         next(reader, None)
-        return [row[0] for row in reader if row and row[0]]
+        families = []
+        seen = set()
+        for row in reader:
+            if not row:
+                continue
+            family = row[0]
+            if not family:
+                raise ValueError(f"Orthogroup gene-count table contains an empty family identity: {path}")
+            if family in seen:
+                raise ValueError(f"Orthogroup gene-count table contains duplicate family identity {family}: {path}")
+            seen.add(family)
+            families.append(family)
+        return families
 
 
 def family_context(
@@ -468,7 +507,7 @@ def family_context(
             raise ValueError("--query-dir is required for query2family mode")
         family_ids = query_ids_from_input_dir(query_dir)
         matchers = query_id_matchers(family_ids)
-        return family_ids, lambda name: query_id_from_name(name, matchers)
+        return family_ids, query_id_extractor(matchers)
     if mode == "orthogroup":
         if genecount is None:
             raise ValueError("--genecount is required for orthogroup mode")
@@ -500,7 +539,7 @@ def family_context_with_supplement(
     family_ids = sorted(set(family_ids))
     if mode == "query2family":
         matchers = query_id_matchers(family_ids)
-        return family_ids, lambda name: query_id_from_name(name, matchers)
+        return family_ids, query_id_extractor(matchers)
     return family_ids, orthogroup_id_from_name
 
 
@@ -6142,7 +6181,7 @@ def finalize_archives(
     finalized: List[Path] = []
     family_matchers = query_id_matchers(family_ids)
     family_from_name = (
-        orthogroup_id_from_name if mode == "orthogroup" else lambda name: query_id_from_name(name, family_matchers)
+        orthogroup_id_from_name if mode == "orthogroup" else query_id_extractor(family_matchers)
     )
     with lock_available_family_ids(
         archive_root,
@@ -7052,8 +7091,7 @@ def run_cli(args: argparse.Namespace) -> int:
             elif mode == "query2family":
                 archived_matchers = query_id_matchers(family_ids)
 
-                def family_from_name(name: str) -> Optional[str]:
-                    return query_id_from_name(name, archived_matchers)
+                family_from_name = query_id_extractor(archived_matchers)
             else:
 
                 def family_from_name(name: str) -> Optional[str]:
@@ -7301,8 +7339,7 @@ def run_cli(args: argparse.Namespace) -> int:
         if mode == "query2family":
             matchers = query_id_matchers(selected_family_ids)
 
-            def family_from_name(name: str) -> Optional[str]:
-                return query_id_from_name(name, matchers)
+            family_from_name = query_id_extractor(matchers)
         else:
             family_from_name = orthogroup_id_from_name
         for path in store.materialize_families(

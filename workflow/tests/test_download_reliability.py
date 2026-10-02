@@ -1,7 +1,9 @@
 """Fault injection for resumable downloads; all HTTP stays on loopback."""
 import gzip
+import json
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -66,6 +68,46 @@ def test_chunked_ranges_produce_exact_file(tmp_path, monkeypatch):
     assert not list(tmp_path.glob('*.part*'))
 
 
+def test_slow_trickle_is_bounded_and_preserves_identified_partial(tmp_path, monkeypatch):
+    monkeypatch.setenv('GG_DOWNLOAD_ATTEMPTS', '1')
+    monkeypatch.setenv('GG_DOWNLOAD_MAX_RESPONSE_SECONDS', '0.15')
+    monkeypatch.setenv('GG_DOWNLOAD_EVENT_DIR', str(tmp_path / 'events'))
+    payload = b'>sequence\n' + b'ACGT' * 100
+    slow = [True]
+
+    def reply(h):
+        h.send_response(200)
+        h.send_header('Content-Length', str(len(payload)))
+        h.send_header('ETag', '"same"')
+        h.end_headers()
+        try:
+            if slow[0]:
+                for offset in range(0, len(payload), 16):
+                    h.wfile.write(payload[offset:offset + 16])
+                    h.wfile.flush()
+                    time.sleep(0.04)
+            else:
+                h.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    target = tmp_path / 'data'
+    with server(reply) as url:
+        with pytest.raises(TimeoutError, match='elapsed-time limit'):
+            download(url, target)
+        assert not target.exists()
+        partial = Path(str(target) + '.part')
+        assert 0 < partial.stat().st_size < len(payload)
+        assert json.loads(Path(str(partial) + '.identity.json').read_text())['etag'] == '"same"'
+        assert not Path(str(target) + '.lock').exists()
+        progress = [json.loads(p.read_text()) for p in (tmp_path / 'events/progress').glob('*.json')]
+        assert any(row['status'] == 'body-error' and row['bytes'] > 0 for row in progress)
+        slow[0] = False
+        monkeypatch.setenv('GG_DOWNLOAD_MAX_RESPONSE_SECONDS', '3')
+        download(url, target)
+    assert target.read_bytes() == payload
+
+
 def test_changed_etag_restarts_without_mixing(tmp_path, monkeypatch):
     monkeypatch.setenv('GG_DOWNLOAD_RANGE_CHUNK_BYTES', '4')
     seen = []
@@ -126,6 +168,38 @@ def test_invalid_response_never_published(tmp_path, monkeypatch, kind):
     with server(reply) as url, pytest.raises((ValueError, OSError)):
         download(url, tmp_path/'12345')
     assert not (tmp_path/'12345').exists()
+
+
+@pytest.mark.parametrize('body', [b'##gff-version\t3\nctg\tCoGe\tCDS\t1\t3\t.\t+\t0\tID=c\n',
+                                 b'<html>failure</html>', b'not a GFF attachment'])
+@pytest.mark.parametrize('ranged', [False, True])
+def test_html_typed_gff_attachment_requires_document_content(tmp_path, monkeypatch, body, ranged):
+    if ranged:
+        monkeypatch.setenv('GG_DOWNLOAD_RANGE_CHUNK_BYTES', '7')
+    def reply(h):
+        if ranged:
+            start, end = map(int, h.headers['Range'][6:].split('-'))
+            end = min(end, len(body) - 1)
+            payload = body[start:end + 1]
+        else:
+            payload = body
+        h.send_response(206 if ranged else 200)
+        if ranged:
+            h.send_header('ETag', '"same"')
+            h.send_header('Content-Range', f'bytes {start}-{end}/{len(body)}')
+        h.send_header('Content-Type', 'text/html;charset=UTF-8')
+        h.send_header('Content-Disposition', 'attachment; filename="source.gff";')
+        h.send_header('Content-Length', str(len(payload)))
+        h.end_headers()
+        h.wfile.write(payload)
+    with server(reply) as url:
+        if body.startswith(b'##gff-version'):
+            download(url, tmp_path/'12345')
+            assert (tmp_path/'12345').read_bytes() == body
+        else:
+            with pytest.raises(ValueError):
+                download(url, tmp_path/'12345')
+            assert not (tmp_path/'12345').exists()
 
 
 def test_retry_budget_is_not_multiplied(tmp_path):

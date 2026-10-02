@@ -130,6 +130,7 @@ def capabilities(_args):
     }, provenance_schema_versions=[provenance.SCHEMA_VERSION],
         verify_workspace_relocation="explicit-recorded-workspace-root-v1",
         verify_profiles=["gene-evolution-terminal-v1"],
+        verify_batches="shared-source-verification-v1", verify_batch_limit=32,
         preflight_stale_policy_override=True,
         requires_kfauto=False, observations_opt_in="GG_OBSERVABILITY=1")
 
@@ -462,7 +463,53 @@ def verify_terminal_profile(store, family):
         return {"profile": "gene-evolution-terminal-v1", "state": "unverified", "detail": str(exc)}
 
 
+def verify_many(requests):
+    """Fence one bounded batch; no digest survives this call."""
+    if not 1 <= len(requests) <= 32:
+        raise ValueError("verification batch must contain 1..32 requests")
+    identities = [(str(item.root.resolve()), item.family_id) for item in requests]
+    if len(set(identities)) != len(identities):
+        raise ValueError("duplicate family in verification batch")
+    with provenance.digest_observation() as memo:
+        results = []
+        for item in requests:
+            result = verify(item)
+            memo.guard((str(item.root.absolute()), item.family_id, "family_observation"),
+                       result["family_observation"], provenance.scoped_digest_reader(
+                           lambda item=item: GeneFamilyOutputStore(item.root, family_filter=item.family_id).family_observation(item.family_id)))
+            results.append(result)
+        return results
+
+
+def verify_batch(args):
+    if args.attempt or args.recorded_workspace_root:
+        raise ValueError("batch attempts and workspace mappings belong in each request")
+    plan = read_json(args.batch_file)
+    if (not isinstance(plan, dict) or set(plan) != {"schema", "requests"}
+            or plan["schema"] != "genegalleon-verify-batch-v1" or not isinstance(plan["requests"], list)
+            or not 1 <= len(plan["requests"]) <= 32):
+        raise ValueError("invalid verification batch plan")
+    requests = []
+    for row in plan["requests"]:
+        if (not isinstance(row, dict) or set(row) - {"family_id", "attempt", "recorded_workspace_root"}
+                or not isinstance(row.get("family_id"), str) or not row["family_id"]):
+            raise ValueError("invalid verification batch request")
+        request = argparse.Namespace(**vars(args))
+        request.batch_file = None
+        request.family_id = row["family_id"]
+        for key in ("attempt", "recorded_workspace_root"):
+            value = row.get(key)
+            if value is not None and (not isinstance(value, str) or not Path(value).is_absolute()):
+                raise ValueError("batch workspace and attempt paths must be absolute")
+            setattr(request, key, Path(value) if value else None)
+        requests.append(request)
+    results = verify_many(requests)
+    return envelope("verify", batch_schema="genegalleon-verify-batch-v1", results=results)
+
+
 def verify(args):
+    if getattr(args, "batch_file", None):
+        return verify_batch(args)
     root, workspace = args.root.absolute(), args.workspace_root.absolute()
     if not root.is_dir() or not workspace.is_dir():
         raise ValueError("logical root and workspace must exist")
@@ -472,7 +519,9 @@ def verify(args):
         raise ValueError("terminal profile requires summary_statistics and tree_plot contracts")
     store = GeneFamilyOutputStore(root, family_filter=args.family_id)
     observation = argparse.Namespace(logical_root=root, family_id=args.family_id)
-    with store.read_snapshot(), provenance.logical_observation(observation, store), provenance.digest_observation() as memo:
+    with (provenance.runtime_support_root(Path(__file__).resolve().parent),
+          store.read_snapshot(), provenance.logical_observation(observation, store),
+          provenance.digest_observation() as memo):
         return _verify(args, store, memo)
 
 
@@ -521,12 +570,17 @@ def _verify(args, store, memo):
     attempt_id = None
     if args.attempt:
         run = read_run(args.attempt / "run.json")
+        memo.guard((str(args.attempt), "run"), (provenance.audit_signature(args.attempt / "run.json"), digest(run)),
+                   lambda: (provenance.audit_signature(args.attempt / "run.json"), digest(read_run(args.attempt / "run.json"))))
         attempt_id = run["attempt_id"]
         if run.get("execution_state") != "exited" or run.get("execution_accepted") is not True:
             completion = "unverified"
         for row in rows:
             path = args.attempt / ("contract-" + digest([args.family_id, row["step"]]) + ".json")
             receipt = read_contract(path, attempt_id) if path.exists() else {}
+            if receipt:
+                memo.guard((str(path), "receipt"), (provenance.audit_signature(path), digest(receipt)),
+                           lambda path=path: (provenance.audit_signature(path), digest(read_contract(path, attempt_id))))
             valid = receipt.get("schema") == "genegalleon-contract-observation-v1" and (
                 receipt.get("attempt_id") == attempt_id and receipt.get("family_id") == args.family_id
                 and receipt.get("step") == row["step"] and receipt.get("manifest_sha256") is not None
@@ -606,7 +660,9 @@ def main(argv=None):
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--root", type=Path, required=True)
     verify_parser.add_argument("--workspace-root", type=Path, required=True)
-    verify_parser.add_argument("--family-id", required=True)
+    verify_source = verify_parser.add_mutually_exclusive_group(required=True)
+    verify_source.add_argument("--family-id")
+    verify_source.add_argument("--batch-file", type=Path, help="bounded genegalleon-verify-batch-v1 JSON plan")
     verify_parser.add_argument("--require-step", action="append", required=True)
     verify_parser.add_argument("--manifest", action="append", default=[], metavar="STEP=FILENAME",
                                help="override a required step's FAMILY.STEP.json name within artifact_provenance")

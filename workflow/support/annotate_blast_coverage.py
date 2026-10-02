@@ -246,10 +246,16 @@ def _parse_outfmt_columns(value):
     return columns
 
 
+def _blast_identifier(value):
+    """Keep identifier text literal while retaining missing empty fields."""
+    return value if value else float("nan")
+
+
 def read_blast_table(infile, outfmt_columns=None):
+    converters = dict.fromkeys(("qacc", "sacc"), _blast_identifier)
     if outfmt_columns is None:
-        return pandas.read_csv(infile, sep="\t", header=0)
-    return pandas.read_csv(infile, sep="\t", header=None, names=outfmt_columns)
+        return pandas.read_csv(infile, sep="\t", header=0, converters=converters)
+    return pandas.read_csv(infile, sep="\t", header=None, names=outfmt_columns, converters=converters)
 
 
 def filter_by_frames(df, frame_filter=None):

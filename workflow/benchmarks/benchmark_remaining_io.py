@@ -46,7 +46,7 @@ def worker(args):
     from workflow_observation import observe_files
     root = args.worker / 'output/orthogroup'
     root.mkdir(parents=True)
-    if args.case == 'verify':
+    if args.case in ('verify', 'verify-batch'):
         source = args.worker / 'input/shared.tsv'
         source.parent.mkdir()
         source.write_bytes(b'x' * (64 * 1024 * 1024))
@@ -71,9 +71,24 @@ def worker(args):
         ns = argparse.Namespace(root=root, workspace_root=args.worker, family_id='OG0000001',
             require_step=['iqtree_anc', 'csubst', 'csubst_scan', 'summary_statistics', 'tree_plot'],
             manifest=[], profile=None, attempt=attempt, recorded_workspace_root=None, include_queue=False)
+        requests = [ns]
+        if args.case == 'verify-batch':
+            for index in range(2, 17):
+                family = f'OG{index:07d}'
+                other = argparse.Namespace(**{**vars(ns), 'family_id': family, 'attempt': None})
+                for step in ns.require_step:
+                    payload = json.loads((root / f'artifact_provenance/OG0000001.{step}.json').read_text())
+                    payload['family_id'] = family
+                    (root / f'artifact_provenance/{family}.{step}.json').write_text(json.dumps(payload))
+                requests.append(other)
         begin = time.perf_counter()
         with read_only_observation():
-            result = api.verify(ns)
+            if args.case == 'verify-batch' and hasattr(api, 'verify_many'):
+                results = api.verify_many(requests)
+            else:
+                results = [api.verify(item) for item in requests]
+        result = results[0]
+        assert all(item['completion_state'] == 'verified_declared_steps' for item in results)
         seconds = time.perf_counter() - begin
         assert result['completion_state'] == 'verified_declared_steps', result
         output = hash_bytes(json.dumps([(r['step'], r['state'], r['attempt_bound'],
@@ -142,16 +157,30 @@ def worker(args):
         if not integrated:
             subprocess.run(['Rscript', '-e', "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)"],
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(['Rscript', str(script), '--stat_branch=' + str(stat),
+        command = ['Rscript', str(script), '--stat_branch=' + str(stat),
             '--max_delta_intron_present=-0.5', '--panel_widths_mm=tree:60', '--panel1=tree,bl_rooted,no,no,L',
             '--show_branch_id=no', '--event_method=species_overlap', '--species_color_table=PLACEHOLDER',
-            '--pie_chart_value_transformation=identity', '--long_branch_display=no', *panel_args], check=True,
-            env={**os.environ, 'GG_TREE_PLOT_CHECK_GGIMAGE': '1'}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            '--pie_chart_value_transformation=identity', '--long_branch_display=no', *panel_args]
+        outputs = []
+        if args.case == 'pdf-batch' and (args.support_root / 'tree_plot_batch.r').exists():
+            jobs = [{'id':str(i), 'cwd':str(args.worker), 'args':command[2:],
+                     'output':str(args.worker / f'{i}.pdf')} for i in range(8)]
+            plan = args.worker / 'plot-plan.json'
+            plan.write_text(json.dumps(jobs))
+            subprocess.run(['Rscript', str(args.support_root / 'tree_plot_batch.r'), str(plan)], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            outputs = [(args.worker / f'{i}.pdf').read_bytes() for i in range(8)]
+        else:
+            for _ in range(8 if args.case == 'pdf-batch' else 1):
+                subprocess.run(command, check=True,
+                    env={**os.environ, 'GG_TREE_PLOT_CHECK_GGIMAGE': '1'}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                outputs.append(Path('stat_branch2tree_plot.pdf').read_bytes())
         seconds = time.perf_counter() - begin
         # R PDFs differ only in creation/modification dates. Compare all other
         # bytes, including compressed drawing commands, fonts and page sizes.
-        raw = Path('stat_branch2tree_plot.pdf').read_bytes()
-        output = hash_bytes(re.sub(rb'/(CreationDate|ModDate) \([^)]*\)', b'', raw))
+        normalized = [hash_bytes(re.sub(rb'/(CreationDate|ModDate) \([^)]*\)', b'', raw)) for raw in outputs]
+        assert len(set(normalized)) == 1
+        output = normalized[0]
     (args.worker / 'measurement.json').write_text(json.dumps({'seconds': seconds, 'output_sha256': output,
         'peak_rss_kib_linux': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         'peak_child_rss_kib_linux': resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss}))
@@ -161,7 +190,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--support-root', type=Path, default=Path(__file__).resolve().parents[1] / 'support')
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--case', choices=['verify', 'database-raw', 'database-zip', 'store-digest', 'pdf', 'pdf-panels'])
+    parser.add_argument('--case', choices=['verify', 'verify-batch', 'database-raw', 'database-zip', 'store-digest', 'pdf', 'pdf-panels', 'pdf-batch'])
     parser.add_argument('--worker', type=Path)
     parser.add_argument('--repeats', type=int, default=3)
     args = parser.parse_args()
@@ -173,7 +202,7 @@ def main():
     results = {'support_root': str(args.support_root), 'python': sys.version,
                'platform': platform.platform(), 'machine': platform.machine(), 'cases': {}}
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    for case in ([args.case] if args.case else ['verify', 'database-raw', 'database-zip', 'store-digest', 'pdf', 'pdf-panels']):
+    for case in ([args.case] if args.case else ['verify', 'verify-batch', 'database-raw', 'database-zip', 'store-digest', 'pdf', 'pdf-panels', 'pdf-batch']):
         samples = []
         for i in range(args.repeats + 1):
             with tempfile.TemporaryDirectory(prefix='gg-remaining-benchmark-') as tmp:

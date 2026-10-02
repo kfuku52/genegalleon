@@ -46,10 +46,10 @@ synteny_dotplot_min_length="${synteny_dotplot_min_length:-1000000}"
 synteny_dotplot_sort="${synteny_dotplot_sort:-homoeolog}"
 synteny_ds_color_max="${synteny_ds_color_max:-2}"
 case "${genome_evolution_mode}" in
-  all) ;;
+  all|species_tree|orthogroups) ;;
   synteny) run_pairwise_synteny=1 ;;
   subgenome) run_subgenome_dominance=1 ;;
-  *) echo "genome_evolution_mode must be all, synteny or subgenome" >&2; exit 2 ;;
+  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, synteny or subgenome" >&2; exit 2 ;;
 esac
 for synteny_flag in run_pairwise_synteny synteny_plot_only run_subgenome_dominance; do
   case "${!synteny_flag}" in
@@ -103,6 +103,8 @@ orthofinder_core_rank="${orthofinder_core_rank:-num_seq:asc,busco_complete_pct:d
 orthofinder_core_method="${orthofinder_core_method:-max-pd}"
 orthofinder_algorithm_threads="${orthofinder_algorithm_threads:-auto}"
 orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
+orthofinder_binary="${orthofinder_binary:-orthofinder}"
+orthofinder_source_manifest="${orthofinder_source_manifest:-}"
 genome_parallel_jobs="${genome_parallel_jobs:-auto}"
 genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
@@ -163,6 +165,24 @@ fi
 ### Modify below if you need to add a new analysis or need to fix some bugs ###
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
+
+# Orthogroup recovery audits existing sequence/tree contracts with stop policy.
+# A rebuild request may rebuild only the two requested orthogroup producers.
+orthogroup_requested_stale_policy="${artifact_stale_policy:-stop}"
+orthogroup_requested_legacy_policy="${artifact_legacy_policy:-adopt}"
+if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+  case "${orthogroup_requested_stale_policy}" in
+    stop|rebuild) ;;
+    *) echo "orthogroups mode requires artifact_stale_policy=stop or rebuild" >&2; exit 2 ;;
+  esac
+  while IFS= read -r config_name; do
+    if [[ "${config_name}" == run_* && "${config_name}" != run_orthofinder && "${config_name}" != run_og_selection ]]; then
+      printf -v "${config_name}" '%s' 0
+    fi
+  done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+  artifact_stale_policy=stop
+  artifact_legacy_policy=stop
+fi
 
 # Synteny-only execution calls this independent stage before species-tree setup
 # and never refreshes, clears or archives the existing tree/OrthoFinder outputs.
@@ -1007,6 +1027,7 @@ run_shared_species_omark_stage() {
   local missing_omark_outputs=0
   local omark_needs_update=0
   local -a omark_provenance_args=()
+  local -a omamer_query_files=()
 
   if [[ ${shared_species_omark_stage_done} -eq 1 ]]; then
     return 0
@@ -1115,8 +1136,19 @@ run_shared_species_omark_stage() {
     gg_step_start "${task}: ${protein_file}"
     ensure_dir "${omark_outdir}"
     if [[ ! -s "${omamer_out}" ]]; then
-      omamer_query="${omark_outdir}/${sp_ub}.query.fa"
+      # Derived search input is computation scratch, not an OMArk result.
+      # Keep it outside the directory fingerprinted by the summary stage.
+      if [[ -L "${dir_tmp}/omamer_queries" ]]; then
+        echo "Refusing symlinked OMAmer query scratch." >&2
+        exit 1
+      fi
+      omamer_query="${dir_tmp}/omamer_queries/${sp_ub}.query.fa"
+      if [[ -L "${omamer_query}" ]]; then
+        echo "Refusing symlinked OMAmer query input: ${omamer_query}" >&2
+        exit 1
+      fi
       stage_species_protein_fasta "${protein_full}" "${omamer_query}"
+      omamer_query_files+=("${omamer_query}")
       omamer search \
         --db "${omark_db_file}" \
         --query "${omamer_query}" \
@@ -1139,6 +1171,9 @@ run_shared_species_omark_stage() {
     fi
   done
   gg_artifact_record "${omark_provenance_args[@]}"
+  if [[ ${delete_tmp_dir} -eq 1 && ${#omamer_query_files[@]} -gt 0 ]]; then
+    rm -f -- "${omamer_query_files[@]}"
+  fi
   echo "$(date): End: ${task}"
 }
 
@@ -2095,6 +2130,19 @@ optimize_astral_tree_branch_lengths() {
 orthofinder_output_directory_cleanup() {
   local target_dir=$1
   local _threads=${2:-1}
+  local working_dir="${target_dir}/WorkingDirectory"
+  # Call only after the complete all-species result has been validated,
+  # published, and recorded. The core run still needs this data for --assign.
+  if [[ -L "${target_dir}" || -L "${working_dir}" ]]; then
+    echo "Refusing to remove a symlinked OrthoFinder WorkingDirectory: ${working_dir}" >&2
+    return 1
+  fi
+  if [[ -d "${working_dir}" ]]; then
+    echo "Removing OrthoFinder WorkingDirectory after validated completion: ${working_dir}"
+    if ! rm -rf -- "${working_dir}"; then
+      return 1
+    fi
+  fi
   if [[ -d "${target_dir}" ]]; then
     remove_empty_subdirs "${target_dir}"
   fi
@@ -2102,7 +2150,7 @@ orthofinder_output_directory_cleanup() {
 
 detect_orthofinder_version() {
   local version_output version
-  version_output=$(orthofinder -v 2>&1 || true)
+  version_output=$("${orthofinder_binary}" -v 2>&1 || true)
   version_output=$(printf '%s\n' "${version_output}" | sed -E $'s/\x1B\\[[0-9;?]*[ -/]*[@-~]//g')
   version=$(printf '%s\n' "${version_output}" | awk '
     match($0, /[Oo]rtho[Ff]inder:?v?[[:space:]]*[0-9]+([.][0-9]+)*/) {
@@ -2119,6 +2167,17 @@ detect_orthofinder_version() {
     }
   ')
   printf '%s\n' "${version}"
+}
+
+validate_orthofinder_run_completion() {
+  local result_dir=$1
+  local native_log="${result_dir}/Log.txt"
+  if [[ ! -f "${native_log}" || ! -s "${native_log}" || -L "${native_log}" ]] ||
+     ! awk '/(^| : )OrthoFinder run completed$/ { complete = 1 } END { exit !complete }' "${native_log}"; then
+    echo "OrthoFinder did not record native run completion: ${native_log}" >&2
+    echo "Retaining staged results and WorkingDirectory; incomplete results will not be published." >&2
+    return 1
+  fi
 }
 
 orthofinder_supports_root_hog_equivalent() {
@@ -2414,7 +2473,6 @@ if [[ -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
 fi
 dir_sp_protein_input="$(species_protein_input_dir_path)"
 file_species_genetic_code="$(species_genetic_code_table_path)"
-file_species_genetic_code_resolved="${gg_workspace_downloads_dir}/tmp/species_genetic_code.resolved.tsv"
 dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
 annotation_species_resolved=""
 annotation_species_candidates=()
@@ -2454,6 +2512,7 @@ dir_concat_iqtree_dna="${dir_species_tree}/concatenated_iqtree_dna"
 dir_concat_iqtree_pep="${dir_species_tree}/concatenated_iqtree_pep"
 dir_mcmctree2="${dir_species_tree}/mcmctree_main"
 dir_tmp=$(gg_task_tmp_path "${dir_species_tree}/tmp") || exit 1
+file_species_genetic_code_resolved="${dir_tmp}/species_genetic_code.resolved.tsv"
 dir_nwkit_download_dir="${gg_workspace_downloads_dir}/nwkit_downloads"
 
 species_tree_managed_directory_paths=(
@@ -2802,12 +2861,18 @@ if species_tree_summary_generation_requested; then
 fi
 species_tree_recover_mixed_managed_directories
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
+if [[ "${genome_evolution_mode}" == "orthogroups" && ! -s "${file_undated_species_tree}" ]]; then
+  echo "orthogroups mode requires an existing audited undated species tree; run species_tree first." >&2
+  exit 3
+fi
 species_tree_materialize_managed_directories_for_files_mode
 if [[ "${species_tree_output_storage}" == "zip" ]]; then
   species_tree_archive_managed_directories
 fi
-refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
-refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
+if [[ "${genome_evolution_mode}" == "all" ]]; then
+  refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
+  refresh_dir_for_shared_protein_input_signature "${dir_genome_evolution}" "genome_evolution" "${shared_protein_input_signature}" || exit $?
+fi
 GG_GENOME_PARALLEL_JOBS=${GG_TASK_CPUS}
 if [[ "${genome_parallel_jobs}" != "auto" ]]; then
   if [[ ! "${genome_parallel_jobs}" =~ ^[0-9]+$ || ${genome_parallel_jobs} -lt 1 ]]; then
@@ -2908,7 +2973,7 @@ fi
 # shellcheck shell=bash
 # Sourced by gg_genome_evolution_core.sh.
 
-if [[ ${run_pairwise_synteny} -eq 1 ]]; then run_pairwise_synteny_stage; fi
+if [[ "${genome_evolution_mode}" == "all" && ${run_pairwise_synteny} -eq 1 ]]; then run_pairwise_synteny_stage; fi
 
 task="BUSCO analysis of species-wise input files"
 run_shared_species_busco_stage
@@ -4419,7 +4484,18 @@ if [[ ${delete_tmp_dir} -eq 1 ]]; then
   fi
 fi
 
+if [[ "${genome_evolution_mode}" == "species_tree" ]]; then
+  echo "Species-tree stages finished; orthogroup and genome-evolution stages were not requested."
+  exit 0
+fi
+
 # Orthogroup inference
+
+if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+  artifact_stale_policy="${orthogroup_requested_stale_policy}"
+  artifact_legacy_policy="${orthogroup_requested_legacy_policy}"
+  refresh_dir_for_shared_protein_input_signature "${dir_orthofinder}" "orthofinder" "${shared_protein_input_signature}" || exit $?
+fi
 
 
 
@@ -4445,6 +4521,15 @@ elif [[ -s "${dir_species_tree_summary}/undated_species_tree.nwk" ]]; then
   orthofinder_provenance_args+=(--input "species_tree=${dir_species_tree_summary}/undated_species_tree.nwk")
 fi
 gg_artifact_add_input_if_present orthofinder_provenance_args "busco_short_summaries" "${dir_species_busco_short}"
+orthofinder_executable=$(command -v -- "${orthofinder_binary}" || true)
+gg_artifact_add_input_if_present orthofinder_provenance_args "orthofinder_executable" "${orthofinder_executable}"
+if [[ -n "${orthofinder_source_manifest}" ]]; then
+  if [[ ! -s "${orthofinder_source_manifest}" ]]; then
+    echo "Missing OrthoFinder source manifest: ${orthofinder_source_manifest}" >&2
+    exit 1
+  fi
+  orthofinder_provenance_args+=(--input "orthofinder_source_manifest=${orthofinder_source_manifest}")
+fi
 orthofinder_provenance_args+=(
   --output "orthogroups=${dir_orthofinder_og}"
   --output "root_hog_equivalent=${dir_orthofinder_hog2og}"
@@ -4453,6 +4538,7 @@ orthofinder_provenance_args+=(
   --parameter "genetic_code=${genetic_code}"
   --parameter "msa_method=msa"
   --parameter "search_method=diamond"
+  --parameter "orthofinder_binary=${orthofinder_binary}"
   --parameter "max_core_species=${max_orthofinder_core_species}"
   --parameter "core_filters=${orthofinder_core_filters}"
   --parameter "core_rank=${orthofinder_core_rank}"
@@ -4779,7 +4865,7 @@ PY
       orthofinder_core_species_tree_args=(-s "${file_orthofinder_core_species_tree}")
     fi
 
-    if orthofinder \
+    if "${orthofinder_binary}" \
       -t "${GG_TASK_CPUS}" \
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
@@ -4797,6 +4883,7 @@ PY
       echo "OrthoFinder failed in the core-species run. Exiting."
       exit 1
     fi
+    validate_orthofinder_run_completion "${dir_orthofinder}/core/Results_core" || exit $?
     shopt -s nullglob
     orthofinder_core_clusters=("${dir_orthofinder}"/core/Results_core/WorkingDirectory/clusters_OrthoFinder*id_pairs.txt)
     shopt -u nullglob
@@ -4805,7 +4892,7 @@ PY
       exit 1
     fi
 
-    if orthofinder \
+    if "${orthofinder_binary}" \
       -t "${GG_TASK_CPUS}" \
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
@@ -4823,7 +4910,7 @@ PY
       echo "OrthoFinder failed in the all-species run. Exiting."
       exit 1
     fi
-
+    validate_orthofinder_run_completion "${dir_orthofinder}/core/Results_all" || exit $?
     shopt -s nullglob
     orthofinder_all_outputs=("${dir_orthofinder}"/core/Results_all/*)
     orthofinder_core_outputs=("${dir_orthofinder}"/core/Results_core/*)
@@ -4852,12 +4939,11 @@ PY
     if [[ ${#orthofinder_result_dirs[@]} -gt 0 ]]; then
       rm -rf -- "${orthofinder_result_dirs[@]}"
     fi
-    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}"
   else
     echo "The number of species (${num_sp}) is less than or equal to the maximum number of core species (${max_orthofinder_core_species}) for OrthoFinder."
     echo "OrthoFinder will be run for 1 round."
 
-    if orthofinder \
+    if "${orthofinder_binary}" \
       -t "${GG_TASK_CPUS}" \
       -a "${orthofinder_algorithm_threads}" \
       -M "msa" \
@@ -4875,7 +4961,7 @@ PY
       echo "OrthoFinder failed in the all-species run. Exiting."
       exit 1
     fi
-
+    validate_orthofinder_run_completion "${dir_orthofinder}/main/Results_main" || exit $?
     shopt -s nullglob
     orthofinder_main_outputs=("${dir_orthofinder}"/main/Results_main/*)
     shopt -u nullglob
@@ -4893,8 +4979,6 @@ PY
     mv_out_bundle "${orthofinder_publication_pairs[@]}"
     rm -rf -- "${dir_orthofinder}/main"
   fi
-
-  orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}"
 
   orthofinder_version=$(detect_orthofinder_version)
   if [[ -n "${orthofinder_version}" ]]; then
@@ -4946,9 +5030,17 @@ PY
   file_orthofinder_core_selected="${dir_orthofinder}/orthofinder_core_species.selected.tsv"
   file_orthofinder_core_selected_list="${dir_orthofinder}/orthofinder_core_species.selected_files.txt"
   file_orthofinder_core_species_tree="${dir_orthofinder}/species_tree_core.nwk"
+  gg_artifact_record "${orthofinder_provenance_args[@]}" || exit $?
+  orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}" || exit $?
+  orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}" || exit $?
   echo "OrthoFinder finished successfully."
-  gg_artifact_record "${orthofinder_provenance_args[@]}"
 else
+  # A previous process may have stopped after recording completion but before
+  # removing all working data. Retry cleanup only for an enabled, audited stage.
+  if [[ ${run_orthofinder} -eq 1 && ${orthofinder_needs_update} -eq 0 && -s "${file_orthofinder_done_marker}" ]]; then
+    orthofinder_output_directory_cleanup "${dir_orthofinder}/core" "${GG_TASK_CPUS}" || exit $?
+    orthofinder_output_directory_cleanup "${dir_orthofinder}" "${GG_TASK_CPUS}" || exit $?
+  fi
   gg_step_skip "${task}"
 fi
 
@@ -5057,12 +5149,23 @@ else
   gg_step_skip "${task}"
 fi
 
+if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+  echo "Orthogroup inference and selection stages finished; later genome-evolution stages were not requested."
+  exit 0
+fi
+
 task="Orthogroup method comparison"
 disable_if_no_input_file "run_orthogroup_method_comparison" "${file_orthofinder_done_marker}"
+# OrthoFinder 3 writes the flat clustering memberships in Orthogroups.txt;
+# the comparison needs their totals, not a replacement HOG count table.
+file_orthogroup_comparison_input="${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
+if [[ ! -s "${file_orthogroup_comparison_input}" && -s "${dir_orthofinder_og}/Orthogroups.txt" ]]; then
+  file_orthogroup_comparison_input="${dir_orthofinder_og}/Orthogroups.txt"
+fi
 orthogroup_comparison_needs_update=0
 gg_artifact_contract_init orthogroup_comparison_provenance_args "orthogroup_method_comparison" "all_species" "${genome_evolution_provenance_dir}/orthogroup_method_comparison.json"
 orthogroup_comparison_provenance_args+=(
-  --input "orthogroup_counts=${dir_orthofinder_og}/Orthogroups.GeneCount.tsv"
+  --input "orthogroup_counts=${file_orthogroup_comparison_input}"
   --input "hog_counts=${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"
   --output "plot=${file_orthogroup_method_comparison}"
 )
@@ -5071,7 +5174,7 @@ if [[ ${orthogroup_comparison_needs_update} -eq 1 && ${run_orthogroup_method_com
   gg_step_start "${task}"
 
   if python "${gg_support_dir}/orthogroup_method_comparison.py" \
-    --orthofinder_og_genecount "${dir_orthofinder_og}/Orthogroups.GeneCount.tsv" \
+    --orthofinder_og_genecount "${file_orthogroup_comparison_input}" \
     --orthofinder_hog_genecount "${dir_orthofinder_hog2og}/Orthogroups.GeneCount.tsv"; then
     exit_code=0
   else

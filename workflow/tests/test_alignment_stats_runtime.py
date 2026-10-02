@@ -11,6 +11,46 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize('reader', ['orthogroup_output_summary', 'query2family_output_summary'])
+@pytest.mark.parametrize('storage', ['files', 'store', 'zip'])
+@pytest.mark.parametrize('ncpu', [1, 2])
+def test_summary_statistics_follow_column_names_not_input_order(tmp_path, reader, storage, ncpu):
+    from workflow.support.gene_family_output_store import GeneFamilyOutputStore, convert_storage_to_zip
+
+    spec = importlib.util.spec_from_file_location(reader, ROOT / f'workflow/support/{reader}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    count = 137 if ncpu > 1 else 2  # Cross multiple bounded I/O windows.
+    families = ([f'HOG{i:07d}' for i in range(count)] if reader.startswith('orthogroup')
+                else ['query_a', 'query_a.b', *[f'query{i}' for i in range(count-2)]])
+    columns = module._alignment_stats_columns()
+    root = tmp_path / 'output'
+    directory = root / 'alignment_stats_original'
+    directory.mkdir(parents=True)
+    expected = {}
+    for offset, family in enumerate(families):
+        row = dict(zip(columns, [7 + offset, 101, 707, 3, 0.2, 19, 11, 0.43], strict=True))
+        expected[family] = row
+        table = pandas.DataFrame([{**row, 'Alignment_name': family, 'engine_extra': 999}])
+        order = list(reversed(columns)) if offset == 0 else columns[3:] + columns[:3]
+        table.loc[:, ['engine_extra', *order, 'Alignment_name']].to_csv(
+            directory / f'{family}_alignment_stats.original.tsv', sep='\t', index=False)
+    matchers = module._query_id_matchers(families) if reader.startswith('query') else None
+    if storage == 'zip':
+        mode = 'query2family' if matchers is not None else 'orthogroup'
+        identify = (lambda name: module._extract_query_id(name, matchers)) if matchers is not None else module._extract_orthogroup_id
+        convert_storage_to_zip(root, mode, families, identify)
+        assert not directory.exists()
+    kwargs = {'query_id_matchers': matchers} if matchers is not None else {}
+    if storage != 'files':
+        kwargs.update(store=GeneFamilyOutputStore(root), logical_subdir='alignment_stats_original')
+    result = module.get_alignment_stats(pandas.DataFrame({'Total': [2] * count}, index=families),
+                                       str(directory), 'original', ncpu=ncpu, **kwargs)
+    for family, row in expected.items():
+        for column, value in row.items():
+            assert result.loc[family, column+'_original'] == value
+
+
 @pytest.mark.parametrize("stage", ["original", "cleaned"])
 @pytest.mark.parametrize("seq_type", ["dna", "aa"])
 def test_alignment_stats_stage_and_summary_readers(tmp_path, stage, seq_type):

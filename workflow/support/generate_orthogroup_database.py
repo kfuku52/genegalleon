@@ -3,6 +3,7 @@
 
 import argparse
 import atexit
+import csv
 import datetime
 import glob
 import io
@@ -14,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from pathlib import Path
@@ -117,18 +119,24 @@ def require_sqlalchemy():
 
 
 def read_header_columns(file_path, store=None, logical_subdir=None, logical_name=None):
+    """Read one logical TSV header, retaining duplicate and quoted names.
+
+    Match the data reader's quoting/BOM rules, including embedded tabs/newlines
+    and literal whitespace in column names. Do not use pandas here: its automatic
+    duplicate renaming would hide invalid input schemas.
     """
-    Read the first line of a TSV file and return column names.
-    """
-    if store is None:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as file_handle:
-            header_line = file_handle.readline().strip()
-    else:
-        with store.open_binary(logical_subdir, logical_name) as file_handle:
-            header_line = file_handle.readline().decode("utf-8", errors="replace").strip()
-    if not header_line:
-        return []
-    return header_line.split("\t")
+    with ExitStack() as stack:
+        if store is None:
+            file_handle = stack.enter_context(open(file_path, "r", encoding="utf-8-sig", errors="replace", newline=""))
+        else:
+            binary = stack.enter_context(store.open_binary(logical_subdir, logical_name))
+            file_handle = stack.enter_context(io.TextIOWrapper(binary, encoding="utf-8-sig", errors="replace", newline=""))
+        return next(csv.reader(file_handle, delimiter="\t"), [])
+
+
+def duplicate_columns(columns):
+    """Return the same sorted duplicates without recounting each wide column."""
+    return sorted(column for column, count in Counter(columns).items() if count > 1)
 
 
 def visible_entries(path):
@@ -220,9 +228,9 @@ def validate_csubst_scan_schemas(scan_dirs, store=None):
                 logical_subdir=logical_subdir,
                 logical_name=infile,
             )
-            duplicate_columns = sorted({col for col in header_columns if header_columns.count(col) > 1})
-            if duplicate_columns:
-                problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
+            duplicates = duplicate_columns(header_columns)
+            if duplicates:
+                problems.append(f"{file_path}: duplicate columns: {', '.join(duplicates)}")
                 continue
 
             header_set = frozenset(header_columns)
@@ -371,7 +379,7 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
     def source(stack):
         return file_path if store is None else stack.enter_context(store.open_binary(logical_subdir, logical_name))
 
-    with ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="gg-tsv-types-") as spool, ExitStack() as stack:
         input_file = source(stack)
         if chunksize is None:
             yield pd.read_csv(input_file, **options)
@@ -418,11 +426,36 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
                     dtypes[column] = pd.Series(["text"]).dtype
                 only_missing[column] = only_missing[column] and incoming_missing
 
+        # Keep the exact inferred frames in a private, bounded disk spool.
+        # Reuse only when every chunk has the final dtype. Promotion still
+        # reparses the original lexemes: casting 001 to text would lose zeros.
+        frame_count = 0
+        first_dtypes = first.dtypes.to_dict()
+        same_types = first_dtypes == dtypes
+        def save_frame(frame):
+            nonlocal frame_count, same_types
+            frame_count += 1
+            reusable = same_types
+            same_types = same_types and frame.dtypes.to_dict() == first_dtypes
+            if same_types:
+                frame.to_pickle(Path(spool) / str(frame_count), protocol=5)
+            elif reusable:
+                # Once promotion is required, the original CSV must be read
+                # again. Release earlier chunks and stop writing unusable data.
+                for cached in Path(spool).iterdir():
+                    cached.unlink()
+        save_frame(first)
+        save_frame(second)
         merge_types(second)
         del first, second
         for frame in reader:
+            save_frame(frame)
             merge_types(frame)
             del frame
+        if same_types and first_dtypes == dtypes:
+            for index in range(1, frame_count + 1):
+                yield pd.read_pickle(Path(spool) / str(index))
+            return
 
     with ExitStack() as stack:
         reader = stack.enter_context(pd.read_csv(source(stack), chunksize=chunksize, dtype=dtypes, **options))
@@ -625,7 +658,7 @@ def apply_cutoff(df, cutoff_stat):
     return df
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description="Optimize performance for database population script.")
     parser.add_argument(
         "--overwrite", metavar="bool", default=0, type=int, choices=(0, 1), help="Atomically replace an existing database if 1; default 0 creates a new database."
@@ -684,7 +717,12 @@ def main():
     parser.add_argument(
         "--ncpu", dest="max_workers", metavar="INT", default=4, type=int, help="Number of worker threads."
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not args.dbpath:
         parser.error("--dbpath must not be empty")
     destination = Path(args.dbpath).absolute()
@@ -843,9 +881,9 @@ def _populate_database(args, parser, output_store):
                     logical_subdir=logical_subdir,
                     logical_name=infile,
                 )
-                duplicate_columns = sorted({column for column in infile_columns if infile_columns.count(column) > 1})
-                if duplicate_columns:
-                    schema_problems.append(f"{file_path}: duplicate columns: {', '.join(duplicate_columns)}")
+                duplicates = duplicate_columns(infile_columns)
+                if duplicates:
+                    schema_problems.append(f"{file_path}: duplicate columns: {', '.join(duplicates)}")
                 required_columns = set(STAT_TABLE_REQUIRED_COLUMNS.get(stat, set()))
                 if stat.startswith("cb"):
                     required_columns.update(name for name, _ in params["cutoff_stat"])

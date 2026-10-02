@@ -310,15 +310,33 @@ def build_long_table(copy_number, presence, species_order, family_order, query_s
     long_rows = []
     query_order = {family_id: idx + 1 for idx, family_id in enumerate(family_order)}
     species_order_map = {species: idx + 1 for idx, species in enumerate(species_order)}
+    species_displays = {}
+    # Unique matrix axes can select each column once. Keep scalar lookup for
+    # ambiguous or missing labels so its existing values/errors are preserved.
+    bulk_rows = isinstance(species_order, (list, tuple, pandas.Index, numpy.ndarray)) and all(
+        axis.is_unique and not isinstance(axis, pandas.MultiIndex)
+        for axis in (copy_number.index, copy_number.columns, presence.index, presence.columns)
+    )
+    if bulk_rows:
+        copy_rows = copy_number.index.get_indexer(species_order)
+        presence_rows = presence.index.get_indexer(species_order)
+        bulk_rows = ((copy_rows >= 0).all() and (presence_rows >= 0).all()
+                     and all(family in presence.columns for family in copy_number.columns))
     for family_id in copy_number.columns:
         status = query_status.get(family_id, "unknown")
-        for species in species_order:
-            copy_value = copy_number.loc[species, family_id]
-            presence_value = presence.loc[species, family_id]
+        if bulk_rows:
+            values = zip(species_order, copy_number[family_id].array.take(copy_rows),
+                         presence[family_id].array.take(presence_rows), strict=True)
+        else:
+            values = ((species, copy_number.loc[species, family_id], presence.loc[species, family_id])
+                      for species in species_order)
+        for species, copy_value, presence_value in values:
+            if species not in species_displays:
+                species_displays[species] = scientific_name_from_label(species)
             long_rows.append(
                 {
                     "species": species,
-                    "species_display": scientific_name_from_label(species),
+                    "species_display": species_displays[species],
                     "species_order": species_order_map[species],
                     "query": family_id,
                     "query_order": query_order[family_id],

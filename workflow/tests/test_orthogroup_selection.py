@@ -136,6 +136,123 @@ def test_get_concatenated_fx2tab_returns_empty_when_no_input(monkeypatch, tmp_pa
     assert list(out.columns) == ["#id", "length"]
 
 
+@pytest.mark.parametrize("gene_ids", [["001", "1"], ["NA", "NULL", "nan", "001", "1"]])
+def test_fx2tab_retains_literal_protein_ids_through_quantile_selection(monkeypatch, tmp_path, gene_ids, capsys):
+    mod = load_module()
+    (tmp_path / "Genus_species.fa").touch()
+    raw = "#id\tlength\n" + "".join(f"{gene}\t{100 + i}\n" for i, gene in enumerate(gene_ids))
+    monkeypatch.setattr(mod, "run_command", lambda *args, **kwargs: raw.encode())
+    args = SimpleNamespace(dir_species_protein=str(tmp_path), ncpu=1, gene_size_quantiles="0.5")
+    lengths = mod.get_concatenated_fx2tab(args)
+    assert lengths["#id"].tolist() == gene_ids
+    assert lengths["length"].dtype == numpy.dtype("int64")
+    original = lengths.copy(deep=True)
+    families = [f"OG{i}" for i in range(len(gene_ids))]
+    orthogroups = pandas.DataFrame({"Orthogroup": families, "Genus_species": gene_ids})
+    counts = pandas.DataFrame({"Orthogroup": families, "Genus_species": 1, "Total": 1})
+    selected = mod.get_df_gc_original(orthogroups, counts, lengths, args)
+    assert selected["geneid_0.5"].tolist() == gene_ids
+    assert capsys.readouterr().err == ""
+    pandas.testing.assert_frame_equal(lengths, original)
+
+
+@pytest.mark.parametrize("ids", [["001", "1"], ["NA", "NULL", "nan", "001", "1"]])
+def test_literal_ids_survive_annotation_and_orthogroup_selection(monkeypatch, tmp_path, ids, capsys):
+    mod = load_module()
+    monkeypatch.chdir(tmp_path)
+    proteins = tmp_path / "proteins"
+    proteins.mkdir()
+    (proteins / "Genus_species.fa").write_text("".join(f">{gene}\nMA\n" for gene in ids))
+    og_dir = tmp_path / "Orthogroups"
+    og_dir.mkdir()
+    membership = og_dir / "Orthogroups.tsv"
+    count_path = og_dir / "Orthogroups.GeneCount.tsv"
+    pandas.DataFrame({"Orthogroup": ids, "Genus_species": ids}).to_csv(membership, sep="\t", index=False)
+    pandas.DataFrame({"Orthogroup": ids, "Genus_species": 1, "Total": 1}).to_csv(count_path, sep="\t", index=False)
+    original = [path.read_bytes() for path in (membership, count_path)]
+    db_prefix = tmp_path / "uniprot"
+    for suffix in (".pin", ".phr", ".psq"):
+        db_prefix.with_suffix(suffix).touch()
+
+    def command(command, **kwargs):
+        if command[:2] == ["seqkit", "fx2tab"]:
+            return ("#id\tlength\n" + "".join(f"{gene}\t2\n" for gene in ids)).encode()
+        if command[0] == "blastp":
+            Path(command[command.index("-out") + 1]).write_text(
+                "".join(f"{gene}\thit for {gene}\t1e-30\t100\n" for gene in ids))
+        return b""
+
+    monkeypatch.setattr(mod, "run_command", command)
+    args = SimpleNamespace(
+        dir_species_protein=str(proteins), dir_orthofinder_og=str(og_dir), gene_size_quantiles="0.5",
+        ncpu=1, annotation_search_method="blastp", path_search_db=str(db_prefix), evalue="1e-2",
+        min_gene_num=1, max_gene_num=10, min_species_num=1, min_percent_species_coverage=0,
+        remove_unannotated=True,
+    )
+    annotated_path = mod.prepare_annotation(args)
+    _, selected, species = mod.select_orthogroups(args, annotated_path)
+    assert selected["Orthogroup"].tolist() == ids
+    assert selected["geneid_0.5"].tolist() == ids
+    assert selected["besthit_0.5"].tolist() == [f"hit for {gene}" for gene in ids]
+    assert selected["Total"].dtype == numpy.dtype("int64")
+    assert species == ["Genus_species"]
+    result = pandas.read_csv(og_dir / "Orthogroups.selected.tsv", sep="\t", dtype=str, keep_default_na=False)
+    assert result["Orthogroup"].tolist() == ids
+    assert result["Genus_species"].tolist() == ids
+    assert [path.read_bytes() for path in (membership, count_path)] == original
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("suffix", [".tsv", ".tsv.gz"])
+def test_identifier_readers_keep_empty_fields_and_numeric_missingness(tmp_path, monkeypatch, suffix):
+    mod = load_module()
+    path = tmp_path / ("counts" + suffix)
+    frame = pandas.DataFrame({
+        "Orthogroup": ["001", "NA", ""], "Genus_species": [1.0, numpy.nan, 2.0],
+        "Total": [1.0, numpy.nan, 2.0], "geneid_0.5": ["NULL", "001", ""],
+        "besthit_0.5": ["NA", "ordinary title", ""],
+    })
+    frame.to_csv(path, sep="\t", index=False)
+    original = path.read_bytes()
+    out = mod._load_orthogroup_table(path)
+    assert out["Orthogroup"].iloc[:2].tolist() == ["001", "NA"]
+    assert out["geneid_0.5"].iloc[:2].tolist() == ["NULL", "001"]
+    assert pandas.isna(out["Orthogroup"].iloc[2])
+    assert pandas.isna(out["geneid_0.5"].iloc[2])
+    assert out["Genus_species"].dtype == numpy.dtype("float64")
+    assert out["Total"].dtype == numpy.dtype("float64")
+    assert out["Genus_species"].iloc[[0, 2]].tolist() == [1.0, 2.0]
+    assert pandas.isna(out["Genus_species"].iloc[1])
+    assert out["besthit_0.5"].isna().tolist() == [True, False, True]
+    assert path.read_bytes() == original
+
+    membership = tmp_path / ("genes" + suffix)
+    pandas.DataFrame({"Orthogroup": ["001", "NA", ""], "sp": ["NULL", "001", ""]}).to_csv(
+        membership, sep="\t", index=False)
+    genes = mod._load_orthogroup_table(membership, gene_membership=True)
+    assert genes["sp"].iloc[:2].tolist() == ["NULL", "001"]
+    assert pandas.isna(genes["sp"].iloc[2])
+
+    monkeypatch.setattr(mod, "get_species_protein_files", lambda _: ["Genus_species.fa"])
+    monkeypatch.setattr(mod, "run_command", lambda *args, **kwargs: b"#id\tlength\nNA\t2\n\tNA\n")
+    lengths = mod.get_concatenated_fx2tab(SimpleNamespace(dir_species_protein=str(tmp_path), ncpu=1))
+    assert lengths["#id"].iloc[0] == "NA"
+    assert pandas.isna(lengths["#id"].iloc[1])
+    assert lengths["length"].dtype == numpy.dtype("float64")
+    assert lengths["length"].iloc[0] == 2.0
+    assert pandas.isna(lengths["length"].iloc[1])
+
+
+def test_besthit_reader_preserves_ids_but_retains_missing_titles(tmp_path):
+    mod = load_module()
+    path = tmp_path / "hits.tsv"
+    path.write_text("001\ttitle\t1e-10\t200\nNA\tNA\t1e-10\t200\n\ttitle\t1e-10\t200\n")
+    out = mod._load_besthit_table(path)
+    assert out["qseqid"].iloc[:2].tolist() == ["001", "NA"]
+    assert pandas.isna(out["qseqid"].iloc[2])
+    assert pandas.isna(out["stitle"].iloc[1])
+
+
 def test_attach_besthits_maps_gene_columns_without_repeated_merges():
     mod = load_module()
     df_gc = pandas.DataFrame(

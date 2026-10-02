@@ -65,6 +65,32 @@ def test_conflicting_isoforms_are_unresolved():
         scaffold.build_tables(pd.concat([gff, gff.assign(chromosome="other")]), tax, "Host_species", 3, scaffold.RankResolver(Ncbi()))
 
 
+def test_isoform_conflicts_keep_rank_and_count_unit_boundaries():
+    gff = pd.DataFrame({'gene_id': ['a', 'b', 'L'], 'chromosome': ['s'] * 3,
+                        'gff_transcript_id': ['t1', 't2', '']})
+    tax = pd.DataFrame({'gene_id': ['a', 'b', 'L'], 'lca_taxid': [3, 5, 3]})
+    genes, summaries = scaffold.build_tables(
+        gff, tax, 'Host_species', 3, scaffold.RankResolver(Ncbi()), {'t1': 'L', 't2': 'L'})
+    # The two isoforms agree at domain, disagree at phylum, and remain
+    # independent of the CDS-ID counting unit with the same literal locus ID.
+    assert genes.loc[genes['rank'].eq('domain'), 'label'].tolist() == ['compatible'] * 3
+    phylum = genes.loc[genes['rank'].eq('phylum')]
+    assert phylum.label.tolist() == ['unresolved', 'unresolved', 'compatible']
+    summary = summaries.loc[summaries['rank'].eq('phylum')].iloc[0]
+    assert summary.total_count == 2
+    assert summary.unresolved_count == 1
+    assert summary.compatible_count == 1
+    assert summary.cds_id_count == 1
+
+
+def test_missing_locus_group_retains_original_labels():
+    gff = pd.DataFrame({'gene_id': ['a'], 'chromosome': ['s'], 'gff_transcript_id': ['t']})
+    tax = pd.DataFrame({'gene_id': ['a'], 'lca_taxid': [3]})
+    genes, _summaries = scaffold.build_tables(
+        gff, tax, 'Host_species', 3, scaffold.RankResolver(Ncbi()), {'t': float('nan')})
+    assert genes.loc[genes['rank'].eq('phylum'), 'label'].tolist() == ['compatible']
+
+
 def test_explicit_gff3_and_gtf_loci(tmp_path):
     path = tmp_path / "input.gff"
     path.write_text("s\tx\tgene\t1\t9\t.\t+\t.\tID=g\n"
@@ -132,6 +158,39 @@ def test_missing_input_is_not_zero_support(tmp_path):
     branches, genes = scaffold.attach_context(branches, genes, "", tree)
     assert branches.host_scaffold_status.eq("missing_scaffold_taxonomy").all()
     assert genes.host_scaffold_phylum_compatible_fraction.isna().all()
+
+
+@pytest.mark.parametrize('index', [
+    pd.Index([27, 7, 52, 12, 99], name='gene_row'),
+    pd.Index(['a', 'a', 'b', 'c', 'a'], name='gene_row'),
+    pd.Index([float('nan'), float('nan'), 1, 2, float('nan')], name='gene_row'),
+    pd.MultiIndex.from_tuples([('a', 1), ('a', 2), ('b', 2), ('c', 3), ('a', 3)], names=['x', 'y']),
+])
+def test_bulk_gene_context_preserves_ordered_scalar_update_semantics(tmp_path, monkeypatch, index):
+    branches, genes, tree = fixture_context(tmp_path)
+    genes.index = index
+    genes['host_scaffold_status'] = 'stale'
+    original = genes.copy(deep=True)
+
+    def scalar_updates(frame, rows, columns):
+        for label, row in zip(frame.index, rows, strict=True):
+            for column, value in row.items():
+                frame.at[label, column] = value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(scaffold, '_apply_context_rows', scalar_updates)
+        expected = scaffold.attach_context(branches, genes, tmp_path, tree)
+    actual = scaffold.attach_context(branches, genes, tmp_path, tree)
+    for before, after in zip(expected, actual, strict=True):
+        pd.testing.assert_frame_equal(before, after)
+    pd.testing.assert_frame_equal(genes, original)
+
+
+def test_bulk_context_retains_rejection_of_nonunique_tuple_index(tmp_path):
+    branches, genes, tree = fixture_context(tmp_path)
+    genes.index = pd.MultiIndex.from_tuples([('a', 1), ('a', 1), ('b', 2), ('c', 3), ('a', 1)])
+    with pytest.raises(ValueError, match='Invalid call for scalar access'):
+        scaffold.attach_context(branches, genes, tmp_path, tree)
 
 
 def test_per_species_files_and_duplicate_rejection(tmp_path):

@@ -360,3 +360,6 @@ signal/exit-status preservation, and absence of workspace writes during queries.
 They establish compatibility with those representations, not every historical
 GeneGalleon release or every scientific toolchain. Production SIF and individual
 project migrations still require their appropriate runtime validation.
+
+For bounded multi-family `verify --batch-file` and its exact-attempt/final-content
+fences, see [batch I/O performance](batch-io-performance.md#verification).

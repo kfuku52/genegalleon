@@ -93,6 +93,42 @@ def test_bien_documented_no_data_response(tmp_path):
     assert report['status'] == 'complete' and len(report['requests']) == 1
 
 
+@pytest.mark.parametrize('payload,empty', [
+    (b'{"message":"No traits available for species Quercus robur"}', True),
+    (b'<html>Cannot GET route</html>', False),
+])
+def test_bien_no_data_through_real_guarded_http_path(tmp_path, monkeypatch, payload, empty):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    monkeypatch.setenv('GG_INPUT_DOWNLOAD_LIMIT_DIR', str(tmp_path / 'limits'))
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(404)
+            self.send_header('Content-Type', 'application/json' if empty else 'text/html')
+            self.end_headers()
+            self.wfile.write(payload)
+        def log_message(self, *args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    source = {'uri': f'http://127.0.0.1:{server.server_port}/api/download/traits'}
+    try:
+        if empty:
+            table = p.load_public_traits('bien', source, ['Quercus_robur'], tmp_path / 'cache', 2, False)
+            assert table.empty
+            report = json.loads(next((tmp_path / 'cache/bien/runs').glob('*.json')).read_text())
+            assert report['status'] == 'complete'
+            assert Path(report['requests'][0]['path']).read_bytes() == payload
+        else:
+            with pytest.raises(ValueError, match='endpoint unavailable'):
+                p.load_public_traits('bien', source, ['Quercus_robur'], tmp_path / 'cache', 2, False)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def test_algae_does_not_inherit_and_preserves_measurement_context():
     hit = dict(scientificname='Ulva lactuca', rank='Species', status='accepted', AphiaID=1)
     attribute = dict(AphiaID=1, measurementTypeID=15, measurementType='Body size', measurementValue='20', AphiaID_Inherited=1, source_id=2, children=[{'measurementType': 'Unit', 'measurementValue': 'cm'}])

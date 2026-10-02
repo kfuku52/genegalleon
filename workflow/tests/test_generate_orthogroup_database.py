@@ -1,4 +1,5 @@
 import argparse
+import csv
 import gc
 import math
 import sqlite3
@@ -82,6 +83,84 @@ def test_read_header_columns_returns_tsv_header_columns(tmp_path):
     infile.write_text("col1\tcol2\tcol3\n1\t2\t3\n", encoding="utf-8")
 
     assert mod.read_header_columns(str(infile)) == ["col1", "col2", "col3"]
+
+
+@pytest.mark.parametrize('layout', ['files', 'store', 'zip'])
+@pytest.mark.parametrize('encoding', ['quoted', 'bom', 'quoted_bom'])
+def test_database_builder_accepts_encoded_headers(tmp_path, layout, encoding):
+    from workflow.support.gene_family_output_store import convert_storage_to_zip
+
+    root = tmp_path / 'families'
+    tree = root / 'stat_tree'
+    branch = root / 'stat_branch'
+    tree.mkdir(parents=True)
+    branch.mkdir()
+    optional = {'metric_plain': 1.25} if encoding == 'bom' else {
+        'metric\tα': 1.25, 'metric\nline': 2.5, 'quote"label': 4, ' spaced metric ': 1}
+    frames = [(stat_tree_frame(**optional), tree / 'OG0001_stat.tree.tsv'),
+              (stat_branch_frame(), branch / 'OG0001_stat.branch.tsv')]
+    for frame, path in frames:
+        frame.to_csv(path, sep='\t', index=False,
+                     quoting=csv.QUOTE_ALL if 'quoted' in encoding else csv.QUOTE_MINIMAL,
+                     encoding='utf-8-sig' if 'bom' in encoding else 'utf-8')
+        assert pandas.read_csv(path, sep='\t').columns.tolist() == frame.columns.tolist()
+    if layout == 'zip':
+        convert_storage_to_zip(root, 'orthogroup', ['OG0001'], lambda name: name.split('_')[0])
+    database = tmp_path / 'result.db'
+    command = [sys.executable, str(SCRIPT_PATH), '--dbpath', str(database),
+               '--dir_stat_tree', str(tree), '--dir_stat_branch', str(branch), '--ncpu', '1']
+    if layout != 'files':
+        command.extend(['--dir_gene_family', str(root)])
+    proc = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    with sqlite3.connect(database) as conn:
+        cursor = conn.execute('SELECT * FROM tree')
+        names = [column[0] for column in cursor.description]
+        row = dict(zip(names, cursor.fetchone(), strict=True))
+    assert row['orthogroup'] == 'OG0001'
+    for name, value in optional.items():
+        assert row[name] == value
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+@pytest.mark.parametrize('table', ['tree', 'scan'])
+@pytest.mark.parametrize('encoding', ['plain', 'quoted_bom'])
+def test_wide_duplicate_headers_remain_fatal_before_database_replacement(tmp_path, layout, table, encoding):
+    from workflow.support.gene_family_output_store import convert_storage_to_zip
+
+    mod = load_module()
+    root = tmp_path / 'families'
+    tree = root / 'stat_tree'
+    branch = root / 'stat_branch'
+    scan = root / 'csubst_scan'
+    for directory in (tree, branch, scan):
+        directory.mkdir(parents=True)
+    stat_tree_frame().to_csv(tree / 'OG0001_stat.tree.tsv', sep='\t', index=False)
+    stat_branch_frame().to_csv(branch / 'OG0001_stat.branch.tsv', sep='\t', index=False)
+    if table == 'tree':
+        path = tree / 'OG0001_stat.tree.tsv'
+        columns = sorted(mod.STAT_TABLE_REQUIRED_COLUMNS['tree'])
+    else:
+        path = scan / 'OG0001_csubst_scan.tsv'
+        columns = sorted(mod.CSUBST_SCAN_BASELINE_COLUMNS[mod.AA_CHANGE_TABLE])
+    columns += [f'optional_{i}' for i in range(2048)]
+    columns += ['repeated_z', 'repeated_α', 'repeated_z', 'repeated_a', 'repeated_a', 'repeated_α']
+    with path.open('w', encoding='utf-8-sig' if encoding == 'quoted_bom' else 'utf-8', newline='') as handle:
+        writer = csv.writer(handle, delimiter='\t', quoting=csv.QUOTE_ALL if encoding == 'quoted_bom' else csv.QUOTE_MINIMAL)
+        writer.writerow(columns)
+        writer.writerow(['1'] * len(columns))
+    if layout == 'zip':
+        convert_storage_to_zip(root, 'orthogroup', ['OG0001'], lambda name: name.split('_')[0])
+    database = tmp_path / 'published.db'
+    original = b'published database must survive duplicate header rejection'
+    database.write_bytes(original)
+    proc = subprocess.run([sys.executable, str(SCRIPT_PATH), '--dbpath', str(database), '--overwrite', '1',
+        '--dir_gene_family', str(root), '--dir_stat_tree', str(tree), '--dir_stat_branch', str(branch),
+        '--dir_csubst_aa_change', str(scan)], cwd=tmp_path, capture_output=True, text=True)
+    assert proc.returncode != 0
+    assert 'duplicate columns: repeated_a, repeated_z, repeated_α' in proc.stderr
+    assert database.read_bytes() == original
+    assert not list(tmp_path.glob('.published.db.*.tmp'))
 
 
 def test_process_files_uses_single_read_csv_call(tmp_path, monkeypatch):
@@ -867,3 +946,102 @@ def test_failed_new_database_is_not_published(tmp_path):
     assert result.returncode != 0
     assert not db.exists()
     assert not list(tmp_path.glob(".out.db.*.tmp"))
+
+
+def test_large_uniform_tsv_spools_exact_frames_without_second_parse(tmp_path, monkeypatch):
+    mod = load_module()
+    path = tmp_path / 'large.tsv'
+    path.write_text('number\tlabel\n' + ''.join(f'{index}\tg{index}\n' for index in range(30000)))
+    expected = pandas.read_csv(path, sep='\t')
+    original = mod.pd.read_csv
+    calls = []
+    def read(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(mod.pd, 'read_csv', read)
+    frames = list(mod.read_csv_chunks(path, ['number', 'label'], 4096, None, None, None))
+    assert len(calls) == 1
+    assert all(len(frame) <= 4096 for frame in frames)
+    pandas.testing.assert_frame_equal(pandas.concat(frames, ignore_index=True), expected)
+
+
+def test_promoted_tsv_preserves_original_lexemes_and_quoted_multiline(tmp_path):
+    mod = load_module()
+    path = tmp_path / 'promoted.tsv'
+    path.write_text('label\tflag\n001\tNA\n002\tTrue\n"late\ttext\nline"\tFalse\n')
+    frames = list(mod.read_csv_chunks(path, ['label', 'flag'], 1, None, None, None))
+    assert frames[0]['label'].iloc[0] == '001'
+    assert frames[-1]['label'].iloc[0] == 'late\ttext\nline'
+    assert str(frames[0]['flag'].dtype) == 'boolean'
+
+
+def test_mixed_tsv_discards_spool_before_reparsing_original_values(tmp_path, monkeypatch):
+    mod = load_module()
+    path = tmp_path / 'mixed.tsv'
+    path.write_text('label\n001\ntext\n003\nmore\n005\n')
+    cached = []
+    original_pickle = mod.pd.DataFrame.to_pickle
+    original_read = mod.pd.read_csv
+    def save(frame, target, **kwargs):
+        cached.append(Path(target))
+        return original_pickle(frame, target, **kwargs)
+    def read(*args, **kwargs):
+        if 'dtype' in kwargs:
+            assert cached and not any(target.exists() for target in cached)
+        return original_read(*args, **kwargs)
+    monkeypatch.setattr(mod.pd.DataFrame, 'to_pickle', save)
+    monkeypatch.setattr(mod.pd, 'read_csv', read)
+    frames = list(mod.read_csv_chunks(path, ['label'], 1, None, None, None))
+    assert len(cached) == 1
+    assert pandas.concat(frames)['label'].tolist() == ['001', 'text', '003', 'more', '005']
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, monkeypatch, layout):
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import artifact_provenance as p
+    import gene_family_database_pipeline as pipeline
+    root = tmp_path / 'output/orthogroup'
+    global_root = tmp_path / 'output/.gg_global_artifacts'
+    global_root.mkdir(parents=True)
+    alignment = root / 'alignment/OG0001.fa'
+    branch = root / 'stat_branch/OG0001_stat.branch.tsv'
+    tree = root / 'stat_tree/OG0001_stat.tree.tsv'
+    for path in (alignment, branch, tree):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    alignment.write_text('>g1\nACGT\n')
+    branch.write_text('branch_id\tnode_name\tnum_sp\tso_event\n0\tg1\t1\tL\n')
+    tree.write_text('num_branch\tnum_spe\tnum_dup\tnum_sp\n1\t2\t0\t1\n')
+    common = ['--workspace-root',str(tmp_path), '--logical-root',str(root)]
+    assert p.dispatch(['record',*common,'--family-id','OG0001','--step','summary_statistics',
+        '--manifest',str(root/'artifact_provenance/OG0001.summary_statistics.json'),
+        '--input','alignment='+str(alignment),'--output','branch='+str(branch),'--output','tree='+str(tree)]) == 0
+    if layout == 'zip':
+        archive_completed_outputs(root, 'orthogroup', {'OG0001'}, lambda name: name.split('_')[0].split('.')[0])
+    database = tmp_path/'database.db'
+    report = tmp_path/'audit.tsv'
+    manifest = tmp_path/'database.json'
+    audit = [*common,'--output-tsv',str(report),'--mode','orthogroup','--check-csubst-branches','--progress-interval','0']
+    db = ['--overwrite','1','--dbpath',str(database),'--dir_gene_family',str(root),
+          '--dir_stat_tree',str(root/'stat_tree'),'--dir_stat_branch',str(root/'stat_branch')]
+    record = ['--workspace-root',str(tmp_path),'--logical-root',str(global_root),'--family-id','orthogroup',
+              '--step','gene_family_database','--manifest',str(manifest),
+              '--input-gene-family-store','families='+str(root),'--output','database='+str(database)]
+    assert pipeline.run(audit, db, record) == 0
+    saved_db, saved_manifest = database.read_bytes(), manifest.read_bytes()
+    assert p.dispatch(['needs-run',*record,'--dry-run']) == 1
+    original = pipeline.database._populate_database
+    def mutate(*args):
+        result = original(*args)
+        alignment.parent.mkdir(exist_ok=True)
+        alignment.write_text('>g1\nTGCA\n')
+        return result
+    monkeypatch.setattr(pipeline.database, '_populate_database', mutate)
+    with pytest.raises((ValueError, RuntimeError), match='changed'):
+        pipeline.run(audit, db, record)
+    assert database.read_bytes() == saved_db
+    assert manifest.read_bytes() == saved_manifest
+    assert 'audit_error' in report.read_text()
+    import json
+    result = json.loads(report.with_suffix('.tsv.result.json').read_text())
+    assert result['exit_code'] != 0

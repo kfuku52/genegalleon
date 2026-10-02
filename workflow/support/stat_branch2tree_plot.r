@@ -1,5 +1,5 @@
 # %%
-cli_args = commandArgs(trailingOnly = TRUE)
+cli_args = if (exists(".gg_tree_plot_args", inherits=FALSE)) .gg_tree_plot_args else commandArgs(trailingOnly = TRUE)
 args = cli_args
 
 # The workflow used to start another R process for this optional dependency.

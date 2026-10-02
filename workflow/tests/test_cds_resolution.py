@@ -22,6 +22,39 @@ def test_phase_is_constraint_and_padding_does_not_mask_stops():
     assert resolution.evaluate('ATGTAAA', phase=0)['reason'] == 'premature_stop'
 
 
+@pytest.mark.parametrize('phase', [0, 1, 2])
+@pytest.mark.parametrize('position, reason', [
+    (0, 'internal_ambiguous_bases'),
+    (3, 'internal_ambiguous_bases'),
+    (6, 'accepted'),
+])
+def test_ambiguity_check_preserves_internal_and_terminal_codon_boundaries(phase, position, reason):
+    source = 'A' * phase + 'CCCCCCTAA'
+    for ambiguous in 'RYSWKMBDHVN':
+        offset = phase + position
+        sequence = source[:offset] + ambiguous + source[offset + 1:]
+        result = resolution.evaluate(sequence, phase=phase)
+        assert result['reason'] == reason, (ambiguous, phase, position)
+        assert result['internal_stop_count'] == 0
+        assert result['sequence'] == 'N' * ((3 - phase) % 3) + sequence
+        assert result['source_sha256'] == resolution.sequence_digest(sequence)
+
+
+@pytest.mark.parametrize('phase', [1, 2])
+def test_ambiguity_in_first_incomplete_codon_is_retained(phase):
+    for ambiguous in 'RYSWKMBDHVN':
+        sequence = ambiguous + 'A' * (phase - 1) + 'CCCCCCTAA'
+        result = resolution.evaluate(sequence, phase=phase)
+        assert result['accepted']
+        assert result['sequence'] == 'N' * ((3 - phase) % 3) + sequence
+
+
+def test_cds_rejection_precedence_is_retained():
+    assert resolution.evaluate('CCCTAANNNTAA', phase=0)['reason'] == 'premature_stop'
+    assert resolution.evaluate('CCCTGATAA', code=27, phase=0)['reason'] == 'translation_uncertain'
+    assert resolution.evaluate('NCCTGATAA', code=27, phase=0)['reason'] == 'internal_ambiguous_bases'
+
+
 def test_valid_source_priority_and_conditional_longest_selection():
     choice, reason, _ = resolution.select_candidate('ATGAAATAA', 'ATGCCCAAATAA', phase=0)
     assert choice == 'supplied' and 'disagreement' in reason

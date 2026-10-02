@@ -67,6 +67,116 @@ def candidate_rows():
     )
 
 
+@pytest.mark.parametrize("identifier_dtype", ["object", "string"])
+@pytest.mark.parametrize("duplicate_metadata", [False, True])
+def test_input_state_annotation_preserves_exact_cache_keys_frame_types_and_order(identifier_dtype, duplicate_metadata):
+    mod = load_module()
+    frame = pd.DataFrame({
+        "orthogroup": pd.Series(["OG1", "OG2", "OG1"], dtype=identifier_dtype),
+        "_analysis_key": pd.Series(["keyA", "keyB", "keyC"], dtype=identifier_dtype),
+        "_candidate_id": pd.Series(["candA", "candB", "candC"], dtype=identifier_dtype),
+        "metadata": pd.Series([1, pd.NA, 3], dtype="Int64"),
+    })
+    if duplicate_metadata:
+        frame = pd.concat([frame, frame[["metadata"]]], axis=1)
+    frame.index = pd.Index([8, 8, 2], name="source_row")
+    original = frame.copy(deep=True)
+    states = {"OG1": {"missing_required_inputs": ["a.tsv", "b.nwk"], "required_input_signature": "signatureA"},
+              "OG2": {"missing_required_inputs": [], "required_input_signature": "signatureB"}}
+    output = mod.annotate_candidate_input_state(frame, states)
+    expected_keys = ["27da8d6f06fff3753dfb091053cfd4449be6a1b174b28b68c6f75eb8aad4cc39",
+                     "73453a6f3812c1be649f825128d05806b4614accec8450fe867bc2df7ed3f5f5",
+                     "4e3f2f6309aed8ba2d72c2af748a827b506d9ef0af09c587ab3d913e5ad1dafc"]
+    assert output["_analysis_key"].tolist() == expected_keys
+    assert output["_cache_name"].tolist() == [f"{name}_{key[:16]}" for name, key in zip(["candA", "candB", "candC"], expected_keys, strict=True)]
+    assert output["_missing_required_inputs"].tolist() == ["a.tsv;b.nwk", "", "a.tsv;b.nwk"]
+    assert output["_required_input_signature"].tolist() == ["signatureA", "signatureB", "signatureA"]
+    assert output.columns.tolist() == frame.columns.tolist() + ["_missing_required_inputs", "_required_input_signature", "_cache_name"]
+    pd.testing.assert_frame_equal(output.drop(columns=["_analysis_key", "_missing_required_inputs", "_required_input_signature", "_cache_name"]),
+                                  frame.drop(columns="_analysis_key"))
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_input_state_annotation_keeps_numeric_legacy_row_coercion():
+    mod = load_module()
+    frame = pd.DataFrame({"orthogroup": [1], "_analysis_key": [2.0], "_candidate_id": [3]})
+    original = frame.copy(deep=True)
+    output = mod.annotate_candidate_input_state(frame, {"1.0": {"missing_required_inputs": [], "required_input_signature": "signatureN"}})
+    assert output["_analysis_key"].tolist() == ["6890eddd8869214a17e0d6f1d0346476386df22acfce6a8a3e8b888c3b55cbf0"]
+    assert output["_cache_name"].tolist() == ["3.0_6890eddd8869214a"]
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_input_state_annotation_keeps_empty_schema_and_lookup_error_order():
+    mod = load_module()
+    empty = pd.DataFrame()
+    output = mod.annotate_candidate_input_state(empty, {})
+    assert output.columns.tolist() == ["_missing_required_inputs", "_required_input_signature"]
+    assert output.empty and empty.empty and len(empty.columns) == 0
+    frame = pd.DataFrame({"orthogroup": ["unknown"]})
+    original = frame.copy(deep=True)
+    with pytest.raises(KeyError, match="unknown"):
+        mod.annotate_candidate_input_state(frame, {})
+    pd.testing.assert_frame_equal(frame, original)
+    frame = pd.DataFrame({"orthogroup": ["known"], "_analysis_key": ["key"]})
+    with pytest.raises(KeyError, match="_candidate_id"):
+        mod.annotate_candidate_input_state(frame, {"known": {"missing_required_inputs": [], "required_input_signature": "signature"}})
+
+
+@pytest.mark.parametrize("numeric_dtype", ["float32", "float64", "Float32"])
+@pytest.mark.parametrize("duplicate_metadata", [False, True])
+def test_candidate_identity_keeps_scalar_precision_nullable_types_and_exact_hashes(numeric_dtype, duplicate_metadata):
+    mod = load_module()
+    frame = pd.DataFrame({
+        "orthogroup": ["OG_001", "NA"], "trait": pd.Series(["aquatic", pd.NA], dtype="string"),
+        "state_change": ["A>V", "G>D"], "codon_site_alignment": pd.Series([9, 4], dtype="Int64"),
+        "from_state": pd.Series([0.1, float("nan")], dtype=numeric_dtype),
+        "to_state": pd.Series([1, 2], dtype="UInt64"), "_canonical_support_branch_ids": ["3,7", None],
+        "unused": pd.Categorical(["u", "v"]),
+    })
+    if duplicate_metadata:
+        frame = pd.concat([frame, frame[["unused"]]], axis=1)
+    frame.index = pd.Index([8, 8], name="source_row")
+    original = frame.copy(deep=True)
+    output = mod.assign_candidate_ids(frame, "no", "none")
+    if numeric_dtype == "float64":
+        first_id = "OG_001_site9_A_V_bffa70544fc05999"
+        first_key = "c5176013feda1aab58d957f5fdec9cc2507e576c433f599401f73de51f719f5c"
+    else:
+        first_id = "OG_001_site9_A_V_3bc868909033769b"
+        first_key = "c3494a1c7b77f5d57fb3cac19bf0663c0cd4c06ecead8449ba6b69b1f3b7e100"
+    expected_ids = [first_id, "NA_site4_G_D_8faacf8f38690d6d"]
+    expected_keys = [first_key, "af336d6fb3bf5090ac8403c06eb2d1d977e47d3f6cfed19b38caaac3360aec39"]
+    assert output["_candidate_id"].tolist() == expected_ids
+    assert output["_analysis_key"].tolist() == expected_keys
+    assert output["_cache_name"].tolist() == [f"{identifier}_{key[:16]}" for identifier, key in zip(expected_ids, expected_keys, strict=True)]
+    pd.testing.assert_frame_equal(output.drop(columns=["_candidate_id", "_analysis_key", "_cache_name"]), original)
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_candidate_identity_keeps_numeric_legacy_row_coercion():
+    mod = load_module()
+    frame = pd.DataFrame({"orthogroup": [1], "state_change": [2], "codon_site_alignment": [3], "unused": [0.5]})
+    output = mod.assign_candidate_ids(frame, "no", "none")
+    assert output["_candidate_id"].tolist() == ["1.0_site3_2.0_115c165d73c91d2d"]
+    assert output["_analysis_key"].tolist() == ["848090a1a470c3c8b6a0d18122aa9fdbe36a90f369df6f87888ad51bbffdb7a0"]
+
+
+def test_candidate_identity_keeps_duplicate_rejection_empty_schema_and_error_order():
+    mod = load_module()
+    empty = mod.assign_candidate_ids(pd.DataFrame(), "no", "none")
+    assert empty.empty and empty.columns.tolist() == ["_candidate_id", "_analysis_key", "_cache_name"]
+    with pytest.raises(KeyError, match="codon_site_alignment"):
+        mod.assign_candidate_ids(pd.DataFrame({"orthogroup": ["OG1"]}), "no", "none")
+    with pytest.raises(ValueError, match="cannot convert float NaN to integer"):
+        mod.assign_candidate_ids(pd.DataFrame({"orthogroup": ["OG1"], "codon_site_alignment": [float("nan")]}), "no", "none")
+    frame = pd.DataFrame({"orthogroup": ["OG1", "OG1"], "codon_site_alignment": [1, 1], "state_change": ["A>V", "A>V"]})
+    original = frame.copy(deep=True)
+    with pytest.raises(ValueError, match="Candidate IDs are not unique"):
+        mod.assign_candidate_ids(frame, "no", "none")
+    pd.testing.assert_frame_equal(frame, original)
+
+
 def write_summary(path, frame=None):
     if frame is None:
         frame = candidate_rows()
