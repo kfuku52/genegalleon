@@ -415,6 +415,45 @@ see [remaining I/O performance](remaining-io-performance.md) and
 [batch I/O performance](batch-io-performance.md). Its benchmark also
 checks equivalent logical outputs and separates parent/child peak RSS.
 
+## Input staging comparisons
+
+`workflow/benchmarks/benchmark_input_staging.py` generates a deterministic large
+genome, CDS, and gzip GFF, then measures planning, initial staging, resumed staging,
+and worker metadata preflight. It reports SHA-256 calls/bytes, wall time, peak RSS,
+and an exact combined fingerprint of plans, staged receipts/manifests, and worker
+metadata. It alternates baseline/current runs with one warmup and three measured
+trials; comparison fails if any fingerprint differs. Run without concurrent builds
+or tests. Provide a saved baseline support directory visible at the same path in
+the runtime, for example via `GENEGALLEON_DOCKER_EXTRA_BINDS`:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_input_staging.py \
+  --baseline-support /tmp/gg-baseline/workflow/support --genome-mib 1024 \
+  --output tmp/input-staging-comparison.json
+```
+
+Add `--alias-roles` to exercise CDS/genome roles sharing a file. These warm-cache
+synthetic comparisons do not establish production NAS throughput or whole-workflow
+speedup. Source mutation/replacement, conflicting receipts, gzip rejection, and
+formatted-output equivalence are covered by `test_input_generation_array_scripts.py`.
+
+On 2026-10-02, Docker Linux/arm64 with Python 3.12.14 compared baseline
+`0f9e3c9` against this change using 1.074 GB of raw fixtures and three alternating
+trials after warmup. Complete plan/receipt/metadata fingerprints matched across
+all measured runs. Median process peak RSS was 65.84 / 65.80 MiB before/after.
+
+| Phase | Before seconds | After seconds | Before SHA-256 GB | After SHA-256 GB |
+| --- | ---: | ---: | ---: | ---: |
+| Initial staging | 2.264 | 1.618 | 4.30 | 3.22 |
+| Resumed staging | 1.083 | 0.526 | 2.15 | 1.07 |
+| Worker metadata preflight | 1.027 | 0.520 | 2.15 | 1.07 |
+
+The initial-staging SHA-256 volume drops by 25%, and resumed staging/worker
+preflight by 50%. Planning with distinct role paths keeps the same read volume.
+These measurements exclude shared-resource downloads, formatting and BUSCO,
+and do not establish a production NAS or SIF speedup.
+
 ## Dependency-aware debug harness
 
 `workflow/gg_all_entrypoints_debug.sh` runs all major entrypoints in a dependency-aware order and records a summary TSV.

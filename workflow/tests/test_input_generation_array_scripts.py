@@ -16,6 +16,238 @@ REQUIRE_GENOMES_SCRIPT = SUPPORT_DIR / "validate_required_genomes.py"
 REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
 
 
+@pytest.fixture
+def bound_staging_plan(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    species = 'Arabidopsis_thaliana'
+    raw = tmp_path / 'raw'
+    write_direct_species_fixture(raw, species)
+    roles = {role: raw / species / (species + suffix) for role, suffix in
+             (('cds', '.cds.fa'), ('gff', '.gff'), ('genome', '.genome.fa'))}
+    manifest = tmp_path / 'manifest.tsv'
+    manifest.write_text('provider\tid\tspecies_key\tbind_local_sources\tcds_url\tgff_url\tgenome_url\n'
+                        + f'direct\tfixture\t{species}\t1\t'
+                        + '\t'.join(path.as_uri() for path in roles.values()) + '\n')
+    plan = tmp_path / 'plan.json'
+    result = run_python(PLAN_SCRIPT, '--provider', 'all', '--download-manifest', str(manifest),
+                        '--download-dir', str(tmp_path / 'downloads'), '--stage-downloads', '--outfile', str(plan))
+    assert result.returncode == 0, result.stderr
+    return plan, roles
+
+
+def test_staging_reads_unique_sources_per_boundary_and_resume_keeps_receipts(bound_staging_plan, monkeypatch):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+
+    plan, roles = bound_staging_plan
+    original_digest = state.digest
+    calls = []
+
+    def counted(path):
+        calls.append(str(path))
+        return original_digest(path)
+
+    monkeypatch.setattr(state, 'digest', counted)
+    monkeypatch.setattr(staging, 'digest', counted)
+    staging.stage_downloads(plan)
+    for path in roles.values():
+        assert calls.count(str(path)) == 3  # Preflight, binding, and publication.
+    receipt = Path(str(plan) + '.tasks/1.json')
+    frozen = receipt.read_bytes()
+    calls.clear()
+    staging.stage_downloads(plan)
+    assert receipt.read_bytes() == frozen
+    for path in roles.values():
+        assert calls.count(str(path)) == 1
+    payload = json.loads(frozen)
+    payload['task']['input_sha256'][str(roles['cds'])] = '0' * 64
+    receipt.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match='Staged raw input changed'):
+        staging.stage_downloads(plan)
+
+
+@pytest.mark.parametrize('boundary', ['binding', 'publication', 'resume'])
+@pytest.mark.parametrize('mutation', ['write', 'restore_mtime', 'replace'])
+def test_staging_rejects_changes_between_boundaries(bound_staging_plan, monkeypatch, boundary, mutation):
+    import os
+
+    import stage_input_generation_downloads as staging
+
+    plan, roles = bound_staging_plan
+    source = roles['cds']
+
+    def mutate():
+        before = source.stat()
+        changed = source.read_bytes().replace(b'ATG', b'ACG')
+        if mutation == 'replace':
+            replacement = source.with_suffix('.replacement')
+            replacement.write_bytes(changed)
+            os.replace(replacement, source)
+        else:
+            source.write_bytes(changed)
+        if mutation in ('restore_mtime', 'replace'):
+            os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    if boundary == 'resume':
+        staging.stage_downloads(plan)
+        mutate()
+        with pytest.raises(ValueError, match='Local manifest input changed'):
+            staging.stage_downloads(plan)
+    else:
+        original_binding = staging.bound_local_manifest_task
+
+        def changed_binding(task):
+            if boundary == 'binding':
+                mutate()
+            actual = original_binding(task)
+            if boundary == 'publication':
+                mutate()
+            return actual
+
+        monkeypatch.setattr(staging, 'bound_local_manifest_task', changed_binding)
+        with pytest.raises(ValueError, match='(Bound local source|Local input changed)'):
+            staging.stage_downloads(plan)
+        assert not Path(str(plan) + '.tasks/1.json').exists()
+
+
+def test_planning_and_binding_hash_aliased_roles_once(bound_staging_plan, monkeypatch):
+    import input_generation_array_state as state
+    import plan_input_generation_tasks as planner
+    import stage_input_generation_downloads as staging
+
+    plan, roles = bound_staging_plan
+    manifest = plan.parent / 'manifest.tsv'
+    manifest.write_text(manifest.read_text().replace(roles['cds'].as_uri(), roles['genome'].as_uri()))
+    aliased_plan = plan.with_name('aliased.json')
+    original_digest = state.digest
+    calls = []
+
+    def counted(path):
+        calls.append(str(path))
+        return original_digest(path)
+
+    monkeypatch.setattr(state, 'digest', counted)
+    monkeypatch.setattr(sys, 'argv', ['planner', '--provider', 'all', '--download-manifest', str(manifest),
+                        '--download-dir', str(plan.parent / 'downloads'), '--stage-downloads', '--outfile', str(aliased_plan)])
+    assert planner.main() == 0
+    assert calls.count(str(roles['genome'])) == 1
+    calls.clear()
+    task = json.loads(aliased_plan.read_text())['tasks'][0]
+    actual = staging.bound_local_manifest_task(task)
+    assert actual['cds_path'] == actual['genome_path'] == roles['genome']
+    assert calls.count(str(roles['genome'])) == 1
+    calls.clear()
+    staging.stage_downloads(aliased_plan)
+    assert calls.count(str(roles['genome'])) == 3
+
+
+def test_digest_rejects_path_replacement_while_reading(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    import input_generation_array_state as state
+
+    source = tmp_path / 'source.fa'
+    source.write_bytes(b'>chr1\nATG\n')
+    replacement = tmp_path / 'replacement.fa'
+    replacement.write_bytes(b'>chr1\nACG\n')
+    original_fstat = state.os.fstat
+    calls = 0
+
+    def replace_after_fstat(fd):
+        nonlocal calls
+        info = original_fstat(fd)
+        calls += 1
+        if calls == 2:
+            state.os.replace(replacement, source)
+        return info
+
+    monkeypatch.setattr(state.os, 'fstat', replace_after_fstat)
+    with pytest.raises(OSError, match='File changed while hashing'):
+        state.digest(source)
+
+
+def test_unique_hash_batch_rejects_source_changed_after_its_read(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    import input_generation_array_state as state
+
+    first, second = tmp_path / 'first.fa', tmp_path / 'second.fa'
+    first.write_bytes(b'>chr1\nATG\n')
+    second.write_bytes(b'>chr2\nATG\n')
+    original_digest = state.digest
+
+    def change_earlier_file(path):
+        if path == str(second):
+            before = first.stat()
+            first.write_bytes(b'>chr1\nACG\n')
+            state.os.utime(first, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return original_digest(path)
+
+    monkeypatch.setattr(state, 'digest', change_earlier_file)
+    with pytest.raises(OSError, match='File changed while hashing'):
+        state.digest_paths([first, second, first])
+
+
+def test_worker_verifies_bound_inputs_once_and_rejects_conflicting_receipt(bound_staging_plan, monkeypatch):
+    import input_generation_array_state as state
+    import run_input_generation_task as runner
+    import stage_input_generation_downloads as staging
+
+    plan, roles = bound_staging_plan
+    staging.stage_downloads(plan)
+    original_digest = state.digest
+    calls = []
+
+    def counted(path):
+        calls.append(str(path))
+        return original_digest(path)
+
+    monkeypatch.setattr(state, 'digest', counted)
+    monkeypatch.setattr(runner, 'digest', counted)
+    metadata = plan.parent / 'metadata.json'
+    argv = ['runner', '--task-plan', str(plan), '--task-index', '1', '--describe-only',
+            '--species-cds-dir', str(plan.parent / 'cds'), '--species-gff-dir', str(plan.parent / 'gff'),
+            '--species-genome-dir', str(plan.parent / 'genomes'), '--task-meta-output', str(metadata)]
+    monkeypatch.setattr(sys, 'argv', argv)
+    assert runner.main() == 0
+    for path in roles.values():
+        assert calls.count(str(path)) == 1
+    frozen = metadata.read_bytes()
+    receipt = Path(str(plan) + '.tasks/1.json')
+    payload = json.loads(receipt.read_text())
+    payload['task']['input_sha256'][str(roles['cds'])] = '0' * 64
+    receipt.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit) as error:
+        runner.main()
+    assert error.value.code == 2
+    assert metadata.read_bytes() == frozen
+    with pytest.raises(ValueError, match='conflicts with the frozen plan'):
+        state.frozen_input_hashes(plan, state.load_plan(plan), 1)
+
+
+def test_legacy_download_rejects_original_changed_before_receipt(bound_staging_plan, monkeypatch):
+    from types import SimpleNamespace
+
+    import run_input_generation_task as runner
+
+    plan, roles = bound_staging_plan
+    payload = json.loads(plan.read_text())
+    payload.pop('download_mode')
+    payload['tasks'][0]['manifest_row']['bind_local_sources'] = '0'
+    plan.write_text(json.dumps(payload))
+    original_download = runner.fsi.download_from_manifest
+
+    def changed_download(*args, **kwargs):
+        report = original_download(*args, **kwargs)
+        roles['cds'].write_text('>gene1\nACGAAATTT\n')
+        return report
+
+    monkeypatch.setattr(runner.fsi, 'download_from_manifest', changed_download)
+    args = SimpleNamespace(task_plan=plan, task_index=1, download_timeout=5,
+                           http_header=[], auth_bearer_token_env='')
+    with pytest.raises(ValueError, match='Local manifest input changed'):
+        runner.resolve_manifest_task(runner.deserialize_task(payload['tasks'][0]), args)
+    assert not Path(str(plan) + '.tasks/1.json').exists()
+
+
 def test_bound_sources_preserve_formatted_outputs_without_raw_copy_and_reject_changes(tmp_path):
     raw = tmp_path / "raw"
     species = "Arabidopsis_thaliana"

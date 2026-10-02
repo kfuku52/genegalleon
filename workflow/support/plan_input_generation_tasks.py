@@ -9,7 +9,7 @@ import format_species_inputs as fsi
 from format_species_manifest import read_download_manifest
 from format_species_provider_config import DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
-from input_generation_array_state import atomic_json, digest, safe_component
+from input_generation_array_state import atomic_json, digest_paths, safe_component
 
 
 def build_arg_parser():
@@ -109,7 +109,7 @@ def main():
             task["gene_grouping_mode"] = args.gene_grouping_mode
             task["gff_repair_mode"] = args.gff_repair_mode
             task["format_strict"] = bool(args.strict)
-            task["input_sha256"] = {str(task[key]): digest(task[key]) for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if task.get(key)}
+            task["input_sha256"] = digest_paths(task[key] for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if task.get(key))
             all_tasks.append(task)
         all_warnings.extend(warnings)
         all_errors.extend(errors)
@@ -132,12 +132,13 @@ def main():
                 row = {**row, **resolve_local_manifest_row(provider, row.get("id", ""), species, row,
                           manifest.parent, [], 0)}
             row = {**row, "provider": provider, "species_key": species}
-            source_hashes = {}
+            source_paths = []
             for key in ("cds_url", "gff_url", "gbff_url", "genome_url"):
                 parsed = urlparse(row.get(key, ""))
                 if parsed.scheme == "file":
                     source = str(Path(unquote(parsed.path)).resolve())
-                    source_hashes[source] = digest(source)
+                    source_paths.append(source)
+            source_hashes = digest_paths(source_paths)
             all_tasks.append({"input_sha256": source_hashes, "provider": provider, "species_key": species, "species_prefix": species,
                               "manifest_row": row, "manifest_parent": str(manifest.parent),
                               "download_dir": str(Path(args.download_dir).expanduser().resolve()),

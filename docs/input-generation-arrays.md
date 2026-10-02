@@ -20,6 +20,14 @@ changed/missing sources. CoGe GFF content checks still apply. Default rows retai
 the ordinary isolated staged-copy behavior. Keep bound files visible in the
 same container namespace until all workers and finalization finish.
 
+SHA-256 checks read each unique path once within a verification phase, including
+roles sharing a file and original/staged references to bound sources. Preflight,
+binding, and publication remain independent full-content checks; later invocations
+never trust a persistent size/mtime hash cache. Worker preflight checks both the
+original plan and resolved receipt in one pass, rejecting conflicting hashes.
+Hashing checks the open file and current path identity to reject modifications or
+replacement during the read. Plan and receipt formats are unchanged.
+
 BUSCO lineage downloads are extracted into a temporary directory inside the
 workspace download cache and published only after BUSCO succeeds. An incomplete
 download remains there for diagnosis and is not treated as a ready lineage.

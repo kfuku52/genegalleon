@@ -9,7 +9,7 @@ from pathlib import Path
 
 import format_species_inputs as fsi
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
-from input_generation_array_state import atomic_json, digest, load_plan
+from input_generation_array_state import atomic_json, digest, digest_paths, load_plan
 
 
 def build_arg_parser():
@@ -87,12 +87,27 @@ def write_json(path_text, payload):
         json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
 
 
-def resolve_manifest_task(task, args):
+def verify_task_inputs(task, actual=None, raw_input_error=None):
+    original = task.get("input_sha256", {})
+    resolved = actual.get("input_sha256", {}) if actual is not None else {}
+    observed = digest_paths([*original, *resolved])
+    for path, expected in original.items():
+        if observed[path] != expected:
+            label = "Local manifest input" if "manifest_row" in task else "Raw input"
+            if label == "Raw input" and raw_input_error is not None:
+                raw_input_error(label + " changed after planning: " + path)
+            raise ValueError(label + " changed after planning: " + path)
+    for path, expected in resolved.items():
+        if observed[path] != expected:
+            if raw_input_error is not None:
+                raw_input_error("Raw input changed after planning: " + path)
+            raise ValueError("Raw input changed after planning: " + path)
+
+
+def resolve_manifest_task(task, args, *, raw_input_error=None):
     if "manifest_row" not in task:
+        verify_task_inputs(task, raw_input_error=raw_input_error)
         return task
-    for path, expected in task.get("input_sha256", {}).items():
-        if digest(path) != expected:
-            raise ValueError("Local manifest input changed after planning: " + path)
     plan_sha256 = digest(args.task_plan)
     root = Path(str(args.task_plan) + ".tasks")
     root.mkdir(parents=True, exist_ok=True)
@@ -104,7 +119,9 @@ def resolve_manifest_task(task, args):
         actual = deserialize_task(cached["task"])
         if any(actual.get(key) != task.get(key) for key in ("species_prefix", "species_key", "provider")):
             raise ValueError("Resolved download cache species/provider mismatch")
+        verify_task_inputs(task, actual, raw_input_error=raw_input_error)
         return actual
+    verify_task_inputs(task)
     if load_plan(args.task_plan).get("download_mode") == "staged":
         raise ValueError("Staged download receipt is missing; rerun array_prepare before workers")
     manifest = root / (str(args.task_index) + ".tsv")
@@ -127,7 +144,14 @@ def resolve_manifest_task(task, args):
     if errors or len(tasks) != 1:
         raise ValueError("Expected exactly one downloaded species task: " + repr(errors))
     actual = tasks[0]
-    actual["input_sha256"] = {**task.get("input_sha256", {}), **{str(actual[key]): digest(actual[key]) for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(key)}}
+    # Legacy worker-side downloads also need a fresh check of original sources
+    # after the network work, before a resolved receipt can be published.
+    actual_paths = [str(actual[key]) for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(key)]
+    observed = digest_paths([*actual_paths, *task.get("input_sha256", {})])
+    for path, expected in task.get("input_sha256", {}).items():
+        if observed[path] != expected:
+            raise ValueError("Local manifest input changed after planning: " + path)
+    actual["input_sha256"] = {**task.get("input_sha256", {}), **{path: observed[path] for path in actual_paths}}
     for key in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
         actual[key] = task[key]
     atomic_json(resolved, {"plan_sha256": plan_sha256, "task_index": args.task_index,
@@ -152,10 +176,7 @@ def main():
 
     if args.dry_run and "manifest_row" in tasks[args.task_index - 1]:
         parser.error("Use the array submission helper for a download-free manifest preview")
-    task = resolve_manifest_task(deserialize_task(tasks[args.task_index - 1]), args)
-    for path, expected in task.get("input_sha256", {}).items():
-        if digest(path) != expected:
-            parser.error("Raw input changed after planning: " + path)
+    task = resolve_manifest_task(deserialize_task(tasks[args.task_index - 1]), args, raw_input_error=parser.error)
     output_cds_dir = Path(args.species_cds_dir).expanduser().resolve()
     output_gff_dir = Path(args.species_gff_dir).expanduser().resolve()
     output_genome_dir = Path(args.species_genome_dir).expanduser().resolve()

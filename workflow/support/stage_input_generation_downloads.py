@@ -14,7 +14,7 @@ from format_species_download.local import validate_gzip_with_cache
 from format_species_manifest import resolved_manifest_fieldnames, write_resolved_manifest_tsv
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from format_species_providers.catalogs import validate_coge_export_gff_file
-from input_generation_array_state import atomic_json, digest, export_manifest, load_plan
+from input_generation_array_state import atomic_json, digest, digest_paths, export_manifest, load_plan
 
 
 def has_required_source(task, keys):
@@ -91,12 +91,16 @@ def bound_local_manifest_task(task):
             if not path.is_file() or path.stat().st_size == 0:
                 raise ValueError("Missing or empty bound local source: " + str(path))
             expected = task.get("input_sha256", {}).get(str(path))
-            if not expected or digest(path) != expected:
+            if not expected:
                 raise ValueError("Bound local source does not match the frozen plan: " + str(path))
-            error = validate_gzip_with_cache(path)
-            if error is not None:
-                raise ValueError("Invalid bound local source: {} ({})".format(path, error))
         actual[role + "_path"] = path
+    paths = [actual[key] for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual[key]]
+    for path, observed in digest_paths(paths).items():
+        if observed != task["input_sha256"][path]:
+            raise ValueError("Bound local source does not match the frozen plan: " + path)
+        error = validate_gzip_with_cache(Path(path))
+        if error is not None:
+            raise ValueError("Invalid bound local source: {} ({})".format(path, error))
     missing = task_missing_annotation_label(actual["cds_path"], actual["gff_path"],
                                             actual["gbff_path"], actual["genome_path"])
     if missing:
@@ -117,16 +121,24 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     task_root.mkdir(parents=True, exist_ok=True)
     pending = []
     for index, task in enumerate(plan["tasks"], 1):
-        for path, expected in task.get("input_sha256", {}).items():
-            if digest(path) != expected:
-                raise ValueError("Local manifest input changed after planning: " + path)
+        original_hashes = task.get("input_sha256", {})
         cached_path = task_root / f"{index}.json"
+        cached = None
         if cached_path.exists():
             cached = json.loads(cached_path.read_text())
             if cached.get("plan_sha256") != plan_hash or cached.get("task_index") != index:
                 raise ValueError("Staged input belongs to another plan/task")
+        # A resumed receipt often names the original bound sources again.
+        # Share this full read only within preflight; binding/publication still
+        # perform their independent content checks after intervening work.
+        cached_hashes = cached["task"]["input_sha256"] if cached is not None else {}
+        observed_hashes = digest_paths([*original_hashes, *cached_hashes])
+        for path, expected in original_hashes.items():
+            if observed_hashes[path] != expected:
+                raise ValueError("Local manifest input changed after planning: " + path)
+        if cached is not None:
             for path, expected in cached["task"]["input_sha256"].items():
-                if digest(path) != expected:
+                if observed_hashes[path] != expected:
                     raise ValueError("Staged raw input changed; use a new workspace: " + path)
             if not (task_root / f"{index}.resolved.tsv").is_file():
                 raise ValueError("Staged resolved manifest is missing; use a new workspace")
@@ -228,13 +240,15 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
         if require_genome and not has_required_source(actual, ("genome_path", "gbff_path")):
             staging_errors.append("Required genome input is missing for " + task["species_prefix"])
             continue
-        actual["input_sha256"] = {
-            **task.get("input_sha256", {}),
-            **{str(actual[k]): digest(actual[k]) for k in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(k)},
-        }
+        actual_paths = [str(actual[k]) for k in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(k)]
+        # Check the union before merging: a bound path serves both as original
+        # input and actual output, and must match the frozen hash we publish.
+        observed_hashes = digest_paths([*actual_paths, *task.get("input_sha256", {})])
         for path, expected in task.get("input_sha256", {}).items():
-            if digest(path) != expected:
+            if observed_hashes[path] != expected:
                 raise ValueError("Local input changed during staging: " + path)
+        actual["input_sha256"] = {**task.get("input_sha256", {}),
+                                  **{path: observed_hashes[path] for path in actual_paths}}
         for setting in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
             actual[setting] = task[setting]
         rows = [resolved_rows[key]]
