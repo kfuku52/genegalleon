@@ -16,6 +16,7 @@ from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from format_species_provider_resolvers import provider_raw_dir
 from format_species_providers.catalogs import validate_coge_export_gff_file
 from input_generation_array_state import atomic_json, digest, digest_paths, export_manifest, load_plan
+from input_generation_staging_reuse import FreshReadFence, StagedProofReader
 
 
 def has_required_source(task, keys):
@@ -68,7 +69,7 @@ def explicit_manifest_task(task, row, download_root):
     return actual
 
 
-def bound_local_manifest_task(task):
+def bound_local_manifest_task(task, verified_inputs=None):
     """Explicitly bind frozen file sources without creating another raw copy."""
     row = task["manifest_row"]
     mode = str(row.get("bind_local_sources", "") or "").strip()
@@ -98,10 +99,11 @@ def bound_local_manifest_task(task):
                 raise ValueError("Bound local source does not match the frozen plan: " + str(path))
         actual[role + "_path"] = path
     paths = [actual[key] for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual[key]]
-    for path, observed in digest_paths(paths).items():
+    observed_hashes = verified_inputs.verified(paths) if verified_inputs else digest_paths(paths)
+    for path, observed in observed_hashes.items():
         if observed != task["input_sha256"][path]:
             raise ValueError("Bound local source does not match the frozen plan: " + path)
-        error = validate_gzip_with_cache(Path(path))
+        error = None if verified_inputs else validate_gzip_with_cache(Path(path))
         if error is not None:
             raise ValueError("Invalid bound local source: {} ({})".format(path, error))
     missing = task_missing_annotation_label(actual["cds_path"], actual["gff_path"],
@@ -123,6 +125,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     task_root = Path(str(plan_path) + ".tasks")
     task_root.mkdir(parents=True, exist_ok=True)
     pending = []
+    reuse_reader = StagedProofReader()
+    reuse_fences = {}
     for index, task in enumerate(plan["tasks"], 1):
         original_hashes = task.get("input_sha256", {})
         cached_path = task_root / f"{index}.json"
@@ -135,7 +139,18 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
         # Share this full read only within preflight; binding/publication still
         # perform their independent content checks after intervening work.
         cached_hashes = cached["task"]["input_sha256"] if cached is not None else {}
+        reuse = reuse_reader.resolve(task)
+        if reuse != task.get("staged_input_reuse"):
+            raise ValueError("Staging reuse proof differs from the frozen plan")
+        if reuse:
+            if original_hashes != reuse["input_sha256"]:
+                raise ValueError("Staging reuse hashes differ from the frozen plan")
+            reuse_fences[index] = FreshReadFence([*original_hashes, *cached_hashes])
         observed_hashes = digest_paths([*original_hashes, *cached_hashes])
+        if reuse:
+            if cached_hashes and cached_hashes != original_hashes:
+                raise ValueError("Staging reuse cache hashes differ from the frozen plan")
+            reuse_fences[index].certify(observed_hashes, original_hashes)
         for path, expected in original_hashes.items():
             if observed_hashes[path] != expected:
                 raise ValueError("Local manifest input changed after planning: " + path)
@@ -152,6 +167,9 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
         else:
             pending.append((index, task))
     if not pending:
+        reuse_reader.check()
+        for fence in reuse_fences.values():
+            fence.check()
         print("All staged inputs verified; no downloads needed.")
         return
 
@@ -160,7 +178,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     bound = {}
     pending_tasks = []
     for _index, task in pending:
-        actual = bound_local_manifest_task(task)
+        fence = reuse_fences.get(_index)
+        actual = bound_local_manifest_task(task, verified_inputs=fence) if fence else bound_local_manifest_task(task)
         key = (task["provider"], task["species_prefix"])
         if actual is None:
             pending_tasks.append(task)
@@ -246,7 +265,9 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
         actual_paths = [str(actual[k]) for k in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(k)]
         # Check the union before merging: a bound path serves both as original
         # input and actual output, and must match the frozen hash we publish.
-        observed_hashes = digest_paths([*actual_paths, *task.get("input_sha256", {})])
+        fence = reuse_fences.get(index)
+        observed_hashes = (fence.verified([*actual_paths, *task.get("input_sha256", {})]) if fence
+                           else digest_paths([*actual_paths, *task.get("input_sha256", {})]))
         for path, expected in task.get("input_sha256", {}).items():
             if observed_hashes[path] != expected:
                 raise ValueError("Local input changed during staging: " + path)
@@ -254,6 +275,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
                                   **{path: observed_hashes[path] for path in actual_paths}}
         for setting in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
             actual[setting] = task[setting]
+        if fence:
+            actual["staged_input_reuse"] = task["staged_input_reuse"]
         rows = [resolved_rows[key]]
         write_resolved_manifest_tsv(task_root / f"{index}.resolved.tsv", resolved_manifest_fieldnames(rows), rows)
         atomic_json(task_root / f"{index}.json", {
@@ -262,6 +285,9 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
         }, immutable=True)
         staged_count += 1
 
+    reuse_reader.check()
+    for fence in reuse_fences.values():
+        fence.check()
     failures = list(report["errors"]) + discovery_errors + staging_errors
     if failures:
         raise ValueError(

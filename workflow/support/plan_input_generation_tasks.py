@@ -10,6 +10,7 @@ from format_species_manifest import read_download_manifest
 from format_species_provider_config import DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 from input_generation_array_state import atomic_json, digest_paths, safe_component
+from input_generation_staging_reuse import StagedProofReader
 
 
 def build_arg_parser():
@@ -82,6 +83,7 @@ def main():
     all_warnings = []
     all_errors = []
     resolved_inputs = []
+    reuse_reader = StagedProofReader()
 
     for provider, input_dir in provider_inputs:
         resolved_inputs.append({"provider": provider, "input_dir": str(input_dir)})
@@ -138,12 +140,18 @@ def main():
                 if parsed.scheme == "file":
                     source = str(Path(unquote(parsed.path)).resolve())
                     source_paths.append(source)
-            source_hashes = digest_paths(source_paths)
-            all_tasks.append({"input_sha256": source_hashes, "provider": provider, "species_key": species, "species_prefix": species,
+            task = {"provider": provider, "species_key": species, "species_prefix": species,
                               "manifest_row": row, "manifest_parent": str(manifest.parent),
                               "download_dir": str(Path(args.download_dir).expanduser().resolve()),
                               "gene_grouping_mode": args.gene_grouping_mode,
-                              "gff_repair_mode": args.gff_repair_mode, "format_strict": bool(args.strict)})
+                              "gff_repair_mode": args.gff_repair_mode, "format_strict": bool(args.strict)}
+            reuse = reuse_reader.resolve(task)
+            if reuse is not None:
+                if not args.stage_downloads:
+                    parser.error("Staging reuse requires --stage-downloads")
+                task["staged_input_reuse"] = reuse
+            task["input_sha256"] = reuse["input_sha256"] if reuse else digest_paths(source_paths)
+            all_tasks.append(task)
     species = [task["species_prefix"] for task in all_tasks]
     if any(not safe_component(name) for name in species):
         parser.error("Species prefixes must be safe, non-hidden filename components")
@@ -174,6 +182,7 @@ def main():
     }
     if args.stage_downloads:
         payload["download_mode"] = "staged"
+    reuse_reader.check()
     atomic_json(outfile, payload, immutable=True)
 
     print("Discovered {} species tasks -> {}".format(len(all_tasks), outfile))

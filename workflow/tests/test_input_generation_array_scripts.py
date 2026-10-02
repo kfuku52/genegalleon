@@ -67,6 +67,232 @@ def test_staging_reads_unique_sources_per_boundary_and_resume_keeps_receipts(bou
         staging.stage_downloads(plan)
 
 
+@pytest.fixture
+def reusable_staging_plan(bound_staging_plan):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+
+    old_plan, roles = bound_staging_plan
+    staging.stage_downloads(old_plan)
+    task = json.loads(old_plan.read_text())['tasks'][0]
+    row = dict(task['manifest_row'])
+    row.update(reuse_staged_plan=str(old_plan), reuse_staged_plan_sha256=state.digest(old_plan),
+               reuse_staged_workspace=str(old_plan.parent), reuse_staged_task_index='1',
+               reuse_staged_receipt_sha256=state.digest(Path(str(old_plan) + '.tasks/1.json')))
+    manifest = old_plan.parent / 'reuse.tsv'
+    with manifest.open('w') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row), delimiter='\t')
+        writer.writeheader()
+        writer.writerow(row)
+    new_plan = old_plan.with_name('new.json')
+    return old_plan, new_plan, manifest, roles
+
+
+def plan_reuse(new_plan, manifest):
+    return run_python(PLAN_SCRIPT, '--provider', 'all', '--download-manifest', str(manifest),
+                      '--download-dir', str(new_plan.parent / 'new-downloads'),
+                      '--stage-downloads', '--outfile', str(new_plan))
+
+
+def test_cross_plan_reuse_reads_once_keeps_outputs_and_same_plan_resume(reusable_staging_plan, monkeypatch):
+    import input_generation_array_state as state
+    import plan_input_generation_tasks as planner
+    import stage_input_generation_downloads as staging
+
+    old_plan, new_plan, manifest, roles = reusable_staging_plan
+    original_digest = state.digest
+    calls = []
+
+    def counted(path):
+        calls.append(str(path))
+        return original_digest(path)
+
+    monkeypatch.setattr(state, 'digest', counted)
+    monkeypatch.setattr(sys, 'argv', ['plan', '--provider', 'all', '--download-manifest', str(manifest),
+                                    '--download-dir', str(new_plan.parent / 'new-downloads'),
+                                    '--stage-downloads', '--outfile', str(new_plan)])
+    assert planner.main() == 0
+    assert not any(str(path) in calls for path in roles.values())
+
+    def unexpected_gzip(*args, **kwargs):
+        pytest.fail('Identical successfully staged inputs should reuse gzip validation')
+
+    monkeypatch.setattr(staging, 'validate_gzip_with_cache', unexpected_gzip)
+    staging.stage_downloads(new_plan)
+    for path in roles.values():
+        assert calls.count(str(path)) == 1
+    original = json.loads(Path(str(old_plan) + '.tasks/1.json').read_text())['task']
+    migrated = json.loads(Path(str(new_plan) + '.tasks/1.json').read_text())['task']
+    assert {k: v for k, v in migrated.items() if k != 'staged_input_reuse'} == original
+    frozen = Path(str(new_plan) + '.tasks/1.json').read_bytes()
+    calls.clear()
+    staging.stage_downloads(new_plan)
+    assert Path(str(new_plan) + '.tasks/1.json').read_bytes() == frozen
+    for path in roles.values():
+        assert calls.count(str(path)) == 1
+
+
+@pytest.mark.parametrize('fault', ['plan_sha', 'receipt_sha', 'species', 'index', 'role', 'partial', 'unbound'])
+def test_cross_plan_reuse_rejects_wrong_proof(reusable_staging_plan, fault):
+    old_plan, new_plan, manifest, roles = reusable_staging_plan
+    with manifest.open() as handle:
+        row = next(csv.DictReader(handle, delimiter='\t'))
+    if fault == 'plan_sha':
+        row['reuse_staged_plan_sha256'] = '0' * 64
+    elif fault == 'receipt_sha':
+        row['reuse_staged_receipt_sha256'] = '0' * 64
+    elif fault == 'species':
+        row['species_key'] = 'Arabidopsis_lyrata'
+    elif fault == 'index':
+        row['reuse_staged_task_index'] = '2'
+    elif fault == 'role':
+        row['cds_url'] = roles['genome'].as_uri()
+    elif fault == 'partial':
+        row['reuse_staged_workspace'] = ''
+    else:
+        row['bind_local_sources'] = '0'
+    with manifest.open('w') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row), delimiter='\t')
+        writer.writeheader()
+        writer.writerow(row)
+    result = plan_reuse(new_plan, manifest)
+    assert result.returncode != 0
+    assert 'Staging reuse' in result.stderr or 'staging reuse' in result.stderr
+    assert not new_plan.exists()
+
+
+@pytest.mark.parametrize('moment', ['before_staging', 'binding', 'publication', 'after_publication'])
+@pytest.mark.parametrize('mutation', ['restore_mtime', 'replace'])
+def test_cross_plan_reuse_rejects_changed_bytes_and_late_changes(reusable_staging_plan, monkeypatch, moment, mutation):
+    import os
+
+    import stage_input_generation_downloads as staging
+
+    _old_plan, new_plan, manifest, roles = reusable_staging_plan
+    assert plan_reuse(new_plan, manifest).returncode == 0
+    source = roles['cds']
+
+    def mutate():
+        before = source.stat()
+        time.sleep(0.02)
+        data = source.read_bytes().replace(b'ATG', b'ACG')
+        if mutation == 'replace':
+            replacement = source.with_suffix('.new')
+            replacement.write_bytes(data)
+            os.replace(replacement, source)
+        else:
+            source.write_bytes(data)
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    if moment == 'before_staging':
+        mutate()
+    elif moment in ('binding', 'publication'):
+        original = staging.bound_local_manifest_task
+
+        def binding(task, **kwargs):
+            if moment == 'binding':
+                mutate()
+            result = original(task, **kwargs)
+            if moment == 'publication':
+                mutate()
+            return result
+
+        monkeypatch.setattr(staging, 'bound_local_manifest_task', binding)
+    else:
+        original = staging.atomic_json
+
+        def publish(path, *args, **kwargs):
+            result = original(path, *args, **kwargs)
+            mutate()
+            return result
+
+        monkeypatch.setattr(staging, 'atomic_json', publish)
+    with pytest.raises(ValueError, match='(Input changed during staging reuse|Staging reuse input SHA256 mismatch)'):
+        staging.stage_downloads(new_plan)
+    assert not Path(str(new_plan) + '.prepared.json').exists()
+
+
+def test_cross_plan_reuse_rechecks_sealed_evidence_on_staging(reusable_staging_plan):
+    import stage_input_generation_downloads as staging
+
+    old_plan, new_plan, manifest, _roles = reusable_staging_plan
+    assert plan_reuse(new_plan, manifest).returncode == 0
+    receipt = Path(str(old_plan) + '.tasks/1.json')
+    receipt.write_text(receipt.read_text() + ' ')
+    with pytest.raises(ValueError, match='evidence SHA256 mismatch'):
+        staging.stage_downloads(new_plan)
+
+
+def test_cross_plan_reuse_maps_old_container_paths(reusable_staging_plan):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+
+    old_plan, new_plan, manifest, _roles = reusable_staging_plan
+    receipt_path = Path(str(old_plan) + '.tasks/1.json')
+    receipt = json.loads(receipt_path.read_text())
+    task = receipt['task']
+    mapping = {path: '/workspace/' + str(Path(path).relative_to(old_plan.parent)) for path in task['input_sha256']}
+    task['input_sha256'] = {mapping[path]: sha for path, sha in task['input_sha256'].items()}
+    for role in ('cds', 'gff', 'genome'):
+        task[role + '_path'] = mapping[task[role + '_path']]
+    receipt_path.write_text(json.dumps(receipt))
+    text = manifest.read_text().replace(next(csv.DictReader(manifest.open(), delimiter='\t'))['reuse_staged_receipt_sha256'], state.digest(receipt_path))
+    manifest.write_text(text)
+    result = plan_reuse(new_plan, manifest)
+    assert result.returncode == 0, result.stderr
+    staging.stage_downloads(new_plan)
+
+
+def test_cross_plan_reuse_keeps_worker_fresh_content_verification(reusable_staging_plan):
+    from argparse import Namespace
+
+    import run_input_generation_task as worker
+    import stage_input_generation_downloads as staging
+
+    _old_plan, new_plan, manifest, roles = reusable_staging_plan
+    assert plan_reuse(new_plan, manifest).returncode == 0
+    staging.stage_downloads(new_plan)
+    task = json.loads(new_plan.read_text())['tasks'][0]
+    args = Namespace(task_plan=str(new_plan), task_index=1)
+    assert worker.resolve_manifest_task(task, args)['cds_path'] == roles['cds']
+    roles['cds'].write_bytes(roles['cds'].read_bytes().replace(b'ATG', b'ACG'))
+    with pytest.raises(ValueError, match='Local manifest input changed'):
+        worker.resolve_manifest_task(task, args)
+
+
+def test_cross_plan_reuse_keeps_current_coge_validation(reusable_staging_plan, monkeypatch):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+
+    old_plan, new_plan, manifest, _roles = reusable_staging_plan
+    old = json.loads(old_plan.read_text())
+    old['tasks'][0]['provider'] = 'coge'
+    old_plan.write_text(json.dumps(old))
+    receipt_path = Path(str(old_plan) + '.tasks/1.json')
+    receipt = json.loads(receipt_path.read_text())
+    receipt['task']['provider'] = 'coge'
+    receipt['plan_sha256'] = state.digest(old_plan)
+    receipt_path.write_text(json.dumps(receipt))
+    with manifest.open() as handle:
+        row = next(csv.DictReader(handle, delimiter='\t'))
+    row.update(provider='coge', reuse_staged_plan_sha256=state.digest(old_plan),
+               reuse_staged_receipt_sha256=state.digest(receipt_path))
+    with manifest.open('w') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row), delimiter='\t')
+        writer.writeheader()
+        writer.writerow(row)
+    result = plan_reuse(new_plan, manifest)
+    assert result.returncode == 0, result.stderr
+
+    def current_check(*args, **kwargs):
+        raise ValueError('Current CoGe payload check')
+
+    monkeypatch.setattr(staging, 'validate_coge_export_gff_file', current_check)
+    with pytest.raises(ValueError, match='Current CoGe payload check'):
+        staging.stage_downloads(new_plan)
+    assert not Path(str(new_plan) + '.tasks/1.json').exists()
+
+
 @pytest.mark.parametrize('boundary', ['binding', 'publication', 'resume'])
 @pytest.mark.parametrize('mutation', ['write', 'restore_mtime', 'replace'])
 def test_staging_rejects_changes_between_boundaries(bound_staging_plan, monkeypatch, boundary, mutation):

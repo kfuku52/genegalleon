@@ -28,6 +28,27 @@ original plan and resolved receipt in one pass, rejecting conflicting hashes.
 Hashing checks the open file and current path identity to reject modifications or
 replacement during the read. Plan and receipt formats are unchanged.
 
+For a new workspace/runtime, bound rows can reuse successful native staging
+receipts from a previous prepare, including a partially failed prepare. Supply
+all five manifest columns: `reuse_staged_plan` (absolute old plan path),
+`reuse_staged_plan_sha256`, `reuse_staged_workspace` (absolute old workspace),
+`reuse_staged_task_index` (one-based), and `reuse_staged_receipt_sha256` (SHA-256
+of the old `task_plan.json.tasks/N.json`). The old staged version-2 plan and
+receipt must agree on plan hash, index, provider, species, every role and its
+source hash. Old `/workspace/...` receipt paths are mapped through the supplied
+workspace; other paths must match exactly. Incomplete or inconsistent proof
+is rejected, rather than silently using it.
+
+Planning freezes those previously validated hashes without rereading the raw
+files. Prepare then performs one fresh full SHA-256 read per unique source and
+reuses gzip validation only after matching the sealed receipt. That read is
+fenced through binding, publication and the end of staging by device, inode,
+size, mtime and ctime checks. A change, replacement or symlink invalidates the
+attempt, including changes after an earlier species was published. No checksum
+is cached across invocations; a retry and every worker still verify content
+afresh. CoGe GFF checks remain current. This reuses raw staging validation only;
+formatting, CDS/GFF validation and BUSCO results are not certified by it.
+
 BUSCO lineage downloads are extracted into a temporary directory inside the
 workspace download cache and published only after BUSCO succeeds. An incomplete
 download remains there for diagnosis and is not treated as a ready lineage.
@@ -146,7 +167,8 @@ supported `provider`, and an `id`. Duplicate output species prefixes are rejecte
 even across providers. Species keys and explicit download filenames must be
 non-hidden filename components, without directory separators or control characters. Prepare embeds the selected rows; workers do not reread a
 mutable manifest. Local source references are resolved before embedding. Local
-raw inputs, including file URLs in manifests, are hashed during planning;
+raw inputs, including file URLs in manifests, are hashed during planning
+(or frozen from sealed staging evidence and freshly hashed by prepare);
 downloaded inputs are hashed by prepare. Resolved tasks and manifests are bound
 to the prepare-completion marker. Changed raw inputs or missing staged receipts
 are rejected instead of silently downloading during a worker run.
