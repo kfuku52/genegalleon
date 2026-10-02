@@ -1072,6 +1072,49 @@ def test_eight_families_and_twenty_three_query_columns_render_without_cross_fami
     assert len({round(value, 2) for value in family_legend_x}) == 1
 
 
+@pytest.mark.parametrize("plot_width", [None, 18.0])
+def test_family_summary_keeps_long_rotated_labels_and_legend_inside_page(
+    tmp_path: Path, plot_width: float | None,
+):
+    if shutil.which("Rscript") is None:
+        pytest.skip("Rscript is unavailable")
+    tree = tmp_path / "species.nwk"
+    tree.write_text("(Species_one:1,Species_two:1);\n", encoding="utf-8")
+    families = ["neprosin_glutamic_prolyl_endopeptidase"] + [f"family_{i}" for i in range(16)]
+    long_table = tmp_path / "long.tsv"
+    pandas.DataFrame([
+        dict(species=species, species_display=species.replace("_", " "), query=family,
+             query_order=index, presence=1, copy_number=1, status="complete")
+        for index, family in enumerate(families, 1) for species in ["Species_one", "Species_two"]
+    ]).to_csv(long_table, sep="\t", index=False)
+    svg = tmp_path / "family_summary.svg"
+    command = [
+        "Rscript", str(SUPPORT_DIR / "plot_query2family_presence_absence.R"),
+        f"--species_tree={tree}", f"--long_table={long_table}", f"--out_svg={svg}",
+    ]
+    if plot_width is not None:
+        command.append(f"--width={plot_width}")
+    subprocess.run(command, check=True, capture_output=True, text=True)
+    root = ElementTree.parse(svg).getroot()
+    page_width = float(root.attrib["viewBox"].split()[2])
+    page_height = float(root.attrib["viewBox"].split()[3])
+    assert page_width == pytest.approx((7.2 if plot_width is None else plot_width) * 72)
+    text = svg.read_text(encoding="utf-8")
+    label_boxes = [
+        (float(y), float(length)) for y, length in re.findall(
+            r"translate\([0-9.]+,([0-9.]+)\) rotate\(-90\).*?textLength='([0-9.]+)px'",
+            text,
+        )
+    ]
+    assert len(label_boxes) == len(families)
+    label_bottom = max(y + length for y, length in label_boxes)
+    assert label_bottom < page_height - 3
+    legend = next(element for element in root.iter()
+                  if element.tag.endswith("text") and element.text == "Ortholog")
+    legend_y = float(legend.attrib["y"])
+    assert label_bottom + 6 < legend_y < page_height - 3
+
+
 @pytest.mark.parametrize(
     ("cds_fasta_id", "species", "expected"),
     [

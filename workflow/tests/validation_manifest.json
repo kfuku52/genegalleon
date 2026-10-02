@@ -6,6 +6,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_presence_absence_runtime.py",
     "test_pairwise_synteny.py",
     "test_pairwise_synteny_runtime.py",
     "test_species_taxonomy_runtime.py",

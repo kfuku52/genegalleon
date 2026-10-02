@@ -186,7 +186,10 @@ def species_gene_cache_contract(species_name, species_cds_path, species_gff_path
             "cds_sha256": sha256_file(species_cds_path),
             "gff_sha256": sha256_file(species_gff_path),
         },
-        "parameters": {"feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 5},
+        "parameters": {
+            "feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 5,
+            "phase_policy": "report",
+        },
     }
 
 
@@ -263,6 +266,11 @@ def ensure_species_gene_cache(
                 "CDS",
                 "--multiple_hits",
                 "longest",
+                # Neighborhoods use validated genomic coordinates, not GFF
+                # coding frames. Translate the independently supplied FASTA;
+                # retain conflicting phases as unavailable frame metadata.
+                "--phase-policy",
+                "report",
                 "--ncpu",
                 str(max(1, int(threads))),
                 "--outfile",

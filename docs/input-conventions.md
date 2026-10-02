@@ -154,6 +154,11 @@ during interval normalization. This does not supply missing annotations or
 relax source/provenance checks; normal and reversed intervals retain both
 original coordinate bounds.
 
+Local synteny caches use `gff2genestat.py --phase-policy report`: neighborhoods
+need genomic coordinates, while sequence similarity uses the supplied FASTA
+independently of GFF phase. Conflicting phases remain recorded with an
+unavailable coding frame; coordinate/identity validation remains strict.
+
 ### `workspace/input/species_genetic_code/species_genetic_code.tsv`
 
 This file is optional and is consulted only when GeneGalleon translates CDS to proteins.
@@ -234,6 +239,10 @@ MAKKIK...
 
 When using gene IDs rather than FASTA, keep the identifiers consistent with
 the headers in `workspace/input/species_cds`.
+
+For query-source ranking in presence/absence summaries, retain explicit
+`species=Source species` FASTA metadata or provide a query-metadata TSV;
+see [query selection and saved OG/HOG inputs](presence-absence.md).
 
 ### `workspace/input/species_expression`
 

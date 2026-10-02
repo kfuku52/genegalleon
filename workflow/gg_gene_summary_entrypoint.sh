@@ -135,6 +135,15 @@ presence_absence_plot_width="${presence_absence_plot_width:-7.2}" # Width in inc
 presence_absence_max_families="${presence_absence_max_families:-auto}" # Maximum plotted families; auto means all query2family queries and first 100 orthogroups. Use 0/all for no cap.
 presence_absence_family_ids="${presence_absence_family_ids:-}" # Optional comma/space-separated family IDs to plot, overriding the default subset.
 presence_absence_family_file="${presence_absence_family_file:-}" # Optional file listing family IDs to plot, one ID per line or first column.
+presence_absence_family_manifest="${presence_absence_family_manifest:-}" # Ordered saved-family sources, query files or anchor species, and optional HOG membership; see docs/presence-absence.md.
+presence_absence_query_metadata="${presence_absence_query_metadata:-}" # TSV with family_id, query_id, source_species, and optional tree_species.
+presence_absence_query_selection="${presence_absence_query_selection:-all}" # all|closest; closest conservatively replaces redundant farther-source queries.
+presence_absence_target_species="${presence_absence_target_species:-}" # Species-tree tip used to rank original query source species in closest mode.
+presence_absence_selection_species="${presence_absence_selection_species:-}" # Comma-separated species whose exact ortholog union is preserved; empty means all family species.
+presence_absence_query_label="${presence_absence_query_label:-id}" # id|label for query-anchor column labels; identifiers remain unchanged.
+presence_absence_label_map="${presence_absence_label_map:-}" # Display-only TSV with kind (family|column), id, label.
+presence_absence_focus_species="${presence_absence_focus_species:-}" # Comma-separated plotted species to outline.
+presence_absence_legend_columns="${presence_absence_legend_columns:-auto}" # auto|1|2|3 for the ortholog glyph legend.
 
 # HGT parameters
 hgt_summary_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" # Resolve UniProt best-hit taxonomic distances with the local ETE taxonomy DB when available.

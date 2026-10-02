@@ -42,6 +42,31 @@ presence_absence_plot_width="${presence_absence_plot_width:-7.2}"
 presence_absence_max_families="${presence_absence_max_families:-auto}"
 presence_absence_family_ids="${presence_absence_family_ids:-}"
 presence_absence_family_file="${presence_absence_family_file:-}"
+presence_absence_family_manifest="${presence_absence_family_manifest:-}"
+presence_absence_query_metadata="${presence_absence_query_metadata:-}"
+presence_absence_query_selection="${presence_absence_query_selection:-all}"
+presence_absence_target_species="${presence_absence_target_species:-}"
+presence_absence_selection_species="${presence_absence_selection_species:-}"
+presence_absence_query_label="${presence_absence_query_label:-id}"
+presence_absence_label_map="${presence_absence_label_map:-}"
+presence_absence_focus_species="${presence_absence_focus_species:-}"
+presence_absence_legend_columns="${presence_absence_legend_columns:-auto}"
+# Preserve caller-relative paths before core helpers change directories.
+for presence_input in presence_absence_family_manifest presence_absence_query_metadata presence_absence_label_map; do
+  case "${!presence_input}" in ""|/*) ;; *) printf -v "${presence_input}" '%s/%s' "${PWD}" "${!presence_input}" ;; esac
+done
+unset presence_input
+if [[ -n "${presence_absence_family_manifest}" && "${presence_absence_ortholog_basis}" != "query_gene" ]]; then
+  echo 'presence_absence_family_manifest requires presence_absence_ortholog_basis=query_gene' >&2
+  exit 1
+fi
+case "${presence_absence_query_selection}" in all|closest) ;; *) echo 'Invalid presence_absence_query_selection (all|closest)' >&2; exit 1 ;; esac
+case "${presence_absence_query_label}" in id|label) ;; *) echo 'Invalid presence_absence_query_label (id|label)' >&2; exit 1 ;; esac
+case "${presence_absence_legend_columns}" in auto|1|2|3) ;; *) echo 'Invalid presence_absence_legend_columns (auto|1|2|3)' >&2; exit 1 ;; esac
+if [[ "${presence_absence_query_selection}" == "closest" && ( -z "${presence_absence_target_species}" || "${presence_absence_ortholog_basis}" == "reference_species" ) ]]; then
+  echo 'closest requires presence_absence_target_species and query_gene/both ortholog basis' >&2
+  exit 1
+fi
 summary_output_dir="${summary_output_dir:-auto}"
 hgt_summary_output_dir="${hgt_summary_output_dir:-auto}"
 csubst_site_output_dir="${csubst_site_output_dir:-auto}"
@@ -430,23 +455,25 @@ run_presence_absence_summary_for_source() {
     echo "Skipping gene-family presence/absence summary because run_presence_absence_summary=0."
     return 0
   fi
-  if python "${gg_support_dir}/gene_family_output_store.py" has-files \
-    --root "${dir_gene_family}" \
-    --subdir stat_branch \
-    --suffix "_stat.branch.tsv"
-  then
-    :
-  else
-    store_status=$?
-    if [[ ${store_status} -eq 1 ]]; then
-      echo "Skipping gene-family presence/absence summary because no live or ZIP-backed stat_branch files were found under: ${dir_gene_family}"
+  if [[ -z "${presence_absence_family_manifest}" ]]; then
+    if python "${gg_support_dir}/gene_family_output_store.py" has-files \
+      --root "${dir_gene_family}" \
+      --subdir stat_branch \
+      --suffix "_stat.branch.tsv"
+    then
+      :
+    else
+      store_status=$?
+      if [[ ${store_status} -eq 1 ]]; then
+        echo "Skipping gene-family presence/absence summary because no live or ZIP-backed stat_branch files were found under: ${dir_gene_family}"
+        return 0
+      fi
+      return "${store_status}"
+    fi
+    if [[ "${gene_family_source}" == "query2family" && ! -d "${dir_query_gene}" ]]; then
+      echo "Skipping query2family presence/absence summary because query_gene input directory was not found: ${dir_query_gene}"
       return 0
     fi
-    return "${store_status}"
-  fi
-  if [[ "${gene_family_source}" == "query2family" && ! -d "${dir_query_gene}" ]]; then
-    echo "Skipping query2family presence/absence summary because query_gene input directory was not found: ${dir_query_gene}"
-    return 0
   fi
 
   local file_species_tree
@@ -488,60 +515,65 @@ run_presence_absence_summary_for_source() {
   local file_pdf="${summary_output_dir}/${outbase}.pdf"
   local file_svg="${summary_output_dir}/${outbase}.svg"
 
-  local collect_args=(
-    --mode "${gene_family_source}"
-    --dir_gene_family "${dir_gene_family}"
-    --species_tree "${file_species_tree}"
-    --out_presence "${file_presence}"
-    --out_copy_number "${file_copy_number}"
-    --out_long "${file_long}"
-    --out_plot_presence "${file_plot_presence}"
-    --out_plot_copy_number "${file_plot_copy_number}"
-    --out_plot_long "${file_plot_long}"
-    --out_selection "${file_selection}"
-    --include_incomplete "${presence_absence_include_incomplete}"
-    --max_families "${presence_absence_max_families}"
-  )
-  if [[ "${gene_family_source}" == "query2family" ]]; then
-    collect_args+=(--dir_query_gene "${dir_query_gene}")
-  elif [[ -n "${file_orthogroup_genecount_selected}" ]]; then
-    collect_args+=(--orthogroup_genecount "${file_orthogroup_genecount_selected}")
-  fi
-  if [[ -n "${presence_absence_family_ids}" ]]; then
-    collect_args+=(--family_ids "${presence_absence_family_ids}")
-  fi
-  if [[ -n "${presence_absence_family_file}" ]]; then
-    collect_args+=(--family_file "${presence_absence_family_file}")
+  if [[ -z "${presence_absence_family_manifest}" ]]; then
+    local collect_args=(
+      --mode "${gene_family_source}"
+      --dir_gene_family "${dir_gene_family}"
+      --species_tree "${file_species_tree}"
+      --out_presence "${file_presence}"
+      --out_copy_number "${file_copy_number}"
+      --out_long "${file_long}"
+      --out_plot_presence "${file_plot_presence}"
+      --out_plot_copy_number "${file_plot_copy_number}"
+      --out_plot_long "${file_plot_long}"
+      --out_selection "${file_selection}"
+      --include_incomplete "${presence_absence_include_incomplete}"
+      --max_families "${presence_absence_max_families}"
+    )
+    if [[ "${gene_family_source}" == "query2family" ]]; then
+      collect_args+=(--dir_query_gene "${dir_query_gene}")
+    elif [[ -n "${file_orthogroup_genecount_selected}" ]]; then
+      collect_args+=(--orthogroup_genecount "${file_orthogroup_genecount_selected}")
+    fi
+    if [[ -n "${presence_absence_family_ids}" ]]; then
+      collect_args+=(--family_ids "${presence_absence_family_ids}")
+    fi
+    if [[ -n "${presence_absence_family_file}" ]]; then
+      collect_args+=(--family_file "${presence_absence_family_file}")
+    fi
+
+    python "${gg_support_dir}/gene_family_presence_absence.py" "${collect_args[@]}"
+
+    local plot_args=(
+      --species_tree="${file_species_tree}" \
+      --long_table="${file_plot_long}" \
+      --value="${presence_absence_heatmap_value}" \
+      --width="${presence_absence_plot_width}" \
+      --out_pdf="${file_pdf}" \
+      --out_svg="${file_svg}"
+      --label_map="${presence_absence_label_map}"
+      --focus_species="${presence_absence_focus_species}"
+      --legend_columns="${presence_absence_legend_columns}"
+    )
+    if [[ -n "${file_species_tree_ci}" ]]; then
+      plot_args+=(--species_tree_ci="${file_species_tree_ci}")
+    fi
+    if [[ -n "${file_species_tree_support}" ]]; then
+      plot_args+=(--support_tree="${file_species_tree_support}")
+    fi
+    if [[ -n "${file_busco_table}" ]]; then
+      plot_args+=(--busco_table="${file_busco_table}")
+    fi
+    Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${plot_args[@]}"
   fi
 
-  python "${gg_support_dir}/gene_family_presence_absence.py" "${collect_args[@]}"
-
-  local plot_args=(
-    --species_tree="${file_species_tree}" \
-    --long_table="${file_plot_long}" \
-    --value="${presence_absence_heatmap_value}" \
-    --width="${presence_absence_plot_width}" \
-    --out_pdf="${file_pdf}" \
-    --out_svg="${file_svg}"
-  )
-  if [[ -n "${file_species_tree_ci}" ]]; then
-    plot_args+=(--species_tree_ci="${file_species_tree_ci}")
-  fi
-  if [[ -n "${file_species_tree_support}" ]]; then
-    plot_args+=(--support_tree="${file_species_tree_support}")
-  fi
-  if [[ -n "${file_busco_table}" ]]; then
-    plot_args+=(--busco_table="${file_busco_table}")
-  fi
-  Rscript "${gg_support_dir}/plot_query2family_presence_absence.R" "${plot_args[@]}"
-
-  if [[ "${gene_family_source}" == "query2family" ]]; then
+  if [[ "${gene_family_source}" == "query2family" || -n "${presence_absence_family_manifest}" ]]; then
     local file_species_mapping_tree="${file_species_tree}"
     if file_species_mapping_tree=$(resolve_presence_absence_species_mapping_tree "${file_species_tree}"); then
       echo "Using species-node mapping tree for reconciled duplications: ${file_species_mapping_tree}"
     fi
 
-    if [[ "${presence_absence_ortholog_basis}" == "reference_species" || "${presence_absence_ortholog_basis}" == "both" ]]; then
+    if [[ "${gene_family_source}" == "query2family" && ( "${presence_absence_ortholog_basis}" == "reference_species" || "${presence_absence_ortholog_basis}" == "both" ) ]]; then
       local reference_species_requested="${GG_COMMON_REFERENCE_SPECIES:-auto}"
       local reference_species_resolved=""
       local reference_species_candidate=""
@@ -605,6 +637,9 @@ run_presence_absence_summary_for_source() {
           --width="${presence_absence_plot_width}"
           --out_pdf="${file_reference_pdf}"
           --out_svg="${file_reference_svg}"
+          --label_map="${presence_absence_label_map}"
+          --focus_species="${presence_absence_focus_species}"
+          --legend_columns="${presence_absence_legend_columns}"
         )
         if [[ -n "${file_species_tree_ci}" ]]; then
           reference_plot_args+=(--species_tree_ci="${file_species_tree_ci}")
@@ -630,23 +665,37 @@ run_presence_absence_summary_for_source() {
       local file_query_map="${summary_output_dir}/query2family_query_gene_orthologs.query_map.tsv"
       local file_query_pdf="${summary_output_dir}/query2family_query_gene_orthologs.pdf"
       local file_query_svg="${summary_output_dir}/query2family_query_gene_orthologs.svg"
+      local file_query_long="${summary_output_dir}/query2family_query_gene_orthologs.long.tsv"
+      local query_input_args=(
+        --family_manifest "${presence_absence_family_manifest}"
+        --query_metadata "${presence_absence_query_metadata}"
+        --query_selection "${presence_absence_query_selection}"
+        --species_tree "${file_species_tree}"
+        --target_species "${presence_absence_target_species}"
+        --selection_species "${presence_absence_selection_species}"
+        --query_label "${presence_absence_query_label}"
+        --out_selection "${summary_output_dir}/query2family_query_gene_orthologs.selection.tsv"
+        --out_overlap "${summary_output_dir}/query2family_query_gene_orthologs.overlap.tsv"
+        --out_long "${file_query_long}"
+      )
 
       python "${gg_support_dir}/query_gene_orthologs.py" \
         --basis query_gene \
         --dir_gene_family "${dir_gene_family}" \
-        --dir_query_gene "${dir_query_gene}" \
+        --dir_query_gene "${dir_query_gene:-}" \
         --family_file "${file_selection}" \
         --out_columns "${file_query_columns}" \
         --out_glyphs "${file_query_glyphs}" \
         --out_tree "${file_query_tree}" \
         --out_synteny "${file_query_synteny}" \
         --out_ufboot "${file_query_ufboot}" \
-        --out_query_map "${file_query_map}"
+        --out_query_map "${file_query_map}" \
+        "${query_input_args[@]}"
 
       if [[ $(wc -l < "${file_query_columns}") -gt 1 && $(wc -l < "${file_query_glyphs}") -gt 1 ]]; then
         local query_gene_plot_args=(
           --species_tree="${file_species_tree}"
-          --long_table="${file_plot_long}"
+          --long_table="${file_query_long}"
           --ortholog_column_table="${file_query_columns}"
           --ortholog_glyph_table="${file_query_glyphs}"
           --ortholog_tree_table="${file_query_tree}"
@@ -659,6 +708,9 @@ run_presence_absence_summary_for_source() {
           --width="${presence_absence_plot_width}"
           --out_pdf="${file_query_pdf}"
           --out_svg="${file_query_svg}"
+          --label_map="${presence_absence_label_map}"
+          --focus_species="${presence_absence_focus_species}"
+          --legend_columns="${presence_absence_legend_columns}"
         )
         if [[ -n "${file_species_tree_ci}" ]]; then
           query_gene_plot_args+=(--species_tree_ci="${file_species_tree_ci}")

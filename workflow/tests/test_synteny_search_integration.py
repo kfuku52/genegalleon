@@ -12,6 +12,41 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+def test_synteny_cache_retains_coordinates_but_not_conflicting_coding_frame(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache, load_gene_info
+
+    cds = tmp_path / 'Species_a.fa'
+    cds.write_text('>Species_a_g1\nATGATGATG\n')
+    gff = tmp_path / 'Species_a.gff'
+    gff.write_text(
+        'chr1\ttest\tgene\t1\t14\t.\t+\t.\tID=g1\n'
+        'chr1\ttest\tmRNA\t1\t14\t.\t+\t.\tID=t1;Parent=g1\n'
+        'chr1\ttest\tCDS\t1\t4\t.\t+\t0\tID=c1;Parent=t1\n'
+        'chr1\ttest\tCDS\t10\t14\t.\t+\t0\tID=c2;Parent=t1\n'
+    )
+    kwargs = dict(species_name='Species_a', species_cds_path=str(cds), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1)
+    path = ensure_species_gene_cache(**kwargs)
+    row = pd.read_csv(path, sep='\t').iloc[0]
+    assert row.phase_status == 'conflicting'
+    assert pd.isna(row.cds_first_phase)
+    assert load_gene_info(path)[['gene_id', 'start', 'end']].values.tolist() == [['Species_a_g1', 1, 14]]
+    manifest = json.loads(Path(path + '.provenance.json').read_text())
+    assert manifest['parameters']['phase_policy'] == 'report'
+
+    # Reporting phase disagreement must not accept invalid phase values or
+    # overlapping CDS coordinates, and must not replace the prior valid cache.
+    original_output = Path(path).read_bytes()
+    valid = gff.read_text()
+    for invalid in [valid.replace('\t+\t0\tID=c2', '\t+\t3\tID=c2'),
+                    valid.replace('CDS\t10\t14', 'CDS\t4\t8')]:
+        gff.write_text(invalid)
+        with pytest.raises(RuntimeError):
+            ensure_species_gene_cache(**kwargs)
+        assert Path(path).read_bytes() == original_output
+
+
 @pytest.mark.parametrize('mode', ['cds', 'protein'])
 def test_search_windows_strands_boundaries_and_cache(tmp_path, mode):
     for tool in ['diamond', 'seqkit']:

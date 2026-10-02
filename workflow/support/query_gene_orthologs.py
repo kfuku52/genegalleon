@@ -29,10 +29,15 @@ import csv
 import gzip
 import io
 import math
+import re
+import warnings
 from collections import defaultdict
 from pathlib import Path
 
-from gene_family_output_store import GeneFamilyOutputStore
+if __package__:
+    from .gene_family_output_store import GeneFamilyOutputStore
+else:
+    from gene_family_output_store import GeneFamilyOutputStore
 
 STAT_BRANCH_SUFFIX = "_stat.branch.tsv"
 SYNTENY_SUFFIX = "_synteny.tsv"
@@ -204,14 +209,32 @@ QUERY_MAP_FIELDS = [
     "anchor_tip_branch_id",
     "column_order",
     "merged_query_count",
+    "source_species",
+    "hog_ids",
+]
+SELECTION_FIELDS = [
+    "family_id", "query_id", "source_species", "tree_species", "distance",
+    "anchor_cds_fasta_id", "decision", "reason", "replaced_by",
 ]
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir_gene_family", metavar="PATH", required=True)
-    parser.add_argument("--dir_query_gene", metavar="PATH", required=True)
+    parser.add_argument("--dir_query_gene", metavar="PATH", default="")
     parser.add_argument("--family_file", metavar="PATH", default="")
+    parser.add_argument("--family_manifest", metavar="TSV", default="",
+                        help="Ordered saved-family sources; see docs/presence-absence.md")
+    parser.add_argument("--query_metadata", metavar="TSV", default="")
+    parser.add_argument("--query_selection", choices=("all", "closest"), default="all")
+    parser.add_argument("--species_tree", metavar="NEWICK", default="")
+    parser.add_argument("--target_species", default="")
+    parser.add_argument("--selection_species", default="",
+                        help="Comma-separated species whose exact ortholog union must be preserved; empty=all")
+    parser.add_argument("--query_label", choices=("id", "label"), default="id")
+    parser.add_argument("--out_selection", metavar="TSV", default="")
+    parser.add_argument("--out_overlap", metavar="TSV", default="")
+    parser.add_argument("--out_long", metavar="TSV", default="")
     parser.add_argument(
         "--basis",
         choices=("reference_species", "query_gene"),
@@ -260,6 +283,7 @@ def read_query_definitions(path):
                         {
                             "query_id": query_id,
                             "query_label": _query_label_from_header(header, query_id),
+                            "source_species": _source_species_from_header(header),
                         }
                     )
         else:
@@ -276,6 +300,252 @@ def read_query_definitions(path):
         seen.add(query_id)
         unique.append(definition)
     return unique
+
+
+def _source_species_from_header(header):
+    # Explicit metadata only: never infer source from the best-hit tip or ID prefixes.
+    match = re.search(r"(?:^|[|\s])species=(.*?)(?=\s+[A-Za-z_]+=[^=]|\||$)", header)
+    return normalize_species_label(match.group(1)) if match else ""
+
+
+def read_query_metadata(path):
+    if not path:
+        return {}
+    metadata = {}
+    with Path(path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        if not {"family_id", "query_id", "source_species"}.issubset(reader.fieldnames or []):
+            raise ValueError("Query metadata requires family_id, query_id, source_species")
+        for row in reader:
+            key = (row["family_id"].strip(), row["query_id"].strip())
+            if not all(key) or key in metadata:
+                raise ValueError(f"Empty or duplicate query metadata key: {key}")
+            metadata[key] = {field: normalize_species_label(row.get(field))
+                             for field in ("source_species", "tree_species")}
+    return metadata
+
+
+def select_closest_queries(rows, definitions, family_id, species_tree, target_species,
+                           selection_species="", policy="all"):
+    """Conservatively replace only farther, orthologous, coverage-redundant queries."""
+    assignments = select_query_tip_assignments(rows, definitions)
+    by_id, _children, _root = build_tree_index(rows)
+    ancestors = {node: ancestor_chain(by_id, node) for node in by_id}
+    distances = {}
+    if policy == "closest":
+        if not species_tree or not target_species:
+            raise ValueError("closest requires --species_tree and --target_species")
+        from Bio import Phylo
+
+        tree = Phylo.read(species_tree, "newick")
+        tips = {normalize_species_label(tip.name): tip for tip in tree.get_terminals()}
+        if len(tips) != len(tree.get_terminals()) or "" in tips:
+            raise ValueError("Species tree must have unique non-empty tip labels")
+        target = normalize_species_label(target_species)
+        if target not in tips:
+            raise ValueError(f"Target species is absent from species tree: {target}")
+        # Rank shared ancestry, not total path length: a densely sampled source
+        # clade must not make a genuinely nearer relative appear farther away.
+        # Count target-lineage edges back to the source/target MRCA, independent
+        # of missing/non-comparable branch lengths.
+        paths = {name: [tree.root] + tree.get_path(tip) for name, tip in tips.items()}
+        for name, path in paths.items():
+            common = sum(a is b for a, b in zip(path, paths[target], strict=False))
+            distances[name] = len(paths[target]) - common
+    selected_species = {normalize_species_label(value) for value in selection_species.split(",")
+                        if value.strip()}
+    if selected_species:
+        if not species_tree:
+            raise ValueError("--selection_species requires --species_tree")
+        from Bio import Phylo
+
+        available_species = {normalize_species_label(tip.name)
+                             for tip in Phylo.read(species_tree, "newick").get_terminals()}
+        if selected_species - available_species:
+            raise ValueError(f"Selection species absent from species tree: {sorted(selected_species - available_species)}")
+        # A tree-tip species with zero family members is valid biological non-detection.
+    coverage = {}
+    for definition in definitions if policy == "closest" else []:
+        query_id = definition["query_id"]
+        tip = assignments[query_id]["tip"]
+        coverage[query_id] = {
+            str(row["node_name"]) for node, row in by_id.items()
+            if row.get("so_event") == "L"
+            and (not selected_species or normalize_species_label(row.get("spnode_coverage"))
+                 in selected_species)
+            and (node == tip or by_id[mrca_node(ancestors, node, tip)].get("so_event") == "S")
+        }
+    distance_by_query = {
+        definition["query_id"]: distances.get(
+            definition.get("tree_species") or definition.get("source_species", ""))
+        for definition in definitions
+    }
+    kept = []
+    decisions = {}
+    # Nearer candidates are finalized first. Equal distances never eliminate each other.
+    ordered = sorted(definitions, key=lambda d: (
+        distance_by_query[d["query_id"]] is None,
+        distance_by_query[d["query_id"]] or 0,
+    ))
+    for definition in ordered:
+        query_id = definition["query_id"]
+        distance = distance_by_query[query_id]
+        replacement = ""
+        if policy == "closest" and distance is not None:
+            tip = assignments[query_id]["tip"]
+            for candidate in kept:
+                candidate_id = candidate["query_id"]
+                candidate_distance = distance_by_query[candidate_id]
+                if candidate_distance is None or candidate_distance >= distance:
+                    continue
+                other_tip = assignments[candidate_id]["tip"]
+                same_lineage = tip == other_tip or by_id[
+                    mrca_node(ancestors, tip, other_tip)].get("so_event") == "S"
+                if same_lineage and coverage[query_id].issubset(coverage[candidate_id]):
+                    replacement = candidate_id
+                    break
+        if not replacement:
+            kept.append(definition)
+        decisions[query_id] = (replacement, distance)
+    retained_ids = {definition["query_id"] for definition in kept}
+    before = set().union(*coverage.values()) if coverage else set()
+    after = set().union(*(coverage[q] for q in retained_ids)) if retained_ids and coverage else set()
+    if before != after:
+        raise ValueError(f"Query selection changed the target ortholog union: family={family_id}")
+    audit = []
+    for definition in definitions:
+        query_id = definition["query_id"]
+        replacement, distance = decisions[query_id]
+        audit.append(dict(
+            family_id=family_id, query_id=query_id,
+            source_species=definition.get("source_species", ""),
+            tree_species=definition.get("tree_species") or definition.get("source_species", ""),
+            distance="NA" if distance is None else distance,
+            anchor_cds_fasta_id=by_id[assignments[query_id]["tip"]]["node_name"],
+            decision="excluded" if replacement else "retained",
+            reason=("nearer_ortholog_covers_target_union" if replacement else
+                    "all_queries" if policy == "all" else
+                    "unknown_source_or_tree_species" if distance is None else
+                    "no_strictly_nearer_redundant_ortholog"),
+            replaced_by=replacement,
+        ))
+    return [definition for definition in definitions if definition["query_id"] in retained_ids], audit
+
+
+def read_family_manifest(path):
+    """Read explicit saved tree sources without copying or pruning their artifacts."""
+    base = Path(path).resolve().parent
+    records = []
+    with Path(path).open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        required = {"family_id", "source_dir", "source_family_id"}
+        if not required.issubset(reader.fieldnames or []):
+            raise ValueError(f"Family manifest requires {sorted(required)}")
+        for row in reader:
+            row = {key: (value or "").strip() for key, value in row.items()}
+            if not all(row.get(key) for key in required):
+                raise ValueError("Family manifest has empty required values")
+            for key in ("source_dir", "query_file", "hog_table"):
+                if row.get(key):
+                    row[key] = str((base / row[key]).resolve())
+            if bool(row.get("query_file")) == bool(row.get("anchor_species")):
+                raise ValueError("Each manifest row requires query_file OR anchor_species")
+            if bool(row.get("hog_ids")) != bool(row.get("hog_table")):
+                raise ValueError("hog_ids and hog_table must be supplied together")
+            records.append(row)
+    ids = [row["family_id"] for row in records]
+    if not ids or len(ids) != len(set(ids)):
+        raise ValueError("Family manifest requires unique, non-empty family_id values")
+    return records
+
+
+class ManifestOutputStore:
+    """Route logical plot IDs to their original live-or-ZIP family artifacts."""
+
+    def __init__(self, records):
+        self.records = {row["family_id"]: row for row in records}
+        self.stores = {row["source_dir"]: GeneFamilyOutputStore(row["source_dir"])
+                       for row in records}
+
+    def _resolve(self, name):
+        for family_id in sorted(self.records, key=len, reverse=True):
+            if name.startswith(family_id + "_"):
+                row = self.records[family_id]
+                return self.stores[row["source_dir"]], row["source_family_id"] + name[len(family_id):]
+        raise ValueError(f"No manifest source for artifact: {name}")
+
+    def artifact(self, subdir, name):
+        store, original = self._resolve(name)
+        return store.artifact(subdir, original)
+
+    def open_binary(self, subdir, name):
+        store, original = self._resolve(name)
+        return store.open_binary(subdir, original)
+
+
+def manifest_query_definitions(record, rows, cds_fasta_ids):
+    definitions = read_query_definitions(record["query_file"]) if record.get("query_file") else []
+    members = defaultdict(set)
+    if record.get("hog_table"):
+        selected = set(record["hog_ids"].split(";"))
+        observed = set()
+        with _open_query_text(record["hog_table"]) as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            if not {"HOG", "OG"}.issubset(reader.fieldnames or []):
+                raise ValueError("HOG table requires HOG and OG columns")
+            tip_species = {str(row["node_name"]): normalize_species_label(row.get("spnode_coverage"))
+                           for row in rows if row.get("so_event") == "L"}
+            tip_ids = set(tip_species)
+            for hog in reader:
+                if hog["HOG"] not in selected:
+                    continue
+                if hog["HOG"] in observed or hog["OG"] != record["source_family_id"]:
+                    raise ValueError("Selected HOG is duplicated or belongs to another source OG")
+                observed.add(hog["HOG"])
+                for species, text in hog.items():
+                    if species in ("HOG", "OG", "Gene Tree Parent Clade"):
+                        continue
+                    for gene in re.split(r"[,;]\s*", text or ""):
+                        if not gene.strip():
+                            continue
+                        gene = gene.strip()
+                        if gene not in tip_ids:
+                            matches = [str(row["node_name"]) for row in rows
+                                       if row.get("so_event") == "L"
+                                       and normalize_species_label(row.get("spnode_coverage"))
+                                       == normalize_species_label(species)
+                                       and gene_id_from_cds_fasta_id(row["node_name"], species) == gene]
+                            if len(matches) != 1:
+                                raise ValueError(f"HOG member not uniquely present in saved tree: {gene}")
+                            gene = matches[0]
+                        if gene not in cds_fasta_ids:
+                            raise ValueError(f"HOG member missing from saved CDS FASTA: {gene}")
+                        if tip_species[gene] != normalize_species_label(species):
+                            raise ValueError(f"HOG member is in the wrong species column: {gene}")
+                        members[gene].add(hog["HOG"])
+        if selected != observed:
+            raise ValueError(f"Selected HOGs missing from table: {sorted(selected - observed)}")
+    if record.get("anchor_species"):
+        species = normalize_species_label(record["anchor_species"])
+        for row in rows:
+            if row.get("so_event") != "L" or normalize_species_label(row.get("spnode_coverage")) != species:
+                continue
+            gene = str(row["node_name"])
+            if record.get("hog_table") and gene not in members:
+                continue
+            definitions.append(dict(query_id=gene,
+                                    query_label=";".join(sorted(members[gene])) + " " + gene
+                                    if members[gene] else gene,
+                                    source_species=species))
+            # Mark an exact saved tip; do not search or rebuild the full OG tree.
+            row["query_marker_source"] = str(row.get("query_marker_source") or "") + "|direct:" + gene
+        if not definitions:
+            raise ValueError(f"No selected anchor-species genes in saved tree: {record['family_id']}")
+    for definition in definitions:
+        if members:
+            # HOG membership remains annotation, never a replacement tree or orthology definition.
+            definition["hog_ids"] = ";".join(sorted(members.get(definition["query_id"], set())))
+    return definitions
 
 
 def read_family_ids(query_dir, family_file=""):
@@ -1600,6 +1870,7 @@ def collect_family_query_anchor_orthologs(
     family_order,
     first_column_order,
     first_query_order,
+    query_label="id",
 ):
     """Collect query-anchored orthologs, coalescing records on one tree tip."""
 
@@ -1638,7 +1909,7 @@ def collect_family_query_anchor_orthologs(
                 "A query marker selected a gene-tree tip without species coverage: "
                 f"family={family_id}, branch_id={tip}, queries={query_ids}"
             )
-        plot_label = query_ids[0]
+        plot_label = query_labels[0] if query_label == "label" else query_ids[0]
         if len(query_ids) > 1:
             plot_label = f"{plot_label} (+{len(query_ids) - 1})"
         anchor_tip_by_id[anchor_cds_fasta_id] = tip
@@ -1717,6 +1988,8 @@ def collect_family_query_anchor_orthologs(
                 "anchor_tip_branch_id": tip,
                 "column_order": column["column_order"],
                 "merged_query_count": len(metadata["query_ids"]),
+                "source_species": definition.get("source_species", ""),
+                "hog_ids": definition.get("hog_ids", ""),
             }
         )
     return columns, glyphs, tree_nodes, query_map
@@ -1726,10 +1999,24 @@ def collect_query_anchor_orthologs(
     dir_gene_family,
     dir_query_gene,
     family_file="",
+    manifest_records=None,
+    query_metadata=None,
+    query_selection="all",
+    species_tree="",
+    target_species="",
+    selection_species="",
+    query_label="id",
+    selection_audit=None,
+    long_rows=None,
 ):
     query_dir = Path(dir_query_gene)
-    family_ids = read_family_ids(query_dir, family_file=family_file)
-    store = GeneFamilyOutputStore(dir_gene_family)
+    if manifest_records is None and not dir_query_gene:
+        raise ValueError("--dir_query_gene or --family_manifest is required")
+    family_ids = ([record["family_id"] for record in manifest_records] if manifest_records
+                  else read_family_ids(query_dir, family_file=family_file))
+    store = (ManifestOutputStore(manifest_records) if manifest_records
+             else GeneFamilyOutputStore(dir_gene_family))
+    manifest_by_id = {record["family_id"]: record for record in manifest_records or []}
     columns = []
     glyphs = []
     tree_nodes = []
@@ -1740,11 +2027,50 @@ def collect_query_anchor_orthologs(
     for family_id in family_ids:
         rows = read_stat_branch(store, family_id)
         if not rows:
-            continue
-        query_definitions = read_query_definitions(query_dir / family_id)
-        if not query_definitions:
+            if manifest_records:
+                raise ValueError(f"Saved family has no stat_branch artifact: {family_id}")
             continue
         cds_fasta_ids = read_family_cds_fasta_ids(store, family_id)
+        if manifest_records:
+            tip_ids = [str(row["node_name"]) for row in rows if row.get("so_event") == "L"]
+            if len(tip_ids) != len(set(tip_ids)):
+                raise ValueError(f"Saved tree repeats CDS FASTA IDs: {family_id}")
+            missing = set(tip_ids) - set(cds_fasta_ids)
+            if missing:
+                raise ValueError(f"Saved tree tips missing from CDS FASTA: {family_id}: {sorted(missing)}")
+            query_definitions = manifest_query_definitions(manifest_by_id[family_id], rows, cds_fasta_ids)
+        else:
+            query_definitions = read_query_definitions(query_dir / family_id)
+        if not query_definitions:
+            if manifest_records:
+                raise ValueError(f"Manifest query file has no records: {family_id}")
+            continue
+        known_query_ids = {definition["query_id"] for definition in query_definitions}
+        unknown_metadata_ids = {query_id for metadata_family, query_id in query_metadata or {}
+                                if metadata_family == family_id and query_id not in known_query_ids}
+        if unknown_metadata_ids:
+            raise ValueError(f"Query metadata IDs absent from selected family {family_id}: {sorted(unknown_metadata_ids)}")
+        for definition in query_definitions:
+            metadata = (query_metadata or {}).get((family_id, definition["query_id"]), {})
+            header_species = definition.get("source_species", "")
+            if header_species and metadata.get("source_species") and header_species != metadata["source_species"]:
+                raise ValueError(f"Conflicting source species metadata: {family_id}: {definition['query_id']}")
+            definition.update({key: value for key, value in metadata.items() if value})
+        query_definitions, audit = select_closest_queries(
+            rows, query_definitions, family_id, species_tree, target_species,
+            selection_species, query_selection,
+        )
+        if selection_audit is not None:
+            selection_audit.extend(audit)
+        if long_rows is not None:
+            counts = defaultdict(int)
+            for row in rows:
+                if row.get("so_event") == "L":
+                    counts[normalize_species_label(row.get("spnode_coverage"))] += 1
+            for species, count in counts.items():
+                long_rows.append(dict(species=species, species_display=species.replace("_", " "),
+                                      query=family_id, query_order=next_family_order,
+                                      presence=int(count > 0), copy_number=count, status="complete"))
         (
             family_columns,
             family_glyphs,
@@ -1758,6 +2084,7 @@ def collect_query_anchor_orthologs(
             family_order=next_family_order,
             first_column_order=next_column_order,
             first_query_order=next_query_order,
+            query_label=query_label,
         )
         columns.extend(family_columns)
         glyphs.extend(family_glyphs)
@@ -1868,9 +2195,13 @@ def query_evidence_for_output(rows):
 
 
 def run(args):
-    store = GeneFamilyOutputStore(args.dir_gene_family)
+    manifest_path = getattr(args, "family_manifest", "")
+    manifest_records = read_family_manifest(manifest_path) if manifest_path else None
+    store = ManifestOutputStore(manifest_records) if manifest_records else GeneFamilyOutputStore(args.dir_gene_family)
     basis = getattr(args, "basis", "reference_species")
     if basis == "reference_species":
+        if manifest_records or getattr(args, "query_selection", "all") != "all":
+            raise ValueError("Family manifests and query selection require --basis=query_gene")
         if not str(args.reference_species).strip():
             raise ValueError("--reference_species is required when --basis=reference_species")
         columns, glyphs, tree_nodes = collect_query_gene_orthologs(
@@ -1910,10 +2241,24 @@ def run(args):
     out_query_map = str(getattr(args, "out_query_map", "")).strip()
     if not out_query_map:
         raise ValueError("--out_query_map is required when --basis=query_gene")
+    selection_audit = []
+    long_rows = []
+    selection_output = getattr(args, "out_selection", "")
+    if getattr(args, "query_selection", "all") == "closest" and not selection_output:
+        raise ValueError("closest requires --out_selection to record excluded queries")
     columns, glyphs, tree_nodes, query_map = collect_query_anchor_orthologs(
         dir_gene_family=args.dir_gene_family,
         dir_query_gene=args.dir_query_gene,
         family_file=args.family_file,
+        manifest_records=manifest_records,
+        query_metadata=read_query_metadata(getattr(args, "query_metadata", "")),
+        query_selection=getattr(args, "query_selection", "all"),
+        species_tree=getattr(args, "species_tree", ""),
+        target_species=getattr(args, "target_species", ""),
+        selection_species=getattr(args, "selection_species", ""),
+        query_label=getattr(args, "query_label", "id"),
+        selection_audit=selection_audit,
+        long_rows=long_rows,
     )
     synteny_evidence = collect_reference_synteny_evidence(
         store=store,
@@ -1940,6 +2285,38 @@ def run(args):
         query_evidence_for_output(ufboot_evidence),
     )
     write_tsv(out_query_map, QUERY_MAP_FIELDS, query_map)
+    if selection_output:
+        write_tsv(selection_output, SELECTION_FIELDS, selection_audit)
+    if getattr(args, "out_long", ""):
+        # Complete absent-family rows for the species-tree tips as well as observed taxa.
+        species = {row["species"] for row in long_rows}
+        if getattr(args, "species_tree", ""):
+            from Bio import Phylo
+
+            species.update(normalize_species_label(tip.name)
+                           for tip in Phylo.read(args.species_tree, "newick").get_terminals())
+        by_key = {(row["query"], row["species"]): row for row in long_rows}
+        families = sorted({(row["query_order"], row["query"]) for row in long_rows})
+        complete_long = []
+        for order, family in families:
+            for sp in sorted(species):
+                complete_long.append(by_key.get((family, sp), dict(
+                    species=sp, species_display=sp.replace("_", " "), query=family,
+                    query_order=order, presence=0, copy_number=0, status="complete")))
+        write_tsv(args.out_long, ["species", "species_display", "query", "query_order",
+                                  "presence", "copy_number", "status"], complete_long)
+    gene_families = defaultdict(set)
+    for glyph in glyphs:
+        for gene in glyph["gene_ids"].split(";"):
+            gene_families[(glyph["species"], gene)].add(glyph["family_id"])
+    overlaps = [dict(species=sp, cds_fasta_id=gene, family_ids=";".join(sorted(families)),
+                     family_count=len(families))
+                for (sp, gene), families in sorted(gene_families.items()) if len(families) > 1]
+    if getattr(args, "out_overlap", ""):
+        write_tsv(args.out_overlap, ["species", "cds_fasta_id", "family_ids", "family_count"], overlaps)
+    if overlaps:
+        warnings.warn(f"{len(overlaps)} genes occur in multiple plot blocks; do not sum blocks as independent counts",
+                      stacklevel=2)
     print(
         "Query-gene ortholog summary: "
         f"query_records={len(query_map)}, anchors={len(columns)}, "
