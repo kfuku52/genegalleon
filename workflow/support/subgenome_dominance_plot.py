@@ -7,9 +7,13 @@ from __future__ import annotations
 
 import copy
 import csv
+import fcntl
 import hashlib
 import json
 import math
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 METRICS = ("retention_difference", "expression_log2_ratio", "expression_detection_difference")
@@ -35,20 +39,22 @@ def sha256(path):
 def validate_config(config):
     from matplotlib.colors import is_color_like
 
+    if not isinstance(config, dict):
+        raise ValueError("Plot config must be an object")
     unknown = set(config) - set(DEFAULTS)
     if unknown:
         raise ValueError(f"Unknown subgenome plot settings: {sorted(unknown)}")
-    result = {**DEFAULTS, **config}
+    result = {**copy.deepcopy(DEFAULTS), **copy.deepcopy(config)}
     for key in ("font_size", "point_size", "error_bar_width", "dpi"):
-        if not isinstance(result[key], (int, float)) or not math.isfinite(result[key]) or result[key] <= 0:
+        if type(result[key]) not in (int, float) or not math.isfinite(result[key]) or result[key] <= 0:
             raise ValueError(f"{key} must be positive and finite")
     for key in ("width_pt", "height_pt", "individual_width_pt", "individual_height_pt"):
-        if result[key] is not None and (not isinstance(result[key], (int, float))
+        if result[key] is not None and (type(result[key]) not in (int, float)
                                        or not math.isfinite(result[key]) or result[key] <= 0):
             raise ValueError(f"{key} must be positive and finite")
-    if not isinstance(result["capsize"], (int, float)) or not math.isfinite(result["capsize"]) or result["capsize"] < 0:
+    if type(result["capsize"]) not in (int, float) or not math.isfinite(result["capsize"]) or result["capsize"] < 0:
         raise ValueError("capsize must be finite and nonnegative")
-    if not isinstance(result["significance_threshold"], (int, float)) or not 0 < result["significance_threshold"] < 1:
+    if type(result["significance_threshold"]) not in (int, float) or not 0 < result["significance_threshold"] < 1:
         raise ValueError("significance_threshold must be between zero and one")
     for key in ("show_significance", "panel_labels"):
         if not isinstance(result[key], bool):
@@ -70,15 +76,17 @@ def validate_config(config):
     for key in ("contrast_anchors", "group_labels", "x_limits", "absolute_x_limits"):
         if not isinstance(result[key], dict):
             raise ValueError(f"{key} must be an object")
-    if any(not isinstance(v, str) or not v for v in result["contrast_anchors"].values()):
+    if any(not isinstance(k, str) or not k or not isinstance(v, str) or not v
+           for k, v in result["contrast_anchors"].items()):
         raise ValueError("contrast_anchors maps species to a subgenome label")
-    if any(not isinstance(labels, dict) or any(not isinstance(v, str) for v in labels.values())
-           for labels in result["group_labels"].values()):
+    if any(not isinstance(species, str) or not species or not isinstance(labels, dict) or
+           any(not isinstance(k, str) or not k or not isinstance(v, str) for k, v in labels.items())
+           for species, labels in result["group_labels"].items()):
         raise ValueError("group_labels maps species to group/label objects")
     for key in ("x_limits", "absolute_x_limits"):
         for metric, limits in result[key].items():
             if metric not in METRICS or not isinstance(limits, list) or len(limits) != 2 or any(
-                    not isinstance(x, (int, float)) or not math.isfinite(x) for x in limits) or limits[0] >= limits[1]:
+                    type(x) not in (int, float) or not math.isfinite(x) for x in limits) or limits[0] >= limits[1]:
                 raise ValueError(f"{key} requires metric: [finite lower, finite upper]")
     return result
 
@@ -106,7 +114,7 @@ def display_interval(row, absolute):
         raise ValueError("Both confidence bounds are required together")
     if low is not None:
         low, high = low * scale, high * scale
-        if not all(math.isfinite(v) for v in (effect, low, high)) or not low <= effect <= high:
+        if not all(math.isfinite(v) for v in (effect, low, high)) or low > high:
             raise ValueError("Invalid signed confidence interval")
     elif not math.isfinite(effect):
         raise ValueError("Nonfinite effect")
@@ -120,25 +128,30 @@ def display_interval(row, absolute):
 def select_analyses(analyses, config, apply_filters=True):
     if len({a["analysis_id"] for a in analyses}) != len(analyses):
         raise ValueError("Comparison analysis IDs must be unique")
-    selected = []
+    if apply_filters and set(config["contrast_anchors"]) - {a["species"] for a in analyses}:
+        raise ValueError("contrast_anchors contains an unknown species")
+    selected, available_tissues = [], set()
     for analysis in analyses:
+        validate_statistics(analysis["statistics"])
         if apply_filters and any(config[key] and analysis.get(key, "") != config[key] for key in ("reference", "pair_set")):
             continue
         if apply_filters and config["analysis_ids"] and analysis["analysis_id"] not in config["analysis_ids"]:
             continue
+        available_tissues.update(r["tissue"] for r in analysis["statistics"] if r["tissue"])
         anchor = config["contrast_anchors"].get(analysis["species"], "") if apply_filters else ""
-        rows = [r for r in analysis["statistics"] if r["metric"] in config["metrics"] and r["effect"] is not None
+        if anchor and analysis["statistics"] and not any(
+                anchor in (r["subgenome_a"], r["subgenome_b"]) for r in analysis["statistics"]):
+            raise ValueError(f"Requested contrast anchor is absent: {analysis['species']}: {anchor}")
+        rows = [r for r in analysis["statistics"] if r["metric"] in config["metrics"]
                 and (not apply_filters or not config["tissue"] or not r["tissue"] or r["tissue"] == config["tissue"])
                 and (not anchor or anchor in (r["subgenome_a"], r["subgenome_b"]))]
-        identities = [(r["metric"], r["group_id"], r["subgenome_a"], r["subgenome_b"], r["tissue"]) for r in rows]
-        if len(set(identities)) != len(identities):
-            raise ValueError("Repeated comparison identity in a statistics table")
-        if rows:
-            selected.append({**analysis, "statistics": rows})
+        selected.append({**analysis, "statistics": rows})
     if not selected:
-        raise ValueError("No estimable contrasts match the display filters")
+        raise ValueError("No analyses match the display filters")
     if apply_filters and config["analysis_ids"] and set(config["analysis_ids"]) - {a["analysis_id"] for a in selected}:
-        raise ValueError("Requested analysis_ids are missing or have no selected contrasts")
+        raise ValueError("Requested analysis_ids are missing")
+    if apply_filters and config["tissue"] and available_tissues and config["tissue"] not in available_tissues:
+        raise ValueError("Requested tissue is absent")
     if apply_filters and config["species_order"]:
         if set(config["species_order"]) != {a["species"] for a in selected}:
             raise ValueError("species_order must contain every selected species exactly once")
@@ -154,9 +167,9 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
     from matplotlib.legend_handler import HandlerBase
     from matplotlib.text import Text
 
-    config = validate_config(config or {})
+    config = validate_config({} if config is None else config)
     analyses = select_analyses(analyses, config, apply_filters)
-    metrics = [m for m in config["metrics"] if any(r["metric"] == m for a in analyses for r in a["statistics"])]
+    metrics = config["metrics"]
     for font in config["font_files"]:
         font_manager.fontManager.addfont(font)
     selector = font_manager.fontManager
@@ -178,15 +191,15 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     stem = stem or ("comparison_absolute" if absolute else "comparison")
-    plotted, limits_by_metric = [], {}
+    plotted, limits_by_metric, panels = [], {}, []
     with plt.rc_context(style):
         fig, axes = plt.subplots(len(metrics), ncols, figsize=(width / 72, height / 72),
                                  squeeze=False, layout="constrained")
         try:
             for i, metric in enumerate(metrics):
-                bounds = [v for a in analyses for r in a["statistics"] if r["metric"] == metric
+                bounds = [v for a in analyses for r in a["statistics"] if r["metric"] == metric and r["effect"] is not None
                           for v in display_interval(r, absolute) if v is not None]
-                lower, upper = min(0, min(bounds)), max(0, max(bounds))
+                lower, upper = min(0, min(bounds, default=0)), max(0, max(bounds, default=0))
                 span = upper - lower or 1
                 limits = config["absolute_x_limits" if absolute else "x_limits"].get(
                     metric, [lower - span * .04, upper + span * .13])
@@ -203,12 +216,18 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
                     for y, ((group, tissue), rows) in enumerate(buckets.items()):
                         for k, row in enumerate(rows):
                             position = y + ((k / (len(rows) - 1) - .5) * .6 if len(rows) > 1 else 0)
+                            if row["effect"] is None:
+                                continue
                             effect, low, high = display_interval(row, absolute)
                             axis.plot(effect, position, "o", color=config["point_colour"], ms=config["point_size"])
                             if low is not None:
-                                axis.errorbar(effect, position, xerr=[[effect - low], [high - effect]], fmt="none",
-                                              ecolor=config["error_bar_colour"], elinewidth=config["error_bar_width"],
-                                              capsize=config["capsize"])
+                                # A percentile confidence set need not contain its point estimate.
+                                axis.hlines(position, low, high, color=config["error_bar_colour"],
+                                            linewidth=config["error_bar_width"])
+                                if config["capsize"]:
+                                    axis.plot([low, high], [position, position], linestyle="none", marker="|",
+                                              color=config["error_bar_colour"], ms=2 * config["capsize"],
+                                              markeredgewidth=config["error_bar_width"])
                             significant = row.get("q_value") is not None and row["q_value"] < config["significance_threshold"]
                             if config["show_significance"] and significant:
                                 axis.annotate("*", (effect, position), xytext=(3, 1), textcoords="offset points",
@@ -242,7 +261,12 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
                         if sum(a["species"] == analysis["species"] for a in analyses) > 1:
                             title += "\n" + analysis["analysis_id"]
                         axis.set_title(title, fontstyle="italic", fontsize=size)
-                    if not selected:
+                    point_count = sum(r["effect"] is not None for r in selected)
+                    panels.append({"panel": f"{i + 1}:{j + 1}", "analysis_id": analysis["analysis_id"],
+                                   "metric": metric, "point_count": point_count,
+                                   "unestimable_count": len(selected) - point_count,
+                                   "status": "estimable" if point_count else "not_estimable"})
+                    if not point_count:
                         axis.text(.5, .5, "Not estimable", transform=axis.transAxes, ha="center", fontsize=size)
             if config["show_significance"]:
                 class StarHandler(HandlerBase):
@@ -287,7 +311,10 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
                 fig.savefig(output / f"{stem}.{extension}", dpi=config["dpi"])
         finally:
             plt.close(fig)
-    fields = list(dict.fromkeys(key for row in plotted for key in row))
+    fields = list(dict.fromkeys(key for row in plotted for key in row)) or [
+        "analysis_id", "species", "metric", "group_id", "subgenome_a", "subgenome_b", "tissue",
+        "n_opportunities", "n_loci", "n_blocks", "effect", "ci_low", "ci_high", "p_value", "q_value", "status",
+        "panel", "plotted_effect", "plotted_ci_low", "plotted_ci_high", "plotted_y", "plotted_unit"]
     with (output / f"{stem}_points.tsv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, delimiter="\t")
         writer.writeheader()
@@ -298,7 +325,8 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
                   "ci": "signed 95% block bootstrap confidence set mapped under abs" if absolute else "signed 95% block bootstrap interval",
                   "tests": "signed tests; Benjamini–Hochberg families unchanged by display filters",
                   "local_labels": "identities across local groups are unresolved; all points use circles",
-                  "shared_x_limits": limits_by_metric, "font_hashes": fonts, "input_hashes": input_hashes or {},
+                  "shared_x_limits": limits_by_metric, "panels": panels,
+                  "font_hashes": fonts, "input_hashes": input_hashes or {},
                   "renderer_sha256": sha256(__file__),
                   "matplotlib_version": matplotlib.__version__,
                   "output_hashes": {f"{stem}.{ext}": sha256(output / f"{stem}.{ext}") for ext in config["formats"]}}
@@ -307,35 +335,152 @@ def comparison_plot(analyses, output, *, config=None, absolute=True, stem=None, 
     return provenance
 
 
+NUMERIC = {"effect", "ci_low", "ci_high", "p_value", "q_value", "mc_p_ci_low", "mc_p_ci_high"}
+INTEGERS = {"n_loci", "n_blocks", "n_opportunities", "retained_a", "retained_b", "null_draws",
+            "bootstrap_replicates", "n_nonzero_blocks", "inference_version", "multiple_testing_n"}
+STATISTICS_COLUMNS = {"metric", "group_id", "subgenome_a", "subgenome_b", "tissue",
+                      "effect", "ci_low", "ci_high", "q_value", "n_loci", "n_blocks"}
+
+
+def validate_statistics(rows):
+    identities = set()
+    for row in rows:
+        if not STATISTICS_COLUMNS <= set(row) or any(
+                not isinstance(row[k], str) or not row[k].strip()
+                for k in ("metric", "group_id", "subgenome_a", "subgenome_b")):
+            raise ValueError("Incomplete statistics row")
+        if row["metric"] not in METRICS or row["subgenome_a"] == row["subgenome_b"]:
+            raise ValueError("Invalid metric or identical comparison labels")
+        if not isinstance(row["tissue"], str):
+            raise ValueError("tissue must be a string")
+        identity = (row["metric"], row["group_id"], *sorted((row["subgenome_a"], row["subgenome_b"])), row["tissue"])
+        if identity in identities:
+            raise ValueError("Repeated comparison identity in a statistics table")
+        identities.add(identity)
+        for key in NUMERIC & row.keys():
+            value = row[key]
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value)):
+                raise ValueError(f"{key} must be finite or empty")
+            if value is not None and key in {"p_value", "q_value", "mc_p_ci_low", "mc_p_ci_high"} and not 0 <= value <= 1:
+                raise ValueError(f"{key} must be between zero and one")
+        for key in INTEGERS & row.keys():
+            value = row[key]
+            if value is None and key not in {"n_loci", "n_blocks"}:
+                continue
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{key} must be a nonnegative integer")
+        if row["n_blocks"] > row["n_loci"] or any(
+                row.get(k) is not None and row[k] > row["n_loci"] for k in ("retained_a", "retained_b")):
+            raise ValueError("Counts exceed eligible loci")
+        if row.get("n_opportunities") is not None and row["n_opportunities"] < row["n_loci"]:
+            raise ValueError("Eligible loci exceed opportunities")
+        if row.get("n_nonzero_blocks") is not None and row["n_nonzero_blocks"] > row["n_blocks"]:
+            raise ValueError("Nonzero block count exceeds blocks")
+        if row["effect"] is None:
+            if any(row.get(k) is not None for k in ("ci_low", "ci_high", "p_value", "q_value")):
+                raise ValueError("Unestimable rows cannot have confidence bounds or significance")
+        else:
+            display_interval(row, False)
+            if row["metric"] != "expression_log2_ratio" and any(
+                    abs(row[k]) > 1 + 1e-12 for k in ("effect", "ci_low", "ci_high") if row[k] is not None):
+                raise ValueError("Fraction differences must lie between -1 and 1")
+        if "p_value" in row and row["q_value"] is not None and (
+                row["p_value"] is None or row["q_value"] + 1e-12 < row["p_value"]):
+            raise ValueError("q_value requires a p_value and cannot be smaller")
+
+
+def read_report_table(path, required):
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream, delimiter="\t")
+        if not reader.fieldnames or len(set(reader.fieldnames)) != len(reader.fieldnames) or not required <= set(reader.fieldnames):
+            raise ValueError(f"Missing or duplicate table headers: {path}")
+        rows = list(reader)
+    if any(None in row or any(v is None for v in row.values()) for row in rows):
+        raise ValueError(f"Malformed table row: {path}")
+    return rows
+
+
+def publish_report(staged, output, managed):
+    """Replace owned files only, rolling back the prior report on exceptions."""
+    output.mkdir(exist_ok=True)
+    # Keep recovery files outside the auto-cleaned render directory. A persistent
+    # filesystem error during rollback must not cause old files to be deleted.
+    backup = Path(tempfile.mkdtemp(prefix=".subgenome-report-recovery-", dir=output.parent))
+    saved, published = [], []
+    try:
+        for name in managed:
+            target = output / name
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                raise ValueError(f"Report target must be a regular file: {target}")
+            if target.exists():
+                os.replace(target, backup / name)
+                saved.append(name)
+        # The completion manifest is last, so readers can verify one report generation.
+        for source in sorted(staged.iterdir(), key=lambda p: (p.name == "report_manifest.json", p.name)):
+            if source.is_file():
+                os.replace(source, output / source.name)
+                published.append(source.name)
+    except BaseException as exc:
+        recovery_failed = False
+        for name in published:
+            try:
+                (output / name).unlink()
+            except OSError:
+                recovery_failed = True
+        for name in saved:
+            try:
+                os.replace(backup / name, output / name)
+            except OSError:
+                recovery_failed = True
+        if recovery_failed:
+            raise RuntimeError(f"Report rollback incomplete; inspect recovery files at: {backup}") from exc
+        shutil.rmtree(backup, ignore_errors=True)
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
+
+
 def report(manifest, output, config_path=None):
     config, inputs = load_config(config_path)
-    manifest = Path(manifest).resolve()
+    manifest, output = Path(manifest).resolve(), Path(output).resolve()
     inputs[str(manifest)] = sha256(manifest)
-    with manifest.open(newline="") as stream:
-        reader = csv.DictReader(stream, delimiter="\t")
-        if not reader.fieldnames or not {"analysis_id", "species", "statistics_file"} <= set(reader.fieldnames):
-            raise ValueError("Report manifest requires analysis_id, species, statistics_file")
-        entries = list(reader)
+    inputs[str(Path(__file__).resolve())] = sha256(__file__)
+    entries = read_report_table(manifest, {"analysis_id", "species", "statistics_file"})
     analyses = []
-    numeric = {"effect", "ci_low", "ci_high", "p_value", "q_value", "mc_p_ci_low", "mc_p_ci_high"}
-    integers = {"n_loci", "n_blocks", "n_opportunities", "retained_a", "retained_b", "null_draws",
-                "bootstrap_replicates", "n_nonzero_blocks", "inference_version", "multiple_testing_n"}
     for entry in entries:
-        if any(not entry.get(key, "") for key in ("analysis_id", "species", "statistics_file")):
+        if any(not entry[key].strip() for key in ("analysis_id", "species", "statistics_file")):
             raise ValueError("Incomplete comparison manifest")
         path = (manifest.parent / entry["statistics_file"]).resolve()
         inputs[str(path)] = sha256(path)
-        with path.open(newline="") as stream:
-            reader = csv.DictReader(stream, delimiter="\t")
-            if not reader.fieldnames or not {"metric", "group_id", "subgenome_a", "subgenome_b", "tissue",
-                                              "effect", "ci_low", "ci_high", "q_value", "n_loci", "n_blocks"} <= set(reader.fieldnames):
-                raise ValueError("Incomplete statistics table")
-            rows = [{k: (float(v) if v else None) if k in numeric else (int(v) if v else None) if k in integers else v
-                     for k, v in row.items()} for row in reader]
+        rows = [{k: (float(v) if v else None) if k in NUMERIC else (int(v) if v else None) if k in INTEGERS else v
+                 for k, v in row.items()} for row in read_report_table(path, STATISTICS_COLUMNS)]
+        validate_statistics(rows)
         analyses.append({**entry, "statistics_file": str(path), "statistics": rows})
-    results = [comparison_plot(analyses, output, config=config, absolute=absolute, input_hashes=inputs)
-               for absolute in (False, True)]
-    for path, expected in inputs.items():
-        if sha256(path) != expected:
-            raise ValueError(f"Report input changed during rendering: {path}")
+    managed = [f"{stem}{suffix}" for stem in ("comparison", "comparison_absolute")
+               for suffix in (".png", ".svg", ".pdf", "_points.tsv", "_provenance.json")] + ["report_manifest.json"]
+    for name in managed:
+        target = output / name
+        if str(target.resolve()) in inputs:
+            raise ValueError(f"Report output would overwrite an input: {target}")
+        if target.is_symlink() or (target.exists() and not target.is_file()):
+            raise ValueError(f"Report target must be a regular file: {target}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lock_key = hashlib.sha256(str(output).encode()).hexdigest()[:20]
+    # Do not unlink a flock file: another process may already hold its inode.
+    with (output.parent / f".subgenome-report-{lock_key}.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError(f"Another report owns the output lock: {output}") from exc
+        with tempfile.TemporaryDirectory(prefix=".subgenome-report-", dir=output.parent) as temporary:
+            staged = Path(temporary)
+            results = [comparison_plot(analyses, staged, config=config, absolute=absolute, input_hashes=inputs)
+                       for absolute in (False, True)]
+            for path, expected in inputs.items():
+                if sha256(path) != expected:
+                    raise ValueError(f"Report input changed during rendering: {path}")
+            completion = {"schema_version": 1, "input_hashes": inputs,
+                          "output_hashes": {p.name: sha256(p) for p in staged.iterdir() if p.is_file()}}
+            (staged / "report_manifest.json").write_text(json.dumps(completion, indent=2, allow_nan=False) + "\n")
+            publish_report(staged, output, managed)
     return results

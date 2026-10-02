@@ -12,6 +12,9 @@ Its TSV columns are `analysis_id`, `species`, `mapping_file`, and optional
 manifest. Analysis IDs must be unique safe path components.
 `expression_unit` defaults to `TPM`; `FPKM` is also accepted for within-sample
 copy ratios. Other units, including counts and log transforms, are rejected.
+Computations use differences of log2 arithmetic means, with scaled technical
+means, to avoid overflow/underflow for finite positive input values. This is
+algebraically the same ratio, not a mean of log-transformed technical inputs.
 Optional `reference` and `pair_set` columns describe the input dataset for
 comparison-figure filters. They are metadata, not instructions to reconstruct
 callability or change homoeolog eligibility.
@@ -66,6 +69,12 @@ use exhaustive enumeration; larger tests use exact meet-in-the-middle when
 each half fits that state ceiling. Remaining cases use
 `subgenome_permutation_replicates` Monte Carlo draws (default 100000), with the
 plus-one p-value correction. The null model is the same in all four methods.
+Integer comparisons are exact. Floating block sums are scaled before summation
+and use a relative tolerance of 100 times machine epsilon at the observed null
+statistic, following the numerical approach documented for
+[SciPy's permutation test](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.permutation_test.html).
+An absolute tolerance would incorrectly treat sufficiently small effects as
+zero. Scaling avoids overflow and leaves the two-sided sign-flip null unchanged.
 Monte Carlo results include a 95% Wilson interval for the sampled null tail
 probability, distinct from the biological effect CI. This interval does not
 propagate Monte Carlo uncertainty through the multiple-testing correction.
@@ -83,9 +92,14 @@ tissue. Canonical block order makes results independent of input row order.
 Removing retention, adding another contrast or changing bootstrap replication
 does not consume another comparison's permutation stream. Changing analysis
 IDs intentionally changes its streams; q values can change when the actual
-test family changes. Individual stream seeds and inference version 2 are
-recorded. Version 2 preserves the effect and null definitions but can change
+test family changes. Individual stream seeds and inference version 3 are
+recorded. Version 2 preserved the effect and null definitions but could change
 CIs and p/q values relative to the former shared-stream, 2000-draw version.
+Version 3 fixes floating null comparisons and abundance arithmetic at numerical
+boundaries; ordinary data may show rounding-level differences. It also records
+zero-eligible expression contrasts explicitly, with empty effect/CI/p/q cells;
+these rows do not enter the correction family. Confidence bounds are required
+to be finite and ordered, but need not contain the point estimate.
 Recompute the whole metric family when upgrading; retain prior published runs
 as separate versioned artifacts.
 
@@ -95,6 +109,8 @@ Outputs under `workspace/output/genome_evolution/subgenome_dominance/<analysis_i
 SHA256s, seed, NumPy version, input/implementation provenance, and uses the
 existing transaction lock, stale-policy and atomic publication mechanisms.
 Missing retention or expression data remain explicit `not_estimable` results.
+Plans guard both analysis and plotting implementation hashes, in addition to
+the data and config inputs, before and after inference.
 
 `contrasts_absolute.png` and `.svg` also show A/B-invariant magnitudes: the
 absolute retention/detection difference or absolute **mean** log2 expression
@@ -119,6 +135,11 @@ Set `subgenome_plot_config` to a JSON file. Its display filters apply to the
 combined comparison figure; individual analysis plots retain every estimable
 comparison of the selected metrics. Filters never recompute p/q values or
 reduce the original Benjamini–Hochberg family.
+Selected species and requested metric panels remain present when comparisons
+are unestimable. Such panels show `Not estimable`, never a fabricated zero.
+The figure provenance records per-panel point and unestimable counts; an empty
+points table retains its column headers. Unknown analysis/reference/tissue or
+contrast-anchor selections still fail explicitly.
 
 ```json
 {
@@ -181,7 +202,21 @@ The comparison manifest requires `analysis_id`, `species`, `statistics_file`
 and accepts context columns such as `reference`, `pair_set`, `expression_unit`,
 `assignment_scope` and `retention_status`. Paths are relative to that manifest.
 Both signed and absolute figures, points tables and provenance are exported;
-input file hashes are checked again after rendering. Version 1 statistics tables
+input and renderer hashes are checked again after rendering. The reader rejects
+malformed/duplicate columns, nonfinite probabilities, impossible counts and
+repeated comparison identities (including reversed A/B duplicates).
+Both figures render into a temporary directory under an exclusive report-output
+lock. Publication replaces only the report's named files, removes obsolete
+export formats and rolls back on exceptions. If rollback itself encounters a
+filesystem error, prior files remain in a named recovery directory reported by
+the error; they are never removed with the temporary render files.
+Unrelated files are preserved;
+input/output path collisions are rejected before writing. A completion file,
+`report_manifest.json`, is published last and contains all output hashes for
+readers to verify one generation. Each file rename is atomic; publication is
+not an atomic directory swap. Readers requiring a consistent bundle must verify that
+completion file. The parent lock file persists, while the operating-system
+lock is released on process exit. Version 1 statistics tables
 remain readable. The report command does not recalculate statistical inference.
 
 Reference: [Saul et al. (2023), Nature Plants](https://www.nature.com/articles/s41477-023-01562-2).

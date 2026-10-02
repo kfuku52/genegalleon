@@ -26,6 +26,126 @@ def test_pairwise_synteny_help_uses_real_runtime_dependency(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.fixture
+def saved_karyotype(tmp_path):
+    directory = tmp_path / "saved"
+    directory.mkdir()
+    for side, prefix in (("target", "t"), ("query", "q")):
+        (directory / f"{side}.bed").write_text(
+            "".join(f"chr1\t{i * 10}\t{i * 10 + 5}\t{prefix}{i}\n" for i in range(6)))
+    (directory / "seqids").write_text("chr1\nchr1\n")
+    (directory / "layout").write_text(
+        "0.7,0.12,0.92,0,,Target species,top,target.bed,top\n"
+        "0.3,0.12,0.92,0,,Query species,bottom,query.bed,bottom\n"
+        "e,0,1,colored.simple\n")
+    (directory / "colored.simple").write_text("#88afc4*t0 t2 q1 q4 5 +\n")
+    colors = {"chromosomes": {side: {"chr1": "#88afc4"} for side in ("target", "query")}}
+    pair = {"target_species": "Target_species", "query_species": "Query_species"}
+    return directory, pair, colors
+
+
+def test_karyotype_saved_relative_inputs_resolve_beside_layout(saved_karyotype, tmp_path, monkeypatch):
+    from workflow.support.pairwise_synteny_karyotype import render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    # A caller's working directory can contain different files with the same names.
+    for side, prefix in (("target", "t"), ("query", "q")):
+        (tmp_path / f"{side}.bed").write_text(
+            "".join(f"chr1\t{i * 10}\t{i * 10 + 5}\t{prefix}{i}\n" for i in range(12)))
+    (tmp_path / "colored.simple").write_text("#88afc4*t0 t2 q1 q4 5 +\n")
+    monkeypatch.chdir(tmp_path)
+    original = (directory / "layout").read_bytes()
+    style = render_karyotype(directory, pair, "svg", colors)
+    assert style["track_gene_counts"] == [6, 6]
+    assert (directory / "layout").read_bytes() == original
+
+
+@pytest.mark.parametrize("invalid", ["duplicate-seqid", "unknown-seqid", "duplicate-gene"])
+def test_karyotype_invalid_saved_coordinates_preserve_plot_and_close_figure(saved_karyotype, monkeypatch, invalid):
+    import matplotlib.pyplot as plt
+
+    from workflow.support.pairwise_synteny_karyotype import render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    monkeypatch.chdir(directory)
+    if invalid == "duplicate-seqid":
+        (directory / "seqids").write_text("chr1,chr1\nchr1\n")
+    elif invalid == "unknown-seqid":
+        (directory / "seqids").write_text("absent\nchr1\n")
+    else:
+        with (directory / "target.bed").open("a") as handle:
+            handle.write("chr1\t100\t105\tt0\n")
+    plot = directory / "karyotype.svg"
+    plot.write_text("previous plot")
+    figures = plt.get_fignums()
+    with pytest.raises(ValueError):
+        render_karyotype(directory, pair, "svg", colors)
+    assert plot.read_text() == "previous plot"
+    assert plt.get_fignums() == figures
+
+
+def test_karyotype_failed_save_preserves_previous_plot(saved_karyotype, monkeypatch):
+    from matplotlib.figure import Figure
+
+    from workflow.support.pairwise_synteny_karyotype import render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    monkeypatch.chdir(directory)
+    plot = directory / "karyotype.svg"
+    plot.write_text("previous plot")
+
+    def fail_save(figure, path, **kwargs):
+        Path(path).write_text("partial plot")
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(Figure, "savefig", fail_save)
+    with pytest.raises(OSError, match="simulated disk failure"):
+        render_karyotype(directory, pair, "svg", colors)
+    assert plot.read_text() == "previous plot"
+
+
+def test_karyotype_failed_style_publication_rolls_back_plot_and_style(saved_karyotype, monkeypatch):
+    import nwkit.output_transaction as transaction
+
+    from workflow.support.pairwise_synteny_karyotype import render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    plot, report = directory / "karyotype.svg", directory / "karyotype_style.json"
+    plot.write_text("previous plot")
+    report.write_text("previous style")
+    rename = transaction.os.replace
+
+    def fail_install(source, destination):
+        if Path(destination) == report and ".stage." in Path(source).name:
+            raise OSError("simulated style installation failure")
+        return rename(source, destination)
+
+    monkeypatch.setattr(transaction.os, "replace", fail_install)
+    with pytest.raises(OSError, match="simulated style installation failure"):
+        render_karyotype(directory, pair, "svg", colors, layout_report=report)
+    assert plot.read_text() == "previous plot" and report.read_text() == "previous style"
+
+
+@pytest.mark.parametrize("defect", ["cross-chromosome", "orientation"])
+def test_karyotype_rejects_malformed_saved_blocks(saved_karyotype, monkeypatch, defect):
+    from workflow.support.pairwise_synteny_karyotype import render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    monkeypatch.chdir(directory)
+    if defect == "orientation":
+        (directory / "colored.simple").write_text("#88afc4*t0 t2 q1 q4 5 sideways\n")
+    else:
+        (directory / "query.bed").write_text(
+            "".join(f"chr{1 if i < 3 else 2}\t{i * 10}\t{i * 10 + 5}\tq{i}\n" for i in range(6)))
+        (directory / "seqids").write_text("chr1\nchr1,chr2\n")
+        colors["chromosomes"]["query"]["chr2"] = "#88afc4"
+    plot = directory / "karyotype.svg"
+    plot.write_text("previous plot")
+    with pytest.raises(ValueError, match="block|ribbon"):
+        render_karyotype(directory, pair, "svg", colors)
+    assert plot.read_text() == "previous plot"
+
+
 def write_genome(workspace, species, mode, chromosomes, seed_offsets=None):
     sequence_dir = workspace / "input" / f"species_{mode}"
     annotation_dir = workspace / "input/species_gff"
@@ -622,7 +742,10 @@ def test_normal_genome_evolution_can_opt_in_to_pairwise_stage(tmp_path):
     write_genome(workspace, "Query_species", "protein", (("Chr2", False),))
     (workspace / "input/synteny_pairs.tsv").write_text("analysis_id\ttarget_species\tquery_species\npair\tTarget_species\tQuery_species\n")
     result = _run_core(tmp_path, {"genome_evolution_mode": "all", "run_pairwise_synteny": "1",
-                                 "synteny_plot_formats": "png", "run_orthofinder": "0"})
+                                 "synteny_plot_formats": "png", "run_orthofinder": "0",
+                                 # The plot uses real NWKIT transactions, not this
+                                 # fixture's species-parser-only Python stub.
+                                 "PYTHONPATH": os.environ.get("PYTHONPATH", "")})
     assert result.returncode == 0, result.stdout + result.stderr
     root = workspace / "output/genome_evolution/synteny"
     assert (root / "analysis/pair/summary.json").is_file()

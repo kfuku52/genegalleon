@@ -16,6 +16,156 @@ def run(*args):
     return subprocess.run([str(value) for value in args], capture_output=True, text=True)
 
 
+def test_dated_tree_rejects_duplicate_tip_names(tmp_path):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree, plot = tmp_path / "tree.nwk", tmp_path / "plot.svg"
+    tree.write_text("(A:10,A:10);")
+    plot.write_text("previous plot")
+    with pytest.raises(ValueError, match="unique"):
+        render_dated_tree(tree, plot, geological_background="none")
+    assert plot.read_text() == "previous plot"
+
+
+@pytest.mark.parametrize("table, content", [
+    ("tip_order", "species_id\tspecies_id\nwrong\tA\nwrong\tB\n"),
+    ("tip_annotations", "species_id\tcolour\tcolour\nA\tinvalid\tblack\n"),
+    ("age_clades", "descendant_species\tdescendant_species\nwrong\tA,B\n"),
+    ("busco_summary", "Species\tbusco_cds_single\tbusco_cds_single\tbusco_cds_duplicated\tbusco_cds_fragmented\tbusco_cds_missing\tbusco_cds_total\nA\t99\t1\t0\t0\t0\t1\nB\t99\t1\t0\t0\t0\t1\n"),
+    ("tip_order", "species_id\nA\tunlabelled extra field\nB\tunlabelled extra field\n"),
+])
+def test_dated_tree_rejects_ambiguous_metadata_without_replacing_plot(tmp_path, table, content):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree, plot, metadata = tmp_path / "tree.nwk", tmp_path / "plot.svg", tmp_path / "metadata.tsv"
+    tree.write_text("(A:10,B:10);")
+    metadata.write_text(content)
+    plot.write_text("previous plot")
+    with pytest.raises(ValueError, match="header|row width"):
+        render_dated_tree(tree, plot, geological_background="none", **{table: metadata})
+    assert plot.read_text() == "previous plot"
+
+
+def test_dated_tree_restores_matplotlib_style_after_render(tmp_path):
+    import matplotlib
+
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree = tmp_path / "tree.nwk"
+    tree.write_text("(A:10,B:10);")
+    with matplotlib.rc_context({"font.family": "serif", "font.size": 13, "pdf.fonttype": 3, "svg.fonttype": "path"}):
+        before = {key: matplotlib.rcParams[key] for key in ("font.family", "font.size", "pdf.fonttype", "svg.fonttype")}
+        render_dated_tree(tree, tmp_path / "plot.svg", geological_background="none")
+        assert {key: matplotlib.rcParams[key] for key in before} == before
+
+
+def test_dated_tree_mixed_interval_legends_fit_narrow_page(tmp_path):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree = tmp_path / "tree.nhx"
+    tree.write_text("((A:10,B:10):20[&&NHX:age=10:age_ci_low=8:age_ci_high=12:age_ci_kind=equal-tail:age_ci_level=0.95],C:30)[&95%HPD={28,32}];")
+    report = render_dated_tree(tree, tmp_path / "plot.svg", figure_width=3.6, geological_background="none")
+    assert report["credible_interval_count"] == 2
+    assert report["legend_rows"] == 2
+    assert "equal-tailed credible intervals" in report["credible_interval_label"]
+
+
+def test_dated_tree_multiline_branch_legends_do_not_overlap(tmp_path):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree, annotations = tmp_path / "tree.nwk", tmp_path / "branches.tsv"
+    tree.write_text("(A:10,B:10);")
+    annotations.write_text('descendant_species\tlabel\tsymbol\nA\t"First event\nwith explanation\nand third line"\t^\nB\t"Second event with\na long explanation\nand another line"\tx\n')
+    report = render_dated_tree(tree, tmp_path / "plot.svg", branch_annotations=annotations, figure_width=3.6,
+                               geological_background="none")
+    boxes = report["legend_bbox_points"]
+    assert all(box[3] < other[1] or box[1] > other[3]
+               for index, box in enumerate(boxes) for other in boxes[index + 1:])
+
+
+def test_dated_tree_cannot_replace_any_consumed_busco_header(tmp_path):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree, summary = tmp_path / "tree.nwk", tmp_path / "summary.tsv"
+    tree.write_text("(A:10,B:10);")
+    summary.write_text("Species\tbusco_cds_single\tbusco_cds_duplicated\tbusco_cds_fragmented\tbusco_cds_missing\tbusco_cds_total\nA\t1\t0\t0\t0\t1\nB\t1\t0\t0\t0\t1\n")
+    results = tmp_path / "busco"
+    results.mkdir()
+    original = "# The lineage dataset is: embryophyta_odb12\n"
+    for species in "AB":
+        for suffix in ("short.txt", "full.tsv"):
+            (results / f"{species}.busco.{suffix}").write_text(original)
+    header = results / "A.busco.short.txt"
+    with pytest.raises(ValueError, match="replace|input"):
+        render_dated_tree(tree, tmp_path / "plot.svg", busco_summary=summary, busco_results=results,
+                          layout_report=header, geological_background="none")
+    assert header.read_text() == original
+
+
+def test_dated_tree_cannot_replace_geological_boundary_table(tmp_path, monkeypatch):
+    from workflow.support import dated_tree_presentation as presentation
+
+    tree, table = tmp_path / "tree.nwk", tmp_path / "periods.tsv"
+    tree.write_text("(A:10,B:10);")
+    original = presentation.GEOLOGICAL_DATA.read_bytes()
+    table.write_bytes(original)
+    monkeypatch.setattr(presentation, "GEOLOGICAL_DATA", table)
+    with pytest.raises(ValueError, match="replace|input"):
+        presentation.render_dated_tree(tree, tmp_path / "plot.svg", layout_report=table)
+    assert table.read_bytes() == original
+
+
+def test_dated_tree_branch_symbols_near_present_are_complete_and_separate_from_age_labels(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree, annotations = tmp_path / "tree.nwk", tmp_path / "branches.tsv"
+    tree.write_text("((A:10,B:10):20,C:30);")
+    annotations.write_text("descendant_species\tlabel\tsymbol\tbranch_fraction\nA\tRecent event\tx\t0.001\nA,B\tEarlier event\t^\t0.02\n")
+    save = Figure.savefig
+    observed = []
+
+    def inspect(figure, *args, **kwargs):
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        markers = [line for line in figure.axes[0].lines if (line.get_gid() or "").startswith("branch-event-")]
+        assert len(markers) == 2 and all(not line.get_clip_on() for line in markers)
+        for text in figure.axes[0].texts:
+            if text.get_text() in {"10.0", "30.0"}:
+                assert all(not text.get_window_extent(renderer).overlaps(line.get_window_extent(renderer))
+                           for line in markers)
+        observed.append(True)
+        return save(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", inspect)
+    report = render_dated_tree(tree, tmp_path / "plot.svg", branch_annotations=annotations, node_ages="all",
+                               geological_background="none")
+    assert observed == [True] and report["mean_age_label_count"] == 2
+
+
+def test_dated_tree_rejects_overlapping_branch_symbols_without_replacing_outputs(tmp_path):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree, annotations, plot = tmp_path / "tree.nwk", tmp_path / "branches.tsv", tmp_path / "plot.svg"
+    tree.write_text("(A:10,B:10);")
+    annotations.write_text("descendant_species\tlabel\tsymbol\tbranch_fraction\nA\tGain\t^\t0.5\nA\tLoss\tx\t0.501\n")
+    plot.write_text("previous plot")
+    with pytest.raises(ValueError, match="Branch symbols overlap"):
+        render_dated_tree(tree, plot, branch_annotations=annotations, geological_background="none")
+    assert plot.read_text() == "previous plot"
+
+
+@pytest.mark.parametrize("width", [3.6, 4.8])
+def test_dated_tree_deep_time_source_footer_wraps_within_page(tmp_path, width):
+    from workflow.support.dated_tree_presentation import render_dated_tree
+
+    tree = tmp_path / "tree.nwk"
+    tree.write_text("(A:4500,B:4500);")
+    report = render_dated_tree(tree, tmp_path / "plot.svg", figure_width=width, show_geological_source=True)
+    assert report["geological_source_credit_visible"] is True
+
+
 @pytest.mark.parametrize("width", [3.6, 4.8, 6.0, 7.2])
 def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp_path, width):
     import xml.etree.ElementTree as ET
@@ -73,7 +223,7 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
     assert data["figure_size_inches"][0] == width
     assert data["font_size_points"] == 8
     assert data["tree_x_axis_position"] == "bottom"
-    assert data["tree_x_axis_y_points"] == data["busco_plot_bbox_points"][1]
+    assert data["tree_x_axis_y_points"] == pytest.approx(data["busco_plot_bbox_points"][1])
     assert data["tree_x_axis_y_points"] < data["busco_percentage_axis_y_points"]
     assert data["mean_age_label_count"] == 0
     assert data["credible_interval_style"]["alpha"] is None
@@ -213,6 +363,29 @@ def test_dated_tree_busco_header_discovery_and_mixed_dataset_rejection(tmp_path)
     )
     assert result.returncode != 0 and "Mixed BUSCO" in result.stderr
     assert plot.read_bytes() == b"old plot" and report.read_text() == "old report"
+
+
+@pytest.mark.parametrize("missing", ["NA", "", "n/a"])
+def test_dated_tree_busco_missing_lineage_never_becomes_a_dataset_name(tmp_path, missing):
+    from workflow.support.dated_tree_presentation import read_busco
+
+    summary = tmp_path / "summary.tsv"
+    summary.write_text("Species\tbusco_cds_single\tbusco_cds_duplicated\tbusco_cds_fragmented\tbusco_cds_missing\tbusco_cds_total\tbusco_cds_lineage\n"
+                       f"A\t1\t0\t0\t0\t1\t{missing}\nB\t1\t0\t0\t0\t1\t{missing}\n")
+    assert read_busco(summary, ["A", "B"])[1] is None
+    for species in "AB":
+        (tmp_path / f"{species}.busco.short.txt").write_text("# The lineage dataset is: embryophyta_odb12\n")
+    assert read_busco(summary, ["A", "B"], tmp_path)[1] == "embryophyta_odb12"
+
+
+def test_dated_tree_busco_empty_header_cannot_consume_the_following_line(tmp_path):
+    from workflow.support.dated_tree_presentation import read_busco
+
+    summary = tmp_path / "summary.tsv"
+    summary.write_text("Species\tbusco_cds_single\tbusco_cds_duplicated\tbusco_cds_fragmented\tbusco_cds_missing\tbusco_cds_total\nA\t1\t0\t0\t0\t1\nB\t1\t0\t0\t0\t1\n")
+    for species in "AB":
+        (tmp_path / f"{species}.busco.short.txt").write_text("# The lineage dataset is:\n# Busco id\tStatus\n")
+    assert read_busco(summary, ["A", "B"], tmp_path)[1] is None
 
 
 def test_dated_tree_geological_header_handles_narrow_periods_on_deep_time_tree(tmp_path):

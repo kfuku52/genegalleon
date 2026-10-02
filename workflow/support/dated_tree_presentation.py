@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import re
+from contextlib import ExitStack
 from pathlib import Path
 
 STATUS = ("single", "duplicated", "fragmented", "missing")
@@ -23,9 +24,21 @@ def species_key(value):
     return str(value).strip().replace(" ", "_")
 
 
-def read_busco(summary, species, results=None, prefix="busco_cds"):
-    with Path(summary).open(encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
+def read_metadata_table(path, required=()):
+    """Reject ambiguous TSVs before DictReader can silently discard columns."""
+    with Path(path).open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fields = reader.fieldnames or []
+        if not fields or not all(fields) or len(fields) != len(set(fields)) or set(required) - set(fields):
+            raise ValueError(f"Invalid metadata header in {path}: columns must be unique and include required fields.")
+        rows = list(reader)
+    if any(None in row or any(value is None for value in row.values()) for row in rows):
+        raise ValueError(f"Metadata row width does not match its header in {path}.")
+    return rows
+
+
+def read_busco(summary, species, results=None, prefix="busco_cds", *, input_paths=None):
+    rows = read_metadata_table(summary, [prefix + "_" + status for status in (*STATUS, "total")])
     by_species = {}
     for row in rows:
         key = species_key(row.get("Species", row.get("species", "")))
@@ -47,6 +60,8 @@ def read_busco(summary, species, results=None, prefix="busco_cds"):
             raise ValueError(f"BUSCO counts do not sum to the positive total for {name}.")
         counts[name] = values
         datasets[name] = row.get(prefix + "_lineage", "").strip()
+        if datasets[name].upper() in {"NA", "N/A", "NAN", "NONE", "NULL"}:
+            datasets[name] = ""
     if results is None and not all(datasets.values()):
         stem = "species_cds" if prefix == "busco_cds" else "species_genome"
         for parent in Path(summary).resolve().parents[:3]:
@@ -58,15 +73,19 @@ def read_busco(summary, species, results=None, prefix="busco_cds"):
             if results is not None:
                 break
     if results is not None:
+        if not Path(results).is_dir():
+            raise ValueError(f"BUSCO results directory does not exist: {results}.")
         paths = sorted(Path(results).glob("*busco.short.txt")) + sorted(Path(results).glob("*busco.full.tsv"))
         for path in paths:
             key = species_key(re.sub(r"\.busco\.(short\.txt|full\.tsv)$", "", path.name))
             matched = [name for name in species if species_key(name) == key]
             if not matched:
                 continue
+            if input_paths is not None:
+                input_paths.append(path.resolve())
             with path.open(encoding="utf-8") as handle:
                 header = "".join(line for _, line in zip(range(30), handle, strict=False))
-            found = set(re.findall(r"lineage dataset is:\s*(\S+)", header, flags=re.IGNORECASE))
+            found = set(re.findall(r"lineage dataset is:[ \t]*(\S+)", header, flags=re.IGNORECASE))
             if len(found) > 1:
                 raise ValueError(f"Conflicting BUSCO dataset metadata in {path}.")
             if found:
@@ -109,7 +128,8 @@ def interval_label(nodes):
     labels = []
     for kind, level in sorted(intervals, key=str):
         percentage = f"{100 * float(level):g}% " if level is not None else ""
-        description = {"HPD": "highest posterior density intervals", "ETI": "equal-tailed credible intervals"}.get(
+        description = {"HPD": "highest posterior density intervals", "ETI": "equal-tailed credible intervals",
+                       "EQUAL-TAIL": "equal-tailed credible intervals"}.get(
             kind, "credible intervals"
         )
         labels.append(percentage + description)
@@ -199,6 +219,8 @@ def render_dated_tree(
     from nwkit.util import read_tree
 
     outfile = Path(outfile)
+    if geological_background not in {"none", "period"} or node_ages not in {"none", "root", "all"}:
+        raise ValueError("Invalid geological background or node age label mode.")
     inputs = [("tree", infile)] + [
         (name, value)
         for name, value in [
@@ -223,10 +245,11 @@ def render_dated_tree(
         infer_node_ages_from_branch_lengths(tree)
     leaves = list(tree.leaves())
     species = [leaf.name for leaf in leaves]
+    if not all(species) or len({species_key(name) for name in species}) != len(species):
+        raise ValueError("Tree tip names must be nonempty and unique, including normalized species IDs.")
     order = species
     if tip_order:
-        with Path(tip_order).open(encoding="utf-8") as handle:
-            order = [row["species_id"] for row in csv.DictReader(handle, delimiter="\t")]
+        order = [row["species_id"] for row in read_metadata_table(tip_order, ["species_id"])]
         if len(order) != len(species) or set(order) != set(species):
             raise ValueError("Tip order must contain each tree species exactly once.")
         ranks = {name: rank for rank, name in enumerate(order)}
@@ -237,18 +260,26 @@ def render_dated_tree(
             raise ValueError("Requested tip order is not compatible with the topology.")
     styles = {}
     if tip_annotations:
-        with Path(tip_annotations).open(encoding="utf-8") as handle:
-            for row in csv.DictReader(handle, delimiter="\t"):
-                name = row["species_id"]
-                if name not in species or name in styles:
-                    raise ValueError("Unknown or duplicate tip annotation.")
-                styles[name] = row
+        from matplotlib.colors import is_color_like
+
+        for row in read_metadata_table(tip_annotations, ["species_id"]):
+            name = row["species_id"]
+            if name not in species or name in styles:
+                raise ValueError("Unknown or duplicate tip annotation.")
+            row["font_weight"] = row.get("font_weight") or "normal"
+            row["colour"] = row.get("colour") or "#202020"
+            FontProperties(weight=row["font_weight"])
+            if not is_color_like(row["colour"]):
+                raise ValueError("Invalid tip annotation colour.")
+            styles[name] = row
     selected = set()
     if age_clades:
-        with Path(age_clades).open(encoding="utf-8") as handle:
-            selected = {
-                frozenset(row["descendant_species"].split(",")) for row in csv.DictReader(handle, delimiter="\t")
-            }
+        for row in read_metadata_table(age_clades, ["descendant_species"]):
+            names = [name.strip() for name in row["descendant_species"].split(",")]
+            clade = frozenset(names)
+            if not all(names) or len(names) != len(clade) or clade in selected:
+                raise ValueError("Age clades require unique nonempty species and no repeated clade.")
+            selected.add(clade)
         actual = {frozenset(node.leaf_names()) for node in tree.traverse() if not node.is_leaf}
         if not selected <= actual:
             raise ValueError("A requested age label is not an internal clade in the tree.")
@@ -268,26 +299,31 @@ def render_dated_tree(
     if max_age <= 0:
         raise ValueError("A dated tree must span positive time.")
     periods = geological_intervals(max_age) if geological_background == "period" else []
+    metadata_inputs = []
     counts, dataset, dataset_sources = (
-        read_busco(busco_summary, species, busco_results, busco_prefix) if busco_summary else ({}, None, {})
+        read_busco(busco_summary, species, busco_results, busco_prefix, input_paths=metadata_inputs)
+        if busco_summary else ({}, None, {})
     )
-    inputs.extend(("BUSCO metadata", source) for source in dataset_sources.values())
+    inputs.extend(("BUSCO metadata", source) for source in metadata_inputs)
+    if periods:
+        inputs.append(("geological boundaries", GEOLOGICAL_DATA))
     validate_outputs_do_not_replace_inputs(inputs, outputs)
     spacing = row_spacing_points if row_spacing_points is not None else max(font_size + 1, font_size * 1.12)
     if not math.isfinite(spacing) or spacing < font_size:
         raise ValueError("Row spacing must be finite and at least the font size, in points.")
     if figure_width < 3.6 or (figure_height is not None and (not math.isfinite(figure_height) or figure_height < 2.5)):
         raise ValueError("Presentation plots need a width of at least 3.6 and a height of at least 2.5 inches.")
-    plt.rcParams.update(
+    with matplotlib.rc_context(
         {"font.family": font_family, "font.size": font_size, "pdf.fonttype": 42, "svg.fonttype": "none"}
-    )
-    figure = plt.figure(figsize=(figure_width, figure_height or 3))
-    try:
+    ), ExitStack() as cleanup:
+        figure = plt.figure(figsize=(figure_width, figure_height or 3))
+        cleanup.callback(plt.close, figure)
         renderer = figure.canvas.get_renderer()
 
         def text_width(text, style="normal", weight="normal"):
             properties = FontProperties(family=font_family, size=font_size, style=style, weight=weight)
-            return renderer.get_text_width_height_descent(text, properties, False)[0] * 72 / figure.dpi
+            return max(renderer.get_text_width_height_descent(line, properties, False)[0]
+                       for line in text.splitlines()) * 72 / figure.dpi
 
         width_points = figure_width * 72
         left_points, right_points, gap_points = 12, 10, 6
@@ -304,33 +340,49 @@ def render_dated_tree(
         if tree_points < 48:
             raise ValueError("Figure is too narrow for the tip labels and panels.")
         credible_label = interval_label(nodes)
-        legend_labels = ([credible_label] if credible_label else []) + (list(STATUS_LABELS) if counts else [])
-        legend_points = (
-            sum(text_width(label) + font_size * 1.35 for label in legend_labels)
-            + max(0, len(legend_labels) - 1) * font_size * 0.9
-            + font_size * 0.8
-        )
-        legend_rows = 2 if counts and credible_label and legend_points > width_points - 24 else int(bool(legend_labels))
-        event_groups, event_labels = [], {}
+        credible_labels = [credible_label] if credible_label else []
+        if credible_label and text_width(credible_label) + font_size * 2.15 > width_points - 24:
+            credible_labels = credible_label.split("; ")
+
+        def pack_legend_labels(items):
+            groups, group, group_width = [], [], 0
+            for label in items:
+                size = text_width(label) + font_size * 1.35
+                if size + font_size * 0.8 > width_points - 24:
+                    raise ValueError("Legend label is too wide; shorten it or increase figure width.")
+                if group and group_width + size + font_size * 1.7 > width_points - 24:
+                    groups.append(group)
+                    group, group_width = [], 0
+                group_width += size + (font_size * 0.9 if group else 0)
+                group.append(label)
+            return groups + ([group] if group else [])
+
+        status_labels = list(STATUS_LABELS) if counts else []
+        base_groups = pack_legend_labels(credible_labels + status_labels)
+        if len(base_groups) > 1 and credible_labels and status_labels:
+            base_groups = pack_legend_labels(credible_labels) + pack_legend_labels(status_labels)
+        base_groups.reverse()  # BUSCO below age intervals, as in the compact publication panel.
+        event_labels = {}
         for event in events:
             event_labels.setdefault(event["label"], event)
-        group, group_width = [], 0
-        for label, event in event_labels.items():
-            size = text_width(label) + font_size * 1.35
-            if size + font_size * 0.8 > width_points - 24:
-                raise ValueError("Branch legend label is too wide; shorten it or increase figure width.")
-            if group and group_width + size + font_size * 1.7 > width_points - 24:
-                event_groups.append(group)
-                group, group_width = [], 0
-            group_width += size + (font_size * 0.9 if group else 0)
-            group.append(event)
-        if group:
-            event_groups.append(group)
-        base_legend_rows = legend_rows
-        legend_rows += len(event_groups)
-        legend_row_points = font_size + 8
+        event_groups = pack_legend_labels(event_labels)
+        legend_rows = len(base_groups) + len(event_groups)
+        row_heights = [font_size + 8 + (max(len(label.splitlines()) for label in group) - 1) * font_size * 1.5
+                       for group in base_groups + event_groups]
+        source_text = "Geological periods: ICS 2026/06."
+        if any(p["name"] == "Precambrian" for p in periods):
+            source_text += " Precambrian shown as one interval."
+        words, source_lines = source_text.split(), []
+        for word in words:
+            if not source_lines or text_width(source_lines[-1] + " " + word) > width_points - 24:
+                source_lines.append(word)
+            else:
+                source_lines[-1] += " " + word
+        source_text = "\n".join(source_lines)
         source_points = 20 if periods and show_geological_source else 0
-        footer_points = (48 if counts else font_size * 3 + 7) + source_points + legend_rows * legend_row_points
+        if source_points:
+            source_points += (len(source_lines) - 1) * font_size * 1.5
+        footer_points = (48 if counts else font_size * 3 + 7) + source_points + sum(row_heights)
         period_offset = 4
         header_points = max(30, (max(text_width(p["name"]) for p in periods) + period_offset + 8) if periods else 30)
         height = (
@@ -461,10 +513,12 @@ def render_dated_tree(
                 marker.set_path_effects([effects.Stroke(linewidth=2.3, foreground="white"), effects.Normal()])
             return marker
 
+        event_markers = []
         for event in events:
-            marker = event_marker(event, [event["display_position_Ma"]], [event["y"]], zorder=5)
+            marker = event_marker(event, [event["display_position_Ma"]], [event["y"]], zorder=5, clip_on=False)
             marker.set_gid("branch-event-" + event["event_id"])
             axis.add_line(marker)
+            event_markers.append(marker)
         tip_texts = []
         for leaf in leaves:
             style = styles.get(leaf.name, {})
@@ -500,7 +554,10 @@ def render_dated_tree(
         figure.canvas.draw()
         renderer = figure.canvas.get_renderer()
         branch_pixels = [(axis.transData.transform(a), axis.transData.transform(b)) for a, b in branches]
-        occupied = []
+        event_boxes = [marker.get_window_extent(renderer).padded(1.2 * figure.dpi / 72) for marker in event_markers]
+        if any(box.overlaps(other) for index, box in enumerate(event_boxes) for other in event_boxes[index + 1:]):
+            raise ValueError("Branch symbols overlap; adjust branch_fraction or increase figure size.")
+        occupied = list(event_boxes)
         for text in age_texts:
             placed = False
             positions = [
@@ -593,24 +650,21 @@ def render_dated_tree(
             percent.tick_params(axis="x", labelsize=font_size, length=2.5, width=0.6)
             percent.spines[["left", "right", "bottom"]].set_visible(False)
             percent.spines["top"].set_linewidth(0.6)
-        handles = []
-        if credible_label:
-            handles.append(Line2D([0], [0], color="#D55E00", lw=1.2, label=credible_label))
+        handles = {label: Line2D([0], [0], color="#D55E00", lw=1.2, label=label) for label in credible_labels}
         if counts:
-            handles.extend(
-                Patch(facecolor=colour, label=name) for colour, name in zip(STATUS_COLOURS, STATUS_LABELS, strict=True)
-            )
-        legend_groups = [handles[:1], handles[1:]] if base_legend_rows == 2 else ([handles] if handles else [])
-        legend_groups = list(reversed(legend_groups)) + [
-            [event_marker(event, label=event["label"]) for event in group] for group in event_groups
+            handles.update({name: Patch(facecolor=colour, label=name)
+                            for colour, name in zip(STATUS_COLOURS, STATUS_LABELS, strict=True)})
+        legend_groups = [[handles[label] for label in group] for group in base_groups] + [
+            [event_marker(event_labels[label], label=label) for label in group] for group in event_groups
         ]
         legends = []
-        for index, group in enumerate(legend_groups):
+        legend_bottom = source_points
+        for group, row_height in zip(legend_groups, row_heights, strict=True):
             legends.append(
                 figure.legend(
                     handles=group,
                     loc="lower center",
-                    bbox_to_anchor=(0.5, (source_points + index * legend_row_points) / (height * 72)),
+                    bbox_to_anchor=(0.5, legend_bottom / (height * 72)),
                     ncol=len(group),
                     frameon=False,
                     fontsize=font_size,
@@ -619,12 +673,12 @@ def render_dated_tree(
                     handletextpad=0.35,
                 )
             )
+            legend_bottom += row_height
         if periods and show_geological_source:
             figure.text(
                 left_points / width_points,
                 5 / (height * 72),
-                "Geological periods: ICS 2026/06."
-                + (" Precambrian shown as one interval." if any(p["name"] == "Precambrian" for p in periods) else ""),
+                source_text,
                 fontsize=font_size,
             )
         figure.canvas.draw()
@@ -632,6 +686,9 @@ def render_dated_tree(
         period_boxes = [text.get_window_extent(renderer) for text in period_texts]
         if any(a.overlaps(b) for i, a in enumerate(period_boxes) for b in period_boxes[i + 1 :]):
             raise ValueError("Geological period names overlap; increase figure width.")
+        legend_boxes = [legend.get_window_extent(renderer) for legend in legends]
+        if any(box.overlaps(other) for index, box in enumerate(legend_boxes) for other in legend_boxes[index + 1:]):
+            raise ValueError("Legend rows overlap; increase figure height or shorten multiline labels.")
         for text in figure.findobj(matplotlib.text.Text):
             if text.get_visible() and text.get_text():
                 box = text.get_window_extent(renderer)
@@ -676,6 +733,8 @@ def render_dated_tree(
             "geological_source": GEOLOGICAL_SOURCE if periods else None,
             "geological_source_credit_visible": bool(periods and show_geological_source),
             "branch_annotations": events,
+            "branch_symbol_bbox_points": [[float(value) * 72 / figure.dpi for value in box.extents]
+                                          for box in event_boxes],
             "geological_intervals": periods,
             "geological_label_placement": "above_tree" if periods else None,
             "tree_plot_bbox_points": [float(value) * 72 / figure.dpi for value in axis.bbox.extents],
@@ -714,15 +773,13 @@ def render_dated_tree(
         paths = [Path(target) for _, target in outputs]
         with output_transaction(paths, create_parents=True) as staged:
             metadata = {"Creator": "GeneGalleon / NWKIT " + nwkit.__version__}
-            if outfile.suffix == ".pdf":
+            if outfile.suffix.lower() == ".pdf":
                 metadata.update(CreationDate=None, ModDate=None)
-            elif outfile.suffix == ".svg":
+            elif outfile.suffix.lower() == ".svg":
                 metadata["Date"] = None
             else:
                 metadata = None
-            figure.savefig(staged[outfile], format=outfile.suffix[1:], dpi=300, metadata=metadata)
+            figure.savefig(staged[outfile], format=outfile.suffix[1:].lower(), dpi=300, metadata=metadata)
             if layout_report:
                 Path(staged[Path(layout_report)]).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         return report
-    finally:
-        plt.close(figure)
