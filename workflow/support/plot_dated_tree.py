@@ -87,6 +87,8 @@ def main():
         choices=["none", "period"],
         help="Use the publication renderer with an optional ICS geological background.",
     )
+    parser.add_argument("--show-geological-source", action="store_true",
+                        help="Show the ICS source footer (omitted by default, with its space reclaimed).")
     parser.add_argument("--figure-width", type=float)
     parser.add_argument("--figure-height", type=float)
     parser.add_argument("--row-spacing", type=float, help="Adjacent-tip spacing in points (default: 9 with an 8-point font).")
@@ -94,6 +96,8 @@ def main():
     parser.add_argument("--font-size", type=float)
     parser.add_argument("--tip-order", type=Path, help="TSV with species_id in top-to-bottom order.")
     parser.add_argument("--tip-annotations", type=Path, help="TSV: species_id, colour, font_weight.")
+    parser.add_argument("--branch-annotations", type=Path,
+                        help="TSV: descendant_species, label, symbol; optional event_id, colour, branch_fraction.")
     parser.add_argument("--node-ages", choices=["none", "root", "all"], default="none")
     parser.add_argument(
         "--age-clades", type=Path, help="TSV: descendant_species, comma-separated exact clades to label."
@@ -104,6 +108,7 @@ def main():
         parser.error("--busco-results requires --busco-summary")
     if (
         args.geological_background is not None
+        or args.show_geological_source
         or args.busco_summary is not None
         or args.node_ages != "none"
         or args.age_clades is not None
@@ -117,6 +122,7 @@ def main():
                 args.font_size,
                 args.tip_order,
                 args.tip_annotations,
+                args.branch_annotations,
                 args.layout_report,
             )
         )
@@ -130,6 +136,7 @@ def main():
             busco_results=args.busco_results,
             busco_prefix=args.busco_prefix,
             geological_background=args.geological_background or "period",
+            show_geological_source=args.show_geological_source,
             figure_width=args.figure_width if args.figure_width is not None else 4.8,
             figure_height=args.figure_height,
             row_spacing_points=args.row_spacing,
@@ -137,6 +144,7 @@ def main():
             font_size=args.font_size if args.font_size is not None else 8,
             tip_order=args.tip_order,
             tip_annotations=args.tip_annotations,
+            branch_annotations=args.branch_annotations,
             node_ages=args.node_ages,
             age_clades=args.age_clades,
             layout_report=args.layout_report,

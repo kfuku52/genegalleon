@@ -98,7 +98,11 @@ def connection_legend_text(criteria):
             f"Liftover: |dx| + |dy| < {criteria['liftover_gene_rank_distance']} gene ranks; {quota}; no dS filter")
 
 
-def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis=None):
+def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis=None, track_order="target-query"):
+    if track_order not in {"target-query", "query-target"}:
+        raise ValueError("karyotype-track-order must be target-query or query-target")
+    sides = ("target", "query")
+    display_sides = sides if track_order == "target-query" else sides[::-1]
     os.environ.setdefault("MPLCONFIGDIR", str(directory / ".mplconfig"))
     import matplotlib
     matplotlib.use("Agg")
@@ -123,6 +127,12 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         selected = (directory / "seqids").read_text(encoding="utf-8").splitlines()
         if len(layout) != 2 or len(selected) != 2:
             raise ValueError("Pairwise karyotype requires exactly two tracks")
+        upper, lower = sorted((layout[0].y, layout[1].y), reverse=True)
+        if upper == lower:
+            raise ValueError("Pairwise karyotype needs distinct vertical track positions")
+        # Keep BEDs, seqids and edge indices in analysis order. Moving only
+        # the vertical coordinates preserves every ribbon endpoint.
+        layout[0].y, layout[1].y = (upper, lower) if track_order == "target-query" else (lower, upper)
         # Use native JCVI ranks/geometry and ribbon primitives; never infer bp
         # length from the last gene or label a gene-rank scale as Mbp.
         for entry, line in zip(layout, selected, strict=True):
@@ -134,8 +144,8 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         ShadeManager(root, tracks, layout)
         scale = gene_scale([track.total for track in tracks])
         scale_lines, species_labels, unit_labels, chromosome_labels = [], [], [], []
-        for side, track in zip(("target", "query"), tracks, strict=True):
-            direction = 1 if side == "target" else -1
+        for side, track in zip(sides, tracks, strict=True):
+            direction = 1 if side == display_sides[0] else -1
             track_labels = []
             for sid in track.seqids:
                 start, length = track.offsets[sid], track.ratio * track.sizes[sid]
@@ -158,7 +168,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             unit_labels.append(units)
             # One bottom bar is valid for both shared-scale tracks. Independent
             # normalization needs a separate, correctly sized bar per track.
-            if scale_mode == "independent" or side == "query":
+            if scale_mode == "independent" or side == display_sides[-1]:
                 line, = root.plot([track.xstart, track.xstart + track.ratio * scale], [track.y, track.y],
                                   color="black", linewidth=0.6, solid_capstyle="butt", clip_on=False)
                 text = root.annotate(f"{scale:,} {'gene' if scale == 1 else 'genes'}", (track.xstart + track.ratio * scale / 2, track.y),
@@ -196,7 +206,7 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             fig.set_size_inches(width, width * 0.4)
             label_layout.clear()
             for index, track in enumerate(tracks):
-                direction = 1 if index == 0 else -1
+                direction = 1 if sides[index] == display_sides[0] else -1
                 labels = chromosome_labels[index]
                 boxes = [label.get_window_extent(renderer) for label in labels]
                 anchor_y = root.transData.transform((0, track.y))[1]
@@ -249,6 +259,9 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         finally:
             plt.close(fig)
     return {"coordinate_system": "gene_rank", "scale_mode": scale_mode, "scale_unit": "genes", "scale_value": scale,
+            "track_order": list(display_sides),
+            "display_species_order": [pair[f"{side}_species"] for side in display_sides],
+            "track_metadata_order": list(sides),
             "scale_bar_count": len(scale_lines), "track_gene_counts": [track.total for track in tracks],
             "scale_label_position": "above",
             "track_extents": [[track.xstart, track.xend] for track in tracks], "track_alignment": "left",
@@ -267,10 +280,12 @@ def main():
     parser.add_argument("--query-species", required=True)
     parser.add_argument("--format", choices=("pdf", "png", "svg"), required=True)
     parser.add_argument("--scale", choices=("shared", "independent"), default="shared")
+    parser.add_argument("--track-order", choices=("target-query", "query-target"), default="target-query",
+                        help="Top-to-bottom display order; analysis inputs and ribbon endpoints are unchanged.")
     parser.add_argument("--analysis", type=Path, help="Recorded analysis directory for the connection legend")
     args = parser.parse_args()
     colors = json.loads((args.directory / "karyotype_colors.json").read_text(encoding="utf-8"))
-    style = render_karyotype(args.directory, vars(args), args.format, colors, args.scale, args.analysis)
+    style = render_karyotype(args.directory, vars(args), args.format, colors, args.scale, args.analysis, args.track_order)
     (args.directory / "karyotype_style.json").write_text(json.dumps(style, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

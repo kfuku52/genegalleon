@@ -334,6 +334,7 @@ synteny_plot_formats
 synteny_karyotype_sort
 synteny_karyotype_color
 synteny_karyotype_scale
+synteny_karyotype_track_order
 synteny_dotplot_color
 synteny_dotplot_min_length
 synteny_dotplot_sort

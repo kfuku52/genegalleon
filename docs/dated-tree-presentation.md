@@ -10,6 +10,9 @@ new dating constraints.
 Full period names appear vertically above their corresponding background bands
 in the tree panel, without a separate geological legend. The two greys alternate
 across all periods so adjacent bands remain distinguishable.
+The source-credit footer is omitted by default and its 20 pt of reserved space
+is reclaimed. Use `--show-geological-source` to include it. The layout report
+always retains the ICS source URL and boundaries when the background is enabled.
 On deep-time trees, crowded names spread within the header with short leaders
 to their original bands, preserving the time scale.
 
@@ -66,3 +69,25 @@ which must be compatible with the topology. `--tip-annotations FILE` takes
 only. The layout report records ages, intervals, geological boundaries, BUSCO
 counts, dataset identity and tip-row coordinates. The plot and requested report
 are staged together, with rollback on a handled publication error.
+
+`--branch-annotations FILE` adds symbols on selected stem branches and a shared
+legend. Required TSV columns are `descendant_species` (comma-separated exact
+species IDs forming a clade, or one tip), `label` and `symbol`. Supported symbols
+are `^`, `v`, `o`, `s`, `D`, `x`, `+` and `*`. Optional columns are `event_id`
+(unique safe identifier), `colour` (default `#202020`) and `branch_fraction`
+(default `0.5`, strictly between 0 and 1, measured from child towards parent).
+For example:
+
+```tsv
+event_id	descendant_species	label	symbol
+gain-ab	A_a,B_b	Carnivory gain	^
+loss-a	A_a	Carnivory loss	x
+```
+
+The root has no stem and cannot receive a symbol. Unknown/non-monophyletic
+clades, zero-length branches, duplicate positions and conflicting styles for
+the same legend label are rejected. Symbols sit above branches with a white
+outline for readability. Their positions are graphical annotations, not
+estimated event dates; the report records this interpretation, branch bounds,
+display positions and unchanged saved node ages. Legend rows reserve their own
+space while preserving species row spacing.

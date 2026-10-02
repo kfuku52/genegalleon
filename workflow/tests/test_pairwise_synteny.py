@@ -159,6 +159,11 @@ def test_plot_settings_do_not_change_analysis_contract(tmp_path):
     assert synteny.contract_args(plan, "ds") == before_ds
     assert synteny.contract_args(plan, "plots") != before_plots
     before_plots = synteny.contract_args(plan, "plots")
+    plan["karyotype_track_order"] = "query-target"
+    assert synteny.contract_args(plan, "analysis") == before_analysis
+    assert synteny.contract_args(plan, "ds") == before_ds
+    assert synteny.contract_args(plan, "plots") != before_plots
+    before_plots = synteny.contract_args(plan, "plots")
     plan.update(dotplot_sort="none", dotplot_min_length=2000000)
     plan["pairs"][0]["dotplot_lengths"] = {"target": {"kind": "genome", "path": "/input/genome.fa"}}
     assert synteny.contract_args(plan, "analysis") == before_analysis

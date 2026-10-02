@@ -381,6 +381,64 @@ def test_compact_jcvi_karyotype_has_black_helvetica8_species_only_italic_and_tra
             image.verify()
 
 
+@pytest.mark.parametrize("scale_mode", ["shared", "independent"])
+def test_karyotype_track_swap_preserves_inputs_ribbon_endpoints_and_scale(tmp_path, monkeypatch, scale_mode):
+    import hashlib
+
+    from kffractbias.io import read_bed
+    from matplotlib.figure import Figure
+    from matplotlib.patches import PathPatch
+
+    from workflow.support.pairwise_synteny_karyotype import chromosome_colors, render_karyotype
+
+    (tmp_path / "target.bed").write_text("".join(f"chr1\t{i * 10}\t{i * 10 + 5}\tt{i}\n" for i in range(6)))
+    (tmp_path / "query.bed").write_text("".join(f"scaffold_long\t{i * 10}\t{i * 10 + 5}\tq{i}\n" for i in range(10)))
+    (tmp_path / "seqids").write_text("chr1\nscaffold_long\n")
+    (tmp_path / "layout").write_text(
+        f"0.7,0.12,0.92,0,,Target species,top,{tmp_path / 'target.bed'},top\n"
+        f"0.3,0.12,0.92,0,,Query species,bottom,{tmp_path / 'query.bed'},bottom\n"
+        f"e,0,1,{tmp_path / 'colored.simple'}\n")
+    (tmp_path / "colored.simple").write_text("#88afc4*t0 t2 q1 q4 5 +\n")
+    originals = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in tmp_path.iterdir()}
+    genomes = [read_bed(tmp_path / f"{side}.bed") for side in ("target", "query")]
+    colors = chromosome_colors([["chr1"], ["scaffold_long"]], genomes, tmp_path / "unused")
+    pair = {"target_species": "Target_species", "query_species": "Query_species"}
+    observed, saved = [], Figure.savefig
+
+    def inspect(figure, *args, **kwargs):
+        root = figure.axes[0]
+        observed.append({"ribbons": [patch.get_path().vertices.copy() for patch in root.patches
+                                     if isinstance(patch, PathPatch)],
+                         "species": {text.get_text(): text.xy[1] for text in root.texts
+                                     if text.get_text() in {"Target species", "Query species"}},
+                         "bars": [(line.get_xdata()[1] - line.get_xdata()[0], line.get_ydata()[0])
+                                  for line in root.lines]})
+        return saved(figure, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", inspect)
+    styles = [render_karyotype(tmp_path, pair, "svg", colors, scale_mode, track_order=order)
+              for order in ("target-query", "query-target")]
+    assert observed[0]["species"] == {"Target species": 0.7, "Query species": 0.3}
+    assert observed[1]["species"] == {"Target species": 0.3, "Query species": 0.7}
+    assert len(observed[0]["ribbons"]) == len(observed[1]["ribbons"]) == 1
+    for before, after in zip(observed[0]["ribbons"], observed[1]["ribbons"], strict=True):
+        assert before[:, 0] == pytest.approx(after[:, 0])
+        assert before[:, 1] == pytest.approx(1 - after[:, 1])
+    assert [style["track_gene_counts"] for style in styles] == [[6, 10], [6, 10]]
+    assert styles[0]["track_ratios"] == styles[1]["track_ratios"]
+    assert styles[1]["track_order"] == ["query", "target"]
+    assert styles[1]["display_species_order"] == ["Query_species", "Target_species"]
+    assert styles[1]["track_metadata_order"] == ["target", "query"]
+    assert styles[0]["scale_value"] == styles[1]["scale_value"]
+    if scale_mode == "shared":
+        assert len(observed[1]["bars"]) == 1
+        assert observed[0]["bars"][0][0] == pytest.approx(observed[1]["bars"][0][0])
+        assert observed[1]["bars"][0][1] < 0.3
+    else:
+        assert [bar[0] for bar in observed[0]["bars"]] == pytest.approx([bar[0] for bar in observed[1]["bars"]])
+    assert {name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() for name in originals} == originals
+
+
 def test_connection_legend_bounds_match_native_mcscan_and_liftover():
     from jcvi.compara.synteny import synteny_liftover, synteny_scan
 
@@ -452,6 +510,7 @@ def test_synteny_only_generates_real_plots_preserves_other_stages_and_reuses_ana
     assert summary["syntenic_genes"] == [8, 16]
     assert summary["parameters"]["quota"] is None
     style = json.loads((plots / "karyotype_style.json").read_text())
+    assert style["track_order"] == ["target", "query"]
     assert style["connection_criteria"]["seed_cscore"] == summary["parameters"]["cscore"]
     assert style["connection_criteria"]["protein_evalue"] == 1e-5
     assert "Connections: syntenic blocks (MCscan + liftover)" in style["connection_legend_text"]
@@ -486,6 +545,16 @@ def test_synteny_only_generates_real_plots_preserves_other_stages_and_reuses_ana
     assert (analysis / "commands.json").stat().st_mtime_ns == analysis_mtime
     assert (plots / "seqids").read_text() == "Chr1\nChr10,Chr2\n"
     assert (plots / "karyotype.png").stat().st_mtime_ns != image_mtime
+    original_inputs = {name: (plots / name).read_bytes() for name in
+                       ("target.bed", "query.bed", "seqids", "layout", "colored.simple", "karyotype_colors.json")}
+    result = run_core(workspace, synteny_plot_only="1", synteny_plot_formats="png",
+                      synteny_karyotype_track_order="query-target", artifact_stale_policy="rebuild")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (analysis / "commands.json").stat().st_mtime_ns == analysis_mtime
+    assert {name: (plots / name).read_bytes() for name in original_inputs} == original_inputs
+    style = json.loads((plots / "karyotype_style.json").read_text())
+    assert style["display_species_order"] == ["Ancistrocladus_abbreviatus", "Triphyophyllum_peltatum"]
+    assert style["track_gene_counts"] == [8, 16]
     source = workspace / "input/species_protein/Triphyophyllum_peltatum.protein.fa"
     source.write_text(source.read_text().replace("\nM", "\nA", 1))
     result = run_core(workspace)

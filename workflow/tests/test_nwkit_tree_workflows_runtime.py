@@ -52,6 +52,8 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
     assert "Number of BUSCO genes" in texts and "(embryophyta_odb12)" in texts
     data = json.loads(report.read_text())
     assert data["geological_label_placement"] == "above_tree"
+    assert data["geological_source_credit_visible"] is False
+    assert not any(text and text.startswith("Geological periods:") for text in texts)
     assert len(data["geological_labels"]) == len(data["geological_intervals"])
     for period, label in zip(data["geological_intervals"], data["geological_labels"], strict=True):
         assert label["name"] == period["name"]
@@ -94,6 +96,83 @@ def test_dated_tree_publication_preserves_intervals_dataset_and_species_rows(tmp
     assert all(box[3] < other[1] or box[1] > other[3]
                for index, box in enumerate(legend_boxes) for other in legend_boxes[index + 1:])
     assert tree.read_text().endswith("[&95%HPD={145,155}];")
+
+
+def test_dated_tree_source_footer_is_opt_in_and_reclaims_physical_space(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    tree = tmp_path / "tree.nwk"
+    tree.write_text("(" + ",".join(f"Species_{i}:200" for i in range(20)) + ");")
+    reports = []
+    for visible in (False, True):
+        plot, report = tmp_path / f"credit-{visible}.svg", tmp_path / f"credit-{visible}.json"
+        command = [sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", tree,
+                   "--outfile", plot, "--geological-background", "period", "--layout-report", report]
+        if visible:
+            command.append("--show-geological-source")
+        result = run(*command)
+        assert result.returncode == 0, result.stdout + result.stderr
+        texts = [item.text for item in ET.parse(plot).iter("{http://www.w3.org/2000/svg}text")]
+        assert any(text and text.startswith("Geological periods:") for text in texts) is visible
+        data = json.loads(report.read_text())
+        assert data["geological_source_credit_visible"] is visible
+        assert data["geological_source"].endswith("ChronostratChart2026-06.pdf")
+        reports.append(data)
+    assert (reports[1]["figure_size_inches"][1] - reports[0]["figure_size_inches"][1]) * 72 == pytest.approx(20)
+    assert [report["row_spacing_points"] for report in reports] == pytest.approx([9, 9])
+    assert reports[0]["all_ages_Ma"] == reports[1]["all_ages_Ma"]
+
+
+def test_dated_tree_branch_events_select_exact_stems_and_share_legends(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    tree, annotations = tmp_path / "tree.nwk", tmp_path / "branches.tsv"
+    original = "((A_a:10,B_b:10):140,C_c:150)[&95%HPD={145,155}];"
+    tree.write_text(original)
+    annotations.write_text(
+        "event_id\tdescendant_species\tlabel\tsymbol\tbranch_fraction\n"
+        "gain-ab\tB_b,A_a\tCarnivory gain\t^\t\n"
+        "loss-a\tA_a\tCarnivory loss\tx\t0.75\n"
+        "loss-b\tB_b\tCarnivory loss\tx\t\n")
+    plot, report = tmp_path / "plot.svg", tmp_path / "report.json"
+    result = run(sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", tree,
+                 "--outfile", plot, "--branch-annotations", annotations, "--layout-report", report)
+    assert result.returncode == 0, result.stdout + result.stderr
+    root = ET.parse(plot)
+    texts = [item.text for item in root.iter("{http://www.w3.org/2000/svg}text")]
+    assert texts.count("Carnivory gain") == texts.count("Carnivory loss") == 1
+    groups = {item.attrib.get("id"): item for item in root.iter("{http://www.w3.org/2000/svg}g")}
+    assert all("branch-event-" + name in groups for name in ("gain-ab", "loss-a", "loss-b"))
+    data = json.loads(report.read_text())
+    assert [event["display_position_Ma"] for event in data["branch_annotations"]] == [80, 7.5, 5]
+    assert [event["y"] for event in data["branch_annotations"]] == [1.5, 2, 1]
+    assert data["credible_interval_count"] == 1
+    assert data["all_ages_Ma"][0]["mean"] == 150
+    boxes = data["legend_bbox_points"]
+    assert len(boxes) == 2 and boxes[0][3] < boxes[1][1]
+    assert tree.read_text() == original
+
+
+@pytest.mark.parametrize("rows, error", [
+    ("A_a,C_c\tGain\t^\t0.5", "exact non-root"),
+    ("A_a,B_b,C_c\tGain\t^\t0.5", "exact non-root"),
+    ("A_a\tGain\t^\t0", "Branch fraction"),
+    ("A_a\tGain\t^\tnan", "Branch fraction"),
+    ("A_a\tGain\tbad\t0.5", "Invalid branch"),
+    ("A_a\tGain\t^\t0.5\nB_b\tGain\tx\t0.5", "conflicting symbols"),
+    ("A_a\tGain\t^\t0.5\nA_a\tLoss\tx\t0.5", "same display position"),
+])
+def test_dated_tree_rejects_bad_branch_annotations_preserving_outputs(tmp_path, rows, error):
+    tree, annotations = tmp_path / "tree.nwk", tmp_path / "branches.tsv"
+    tree.write_text("((A_a:10,B_b:10):140,C_c:150);")
+    annotations.write_text("descendant_species\tlabel\tsymbol\tbranch_fraction\n" + rows + "\n")
+    plot, report = tmp_path / "plot.svg", tmp_path / "report.json"
+    plot.write_text("old plot")
+    report.write_text("old report")
+    result = run(sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", tree,
+                 "--outfile", plot, "--branch-annotations", annotations, "--layout-report", report)
+    assert result.returncode != 0 and error in result.stderr
+    assert plot.read_text() == "old plot" and report.read_text() == "old report"
 
 
 def test_dated_tree_busco_header_discovery_and_mixed_dataset_rejection(tmp_path):

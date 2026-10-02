@@ -102,6 +102,9 @@ def build_plan(args):
     karyotype_scale = getattr(args, "karyotype_scale", "shared")
     if karyotype_scale not in {"shared", "independent"}:
         raise ValueError("karyotype-scale must be shared or independent")
+    karyotype_track_order = getattr(args, "karyotype_track_order", "target-query")
+    if karyotype_track_order not in {"target-query", "query-target"}:
+        raise ValueError("karyotype-track-order must be target-query or query-target")
     if minimum_length < 0 or dotplot_sort not in {"karyotype", "homoeolog", "none"}:
         raise ValueError("dotplot-min-length must be nonnegative; dotplot-sort must be karyotype, homoeolog or none")
     if dotplot_color not in {"orientation", "ds"} or not math.isfinite(ds_color_max) or ds_color_max <= 0:
@@ -239,6 +242,7 @@ def build_plan(args):
                        "isoform_policy": "longest"},
         "formats": formats, "karyotype_sort": args.karyotype_sort, "karyotype_color": karyotype_color,
         "karyotype_scale": karyotype_scale,
+        "karyotype_track_order": karyotype_track_order,
         "dotplot_color": dotplot_color, "ds_color_max": ds_color_max, "ds_tools": ds_tools,
         "dotplot_min_length": minimum_length, "dotplot_sort": dotplot_sort,
         "tools": tool_identity(), "input_hashes": inputs, "schema_version": 1,
@@ -290,6 +294,7 @@ def contract_args(plan, phase):
                       "karyotype_sort": plan.get("karyotype_sort", "both_length"), "karyotype_figsize": list(FIGSIZE),
                       "karyotype_color": plan.get("karyotype_color", "chromosome"),
                       "karyotype_scale": plan.get("karyotype_scale", "shared"),
+                      "karyotype_track_order": plan.get("karyotype_track_order", "target-query"),
                       "pairs": [{k: pair[k] for k in ("analysis_id", "target_seqids", "query_seqids")} for pair in plan["pairs"]],
                       "jcvi": plan["tools"]["jcvi"]}
         parameters.update(dotplot_color=plan.get("dotplot_color", "orientation"), ds_color_max=plan.get("ds_color_max", 2.0))
@@ -559,6 +564,7 @@ def render(plan, output):
                          "--directory", str(directory.resolve()), "--target-species", pair["target_species"],
                          "--query-species", pair["query_species"], "--format", fmt,
                          "--scale", plan.get("karyotype_scale", "shared"),
+                         "--track-order", plan.get("karyotype_track_order", "target-query"),
                          "--analysis", str(source.resolve())], directory, commands, f"karyotype-{fmt}")
             for name in ("dotplot", "karyotype"):
                 if not (directory / f"{name}.{fmt}").is_file() or not (directory / f"{name}.{fmt}").stat().st_size:
@@ -613,6 +619,8 @@ def main(argv=None):
                           help="Minimize width-weighted ribbon length (default both_length); target/query use dominant-anchor partners")
     planning.add_argument("--karyotype-color", choices=("chromosome", "homoeolog"), default="chromosome",
                           help="Soft chromosome colors (default); homoeolog shares supported 2x2 group colors")
+    planning.add_argument("--karyotype-track-order", choices=("target-query", "query-target"), default="target-query",
+                          help="Top-to-bottom ribbon display order, independent of analysis target/query")
     planning.add_argument("--karyotype-scale", choices=("shared", "independent"), default="shared",
                           help="Shared gene width and one scale bar (default); independent normalizes each track separately")
     planning.add_argument("--outfile", required=True, type=Path)

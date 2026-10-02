@@ -221,6 +221,7 @@ synteny_plot_formats="pdf,svg,png" # Comma-separated output formats.
 synteny_karyotype_sort="both_length" # both_length moves both tracks; target_length|query_length fix the opposite track; target|query use dominant partners; none preserves input order.
 synteny_karyotype_color="chromosome" # chromosome|homoeolog; optional homoeolog gives supported 2x2 groups the same soft color.
 synteny_karyotype_scale="shared" # shared uses the same width per gene and one scale bar for both species; independent normalizes each track separately.
+synteny_karyotype_track_order="target-query" # Top-to-bottom display order: target-query or query-target. Analysis roles remain unchanged.
 synteny_dotplot_color="orientation" # orientation|ds; ds requires matching CDS and the CDSKIT dnds estimator.
 synteny_dotplot_min_length=1000000 # Dotplot includes only scaffold/chromosome assembly lengths >= this many bp; 0 disables filtering.
 synteny_dotplot_sort="homoeolog" # homoeolog places supported 2x2 chromosome groups together; karyotype follows ribbon order; none preserves BED order.

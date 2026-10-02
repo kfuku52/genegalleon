@@ -240,6 +240,10 @@ def test_pairwise_synteny_sort_defaults_to_weighted_length_and_is_forwarded_to_p
     assert 'synteny_karyotype_scale="shared"' in entrypoint
     assert 'synteny_karyotype_scale="${synteny_karyotype_scale:-shared}"' in core
     assert '--karyotype-scale "${synteny_karyotype_scale}"' in core
+    assert 'synteny_karyotype_track_order="target-query"' in entrypoint
+    assert 'synteny_karyotype_track_order="${synteny_karyotype_track_order:-target-query}"' in core
+    assert '--karyotype-track-order "${synteny_karyotype_track_order}"' in core
+    assert "\nsynteny_karyotype_track_order\n" in registry
     assert "\nsynteny_karyotype_sort\n" in registry
     assert "\nsynteny_karyotype_color\n" in registry
     assert "\nsynteny_karyotype_scale\n" in registry

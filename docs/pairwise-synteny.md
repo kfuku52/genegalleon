@@ -210,6 +210,18 @@ scale bars, track gene counts, track ratios and per-track species-label placemen
 Changing the scaling mode
 invalidates only plots, not the analysis or dS estimates.
 
+The target track is above the query track by default
+(`synteny_karyotype_track_order=target-query`). Set
+`GG_GENOME_EVOLUTION_SYNTENY_KARYOTYPE_TRACK_ORDER=query-target` to reverse the
+display. This moves only the vertical track coordinates; BEDs, gene ranks,
+chromosome order, colors, ribbon endpoints and analysis roles remain unchanged.
+It invalidates only plots. The standalone `pairwise_synteny_karyotype.py` helper
+accepts `--track-order query-target`; `pairwise_synteny.py plan` accepts
+`--karyotype-track-order query-target`. The style report records top-to-bottom
+`track_order` and `display_species_order`; per-track counts, ratios and label
+metadata stay in target/query analysis order (`track_metadata_order`). Shared
+scales place their single bar below the bottom displayed track.
+
 The summary records source hashes, selected/unmapped gene counts, syntenic gene
 fractions, block/anchor counts, genetic codes, algorithm parameters, tool versions
 and annotation-mapper identity. A run with no blocks fails before publication.

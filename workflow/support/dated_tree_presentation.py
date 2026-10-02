@@ -116,6 +116,53 @@ def interval_label(nodes):
     return "; ".join(labels)
 
 
+def read_branch_annotations(path, nodes, ys):
+    """Map presentation symbols to exact stem branches, never estimate dates."""
+    from matplotlib.colors import is_color_like
+
+    clades = {frozenset(node.leaf_names()): node for node in nodes}
+    required = {"descendant_species", "label", "symbol"}
+    optional = {"event_id", "colour", "branch_fraction"}
+    events, identifiers, legend_styles, positions = [], set(), {}, set()
+    with Path(path).open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fields = reader.fieldnames or []
+        if len(fields) != len(set(fields)) or required - set(fields) or set(fields) - required - optional:
+            raise ValueError("Branch annotations require descendant_species,label,symbol and only documented optional columns.")
+        for index, row in enumerate(reader, 1):
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError("Branch annotation row width does not match its header.")
+            row = {key: value.strip() for key, value in row.items()}
+            names = [name.strip() for name in row["descendant_species"].split(",")]
+            node = clades.get(frozenset(names))
+            if not all(names) or len(names) != len(set(names)) or node is None or node.is_root:
+                raise ValueError("Branch annotation must select an exact non-root clade or tip.")
+            identifier = row.get("event_id") or f"event-{index}"
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", identifier) or identifier in identifiers:
+                raise ValueError("Branch event_id must be a unique safe identifier.")
+            label, symbol, colour = row["label"], row["symbol"], row.get("colour") or "#202020"
+            if not label or symbol not in {"^", "v", "o", "s", "D", "x", "+", "*"} or not is_color_like(colour):
+                raise ValueError("Invalid branch annotation label, symbol or colour.")
+            fraction = float(row.get("branch_fraction") or 0.5)
+            child, parent = float(node.props["age"]), float(node.up.props["age"])
+            if not math.isfinite(fraction) or not 0 < fraction < 1 or parent <= child:
+                raise ValueError("Branch fraction must be between 0 and 1 on a positive-length branch.")
+            position = (frozenset(names), fraction)
+            if position in positions:
+                raise ValueError("Branch annotations share the same display position.")
+            if label in legend_styles and legend_styles[label] != (symbol, colour):
+                raise ValueError("A branch legend label has conflicting symbols or colours.")
+            identifiers.add(identifier)
+            positions.add(position)
+            legend_styles[label] = (symbol, colour)
+            events.append({"event_id": identifier, "label": label, "symbol": symbol, "colour": colour,
+                           "descendant_species": sorted(names), "branch_fraction": fraction,
+                           "branch_child_age_Ma": child, "branch_parent_age_Ma": parent,
+                           "display_position_Ma": child + fraction * (parent - child), "y": ys[node],
+                           "position_interpretation": "Graphical position along the branch, not an estimated event date."})
+    return events
+
+
 def render_dated_tree(
     infile,
     outfile,
@@ -124,6 +171,7 @@ def render_dated_tree(
     busco_results=None,
     busco_prefix="busco_cds",
     geological_background="period",
+    show_geological_source=False,
     figure_width=4.8,
     figure_height=None,
     row_spacing_points=None,
@@ -131,6 +179,7 @@ def render_dated_tree(
     font_size=8,
     tip_order=None,
     tip_annotations=None,
+    branch_annotations=None,
     node_ages="none",
     age_clades=None,
     layout_report=None,
@@ -156,6 +205,7 @@ def render_dated_tree(
             ("busco_summary", busco_summary),
             ("tip_order", tip_order),
             ("tip_annotations", tip_annotations),
+            ("branch_annotations", branch_annotations),
             ("age_clades", age_clades),
         ]
         if value is not None
@@ -208,6 +258,7 @@ def render_dated_tree(
     for node in tree.traverse(strategy="postorder"):
         if not node.is_leaf:
             ys[node] = (ys[node.children[0]] + ys[node.children[-1]]) / 2
+    events = read_branch_annotations(branch_annotations, nodes, ys) if branch_annotations else []
     max_age = max(float(node.props.get("age_ci_high", node.props["age"])) for node in nodes)
     if geological_background == "period" and max_age > 4567:
         raise ValueError("Geological background requires ages between 0 and 4567 Ma.")
@@ -260,8 +311,26 @@ def render_dated_tree(
             + font_size * 0.8
         )
         legend_rows = 2 if counts and credible_label and legend_points > width_points - 24 else int(bool(legend_labels))
+        event_groups, event_labels = [], {}
+        for event in events:
+            event_labels.setdefault(event["label"], event)
+        group, group_width = [], 0
+        for label, event in event_labels.items():
+            size = text_width(label) + font_size * 1.35
+            if size + font_size * 0.8 > width_points - 24:
+                raise ValueError("Branch legend label is too wide; shorten it or increase figure width.")
+            if group and group_width + size + font_size * 1.7 > width_points - 24:
+                event_groups.append(group)
+                group, group_width = [], 0
+            group_width += size + (font_size * 0.9 if group else 0)
+            group.append(event)
+        if group:
+            event_groups.append(group)
+        base_legend_rows = legend_rows
+        legend_rows += len(event_groups)
         legend_row_points = font_size + 8
-        footer_points = (48 if counts else font_size * 3 + 7) + 20 + legend_rows * legend_row_points
+        source_points = 20 if periods and show_geological_source else 0
+        footer_points = (48 if counts else font_size * 3 + 7) + source_points + legend_rows * legend_row_points
         period_offset = 4
         header_points = max(30, (max(text_width(p["name"]) for p in periods) + period_offset + 8) if periods else 30)
         height = (
@@ -380,6 +449,22 @@ def render_dated_tree(
                 caps.set_gid(f"age-interval-cap-{interval_count}")
                 interval_lines.extend([line, caps])
                 interval_count += 1
+        def event_marker(event, x=(), y=(), **kwargs):
+            import matplotlib.patheffects as effects
+
+            filled = event["symbol"] not in {"x", "+"}
+            marker = Line2D(x, y, linestyle="none", marker=event["symbol"], markersize=font_size * 0.625,
+                            color=event["colour"], markerfacecolor=event["colour"],
+                            markeredgecolor="white" if filled else event["colour"],
+                            markeredgewidth=0.6 if filled else 1, **kwargs)
+            if not filled:
+                marker.set_path_effects([effects.Stroke(linewidth=2.3, foreground="white"), effects.Normal()])
+            return marker
+
+        for event in events:
+            marker = event_marker(event, [event["display_position_Ma"]], [event["y"]], zorder=5)
+            marker.set_gid("branch-event-" + event["event_id"])
+            axis.add_line(marker)
         tip_texts = []
         for leaf in leaves:
             style = styles.get(leaf.name, {})
@@ -515,14 +600,17 @@ def render_dated_tree(
             handles.extend(
                 Patch(facecolor=colour, label=name) for colour, name in zip(STATUS_COLOURS, STATUS_LABELS, strict=True)
             )
-        legend_groups = [handles[:1], handles[1:]] if legend_rows == 2 else ([handles] if handles else [])
+        legend_groups = [handles[:1], handles[1:]] if base_legend_rows == 2 else ([handles] if handles else [])
+        legend_groups = list(reversed(legend_groups)) + [
+            [event_marker(event, label=event["label"]) for event in group] for group in event_groups
+        ]
         legends = []
-        for index, group in enumerate(reversed(legend_groups)):
+        for index, group in enumerate(legend_groups):
             legends.append(
                 figure.legend(
                     handles=group,
                     loc="lower center",
-                    bbox_to_anchor=(0.5, (20 + index * legend_row_points) / (height * 72)),
+                    bbox_to_anchor=(0.5, (source_points + index * legend_row_points) / (height * 72)),
                     ncol=len(group),
                     frameon=False,
                     fontsize=font_size,
@@ -531,7 +619,7 @@ def render_dated_tree(
                     handletextpad=0.35,
                 )
             )
-        if periods:
+        if periods and show_geological_source:
             figure.text(
                 left_points / width_points,
                 5 / (height * 72),
@@ -586,6 +674,8 @@ def render_dated_tree(
             "mean_age_label_count": len(age_texts),
             "geological_background": geological_background,
             "geological_source": GEOLOGICAL_SOURCE if periods else None,
+            "geological_source_credit_visible": bool(periods and show_geological_source),
+            "branch_annotations": events,
             "geological_intervals": periods,
             "geological_label_placement": "above_tree" if periods else None,
             "tree_plot_bbox_points": [float(value) * 72 / figure.dpi for value in axis.bbox.extents],
