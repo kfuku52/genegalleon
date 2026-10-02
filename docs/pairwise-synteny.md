@@ -221,6 +221,14 @@ accepts `--track-order query-target`; `pairwise_synteny.py plan` accepts
 `track_order` and `display_species_order`; per-track counts, ratios and label
 metadata stay in target/query analysis order (`track_metadata_order`). Shared
 scales place their single bar below the bottom displayed track.
+Saved layout BED/block paths are resolved relative to the layout directory,
+so `--directory` can be used from any working directory. Duplicate chromosome
+or BED gene IDs and selected chromosomes absent from the BED are rejected.
+Ribbon endpoints must belong to one chromosome per track, with a positive block
+score and a `+` or `-` orientation.
+The standalone CLI stages the plot and `karyotype_style.json` together and
+restores both if installation fails; input layout, BEDs and blocks are protected
+from output replacement.
 
 The summary records source hashes, selected/unmapped gene counts, syntenic gene
 fractions, block/anchor counts, genetic codes, algorithm parameters, tool versions

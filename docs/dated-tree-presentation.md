@@ -42,7 +42,9 @@ computed from the rows and header/footer text.
 height. Use `--figure-width`, `--font-family` and `--font-size` for publication
 requirements. The default width is 4.8 inches; widths down to 3.6 inches
 are supported when the labels and panels fit. The renderer measures species
-labels to reserve their physical width and splits a crowded legend into two rows.
+labels to reserve their physical width and splits crowded legends into as many
+rows as needed. Multiple interval types and quoted multiline branch labels
+reserve their own row heights. An enabled source footer wraps on narrow pages.
 
 BUSCO lineage identity is read from `busco_cds_lineage` in the summary, or from
 BUSCO's own full/short-result headers. Canonical neighbouring
@@ -54,6 +56,8 @@ identity is left unlabelled rather than inferred from the gene count. Mixed
 datasets or unequal totals are rejected because a shared completeness axis
 would be misleading. `annotation_summary.r` now preserves per-species lineage
 in `busco_cds_lineage`/`busco_genome_lineage` and includes it in its BUSCO plots.
+Missing-value tokens such as R's `NA` are treated as unknown metadata; they are
+never printed as dataset names. Empty BUSCO lineage headers remain unknown.
 
 Highest posterior density intervals are spelled out in the legend, including
 their probability level. Equal-tailed or unspecified credible intervals retain
@@ -69,6 +73,9 @@ which must be compatible with the topology. `--tip-annotations FILE` takes
 only. The layout report records ages, intervals, geological boundaries, BUSCO
 counts, dataset identity and tip-row coordinates. The plot and requested report
 are staged together, with rollback on a handled publication error.
+Tip names must be unique, including normalized species IDs. Metadata TSVs must
+have unique column names and rows matching their header width. Outputs cannot
+replace any consumed BUSCO header or the bundled geological boundary table.
 
 `--branch-annotations FILE` adds symbols on selected stem branches and a shared
 legend. Required TSV columns are `descendant_species` (comma-separated exact
@@ -91,3 +98,6 @@ outline for readability. Their positions are graphical annotations, not
 estimated event dates; the report records this interpretation, branch bounds,
 display positions and unchanged saved node ages. Legend rows reserve their own
 space while preserving species row spacing.
+Symbols near plot boundaries remain complete. Overlapping symbols are rejected
+with a request to adjust `branch_fraction` or figure size, and optional node-age
+labels avoid the symbols as well as tree branches.

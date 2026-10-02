@@ -6,6 +6,8 @@ import json
 import math
 import os
 import re
+import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 try:
@@ -98,7 +100,36 @@ def connection_legend_text(criteria):
             f"Liftover: |dx| + |dy| < {criteria['liftover_gene_rank_distance']} gene ranks; {quota}; no dS filter")
 
 
-def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis=None, track_order="target-query"):
+def resolved_layout(directory):
+    """Resolve JCVI's BED/block paths beside the saved layout, without chdir."""
+    source = directory / "layout"
+    inputs, lines = [("layout", source), ("seqids", directory / "seqids")], []
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            lines.append(line)
+            continue
+        fields = [field.strip() for field in line.split(",")]
+        edge = fields[0] == "e"
+        if (edge and len(fields) not in {4, 5}) or (not edge and len(fields) not in {8, 9}):
+            raise ValueError("Invalid pairwise karyotype layout row.")
+        index = 3 if edge else 7
+        if not fields[index]:
+            raise ValueError("Karyotype layout requires a BED or block file path.")
+        path = Path(fields[index])
+        path = path if path.is_absolute() else directory / path
+        fields[index] = str(path.resolve())
+        inputs.append(("blocks" if edge else "BED", path))
+        lines.append(",".join(fields))
+    return "\n".join(lines) + "\n", inputs
+
+
+def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis=None, track_order="target-query",
+                     *, layout_report=None):
+    directory = Path(directory).resolve()
+    if fmt not in {"pdf", "svg", "png"}:
+        raise ValueError("Karyotype format must be pdf, svg or png")
+    if scale_mode not in {"shared", "independent"}:
+        raise ValueError("karyotype-scale must be shared or independent")
     if track_order not in {"target-query", "query-target"}:
         raise ValueError("karyotype-track-order must be target-query or query-target")
     sides = ("target", "query")
@@ -114,19 +145,39 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
     from matplotlib.patches import PathPatch, Rectangle
     from matplotlib.path import Path as MplPath
     from matplotlib.transforms import Bbox
+    from nwkit.file_paths import validate_distinct_output_paths, validate_outputs_do_not_replace_inputs
+    from nwkit.output_transaction import output_transaction
 
+    layout_text, inputs = resolved_layout(directory)
+    colors_path = directory / "karyotype_colors.json"
+    if colors_path.exists():
+        inputs.append(("colors", colors_path))
+    if analysis is not None:
+        inputs.extend(("analysis metadata", Path(analysis) / path) for path in ("summary.json", "logs/01.mcscan.log"))
+    outfile = directory / f"karyotype.{fmt}"
+    outputs = [("plot", outfile)] + ([("layout_report", layout_report)] if layout_report is not None else [])
+    validate_distinct_output_paths(outputs)
+    validate_outputs_do_not_replace_inputs(inputs, outputs)
     criteria = connection_criteria(analysis) if analysis is not None else None
     legend_text = connection_legend_text(criteria) if criteria is not None else None
-    with matplotlib.rc_context(STYLE):
+    with matplotlib.rc_context(STYLE), ExitStack() as cleanup:
         fig = plt.figure(figsize=(9, 3.6), dpi=72)
+        cleanup.callback(plt.close, fig)
         root = fig.add_axes((0, 0, 1, 1))
         root.set_xlim(0, 1)
         root.set_ylim(0, 1)
         root.set_axis_off()
-        layout = Layout(str(directory / "layout"), generank=True, seed=1)
+        with tempfile.TemporaryDirectory(prefix="gg-karyotype-") as temporary:
+            absolute_layout = Path(temporary) / "layout"
+            absolute_layout.write_text(layout_text, encoding="utf-8")
+            layout = Layout(str(absolute_layout), generank=True, seed=1)
         selected = (directory / "seqids").read_text(encoding="utf-8").splitlines()
-        if len(layout) != 2 or len(selected) != 2:
+        if len(layout) != 2 or len(selected) != 2 or any(entry.empty for entry in layout):
             raise ValueError("Pairwise karyotype requires exactly two tracks")
+        for entry in layout:
+            if (entry.rotation != 0 or not all(math.isfinite(value) for value in (entry.y, entry.xstart, entry.xend))
+                    or not 0 < entry.y < 1 or not 0 <= entry.xstart < entry.xend <= 1):
+                raise ValueError("Compact karyotype requires horizontal tracks with valid normalized coordinates.")
         upper, lower = sorted((layout[0].y, layout[1].y), reverse=True)
         if upper == lower:
             raise ValueError("Pairwise karyotype needs distinct vertical track positions")
@@ -136,11 +187,32 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
         # Use native JCVI ranks/geometry and ribbon primitives; never infer bp
         # length from the last gene or label a gene-rank scale as Mbp.
         for entry, line in zip(layout, selected, strict=True):
-            entry.seqids = line.split(",")
+            entry.seqids = [sid.strip() for sid in line.split(",")]
+            if not all(entry.seqids) or len(entry.seqids) != len(set(entry.seqids)):
+                raise ValueError("Each karyotype track requires unique nonempty chromosome IDs.")
+            identifiers = [gene.accn for gene in entry.bed]
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError("Karyotype BED gene IDs must be unique within each track.")
             entry.rev = set()
             entry.sizes = {sid: len(list(entry.bed.sub_bed(sid))) for sid in entry.seqids}
+            if not all(entry.sizes.values()):
+                raise ValueError("Every selected karyotype chromosome must have genes in its BED.")
+        for first, second, blocks, _ in layout.edges:
+            if {first, second} != {0, 1}:
+                raise ValueError("Pairwise ribbon edges must connect the two different tracks.")
+            for a, b, c, d, score, orientation, _ in blocks:
+                if score <= 0 or orientation not in {"+", "-"}:
+                    raise ValueError("Invalid karyotype block score or orientation.")
+                for side, endpoints in ((first, (a, b)), (second, (c, d))):
+                    coordinates = layout[side].order_in_chr
+                    if any(gene not in coordinates for gene in endpoints):
+                        raise ValueError("Karyotype block endpoints must occur in their track BED.")
+                    if coordinates[endpoints[0]][0] != coordinates[endpoints[1]][0]:
+                        raise ValueError("A karyotype ribbon block cannot span multiple chromosomes.")
         tracks = [Track(root, entry, draw=False) for entry in layout]
         scale_tracks(tracks, scale_mode)
+        if any(not math.isfinite(track.ratio) or track.ratio <= 0 for track in tracks):
+            raise ValueError("Karyotype chromosome gaps leave no positive space for genes; select fewer chromosomes.")
         ShadeManager(root, tracks, layout)
         scale = gene_scale([track.total for track in tracks])
         scale_lines, species_labels, unit_labels, chromosome_labels = [], [], [], []
@@ -241,24 +313,20 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
                 box = Bbox.union([box, legend.get_window_extent(renderer)])
             return box
 
-        try:
-            width, padding = 7.2, 0.06
-            low, high = 1.0, 12.0
-            if content(low).width > (width - 2 * padding) * 72:
-                raise ValueError("Karyotype labels cannot fit a 7.2-inch page at 8 pt")
-            for _ in range(32):
-                middle = (low + high) / 2
-                if content(middle).width <= (width - 2 * padding) * 72:
-                    low = middle
-                else:
-                    high = middle
-            box = content(low).transformed(fig.dpi_scale_trans.inverted())
-            page = Bbox.from_bounds((box.x0 + box.x1 - width) / 2,
-                                    box.y0 - padding, width, box.height + 2 * padding)
-            fig.savefig(directory / f"karyotype.{fmt}", format=fmt, dpi=300, bbox_inches=page)
-        finally:
-            plt.close(fig)
-    return {"coordinate_system": "gene_rank", "scale_mode": scale_mode, "scale_unit": "genes", "scale_value": scale,
+        width, padding = 7.2, 0.06
+        low, high = 1.0, 12.0
+        if content(low).width > (width - 2 * padding) * 72:
+            raise ValueError("Karyotype labels cannot fit a 7.2-inch page at 8 pt")
+        for _ in range(32):
+            middle = (low + high) / 2
+            if content(middle).width <= (width - 2 * padding) * 72:
+                low = middle
+            else:
+                high = middle
+        box = content(low).transformed(fig.dpi_scale_trans.inverted())
+        page = Bbox.from_bounds((box.x0 + box.x1 - width) / 2,
+                                box.y0 - padding, width, box.height + 2 * padding)
+        report = {"coordinate_system": "gene_rank", "scale_mode": scale_mode, "scale_unit": "genes", "scale_value": scale,
             "track_order": list(display_sides),
             "display_species_order": [pair[f"{side}_species"] for side in display_sides],
             "track_metadata_order": list(sides),
@@ -271,6 +339,12 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             "species_label_layout": label_layout,
             "chromosome_style": "rectangular",
             "connection_criteria": criteria, "connection_legend_text": legend_text}
+        with output_transaction([Path(path) for _, path in outputs]) as staged:
+            fig.savefig(staged[outfile], format=fmt, dpi=300, bbox_inches=page)
+            if layout_report is not None:
+                Path(staged[Path(layout_report)]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
+                                                           encoding="utf-8")
+        return report
 
 
 def main():
@@ -285,8 +359,8 @@ def main():
     parser.add_argument("--analysis", type=Path, help="Recorded analysis directory for the connection legend")
     args = parser.parse_args()
     colors = json.loads((args.directory / "karyotype_colors.json").read_text(encoding="utf-8"))
-    style = render_karyotype(args.directory, vars(args), args.format, colors, args.scale, args.analysis, args.track_order)
-    (args.directory / "karyotype_style.json").write_text(json.dumps(style, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    render_karyotype(args.directory, vars(args), args.format, colors, args.scale, args.analysis, args.track_order,
+                     layout_report=args.directory / "karyotype_style.json")
 
 
 if __name__ == "__main__":
