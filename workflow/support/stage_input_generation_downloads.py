@@ -13,6 +13,7 @@ from format_species_common import is_fasta_filename, is_gbff_filename, is_gff_fi
 from format_species_download.local import validate_gzip_with_cache
 from format_species_manifest import resolved_manifest_fieldnames, write_resolved_manifest_tsv
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
+from format_species_provider_resolvers import provider_raw_dir
 from format_species_providers.catalogs import validate_coge_export_gff_file
 from input_generation_array_state import atomic_json, digest, digest_paths, export_manifest, load_plan
 
@@ -25,15 +26,15 @@ def has_required_source(task, keys):
 
 
 def explicit_manifest_task(task, row, download_root):
-    """Keep explicit direct/NCBI manifest roles when filenames lack role markers."""
+    """Bind resolved manifest roles without inferring species from filenames."""
     provider = task["provider"]
     roles = ("cds", "gff", "gbff", "genome")
-    if provider not in ("direct", "ncbi") or not any((row.get(role + "_url") or "").strip() for role in roles):
+    if not any((row.get(role + "_url") or "").strip() for role in roles):
         return None
     species_key = task["species_key"]
     if species_key in ("", ".", "..") or Path(species_key).name != species_key:
         raise ValueError("Unsafe manifest species key: " + species_key)
-    raw_dir = download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
+    raw_dir = provider_raw_dir(provider, download_root, species_key)
     actual = {
         "provider": provider, "species_key": species_key,
         "species_prefix": task["species_prefix"],
@@ -59,6 +60,8 @@ def explicit_manifest_task(task, row, download_root):
         actual["cds_path"], actual["gff_path"], actual["gbff_path"], actual["genome_path"])
     if missing:
         raise ValueError("[{}] {}: missing {}".format(provider, species_key, missing))
+    if provider == "coge" and actual["gff_path"] is not None:
+        validate_coge_export_gff_file(actual["gff_path"], gid=row.get("id", ""))
     actual["gff_selection_candidates"] = (
         (actual["gff_path"].name,) if actual["gff_path"] is not None else ()
     )

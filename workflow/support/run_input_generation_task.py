@@ -10,6 +10,7 @@ from pathlib import Path
 import format_species_inputs as fsi
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from input_generation_array_state import atomic_json, digest, digest_paths, load_plan
+from stage_input_generation_downloads import explicit_manifest_task
 
 
 def build_arg_parser():
@@ -139,11 +140,17 @@ def resolve_manifest_task(task, args, *, raw_input_error=None):
         validation_cache_dir=Path(task["download_dir"]) / "array" / ".gg-gzip-validation")
     if report["errors"]:
         raise ValueError("; ".join(report["errors"]))
-    tasks, warnings, errors = fsi.discover_tasks(task["provider"], download_root / DEFAULT_INPUT_RELATIVE_DIRS[task["provider"]])
-    tasks = [candidate for candidate in tasks if candidate["species_prefix"] == task["species_prefix"]]
-    if errors or len(tasks) != 1:
-        raise ValueError("Expected exactly one downloaded species task: " + repr(errors))
-    actual = tasks[0]
+    rows = [row for row in report["resolved_rows"]
+            if (row["provider"], row["species_key"]) == (task["provider"], task["species_key"])]
+    if len(rows) != 1:
+        raise ValueError("Expected exactly one resolved manifest row")
+    actual = explicit_manifest_task(task, rows[0], download_root)
+    if actual is None:
+        tasks, warnings, errors = fsi.discover_tasks(task["provider"], download_root / DEFAULT_INPUT_RELATIVE_DIRS[task["provider"]])
+        tasks = [candidate for candidate in tasks if candidate["species_prefix"] == task["species_prefix"]]
+        if errors or len(tasks) != 1:
+            raise ValueError("Expected exactly one downloaded species task: " + repr(errors))
+        actual = tasks[0]
     # Legacy worker-side downloads also need a fresh check of original sources
     # after the network work, before a resolved receipt can be published.
     actual_paths = [str(actual[key]) for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual.get(key)]

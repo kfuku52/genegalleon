@@ -397,6 +397,90 @@ def test_staged_manifest_roles_override_nonstandard_direct_and_ncbi_filenames(tm
         assert Path(task["cds_path"]).name == cds.name
 
 
+@pytest.mark.parametrize("provider,species,source_prefix", [
+    ("ensemblplants", "Oryza_sativa_tropical_japonica_subgroup", "Oryza_sativa_azucena.AzucenaRS1"),
+    ("ensemblplants", "Oryza_sativa_aus_subgroup", "Oryza_sativa_n22.OsN22RS2"),
+    ("citrusgenomedb", "Citrus_clementina_x_Citrus_x_tangelo", "Citrus_reticulata_fairchild"),
+])
+@pytest.mark.parametrize("staged", [True, False])
+def test_manifest_roles_preserve_provider_alias_and_hybrid_identity(tmp_path, provider, species, source_prefix, staged):
+    roles = {role: tmp_path / (source_prefix + suffix) for role, suffix in
+             (("cds", ".cds.fa"), ("gff", ".gff3"), ("genome", ".dna.toplevel.fa"))}
+    roles["cds"].write_text(">gene1\nATGAAATTT\n")
+    roles["gff"].write_text("##gff-version 3\nchr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene1\n")
+    roles["genome"].write_text(">chr1\nATGAAATTT\n")
+    fields = ["provider", "id", "species_key", *[r + suffix for r in roles for suffix in ("_url", "_filename")]]
+    manifest = tmp_path / "manifest.tsv"
+    with manifest.open("w") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
+        writer.writeheader()
+        writer.writerow({"provider": provider, "id": "fixture", "species_key": species,
+                         **{r + "_url": p.as_uri() for r, p in roles.items()},
+                         **{r + "_filename": p.name if provider == "ensemblplants" else "" for r, p in roles.items()}})
+    plan = tmp_path / "plan.json"
+    planned = run_python(PLAN_SCRIPT, "--provider", "all", "--download-manifest", str(manifest),
+                         "--download-dir", str(tmp_path / "downloads"), "--outfile", str(plan),
+                         *(["--stage-downloads"] if staged else []))
+    assert planned.returncode == 0, planned.stderr
+    args = ("--task-plan", str(plan), "--task-index", "1", "--describe-only",
+            "--task-meta-output", str(tmp_path / "meta.json"), "--species-cds-dir", str(tmp_path / "cds"),
+            "--species-gff-dir", str(tmp_path / "gff"), "--species-genome-dir", str(tmp_path / "genome"))
+    if staged:
+        result = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-gff", "--require-genome")
+        assert result.returncode == 0, result.stdout + result.stderr
+    result = run_python(RUN_TASK_SCRIPT, *args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = Path(str(plan) + ".tasks/1.json")
+    task = json.loads(receipt.read_text())["task"]
+    assert task["species_key"] == task["species_prefix"] == species
+    assert task["provider"] == provider
+    for role, source in roles.items():
+        assert Path(task[role + "_path"]).read_bytes() == source.read_bytes()
+    if provider == "ensemblplants":
+        assert Path(task["cds_path"]).name == roles["cds"].name
+        assert Path(task["cds_path"]).parent.name == "original_files"
+    else:
+        assert Path(task["cds_path"]).parent.name == species
+    before = receipt.read_bytes()
+    if staged:
+        resumed = run_python(STAGE_SCRIPT, "--task-plan", str(plan), "--require-gff", "--require-genome")
+        assert resumed.returncode == 0 and "no downloads needed" in resumed.stdout, resumed.stderr
+    else:
+        assert run_python(RUN_TASK_SCRIPT, *args).returncode == 0
+    assert receipt.read_bytes() == before
+
+
+@pytest.mark.parametrize("invalid", ["traversal", "symlink", "extension", "missing", "header_only_coge"])
+def test_provider_manifest_roles_reject_invalid_inputs(tmp_path, monkeypatch, invalid):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    from format_species_provider_resolvers import provider_raw_dir
+    from stage_input_generation_downloads import explicit_manifest_task
+
+    provider = "coge" if invalid == "header_only_coge" else "ensemblplants"
+    task = {"provider": provider, "species_key": "Example_species", "species_prefix": "Example_species"}
+    raw = provider_raw_dir(provider, tmp_path, task["species_key"])
+    raw.mkdir(parents=True)
+    cds = raw / "alias.cds.fa"
+    cds.write_text(">gene1\nATG\n")
+    row = {"id": "123", "cds_url": "https://example.invalid/alias.cds.fa", "cds_filename": cds.name}
+    if invalid == "traversal":
+        row["cds_filename"] = "../alias.cds.fa"
+    elif invalid == "symlink":
+        link = raw / "link.fa"
+        link.symlink_to(cds)
+        row["cds_filename"] = link.name
+    elif invalid == "extension":
+        row["cds_filename"] = "alias.html"
+    elif invalid == "missing":
+        cds.unlink()
+    else:
+        gff = raw / "alias.gff3"
+        gff.write_text("##gff-version 3\n")
+        row.update(gff_url="https://example.invalid/alias.gff3", gff_filename=gff.name)
+    with pytest.raises(ValueError):
+        explicit_manifest_task(task, row, tmp_path)
+
+
 def test_prepare_resources_are_separate_from_compute_array(tmp_path):
     helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
     result = run_python(helper, "--task-plan", str(tmp_path / "plan.json"), "--cpus", "4", "--memory", "32G",
