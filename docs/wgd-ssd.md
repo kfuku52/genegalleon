@@ -186,6 +186,51 @@ copies were never WGD-derived. Broad segmental duplication can also resemble WGD
 evidence; this experimental combined rule is not a validated discriminator for
 all such histories.
 
+### Optional MUL Node Diagnostics
+
+Set `wgd_mul_diagnostics=1` alongside `run_wgd_ssd_classification=1`, with an
+explicit `wgd_mul_h1` selector in the **full, original-label** species tree.
+`wgd_mul_h2` optionally restricts second parents; empty searches all admissible
+placements. This runs a separate per-family `nwkit mul-reconcile --score-model
+dl` search on the same unmodified rooted gene/species inputs. It does not join
+the genome-stage GRAMPA bundle, change WGD/SSD rules, or infer DL+ILS node origins.
+
+Every globally tied best candidate and every optimal assignment is retained in
+`mul/nodes.tsv`, with `mul/scores.tsv` and `mul/results.json`. Rooted topology
+IDs and descendant-tip clade IDs verify the join independently of child order
+and branch lengths. Leaf species, candidate metadata, assignment completeness,
+score totals and uniqueness must agree; mismatches fail the stage. Original
+input/evidence hashes remain checked, and the entire family ZIP publishes
+atomically, preserving previous results on failure.
+
+`node_diagnostics.tsv` has one row per internal gene node, including
+non-duplication events with classification `NA`. It retains the original
+reconciliation event, classification/reason, and adds `mul_mapping_status`
+(`consistent` or `ambiguous`), `mul_dl_duplication` (`all`, `none`, `ambiguous`),
+candidate/mapping counts and all distinct mapped occurrence clades/cost states.
+Consistency means that the mapped tip occurrences, species and local D+L costs
+agree across all co-optimal assignments, not biological certainty or stability
+under tree/model uncertainty. Counts are enumerations, not posterior weights.
+Even `mul_dl_duplication=none` does not overwrite `SSD-supported` evidence.
+
+The classified NHX additionally stores `mul_mapping_status`,
+`mul_dl_duplication`, `mul_gene_node`, `mul_best_hypotheses` and
+`mul_optimal_mappings`. `duplication_origins_mul.pdf` uses the original origin
+colors and a circle for consistent MUL mappings or a triangle for ambiguous
+ones. Its `N<number>` labels join to the run-local `gene_node`; clade IDs are
+the child-order-independent identifiers. Existing origin TSV columns and the
+original PDF are unchanged. Stage-owned MUL attributes are cleared on rerun,
+including when diagnostics are disabled.
+
+The default is off. `wgd_mul_max_candidates`, `wgd_mul_max_state_pairs` and
+`wgd_mul_max_maps` default to NWKIT's 10,000 candidates, 10,000,000 state pairs
+per gene/candidate and 100,000 optimal assignments per gene/candidate.
+Exceeding a cap fails without filtering candidates or truncating assignments.
+Settings support the normal `GG_GENE_EVOLUTION_` overrides and participate in
+artifact invalidation. Disabling the option rebuilds the family bundle under
+the existing stale-artifact policy; cached diagnostics are not treated as new
+disabled-mode results.
+
 Set `wgd_native_tree_likelihood=1` to additionally run `nwkit wgd-tree` using
 the count-fit parameters and each single-event candidate. This optional model
 uses a rooted binary species-colored gene topology, not observed gene branch

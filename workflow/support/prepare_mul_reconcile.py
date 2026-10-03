@@ -2,6 +2,7 @@
 """Prepare legacy gene_species labels without editing Newick syntax as text."""
 
 import argparse
+import json
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,10 @@ def input_text(tree):
     return output.getvalue()
 
 
+def rooted_clades(tree):
+    return {frozenset(node.leaf_names()) for node in tree.traverse() if not node.is_leaf}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--species-tree", required=True)
@@ -33,7 +38,14 @@ def main():
     parser.add_argument("--species-out", required=True)
     parser.add_argument("--genes-out", required=True)
     parser.add_argument("--names-out", required=True)
+    parser.add_argument("--locus-model")
+    parser.add_argument("--locus-model-out")
+    parser.add_argument("--locus-species-tree")
+    parser.add_argument("--locus-species-out")
     args = parser.parse_args()
+    locus_options = (args.locus_model, args.locus_model_out, args.locus_species_tree, args.locus_species_out)
+    if any(locus_options) and not all(locus_options):
+        parser.error("All four --locus-model/--locus-species input/output options are required together.")
     if args.gene_tree_dir is not None:
         args.gene_tree = [
             str(path) for path in sorted(Path(args.gene_tree_dir).glob("*.nwk"))
@@ -41,18 +53,29 @@ def main():
         ]
     if not args.gene_tree:
         raise ValueError("At least one gene tree is required.")
-    validate_output_targets([args.species_out, args.genes_out, args.names_out])
+    outputs = [("--species-out", args.species_out), ("--genes-out", args.genes_out), ("--names-out", args.names_out)]
+    if args.locus_model_out:
+        outputs.append(("--locus-model-out", args.locus_model_out))
+        outputs.append(("--locus-species-out", args.locus_species_out))
+    validate_output_targets([path for _, path in outputs])
     validate_outputs_do_not_replace_inputs(
         [
             ("--species-tree", args.species_tree),
             ("--species-map-tsv", args.species_map_tsv),
+            ("--locus-model", args.locus_model),
+            ("--locus-species-tree", args.locus_species_tree),
             *(("--gene-tree", path) for path in args.gene_tree),
         ],
-        [("--species-out", args.species_out), ("--genes-out", args.genes_out), ("--names-out", args.names_out)],
+        outputs,
     )
     species = read_tree(args.species_tree, "auto", True, quiet=True)
     validate_binary(species, "Species tree")
     names = set(species.leaf_names())
+    clades = rooted_clades(species)
+    child_order = {
+        frozenset(node.leaf_names()): {frozenset(child.leaf_names()): i for i, child in enumerate(node.children)}
+        for node in species.traverse() if not node.is_leaf
+    }
     for leaf in species.leaves():
         leaf.name = leaf.name.replace("_", "-")
     validate_unique_named_leaves(species, "Normalized species tree")
@@ -81,6 +104,29 @@ def main():
         args.genes_out: "\n".join(genes) + "\n",
         args.names_out: "\n".join(filenames) + "\n",
     }
+    if args.locus_model:
+        from nwkit.mul_locus_cli import json_pairs
+        from nwkit.mul_locus_mc import validate_model
+
+        with open(args.locus_model) as handle:
+            model = json.load(handle, object_pairs_hook=json_pairs)
+        locus_species = read_tree(args.locus_species_tree, "auto", True, quiet=True)
+        validate_binary(locus_species, "Locus species tree")
+        if set(locus_species.leaf_names()) != names or rooted_clades(locus_species) != clades:
+            raise ValueError("Locus species tree must have the same species and rooted topology.")
+        # Numeric H1/H2 selectors use postorder IDs, so match the original order.
+        for node in locus_species.traverse():
+            if not node.is_leaf:
+                order = child_order[frozenset(node.leaf_names())]
+                node.children.sort(key=lambda child: order[frozenset(child.leaf_names())])
+        for leaf in locus_species.leaves():
+            leaf.name = leaf.name.replace("_", "-")
+        if not isinstance(model, dict) or not isinstance(model.get("detection"), dict) or set(model["detection"]) != names:
+            raise ValueError("Locus detection must match the original species labels exactly.")
+        model["detection"] = {name.replace("_", "-"): p for name, p in model["detection"].items()}
+        validate_model(model, locus_species)
+        contents[args.locus_model_out] = json.dumps(model, indent=2, allow_nan=False) + "\n"
+        contents[args.locus_species_out] = input_text(locus_species) + "\n"
     with output_transaction(contents) as staged:
         for path, content in contents.items():
             staged.write_text(path, lambda handle, content=content: handle.write(content))

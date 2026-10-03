@@ -142,6 +142,11 @@ run_mcmctree_calibration_diagnostics="${run_mcmctree_calibration_diagnostics:-0}
 mcmctree_calibration_diagnostic_chains="${mcmctree_calibration_diagnostic_chains:-4}"
 mcmctree_calibration_diagnostic_seed="${mcmctree_calibration_diagnostic_seed:-1729}"
 grampa_h1="${grampa_h1:-}"
+grampa_locus_model="${grampa_locus_model:-}"
+grampa_locus_species_tree="${grampa_locus_species_tree:-}"
+grampa_locus_h2="${grampa_locus_h2:-}"
+grampa_locus_bootstrap="${grampa_locus_bootstrap:-0}"
+grampa_locus_null_calibration="${grampa_locus_null_calibration:-plug-in}"
 target_branch_go="${target_branch_go:-}"
 go_enrichment_method="${go_enrichment_method:-event}"
 go_family_alpha="${go_family_alpha:-0.05}"
@@ -2335,13 +2340,51 @@ busco_species_tree_assisted_gene_tree_rooting() {
 
 busco_grampa() {
   (
-    local indir outdir outfile support_dir species_tree map_file="" work_dir prior_file
+    local indir outdir outfile support_dir species_tree map_file="" work_dir prior_file locus_model="" locus_species=""
     indir=$(gg_resolve_physical_path "$1") || return $?
     outdir=$(gg_resolve_physical_path "$2") || return $?
     ensure_dir "${outdir}" || return $?
     outfile=$(gg_resolve_physical_path "$3") || return $?
     support_dir=$(gg_resolve_physical_path "${gg_support_dir}") || return $?
     species_tree=$(gg_resolve_physical_path "${file_dated_species_tree}") || return $?
+    if [[ -n "${grampa_locus_model:-}" ]]; then
+      locus_model=$(gg_resolve_physical_path "${grampa_locus_model}") || return $?
+      if [[ -z "${grampa_locus_species_tree:-}" ]]; then
+        echo "Set grampa_locus_species_tree explicitly in generations; workflow dating units are not assumed." >&2
+        return 1
+      fi
+      locus_species=$(gg_resolve_physical_path "${grampa_locus_species_tree}") || return $?
+      case "${locus_model}" in
+        "${outdir}"|"${outdir}/"*)
+          echo "The locus model must be outside the result directory to preserve research inputs." >&2
+          return 1
+          ;;
+      esac
+      case "${locus_species}" in
+        "${outdir}"|"${outdir}/"*)
+          echo "The locus species tree must be outside the result directory." >&2
+          return 1
+          ;;
+      esac
+      if [[ -z "${grampa_h1}" ]]; then
+        echo "Experimental locus reconciliation requires an explicit grampa_h1." >&2
+        return 1
+      fi
+      if [[ ! "${grampa_locus_bootstrap:-0}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "grampa_locus_bootstrap must be a nonnegative integer." >&2
+        return 1
+      fi
+      case "${grampa_locus_null_calibration:-plug-in}" in
+        plug-in) ;;
+        grid-supremum)
+          if [[ "${grampa_locus_bootstrap:-0}" == 0 ]]; then
+            echo "grid-supremum requires positive grampa_locus_bootstrap." >&2
+            return 1
+          fi
+          ;;
+        *) echo "Unknown grampa_locus_null_calibration." >&2; return 1 ;;
+      esac
+    fi
     if [[ -n "${species_label_map_tsv}" ]]; then
       map_file=$(gg_resolve_physical_path "${species_label_map_tsv}") || return $?
     fi
@@ -2353,7 +2396,8 @@ busco_grampa() {
       for prior_file in "${outfile}" "${outdir}/best_mul_tree.nwk" \
         "${outdir}/grampa_checknums.txt" "${outdir}/grampa_det.txt" "${outdir}/grampa_out.txt" \
         "${outdir}/nwkit_mul_reconcile.json" "${outdir}/grampa_input_species_tree.nwk" \
-        "${outdir}/grampa_input_gene_trees.nwk" "${outdir}/busco_genetree_filenames.txt"; do
+        "${outdir}/grampa_input_gene_trees.nwk" "${outdir}/busco_genetree_filenames.txt" \
+        "${outdir}/locus"; do
         if [[ -e "${prior_file}" || -L "${prior_file}" ]]; then
           echo "No rooted gene trees in ${indir}; preserving prior MUL results without recording them as current." >&2
           return 1
@@ -2379,6 +2423,11 @@ busco_grampa() {
     fi
     if [[ -n "${map_file}" ]]; then
       prepare_args+=(--species-map-tsv "${map_file}")
+    fi
+    if [[ -n "${locus_model}" ]]; then
+      ensure_dir "./locus" || return $?
+      prepare_args+=(--locus-model "${locus_model}" --locus-model-out "./locus/input_model.json"
+        --locus-species-tree "${locus_species}" --locus-species-out "./locus/species_tree.nwk")
     fi
     python "${support_dir}/prepare_mul_reconcile.py" "${prepare_args[@]}" || return $?
     echo "Number of rooted gene trees passed to NWKIT MUL reconciliation: ${#nwk_files[@]}"
@@ -2412,6 +2461,28 @@ busco_grampa() {
       --ncpu "${GG_TASK_CPUS}" \
       --sorted_gene_tree_file_names "./busco_genetree_filenames.txt" || return $?
 
+    local locus_output_pairs=()
+    if [[ -n "${locus_model}" ]]; then
+      echo "Experimental DL+ILS comparison: workflow curation and gene-tree inference errors are not calibrated; no automatic WGD decision." >&2
+      local locus_args=(mul-reconcile --score-model locus-mc
+        --species-tree "./locus/species_tree.nwk" --infile "grampa_input_gene_trees.nwk"
+        --species-regex '^.*_([^_]+)$' --h1 "${grampa_h1_normalized}"
+        --locus-model "./locus/input_model.json" --locus-bootstrap "${grampa_locus_bootstrap:-0}"
+        --outfile "./locus/scores.tsv" --report "./locus/families.tsv"
+        --check-out "./locus/checks.tsv" --model-out "./locus/results.json" --cpus "${GG_TASK_CPUS}")
+      if [[ -n "${grampa_locus_h2:-}" ]]; then
+        locus_args+=(--h2 "${grampa_locus_h2//_/-}")
+      fi
+      if [[ "${grampa_locus_bootstrap:-0}" != 0 ]]; then
+        locus_args+=(--locus-null-calibration "${grampa_locus_null_calibration:-plug-in}"
+          --locus-calibration-out "./locus/null_search.tsv")
+      fi
+      nwkit "${locus_args[@]}" || return $?
+      locus_output_pairs=("./locus" "${outdir}/locus")
+    elif [[ -e "${outdir}/locus" ]]; then
+      echo "Retaining previous experimental locus results; they are not part of this D+L-only analysis." >&2
+    fi
+
     if [[ -s "${grampa_checknums_file}" && -s "${grampa_det_file}" && -s "${grampa_out_file}" && -s "grampa_summary.tsv" ]]; then
       mv_out_bundle \
         "./grampa_out/best_mul_tree.nwk" "${outdir}/best_mul_tree.nwk" \
@@ -2422,12 +2493,27 @@ busco_grampa() {
         "./grampa_input_species_tree.nwk" "${outdir}/grampa_input_species_tree.nwk" \
         "./grampa_input_gene_trees.nwk" "${outdir}/grampa_input_gene_trees.nwk" \
         "./busco_genetree_filenames.txt" "${outdir}/busco_genetree_filenames.txt" \
-        "./grampa_summary.tsv" "${outfile}" || return $?
+        "./grampa_summary.tsv" "${outfile}" "${locus_output_pairs[@]}" || return $?
     else
       echo "NWKIT MUL reconciliation output files are missing." >&2
       return 1
     fi
   )
+}
+
+grampa_locus_provenance() {
+  local -n contract=$1
+  local output_root=$2
+  contract+=(--parameter "locus_model=${grampa_locus_model}"
+    --parameter "locus_species_tree=${grampa_locus_species_tree}"
+    --parameter "locus_h2=${grampa_locus_h2}"
+    --parameter "locus_bootstrap=${grampa_locus_bootstrap}"
+    --parameter "locus_null_calibration=${grampa_locus_null_calibration}")
+  if [[ -n "${grampa_locus_model}" ]]; then
+    contract+=(--input "locus_config=${grampa_locus_model}"
+      --input "locus_species=${grampa_locus_species_tree}"
+      --optional-output "locus_bundle=${output_root}/locus")
+  fi
 }
 
 
@@ -5882,6 +5968,7 @@ busco_grampa_dna_provenance_args+=(
 if [[ -n "${species_label_map_tsv}" ]]; then
   busco_grampa_dna_provenance_args+=(--input "species_map=${species_label_map_tsv}")
 fi
+grampa_locus_provenance busco_grampa_dna_provenance_args "${file_busco_grampa_dna%/*}"
 gg_artifact_prepare_stage busco_grampa_dna_needs_update run_busco_dupaware_grampa_dna "${busco_grampa_dna_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_dna_needs_update} -eq 1 && ${run_busco_dupaware_grampa_dna} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5919,6 +6006,7 @@ busco_grampa_pep_provenance_args+=(
 if [[ -n "${species_label_map_tsv}" ]]; then
   busco_grampa_pep_provenance_args+=(--input "species_map=${species_label_map_tsv}")
 fi
+grampa_locus_provenance busco_grampa_pep_provenance_args "${file_busco_grampa_pep%/*}"
 gg_artifact_prepare_stage busco_grampa_pep_needs_update run_busco_dupaware_grampa_pep "${busco_grampa_pep_provenance_args[@]}" || exit $?
 if [[ ${busco_grampa_pep_needs_update} -eq 1 && ${run_busco_dupaware_grampa_pep} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -5960,6 +6048,7 @@ orthogroup_grampa_provenance_args+=(
 if [[ -n "${species_label_map_tsv}" ]]; then
   orthogroup_grampa_provenance_args+=(--input "species_map=${species_label_map_tsv}")
 fi
+grampa_locus_provenance orthogroup_grampa_provenance_args "${file_orthogroup_grampa%/*}"
 gg_artifact_prepare_stage orthogroup_grampa_needs_update run_orthogroup_grampa "${orthogroup_grampa_provenance_args[@]}" || exit $?
 if [[ ${orthogroup_grampa_needs_update} -eq 1 && ${run_orthogroup_grampa} -eq 1 ]]; then
   gg_step_start "${task}"

@@ -243,6 +243,12 @@ run_wgd_ssd_classification
 wgd_evidence_dir
 wgd_proximal_distance
 wgd_native_tree_likelihood
+wgd_mul_diagnostics
+wgd_mul_h1
+wgd_mul_h2
+wgd_mul_max_candidates
+wgd_mul_max_state_pairs
+wgd_mul_max_maps
 reconciliation_duplication_cost
 reconciliation_loss_cost
 run_orthogroup_extraction
@@ -384,6 +390,11 @@ change_direction_go
 delete_tmp_dir
 file_trait
 grampa_h1
+grampa_locus_model
+grampa_locus_species_tree
+grampa_locus_h2
+grampa_locus_bootstrap
+grampa_locus_null_calibration
 go_category
 go_enrichment_method
 go_family_alpha

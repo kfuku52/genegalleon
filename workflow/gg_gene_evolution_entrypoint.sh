@@ -141,6 +141,12 @@ run_wgd_ssd_classification=0 # Join full-species-tree WGD candidates and genomic
 wgd_evidence_dir="" # Default: workspace/output/genome_evolution/wgd_ssd.
 wgd_proximal_distance=10 # Report nearby copies within this gene-rank distance; proximity alone is not SSD support.
 wgd_native_tree_likelihood=0 # Optional fixed-topology DL/WGD likelihood using supplied count-fit parameters.
+wgd_mul_diagnostics=0 # Add tied-best D+L MUL node mappings without changing origin classifications.
+wgd_mul_h1="" # Required when diagnostics are enabled: polyploid clade in the full species tree.
+wgd_mul_h2="" # Optional second-parent scope; empty searches all admissible parents.
+wgd_mul_max_candidates=10000 # Fail, never truncate, if the candidate cap is exceeded.
+wgd_mul_max_state_pairs=10000000 # Exact D+L state-pair work limit per family/candidate.
+wgd_mul_max_maps=100000 # Optimal assignments per tied-best candidate; fail rather than drop mappings.
 run_tree_dating=0 # Species-tree-guided divergence time estimation with NWKIT; native or IQ-TREE sequence engine.
 
 # Trait and promoter workflow flags

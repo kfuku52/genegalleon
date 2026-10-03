@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CORE = ROOT / "workflow/core/gg_genome_evolution_core.sh"
 
 
-def run_wrapper(tmp_path, *, h1="Hybrid_three", fault=None, gene_text=None, empty=False):
+def run_wrapper(tmp_path, *, h1="Hybrid_three", fault=None, gene_text=None, empty=False, locus=False, bootstrap=0, null_calibration="plug-in", locus_model_path=None, locus_species_text=None, missing_locus_species=False):
     source = CORE.read_text()
     start = source.index("busco_grampa() {")
     end = source.index("\n}\n", start) + 3
@@ -22,7 +22,22 @@ def run_wrapper(tmp_path, *, h1="Hybrid_three", fault=None, gene_text=None, empt
     if not empty:
         (trees / "OG001.nwk").write_text(gene_text or "((Alpha_one_a,Hybrid_three_x1),(Beta_two_b,Hybrid_three_x2));\n")
     species = tmp_path / "species.nwk"
-    species.write_text("[&R]((Alpha_one,Hybrid_three),Beta_two);\n")
+    species.write_text("[&R]((Alpha_one:1,Hybrid_three:1):1,Beta_two:2);\n" if locus else "[&R]((Alpha_one,Hybrid_three),Beta_two);\n")
+    model_path = tmp_path / "locus_model.json"
+    locus_species = tmp_path / "generations.nwk"
+    if locus:
+        locus_species.write_text(locus_species_text or species.read_text())
+    if locus:
+        model_path.write_text(json.dumps({
+            "schema": "nwkit-mul-locus-mc-model-v1", "copy_role": "distinct-loci",
+            "root_locus_count": 1, "species_time_unit": "generations", "ancestral_stem": 0.5,
+            "detection": {"Alpha_one": 0.8, "Hybrid_three": 0.8, "Beta_two": 0.8},
+            "max_observed_tips": 4,
+            "parameter_grid": [{"duplication": 0, "loss": 0, "ne": 1, "hybridization_age": 0.5}],
+            "samples": 64, "seed": 20261115, "confidence": 0.99,
+            "max_attempts": 10000, "max_locus_nodes": 1000, "max_coalescent_states": 100000,
+            "integration": "hybrid-rb",
+        }))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     forbidden = bin_dir / "grampa.py"
@@ -32,11 +47,21 @@ def run_wrapper(tmp_path, *, h1="Hybrid_three", fault=None, gene_text=None, empt
         forbidden = bin_dir / "nwkit"
         forbidden.write_text("#!/bin/sh\nexit 92\n")
         forbidden.chmod(forbidden.stat().st_mode | stat.S_IXUSR)
-    elif fault == "publish":
+    elif fault == "late-publish":
+        forbidden = bin_dir / "mv"
+        forbidden.write_text(
+            '#!/bin/bash\nstage=0\nfor arg in "$@"; do\n'
+            'case "$arg" in */.locus.gg-stage.*) stage=1;; esac\ndone\n'
+            'if [[ $stage == 1 && "${@: -1}" == */results/locus ]]; then exit 94; fi\n'
+            'exec /bin/mv "$@"\n'
+        )
+        forbidden.chmod(forbidden.stat().st_mode | stat.S_IXUSR)
+    elif fault in ("publish", "locus-publish"):
+        target = "locus" if fault == "locus-publish" else "grampa_out.txt"
         forbidden = bin_dir / "mv"
         forbidden.write_text(
             '#!/bin/bash\nfor arg in "$@"; do\n'
-            'case "$arg" in */results/grampa_out.txt) exit 93;; esac\ndone\nexec /bin/mv "$@"\n'
+            f'case "$arg" in */results/{target}) exit 93;; esac\ndone\nexec /bin/mv "$@"\n'
         )
         forbidden.chmod(forbidden.stat().st_mode | stat.S_IXUSR)
     script = "\n".join(
@@ -62,11 +87,74 @@ def run_wrapper(tmp_path, *, h1="Hybrid_three", fault=None, gene_text=None, empt
             "species_label_parser": "legacy",
             "species_label_regex": "",
             "species_label_map_tsv": "",
+            "grampa_locus_model": str(locus_model_path or model_path) if locus else "",
+            "grampa_locus_species_tree": str(locus_species) if locus and not missing_locus_species else "",
+            "grampa_locus_h2": "Alpha_one Beta_two" if locus else "",
+            "grampa_locus_bootstrap": str(bootstrap),
+            "grampa_locus_null_calibration": null_calibration,
         },
         capture_output=True,
         text=True,
         timeout=120,
     )
+
+
+@pytest.mark.parametrize("bootstrap,calibration", [(0, "plug-in"), (2, "grid-supremum")])
+def test_optional_locus_pipeline_has_distinct_schema_and_normalized_model(tmp_path, bootstrap, calibration):
+    result = run_wrapper(tmp_path, locus=True, bootstrap=bootstrap, null_calibration=calibration,
+                         gene_text="((Alpha_one_a,Hybrid_three_x),Beta_two_b);\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = tmp_path / "results"
+    old = json.loads((output / "nwkit_mul_reconcile.json").read_text())
+    saved = json.loads((output / "locus/results.json").read_text())
+    assert old["method"] == "exact-MUL-LCA-DL-parsimony-v1"
+    assert saved["schema"] == "nwkit-mul-locus-mc-v1"
+    assert saved["model"]["integration"] == "hybrid-rb"
+    assert set(saved["model"]["detection"]) == {"Alpha-one", "Hybrid-three", "Beta-two"}
+    assert set(json.loads((tmp_path / "locus_model.json").read_text())["detection"]) == {"Alpha_one", "Hybrid_three", "Beta_two"}
+    assert saved["num_gene_trees"] == 1
+    assert saved["banks"][0]["interval_method"] == "chernoff-kl"
+    assert (output / "locus/null_search.tsv").exists() == bool(bootstrap)
+    assert not (output / "locus/best_mul_tree.nwk").exists()
+    assert not list(tmp_path.glob("tmp.mul-reconcile.*"))
+
+
+@pytest.mark.parametrize("fault", ["invalid-family", "locus-publish", "late-publish", "invalid-calibration", "input-alias", "missing-generations", "wrong-topology", "invalid-bootstrap"])
+def test_locus_failure_preserves_both_bundles(tmp_path, fault):
+    gene = "((Alpha_one_a,Hybrid_three_x),Beta_two_b);\n"
+    initial = run_wrapper(tmp_path, locus=True, gene_text=gene)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    output = tmp_path / "results"
+    before = {str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+    result = run_wrapper(
+        tmp_path, locus=True,
+        gene_text="((Alpha_one_a,Hybrid_three_x1),(Beta_two_b,Hybrid_three_x2));" if fault == "invalid-family" else gene,
+        fault=fault if fault in ("locus-publish", "late-publish") else None,
+        null_calibration="grid-supremum" if fault == "invalid-calibration" else "plug-in",
+        locus_model_path=output / "locus/input_model.json" if fault == "input-alias" else None,
+        missing_locus_species=fault == "missing-generations",
+        locus_species_text="((Alpha_one:1,Beta_two:1):1,Hybrid_three:2);" if fault == "wrong-topology" else None,
+        bootstrap=-1 if fault == "invalid-bootstrap" else 0,
+    )
+    assert result.returncode != 0
+    assert {str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()} == before
+    assert not list(tmp_path.glob("tmp.mul-reconcile.*"))
+
+
+def test_generations_tree_child_order_preserves_numeric_selectors(tmp_path):
+    result = run_wrapper(tmp_path, locus=True, gene_text="((Alpha_one_a,Hybrid_three_x),Beta_two_b);",
+                         locus_species_text="(Beta_two:2,(Hybrid_three:1,Alpha_one:1):1);")
+    assert result.returncode == 0, result.stdout + result.stderr
+    species = read_tree(str(tmp_path / "results/locus/species_tree.nwk"), "auto", True, quiet=True)
+    assert list(species.leaf_names()) == ["Alpha-one", "Hybrid-three", "Beta-two"]
+    assert species.children[0].dist == 1
+
+
+def test_optional_locus_provenance_covers_every_stage_and_config_content():
+    source = CORE.read_text()
+    assert source.count("grampa_locus_provenance ") == 3
+    assert '--input "locus_config=${grampa_locus_model}"' in source
+    assert '--optional-output "locus_bundle=${output_root}/locus"' in source
 
 
 def test_native_replacement_runs_existing_busco_wrapper_and_summary_without_grampa(tmp_path):

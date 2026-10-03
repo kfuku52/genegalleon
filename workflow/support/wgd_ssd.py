@@ -17,10 +17,12 @@ try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from wgd_evidence import branch_for_ks, combine_node, number, read_table, summarize_events, valid_position
+    from wgd_mul_diagnostics import run_diagnostics
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
     from .wgd_evidence import branch_for_ks, combine_node, number, read_table, summarize_events, valid_position
+    from .wgd_mul_diagnostics import run_diagnostics
 
 
 def write_table(path, rows, fields):
@@ -65,6 +67,7 @@ def owned_identity():
     for root in (Path(nwkit.__file__).parent, Path(kffractbias.io.__file__).parent):
         files.extend(root.rglob("*.py"))
     files += [Path(__file__).resolve(), Path(__file__).with_name("wgd_evidence.py").resolve(),
+              Path(__file__).with_name("wgd_mul_diagnostics.py").resolve(),
               Path(__file__).with_name("pairwise_synteny.py").resolve()]
     ds = ds_tool_identity()
     return {"nwkit": nwkit.__version__, "ds": ds,
@@ -531,6 +534,9 @@ def classify(args):
     from nwkit.rooting_state import require_rooted
     from nwkit.util import _is_missing_support_value, assign_branch_ids, read_tree, write_tree
 
+    mul_enabled = bool(getattr(args, "mul_diagnostics", 0))
+    if mul_enabled and (not args.mul_h1.strip() or min(args.mul_max_candidates, args.mul_max_state_pairs, args.mul_max_maps) < 1):
+        raise ValueError("MUL diagnostics require explicit H1 and positive resource limits")
     evidence = args.evidence.resolve()
     # Ensure the candidate IDs refer to this full tree, not a family-pruned tree.
     summary = json.loads((evidence / "summary.json").read_text())
@@ -552,11 +558,16 @@ def classify(args):
     protect_output(args.output, [args.gene_tree, args.species_tree, evidence],
                    Path(summary["plan"]["workspace"]) if "workspace" in summary["plan"] else None)
     species = species_tree(args.species_tree)
+    if mul_enabled:
+        from nwkit.mul_reconcile_model import validate_binary
+
+        validate_binary(species, "MUL diagnostic species tree")
     tree = read_tree(str(args.gene_tree), "auto", True, rooted="auto")
     require_rooted(tree, "WGD classification requires a rooted gene tree.")
     args.output.mkdir(parents=True, exist_ok=False)
     for node in tree.traverse():
-        for prop in ("duplication_origin", "conditional_wgd_probability"):
+        for prop in ("duplication_origin", "conditional_wgd_probability", "mul_mapping_status", "mul_dl_duplication",
+                     "mul_gene_node", "mul_best_hypotheses", "mul_optimal_mappings"):
             node.props.pop(prop, None)
     event_source = "nhx" if any("D" in node.props or "H" in node.props for node in tree.traverse()) else "lca"
     command = [sys.executable, "-m", "nwkit", "reconcile", "--infile", args.gene_tree,
@@ -636,6 +647,7 @@ def classify(args):
               "num_same_species_cross_child_pairs", "num_anchor_rows", "input_tree_support", "native_conditional_wgd_probability", "score_meaning"]
     write_table(args.output / "duplication_origins.tsv", result, fields)
     write_table(args.output / "pair_evidence.tsv", pair_rows, ["gene_clade_id", "gene_a", "gene_b", "position_feature", "gene_rank_distance"])
+    mul_summary = run_diagnostics(args, tree, species, reconciliation, result, run_tool, read_table, write_table) if mul_enabled else {"enabled": False}
     properties = {key for node in tree.traverse() for key in node.props} - {"name", "dist", "support"}
     write_tree(tree, argparse.Namespace(outfile=str(args.output / "classified_gene_tree.nhx")),
                "auto", quiet=True, props=sorted(properties))
@@ -646,6 +658,7 @@ def classify(args):
     write_json(args.output / "summary.json", {"schema_version": 1, "num_duplications": len(result),
         "class_counts": {status: sum(row["classification"] == status for row in result) for status in ("WGD-supported", "SSD-supported", "unresolved")},
         "native_tree_likelihood": bool(args.native_tree_likelihood),
+        "mul_diagnostics": mul_summary,
         "interpretation": "Conditional on one input gene tree. Origin labels are inspectable evidence support, not probabilities. Tandem adjacency supports an SSD hypothesis but does not exclude WGD-derived copies relocated by rearrangement. Broad segmental duplication can mimic combined WGD evidence. Optional native probabilities condition on fixed topology, supplied count parameters and one event, not WGD occurrence or parameter/tree uncertainty."})
 
 
@@ -717,6 +730,12 @@ def main():
     node.add_argument("--species-map", default="")
     node.add_argument("--proximal-distance", type=int, default=10)
     node.add_argument("--native-tree-likelihood", type=int, choices=(0, 1), default=0)
+    node.add_argument("--mul-diagnostics", type=int, choices=(0, 1), default=0)
+    node.add_argument("--mul-h1", default="")
+    node.add_argument("--mul-h2", default="")
+    node.add_argument("--mul-max-candidates", type=int, default=10000)
+    node.add_argument("--mul-max-state-pairs", type=int, default=10000000)
+    node.add_argument("--mul-max-maps", type=int, default=100000)
     args = parser.parse_args()
     if args.command == "plan":
         write_json(args.outfile, make_plan(args))

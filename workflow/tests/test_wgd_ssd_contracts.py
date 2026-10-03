@@ -1,7 +1,9 @@
 """Bounded input and evidence regressions, independent of the full WGD scan."""
 
+import copy
 import csv
 import json
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -645,12 +647,13 @@ def test_species_parser_and_coordinate_species_disagreement_remains_unresolved(t
 
 def test_generated_nhx_origins_are_recomputed_not_inherited(tmp_path):
     args = classification_fixture(tmp_path,
-        "(A_a:1[&&NHX:duplication_origin=WGD-supported],B_a:1)[&&NHX:D=N:duplication_origin=WGD-supported:conditional_wgd_probability=0.99:custom=keep];",
+        "(A_a:1[&&NHX:duplication_origin=WGD-supported:mul_mapping_status=ambiguous],B_a:1)[&&NHX:D=N:duplication_origin=WGD-supported:conditional_wgd_probability=0.99:mul_mapping_status=consistent:mul_dl_duplication=all:mul_gene_node=42:mul_best_hypotheses=99:mul_optimal_mappings=999:custom=keep];",
         [positioned("A_a"), positioned("B_a")])
     wgd_ssd.classify(args)
     annotated = (args.output / "classified_gene_tree.nhx").read_text()
     assert "duplication_origin=" not in annotated
     assert "conditional_wgd_probability=" not in annotated
+    assert "mul_" not in annotated
     assert "custom=keep" in annotated and "D=N" in annotated
 
 
@@ -919,3 +922,186 @@ def test_known_annotation_isoforms_cannot_inflate_family_gene_counts(tmp_path, d
     wgd_ssd.validated_members(plan)
     with pytest.raises(ValueError, match="isoform|locus"):
         wgd_ssd.validate_annotation_counts(plan, rows)
+
+
+def mul_join_fixture(gene_text="(x1_X,x2_X);"):
+    from nwkit.mul_reconcile import run_search, topology_text
+    from nwkit.mul_reconcile_model import hypotheses
+    from nwkit.mul_reconcile_nodes import write_node_diagnostics
+    from nwkit.reconcile import build_reconciliation_table
+    from nwkit.species_parser import get_species_parser
+    from nwkit.util import read_tree
+
+    gene = read_tree(gene_text, "auto", True, quiet=True)
+    species = read_tree("((A,X),B);", "auto", True, quiet=True)
+    parser = get_species_parser(species_parser="legacy", species_regex=r".*_([^_]+)$")
+    candidates = hypotheses(species, "X", "A B X")
+    scores = {c: s for c, s, _ in run_search(candidates, [gene], parser)}
+    best = [c for c in candidates if scores[c.id] == min(scores.values())]
+    handle = StringIO()
+    write_node_diagnostics(handle, best, [gene], parser, species, max_state_pairs=10000000, max_maps=100000)
+    rows = list(csv.DictReader(StringIO(handle.getvalue()), delimiter="\t"))
+    model = {"method": "exact-MUL-LCA-DL-parsimony-v1", "num_gene_trees": 1,
+             "node_diagnostics": {"schema": "nwkit-mul-node-assignments-v1"},
+             "best_hypotheses": [c.id for c in best],
+             "scores": [{"mul.tree": c.id, "score": scores[c.id], "h1.node": c.h1, "h2.node": c.h2,
+                         "hypothesis.kind": c.kind, "labeled.tree": topology_text(c.tree)} for c in candidates]}
+    reconciliation = build_reconciliation_table(gene, species, {n.name: parser.parse(n.name).species_label for n in gene.leaves()}).to_dict("records")
+    origins = [{"gene_clade_id": r["gene_clade_id"], "classification": "SSD-supported", "reason": "fixture_evidence"}
+               for r in reconciliation if r["event_type"] == "duplication"]
+    return gene, species, rows, model, reconciliation, origins
+
+
+def test_mul_node_join_keeps_ties_and_does_not_override_origin_evidence():
+    from workflow.support.wgd_mul_diagnostics import join_nodes
+
+    fixture = mul_join_fixture()
+    origins = copy.deepcopy(fixture[-1])
+    result = join_nodes(*fixture, "OGtest")
+    assert fixture[-1] == origins
+    assert len(result) == 1 and result[0]["classification"] == "SSD-supported"
+    assert result[0]["mul_best_hypotheses"] == 3
+    assert result[0]["mul_optimal_mappings"] == 6
+    assert result[0]["mul_mapping_status"] == "ambiguous"
+    assert result[0]["mul_dl_duplication"] == "none"
+    assert "probability" not in result[0]
+
+
+def test_mul_node_join_is_clade_based_not_postorder_based():
+    from workflow.support.wgd_mul_diagnostics import join_nodes
+
+    fixture = mul_join_fixture("((a_A,x1_X),(b_B,x2_X));")
+    for node in fixture[0].traverse():
+        node.children.reverse()
+        node.dist = 77
+    result = join_nodes(*fixture, "OGtest")
+    assert len(result) == 3
+    assert {r["mul_mapping_status"] for r in result} == {"consistent"}
+
+
+@pytest.mark.parametrize("kind", ["gene_topology", "species_topology", "missing_node", "duplicate_node",
+                                  "missing_candidate", "count", "duplication", "mapped_tips", "wrong_model",
+                                  "candidate_metadata", "wrong_clade", "reconciliation", "origins",
+                                  "leaf_species", "missing_column", "nonbest_candidate", "repeat_mapping"])
+def test_mul_node_join_rejects_mismatched_or_incomplete_records(kind):
+    from workflow.support.wgd_mul_diagnostics import join_nodes
+
+    fixture = list(mul_join_fixture())
+    rows, model = fixture[2], fixture[3]
+    if kind == "gene_topology":
+        rows[0]["gene_topology_id"] = "other tree"
+    elif kind == "species_topology":
+        rows[0]["species_topology_id"] = "other tree"
+    elif kind == "missing_node":
+        rows.pop()
+    elif kind == "duplicate_node":
+        rows.append(dict(rows[0]))
+    elif kind == "missing_candidate":
+        fixture[2] = [r for r in rows if r["mul.tree"] != "3"]
+    elif kind == "count":
+        rows[0]["optimal.mappings"] = "99"
+    elif kind == "duplication":
+        rows[0]["duplication"] = "2"
+    elif kind == "mapped_tips":
+        rows[0]["mul_descendant_tips"] = '["unknown"]'
+    elif kind == "wrong_model":
+        model["method"] = "locus-mc"
+    elif kind == "candidate_metadata":
+        rows[0]["h2.node"] = "wrong"
+    elif kind == "wrong_clade":
+        rows[0]["gene_clade_id"] = "unknown"
+    elif kind == "reconciliation":
+        fixture[4].pop()
+    elif kind == "origins":
+        fixture[5].clear()
+    elif kind == "leaf_species":
+        next(r for r in fixture[4] if r["event_type"] == "leaf")["species_name"] = "A"
+    elif kind == "missing_column":
+        rows[0].pop("gene_node")
+    elif kind == "nonbest_candidate":
+        model["best_hypotheses"].append(0)
+    elif kind == "repeat_mapping":
+        copies = [dict(r) for r in rows if r["mul.tree"] == "1" and r["mapping.id"] == "1"]
+        for r in rows:
+            if r["mul.tree"] == "1":
+                r["optimal.mappings"] = "3"
+        for r in copies:
+            r["mapping.id"], r["optimal.mappings"] = "3", "3"
+        rows.extend(copies)
+    with pytest.raises(ValueError):
+        join_nodes(*fixture, "OGtest")
+    assert all("mul_mapping_status" not in n.props for n in fixture[0].traverse())
+
+
+@pytest.mark.parametrize("supported", [False, True])
+def test_real_classification_mul_diagnostics_preserve_wgd_unresolved_and_nhx(tmp_path, supported):
+    from nwkit.clade_index import CladeIndex
+
+    reference = tmp_path / "reference.nwk"
+    reference.write_text("(((A:1,B:1)AB:1,C:2)ABC:1,D:3)ROOT;")
+    species = wgd_ssd.species_tree(reference)
+    branch = CladeIndex(species).clade_id_for_node(next(n for n in species.traverse() if n.name == "AB"))
+    positions = [positioned("A_a"), positioned("A_c", chromosome="chr2"),
+                 positioned("B_b"), positioned("B_d", chromosome="chr2")]
+    anchor = {"species": "A", "block_id": "block1", "gene_a": "A_a", "gene_b": "A_c", "ks": "0.5",
+              "ks_status": "ok", "species_event_id": branch, "placement_status": "interval_supported"}
+    args = classification_fixture(tmp_path, "((A_a:1,B_b:1):1,(A_c:1,B_d:1):1)[&&NHX:D=Y:annotation=retained];",
+                                  positions, [anchor] if supported else [],
+                                  [{"species_event_id": branch, "event_support": "WGD-supported"}] if supported else [])
+    wgd_ssd.classify(args)
+    previous = (args.output / "duplication_origins.tsv").read_bytes()
+    args.output = tmp_path / "with_mul"
+    args.mul_diagnostics, args.mul_h1, args.mul_h2 = 1, "A,B", "A,B"
+    args.mul_max_candidates, args.mul_max_state_pairs, args.mul_max_maps = 100, 100000, 10000
+    wgd_ssd.classify(args)
+    assert (args.output / "duplication_origins.tsv").read_bytes() == previous
+    assert (args.output / "duplication_origins_mul.pdf").stat().st_size > 1000
+    diagnostic = read_table(args.output / "node_diagnostics.tsv")
+    assert len(diagnostic) == 3
+    classes = {r["classification"] for r in diagnostic}
+    assert ("WGD-supported" if supported else "unresolved") in classes
+    nhx = (args.output / "classified_gene_tree.nhx").read_text()
+    assert "annotation=retained" in nhx and "D=Y" in nhx and "mul_mapping_status=" in nhx
+    assert json.loads((args.output / "summary.json").read_text())["mul_diagnostics"]["origin_rule_changed"] is False
+
+
+@pytest.mark.parametrize("tips, label_width", [(80, 0), (8, 200)])
+def test_mul_node_plot_deep_tree_labels_do_not_overlap_or_clip(tmp_path, monkeypatch, tips, label_width):
+    import matplotlib.figure
+    from nwkit.util import read_tree
+
+    from workflow.support.wgd_mul_diagnostics import plot_diagnostics
+
+    label = "W" * label_width
+    text = f"({label}tip0,{label}tip1)"
+    for number in range(2, tips):
+        text = f"({text},{label}tip{number})"
+    tree = read_tree(text + ";", "auto", True, quiet=True)
+    for number, node in enumerate(tree.traverse("postorder")):
+        if not node.is_leaf:
+            node.add_prop("mul_mapping_status", "ambiguous")
+            node.add_prop("mul_gene_node", number)
+    save = matplotlib.figure.Figure.savefig
+
+    def checked_save(fig, *args, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        boxes = [t.get_window_extent(renderer) for t in fig.axes[0].texts]
+        for index, box in enumerate(boxes):
+            assert fig.bbox.contains(box.x0, box.y0) and fig.bbox.contains(box.x1, box.y1)
+            assert not any(box.overlaps(other) for other in boxes[index + 1:])
+        return save(fig, *args, **kwargs)
+
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", checked_save)
+    plot_diagnostics(tree, tmp_path / "deep.pdf")
+
+
+@pytest.mark.parametrize("mul_enabled", [0, 1])
+def test_mul_node_diagnostics_preserve_single_tip_rejection(tmp_path, mul_enabled):
+    args = classification_fixture(tmp_path, "A_a:1[&&NHX:nwkit_rooted=yes];", [positioned("A_a")])
+    args.mul_diagnostics, args.mul_h1, args.mul_h2 = mul_enabled, "A", "A"
+    args.mul_max_candidates, args.mul_max_state_pairs, args.mul_max_maps = 100, 100000, 10000
+    with pytest.raises(RuntimeError, match="at least two tips"):
+        wgd_ssd.classify(args)
+    assert not (args.output / "summary.json").exists()
+    assert not (args.output / "node_diagnostics.tsv").exists()

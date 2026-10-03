@@ -9,6 +9,8 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SUPPORT = ROOT / "workflow/support"
 
@@ -40,7 +42,8 @@ def snapshot(results, manifest):
     return {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
 
 
-def test_gene_origin_stage_forwards_parameters_uses_full_tree_and_caches(tmp_path):
+@pytest.mark.parametrize("mul_enabled", [False, True])
+def test_gene_origin_stage_forwards_parameters_uses_full_tree_and_caches(tmp_path, mul_enabled):
     import nwkit
 
     from workflow.support.gene_family_output_store import (
@@ -120,6 +123,12 @@ export GG_FAMILY_OUTPUT_INVENTORY
 export GG_FAMILY_OUTPUT_ROOT="${{dir_output_active}}"
 run_wgd_ssd_classification=1
 wgd_native_tree_likelihood=0
+wgd_mul_diagnostics="${{WGD_TEST_MUL_ENABLED-{int(mul_enabled)}}}"
+wgd_mul_h1="${{WGD_TEST_MUL_H1-A}}"
+wgd_mul_h2="A B C"
+wgd_mul_max_candidates=100
+wgd_mul_max_state_pairs=100000
+wgd_mul_max_maps="${{WGD_TEST_MUL_MAX_MAPS-10000}}"
 wgd_evidence_dir="${{WGD_TEST_EVIDENCE_DIR}}"
 wgd_proximal_distance="${{WGD_TEST_PROXIMAL_DISTANCE}}"
 species_label_parser=legacy
@@ -136,10 +145,10 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
 {stage(core, "Duplication-origin evidence")}
 ''', encoding="utf-8")
 
-    def run(distance, evidence_dir=""):
+    def run(distance, evidence_dir="", **overrides):
         result = subprocess.run(["bash", str(script)], cwd=tmp_path, text=True, capture_output=True,
                                 env={**os.environ, "WGD_TEST_PROXIMAL_DISTANCE": str(distance),
-                                     "WGD_TEST_EVIDENCE_DIR": evidence_dir}, timeout=90)
+                                     "WGD_TEST_EVIDENCE_DIR": evidence_dir, **overrides}, timeout=90)
         assert result.returncode == 0, result.stdout + result.stderr
         with GeneFamilyOutputStore(output_root).open_binary("wgd_ssd", result_zip.name) as handle:
             with zipfile.ZipFile(handle) as archive:
@@ -178,7 +187,18 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
     assert provenance["family_id"] == "OGstage"
     assert provenance["parameters"] == {"species_parser": "legacy", "species_regex": regex,
                                         "proximal_distance": "2", "nwkit_identity": identity,
-                                        "native_tree_likelihood": "0"}
+                                        "native_tree_likelihood": "0",
+                                        **({"mul_diagnostics": "1", "mul_h1": "A", "mul_h2": "A B C",
+                                            "mul_max_candidates": "100", "mul_max_state_pairs": "100000",
+                                            "mul_max_maps": "10000"} if mul_enabled else {})}
+    if mul_enabled:
+        nodes = read_tsv(results / "node_diagnostics.tsv")
+        assert len(nodes) == 3 and {r["classification"] for r in nodes} == {"SSD-supported", "unresolved"}
+        assert {r["species_topology_id"] for r in nodes}
+        assert (results / "mul/nodes.tsv").is_file()
+        assert (results / "duplication_origins_mul.pdf").stat().st_size > 1000
+    else:
+        assert not (results / "node_diagnostics.tsv").exists()
     sources = {row["label"]: row for row in provenance["inputs"]}
     assert sources["full_species_tree"]["sha256"] == digest(full_tree) != digest(pruned_tree)
     assert sources["full_species_tree"]["path"] == "input/species.full.nwk"
@@ -233,3 +253,22 @@ gg_step_skip() {{ printf 'skip:%s\\n' "$1" >> {shlex.quote(str(tmp_path / "ran.t
     assert (manifest.read_bytes(), manifest.stat().st_mtime_ns) == manifest_state
     assert (tmp_path / "ran.txt").read_text().splitlines()[-1] == "skip:Duplication-origin evidence (current artifacts)"
     assert legacy.read_text() == "prior results\n"
+    if mul_enabled:
+        previous = snapshot(result_zip, manifest)
+        for overrides in ({"WGD_TEST_MUL_MAX_MAPS": "1"}, {"WGD_TEST_MUL_H1": ""}):
+            failed = subprocess.run(["bash", str(script)], cwd=tmp_path, text=True, capture_output=True,
+                                    env={**os.environ, "WGD_TEST_PROXIMAL_DISTANCE": "5",
+                                         "WGD_TEST_EVIDENCE_DIR": relative_evidence, **overrides}, timeout=90)
+            assert failed.returncode != 0, failed.stdout + failed.stderr
+            assert snapshot(result_zip, manifest) == previous
+    run(5, relative_evidence, WGD_TEST_MUL_ENABLED=str(int(not mul_enabled)))
+    assert (tmp_path / "ran.txt").read_text().splitlines()[-1] == "run:Duplication-origin evidence"
+    with zipfile.ZipFile(result_zip) as archive:
+        assert ("OGstage/node_diagnostics.tsv" in archive.namelist()) is not mul_enabled
+        nhx = archive.read("OGstage/classified_gene_tree.nhx")
+        assert (b"mul_mapping_status=" in nhx) is not mul_enabled
+    parameters = json.loads(manifest.read_text())["parameters"]
+    assert (parameters.get("mul_diagnostics") == "1") is not mul_enabled
+    toggled = snapshot(result_zip, manifest)
+    run(5, relative_evidence, WGD_TEST_MUL_ENABLED=str(int(not mul_enabled)))
+    assert snapshot(result_zip, manifest) == toggled

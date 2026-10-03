@@ -26,6 +26,12 @@ run_wgd_ssd_classification="${run_wgd_ssd_classification:-0}"
 wgd_evidence_dir="${wgd_evidence_dir:-}"
 wgd_proximal_distance="${wgd_proximal_distance:-10}"
 wgd_native_tree_likelihood="${wgd_native_tree_likelihood:-0}"
+wgd_mul_diagnostics="${wgd_mul_diagnostics:-0}"
+wgd_mul_h1="${wgd_mul_h1:-}"
+wgd_mul_h2="${wgd_mul_h2:-}"
+wgd_mul_max_candidates="${wgd_mul_max_candidates:-10000}"
+wgd_mul_max_state_pairs="${wgd_mul_max_state_pairs:-10000000}"
+wgd_mul_max_maps="${wgd_mul_max_maps:-100000}"
 cdskit_localize_model="${cdskit_localize_model:-latest}"
 cdskit_localize_organism_group="${cdskit_localize_organism_group:-auto}"
 cdskit_localize_include_features="${cdskit_localize_include_features:-0}"
@@ -4121,6 +4127,14 @@ case "${run_wgd_ssd_classification}" in
   0|1) ;;
   *) echo "run_wgd_ssd_classification must be 0 or 1" >&2; exit 2 ;;
 esac
+case "${wgd_mul_diagnostics:-0}" in
+  0|1) ;;
+  *) echo "wgd_mul_diagnostics must be 0 or 1" >&2; exit 2 ;;
+esac
+if [[ ${wgd_mul_diagnostics:-0} -eq 1 && ${run_wgd_ssd_classification} -ne 1 ]]; then
+  echo "wgd_mul_diagnostics requires run_wgd_ssd_classification=1" >&2
+  exit 2
+fi
 if [[ ${run_wgd_ssd_classification} -eq 1 ]]; then
   case "${wgd_native_tree_likelihood:-0}" in
     0|1) ;;
@@ -4144,6 +4158,15 @@ if [[ ${run_wgd_ssd_classification} -eq 1 ]]; then
   if [[ -n "${species_label_map_tsv}" ]]; then
     wgd_ssd_provenance_args+=(--input "species_map=${species_label_map_tsv}")
   fi
+  if [[ ${wgd_mul_diagnostics:-0} -eq 1 ]]; then
+    wgd_ssd_provenance_args+=(
+      --input "mul_diagnostics_implementation=${gg_support_dir}/wgd_mul_diagnostics.py"
+      --parameter "mul_diagnostics=1" --parameter "mul_h1=${wgd_mul_h1:-}" --parameter "mul_h2=${wgd_mul_h2:-}"
+      --parameter "mul_max_candidates=${wgd_mul_max_candidates:-10000}"
+      --parameter "mul_max_state_pairs=${wgd_mul_max_state_pairs:-10000000}"
+      --parameter "mul_max_maps=${wgd_mul_max_maps:-100000}"
+    )
+  fi
   gg_artifact_prepare_stage wgd_ssd_needs_update run_wgd_ssd_classification "${wgd_ssd_provenance_args[@]}" || exit $?
   if [[ ${wgd_ssd_needs_update} -eq 1 ]]; then
     gg_step_start "Duplication-origin evidence"
@@ -4152,6 +4175,11 @@ if [[ ${run_wgd_ssd_classification} -eq 1 ]]; then
       --evidence "${wgd_evidence_dir}" --family-id "${og_id}" --output "${wgd_work_dir}/${og_id}"
       --species-parser "${species_label_parser}" --proximal-distance "${wgd_proximal_distance}"
       --native-tree-likelihood "${wgd_native_tree_likelihood:-0}")
+    if [[ ${wgd_mul_diagnostics:-0} -eq 1 ]]; then
+      wgd_classify_args+=(--mul-diagnostics 1 --mul-h1 "${wgd_mul_h1:-}" --mul-h2 "${wgd_mul_h2:-}"
+        --mul-max-candidates "${wgd_mul_max_candidates:-10000}"
+        --mul-max-state-pairs "${wgd_mul_max_state_pairs:-10000000}" --mul-max-maps "${wgd_mul_max_maps:-100000}")
+    fi
     if [[ -n "${species_label_regex}" ]]; then wgd_classify_args+=(--species-regex "${species_label_regex}"); fi
     if [[ -n "${species_label_map_tsv}" ]]; then wgd_classify_args+=(--species-map "${species_label_map_tsv}"); fi
     python "${gg_support_dir}/wgd_ssd.py" classify "${wgd_classify_args[@]}"
