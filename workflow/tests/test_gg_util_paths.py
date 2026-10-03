@@ -2508,3 +2508,13 @@ def test_runtime_shares_csubst_and_huggingface_resources(tmp_path, explicit):
     expected = ["/custom/csubst", "/custom/hf"] if explicit else [
         str(project / "downloads/csubst"), str(project / "downloads/huggingface")]
     assert result.stdout.strip().splitlines() == expected
+
+
+def test_bind_csv_normalization_keeps_first_destination_and_path_text(tmp_path):
+    command = (f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+               "gg_container_bind_csv_normalize 'bad,/first path:/target:ro,/other:/other,:,' "
+               "'/duplicate:/target:rw,/literal$(no-command):/literal$(no-command):ro,/last:/last'")
+    result = run_bash(command, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == (
+        "/first path:/target:ro,/other:/other,/literal$(no-command):/literal$(no-command):ro,/last:/last")

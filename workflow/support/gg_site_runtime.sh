@@ -200,7 +200,7 @@ gg_set_command_array() {
 
 gg_bind_native_array_sources() {
   local mode=${GG_INPUT_INPUT_GENERATION_MODE:-}
-  local source_path="" kind="" source_list="" source_file=""
+  local source_path="" kind="" source_list="" source_file="" source_mounts=""
   case "${mode}" in
     array_prepare)
       source_path=${GG_INPUT_DOWNLOAD_MANIFEST:-}
@@ -222,8 +222,15 @@ gg_bind_native_array_sources() {
     "${kind}" "${source_path}" --workspace "${gg_workspace_dir}") || return 1
   while IFS= read -r source_file; do
     [[ -n "${source_file}" ]] || continue
-    gg_add_container_bind_mount "${source_file}:${source_file}:ro" || return 1
+    source_mounts="${source_file}:${source_file}:ro${source_mounts:+,${source_mounts}}"
   done <<< "${source_list}"
+  if [[ -n "${source_mounts}" ]]; then
+    # Normalize once for the complete batch. Sources take precedence over any
+    # existing bind for the same file so they cannot silently remain writable.
+    GG_CONTAINER_BIND_MOUNTS="${source_mounts}${GG_CONTAINER_BIND_MOUNTS:+,${GG_CONTAINER_BIND_MOUNTS}}"
+    export GG_CONTAINER_BIND_MOUNTS
+    gg_sync_container_bind_envs || return 1
+  fi
 }
 
 gg_site_container_shell_command() {

@@ -266,6 +266,8 @@ gg_container_bind_destination_exists_in_csv() {
 	local csv_mounts=${2:-}
 	local mount_entry
 	local entry_destination
+	local remainder
+	local -a mount_entries=()
 
 	if [[ -z "${destination}" || -z "${csv_mounts}" ]]; then
 		return 1
@@ -274,7 +276,9 @@ gg_container_bind_destination_exists_in_csv() {
 	IFS=',' read -r -a mount_entries <<< "${csv_mounts}"
 	for mount_entry in "${mount_entries[@]}"; do
 		[[ -n "${mount_entry}" ]] || continue
-		entry_destination=$(gg_container_mount_destination "${mount_entry}" || true)
+		remainder=${mount_entry#*:}
+		[[ "${remainder}" != "${mount_entry}" ]] || continue
+		entry_destination=${remainder%%:*}
 		if [[ -n "${entry_destination}" && "${entry_destination}" == "${destination}" ]]; then
 			return 0
 		fi
@@ -287,20 +291,24 @@ gg_container_bind_csv_normalize() {
 	local mount_entry
 	local entry_destination
 	local normalized=""
+	local remainder
+	local -a mount_entries=()
 
 	for csv_mounts in "$@"; do
 		[[ -n "${csv_mounts}" ]] || continue
 		IFS=',' read -r -a mount_entries <<< "${csv_mounts}"
 		for mount_entry in "${mount_entries[@]}"; do
 			[[ -n "${mount_entry}" ]] || continue
-			entry_destination=$(gg_container_mount_destination "${mount_entry}" || true)
+			remainder=${mount_entry#*:}
+			[[ "${remainder}" != "${mount_entry}" ]] || continue
+			entry_destination=${remainder%%:*}
 			if [[ -z "${entry_destination}" ]]; then
 				continue
 			fi
 			if gg_container_bind_destination_exists_in_csv "${entry_destination}" "${normalized}"; then
 				continue
 			fi
-			normalized=$(gg_csv_append "${normalized}" "${mount_entry}")
+			normalized="${normalized:+${normalized},}${mount_entry}"
 		done
 	done
 

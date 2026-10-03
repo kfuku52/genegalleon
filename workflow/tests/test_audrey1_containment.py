@@ -111,3 +111,19 @@ def test_local_binds_reject_directory_and_remote_file_authority(tmp_path):
     manifest.write_text("cds_url\nfile://remote-host/data.fa\n")
     with pytest.raises(ValueError, match="this host"):
         source_files(manifest, tmp_path)
+
+
+def test_native_source_bind_overrides_existing_write_access(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    source = tmp_path / "source.fa"
+    source.write_text(">seq\nATG\n")
+    manifest = root / "download.tsv"
+    manifest.write_text("cds_url\n" + source.as_uri() + "\n")
+    setup = (f"gg_workspace_dir={shlex.quote(str(root))}; "
+             f"export SINGULARITY_BINDPATH={shlex.quote(str(source)+':'+str(source)+':rw')}; "
+             "export GG_INPUT_INPUT_GENERATION_MODE=array_prepare GG_INPUT_DOWNLOAD_MANIFEST=/workspace/download.tsv; ")
+    result = run_site_command(tmp_path, f"{root}:{root}", setup)
+    assert result.returncode == 0, result.stderr
+    assert f"{source}:{source}:ro" in result.stdout
+    assert f"{source}:{source}:rw" not in result.stdout

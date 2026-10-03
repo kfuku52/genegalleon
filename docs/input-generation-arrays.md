@@ -357,4 +357,5 @@ Files may live outside the workspace/project without exposing their surrounding
 directories. Missing sources and paths that cannot be safely represented as bind
 arguments fail before the container starts. Use explicit file references for
 external source directories. Source hashes and normal preparation/worker checks
-remain required.
+remain required. Source mounts are normalized as one batch; an existing bind
+for a declared source file cannot override its read-only access.
