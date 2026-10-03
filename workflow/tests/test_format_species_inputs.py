@@ -4798,3 +4798,52 @@ def test_gff_gene_repair_detects_alignment_collisions_before_and_after_genes(tmp
     assert plan["id_mapping"] == {"rawSafe": "targetSafe"}
     assert {row["reason"] for row in plan["collisions"]} == {
         "target_id_already_exists", "source_id_is_shared_with_non_gene_feature"}
+
+
+@pytest.mark.parametrize('provided', [False, True])
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, strand):
+    mod = load_module()
+    gff, genome, cds = tmp_path/'source.gff', tmp_path/'genome.fa', tmp_path/'cds.fa'
+    genome.write_text('>chr1\n'+'ATG'*30+'\n')
+    parts = {'a.t1': [(1, 9), (31, 39)],
+             'b.t1': [(1, 9), (21, 23), (31, 39), (61, 69)],
+             'b.t2': [(1, 9), (31, 39), (61, 69)]}
+    lines = []
+    for transcript, intervals in parts.items():
+        lines.append(f'chr1\ts\ttranscript\t1\t69\t.\t{strand}\t.\tID={transcript}')
+        for start, end in intervals:
+            lines.append(f'chr1\ts\tCDS\t{start}\t{end}\t.\t{strand}\t0\tParent={transcript}')
+    gff.write_text('\n'.join(lines)+'\n')
+    task = dict(provider='direct', species_key='Test_species', species_prefix='Test_species',
+                gff_path=gff, genome_path=genome, gene_grouping_mode='rescue_overlap', format_strict=True)
+    if provided:
+        unit = 'ATG' if strand == '+' else 'CAT'
+        cds.write_text(''.join(f'>{name}\n'+unit*(sum(e-s+1 for s,e in intervals)//3)+'\n'
+                               for name, intervals in parts.items()))
+        task['cds_path'] = cds
+    result = mod.format_cds(task, tmp_path, False, False)
+    text = gzip.open(result['output_path'], 'rt').read()
+    assert result['after_count'] == 1
+    assert text.splitlines()[0] == '>Test_species_a'
+    assert len(text.splitlines()[1]) == 30
+
+
+@pytest.mark.parametrize('strict', [False, True])
+def test_ncbi_unique_protein_owner_resolves_wrong_locus_at_shared_cds_coordinates(tmp_path, strict):
+    mod = load_module()
+    gff, cds = tmp_path/'source.gff', tmp_path/'cds.fa'
+    lines = []
+    for gene, protein in [('g1', 'P1.1'), ('g2', 'P2.1')]:
+        lines.extend([f'chr1\ts\tgene\t1\t9\t.\t+\t.\tID=gene-{gene};locus_tag={gene}',
+                      f'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=rna-{gene};Parent=gene-{gene}',
+                      f'chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=cds-{protein};Parent=rna-{gene};protein_id={protein}'])
+    gff.write_text('\n'.join(lines)+'\n')
+    cds.write_text(''.join(f'>lcl|chr1_cds_{protein}_{i} [locus_tag=g1] [protein_id={protein}] [location=1..9] [gbkey=CDS]\nATGATGATG\n'
+                           for i, protein in enumerate(['P1.1', 'P2.1'], 1)))
+    task = dict(provider='ncbi', species_key='Test_species', species_prefix='Test_species',
+                gff_path=gff, cds_path=cds, gene_grouping_mode='rescue_overlap', format_strict=strict)
+    result = mod.format_cds(task, tmp_path, False, False)
+    assert gzip.open(result['output_path'], 'rt').read() == '>Test_species_g1\nATGATGATG\n>Test_species_g2\nATGATGATG\n'
+    audit = json.loads(Path(str(result['output_path'])+'.gff-grouping.json').read_text())
+    assert audit['stats']['ambiguous'] == 0

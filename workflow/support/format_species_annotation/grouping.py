@@ -678,8 +678,7 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
     # identifies one gene and any supplied protein ID agrees. Anonymous NCBI
     # pseudogene CDS records have no protein ID; require their CDS gbkey.
     # Do not waive any disagreement other than the header's locus_tag.
-    if len(location_candidates) == 1 and len(candidate_gene_tokens) > 1:
-        selected = location_candidates[0]
+    if location_candidates and len(candidate_gene_tokens) > 1:
         protein_id = extract_header_tag_value(header, "protein_id")
         locus_tag = extract_header_tag_value(header, "locus_tag")
         gbkey = extract_header_tag_value(header, "gbkey")
@@ -688,10 +687,20 @@ def resolve_cds_header_gff_gene(task, header, grouping_index=None):
             for alias in gff_alias_variants(protein_id)
             if alias in alias_index
         ]
+        protein_owners = {owner for hit in protein_hits for owner in hit}
+        if len(location_candidates) == 1:
+            selected = location_candidates[0]
+        elif len(protein_owners) == 1 and protein_owners.issubset(location_candidates):
+            # Identical CDS coordinates can belong to distinct declared genes.
+            # A unique protein ID selects its owner without collapsing them.
+            selected = next(iter(protein_owners))
+        else:
+            selected = ""
         locus_aliases = set(gff_alias_variants(locus_tag))
         conflicts = [alias for alias, candidates in evidence if selected not in candidates]
         if (
-            locus_tag != ""
+            selected != ""
+            and locus_tag != ""
             and (
                 (protein_id != "" and protein_hits and all(hit == (selected,) for hit in protein_hits))
                 or (protein_id == "" and gbkey.upper() == "CDS")
@@ -974,6 +983,18 @@ def build_rescued_gene_tokens_for_transcripts(
         buckets[(entry["seqid"], entry["strand"])].append(entry)
 
     adjacency = defaultdict(set)
+    # An existing gene group is one unit: if one of its isoforms is rescued,
+    # all siblings must follow. Preserve axis and authoritative boundaries;
+    # reject a bridge between distinct explicit genes at component resolution.
+    siblings_by_gene = defaultdict(list)
+    for entry in entries_by_id.values():
+        if entry["gene_token"] and not entry["rescue_ineligible"]:
+            siblings_by_gene[(entry["seqid"], entry["strand"], entry["gene_token"])].append(entry["transcript_id"])
+    for siblings in siblings_by_gene.values():
+        anchor = siblings[0]
+        for sibling in siblings[1:]:
+            adjacency[anchor].add(sibling)
+            adjacency[sibling].add(anchor)
     for bucket_entries in buckets.values():
         ordered = sorted(
             bucket_entries,

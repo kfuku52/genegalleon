@@ -506,19 +506,23 @@ Notes:
   no more than 0.1% of the CDS input. Larger mismatches are rejected as a likely
   wrong annotation bundle, and input-generation `strict=1` rejects every
   unexpected mismatch,
+- a unique NCBI protein ID and matching CDS coordinates can correct a copied
+  locus_tag in the FASTA header, including when two declared genes have
+  identical CDS coordinates. Their distinct GFF owners remain separate,
 - when a GFF omits a gene feature but an mRNA names its parent gene, that
   otherwise absent parent resolves only when it exactly matches a canonical CDS
   gene ID; a suffix or partial alias never establishes the missing ancestor,
 - `--gene-grouping-mode rescue_overlap` (the entrypoint default) merges only
   compatible overlapping/fragmented models that do not cross strands or
-  authoritative locus boundaries; `strict` keeps provider model boundaries,
+  authoritative locus boundaries; an existing gene group remains intact when
+  an overlapping model is rescued. `strict` keeps provider model boundaries,
 - parentless transcript/CDS names ending in `.tN`, `.mRNAN`, or other supported
   transcript suffixes infer a shared gene only when their CDS intervals form a
   connected locus on the same sequence and strand. This applies to both provided
   and GFF-derived CDS, in both grouping modes. Explicit gene identities take
   precedence. Disconnected coding loci retain separate source transcript IDs
   and emit a warning for review; suffix similarity alone does not delete them,
-- formatting contract 11 invalidates earlier formatting provenance. Use
+- formatting contract 13 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,
@@ -906,7 +910,7 @@ use the Btu rule. The parentless Lavan export restores genes from its documented
 author gene-number / isoform-number IDs, including disjoint alternative coding
 regions within the same author gene. Different contigs or strands remain separate.
 Mixed naming conventions, unknown parents and inconsistent feature coordinates
-fail. Formatter contract 12 rebuilds old format checkpoints.
+fail. Formatter contract 13 rebuilds old format checkpoints.
 
 Formatted GFF contains annotations only. Parsers stop at the GFF3 `##FASTA`
 directive; embedded genomic FASTA is retained in the untouched source and the
