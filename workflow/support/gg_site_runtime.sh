@@ -198,6 +198,34 @@ gg_set_command_array() {
   done
 }
 
+gg_bind_native_array_sources() {
+  local mode=${GG_INPUT_INPUT_GENERATION_MODE:-}
+  local source_path="" kind="" source_list="" source_file=""
+  case "${mode}" in
+    array_prepare)
+      source_path=${GG_INPUT_DOWNLOAD_MANIFEST:-}
+      kind=--manifest
+      ;;
+    array_worker|array_finalize)
+      source_path=${GG_INPUT_TASK_PLAN_OUTPUT:-}
+      kind=--plan
+      ;;
+    *) return 0 ;;
+  esac
+  # Automatic in-workspace discovery keeps its existing behavior. Explicit
+  # manifests/plans can also reference source files outside the project bind.
+  [[ -n "${source_path}" ]] || return 0
+  if [[ "${source_path}" == /workspace/* ]]; then
+    source_path="${gg_workspace_dir}/${source_path#/workspace/}"
+  fi
+  source_list=$(python "${BASH_SOURCE[0]%/*}/local_input_manifest_binds.py" \
+    "${kind}" "${source_path}" --workspace "${gg_workspace_dir}") || return 1
+  while IFS= read -r source_file; do
+    [[ -n "${source_file}" ]] || continue
+    gg_add_container_bind_mount "${source_file}:${source_file}:ro" || return 1
+  done <<< "${source_list}"
+}
+
 gg_site_container_shell_command() {
   local runtime_bin=$1
   local out_var=${2:-}
@@ -217,6 +245,7 @@ gg_site_container_shell_command() {
           return 1
         fi
         gg_add_container_bind_mount "${GG_CONTAINER_PROJECT_ROOT_BIND}" || return 1
+        gg_bind_native_array_sources || return 1
         gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1
       else
         gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1

@@ -292,7 +292,8 @@ def test_longest_validator_rejects_unremoved_orphan_isoforms(tmp_path, old_outpu
         assert "expected_after=1" in result.stdout + result.stderr
 
 
-def test_validate_longest_cds_selection_respects_rescue_overlap_mode(tmp_path):
+@pytest.mark.parametrize("old_merged_output", [False, True])
+def test_rescue_overlap_validator_preserves_declared_gene_boundaries(tmp_path, old_merged_output):
     raw_dir = tmp_path / "raw"
     cds_dir = tmp_path / "species_cds"
     raw_dir.mkdir()
@@ -321,7 +322,8 @@ def test_validate_longest_cds_selection_respects_rescue_overlap_mode(tmp_path):
     formatted_cds = cds_dir / "Arabidopsis_thaliana_demo.fa.gz"
     write_gzip_text(
         formatted_cds,
-        ">Arabidopsis_thaliana_locusX\nATGAAATTTCCC\n",
+        ">Arabidopsis_thaliana_locusX\nATGAAATTTCCC\n" if old_merged_output else
+        ">Arabidopsis_thaliana_badGeneA\nATGAAATTTCCC\n>Arabidopsis_thaliana_badGeneB\nATGTTTCCC\n",
     )
 
     summary_path = tmp_path / "gg_input_generation_species.tsv"
@@ -337,8 +339,8 @@ def test_validate_longest_cds_selection_respects_rescue_overlap_mode(tmp_path):
                 "genome_input_path": str(genome_path),
                 "cds_output_path": str(formatted_cds),
                 "cds_sequences_before": "2",
-                "cds_sequences_after": "1",
-                "aggregated_cds_removed": "1",
+                "cds_sequences_after": "1" if old_merged_output else "2",
+                "aggregated_cds_removed": "1" if old_merged_output else "0",
                 "gene_grouping_mode": "rescue_overlap",
             }
         ],
@@ -350,8 +352,11 @@ def test_validate_longest_cds_selection_respects_rescue_overlap_mode(tmp_path):
         "--species-summary",
         str(summary_path),
     )
-    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    assert "[Arabidopsis_thaliana] Longest CDS validation OK:" in completed.stdout
+    assert completed.returncode == (1 if old_merged_output else 0), completed.stderr + "\n" + completed.stdout
+    if old_merged_output:
+        assert "expected_after=2" in completed.stdout + completed.stderr
+    else:
+        assert "[Arabidopsis_thaliana] Longest CDS validation OK:" in completed.stdout
 
 
 def test_validate_longest_cds_selection_reuses_coge_gff_gene_mapping(tmp_path):

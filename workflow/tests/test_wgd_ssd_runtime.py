@@ -159,3 +159,11 @@ def test_evidence_from_another_full_tree_is_rejected(tmp_path):
     (evidence / "summary.json").write_text(json.dumps({"plan": {"species_tree": "old.nwk", "input_hashes": {"old.nwk": "wrong"}}}))
     with pytest.raises(ValueError, match="species trees differ"):
         classify(SimpleNamespace(evidence=evidence, output=tmp_path / "results", species_tree=tree))
+
+
+def test_wgd_ssd_cli_help_in_owned_runtime(tmp_path):
+    result = subprocess.run([sys.executable, str(HELPER), "--help"], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "usage:" in result.stdout.lower()
+    assert list(tmp_path.iterdir()) == []

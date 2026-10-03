@@ -349,3 +349,12 @@ CDS-only species can run validation and BUSCO with `require_cds=1` and
 `require_gff=0`. Workers still validate longest-CDS selection; CDS-to-GFF
 mapping QC is produced and receipt-bound only when that task supplies a GFF.
 A supplied or required GFF that is missing still fails validation.
+
+For contained native arrays on audrey1, explicitly declared local CDS, GFF,
+GenBank/EMBL and genome files are mounted individually read-only. Prepare reads
+the explicit download manifest; workers and finalize read the frozen task plan.
+Files may live outside the workspace/project without exposing their surrounding
+directories. Missing sources and paths that cannot be safely represented as bind
+arguments fail before the container starts. Use explicit file references for
+external source directories. Source hashes and normal preparation/worker checks
+remain required.
