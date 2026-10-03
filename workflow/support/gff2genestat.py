@@ -20,6 +20,7 @@ import pandas
 try:
     from content_digest_cache import cached_sha256_file
     from fasta_sequence_store import fasta_records
+    from format_species_annotation.grouping_identity import strip_gff_feature_prefix
     from format_species_annotation.organelle import gff_organelle_seqids
     from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
@@ -27,6 +28,7 @@ try:
 except ImportError:  # pragma: no cover - package import path used in tests
     from .content_digest_cache import cached_sha256_file
     from .fasta_sequence_store import fasta_records
+    from .format_species_annotation.grouping_identity import strip_gff_feature_prefix
     from .format_species_annotation.organelle import gff_organelle_seqids
     from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
@@ -444,6 +446,16 @@ def merge_id_info(existing, parents, match, values=()):
     return {"parents": merged_parents, "match": merged_match, "values": merged_values}
 
 
+def exact_structural_feature_match(feature_id, lookup):
+    # Formatting retains distinct source gene IDs when a locus_tag is reused.
+    # Resolve that exact owner before a shared display label or prefix alias.
+    for candidate in unique_values((feature_id, strip_gff_feature_prefix(feature_id))):
+        hit = lookup.get(candidate)
+        if hit is not None and hit[1] >= 1:
+            return (hit[0], len(candidate), hit[1], hit[2])
+    return None
+
+
 def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, lookup, min_len, max_len, value_cache):
     if feature_id == "":
         return None
@@ -459,8 +471,7 @@ def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, loo
         # its gene in Parent. Only an exact canonical FASTA identifier may
         # stand in for that absent ancestor; substring/suffix aliases can
         # silently join unrelated models.
-        hit = lookup.get(feature_id)
-        match = (hit[0], len(feature_id), hit[1], hit[2]) if hit is not None and hit[1] >= 1 else None
+        match = exact_structural_feature_match(feature_id, lookup)
         resolved_cache[feature_id] = match
         return match
     active_stack.add(feature_id)
@@ -514,13 +525,15 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
             if len(parents) == 0 and len(match_values) > 0:
                 # The structural ID establishes ancestry. A display Name may
                 # be an obsolete alias that is another FASTA gene's identifier.
-                match = match_values_to_gene_id(
-                    values=(attr_id,),
-                    lookup=lookup,
-                    min_len=min_len,
-                    max_len=max_len,
-                    value_cache=value_cache,
-                )
+                match = exact_structural_feature_match(attr_id, lookup)
+                if match is None:
+                    match = match_values_to_gene_id(
+                        values=(attr_id,),
+                        lookup=lookup,
+                        min_len=min_len,
+                        max_len=max_len,
+                        value_cache=value_cache,
+                    )
                 if match is None:
                     match = match_values_to_gene_id(
                         values=match_values,

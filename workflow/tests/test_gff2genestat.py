@@ -18,6 +18,26 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
 
 
+@pytest.mark.parametrize('ancestor_present', [True, False])
+def test_exact_gene_owner_preserves_reused_locus_tag(tmp_path, ancestor_present):
+    gff = tmp_path / 'Oldenlandia_corymbosa_var._corymbosa.gff'
+    genes = (
+        'chr1\ts\tgene\t1\t15\t.\t+\t.\tID=gene-OLC1_LOCUS10231;Name=OLC1_LOCUS10231;locus_tag=OLC1_LOCUS10231\n'
+        'chr1\ts\tgene\t10\t24\t.\t-\t.\tID=gene-OLC1_LOCUS10231-2;Name=OLC1_LOCUS10231;locus_tag=OLC1_LOCUS10231\n'
+    )
+    gff.write_text((genes if ancestor_present else '') +
+        'chr1\ts\tmRNA\t1\t15\t.\t+\t.\tID=rna-first;Parent=gene-OLC1_LOCUS10231;locus_tag=OLC1_LOCUS10231\n'
+        'chr1\ts\tmRNA\t10\t24\t.\t-\t.\tID=rna-second;Parent=gene-OLC1_LOCUS10231-2;locus_tag=OLC1_LOCUS10231\n'
+        'chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=cds-first;Parent=rna-first;locus_tag=OLC1_LOCUS10231\n'
+        'chr1\ts\tCDS\t16\t24\t.\t-\t0\tID=cds-second;Parent=rna-second;locus_tag=OLC1_LOCUS10231\n')
+    ids = ['Oldenlandia_corymbosa_var._corymbosa_OLC1_LOCUS10231',
+           'Oldenlandia_corymbosa_var._corymbosa_OLC1_LOCUS10231-2']
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    rows = process_single_gff(gff.name, str(tmp_path), ids, 'CDS', 'longest', columns, OUT_COLS)
+    assert rows.set_index('gene_id').feature_blocks.to_dict() == {ids[0]: '1-9', ids[1]: '16-24'}
+    assert rows.set_index('gene_id').strand.to_dict() == {ids[0]: '+', ids[1]: '-'}
+
+
 @pytest.mark.parametrize('compressed', [False, True])
 @pytest.mark.parametrize('seqids', [['001', '002'], ['NA', 'NULL', 'nan', '001']])
 def test_gff_sequence_identifiers_remain_literal_through_genomic_extraction(tmp_path, compressed, seqids):
