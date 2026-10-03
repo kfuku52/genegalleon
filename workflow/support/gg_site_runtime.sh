@@ -199,8 +199,12 @@ gg_set_command_array() {
 }
 
 gg_bind_native_array_sources() {
+  local bind_args_var=$1
   local mode=${GG_INPUT_INPUT_GENERATION_MODE:-}
-  local source_path="" kind="" source_list="" source_file="" source_mounts=""
+  local source_path="" kind="" source_list="" source_file="" quoted_bind=""
+  local mount_entry="" destination="" filtered_mounts="" matched=""
+  local -a source_files=() existing_mounts=()
+  gg_set_command_array "${bind_args_var}" || return 1
   case "${mode}" in
     array_prepare)
       source_path=${GG_INPUT_DOWNLOAD_MANIFEST:-}
@@ -222,15 +226,33 @@ gg_bind_native_array_sources() {
     "${kind}" "${source_path}" --workspace "${gg_workspace_dir}") || return 1
   while IFS= read -r source_file; do
     [[ -n "${source_file}" ]] || continue
-    source_mounts="${source_file}:${source_file}:ro${source_mounts:+,${source_mounts}}"
+    source_files+=( "${source_file}" )
+    printf -v quoted_bind '%q' "${source_file}:${source_file}:ro"
+    eval "${bind_args_var}+=( --bind ${quoted_bind} )"
   done <<< "${source_list}"
-  if [[ -n "${source_mounts}" ]]; then
-    # Normalize once for the complete batch. Sources take precedence over any
-    # existing bind for the same file so they cannot silently remain writable.
-    GG_CONTAINER_BIND_MOUNTS="${source_mounts}${GG_CONTAINER_BIND_MOUNTS:+,${GG_CONTAINER_BIND_MOUNTS}}"
-    export GG_CONTAINER_BIND_MOUNTS
-    gg_sync_container_bind_envs || return 1
-  fi
+  [[ ${#source_files[@]} -gt 0 ]] || return 0
+  # Avoid Linux's per-environment-variable length limit for large manifests.
+  # Existing non-source binds keep their precedence; an exact source bind is
+  # removed so only the reviewed read-only command argument can provide it.
+  gg_sync_container_bind_envs || return 1
+  IFS=',' read -r -a existing_mounts <<< "${GG_CONTAINER_BIND_MOUNTS:-}"
+  for mount_entry in "${existing_mounts[@]}"; do
+    destination=${mount_entry#*:}
+    destination=${destination%%:*}
+    matched=0
+    for source_file in "${source_files[@]}"; do
+      if [[ "${destination}" == "${source_file}" ]]; then
+        matched=1
+        break
+      fi
+    done
+    [[ "${matched}" == 0 ]] || continue
+    filtered_mounts="${filtered_mounts:+${filtered_mounts},}${mount_entry}"
+  done
+  unset SINGULARITY_BIND SINGULARITY_BINDPATH APPTAINER_BIND APPTAINER_BINDPATH
+  GG_CONTAINER_BIND_MOUNTS="${filtered_mounts}"
+  export GG_CONTAINER_BIND_MOUNTS
+  gg_sync_container_bind_envs || return 1
 }
 
 gg_site_container_shell_command() {
@@ -238,6 +260,7 @@ gg_site_container_shell_command() {
   local out_var=${2:-}
   local echo_header="set_singularity_command: "
   local site_profile
+  local -a source_bind_args=()
 
   site_profile="$(gg_detect_site_profile)"
   case "${site_profile}" in
@@ -252,8 +275,8 @@ gg_site_container_shell_command() {
           return 1
         fi
         gg_add_container_bind_mount "${GG_CONTAINER_PROJECT_ROOT_BIND}" || return 1
-        gg_bind_native_array_sources || return 1
-        gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain || return 1
+        gg_bind_native_array_sources source_bind_args || return 1
+        gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain "${source_bind_args[@]}" || return 1
       else
         gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
       fi

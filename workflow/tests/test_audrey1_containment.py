@@ -1,3 +1,4 @@
+import csv
 import json
 import shlex
 import subprocess
@@ -127,3 +128,31 @@ def test_native_source_bind_overrides_existing_write_access(tmp_path):
     assert result.returncode == 0, result.stderr
     assert f"{source}:{source}:ro" in result.stdout
     assert f"{source}:{source}:rw" not in result.stdout
+
+
+@pytest.mark.parametrize("source_count", [400, 1962])
+def test_large_source_manifest_uses_arguments_without_environment_overflow(tmp_path, source_count):
+    root = tmp_path / "project"
+    root.mkdir()
+    manifest = root / "sources.tsv"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["cds_url"])
+        for index in range(source_count):
+            source = root / (str(index) + "_" + "x" * 160 + ".fa")
+            source.write_text(">seq\nATG\n")
+            writer.writerow([source.as_uri()])
+    command = "\n".join([
+        "set -euo pipefail", f"source {shlex.quote(str(UTIL))}",
+        "export GG_SITE_PROFILE=audrey1 GG_INPUT_INPUT_GENERATION_MODE=array_prepare",
+        f"export GG_INPUT_DOWNLOAD_MANIFEST={shlex.quote(str(manifest))}",
+        f"export GG_CONTAINER_PROJECT_ROOT_BIND={shlex.quote(str(root)+':'+str(root))}",
+        f"gg_workspace_dir={shlex.quote(str(root))}",
+        "gg_site_container_shell_command /usr/bin/true runtime_command",
+        '\"${runtime_command[@]}\"',
+        'printf "argument_count=%s bind_env_bytes=%s\\n" "${#runtime_command[@]}" "${#GG_CONTAINER_BIND_MOUNTS}"',
+    ])
+    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert f"argument_count={3 + 2 * source_count}" in result.stdout
+    assert f"bind_env_bytes={2 * len(str(root)) + 1}" in result.stdout
