@@ -460,8 +460,11 @@ def build_gff_cds_grouping_index(task):
             feature["gene_token"] = tokens[0] if len(tokens) == 1 else ""
         inferred_features[transcript_id] = features
     suffix_tokens = build_suffix_gene_tokens_for_transcripts(task, inferred_features, protected_transcripts)
+    suffix_inferred_tokens = {}
     for transcript_id, token in suffix_tokens.items():
         if transcript_id not in protected_transcripts:
+            if candidate_gene_tokens_by_transcript.get(transcript_id, ()) != (token,):
+                suffix_inferred_tokens[transcript_id] = token
             candidate_gene_tokens_by_transcript[transcript_id] = (token,)
 
     if use_coordinate_rescue:
@@ -588,6 +591,9 @@ def build_gff_cds_grouping_index(task):
         "ambiguous_transcript_gene_tokens": dict(ambiguous_gene_tokens_by_transcript),
         "transcripts_total": len(aliases_by_transcript),
         "rescued_transcript_gene_tokens": {tid: resolved_gene_tokens[tid] for tid in rescued_transcripts},
+        "suffix_inferred_transcript_gene_tokens": {
+            tid: resolved_gene_tokens[tid] for tid in suffix_inferred_tokens
+        },
         "coordinate_rescued_transcripts": len(rescued_transcripts),
         "coordinate_rescued_groups": len(
             {

@@ -32,7 +32,7 @@ from .organelle import (
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 10
+GFF_REPAIR_VERSION = 11
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -464,7 +464,12 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     if mode != "off" and source_task is not None:
         index = build_gff_cds_grouping_index(source_task)
         if index is not None:
+            # Both coding-locus suffix inference and coordinate rescue can
+            # choose a gene representative whose ID is also a shorter source
+            # transcript. Project the complete group's owner so GFF consumers
+            # select among all its isoforms, not just that namesake transcript.
             rescued_owners = set(index["rescued_transcript_gene_tokens"].values())
+            rescued_owners.update(index["suffix_inferred_transcript_gene_tokens"].values())
             rescued_genes = {
                 transcript: sanitize_identifier(gene)
                 for transcript, gene in index["transcript_gene_tokens"].items()

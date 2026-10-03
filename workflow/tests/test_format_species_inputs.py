@@ -1375,6 +1375,60 @@ def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds)
     assert traits.feature_size.tolist() == [15]
 
 
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+@pytest.mark.parametrize("provided_cds", [False, True])
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_disconnected_missing_parent_numeric_models_project_complete_gene_to_gff(
+    tmp_path, mode, provided_cds, strand,
+):
+    from Bio.Seq import Seq
+    from gff2genestat import process_single_gff
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    sequence = "ATG" * 15
+    genome.write_text(">chr1\n" + sequence + "\n")
+    # The representative's name is a short transcript at the first locus.
+    # Another isoform is longest there; the same missing Parent also names
+    # a disconnected second locus that must retain its own representative.
+    root = "Calam.05G208800"
+    models = [(root + ".1", 1, 6), (root + ".6", 1, 12),
+              (root + ".7", 31, 39)]
+    rows, coding = [], {}
+    for tid, start, end in models:
+        rows.extend([
+            f"chr1\tsrc\tmRNA\t{start}\t{end}\t.\t{strand}\t.\tID={tid};Parent={root}",
+            f"chr1\tsrc\tCDS\t{start}\t{end}\t.\t{strand}\t0\tID=cds.{tid};Parent={tid}",
+        ])
+        coding[tid] = sequence[start - 1:end]
+        if strand == "-":
+            coding[tid] = str(Seq(coding[tid]).reverse_complement())
+    gff.write_text("\n".join(rows) + "\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode=mode, gff_repair_mode="safe")
+    if provided_cds:
+        cds = tmp_path / "raw.fa"
+        cds.write_text("".join(f">{tid}\n{value}\n" for tid, value in coding.items()))
+        task["cds_path"] = cds
+    output = tmp_path / "output"
+    output.mkdir()
+    result = mod.format_cds(task, output, False, False, strict=True)
+    ids = ["Test_species_" + root + suffix for suffix in (".1", ".7")]
+    assert dict(mod.iter_fasta_records(result["output_path"])) == {
+        ids[0]: coding[root + ".6"], ids[1]: coding[root + ".7"],
+    }
+    formatted = mod.format_gff(task, output, False, False, formatted_cds_path=result["output_path"])
+    with gzip.open(formatted["output_path"], "rt") as handle:
+        emitted = [line.rstrip().split("\t") for line in handle]
+    assert [parts[:8] for parts in emitted] == [line.split("\t")[:8] for line in rows]
+    assert all(parts[8].startswith(source.split("\t")[8] + ";gene_id=")
+               for parts, source in zip(emitted, rows, strict=True))
+    traits = process_single_gff(Path(formatted["output_path"]).name, str(output), ids,
+        "CDS", "longest",
+        ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"],
+        ["gene_id", "feature_size"])
+    assert dict(zip(traits.gene_id, traits.feature_size, strict=True)) == {ids[0]: 12, ids[1]: 9}
+
+
 def test_suffix_grouping_keeps_explicit_gene_ids_and_connected_components(tmp_path):
     mod = load_module()
     genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
