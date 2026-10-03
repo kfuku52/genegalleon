@@ -521,10 +521,16 @@ Notes:
 - parentless transcript/CDS names ending in `.tN`, `.mRNAN`, or other supported
   transcript suffixes infer a shared gene only when their CDS intervals form a
   connected locus on the same sequence and strand. This applies to both provided
-  and GFF-derived CDS, in both grouping modes. Explicit gene identities take
-  precedence. Disconnected coding loci retain separate source transcript IDs
+  and GFF-derived CDS, in both grouping modes. Siblings that already share a
+  missing parent participate even if an export adds a suffix to one model ID.
+  Explicit gene identities take precedence. Disconnected coding loci retain
+  separate source transcript IDs
   and emit a warning for review; suffix similarity alone does not delete them,
-- formatting contract 14 invalidates earlier formatting provenance. Use
+- parentless CoGe exports group all blocks of one `Name`/`coge_fid` before
+  comparing coding models. Block IDs such as `.CDS2` never become separate
+  transcript or gene representatives. GFF-derived headers retain this model's
+  resolved owner instead of reapplying the legacy provided-CDS header map,
+- formatting contract 15 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,

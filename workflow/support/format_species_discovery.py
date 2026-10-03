@@ -598,7 +598,10 @@ def prepare_cds_identifier_task(task):
         prepared["_gff_cds_grouping_index"] = grouping_index
         prepared["_organelle_seqids"] = grouping_index.get("organelle_seqids", ())
         prepared["_organelle_aliases"] = grouping_index.get("organelle_aliases", ())
-    if task.get("provider") == "coge" and task.get("gff_path") is not None:
+    if (task.get("provider") == "coge" and task.get("gff_path") is not None
+            and task.get("cds_path") is not None):
+        # Derived CDS headers already carry the owner of the complete GFF
+        # model. The legacy provided-header map must not overwrite it.
         prepared["_provider_gene_id_map"] = build_coge_gff_gene_id_map(task["gff_path"])
     return prepared
 

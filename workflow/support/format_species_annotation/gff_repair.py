@@ -32,7 +32,7 @@ from .organelle import (
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 9
+GFF_REPAIR_VERSION = 10
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))

@@ -1277,6 +1277,104 @@ def test_orphan_suffixes_preserve_disjoint_or_opposite_strand_coding_loci(tmp_pa
     assert set(records) == {"Test_species_" + tid for tid, *_ in models}
 
 
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+@pytest.mark.parametrize("provided_cds", [False, True])
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_missing_parent_siblings_keep_shared_owner_with_export_suffix(
+    tmp_path, mode, provided_cds, strand,
+):
+    from Bio.Seq import Seq
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    sequence = "ATG" * 9
+    genome.write_text(">chr1\n" + sequence + "\n")
+    tids = ["locusX.t1", "locusX.t1.1.5db15392"]
+    parts = [[(1, 9), (19, 27)], [(1, 15)]]
+    rows = []
+    for tid, blocks in zip(tids, parts, strict=True):
+        rows.append(f"chr1\tsrc\tmRNA\t1\t27\t.\t{strand}\t.\tID={tid};Parent=locusX;Name=locusX.t1")
+        rows.extend(f"chr1\tsrc\tCDS\t{start}\t{end}\t.\t{strand}\t0\tID=cds.{tid};Parent={tid}"
+                    for start, end in blocks)
+    gff.write_text("\n".join(rows) + "\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode=mode, gff_repair_mode="safe")
+    coding = ["".join(sequence[start - 1:end] for start, end in blocks) for blocks in parts]
+    if strand == "-":
+        coding = [str(Seq(value).reverse_complement()) for value in coding]
+    if provided_cds:
+        cds = tmp_path / "raw.fa"
+        cds.write_text("".join(f">{tid}\n{value}\n" for tid, value in zip(tids, coding, strict=True)))
+        task["cds_path"] = cds
+    output = tmp_path / "output"
+    output.mkdir()
+    result = mod.format_cds(task, output, False, False, strict=True)
+    assert result["before_count"] == 2 and result["after_count"] == 1
+    assert dict(mod.iter_fasta_records(result["output_path"])) == {"Test_species_locusX": coding[0]}
+    formatted = mod.format_gff(task, output, False, False, formatted_cds_path=result["output_path"])
+    from validate_cds_gff_mapping import validate_single_species
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=result["output_path"], gff_file=formatted["output_path"], strict=True), 10)
+    assert mapping["ok"], json.dumps(mapping)
+    from gff2genestat import process_single_gff
+    traits = process_single_gff(Path(formatted["output_path"]).name, str(output),
+        ["Test_species_locusX"], "CDS", "longest",
+        ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"],
+        ["gene_id", "feature_size"])
+    assert traits.gene_id.tolist() == ["Test_species_locusX"]
+    assert traits.feature_size.tolist() == [18]
+
+
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+def test_missing_parent_export_siblings_preserve_disjoint_coding_loci(tmp_path, mode):
+    mod = load_module()
+    gff = tmp_path / "annotation.gff"
+    gff.write_text(
+        "chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID=locusX.t1;Parent=locusX\n"
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=c1;Parent=locusX.t1\n"
+        "chr1\tsrc\tmRNA\t20\t25\t.\t+\t.\tID=locusX.t1.1.5db15392;Parent=locusX\n"
+        "chr1\tsrc\tCDS\t20\t25\t.\t+\t0\tID=c2;Parent=locusX.t1.1.5db15392\n"
+    )
+    index = mod.build_gff_cds_grouping_index(dict(provider="direct", species_key="Test_species",
+        gff_path=gff, gene_grouping_mode=mode))
+    assert len(set(index["transcript_gene_tokens"].values())) == 2
+
+
+@pytest.mark.parametrize("provided_cds", [False, True])
+def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    genome.write_text(">chr1\n" + "ATG" * 9 + "\n")
+    gff.write_text(
+        "chr1\tCoGe\tCDS\t1\t6\t.\t+\t0\tID=modelA;Name=modelA;coge_fid=101\n"
+        "chr1\tCoGe\tCDS\t19\t27\t.\t+\t0\tID=modelA.CDS2;Name=modelA;coge_fid=101\n"
+        "chr1\tCoGe\tCDS\t19\t27\t.\t+\t0\tID=modelB;Name=modelB;coge_fid=102\n"
+    )
+    task = dict(provider="coge", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode="rescue_overlap", gff_repair_mode="safe")
+    if provided_cds:
+        cds = tmp_path / "raw.fa"
+        cds.write_text(">modelA\n" + "ATG" * 5 + "\n>modelB\n" + "ATG" * 3 + "\n")
+        task["cds_path"] = cds
+    index = mod.build_gff_cds_grouping_index(task)
+    assert index["transcripts_total"] == 2
+    assert index["transcript_gene_tokens"] == {"modelA": "modelA", "modelB": "modelA"}
+    output = tmp_path / "output"
+    output.mkdir()
+    result = mod.format_cds(task, output, False, False, strict=True)
+    assert dict(mod.iter_fasta_records(result["output_path"])) == {"Test_species_modelA": "ATG" * 5}
+    formatted = mod.format_gff(task, output, False, False, formatted_cds_path=result["output_path"])
+    from validate_cds_gff_mapping import validate_single_species
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=result["output_path"], gff_file=formatted["output_path"], strict=True), 10)
+    assert mapping["ok"], json.dumps(mapping)
+    from gff2genestat import process_single_gff
+    traits = process_single_gff(Path(formatted["output_path"]).name, str(output),
+        ["Test_species_modelA"], "CDS", "longest",
+        ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"],
+        ["gene_id", "feature_size"])
+    assert traits.feature_size.tolist() == [15]
+
+
 def test_suffix_grouping_keeps_explicit_gene_ids_and_connected_components(tmp_path):
     mod = load_module()
     genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"

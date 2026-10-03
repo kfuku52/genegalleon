@@ -239,6 +239,13 @@ def build_gff_cds_grouping_index(task):
     organelle_seqids = gff_organelle_seqids(gff_path)
     organelle_cds_features = 0
     organelle_aliases = set()
+    coge_features, coge_names = {}, {}
+    coge_duplicate_features = set()
+    if task["provider"] == "coge":
+        # Share the complete-model identity and duplicate proof with CDS
+        # derivation. Exported .CDS2/.CDS3 IDs label blocks, not transcripts.
+        from .genbank import _coge_export_transcript, duplicate_coge_model_ids
+        coge_duplicate_features = duplicate_coge_model_ids(gff_path)
 
     with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
@@ -319,7 +326,12 @@ def build_gff_cds_grouping_index(task):
                 start, end = end, start
             transcript_ids = list(direct_parents if len(direct_parents) > 0 else parents)
             if len(transcript_ids) == 0:
-                transcript_id = choose_first_gff_attribute(attrs, ("transcript_id", "protein_id", "ID", "Name"))
+                transcript_id = ""
+                if task["provider"] == "coge" and _source.lower() == "coge":
+                    transcript_id = _coge_export_transcript(attrs, seqid, strand, coge_features, coge_names)
+                    if transcript_id and set(attrs["coge_fid"]) & coge_duplicate_features:
+                        continue
+                transcript_id = transcript_id or choose_first_gff_attribute(attrs, ("transcript_id", "protein_id", "ID", "Name"))
                 if transcript_id == "":
                     transcript_id = "{}:{}-{}".format(seqid, start, end)
                 transcript_ids = [transcript_id]
@@ -870,6 +882,15 @@ def build_suffix_gene_tokens_for_transcripts(task, cds_features_by_transcript, p
         token_owners[token].add(transcript)
     for stem, entries in sorted(groups.items()):
         group_ids = {entry["transcript_id"] for entry in entries}
+        # A sibling can already resolve to the same missing Parent even when
+        # its source ID has an extra author/export suffix. Include that model
+        # in the coding-locus component; its name alone is not a competing
+        # gene identity. Explicit identities remain protected boundaries.
+        for transcript in sorted(token_owners[stem].difference(group_ids, protected)):
+            entries.append(build_transcript_grouping_entry(
+                provider, transcript, cds_features_by_transcript[transcript],
+            ))
+            group_ids.add(transcript)
         collides = bool(token_owners[stem].difference(group_ids))
         if len(entries) < 2 and not collides:
             continue
