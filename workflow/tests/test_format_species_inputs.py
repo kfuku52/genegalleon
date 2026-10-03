@@ -4745,3 +4745,21 @@ def test_embedded_gff_fasta_never_enters_feature_or_encoding_parsing(tmp_path):
     assert "##FASTA" not in text and ">chr1" not in text
     assert repaired["invalid_utf8_bytes"] == 0
     assert text.count("\tCDS\t") == 1
+
+
+def test_gff_gene_repair_detects_alignment_collisions_before_and_after_genes(tmp_path):
+    from workflow.support.format_species_annotation.gff_repair import choose_gene_id_repairs
+
+    gff = tmp_path / "source.gff"
+    gff.write_text(
+        "chr1\tsrc\tmatch_part\t1\t3\t.\t+\t.\tID=targetTaken\n"
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=rawTaken;Alias=targetTaken\n"
+        "chr1\tsrc\tgene\t4\t6\t.\t+\t.\tID=rawShared;Alias=targetShared\n"
+        "chr1\tsrc\tgene\t7\t9\t.\t+\t.\tID=rawSafe;Alias=targetSafe\n"
+        "chr1\tsrc\tprotein_match\t4\t6\t.\t+\t.\tID=rawShared\n"
+        + "".join(f"chr1\tsrc\tmatch_part\t1\t3\t.\t+\t.\tID=unrelated{i}\n" for i in range(1000))
+    )
+    plan = choose_gene_id_repairs(gff, {"targetTaken", "targetShared", "targetSafe"})
+    assert plan["id_mapping"] == {"rawSafe": "targetSafe"}
+    assert {row["reason"] for row in plan["collisions"]} == {
+        "target_id_already_exists", "source_id_is_shared_with_non_gene_feature"}

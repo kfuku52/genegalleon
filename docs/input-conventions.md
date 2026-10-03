@@ -908,3 +908,8 @@ Formatted GFF contains annotations only. Parsers stop at the GFF3 `##FASTA`
 directive; embedded genomic FASTA is retained in the untouched source and the
 separate genome input. Very long embedded sequence lines must not enter feature
 parsing or annotation encoding audits.
+
+Gene-ID repair checks collisions against every GFF feature type, including
+alignment evidence. It retains only proposed source and target IDs; unrelated
+feature IDs do not accumulate in memory. This requires a second annotation
+pass and preserves the same conservative collision decisions.

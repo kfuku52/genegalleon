@@ -132,7 +132,7 @@ def read_formatted_cds_gene_ids(cds_path, species_prefix):
     return out
 
 
-def iter_gff_feature_rows(gff_path):
+def iter_gff_feature_rows(gff_path, feature_types=None):
     organelle_seqids = gff_organelle_seqids(gff_path)
     with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
@@ -146,7 +146,9 @@ def iter_gff_feature_rows(gff_path):
             parts = line.split("\t")
             if len(parts) < 9:
                 continue
-            yield line_number, parts[2].strip().lower(), parse_gff_attributes(parts[8])
+            feature_type = parts[2].strip().lower()
+            if feature_types is None or feature_type in feature_types:
+                yield line_number, feature_type, parse_gff_attributes(parts[8])
 
 
 def choose_gene_id_repairs(gff_path, cds_gene_ids):
@@ -154,13 +156,8 @@ def choose_gene_id_repairs(gff_path, cds_gene_ids):
     id_feature_types = defaultdict(set)
     missing_gene_id_lines = []
 
-    for line_number, feature_type, attrs in iter_gff_feature_rows(gff_path):
+    for line_number, _feature_type, attrs in iter_gff_feature_rows(gff_path, {"gene"}):
         feature_ids = tuple(str(value or "").strip() for value in attrs.get("ID", ()))
-        for feature_id in feature_ids:
-            if feature_id != "":
-                id_feature_types[feature_id].add(feature_type)
-        if feature_type != "gene":
-            continue
         raw_gene_id = feature_ids[0] if len(feature_ids) > 0 else ""
         if raw_gene_id == "":
             missing_gene_id_lines.append(line_number)
@@ -205,6 +202,17 @@ def choose_gene_id_repairs(gff_path, cds_gene_ids):
                 item["value"],
             ),
         )[0]
+
+    # Every feature type still participates in collision detection. Retain
+    # only source/target IDs of proposed repairs instead of millions of unrelated
+    # alignment IDs. A second pass also catches collisions preceding the gene.
+    relevant_ids = set(proposed) | set(proposed.values())
+    if relevant_ids:
+        for _line_number, feature_type, attrs in iter_gff_feature_rows(gff_path):
+            for feature_id in attrs.get("ID", ()):
+                feature_id = str(feature_id or "").strip()
+                if feature_id in relevant_ids:
+                    id_feature_types[feature_id].add(feature_type)
 
     target_sources = defaultdict(list)
     for source_id, target_id in proposed.items():
