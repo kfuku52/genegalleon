@@ -1187,20 +1187,35 @@ run_validate_stage_one_worker() {
   gg_step_start "${task}"
   stage_validate_status="running"
   rm -f -- "${mapping_stats_file}" "${longest_stats_file}"
-  cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
-  cmd+=(--species-cds-dir "${species_cds_dir}")
-  cmd+=(--species-gff-dir "${species_gff_dir}")
-  cmd+=(--species-summary "${task_summary_file}")
-  cmd+=(--nthreads 1)
-  cmd+=(--stats-output "${mapping_stats_file}")
-  if [[ ${strict} -eq 1 ]]; then
-    cmd+=(--strict)
-  fi
-  echo "Running: ${cmd[*]}"
-  if ! "${cmd[@]}"; then
+  # CDS-only tasks are supported when GFF is optional. Validate supplied GFFs
+  # and preserve their QC, but do not require annotation solely to run BUSCO.
+  if [[ -n "${gff_output_path:-}" ]]; then
+    if [[ ! -s "${gff_output_path}" ]]; then
+      stage_validate_status="failed"
+      echo "Formatted GFF is missing for task ${GG_ARRAY_TASK_ID}: ${gff_output_path}" >&2
+      exit 1
+    fi
+    cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
+    cmd+=(--species-cds-dir "${species_cds_dir}")
+    cmd+=(--species-gff-dir "${species_gff_dir}")
+    cmd+=(--species-summary "${task_summary_file}")
+    cmd+=(--nthreads 1)
+    cmd+=(--stats-output "${mapping_stats_file}")
+    if [[ ${strict} -eq 1 ]]; then
+      cmd+=(--strict)
+    fi
+    echo "Running: ${cmd[*]}"
+    if ! "${cmd[@]}"; then
+      stage_validate_status="failed"
+      echo "Failed: ${task} (CDS-to-GFF mapping)"
+      exit 1
+    fi
+  elif [[ ${require_gff} -eq 1 ]]; then
     stage_validate_status="failed"
-    echo "Failed: ${task} (CDS-to-GFF mapping)"
+    echo "Required formatted GFF is missing for task ${GG_ARRAY_TASK_ID}" >&2
     exit 1
+  else
+    echo "No GFF supplied for task ${GG_ARRAY_TASK_ID}; validating CDS selection only."
   fi
 
   cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
@@ -2170,7 +2185,7 @@ run_array_worker_mode() {
     --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
     --file "${cds_output_path}")
   [[ -z "${gff_output_path}" || ! -s "${gff_output_path}" ]] || receipt_cmd+=(--file "${gff_output_path}")
-  if [[ ${run_validate_inputs} -eq 1 ]]; then
+  if [[ ${run_validate_inputs} -eq 1 && -n "${gff_output_path}" ]]; then
     [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json" ]] || {
       echo "CDS/GFF mapping QC is missing for task ${GG_ARRAY_TASK_ID}" >&2
       exit 1

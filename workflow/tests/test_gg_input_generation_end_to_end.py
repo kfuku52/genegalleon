@@ -952,6 +952,35 @@ def test_array_keeps_cds_only_species_when_gff_requirement_is_off(tmp_path: Path
 
 
 
+
+def test_array_cds_only_validates_and_completes_busco_with_native_receipts(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    for gff in input_dir.glob("*/*.gff"):
+        gff.unlink()
+    workspace = tmp_path / "validated_cds_only_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    for mode, task_id in (("array_prepare", None), ("array_worker", 1),
+                          ("array_worker", 2), ("array_finalize", None)):
+        _run_core(workspace, input_dir, fake_bin, mode, task_id, require_cds=True)
+
+    root = workspace / "output" / "input_generation"
+    rows = _read_tsv_rows(root / "gg_input_generation_species.tsv")
+    assert len(rows) == 2
+    assert all(row["gff_output_path"] == "" for row in rows)
+    for index in (1, 2):
+        receipt = json.loads((root / "tmp" / "task_plan.json.completed" / f"{index}.json").read_text())
+        assert any(path.endswith(".busco.full.tsv") for path in receipt["files"])
+        assert not any(path.endswith(".mapping.json") for path in receipt["files"])
+    run = _read_tsv_rows(root / "gg_input_generation_runs.tsv")[-1]
+    assert run["stage_validate_status"] == "ok"
+    assert run["num_species_busco_full"] == "2"
+    assert run["num_species_busco_short"] == "2"
+    assert all(row["qc_status"] == "not_recorded" for row in _read_tsv_rows(root / "species_mapping_qc.tsv"))
+
+
 def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):
     workspace = tmp_path / "missing_inputs_workspace"
     workspace.mkdir(parents=True, exist_ok=True)

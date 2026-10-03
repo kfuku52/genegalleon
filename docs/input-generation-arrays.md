@@ -312,3 +312,8 @@ other biological exceptions retain their strict existing checks. Pseudogene
 CDS length validation accepts only the formatter's exact terminal `N` padding
 to the next multiple of three. Genomic feature lengths stay unchanged, and
 pseudogenes do not acquire a coding phase or an inferred intron model.
+
+CDS-only species can run validation and BUSCO with `require_cds=1` and
+`require_gff=0`. Workers still validate longest-CDS selection; CDS-to-GFF
+mapping QC is produced and receipt-bound only when that task supplies a GFF.
+A supplied or required GFF that is missing still fails validation.
