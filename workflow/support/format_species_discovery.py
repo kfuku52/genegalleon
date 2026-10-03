@@ -62,7 +62,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 11
+CDS_GFF_GROUPING_AUDIT_VERSION = 12
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -840,6 +840,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         grouping_source = "gff"
     audit_payload = {
         "grouping_source": grouping_source,
+        "rna_conversion": cds_task.get("_rna_conversion_audit", {}),
         "before_count": before_count,
         "after_count": after_count,
         "duplicates": aggregated_away,

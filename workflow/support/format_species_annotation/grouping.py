@@ -42,8 +42,10 @@ from .grouping_identity import (
     resolve_grouping_feature_authoritative_gene_tokens,
     resolve_grouping_feature_gene_feature_ids,
     resolve_grouping_feature_gene_tokens,
+    strip_gff_feature_prefix,
 )
 from .organelle import gff_organelle_seqids
+from .source_identity import source_annotation_path
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 
@@ -173,6 +175,8 @@ def merge_gff_grouping_feature_record(task, feature_records, feature_id, record)
     conflict_fields = []
     if existing_type != record_type and not shared_gene_transcript_id:
         conflict_fields.append("feature_type")
+    if existing_type == record_type == "gene" and existing.get("coordinates") != record.get("coordinates"):
+        conflict_fields.append("gene_coordinates")
     if existing_parents != record_parents and not shared_gene_transcript_id:
         conflict_fields.append("parents")
     existing_gene_token = str(existing.get("gene_token", "") or "").strip()
@@ -225,8 +229,10 @@ def build_gff_cds_grouping_index(task):
     organelle_cds_features = 0
     organelle_aliases = set()
 
-    with open_text(gff_path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
+            if raw_line.startswith("##FASTA"):
+                break
             line = raw_line.rstrip("\n\r")
             if line == "" or line.startswith("#"):
                 continue
@@ -273,6 +279,7 @@ def build_gff_cds_grouping_index(task):
                     ),
                     "aliases": gff_alias_values_from_attributes(attrs),
                     "line_number": line_number,
+                    "coordinates": (seqid, strand, start_text, end_text),
                 }
                 merge_gff_grouping_feature_record(task, feature_records, feature_id, feature_record)
                 if feature_type_lower == "gene" and stable_gene_token != "":
@@ -355,6 +362,13 @@ def build_gff_cds_grouping_index(task):
             gene_feature_id_cache,
             set(),
         )
+        # Explicit Parent genes are boundaries even without locus_tag/GeneID.
+        resolved_authoritative_gene_tokens[transcript_id] = tuple(sorted(
+            authoritative_tokens | {
+                "gene-feature:" + gene_id
+                for gene_id in gene_feature_ids_by_transcript[transcript_id]
+            }
+        ))
         candidate_gene_tokens = ()
         if transcript_id in feature_records:
             candidate_gene_tokens = resolve_grouping_feature_gene_tokens(
@@ -374,6 +388,38 @@ def build_gff_cds_grouping_index(task):
         candidate_gene_tokens_by_transcript[transcript_id] = candidate_gene_tokens
         if len(candidate_gene_tokens) > 1:
             ambiguous_gene_tokens_by_transcript[transcript_id] = candidate_gene_tokens
+    # A stable label reused by distinct explicit gene features is ambiguous.
+    # Retain the declared gene IDs instead of silently dropping one locus.
+    owners_by_token = defaultdict(set)
+    for feature_id, record in feature_records.items():
+        if record["feature_type"] == "gene" and record["gene_token"]:
+            owners_by_token[record["gene_token"]].add(feature_id)
+    for transcript, tokens in candidate_gene_tokens_by_transcript.items():
+        if len(tokens) == 1:
+            owners_by_token[tokens[0]].update(gene_feature_ids_by_transcript[transcript])
+    def owner_loci(token):
+        return {(feature_records[owner]["coordinates"],
+                 feature_records[owner]["authoritative_gene_tokens"])
+                for owner in owners_by_token[token]}
+
+    for transcript, tokens in list(candidate_gene_tokens_by_transcript.items()):
+        owners = gene_feature_ids_by_transcript[transcript]
+        if len(tokens) == 1 and len(owner_loci(tokens[0])) > 1:
+            if len(owners) != 1:
+                ambiguous_gene_tokens_by_transcript[transcript] = tuple(sorted(owners))
+                continue
+            candidate_gene_tokens_by_transcript[transcript] = (strip_gff_feature_prefix(owners[0]),)
+    # Model parent aliases below bind final owners; old label aliases cannot
+    # introduce the reused label as an additional gene token.
+    gene_alias_to_gene_tokens.clear()
+    for feature_id, record in feature_records.items():
+        if record["feature_type"] != "gene" or not record["gene_token"]:
+            continue
+        stable_token = record["gene_token"]
+        final_token = strip_gff_feature_prefix(feature_id) if len(owner_loci(stable_token)) > 1 else stable_token
+        for raw_alias in (feature_id, stable_token) + record["aliases"]:
+            for alias in gff_alias_variants(raw_alias):
+                gene_alias_to_gene_tokens[alias].add(final_token)
     explicit_cache = {}
     inferred_features = {}
     protected_transcripts = set()
@@ -785,6 +831,11 @@ def build_suffix_gene_tokens_for_transcripts(task, cds_features_by_transcript, p
     provider = task["provider"]
     for transcript, features in cds_features_by_transcript.items():
         stem = collapse_transcript_suffix(provider, transcript)
+        if stem == transcript:
+            # Original gene/model IDs e.g. Lavan.20G002400.1, Lavan.S003640.2.
+            # Never strip numeric gene enumeration such as Pn1.1301, or apply
+            # this inference without the connected coding-locus check below.
+            stem = re.sub(r"^(.+(?:G[0-9]+|[._]S[0-9]+))[.][0-9]+$", r"\1", transcript)
         if transcript in protected or stem == transcript or not stem:
             continue
         if resolved[transcript] not in (transcript, stem):

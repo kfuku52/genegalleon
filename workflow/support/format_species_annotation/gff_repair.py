@@ -28,9 +28,10 @@ from .organelle import (
     gff_organelle_seqids,
     iter_non_organelle_gff_lines,
 )
+from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 7
+GFF_REPAIR_VERSION = 8
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -133,8 +134,10 @@ def read_formatted_cds_gene_ids(cds_path, species_prefix):
 
 def iter_gff_feature_rows(gff_path):
     organelle_seqids = gff_organelle_seqids(gff_path)
-    with open_text(Path(gff_path), "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
+            if raw_line.startswith("##FASTA"):
+                break
             line = apply_common_replacements(raw_line.rstrip("\n\r"))
             if line == "" or line.startswith("#"):
                 continue
@@ -406,7 +409,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     mode = normalize_gff_repair_mode(mode)
     source_fingerprint = file_fingerprint(gff_path)
     cds_fingerprint = file_fingerprint(cds_path)
-    encoding_audit = inspect_invalid_utf8(gff_path)
+    encoding_audit = inspect_invalid_utf8(gff_path, stop_at_fasta=True)
     organelle_seqids = gff_organelle_seqids(gff_path)
     organelle_features_excluded = count_organelle_gff_features(gff_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)

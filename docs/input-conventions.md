@@ -875,3 +875,36 @@ These are summaries of retained observations, not estimates of the true species
 range. Keep the generated metadata and quality sidecars. See
 [GBIF observation traits](gbif-observation-traits.md) for local downloads, filters,
 explicit analysis selection, sensitivity replay and migration from older columns.
+
+### Gene identity and transcript FASTA inputs
+
+Explicit GFF gene parents delimit gene groups in both provided and derived CDS
+routes, including `rescue_overlap`. Reused locus labels at different loci retain
+their distinct gene IDs; conflicting duplicate gene definitions and ambiguous
+parents fail. Orphan model suffixes are collapsed only within a connected coding
+locus. Numeric suffix inference requires an author gene stem such as
+`Lavan.20G002400.1` or `Lavan.S003640.2`; ordinary numeric gene IDs stay intact.
+
+Transcript FASTA headers with `CDS=start-end` use that inclusive interval.
+GWH `Type=mRNA` inputs use their GFF exon/CDS model to remove UTRs before longest
+CDS selection. Missing or inconsistent RNA identity, exon lengths or coding
+coordinates fail. Explicitly declared transcripts without CDS annotation are
+excluded with their IDs recorded in the grouping audit's `rna_conversion` field.
+
+For the EMBL Btu export convention, original author gene/transcript IDs in every
+model's `Note` restore the parent hierarchy and gene labels. Coordinates, phases,
+protein accessions and original export identifiers are retained. The generated
+annotation records the source SHA-256 and replaced gene-feature count; the raw
+source stays unchanged. A missing Note or inconsistent RNA model fails. An
+explicit pseudo CDS without RNA remains at its own physical locus as a pseudo
+transcript, with its annotation basis recorded. Other source conventions do not
+use the Btu rule. The parentless Lavan export restores genes from its documented
+author gene-number / isoform-number IDs, including disjoint alternative coding
+regions within the same author gene. Different contigs or strands remain separate.
+Mixed naming conventions, unknown parents and inconsistent feature coordinates
+fail. Formatter contract 12 rebuilds old format checkpoints.
+
+Formatted GFF contains annotations only. Parsers stop at the GFF3 `##FASTA`
+directive; embedded genomic FASTA is retained in the untouched source and the
+separate genome input. Very long embedded sequence lines must not enter feature
+parsing or annotation encoding audits.

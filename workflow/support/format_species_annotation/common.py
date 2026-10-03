@@ -44,6 +44,8 @@ def gff_seqids(path):
     seqids = set()
     with open_text(path, "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             if raw_line.startswith("#") or raw_line.strip() == "":
                 continue
             parts = raw_line.rstrip("\n\r").split("\t")
@@ -407,6 +409,8 @@ def build_coge_gff_gene_id_map(gff_path):
     alias_keys = ("ID", "Name", "Alias", "CDS", "mRNA", "transcript_id", "protein_id")
     with open_text(gff_path, "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             if raw_line.startswith("#") or raw_line.strip() == "":
                 continue
             parts = raw_line.rstrip("\n\r").split("\t")
@@ -457,6 +461,8 @@ def build_coge_gff_gene_id_map(gff_path):
     tokens_by_alias = defaultdict(set)
     with open_text(gff_path, "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             if raw_line.startswith("#") or raw_line.strip() == "":
                 continue
             parts = raw_line.rstrip("\n\r").split("\t")

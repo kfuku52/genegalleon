@@ -45,6 +45,7 @@ from .genbank import (
 )
 from .grouping import resolve_cds_header_gff_gene
 from .organelle import fasta_header_is_organelle, gff_organelle_aliases, gff_organelle_seqids
+from .rna import extract_input_cds
 
 
 def task_missing_annotation_label(cds_path, gff_path, gbff_path, genome_path):
@@ -153,7 +154,9 @@ def iter_task_cds_records(task):
         for header, sequence in iter_fasta_records(cds_path):
             if fasta_header_is_organelle(header, organelle_seqids, organelle_aliases):
                 continue
-            yield header, sequence
+            coding = extract_input_cds(task, header, sequence)
+            if coding is not None:
+                yield header, coding
         return
     gff_path = task.get("gff_path")
     genome_path = task.get("genome_path")

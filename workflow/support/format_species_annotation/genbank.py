@@ -19,7 +19,6 @@ from .common import (
     build_gff_genome_seqid_map,
     choose_first_gff_attribute,
     first_token,
-    has_explicit_feature_gene_identity,
     load_genome_sequences,
     parse_gff_attributes,
     resolve_feature_gene_token,
@@ -27,15 +26,12 @@ from .common import (
     sanitize_identifier,
     transcript_feature_gene_token,
 )
-from .grouping import (
-    build_rescued_gene_tokens_for_transcripts,
-    build_suffix_gene_tokens_for_transcripts,
-)
+from .grouping import build_gff_cds_grouping_index
 from .grouping_identity import (
     gff_authoritative_gene_token,
-    resolve_grouping_feature_authoritative_gene_tokens,
 )
 from .organelle import gff_organelle_seqids
+from .source_identity import source_annotation_path
 
 
 def iter_genome_records_from_gbff(path):
@@ -331,8 +327,10 @@ def duplicate_coge_model_ids(gff_path):
     """Prove complete equality before discarding repeated CoGe export models."""
     models = defaultdict(lambda: defaultdict(list))
     features, names = {}, {}
-    with open_text(gff_path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
         for line in handle:
+            if line.startswith("##FASTA"):
+                break
             if line.startswith("#"):
                 continue
             parts = line.rstrip("\n\r").split("\t")
@@ -353,18 +351,20 @@ def derive_cds_records_from_gff_and_genome(task):
     genome_path = task.get("genome_path")
     if gff_path is None or genome_path is None:
         raise ValueError("GFF+genome inputs are required to derive CDS for {}".format(task.get("species_key", "")))
+    grouping_index = build_gff_cds_grouping_index(task)
+    if grouping_index["ambiguous_transcript_gene_tokens"]:
+        raise ValueError("Ambiguous GFF gene parents: " + ", ".join(
+            sorted(grouping_index["ambiguous_transcript_gene_tokens"])[:5]))
 
     feature_records = {}
     cds_features_by_transcript = defaultdict(list)
     utr_features_by_transcript = defaultdict(list)
     gene_cache = {}
-    explicit_gene_transcripts = set()
-    authoritative_gene_tokens = defaultdict(set)
     coge_features, coge_names = {}, {}
     coge_models = defaultdict(lambda: defaultdict(list))
     organelle_seqids = gff_organelle_seqids(gff_path)
 
-    with open_text(gff_path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n\r")
             if line == "":
@@ -435,17 +435,8 @@ def derive_cds_records_from_gff_and_genome(task):
                 if fallback_id == "":
                     fallback_id = "{}:{}-{}".format(seqid, start, end)
                 transcript_ids = [fallback_id]
-            explicit_gene = choose_first_gff_attribute(
-                attrs,
-                ("gene", "gene_id", "locus_tag", "geneName", "Parent_Accession", "Accession"),
-            )
             for transcript_id in transcript_ids:
-                gene_token = explicit_gene
-                if explicit_gene:
-                    explicit_gene_transcripts.add(transcript_id)
-                authoritative = gff_authoritative_gene_token(attrs)
-                if authoritative:
-                    authoritative_gene_tokens[transcript_id].add(authoritative)
+                gene_token = ""
                 feature = {
                         "seqid": str(seqid or "").strip(),
                         "start": start,
@@ -479,34 +470,17 @@ def derive_cds_records_from_gff_and_genome(task):
     # the existing empty-result contract without loading a huge genome first.
     if not cds_features_by_transcript:
         return
-    explicit_cache = {}
-    authoritative_cache = {}
     for transcript, features in cds_features_by_transcript.items():
-        authoritative_gene_tokens[transcript].update(
-            resolve_grouping_feature_authoritative_gene_tokens(
-                transcript, feature_records, authoritative_cache, set(),
+        inferred = grouping_index["transcript_gene_tokens"].get(transcript, "")
+        if not inferred:
+            inferred = resolve_feature_gene_token(
+                transcript, feature_records, task["provider"], gene_cache, set(),
             )
-        )
-        inferred = resolve_feature_gene_token(
-            transcript, feature_records, task["provider"], gene_cache, set(),
-        )
         for feature in features:
             if not feature["gene_token"]:
                 feature["gene_token"] = inferred
-    explicit_gene_transcripts.update(
-        transcript for transcript in cds_features_by_transcript
-        if has_explicit_feature_gene_identity(transcript, feature_records, explicit_cache)
-    )
-    suffix_tokens = build_suffix_gene_tokens_for_transcripts(
-        task, cds_features_by_transcript, explicit_gene_transcripts,
-    )
-    for transcript, features in cds_features_by_transcript.items():
-        for feature in features:
-            feature["gene_token"] = suffix_tokens[transcript]
     genome_sequences = load_genome_sequences(genome_path)
-    rescued_gene_tokens = build_rescued_gene_tokens_for_transcripts(
-        task, cds_features_by_transcript, authoritative_gene_tokens,
-    )
+    rescued_gene_tokens = grouping_index["transcript_gene_tokens"]
     required_gff_seqids = {
         feature["seqid"]
         for features in cds_features_by_transcript.values()

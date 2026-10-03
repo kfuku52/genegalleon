@@ -59,13 +59,15 @@ def open_binary(path, mode="rb"):
     return open(path, mode)
 
 
-def inspect_invalid_utf8(path, max_line_numbers=20):
+def inspect_invalid_utf8(path, max_line_numbers=20, *, stop_at_fasta=False):
     invalid_bytes = 0
     invalid_sequences = 0
     affected_lines = 0
     line_numbers = []
     with open_binary(path, "rb") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
+            if stop_at_fasta and raw_line.startswith(b"##FASTA"):
+                break
             offset = 0
             line_invalid = False
             while offset < len(raw_line):

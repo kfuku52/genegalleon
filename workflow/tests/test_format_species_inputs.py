@@ -1591,7 +1591,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 11
+    assert audit["version"] == 12
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -2049,7 +2049,7 @@ def test_invalid_utf8_in_gff_attributes_is_replaced_and_audited(tmp_path):
     assert audit["invalid_utf8_lines"] == [1]
 
 
-def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
+def test_gff_grouping_rescue_preserves_declared_parent_genes(tmp_path):
     module = load_module()
     gff_path = tmp_path / "models.gff3"
     gff_path.write_text(
@@ -2082,9 +2082,9 @@ def test_gff_grouping_rescue_overlap_applies_to_provided_cds_aliases(tmp_path):
     rescue_b = module.resolve_cds_header_gff_gene(base_task, "locusX.t2", rescue_index)
 
     assert {strict_a["gene_token"], strict_b["gene_token"]} == {"badGeneA", "badGeneB"}
-    assert rescue_a["gene_token"] == rescue_b["gene_token"] == "locusX"
-    assert rescue_index["coordinate_rescued_transcripts"] == 2
-    assert rescue_index["coordinate_rescued_groups"] == 1
+    assert {rescue_a["gene_token"], rescue_b["gene_token"]} == {"badGeneA", "badGeneB"}
+    assert rescue_index["coordinate_rescued_transcripts"] == 0
+    assert rescue_index["coordinate_rescued_groups"] == 0
 
 
 def test_gff_grouping_preserves_unmatched_terminal_quotes_in_feature_ids(tmp_path):
@@ -2887,7 +2887,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 11
+    assert audit["version"] == 12
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -2930,7 +2930,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 11
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 12
     assert skipped["status"] == "skip"
 
 
@@ -2987,7 +2987,7 @@ def test_format_species_inputs_preserves_cds_despite_overlapping_utrs(tmp_path):
     assert text.count("ATGAAACCCGGGTTT") == 2
 
 
-def test_format_species_inputs_rescue_overlap_merges_misassigned_gene_ids(tmp_path):
+def test_format_species_inputs_rescue_preserves_different_parent_genes(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Arabidopsis_thaliana"
     species_dir.mkdir(parents=True, exist_ok=True)
@@ -3034,13 +3034,13 @@ def test_format_species_inputs_rescue_overlap_merges_misassigned_gene_ids(tmp_pa
     formatted_cds = out_cds / "Arabidopsis_thaliana_annotation.derived.cds.fa.gz"
     with gzip.open(formatted_cds, "rt", encoding="utf-8") as handle:
         headers = [line.strip() for line in handle if line.startswith(">")]
-    assert headers == [">Arabidopsis_thaliana_locusX"]
+    assert headers == [">Arabidopsis_thaliana_badGeneA", ">Arabidopsis_thaliana_badGeneB"]
 
     with open(species_summary, "rt", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle, delimiter="\t"))
     assert len(rows) == 1
     assert rows[0]["gene_grouping_mode"] == "rescue_overlap"
-    assert rows[0]["aggregated_cds_removed"] == "1"
+    assert rows[0]["aggregated_cds_removed"] == "0"
 
 
 def test_format_species_inputs_uses_locus_tag_for_genbank_style_ncbi_cds(tmp_path):
@@ -4531,3 +4531,217 @@ def test_derive_explicit_trans_splicing_without_dropping_or_reordering(tmp_path,
     records = list(derive_cds_records_from_gff_and_genome(dict(
         provider='direct',species_key='Species_a',gff_path=gff,genome_path=genome,gene_grouping_mode='strict')))
     assert len(records)==1 and records[0][0].split()[0]=='t' and records[0][1]==expected
+
+
+@pytest.mark.parametrize('provided', [False, True])
+@pytest.mark.parametrize('mode', ['strict', 'rescue_overlap'])
+@pytest.mark.parametrize('stable', [False, True])
+def test_declared_gene_boundaries_survive_overlap_and_reused_labels(tmp_path, provided, mode, stable):
+    mod = load_module()
+    gff, genome, cds = tmp_path/'source.gff', tmp_path/'genome.fa', tmp_path/'cds.fa'
+    genome.write_text('>chr1\nATGATGATG\n')
+    label = ';locus_tag=shared' if stable else ''
+    gff.write_text('chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=g1'+label+'\n'
+                  'chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n'
+                  'chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c1;Parent=t1\n'
+                  'chr1\tsrc\tgene\t4\t9\t.\t+\t.\tID=g2'+label+'\n'
+                  'chr1\tsrc\tmRNA\t4\t9\t.\t+\t.\tID=t2;Parent=g2\n'
+                  'chr1\tsrc\tCDS\t4\t9\t.\t+\t0\tID=c2;Parent=t2\n')
+    task=dict(provider='direct', species_key='Test_species', species_prefix='Test_species',
+              gff_path=gff, genome_path=genome, gene_grouping_mode=mode, format_strict=True)
+    if provided:
+        cds.write_text('>t1\nATGATGATG\n>t2\nATGATG\n')
+        task['cds_path']=cds
+    result=mod.format_cds(task,tmp_path,False,False)
+    assert gzip.open(result['output_path'],'rt').read()=='>Test_species_g1\nATGATGATG\n>Test_species_g2\nATGATG\n'
+
+
+@pytest.mark.parametrize('provided', [False, True])
+@pytest.mark.parametrize('root', ['Lavan.20G002400','Lavan.S003640'])
+def test_numeric_author_model_suffix_requires_coding_locus(tmp_path, provided, root):
+    mod=load_module()
+    gff=tmp_path/'source.gff'
+    genome=tmp_path/'genome.fa'
+    genome.write_text('>chr1\nATGATGATG\n')
+    gff.write_text(f'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID={root}.1\n'
+                  f'chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent={root}.1\n'
+                  f'chr1\ts\tmRNA\t1\t6\t.\t+\t.\tID={root}.2\n'
+                  f'chr1\ts\tCDS\t1\t6\t.\t+\t0\tParent={root}.2\n')
+    task=dict(provider='direct',species_key='Test_species',species_prefix='Test_species',gff_path=gff,genome_path=genome)
+    if provided:
+        cds=tmp_path/'cds.fa'
+        cds.write_text(f'>{root}.1\nATGATGATG\n>{root}.2\nATGATG\n')
+        task['cds_path']=cds
+    result=mod.format_cds(task,tmp_path,False,False)
+    assert gzip.open(result['output_path'],'rt').read()==f'>Test_species_{root}\nATGATGATG\n'
+    assert mod.collapse_transcript_suffix('direct','Pn1.1301')=='Pn1.1301'
+    assert mod.collapse_transcript_suffix('direct',root+'.1')==root+'.1'
+
+
+def test_derived_cds_uses_parent_gene_identity_before_display_symbol(tmp_path):
+    mod=load_module()
+    gff=tmp_path/'source.gff'
+    genome=tmp_path/'genome.fa'
+    genome.write_text('>chr1\nATGATGATGATG\n')
+    gff.write_text('chr1\ts\tgene\t1\t12\t.\t+\t.\tID=g1;Name=display\n'
+                  'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n'
+                  'chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=t1;gene=first\n'
+                  'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t2;Parent=g1\n'
+                  'chr1\ts\tCDS\t1\t12\t.\t+\t0\tParent=t2;gene=second\n')
+    result=mod.format_cds(dict(provider='direct',species_key='Test_species',species_prefix='Test_species',
+        gff_path=gff,genome_path=genome),tmp_path,False,False)
+    assert gzip.open(result['output_path'],'rt').read()=='>Test_species_g1\nATGATGATGATG\n'
+
+
+def test_transcript_cds_spans_choose_longest_cds_and_record_utr_removal(tmp_path):
+    mod=load_module()
+    gff=tmp_path/'source.gff'
+    cds=tmp_path/'mrna.fa'
+    gff.write_text('chr1\ts\tgene\t1\t39\t.\t+\t.\tID=g1\n'
+                  'chr1\ts\tmRNA\t1\t21\t.\t+\t.\tID=t1;Parent=g1\n'
+                  'chr1\ts\tCDS\t4\t12\t.\t+\t0\tParent=t1\n'
+                  'chr1\ts\tmRNA\t22\t39\t.\t+\t.\tID=t2;Parent=g1\n'
+                  'chr1\ts\tCDS\t22\t36\t.\t+\t0\tParent=t2\n')
+    cds.write_text('>t1 CDS=4-12\nAAAATGATGATGTTTTTTTTT\n>t2 CDS=1-15\nATGATGATGATGATGTTT\n')
+    result=mod.format_cds(dict(provider='direct',species_key='Test_species',species_prefix='Test_species',
+        gff_path=gff,cds_path=cds),tmp_path,False,False)
+    assert gzip.open(result['output_path'],'rt').read()=='>Test_species_g1\nATGATGATGATGATG\n'
+    audit=json.loads(Path(str(result['output_path'])+'.gff-grouping.json').read_text())
+    assert len(audit['rna_conversion']['trimmed'])==2
+
+
+@pytest.mark.parametrize('strand,expected', [('+','CCCGGTTTA'),('-','ACCCGGTTT')])
+def test_gwh_rna_cds_extraction_respects_splicing_and_orientation(tmp_path,strand,expected):
+    from format_species_annotation.rna import extract_input_cds
+    gff=tmp_path/'source.gff'
+    gff.write_text(f'chr1\ts\tmRNA\t1\t18\t.\t{strand}\t.\tID=r1;Accession=GWHT1\n'
+                  f'chr1\ts\texon\t1\t6\t.\t{strand}\t.\tParent=r1\n'
+                  f'chr1\ts\texon\t10\t18\t.\t{strand}\t.\tParent=r1\n'
+                  f'chr1\ts\tCDS\t4\t6\t.\t{strand}\t0\tParent=r1\n'
+                  f'chr1\ts\tCDS\t11\t16\t.\t{strand}\t0\tParent=r1\n')
+    assert extract_input_cds(dict(gff_path=gff),'GWHT1 Type=mRNA','AAACCCGGGTTTAAA')==expected
+
+
+def test_noncoding_rna_is_recorded_and_not_retained_as_an_unmapped_gene(tmp_path):
+    mod=load_module()
+    gff=tmp_path/'source.gff'
+    cds=tmp_path/'mrna.fa'
+    gff.write_text('chr1\ts\tgene\t1\t15\t.\t+\t.\tID=g1\n'
+                  'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=r1;Accession=GWHT1;Parent=g1\n'
+                  'chr1\ts\texon\t1\t9\t.\t+\t.\tParent=r1\n'
+                  'chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=r1\n'
+                  'chr1\ts\tmRNA\t1\t15\t.\t+\t.\tID=r2;Accession=GWHT2;Parent=g1\n'
+                  'chr1\ts\texon\t1\t15\t.\t+\t.\tParent=r2\n')
+    cds.write_text('>GWHT1 Type=mRNA\nATGATGATG\n>GWHT2 Type=mRNA\nATGATGATGATGATG\n')
+    result=mod.format_cds(dict(provider='direct',species_key='Test_species',species_prefix='Test_species',
+        gff_path=gff,cds_path=cds,format_strict=True),tmp_path,False,False)
+    assert gzip.open(result['output_path'],'rt').read()=='>Test_species_g1\nATGATGATG\n'
+    audit=json.loads(Path(str(result['output_path'])+'.gff-grouping.json').read_text())
+    assert audit['rna_conversion']['excluded_noncoding']==['GWHT2']
+
+
+@pytest.mark.parametrize("provided", [False, True])
+def test_btu_author_notes_restore_genes_and_transcript_parents(tmp_path, provided):
+    mod = load_module()
+    gff, genome, cds = (tmp_path / name for name in ("models.gff", "genome.fa", "cds.fa"))
+    genome.write_text(">chr1\nATGATGATGATGATGATG\n")
+    rows = []
+    for index, (start, end, author) in enumerate(((1, 9, "Btu.g00001t01"),
+                                                (1, 6, "Btu.g00001t02"),
+                                                (10, 18, "Btu.g00002t01")), 1):
+        rows.extend((
+            f"chr1\tEMBL\tgene\t{start}\t{end}\t.\t+\t.\tID=gene-BTU1;locus_tag=BTU1",
+            f"chr1\tEMBL\tmRNA\t{start}\t{end}\t.\t+\t.\tID=rna-BTU1;Parent=gene-BTU1;Note=ID:{author}%3B~source:EVM;locus_tag=BTU1",
+            f"chr1\tEMBL\texon\t{start}\t{end}\t.\t+\t.\tParent=rna-BTU1;Note=ID:{author};locus_tag=BTU1",
+            f"chr1\tEMBL\tCDS\t{start}\t{end}\t.\t+\t0\tID=cds-P{index};protein_id=P{index};Parent=gene-BTU1;Note=ID:{author}.CDS;locus_tag=BTU1",
+        ))
+    gff.write_text("\n".join(rows) + "\n")
+    original = gff.read_bytes()
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, format_strict=True)
+    if provided:
+        cds.write_text(">P1\nATGATGATG\n>P2\nATGATG\n>P3\nATGATGATG\n")
+        task["cds_path"] = cds
+    result = mod.format_cds(task, tmp_path, False, False)
+    assert gzip.open(result["output_path"], "rt").read() == (
+        ">Test_species_Btu.g00001\nATGATGATG\n>Test_species_Btu.g00002\nATGATGATG\n")
+    repaired = mod.format_gff(task, tmp_path, False, False, formatted_cds_path=result["output_path"])
+    text = gzip.open(repaired["output_path"], "rt").read()
+    assert "Parent=Btu.g00001t01" in text
+    assert "orig_export_parent=gene-BTU1" in text
+    assert "##genegalleon-original-id-normalization" in text
+    assert gff.read_bytes() == original
+
+
+@pytest.mark.parametrize("failure", ["missing_note", "outside_rna", "conflicting_rna"])
+def test_btu_author_normalization_rejects_unproven_models(tmp_path, failure):
+    from format_species_annotation.source_identity import source_annotation_path
+    gff = tmp_path / "source.gff"
+    rna = "chr1\tEMBL\tmRNA\t1\t9\t.\t+\t.\tID=r;Note=ID:Btu.g00001t01\n"
+    note = "" if failure == "missing_note" else ";Note=ID:Btu.g00001t01.CDS"
+    end = 12 if failure == "outside_rna" else 9
+    gff.write_text(rna + f"chr1\tEMBL\tCDS\t1\t{end}\t.\t+\t0\tID=c;Parent=r{note}\n" +
+                   (rna.replace("\t1\t9\t", "\t1\t12\t") if failure == "conflicting_rna" else ""))
+    with pytest.raises(ValueError):
+        source_annotation_path(gff)
+
+
+def test_derived_cds_rejects_ambiguous_gene_parents(tmp_path):
+    mod = load_module()
+    gff, genome = tmp_path / "source.gff", tmp_path / "genome.fa"
+    genome.write_text(">chr1\nATGATGATG\n")
+    gff.write_text("chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+                   "chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g2\n"
+                   "chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t;Parent=g1,g2\n"
+                   "chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=t\n")
+    with pytest.raises(ValueError, match="Ambiguous GFF gene parents"):
+        list(mod.derive_cds_records_from_gff_and_genome(dict(
+            provider="direct", species_key="Test_species", gff_path=gff, genome_path=genome)))
+
+
+@pytest.mark.parametrize("header", ["t CDS=0-9", "t CDS=1-12", "t Type=mRNA"])
+def test_rna_conversion_rejects_invalid_cds_or_missing_identity(header):
+    from format_species_annotation.rna import extract_input_cds
+    with pytest.raises(ValueError):
+        extract_input_cds({}, header, "ATGATGATG")
+
+
+@pytest.mark.parametrize("author", ["Lavan.01G000100", "Other.01G000100"])
+def test_lavan_original_gene_number_restores_disjoint_isoforms_only_in_known_export(tmp_path, author):
+    mod = load_module()
+    gff, cds = tmp_path / "source.gff", tmp_path / "cds.fa"
+    gff.write_text(f"chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID={author}.1\n"
+                   f"chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent={author}.1\n"
+                   f"chr1\ts\tmRNA\t20\t25\t.\t+\t.\tID={author}.2\n"
+                   f"chr1\ts\tCDS\t20\t25\t.\t+\t0\tParent={author}.2\n")
+    cds.write_text(f">{author}.1\nATGATGATG\n>{author}.2\nATGATG\n")
+    result = mod.format_cds(dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                                 gff_path=gff, cds_path=cds), tmp_path, False, False)
+    assert result["after_count"] == (1 if author.startswith("Lavan.") else 2)
+
+
+def test_source_author_normalization_is_idempotent(tmp_path):
+    from format_species_annotation.source_identity import source_annotation_path
+    gff = tmp_path / "source.gff"
+    gff.write_text("chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=Lavan.S000100.1\n"
+                   "chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=Lavan.S000100.1\n")
+    normalized = source_annotation_path(gff)
+    assert source_annotation_path(normalized) == normalized
+
+
+def test_embedded_gff_fasta_never_enters_feature_or_encoding_parsing(tmp_path):
+    mod = load_module()
+    gff, cds = tmp_path / "source.gff", tmp_path / "cds.fa"
+    annotation = ("##gff-version 3\nchr1\ts\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+                  "chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n"
+                  "chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=t1\n")
+    gff.write_bytes(annotation.encode() + b"##FASTA\n>chr1\n" + b"A" * 1_000_000 + b"\xff\n")
+    cds.write_text(">t1\nATGATGATG\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, cds_path=cds)
+    result = mod.format_cds(task, tmp_path, False, False)
+    repaired = mod.format_gff(task, tmp_path, False, False, formatted_cds_path=result["output_path"])
+    text = gzip.open(repaired["output_path"], "rt").read()
+    assert "##FASTA" not in text and ">chr1" not in text
+    assert repaired["invalid_utf8_bytes"] == 0
+    assert text.count("\tCDS\t") == 1

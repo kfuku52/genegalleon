@@ -12,6 +12,7 @@ import re
 from format_species_writers import apply_common_replacements, open_text
 
 from .common import first_token, parse_gff_attributes
+from .source_identity import source_annotation_path
 
 ORGANELLE_GENOME_TERMS = frozenset(
     {
@@ -72,8 +73,10 @@ def is_organelle_annotation(feature_type, attrs):
 def gff_organelle_seqids(path):
     """Return sequence IDs marked as mitochondrial/plastid in a GFF3 file."""
     seqids = set()
-    with open_text(path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(path), "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             line = apply_common_replacements(raw_line.rstrip("\n\r"))
             if line == "" or line.startswith("#"):
                 continue
@@ -93,8 +96,10 @@ def gff_organelle_aliases(path, seqids=None):
     """Return stable feature aliases on organellar sequence IDs."""
     excluded = gff_organelle_seqids(path) if seqids is None else frozenset(seqids)
     aliases = set()
-    with open_text(path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(path), "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             line = apply_common_replacements(raw_line.rstrip("\n\r"))
             if not gff_data_line_is_organelle(line, excluded):
                 continue
@@ -117,8 +122,10 @@ def gff_data_line_is_organelle(line, seqids):
 def iter_non_organelle_gff_lines(path, seqids=None):
     """Yield source GFF lines after removing complete organellar records."""
     excluded = gff_organelle_seqids(path) if seqids is None else frozenset(seqids)
-    with open_text(path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(path), "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             line = apply_common_replacements(raw_line)
             if not gff_data_line_is_organelle(line, excluded):
                 yield line
@@ -127,8 +134,10 @@ def iter_non_organelle_gff_lines(path, seqids=None):
 def count_organelle_gff_features(path, seqids=None):
     excluded = gff_organelle_seqids(path) if seqids is None else frozenset(seqids)
     count = 0
-    with open_text(path, "rt", errors="replace") as handle:
+    with open_text(source_annotation_path(path), "rt", errors="replace") as handle:
         for raw_line in handle:
+            if raw_line.startswith("##FASTA"):
+                break
             if gff_data_line_is_organelle(raw_line, excluded):
                 count += 1
     return count
