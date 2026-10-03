@@ -208,6 +208,38 @@ renamed only after the optional final shared stages succeed. Each table rename
 is atomic; publication of multiple files is not a filesystem-wide transaction. Shared stages and workers also hold workspace
 locks to prevent simultaneous publication or cleanup.
 
+### Resume completed worker stages
+
+With `overwrite=0`, workers retain independent successful formatting and
+CDS/GFF-validation checkpoints under `tmp/stage_checkpoints/`. A BUSCO failure
+does not invalidate those upstream stages. On retry, fresh content hashes of
+the declared inputs, outputs, QC and summary/statistics shards must match the
+checkpoint, along with formatting/validation parameters. A matching checkpoint
+skips the formatter or validators entirely; output existence alone never
+certifies success. fx2tab and BUSCO use their existing artifact contracts.
+`overwrite=1` explicitly reruns the enabled stages.
+
+For a changed BUSCO lineage, prepare a separate output workspace as usual and
+set these entrypoint parameters (or their `GG_INPUT_*` environment overrides):
+
+- `resume_from_task_plan`: the absolute frozen donor plan path;
+- `resume_from_task_plan_sha256`: the SHA-256 of that exact plan;
+- `resume_from_input_generation_root`: its `output/input_generation` directory.
+
+Native prepare imports verified formatting, validation and available fx2tab
+outputs for matching species and identical raw content. Formatting parameters
+and required-output settings must agree. It remaps shard indices and output
+paths, writes new stage checkpoints and preserves the donor plan/workspace.
+BUSCO results are not imported: the new lineage is assessed normally and
+produces new BUSCO provenance. The donor workspace must be inactive; its phase
+lock prevents copying during workers, prepare or finalize.
+
+Completed older workers can be imported when their native completion receipt
+and format provenance certify the needed files and parameters. A failed older
+worker without independent stage checkpoints cannot prove validation succeeded;
+its uncertified stages run once. Missing mapping QC cannot be treated as clean
+annotation. Subsequent retries retain the new checkpoints.
+
 Array mode retains `tmp/task_plan.json`, settings, staged downloads, and receipts
 for auditing/retry. Storage can be reclaimed after the run is no longer needed,
 with no jobs active. Shared lock/ownership sidecars must also be preserved while

@@ -45,6 +45,9 @@ species_summary_output="${species_summary_output:-}"
 resolved_manifest_output="${resolved_manifest_output:-}"
 species_trait_output="${species_trait_output:-}"
 task_plan_output="${task_plan_output:-}"
+resume_from_task_plan="${resume_from_task_plan:-}"
+resume_from_task_plan_sha256="${resume_from_task_plan_sha256:-}"
+resume_from_input_generation_root="${resume_from_input_generation_root:-}"
 trait_plan="${trait_plan:-}"
 trait_database_sources="${trait_database_sources:-}"
 trait_download_dir="${trait_download_dir:-}"
@@ -1184,6 +1187,16 @@ run_validate_stage_one_worker() {
     exit 1
   fi
 
+  if [[ ${overwrite} -ne 1 ]] && python "${gg_support_dir}/input_generation_stage_resume.py" check \
+    --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+    --format-contract-version "${format_contract_version}" \
+    --task-index "${GG_ARRAY_TASK_ID}" --stage validate
+  then
+    echo "Reused verified CDS/GFF validation: task ${GG_ARRAY_TASK_ID}"
+    stage_validate_status="ok"
+    return 0
+  fi
+
   gg_step_start "${task}"
   stage_validate_status="running"
   rm -f -- "${mapping_stats_file}" "${longest_stats_file}"
@@ -1233,6 +1246,10 @@ run_validate_stage_one_worker() {
   # Keep mapping QC for this species so reported phase/UTR conflicts remain
   # inspectable and are bound to the worker's completion receipt.
   rm -f -- "${longest_stats_file}"
+  python "${gg_support_dir}/input_generation_stage_resume.py" record \
+    --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+    --format-contract-version "${format_contract_version}" \
+    --task-index "${GG_ARRAY_TASK_ID}" --stage validate
   stage_validate_status="ok"
 }
 
@@ -1992,6 +2009,17 @@ run_array_prepare_mode() {
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Warning: Failed to prepare ETE taxonomy DB before array workers." >&2
   fi
+  if [[ -n "${resume_from_task_plan}" ]]; then
+    [[ -n "${resume_from_task_plan_sha256}" && -n "${resume_from_input_generation_root}" ]] || {
+      echo "Stage resume requires the donor plan SHA-256 and input-generation output root." >&2
+      exit 1
+    }
+    python "${gg_support_dir}/input_generation_stage_resume.py" import \
+      --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+    --format-contract-version "${format_contract_version}" \
+      --source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}" \
+      --source-root "${resume_from_input_generation_root}"
+  fi
   local prepared_cmd=(python "${gg_support_dir}/input_generation_array_state.py" prepared --task-plan "${task_plan_output}")
   if [[ -n "${download_manifest}" ]]; then
     local staged_file
@@ -2048,7 +2076,6 @@ run_array_worker_mode() {
   task_stats_file="${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.json"
   task_meta_file="${dir_task_meta_shards}/${GG_ARRAY_TASK_ID}.json"
   task_summary_file="${dir_species_summary_shards}/${GG_ARRAY_TASK_ID}.tsv"
-  rm -f -- "${task_stats_file}" "${task_meta_file}" "${task_summary_file}"
 
   describe_cmd=(python "${gg_support_dir}/run_input_generation_task.py")
   describe_cmd+=(--task-plan "${task_plan_output}")
@@ -2088,81 +2115,96 @@ run_array_worker_mode() {
     echo "Required GFF input is missing for ${species_prefix}" >&2
     exit 1
   fi
-  format_provenance_manifest="${input_generation_provenance_dir}/format.${species_prefix}.json"
-  gg_artifact_contract_init format_provenance_args "input_generation_format" "${species_prefix}" "${format_provenance_manifest}"
-  gg_artifact_add_input_if_present format_provenance_args "cds_input" "${cds_input_path}"
-  gg_artifact_add_input_if_present format_provenance_args "gff_input" "${gff_input_path}"
-  gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
-  gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
-  format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
-  if [[ -n "${gff_output_path}" ]]; then
-    if [[ ${require_gff} -eq 1 || -n "${gff_input_path}" ]]; then
-      format_provenance_args+=(--output "formatted_gff=${gff_output_path}")
-    else
-      format_provenance_args+=(--optional-output "formatted_gff=${gff_output_path}")
+  if [[ ${overwrite} -ne 1 ]] && python "${gg_support_dir}/input_generation_stage_resume.py" check \
+    --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+    --format-contract-version "${format_contract_version}" \
+    --task-index "${GG_ARRAY_TASK_ID}" --stage format
+  then
+    echo "Reused verified input formatting: ${species_prefix}"
+    stage_format_status="ok"
+  else
+    rm -f -- "${task_stats_file}" "${task_summary_file}"
+    format_provenance_manifest="${input_generation_provenance_dir}/format.${species_prefix}.json"
+    gg_artifact_contract_init format_provenance_args "input_generation_format" "${species_prefix}" "${format_provenance_manifest}"
+    gg_artifact_add_input_if_present format_provenance_args "cds_input" "${cds_input_path}"
+    gg_artifact_add_input_if_present format_provenance_args "gff_input" "${gff_input_path}"
+    gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
+    gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
+    format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
+    if [[ -n "${gff_output_path}" ]]; then
+      if [[ ${require_gff} -eq 1 || -n "${gff_input_path}" ]]; then
+        format_provenance_args+=(--output "formatted_gff=${gff_output_path}")
+      else
+        format_provenance_args+=(--optional-output "formatted_gff=${gff_output_path}")
+      fi
     fi
-  fi
-  format_provenance_args+=(
-    --parameter "provider=${provider}"
-    --parameter "gene_grouping_mode=${gene_grouping_mode}"
-    --parameter "gff_repair_mode=${gff_repair_mode}"
-    --parameter "format_contract_version=${format_contract_version}"
-    --parameter "strict=${strict}"
-  )
-  if [[ -n "${genome_output_path}" ]]; then
-    format_provenance_args+=(--optional-output "formatted_genome=${genome_output_path}")
-  fi
-  if [[ ${overwrite} -eq 1 ]]; then
-    format_needs_update=1
-  else
-    gg_artifact_prepare_stage format_needs_update run_format_inputs "${format_provenance_args[@]}" || exit $?
-  fi
-  if [[ ${format_needs_update} -eq 1 && -s "${format_provenance_manifest}" ]]; then
-    format_force_overwrite=1
-    remove_formatted_species_outputs_for_rebuild "${species_prefix}"
-  fi
+    format_provenance_args+=(
+      --parameter "provider=${provider}"
+      --parameter "gene_grouping_mode=${gene_grouping_mode}"
+      --parameter "gff_repair_mode=${gff_repair_mode}"
+      --parameter "format_contract_version=${format_contract_version}"
+      --parameter "strict=${strict}"
+    )
+    if [[ -n "${genome_output_path}" ]]; then
+      format_provenance_args+=(--optional-output "formatted_genome=${genome_output_path}")
+    fi
+    if [[ ${overwrite} -eq 1 ]]; then
+      format_needs_update=1
+    else
+      gg_artifact_prepare_stage format_needs_update run_format_inputs "${format_provenance_args[@]}" || exit $?
+    fi
+    if [[ ${format_needs_update} -eq 1 && -s "${format_provenance_manifest}" ]]; then
+      format_force_overwrite=1
+      remove_formatted_species_outputs_for_rebuild "${species_prefix}"
+    fi
 
-  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
-    echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
-  fi
+    if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+      echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
+    fi
 
-  cmd=(python "${gg_support_dir}/run_input_generation_task.py")
-  cmd+=(--task-plan "${task_plan_output}")
-  cmd+=(--task-index "${GG_ARRAY_TASK_ID}")
-  cmd+=(--species-cds-dir "${species_cds_dir}")
-  cmd+=(--species-gff-dir "${species_gff_dir}")
-  cmd+=(--species-genome-dir "${species_genome_dir}")
-  cmd+=(--species-summary-output "${task_summary_file}")
-  cmd+=(--stats-output "${task_stats_file}")
-  cmd+=(--task-meta-output "${task_meta_file}")
-  if [[ ${format_force_overwrite} -eq 1 ]]; then
-    cmd+=(--overwrite)
-  fi
-  if [[ "${artifact_stale_policy:-stop}" == "reuse" ]]; then
-    cmd+=(--reuse-existing)
-  fi
-  echo "Running: ${cmd[*]}"
-  if "${cmd[@]}"; then
-    cmd_status=0
-  else
-    cmd_status=$?
-  fi
-  if [[ ${cmd_status} -ne 0 ]]; then
-    stage_format_status="failed"
-    echo "Failed: ${task} (exit=${cmd_status})"
-    exit "${cmd_status}"
-  fi
-  if [[ ${require_genome} -eq 1 && ( -z "${genome_output_path}" || ! -s "${genome_output_path}" ) ]]; then
-    stage_format_status="failed"
-    echo "Required formatted genome is missing for ${species_prefix}" >&2
-    exit 1
-  fi
-  validate_required_formatted_outputs "${task_summary_file}" 1 || {
-    stage_format_status="failed"
-    exit 1
-  }
-  if [[ ${format_needs_update} -eq 1 ]]; then
-    gg_artifact_record "${format_provenance_args[@]}"
+    cmd=(python "${gg_support_dir}/run_input_generation_task.py")
+    cmd+=(--task-plan "${task_plan_output}")
+    cmd+=(--task-index "${GG_ARRAY_TASK_ID}")
+    cmd+=(--species-cds-dir "${species_cds_dir}")
+    cmd+=(--species-gff-dir "${species_gff_dir}")
+    cmd+=(--species-genome-dir "${species_genome_dir}")
+    cmd+=(--species-summary-output "${task_summary_file}")
+    cmd+=(--stats-output "${task_stats_file}")
+    cmd+=(--task-meta-output "${task_meta_file}")
+    if [[ ${format_force_overwrite} -eq 1 ]]; then
+      cmd+=(--overwrite)
+    fi
+    if [[ "${artifact_stale_policy:-stop}" == "reuse" ]]; then
+      cmd+=(--reuse-existing)
+    fi
+    echo "Running: ${cmd[*]}"
+    if "${cmd[@]}"; then
+      cmd_status=0
+    else
+      cmd_status=$?
+    fi
+    if [[ ${cmd_status} -ne 0 ]]; then
+      stage_format_status="failed"
+      echo "Failed: ${task} (exit=${cmd_status})"
+      exit "${cmd_status}"
+    fi
+    if [[ ${require_genome} -eq 1 && ( -z "${genome_output_path}" || ! -s "${genome_output_path}" ) ]]; then
+      stage_format_status="failed"
+      echo "Required formatted genome is missing for ${species_prefix}" >&2
+      exit 1
+    fi
+    validate_required_formatted_outputs "${task_summary_file}" 1 || {
+      stage_format_status="failed"
+      exit 1
+    }
+    if [[ ${format_needs_update} -eq 1 ]]; then
+      gg_artifact_record "${format_provenance_args[@]}"
+    fi
+    python "${gg_support_dir}/input_generation_stage_resume.py" record \
+      --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+    --format-contract-version "${format_contract_version}" \
+      --task-index "${GG_ARRAY_TASK_ID}" --stage format
+    stage_format_status="ok"
   fi
 
   if [[ -s "${task_stats_file}" ]]; then
@@ -2173,7 +2215,6 @@ run_array_worker_mode() {
     cds_sequences_after="$(read_stats_json_field "${task_stats_file}" "cds_sequences_after")"
     cds_first_sequence_name="$(read_stats_json_field "${task_stats_file}" "cds_first_sequence_name")"
   fi
-  stage_format_status="ok"
 
   run_validate_stage_one_worker
   run_cds_fx2tab_stage_one_worker
@@ -2361,6 +2402,12 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  # Do not add empty resume fields to old immutable settings documents.
+  if [[ -n "${resume_from_task_plan}${resume_from_task_plan_sha256}${resume_from_input_generation_root}" ]]; then
+    for array_setting in resume_from_task_plan resume_from_task_plan_sha256 resume_from_input_generation_root; do
+      array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
+    done
+  fi
   [[ ${require_cds} -ne 1 ]] || array_settings_cmd+=(--setting "require_cds=1")
   [[ ${require_gff} -ne 1 ]] || array_settings_cmd+=(--setting "require_gff=1")
   [[ ${require_genome} -ne 1 ]] || array_settings_cmd+=(--setting "require_genome=1")

@@ -1048,15 +1048,105 @@ def test_array_failed_busco_worker_retries_without_completed_receipt(tmp_path):
     root = workspace / "output" / "input_generation" / "tmp"
     assert (root / "task_stats_shards" / "1.json").is_file()
     assert not (root / "task_plan.json.completed" / "1.json").exists()
+    checkpoint_root = workspace / "output/input_generation/tmp/stage_checkpoints"
+    assert (checkpoint_root / "format.Arabidopsis_thaliana.json").is_file()
+    assert (checkpoint_root / "validate.Arabidopsis_thaliana.json").is_file()
+    _forbid_format_and_validation(fake_bin)
     del env["GG_TEST_FAIL_BUSCO"]
     resumed = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
                              capture_output=True, text=True, timeout=180)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert "Reused verified input formatting: Arabidopsis_thaliana" in resumed.stdout
+    assert "Reused verified CDS/GFF validation: task 1" in resumed.stdout
     pending = subprocess.run([sys.executable, str(REPO_ROOT / "workflow" / "support" / "input_generation_array_state.py"),
                               "pending", "--task-plan", str(root / "task_plan.json")],
                              capture_output=True, text=True, timeout=30)
     assert pending.returncode == 0, pending.stderr
     assert pending.stdout.strip() == "2"
+
+
+def _forbid_format_and_validation(fake_bin):
+    _write_text(fake_bin / "python", textwrap.dedent(f"""\
+        #!/bin/sh
+        case "$1" in
+          */run_input_generation_task.py)
+            describe=0
+            for arg in "$@"; do [ "$arg" != --describe-only ] || describe=1; done
+            [ "$describe" = 1 ] || exit 91
+            ;;
+          */validate_cds_gff_mapping.py|*/validate_longest_cds_selection.py) exit 92 ;;
+        esac
+        exec '{sys.executable}' "$@"
+        """), mode=0o755)
+    seqkit = fake_bin / "seqkit"
+    allowed = fake_bin / "seqkit_allowed"
+    seqkit.rename(allowed)
+    _write_text(seqkit, f'#!/bin/sh\n[ "$1" != fx2tab ] || exit 93\nexec "{allowed}" "$@"\n', mode=0o755)
+
+
+def test_array_lineage_change_imports_legacy_completed_format_and_validation(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    source_workspace = tmp_path / "legacy_workspace"
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _write_minimal_ete_taxonomy_db(source_workspace)
+    _write_runtime_busco_dataset(source_workspace)
+    _run_core(source_workspace, input_dir, fake_bin, "array_prepare")
+    _run_core(source_workspace, input_dir, fake_bin, "array_worker", 1)
+    source_root = source_workspace / "output/input_generation"
+    # Model a worker completed before per-stage checkpoints were introduced.
+    for path in (source_root / "tmp/stage_checkpoints").glob("*.json"):
+        path.unlink()
+    source_plan = source_root / "tmp/task_plan.json"
+    source_bytes = source_plan.read_bytes()
+    import hashlib
+    workspace = tmp_path / "embryophyta_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace, "embryophyta_odb12")
+    common = dict(overwrite="0", busco_lineage="embryophyta_odb12",
+                  resume_from_task_plan=str(source_plan),
+                  resume_from_task_plan_sha256=hashlib.sha256(source_bytes).hexdigest(),
+                  resume_from_input_generation_root=str(source_root))
+    prepare_env = _core_env(workspace, input_dir, fake_bin, "array_prepare")
+    prepare_env.update(common)
+    result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=prepare_env,
+                            capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '"validation": true' in result.stdout
+    _forbid_format_and_validation(fake_bin)
+    worker_env = _core_env(workspace, input_dir, fake_bin, "array_worker", 1)
+    worker_env.update(common)
+    result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=worker_env,
+                            capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Reused verified input formatting" in result.stdout
+    assert "Reused verified CDS/GFF validation" in result.stdout
+    provenance = json.loads((workspace / "output/input_generation/artifact_provenance/busco.Arabidopsis_thaliana.json").read_text())
+    assert provenance["parameters"]["busco_lineage_resolved"] == "embryophyta_odb12"
+    assert source_plan.read_bytes() == source_bytes
+    root = workspace / "output/input_generation"
+    summary = next(csv.DictReader((root / "tmp/species_summary_shards/1.tsv").open(), delimiter="\t"))
+    assert summary["cds_output_path"].startswith(str(root))
+    assert (root / "tmp/task_plan.json.completed/1.json").is_file()
+
+
+def test_array_invalid_validation_checkpoint_reruns_validation(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "invalid_validation_workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _run_core(workspace, input_dir, fake_bin, "array_prepare")
+    _run_core(workspace, input_dir, fake_bin, "array_worker", 1)
+    path = workspace / "output/input_generation/tmp/stage_checkpoints/validate.Arabidopsis_thaliana.json"
+    path.write_text("{}\n")
+    _forbid_format_and_validation(fake_bin)
+    env = _core_env(workspace, input_dir, fake_bin, "array_worker", 1)
+    env.update(overwrite="0")
+    result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                            capture_output=True, text=True, timeout=180)
+    assert result.returncode != 0
+    assert "Reused verified input formatting" in result.stdout
+    assert "Reused verified CDS/GFF validation" not in result.stdout
 
 
 def test_array_busco_timeout_leaves_worker_retryable(tmp_path):

@@ -1,0 +1,287 @@
+"""Content-verified format/validation checkpoints for native species workers."""
+
+import argparse
+import csv
+import fcntl
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from input_generation_array_state import (
+    atomic_json,
+    claim_workspace,
+    digest,
+    digest_paths,
+    load_plan,
+    prepared,
+    verify_receipt,
+)
+
+FORMAT_PARAMETERS = ("provider", "gene_grouping_mode", "gff_repair_mode", "strict",
+                     "require_cds", "require_gff", "require_genome")
+
+
+def parameters(settings, stage, format_contract_version):
+    result = {key: str(settings.get(key, "0" if key.startswith("require_") else ""))
+              for key in FORMAT_PARAMETERS}
+    result["format_contract_version"] = str(format_contract_version)
+    if stage == "validate":
+        result.update(validation_contract_version="1", run_validate_inputs=str(settings["run_validate_inputs"]))
+    return result
+
+
+def checkpoint_path(root, species, stage):
+    return root / "tmp/stage_checkpoints" / f"{stage}.{species}.json"
+
+
+def context(plan_path, index, root, stage):
+    plan = load_plan(plan_path)
+    task = plan["tasks"][index - 1]
+    settings = json.loads(Path(str(plan_path) + ".settings.json").read_text())
+    meta = json.loads((root / "tmp/task_meta_shards" / f"{index}.json").read_text())
+    if meta["species_prefix"] != task["species_prefix"] or meta["task_index"] != index:
+        raise ValueError("Resume metadata belongs to another species/task")
+    paths = {"cds": meta["cds_output_path"], "stats": str(root / "tmp/task_stats_shards" / f"{index}.json"),
+             "summary": str(root / "tmp/species_summary_shards" / f"{index}.tsv")}
+    if meta.get("gff_output_path"):
+        paths["gff"] = meta["gff_output_path"]
+    if stage == "format":
+        if meta.get("genome_output_path"):
+            paths["genome"] = meta["genome_output_path"]
+        paths.update({key: meta[key] for key in ("cds_path", "gff_path", "genome_path", "gbff_path") if meta.get(key)})
+    elif "gff" in paths:
+        paths["mapping_qc"] = str(root / "tmp/task_stats_shards" / f"{index}.mapping.json")
+    return task, settings, meta, paths
+
+
+def snapshot(paths):
+    if any(not Path(path).is_file() or not Path(path).stat().st_size for path in paths.values()):
+        raise ValueError("Stage resume requires all declared nonempty files")
+    hashes = digest_paths(paths.values())
+    return {label: {"path": path, "sha256": hashes[path]} for label, path in paths.items()}
+
+
+def record(plan_path, index, root, stage, format_contract_version):
+    task, settings, _, paths = context(plan_path, index, root, stage)
+    if stage == "validate" and settings["run_validate_inputs"] != "1":
+        raise ValueError("Disabled validation cannot produce a successful validation checkpoint")
+    atomic_json(checkpoint_path(root, task["species_prefix"], stage), {
+        "schema_version": 1, "stage": stage, "species": task["species_prefix"],
+        "parameters": parameters(settings, stage, format_contract_version), "files": snapshot(paths),
+    })
+
+
+def valid(plan_path, index, root, stage, format_contract_version):
+    try:
+        task, settings, _, paths = context(plan_path, index, root, stage)
+        saved = json.loads(checkpoint_path(root, task["species_prefix"], stage).read_text())
+        return (saved.get("schema_version") == 1 and saved.get("stage") == stage
+                and saved.get("species") == task["species_prefix"]
+                and saved.get("parameters") == parameters(settings, stage, format_contract_version)
+                and saved.get("files") == snapshot(paths))
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return False
+
+
+def copy_atomic(source, destination):
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+    try:
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def import_fx2tab(source_root, target_root, species, source_cds, target_cds, source_settings, target_settings):
+    if target_settings.get("run_cds_fx2tab") != "1":
+        return
+    manifest = source_root / "artifact_provenance" / f"fx2tab.{species}.json"
+    if not manifest.is_file():
+        return
+    payload = json.loads(manifest.read_text())
+    expected_parameters = dict(length="yes", name="yes", gc="yes", gc_skew="yes", only_id="yes")
+    if (payload.get("schema_version") != 1 or payload.get("step") != "input_generation_cds_fx2tab"
+            or str(payload.get("family_id")) != species or payload.get("parameters") != expected_parameters):
+        raise ValueError("Unsupported fx2tab provenance: " + species)
+    source = Path(source_settings["species_cds_fx2tab_dir"]) / f"{species}_fx2tab_cds.tsv"
+    destination = Path(target_settings["species_cds_fx2tab_dir"]) / source.name
+    entries = {item["label"]: item for group in ("inputs", "outputs") for item in payload[group]}
+    hashes = digest_paths([str(source_cds), str(source)])
+    if (hashes[str(source_cds)] != entries["species_cds"]["sha256"]
+            or hashes[str(source)] != entries["fx2tab"]["sha256"]):
+        raise ValueError("fx2tab output/input differs from its successful provenance: " + species)
+    copy_atomic(source, destination)
+    if digest(destination) != hashes[str(source)]:
+        raise ValueError("fx2tab output changed during import: " + species)
+    command = [sys.executable, str(Path(__file__).with_name("artifact_provenance.py")), "record",
+               "--manifest", str(target_root / "artifact_provenance" / manifest.name),
+               "--step", "input_generation_cds_fx2tab", "--family-id", species,
+               "--logical-root", str(target_root.parent / ".gg_global_artifacts"),
+               "--workspace-root", str(target_root.parent.parent),
+               "--input", "species_cds=" + str(target_cds), "--output", "fx2tab=" + str(destination)]
+    for key, value in expected_parameters.items():
+        command.extend(["--parameter", key + "=" + value])
+    subprocess.run(command, check=True)
+
+
+def import_stages(args):
+    """Import native proofs, never infer successful validation from output existence."""
+    source_plan = args.source_plan.resolve(strict=True)
+    if source_plan == args.task_plan.resolve():
+        raise ValueError("Stage import requires a separate frozen plan/output workspace")
+    source_root = args.source_root.resolve(strict=True)
+    if source_root == args.root.resolve():
+        raise ValueError("Stage import cannot share the donor output workspace")
+    with (source_root / ".array-phase.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("Source input-generation workspace has active workers/shared stages") from exc
+        if digest(source_plan) != args.source_plan_sha256:
+            raise ValueError("Source plan differs from the sealed resume SHA-256")
+        if not prepared(source_plan):
+            raise ValueError("Source prepare/settings evidence is missing or stale")
+        claim_workspace(source_plan, source_root)
+        claim_workspace(args.task_plan, args.root)
+        source = load_plan(source_plan)
+        source_settings = json.loads(Path(str(source_plan) + ".settings.json").read_text())
+        target = load_plan(args.task_plan)
+        target_settings = json.loads(Path(str(args.task_plan) + ".settings.json").read_text())
+        if parameters(source_settings, "format", args.format_contract_version) != parameters(target_settings, "format", args.format_contract_version):
+            raise ValueError("Source/target formatting or required-output parameters differ")
+        donor_indices = {task["species_prefix"]: i for i, task in enumerate(source["tasks"], 1)}
+        imported = []
+        skipped = []
+        for index, task in enumerate(target["tasks"], 1):
+            species = task["species_prefix"]
+            old_index = donor_indices.get(species)
+            if old_index is None:
+                skipped.append(species)
+                continue
+            donor_task = source["tasks"][old_index - 1]
+            if any(task.get(key) != donor_task.get(key) for key in ("provider", "species_key")):
+                raise ValueError("Source/target species identity differs: " + species)
+            complete = verify_receipt(source_plan, old_index, args.source_plan_sha256)
+            format_valid = valid(source_plan, old_index, source_root, "format", args.format_contract_version)
+            if not complete and not format_valid:
+                skipped.append(species)
+                continue
+            _, _, old_meta, old_paths = context(source_plan, old_index, source_root, "format")
+            receipt = json.loads(Path(str(source_plan) + f".completed/{old_index}.json").read_text()) if complete else {}
+            if complete and not format_valid:
+                # Old workers bound their metadata/shards and formatted outputs
+                # to completion, and their format manifest declared this contract.
+                manifest = json.loads((source_root / "artifact_provenance" / f"format.{species}.json").read_text())
+                old_parameters = manifest.get("parameters", {})
+                if (manifest.get("step") != "input_generation_format"
+                        or str(manifest.get("family_id")) != species
+                        or str(old_parameters.get("format_contract_version")) != args.format_contract_version):
+                    raise ValueError("Unsupported legacy format provenance: " + species)
+                if any(str(old_parameters.get(key, "")) != str(source_settings[key])
+                       for key in ("provider", "strict", "gene_grouping_mode", "gff_repair_mode")):
+                    raise ValueError("Legacy format parameters differ from their frozen settings: " + species)
+                if any(path not in receipt["files"] for path in old_paths.values()):
+                    raise ValueError("Legacy completion does not certify every format shard: " + species)
+            original_files = snapshot(old_paths)
+            if format_valid:
+                saved_files = json.loads(checkpoint_path(source_root, species, "format").read_text())["files"]
+                if original_files != saved_files:
+                    raise ValueError("Source format files changed after verification: " + species)
+            elif any(item["sha256"] != receipt["files"][item["path"]] for item in original_files.values()):
+                raise ValueError("Source completed files changed after verification: " + species)
+            meta_file = args.root / "tmp/task_meta_shards" / f"{index}.json"
+            command = [sys.executable, str(Path(__file__).with_name("run_input_generation_task.py")),
+                       "--task-plan", str(args.task_plan), "--task-index", str(index), "--describe-only",
+                       "--task-meta-output", str(meta_file)]
+            for key in ("species_cds_dir", "species_gff_dir", "species_genome_dir"):
+                command.extend(["--" + key.replace("_", "-"), target_settings[key]])
+            subprocess.run(command, check=True)
+            _, _, _, new_paths = context(args.task_plan, index, args.root, "format")
+            old_raw = {key: path for key, path in old_paths.items() if key.endswith("_path")}
+            new_raw = {key: path for key, path in new_paths.items() if key.endswith("_path")}
+            if old_raw.keys() != new_raw.keys():
+                raise ValueError("Source/target raw input roles differ: " + species)
+            raw_hashes = digest_paths([*old_raw.values(), *new_raw.values()])
+            if any(raw_hashes[old_raw[key]] != raw_hashes[new_raw[key]] for key in old_raw):
+                raise ValueError("Source/target raw input content differs: " + species)
+            for label in ("cds", "gff", "genome", "stats"):
+                if label in old_paths:
+                    if label not in new_paths:
+                        raise ValueError("Source/target formatted output roles differ: " + species)
+                    copy_atomic(old_paths[label], new_paths[label])
+                    if digest(new_paths[label]) != original_files[label]["sha256"]:
+                        raise ValueError("Copied format output differs from its verified source: " + species)
+            replacements = {old_paths[label]: new_paths[label] for label in old_paths if label in new_paths}
+            with Path(old_paths["summary"]).open(newline="") as handle:
+                reader = csv.DictReader(handle, delimiter="\t")
+                fields = reader.fieldnames
+                rows = [{key: replacements.get(value, value) for key, value in row.items()} for row in reader]
+            if len(rows) != 1 or rows[0].get("species_prefix") != species:
+                raise ValueError("Source summary shard does not identify exactly one requested species")
+            destination = Path(new_paths["summary"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fields, delimiter="\t")
+                writer.writeheader()
+                writer.writerows(rows)
+            if snapshot(old_paths) != original_files:
+                raise ValueError("Source format files changed during import: " + species)
+            record(args.task_plan, index, args.root, "format", args.format_contract_version)
+            import_fx2tab(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
+                          source_settings, target_settings)
+            validation_valid = valid(source_plan, old_index, source_root, "validate", args.format_contract_version)
+            if (source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1"
+                    and (complete or validation_valid)):
+                mapping = source_root / "tmp/task_stats_shards" / f"{old_index}.mapping.json"
+                if old_meta.get("gff_output_path"):
+                    receipt_files = receipt.get("files", {})
+                    if not mapping.is_file() or (not validation_valid and str(mapping) not in receipt_files):
+                        imported.append({"species": species, "validation": False})
+                        continue
+                    mapping_sha256 = (json.loads(checkpoint_path(source_root, species, "validate").read_text())
+                                      ["files"]["mapping_qc"]["sha256"] if validation_valid else receipt_files[str(mapping)])
+                    copy_atomic(mapping, args.root / "tmp/task_stats_shards" / f"{index}.mapping.json")
+                    if digest(args.root / "tmp/task_stats_shards" / f"{index}.mapping.json") != mapping_sha256:
+                        raise ValueError("Copied validation QC differs from its verified source: " + species)
+                record(args.task_plan, index, args.root, "validate", args.format_contract_version)
+                imported.append({"species": species, "validation": True})
+            else:
+                imported.append({"species": species, "validation": False})
+        if digest(source_plan) != args.source_plan_sha256:
+            raise ValueError("Source plan changed during stage import")
+        print(json.dumps({"imported": imported, "without_verified_format": skipped}))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("check", "record", "import"))
+    parser.add_argument("--task-plan", type=Path, required=True)
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--task-index", type=int)
+    parser.add_argument("--format-contract-version", required=True)
+    parser.add_argument("--stage", choices=("format", "validate"))
+    parser.add_argument("--source-plan", type=Path)
+    parser.add_argument("--source-root", type=Path)
+    parser.add_argument("--source-plan-sha256")
+    args = parser.parse_args()
+    if args.action == "import":
+        if not all((args.source_plan, args.source_root, args.source_plan_sha256)):
+            parser.error("Import requires the source plan, root and sealed SHA-256")
+        import_stages(args)
+    else:
+        if not args.stage or not args.task_index or not 1 <= args.task_index <= load_plan(args.task_plan)["task_count"]:
+            parser.error("A stage and valid task index are required")
+        if args.action == "check":
+            raise SystemExit(0 if valid(args.task_plan, args.task_index, args.root, args.stage, args.format_contract_version) else 1)
+        record(args.task_plan, args.task_index, args.root, args.stage, args.format_contract_version)
+
+
+if __name__ == "__main__":
+    main()

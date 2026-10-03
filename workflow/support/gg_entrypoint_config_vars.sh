@@ -565,6 +565,9 @@ require_cds
 require_gff
 require_genome
 resolved_manifest_output
+resume_from_task_plan
+resume_from_task_plan_sha256
+resume_from_input_generation_root
 run_cds_fx2tab
 run_format_inputs
 run_generate_species_trait
