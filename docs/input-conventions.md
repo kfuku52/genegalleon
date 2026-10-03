@@ -884,6 +884,10 @@ their distinct gene IDs; conflicting duplicate gene definitions and ambiguous
 parents fail. Orphan model suffixes are collapsed only within a connected coding
 locus. Numeric suffix inference requires an author gene stem such as
 `Lavan.20G002400.1` or `Lavan.S003640.2`; ordinary numeric gene IDs stay intact.
+Ordered multipart gene rows (`is_ordered=true`) may share an ID when sequence,
+strand, parents and gene identity agree; their separate coordinate parts are
+retained. Other conflicting duplicate gene definitions still fail. See the
+[NCBI GFF3 feature-ID specification](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/file-formats/annotation-files/about-ncbi-gff3/).
 
 Transcript FASTA headers with `CDS=start-end` use that inclusive interval.
 GWH `Type=mRNA` inputs use their GFF exon/CDS model to remove UTRs before longest

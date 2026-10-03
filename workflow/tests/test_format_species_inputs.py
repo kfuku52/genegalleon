@@ -2664,6 +2664,41 @@ def test_gff_grouping_merges_compatible_duplicate_feature_ids(tmp_path):
     assert module.resolve_cds_header_gff_gene(task, "T1b", index)["gene_token"] == "A"
 
 
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_ordered_multipart_gene_keeps_one_longest_cds(tmp_path, strand):
+    module = load_module()
+    gff = tmp_path / 'ordered.gff'
+    gff.write_text(
+        f'chr1\tDDBJ\tgene\t1\t9\t.\t{strand}\t.\tID=gene-A;locus_tag=A;is_ordered=true;partial=true\n'
+        f'chr1\tDDBJ\tgene\t31\t39\t.\t{strand}\t.\tID=gene-A;locus_tag=A;is_ordered=true;partial=true\n'
+        f'chr1\tDDBJ\tCDS\t1\t9\t.\t{strand}\t0\tID=cds-P1;Parent=gene-A;protein_id=P1\n'
+        f'chr1\tDDBJ\tCDS\t31\t39\t.\t{strand}\t0\tID=cds-P1;Parent=gene-A;protein_id=P1\n'
+        f'chr1\tDDBJ\tCDS\t31\t36\t.\t{strand}\t0\tID=cds-P2;Parent=gene-A;protein_id=P2\n')
+    cds = tmp_path / 'cds.fa'
+    cds.write_text('>P1\nATGATGATGATGATGATG\n>P2\nATGATG\n')
+    task = dict(provider='ncbi', species_key='Test_species', species_prefix='Test_species',
+                cds_path=cds, gff_path=gff)
+    result = module.format_cds(task, tmp_path, False, False)
+    assert gzip.open(result['output_path'], 'rt').read() == '>Test_species_A\nATGATGATGATGATGATG\n'
+    audit = json.loads(Path(str(result['output_path']) + '.gff-grouping.json').read_text())
+    assert audit['stats']['mapped'] == 2
+    assert audit['after_count'] == 1
+
+
+@pytest.mark.parametrize('second', [
+    ('chr1', '+', '', 'A'), ('chr2', '+', ';is_ordered=true', 'A'),
+    ('chr1', '-', ';is_ordered=true', 'A'), ('chr1', '+', ';is_ordered=true', 'B'),
+])
+def test_ordered_multipart_gene_rejects_conflicting_identity(tmp_path, second):
+    module = load_module()
+    seqid, strand, marker, token = second
+    gff = tmp_path / 'conflicting.gff'
+    gff.write_text('chr1\tDDBJ\tgene\t1\t9\t.\t+\t.\tID=gene-A;locus_tag=A;is_ordered=true\n' +
+        f'{seqid}\tDDBJ\tgene\t31\t39\t.\t{strand}\t.\tID=gene-A;locus_tag={token}{marker}\n')
+    with pytest.raises(ValueError, match='conflicting definitions for feature ID gene-A'):
+        module.build_gff_cds_grouping_index(dict(provider='ncbi', species_prefix='Test_species', gff_path=gff))
+
+
 @pytest.mark.parametrize("transcript_first", (False, True))
 def test_gff_grouping_accepts_maker_gene_transcript_shared_id(tmp_path, transcript_first):
     module = load_module()

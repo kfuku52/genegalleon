@@ -175,8 +175,15 @@ def merge_gff_grouping_feature_record(task, feature_records, feature_id, record)
     conflict_fields = []
     if existing_type != record_type and not shared_gene_transcript_id:
         conflict_fields.append("feature_type")
+    multipart_gene = False
     if existing_type == record_type == "gene" and existing.get("coordinates") != record.get("coordinates"):
-        conflict_fields.append("gene_coordinates")
+        parts = existing.get("coordinate_parts", (existing["coordinates"],))
+        multipart_gene = (
+            existing.get("is_ordered_gene") and record.get("is_ordered_gene")
+            and all(part[:2] == record["coordinates"][:2] for part in parts)
+        )
+        if not multipart_gene:
+            conflict_fields.append("gene_coordinates")
     if existing_parents != record_parents and not shared_gene_transcript_id:
         conflict_fields.append("parents")
     existing_gene_token = str(existing.get("gene_token", "") or "").strip()
@@ -199,6 +206,10 @@ def merge_gff_grouping_feature_record(task, feature_records, feature_id, record)
                 ",".join(conflict_fields),
             )
         )
+
+    if multipart_gene:
+        existing["coordinate_parts"] = tuple(sorted(set(parts + (record["coordinates"],))))
+        existing["coordinates"] = existing["coordinate_parts"]
 
     if shared_gene_transcript_id:
         existing["feature_type"] = "gene"
@@ -280,6 +291,7 @@ def build_gff_cds_grouping_index(task):
                     "aliases": gff_alias_values_from_attributes(attrs),
                     "line_number": line_number,
                     "coordinates": (seqid, strand, start_text, end_text),
+                    "is_ordered_gene": attrs.get("is_ordered", ()) == ("true",),
                 }
                 merge_gff_grouping_feature_record(task, feature_records, feature_id, feature_record)
                 if feature_type_lower == "gene" and stable_gene_token != "":
