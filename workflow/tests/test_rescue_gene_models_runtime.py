@@ -22,6 +22,14 @@ def cli(*args):
     return result
 
 
+def test_rescue_cli_help_in_owned_runtime(tmp_path):
+    result = subprocess.run([sys.executable, str(SCRIPT), "--help"], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "usage:" in result.stdout.lower()
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.fixture
 def hidden_models(tmp_path):
     rng = random.Random(919)
