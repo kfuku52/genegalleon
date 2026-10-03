@@ -31,6 +31,7 @@ Notable defaults:
   and CDS-to-GFF mapping compatibility, with species-level mapping checks
   parallelized via `validate_cds_gff_mapping.py --nthreads`,
 - `run_species_busco=1` runs BUSCO on formatted CDS inputs by default,
+- `run_gene_model_rescue=1` optionally adds [sparse multi-species/self-synteny gene-model rescue](gene-model-rescue.md), with five common references, nearest donors, augmented CDS/GFF and post-rescue BUSCO,
 - `run_multispecies_summary=1` generates BUSCO plots and `annotation_summary.tsv` under `workspace/output/input_generation/annotation_summary/`,
 - formatted outputs default to `workspace/output/input_generation/species_cds`, `workspace/output/input_generation/species_gff`, and `workspace/output/input_generation/species_genome`,
 - when a species has both provided CDS and GFF inputs, CDS isoforms are grouped

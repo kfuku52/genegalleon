@@ -518,6 +518,19 @@ EOF
       ;;
     gg_input_generation_entrypoint.sh)
       cat <<'EOF'
+run_gene_model_rescue
+gene_model_rescue_tree
+gene_model_rescue_dir
+gene_model_rescue_common_references
+gene_model_rescue_nearest_references
+gene_model_rescue_minimum_busco
+gene_model_rescue_minimum_coverage
+gene_model_rescue_minimum_identity
+gene_model_rescue_max_interval
+gene_model_rescue_max_intron
+gene_model_rescue_genome_fallback
+gene_model_rescue_gemoma_jar
+gene_model_rescue_gemoma_java
 run_species_taxonomy
 taxonomy_species_tree
 taxonomy_ranks

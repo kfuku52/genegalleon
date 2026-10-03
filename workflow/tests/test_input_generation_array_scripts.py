@@ -1275,6 +1275,159 @@ print({"array_prepare": "101", "array_worker": "102", "array_finalize": "103"}[m
     assert "simulated Slurm rejection" in result.stderr
 
 
+def test_slurm_rescue_chain_uses_frozen_comparison_and_species_arrays(tmp_path, monkeypatch):
+    import os
+    plan = tmp_path / "tmp" / "plan.json"
+    plan.parent.mkdir()
+    calls = tmp_path / "calls.jsonl"
+    fake = tmp_path / "sbatch"
+    fake.write_text("#!" + sys.executable + "\n" + '''import hashlib, json, os
+from pathlib import Path
+mode = os.environ["GG_INPUT_INPUT_GENERATION_MODE"]
+with Path(os.environ["TEST_CALLS"]).open("a") as handle:
+    handle.write(json.dumps({"mode": mode, "rescue": os.environ.get("GG_INPUT_RUN_GENE_MODEL_RESCUE"), "argv": __import__("sys").argv[1:]}) + "\\n")
+plan = Path(os.environ["GG_INPUT_TASK_PLAN_OUTPUT"])
+if mode == "array_prepare":
+    plan.write_text(json.dumps({"task_count": 2, "tasks": [{"species_prefix": "A_b"}, {"species_prefix": "C_d"}]}))
+    Path(str(plan) + ".settings.json").write_text("{}")
+    Path(str(plan) + ".prepared.json").write_text(json.dumps({"plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(), "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
+if mode == "array_finalize":
+    root = Path(os.environ["GG_INPUT_GENE_MODEL_RESCUE_DIR"])
+    root.mkdir(exist_ok=True)
+    (root / "plan.json").write_text(json.dumps({"species": ["A_b", "C_d"], "synteny_jobs": [{"index": i, "id": str(i)} for i in range(1, 4)]}))
+print({"array_prepare": 101, "array_worker": 102, "array_finalize": 103, "rescue_synteny": 104, "rescue_models": 105, "rescue_finalize": 106}[mode])
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("TEST_CALLS", str(calls))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--submit", "--max-running", "5")
+    assert result.returncode == 0, result.stderr
+    submissions = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert [c["mode"] for c in submissions] == ["array_prepare", "array_worker", "array_finalize", "rescue_synteny", "rescue_models", "rescue_finalize"]
+    assert all(c["rescue"] == "1" for c in submissions)
+    assert "--wait" in submissions[2]["argv"]
+    assert "--array=1-3%5" in submissions[3]["argv"]
+    assert "--dependency=afterok:104" in submissions[4]["argv"]
+    assert "--array=1-2%5" in submissions[4]["argv"]
+    assert "--dependency=afterok:105" in submissions[5]["argv"]
+
+
+def test_slurm_rescue_retry_requires_qc_worker_receipt(tmp_path):
+    import hashlib
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"task_count": 1, "tasks": [{"species_prefix": "A_b"}]}))
+    Path(str(plan) + ".settings.json").write_text("{}")
+    Path(str(plan) + ".prepared.json").write_text(json.dumps({
+        "plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
+    rescue = tmp_path / "rescue"
+    rescue.mkdir()
+    (rescue / "plan.json").write_text(json.dumps({"species": ["A_b"], "synteny_jobs": []}))
+    models = rescue / "rescued" / "A_b"
+    models.mkdir(parents=True)
+    (models / "models.json").write_text("[]")
+    (models / "receipt.json").write_text(json.dumps({"key": {"plan": hashlib.sha256((rescue / "plan.json").read_bytes()).hexdigest()},
+                                                    "files": {"models.json": hashlib.sha256(b"[]").hexdigest()}}))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--rescue-output", str(rescue), "--retry")
+    assert result.returncode == 0, result.stderr
+    assert "GG_INPUT_INPUT_GENERATION_MODE=rescue_models" in result.stdout and "--array=1%8" in result.stdout
+
+
+def test_slurm_rescue_active_retry_rejects_before_submitting_any_job(tmp_path, monkeypatch):
+    import os
+    for name, contents in (("squeue", "#!/bin/sh\nprintf '123_1\\n'\n"),
+                           ("sbatch", "#!/bin/sh\ntouch \"$TEST_SUBMISSION\"\n")):
+        path = tmp_path / name
+        path.write_text(contents)
+        path.chmod(0o755)
+    submitted = tmp_path / "submitted"
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("TEST_SUBMISSION", str(submitted))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(tmp_path / "plan.json"), "--rescue", "--retry", "--submit")
+    assert result.returncode != 0 and "rescue jobs are active" in result.stderr
+    assert not submitted.exists()
+
+
+@pytest.mark.parametrize("corruption", ["foreign_job", "foreign_species", "malformed_files", "prepared",
+                                       "repaired_comparison", "repaired_prepared", "effective", "none"])
+def test_slurm_rescue_retry_checks_full_job_identity_and_artifacts(tmp_path, corruption):
+    import hashlib
+    plan = tmp_path / "task_plan.json"
+    plan.write_text(json.dumps({"task_count": 2, "tasks": [{"species_prefix": "A_b"}, {"species_prefix": "C_d"}]}))
+    Path(str(plan) + ".settings.json").write_text("{}")
+    Path(str(plan) + ".prepared.json").write_text(json.dumps({
+        "plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
+        "settings_sha256": hashlib.sha256(b"{}").hexdigest()}))
+    root = tmp_path / "rescue"
+    root.mkdir()
+    job = {"id": "comparison_000001", "index": 1, "a": "A_b", "b": "C_d", "kind": "pair"}
+    (root / "plan.json").write_text(json.dumps({"species": ["A_b", "C_d"], "synteny_jobs": [job],
+                                               "donors": {"A_b": ["C_d"], "C_d": ["A_b"]}}))
+    fingerprint = hashlib.sha256((root / "plan.json").read_bytes()).hexdigest()
+    def complete(directory, key):
+        directory.mkdir(parents=True)
+        (directory / "data").write_text("ok")
+        receipt = {"key": key, "files": {"data": hashlib.sha256(b"ok").hexdigest()}}
+        (directory / "receipt.json").write_text(json.dumps(receipt))
+        return directory / "receipt.json"
+    for n in ["A_b", "C_d"]:
+        complete(root / "prepared" / n, {"plan": fingerprint, "species": n})
+    comparison = complete(root / "synteny" / job["id"], {"plan": fingerprint, "job": job,
+                           "prepared": {n: hashlib.sha256((root / "prepared" / n / "receipt.json").read_bytes()).hexdigest()
+                                        for n in ["A_b", "C_d"]}})
+    for n in ["A_b", "C_d"]:
+        models = complete(root / "rescued" / n, {"plan": fingerprint, "species": n,
+                          "comparisons": {job["id"]: hashlib.sha256(comparison.read_bytes()).hexdigest()},
+                          "prepared": {p: hashlib.sha256((root / "prepared" / p / "receipt.json").read_bytes()).hexdigest()
+                                       for p in ["A_b", "C_d"]}})
+        effective = complete(root / "effective" / n, {"plan": fingerprint,
+                             "rescue_receipts": {n: hashlib.sha256(models.read_bytes()).hexdigest()}})
+        complete(root / "workers" / n, {"plan": fingerprint, "species": n})
+        worker = root / "workers" / n / "receipt.json"
+        payload = json.loads(worker.read_text())
+        payload["files"].update({f"../../rescued/{n}/receipt.json": hashlib.sha256(models.read_bytes()).hexdigest(),
+                                 f"../../effective/{n}/receipt.json": hashlib.sha256(effective.read_bytes()).hexdigest()})
+        worker.write_text(json.dumps(payload))
+    if corruption == "foreign_job":
+        payload = json.loads(comparison.read_text())
+        payload["key"]["job"]["id"] = "comparison_000002"
+        comparison.write_text(json.dumps(payload))
+    elif corruption == "foreign_species":
+        (root / "workers" / "C_d" / "receipt.json").write_bytes((root / "workers" / "A_b" / "receipt.json").read_bytes())
+    elif corruption == "malformed_files":
+        comparison.write_text(json.dumps({"key": {"plan": fingerprint, "job": job}, "files": ["invalid"]}))
+    elif corruption == "prepared":
+        (root / "prepared" / "A_b" / "data").write_text("corrupted")
+    elif corruption != "none":
+        directory = {"repaired_comparison": comparison.parent,
+                     "repaired_prepared": root / "prepared" / "A_b",
+                     "effective": root / "effective" / "A_b"}[corruption]
+        (directory / "data").write_text("valid new result")
+        payload = json.loads((directory / "receipt.json").read_text())
+        payload["files"]["data"] = hashlib.sha256(b"valid new result").hexdigest()
+        (directory / "receipt.json").write_text(json.dumps(payload))
+    helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
+    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--rescue-output", str(root), "--retry")
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    pair_lines = [line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_synteny" in line]
+    worker_lines = [line for line in lines if "GG_INPUT_INPUT_GENERATION_MODE=rescue_models" in line]
+    if corruption == "foreign_species":
+        assert pair_lines == [] and len(worker_lines) == 1 and "--array=2%8" in worker_lines[0]
+    elif corruption == "effective":
+        assert pair_lines == [] and len(worker_lines) == 1 and "--array=1%8" in worker_lines[0]
+    elif corruption == "repaired_comparison":
+        assert pair_lines == [] and len(worker_lines) == 1 and "--array=1-2%8" in worker_lines[0]
+    elif corruption == "none":
+        assert pair_lines == [] and worker_lines == []
+    else:
+        assert len(pair_lines) == 1 and "--array=1%8" in pair_lines[0]
+        assert len(worker_lines) == 1 and "--array=1-2%8" in worker_lines[0]
+
+
 def test_workspace_rejects_second_plan_and_malformed_receipt_is_pending(tmp_path):
     state = SUPPORT_DIR / "input_generation_array_state.py"
     raw = tmp_path / "raw"

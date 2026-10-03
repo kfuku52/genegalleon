@@ -43,7 +43,8 @@
     "test_pgls_multiplicity.py",
     "test_fractionation_bias_integration.py",
     "test_gbif_runtime_integration.py",
-    "test_tree_plot_batch.py"
+    "test_tree_plot_batch.py",
+    "test_rescue_gene_models_runtime.py"
   ],
   "runtime_extra_python": [
     "workflow/tests/test_hgt_end_to_end.py",

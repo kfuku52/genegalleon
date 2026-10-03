@@ -34,6 +34,7 @@ jellyfish
 mafft
 meme
 minimap2
+miniprot
 mmseqs2
 ntcard
 omamer

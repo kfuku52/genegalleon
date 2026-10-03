@@ -21,6 +21,19 @@ source "${gg_support_dir}/gg_busco.sh"
 
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 input_generation_mode="${input_generation_mode:-single}"
+run_gene_model_rescue="${run_gene_model_rescue:-0}"
+gene_model_rescue_tree="${gene_model_rescue_tree:-auto}"
+gene_model_rescue_dir="${gene_model_rescue_dir:-}"
+gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
+gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
+gene_model_rescue_minimum_busco="${gene_model_rescue_minimum_busco:-90}"
+gene_model_rescue_minimum_coverage="${gene_model_rescue_minimum_coverage:-0.95}"
+gene_model_rescue_minimum_identity="${gene_model_rescue_minimum_identity:-0.5}"
+gene_model_rescue_max_interval="${gene_model_rescue_max_interval:-200000}"
+gene_model_rescue_max_intron="${gene_model_rescue_max_intron:-20000}"
+gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
+gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
+gene_model_rescue_gemoma_java="${gene_model_rescue_gemoma_java:-java}"
 require_cds="${require_cds:-0}"
 require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
@@ -123,9 +136,9 @@ if [[ -n "${download_manifest}" ]]; then
 fi
 
 case "${input_generation_mode}" in
-  single|array_prepare|array_worker|array_finalize) ;;
+  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize) ;;
   *)
-    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize)"
+    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize)"
     exit 1
     ;;
 esac
@@ -157,6 +170,8 @@ for binary_flag_name in \
   run_validate_inputs \
   run_cds_fx2tab \
   run_species_busco \
+  run_gene_model_rescue \
+  gene_model_rescue_genome_fallback \
   run_multispecies_summary \
   run_generate_species_trait \
   strict \
@@ -205,12 +220,16 @@ if [[ "${input_generation_mode}" != "single" && ${download_only} -eq 1 ]]; then
   echo "download_only=1 is only supported in input_generation_mode=single"
   exit 1
 fi
-if [[ "${input_generation_mode}" != "single" && ${run_format_inputs} -ne 1 ]]; then
+if [[ "${input_generation_mode}" == array_* && ${run_format_inputs} -ne 1 ]]; then
   echo "run_format_inputs must be 1 when input_generation_mode=${input_generation_mode}"
   exit 1
 fi
 
 input_generation_root="${gg_workspace_output_dir}/input_generation"
+gene_model_rescue_dir="${gene_model_rescue_dir:-${input_generation_root}/gene_model_rescue}"
+case "${gene_model_rescue_dir}" in /*) ;; *) gene_model_rescue_dir="${PWD}/${gene_model_rescue_dir}" ;; esac
+case "${gene_model_rescue_tree}" in auto|/*) ;; *) gene_model_rescue_tree="${PWD}/${gene_model_rescue_tree}" ;; esac
+case "${gene_model_rescue_gemoma_jar}" in ""|/*) ;; *) gene_model_rescue_gemoma_jar="${PWD}/${gene_model_rescue_gemoma_jar}" ;; esac
 input_generation_tmp_root="${input_generation_root}/tmp"
 # Shared across arrays and preserved when task scratch directories are cleaned.
 export download_limit_dir="${download_limit_dir:-${gg_workspace_dir}/.gg_cache/input_download_limits}"
@@ -332,7 +351,7 @@ for path in sorted(manifest_dir.iterdir()):
 PY
 }
 
-if [[ -z "${download_manifest}" && "${input_generation_mode}" != array_worker && "${input_generation_mode}" != array_finalize ]]; then
+if [[ -z "${download_manifest}" && "${input_generation_mode}" != array_worker && "${input_generation_mode}" != array_finalize && "${input_generation_mode}" != rescue_* ]]; then
   default_download_manifests=()
   while IFS= read -r discovered_manifest; do
     [[ -n "${discovered_manifest}" ]] || continue
@@ -2372,12 +2391,80 @@ run_array_finalize_mode() {
 }
 
 # Serialize shared stages against active species workers in this output workspace.
+prepare_gene_model_rescue() {
+  local rescue_tree="${gene_model_rescue_tree}"
+  local -a rescue_args=()
+  [[ "${rescue_tree}" != auto ]] || rescue_tree="${gg_workspace_output_dir}/species_taxonomy/taxonomy_tree.nwk"
+  [[ -s "${rescue_tree}" ]] || {
+    echo "Gene-model rescue requires an initial tree: set gene_model_rescue_tree or run species taxonomy." >&2
+    return 1
+  }
+  rescue_args=(plan --cds-dir "${species_cds_dir}" --gff-dir "${species_gff_dir}"
+    --genome-dir "${species_genome_dir}" --busco-dir "${species_busco_short_dir}"
+    --tree "${rescue_tree}" --output "${gene_model_rescue_dir}"
+    --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"
+    --minimum-busco "${gene_model_rescue_minimum_busco}" --minimum-coverage "${gene_model_rescue_minimum_coverage}"
+    --minimum-identity "${gene_model_rescue_minimum_identity}" --max-interval "${gene_model_rescue_max_interval}"
+    --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}")
+  [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
+  [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
+    rescue_args+=(--genetic-codes "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv")
+  python "${gg_support_dir}/rescue_gene_models.py" "${rescue_args[@]}"
+}
+
+gene_model_rescue_busco_species() {
+  # First-pass BUSCO and provenance remain frozen. Re-evaluate changed species
+  # into a separate namespace using the original shared lineage.
+  local before_busco_full="${species_busco_full_dir}"
+  local before_busco_short="${species_busco_short_dir}"
+  local species_busco_full_dir="${gene_model_rescue_dir}/qc/species_cds_busco_full"
+  local species_busco_short_dir="${gene_model_rescue_dir}/qc/species_cds_busco_short"
+  local input_generation_provenance_dir="${gene_model_rescue_dir}/qc/artifact_provenance"
+  local run_species_busco=1
+  local busco_lineage_resolved
+  local rescue_species=$1 rescue_cds=$2 changed=$3
+  busco_lineage_resolved=$(python - "${gene_model_rescue_dir}/plan.json" <<'PY'
+import json
+import sys
+plan = json.load(open(sys.argv[1]))
+print(next(iter(plan['request']['sources'].values()))['quality']['lineage'])
+PY
+)
+  ensure_dir "${species_busco_full_dir}"
+  ensure_dir "${species_busco_short_dir}"
+  ensure_dir "${input_generation_provenance_dir}"
+  if [[ "${changed}" == 0 ]]; then
+    cp -- "${before_busco_full}/${rescue_species}.busco.full.tsv" "${species_busco_full_dir}/${rescue_species}.busco.full.tsv"
+    cp -- "${before_busco_short}/${rescue_species}.busco.short.txt" "${species_busco_short_dir}/${rescue_species}.busco.short.txt"
+  else
+    run_species_busco_for_one_file "${rescue_cds}" "${rescue_species}" "${GG_TASK_CPUS}"
+  fi
+}
+
+finish_gene_model_rescue() {
+  python "${gg_support_dir}/rescue_gene_models.py" finalize --output "${gene_model_rescue_dir}"
+  local rescue_index rescue_species rescue_cds changed qc_complete rescue_qc_rows
+  rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}") || return $?
+  while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
+    if [[ "${qc_complete}" != 1 ]]; then
+      gene_model_rescue_busco_species "${rescue_species}" "${rescue_cds}" "${changed}"
+      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" --task-index "${rescue_index}"
+    fi
+  done <<< "${rescue_qc_rows}"
+  python "${gg_support_dir}/rescue_gene_models.py" qc --output "${gene_model_rescue_dir}" --busco-dir "${gene_model_rescue_dir}/qc/species_cds_busco_short"
+  echo "Augmented CDS/GFF inputs: ${gene_model_rescue_dir}/augmented/inputs.tsv"
+}
+
 ensure_dir "${input_generation_root}"
 array_lock_mode=exclusive
-if [[ "${input_generation_mode}" == array_worker ]]; then
+if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models ]]; then
   array_lock_mode=shared
 fi
 input_generation_lock "${input_generation_root}/.array-phase.lock" "${array_lock_mode}"
+if [[ ${run_gene_model_rescue} -eq 1 || "${input_generation_mode}" == rescue_* ]]; then
+  ensure_dir "${gene_model_rescue_dir}"
+  input_generation_lock "${gene_model_rescue_dir}/.array-phase.lock" "${array_lock_mode}"
+fi
 
 # Custom output directories can be shared across workspace paths. Lock their
 # canonical locations as well, and bind array outputs to one plan at prepare.
@@ -2457,6 +2544,31 @@ case "${input_generation_mode}" in
   array_finalize)
     run_array_finalize_mode
     ;;
+  rescue_prepare)
+    prepare_gene_model_rescue
+    ;;
+  rescue_synteny|rescue_models)
+    write_run_summary_on_exit=0
+    if [[ "${input_generation_mode}" == rescue_models ]]; then
+      [[ "${GG_ARRAY_TASK_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid rescue worker index" >&2; exit 1; }
+      ensure_dir "${gene_model_rescue_dir}/core-worker-locks"
+      input_generation_lock "${gene_model_rescue_dir}/core-worker-locks/${GG_ARRAY_TASK_ID}.lock" exclusive
+    fi
+    rescue_subcommand=synteny
+    [[ "${input_generation_mode}" != rescue_models ]] || rescue_subcommand=rescue
+    python "${gg_support_dir}/rescue_gene_models.py" "${rescue_subcommand}" --output "${gene_model_rescue_dir}" \
+      --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}"
+    if [[ "${input_generation_mode}" == rescue_models ]]; then
+      rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}") || exit $?
+      while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
+        gene_model_rescue_busco_species "${rescue_species}" "${rescue_cds}" "${changed}"
+      done <<< "${rescue_qc_rows}"
+      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}"
+    fi
+    ;;
+  rescue_finalize)
+    finish_gene_model_rescue
+    ;;
 esac
 
 # Species taxonomy uses the current input set and preserves completed output on failure.
@@ -2473,6 +2585,14 @@ if [[ ${run_species_taxonomy} -eq 1 && ( "${input_generation_mode}" == single ||
     --taxid-override "${taxonomy_taxid_override}" \
     --species-dir "${species_cds_dir}" \
     "${taxonomy_summary_args[@]}" || exit $?
+fi
+
+if [[ ${run_gene_model_rescue} -eq 1 && ( "${input_generation_mode}" == single || "${input_generation_mode}" == array_finalize ) && ${dry_run} -ne 1 && ${download_only} -ne 1 ]]; then
+  prepare_gene_model_rescue
+  if [[ "${input_generation_mode}" == single ]]; then
+    python "${gg_support_dir}/rescue_gene_models.py" run --output "${gene_model_rescue_dir}" --cpus "${GG_TASK_CPUS}"
+    finish_gene_model_rescue
+  fi
 fi
 
 if [[ ${cleanup_input_generation_tmp} -eq 1 && -d "${download_tmp_root}" ]]; then

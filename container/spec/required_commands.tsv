@@ -24,6 +24,7 @@ base	mafft
 base	makeblastdb
 base	mapnh
 base	minimap2
+base	miniprot
 base	mcmctree
 base	meme
 base	mmseqs

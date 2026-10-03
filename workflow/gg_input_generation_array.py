@@ -40,6 +40,14 @@ def ensure_no_active_legacy_worker_array():
         )
 
 
+def ensure_no_active_rescue_array():
+    result = subprocess.run(["squeue", "--noheader", "--me", "--name",
+                             "gg_input_rescue_synteny,gg_input_rescue_models,gg_input_rescue_finalize", "--format", "%i"],
+                            capture_output=True, text=True, check=False)
+    if result.returncode or result.stdout.strip():
+        raise RuntimeError("Cannot submit rescue retry while rescue jobs are active or scheduler status is unavailable")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-plan", required=True)
@@ -53,6 +61,8 @@ def main():
     parser.add_argument("--time", default="3-00:00:00")
     parser.add_argument("--partition", default="", help="Slurm partition (default: scheduler default)")
     parser.add_argument("--retry", action="store_true", help="Skip prepare and submit only workers without verified receipts")
+    parser.add_argument("--rescue", action="store_true", help="After initial finalize, submit sparse synteny -> species rescue -> rescue finalize arrays")
+    parser.add_argument("--rescue-output", type=Path, help="Rescue directory; default: TASK_PLAN parent/../gene_model_rescue")
     parser.add_argument("--submit", action="store_true", help="Submit jobs; default prints a dry-run preview")
     args = parser.parse_args()
     if min(args.cpus, args.max_running, args.prepare_cpus if args.prepare_cpus is not None else args.cpus) < 1:
@@ -60,6 +70,12 @@ def main():
     plan_path = Path(args.task_plan).expanduser().resolve()
     env = os.environ.copy()
     env["GG_INPUT_TASK_PLAN_OUTPUT"] = str(plan_path)
+    rescue_output = (args.rescue_output or plan_path.parent.parent / "gene_model_rescue").resolve()
+    if args.rescue:
+        env["GG_INPUT_RUN_GENE_MODEL_RESCUE"] = "1"
+        env["GG_INPUT_GENE_MODEL_RESCUE_DIR"] = str(rescue_output)
+        if args.retry and args.submit:
+            ensure_no_active_rescue_array()
 
     def command(mode, extra):
         preparing = mode == "array_prepare"
@@ -75,7 +91,8 @@ def main():
 
     def dispatch(mode, extra):
         cmd = command(mode, extra)
-        print("GG_INPUT_TASK_PLAN_OUTPUT=" + shlex.quote(str(plan_path)) + " GG_INPUT_INPUT_GENERATION_MODE=" + mode + " " + shlex.join(cmd), flush=True)
+        rescue_env = ("GG_INPUT_RUN_GENE_MODEL_RESCUE=1 GG_INPUT_GENE_MODEL_RESCUE_DIR=" + shlex.quote(str(rescue_output)) + " ") if args.rescue else ""
+        print(rescue_env + "GG_INPUT_TASK_PLAN_OUTPUT=" + shlex.quote(str(plan_path)) + " GG_INPUT_INPUT_GENERATION_MODE=" + mode + " " + shlex.join(cmd), flush=True)
         if not args.submit:
             return "WORKER_JOB_ID"
         result = subprocess.run(cmd, env={**env, "GG_INPUT_INPUT_GENERATION_MODE": mode}, capture_output=True, text=True, check=False)
@@ -109,7 +126,62 @@ def main():
         if args.retry and args.submit and pending:
             ensure_no_active_legacy_worker_array()
         worker_id = dispatch("array_worker", ["--array=" + array_expression(pending) + "%" + str(args.max_running)]) if pending else ""
-    dispatch("array_finalize", (["--dependency=afterok:" + worker_id] if worker_id else []))
+    dispatch("array_finalize", (["--dependency=afterok:" + worker_id] if worker_id else []) + (["--wait"] if args.rescue else []))
+    if args.rescue:
+        rescue_plan = rescue_output / "plan.json"
+        if not rescue_plan.exists():
+            if args.submit:
+                parser.error("Rescue plan missing after initial finalize: " + str(rescue_plan))
+            print("After initial finalize, read " + str(rescue_plan) + " for P comparisons and S species.")
+            pair_id = dispatch("rescue_synteny", ["--array=1-P%" + str(args.max_running)])
+            species_id = dispatch("rescue_models", ["--dependency=afterok:" + pair_id, "--array=1-S%" + str(args.max_running)])
+        else:
+            rescue = json.loads(rescue_plan.read_text())
+            plan_hash = digest(rescue_plan)
+            def done(directory, key):
+                try:
+                    receipt = json.loads((directory / "receipt.json").read_text())
+                    return isinstance(receipt, dict) and receipt.get("key") == key and isinstance(receipt.get("files"), dict) and bool(receipt["files"]) and all(
+                        isinstance(p, str) and isinstance(value, str) and
+                        (directory / p).is_file() and digest(directory / p) == value for p, value in receipt["files"].items())
+                except (OSError, ValueError):
+                    return False
+            pending_prepared = {n for n in rescue["species"] if not done(rescue_output / "prepared" / n, {"plan": plan_hash, "species": n})}
+            def comparison_done(job):
+                try:
+                    key = {"plan": plan_hash, "job": job,
+                           "prepared": {n: digest(rescue_output / "prepared" / n / "receipt.json")
+                                        for n in sorted({job["a"], job["b"]})}}
+                    return done(rescue_output / "synteny" / job["id"], key)
+                except (OSError, ValueError, KeyError, TypeError):
+                    return False
+            pairs = [j["index"] for j in rescue["synteny_jobs"] if not args.retry
+                     or not comparison_done(j)
+                     or j.get("a") in pending_prepared or j.get("b") in pending_prepared]
+            def worker_done(name):
+                try:
+                    donors = rescue["donors"][name]
+                    jobs = [j for j in rescue["synteny_jobs"] if name in {j["a"], j["b"]}
+                            and (j["a"] == j["b"] or (j["b"] if name == j["a"] else j["a"]) in donors)]
+                    key = {"plan": plan_hash, "species": name,
+                           "comparisons": {j["id"]: digest(rescue_output / "synteny" / j["id"] / "receipt.json") for j in jobs},
+                           "prepared": {n: digest(rescue_output / "prepared" / n / "receipt.json") for n in [name, *donors]}}
+                    if not done(rescue_output / "rescued" / name, key):
+                        return False
+                    effective_key = {"plan": plan_hash, "rescue_receipts": {
+                        name: digest(rescue_output / "rescued" / name / "receipt.json")}}
+                    return (done(rescue_output / "effective" / name, effective_key)
+                            and done(rescue_output / "workers" / name, {"plan": plan_hash, "species": name}))
+                except (OSError, ValueError, KeyError, TypeError):
+                    return False
+            # A repaired comparison can change candidate evidence. Revisit all
+            # species after comparison retries; workers verify their own caches.
+            species = [i for i, n in enumerate(rescue["species"], 1)
+                       if pairs or not args.retry or not worker_done(n)]
+            pair_id = dispatch("rescue_synteny", ["--array=" + array_expression(pairs) + "%" + str(args.max_running)]) if pairs else ""
+            species_id = dispatch("rescue_models", (["--dependency=afterok:" + pair_id] if pair_id else []) +
+                                  ["--array=" + array_expression(species) + "%" + str(args.max_running)]) if species else ""
+        dispatch("rescue_finalize", ["--dependency=afterok:" + species_id] if species_id else [])
 
 
 if __name__ == "__main__":

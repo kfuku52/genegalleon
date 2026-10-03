@@ -33,6 +33,7 @@ kallisto
 mafft
 meme
 minimap2
+miniprot
 mmseqs2
 ntcard
 orthofinder

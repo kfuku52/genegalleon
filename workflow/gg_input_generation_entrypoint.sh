@@ -98,6 +98,19 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Workflow flags
+run_gene_model_rescue=0 # Opt-in sparse synteny/model rescue after initial formatting, BUSCO and taxonomy.
+gene_model_rescue_tree="auto" # External initial species tree, or auto for output/species_taxonomy/taxonomy_tree.nwk.
+gene_model_rescue_dir="" # Rescue outputs; blank uses output/input_generation/gene_model_rescue.
+gene_model_rescue_common_references=5 # Common high-BUSCO species selected by NWKIT max-pd.
+gene_model_rescue_nearest_references=3 # Additional nearest species per target; redundant pairs are computed once.
+gene_model_rescue_minimum_busco=90 # Minimum complete BUSCO percentage for common references; S+D, same dataset/version/mode.
+gene_model_rescue_minimum_coverage=0.95 # Minimum donor protein coverage for automatic model acceptance.
+gene_model_rescue_minimum_identity=0.5 # Minimum protein identity for automatic model acceptance.
+gene_model_rescue_max_interval=200000 # Maximum interval between target flanking anchors, in bp.
+gene_model_rescue_max_intron=20000 # Maximum intron size for miniprot, in bp.
+gene_model_rescue_genome_fallback=1 # Search unresolved syntenic candidates across the target genome; outside-block hits remain unresolved.
+gene_model_rescue_gemoma_jar="" # Optional GeMoMa refinement jar; blank uses miniprot alone.
+gene_model_rescue_gemoma_java="java" # Java executable compatible with the supplied GeMoMa jar; GeMoMa 1.9 requires a JavaScript engine.
 run_species_taxonomy=1 # Resolve NCBI taxonomic ranks and plot them on the available species tree or an NCBI taxonomy tree.
 run_format_inputs=1 # Format local inputs or download-manifest targets into workspace layout.
 run_validate_inputs=1 # Validate formatted inputs before downstream workflows use them.
@@ -116,7 +129,7 @@ taxonomy_taxid_override="" # One explicit species:TaxID correction for a schedul
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.
-input_generation_mode="single" # single=all stages | array_prepare=download together and freeze local tasks | array_worker=compute one species per GG_ARRAY_TASK_ID | array_finalize=merge shards and run shared validation/summaries.
+input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_finalize. Workers use GG_ARRAY_TASK_ID.
 species_busco_parallel_jobs="auto" # In single mode, auto runs up to four species BUSCO jobs within GG_TASK_CPUS; array_worker still runs one species per task.
 species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BUSCO species job; parallelism is capped by GG_MEM_TOOL_GB / this value.
 trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.
