@@ -575,6 +575,7 @@ def build_gff_cds_grouping_index(task):
         "transcript_gene_tokens": dict(resolved_gene_tokens),
         "ambiguous_transcript_gene_tokens": dict(ambiguous_gene_tokens_by_transcript),
         "transcripts_total": len(aliases_by_transcript),
+        "rescued_transcript_gene_tokens": {tid: resolved_gene_tokens[tid] for tid in rescued_transcripts},
         "coordinate_rescued_transcripts": len(rescued_transcripts),
         "coordinate_rescued_groups": len(
             {

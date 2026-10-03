@@ -4827,6 +4827,20 @@ def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, 
     assert result['after_count'] == 1
     assert text.splitlines()[0] == '>Test_species_a'
     assert len(text.splitlines()[1]) == 30
+    formatted = mod.format_gff(task, tmp_path, False, False, formatted_cds_path=result['output_path'])
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import gff2genestat as reader
+    rows = reader.process_single_gff(formatted['output_path'].name, str(tmp_path), ['Test_species_a'],
+                                    'CDS', 'longest',
+                                    ['sequence','source','feature','start','end','score','strand','phase','attributes'],
+                                    ['gene_id','feature_size','feature_blocks','chromosome','start','end','strand','feature_type'])
+    assert rows.gene_id.tolist() == ['Test_species_a']
+    assert rows.feature_size.tolist() == [30]
+    original_rows = [line.split('\t') for line in gff.read_text().splitlines()]
+    output_rows = [line.split('\t') for line in gzip.open(formatted['output_path'], 'rt').read().splitlines()]
+    assert [r[:8] for r in output_rows] == [r[:8] for r in original_rows]
+    for original, output in zip(original_rows, output_rows, strict=True):
+        assert output[8].startswith(original[8])
 
 
 @pytest.mark.parametrize('strict', [False, True])

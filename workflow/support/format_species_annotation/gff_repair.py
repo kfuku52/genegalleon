@@ -22,6 +22,7 @@ from .common import (
     sanitize_identifier,
 )
 from .genbank import _coge_export_transcript, duplicate_coge_model_ids
+from .grouping import build_gff_cds_grouping_index
 from .organelle import (
     count_organelle_gff_features,
     gff_data_line_is_organelle,
@@ -31,7 +32,7 @@ from .organelle import (
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 8
+GFF_REPAIR_VERSION = 9
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -371,7 +372,7 @@ def canonicalize_coge_cds_attributes(parts, features, names):
     return ";".join(rewritten), changed
 
 
-def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False):
+def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False, rescued_genes=None):
     coge_features, coge_names = {}, {}
     duplicate_features = duplicate_coge_model_ids(gff_path) if coge else set()
     for line in iter_non_organelle_gff_lines(gff_path):
@@ -386,6 +387,24 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             continue
         feature_type = parts[2].strip().lower()
         coge_changes = 0
+        rescued_changes = 0
+        if rescued_genes:
+            attrs = parse_gff_attributes(parts[8])
+            identifiers = attrs.get("ID", ()) if feature_type != "cds" else attrs.get("Parent", ())
+            if feature_type == "cds" and not identifiers and parts[1].strip().lower() == "coge":
+                identifiers = attrs.get("Name", ())
+            owners = {rescued_genes[identifier] for identifier in identifiers if identifier in rescued_genes}
+            if owners:
+                if len(owners) != 1 or any(identifier not in rescued_genes for identifier in identifiers):
+                    raise ValueError("Conflicting rescued GFF gene owners: " + parts[8])
+                owner = next(iter(owners))
+                existing = attrs.get("gene_id", ())
+                if existing and existing != (owner,):
+                    raise ValueError("Rescued GFF gene conflicts with explicit gene_id: " + parts[8])
+                if not existing:
+                    parts[8] = parts[8].rstrip(";") + ";gene_id=" + quote(owner, safe="._:-|")
+                    rescued_changes = 1
+                    counters["rescued_gene_annotations"] = counters.get("rescued_gene_annotations", 0) + 1
         if feature_type == "cds":
             if coge and parts[1].strip().lower() == "coge":
                 attrs = parse_gff_attributes(parts[8])
@@ -403,10 +422,10 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             feature_type,
             id_mapping,
         )
-        if value_changes > 0 or normalized_bare > 0 or coge_changes > 0:
+        if value_changes > 0 or normalized_bare > 0 or coge_changes > 0 or rescued_changes > 0:
             parts[8] = attributes
             counters["changed_lines"] += 1
-            counters["changed_values"] += value_changes + coge_changes
+            counters["changed_values"] += value_changes + coge_changes + rescued_changes
             counters["changed_references"] += reference_changes
             counters["normalized_bare_attribute_lines"] += normalized_bare
             line = "\t".join(parts) + newline
@@ -441,6 +460,17 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             )
         )
 
+    rescued_genes = {}
+    if mode != "off" and source_task is not None:
+        index = build_gff_cds_grouping_index(source_task)
+        if index is not None:
+            rescued_owners = set(index["rescued_transcript_gene_tokens"].values())
+            rescued_genes = {
+                transcript: sanitize_identifier(gene)
+                for transcript, gene in index["transcript_gene_tokens"].items()
+                if gene in rescued_owners and sanitize_identifier(gene) in cds_gene_ids
+            }
+        del index
     counters = {
         "changed_lines": 0,
         "changed_values": 0,
@@ -452,6 +482,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         iter_repaired_gff_lines(
             gff_path, plan["id_mapping"], counters, confirmed_overlaps,
             coge=mode != "off" and (source_task or {}).get("provider") == "coge",
+            rescued_genes=rescued_genes,
         ),
     )
     status = (
@@ -480,6 +511,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "cds_gene_ids": plan["cds_gene_ids"],
         "gene_features": plan["gene_features"],
         "renamed_gene_ids": len(plan["id_mapping"]),
+        "rescued_gene_annotations": counters.get("rescued_gene_annotations", 0),
         "changed_lines": counters["changed_lines"],
         "changed_values": counters["changed_values"],
         "changed_references": counters["changed_references"],

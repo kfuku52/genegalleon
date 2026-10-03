@@ -515,14 +515,16 @@ Notes:
 - `--gene-grouping-mode rescue_overlap` (the entrypoint default) merges only
   compatible overlapping/fragmented models that do not cross strands or
   authoritative locus boundaries; an existing gene group remains intact when
-  an overlapping model is rescued. `strict` keeps provider model boundaries,
+  an overlapping model is rescued. Formatted GFF records the same rescued
+  owner in `gene_id` without changing source IDs, parents, or coordinates.
+  `strict` keeps provider model boundaries,
 - parentless transcript/CDS names ending in `.tN`, `.mRNAN`, or other supported
   transcript suffixes infer a shared gene only when their CDS intervals form a
   connected locus on the same sequence and strand. This applies to both provided
   and GFF-derived CDS, in both grouping modes. Explicit gene identities take
   precedence. Disconnected coding loci retain separate source transcript IDs
   and emit a warning for review; suffix similarity alone does not delete them,
-- formatting contract 13 invalidates earlier formatting provenance. Use
+- formatting contract 14 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,
@@ -910,7 +912,7 @@ use the Btu rule. The parentless Lavan export restores genes from its documented
 author gene-number / isoform-number IDs, including disjoint alternative coding
 regions within the same author gene. Different contigs or strands remain separate.
 Mixed naming conventions, unknown parents and inconsistent feature coordinates
-fail. Formatter contract 13 rebuilds old format checkpoints.
+fail. Formatter contract 14 rebuilds old format checkpoints.
 
 Formatted GFF contains annotations only. Parsers stop at the GFF3 `##FASTA`
 directive; embedded genomic FASTA is retained in the untouched source and the
