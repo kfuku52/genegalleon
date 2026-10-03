@@ -616,6 +616,14 @@ def transcript_ids(attributes, gene_id):
     match = re.search(r'(?:^|;)\s*transcript_id(?:=|\s+)\s*([^;]+)', str(attributes))
     if match:
         return (normalize_attribute_value(match.group(1)),)
+    # Parentless CoGe CDS exports use one internal feature identity for all
+    # exons of a transcript. Keep alternative models separate before longest
+    # selection, even when both now map to the same canonical gene ID.
+    coge_ids = _parse_gff_attributes(attributes).get("coge_fid", [])
+    if coge_ids:
+        if len(coge_ids) != 1 or not coge_ids[0].isdigit():
+            raise ValueError(f"Ambiguous CoGe CDS feature identity for {gene_id}")
+        return ("coge_fid:" + coge_ids[0],)
     # Some prokaryotic CDS features attach directly to their gene.
     return (gene_id,)
 

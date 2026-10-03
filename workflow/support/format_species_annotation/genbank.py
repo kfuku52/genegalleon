@@ -18,8 +18,8 @@ except Exception:  # pragma: no cover - runtime without biopython
 from .common import (
     build_gff_genome_seqid_map,
     choose_first_gff_attribute,
-    collapse_transcript_suffix,
     first_token,
+    has_explicit_feature_gene_identity,
     load_genome_sequences,
     parse_gff_attributes,
     resolve_feature_gene_token,
@@ -29,6 +29,11 @@ from .common import (
 )
 from .grouping import (
     build_rescued_gene_tokens_for_transcripts,
+    build_suffix_gene_tokens_for_transcripts,
+)
+from .grouping_identity import (
+    gff_authoritative_gene_token,
+    resolve_grouping_feature_authoritative_gene_tokens,
 )
 from .organelle import gff_organelle_seqids
 
@@ -353,6 +358,8 @@ def derive_cds_records_from_gff_and_genome(task):
     cds_features_by_transcript = defaultdict(list)
     utr_features_by_transcript = defaultdict(list)
     gene_cache = {}
+    explicit_gene_transcripts = set()
+    authoritative_gene_tokens = defaultdict(set)
     coge_features, coge_names = {}, {}
     coge_models = defaultdict(lambda: defaultdict(list))
     organelle_seqids = gff_organelle_seqids(gff_path)
@@ -381,6 +388,7 @@ def derive_cds_records_from_gff_and_genome(task):
                     "feature_type": feature_type_lower,
                     "parents": parents,
                     "attrs": attrs,
+                    "authoritative_gene_tokens": tuple(filter(None, (gff_authoritative_gene_token(attrs),))),
                 }
             if feature_type_lower in ("five_prime_utr", "three_prime_utr"):
                 try:
@@ -433,16 +441,11 @@ def derive_cds_records_from_gff_and_genome(task):
             )
             for transcript_id in transcript_ids:
                 gene_token = explicit_gene
-                if gene_token == "":
-                    gene_token = resolve_feature_gene_token(
-                        transcript_id,
-                        feature_records,
-                        task["provider"],
-                        gene_cache,
-                        set(),
-                    )
-                if gene_token == "":
-                    gene_token = collapse_transcript_suffix(task["provider"], transcript_id)
+                if explicit_gene:
+                    explicit_gene_transcripts.add(transcript_id)
+                authoritative = gff_authoritative_gene_token(attrs)
+                if authoritative:
+                    authoritative_gene_tokens[transcript_id].add(authoritative)
                 feature = {
                         "seqid": str(seqid or "").strip(),
                         "start": start,
@@ -476,8 +479,34 @@ def derive_cds_records_from_gff_and_genome(task):
     # the existing empty-result contract without loading a huge genome first.
     if not cds_features_by_transcript:
         return
+    explicit_cache = {}
+    authoritative_cache = {}
+    for transcript, features in cds_features_by_transcript.items():
+        authoritative_gene_tokens[transcript].update(
+            resolve_grouping_feature_authoritative_gene_tokens(
+                transcript, feature_records, authoritative_cache, set(),
+            )
+        )
+        inferred = resolve_feature_gene_token(
+            transcript, feature_records, task["provider"], gene_cache, set(),
+        )
+        for feature in features:
+            if not feature["gene_token"]:
+                feature["gene_token"] = inferred
+    explicit_gene_transcripts.update(
+        transcript for transcript in cds_features_by_transcript
+        if has_explicit_feature_gene_identity(transcript, feature_records, explicit_cache)
+    )
+    suffix_tokens = build_suffix_gene_tokens_for_transcripts(
+        task, cds_features_by_transcript, explicit_gene_transcripts,
+    )
+    for transcript, features in cds_features_by_transcript.items():
+        for feature in features:
+            feature["gene_token"] = suffix_tokens[transcript]
     genome_sequences = load_genome_sequences(genome_path)
-    rescued_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
+    rescued_gene_tokens = build_rescued_gene_tokens_for_transcripts(
+        task, cds_features_by_transcript, authoritative_gene_tokens,
+    )
     required_gff_seqids = {
         feature["seqid"]
         for features in cds_features_by_transcript.values()

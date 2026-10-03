@@ -512,6 +512,16 @@ Notes:
 - `--gene-grouping-mode rescue_overlap` (the entrypoint default) merges only
   compatible overlapping/fragmented models that do not cross strands or
   authoritative locus boundaries; `strict` keeps provider model boundaries,
+- parentless transcript/CDS names ending in `.tN`, `.mRNAN`, or other supported
+  transcript suffixes infer a shared gene only when their CDS intervals form a
+  connected locus on the same sequence and strand. This applies to both provided
+  and GFF-derived CDS, in both grouping modes. Explicit gene identities take
+  precedence. Disconnected coding loci retain separate source transcript IDs
+  and emit a warning for review; suffix similarity alone does not delete them,
+- formatting contract 11 invalidates earlier formatting provenance. Use
+  `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
+  from the existing sources; an explicit `reuse` keeps the older artifact and
+  does not apply this grouping correction,
 - GFF-backed CDS grouping writes `*.fa.gz.gff-grouping.json` and
   `*.fa.gz.gff-grouping.tsv` audit files beside the formatted CDS, including
   mapping status and the selected representative for every input record,

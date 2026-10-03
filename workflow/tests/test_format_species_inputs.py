@@ -1205,6 +1205,124 @@ def test_coge_export_rejects_conflicting_source_models(tmp_path, second):
         }))
 
 
+@pytest.mark.parametrize("provider,suffix", [("direct", ".t"), ("coge", ".mRNA")])
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+@pytest.mark.parametrize("provided_cds", [False, True])
+def test_orphan_transcript_suffixes_select_one_longest_at_shared_coding_locus(
+    tmp_path, provider, suffix, mode, provided_cds,
+):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    genome.write_text(">chr1\nATGAAACCC\n")
+    t1, t2 = "locusX" + suffix + "1", "locusX" + suffix + "2"
+    if provider == "direct":
+        rows = [
+            f"chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID={t1}",
+            f"chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds1;Parent={t1}",
+            f"chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID={t2}",
+            f"chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=cds2;Parent={t2}",
+        ]
+    else:
+        rows = [
+            f"chr1\tCoGe\tCDS\t1\t9\t.\t+\t.\tID={t1};Name={t1};coge_fid=1",
+            f"chr1\tCoGe\tCDS\t1\t6\t.\t+\t.\tID={t2};Name={t2};coge_fid=2",
+        ]
+    gff.write_text("\n".join(rows) + "\n")
+    task = dict(provider=provider, species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode=mode, gff_repair_mode="safe")
+    if provided_cds:
+        cds = tmp_path / "raw.fa"
+        cds.write_text(f">{t1}\nATGAAACCC\n>{t2}\nATGAAA\n")
+        task["cds_path"] = cds
+    output = tmp_path / "cds"
+    output.mkdir()
+    result = mod.format_cds(task, output, False, False)
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.read() == ">Test_species_locusX\nATGAAACCC\n"
+    gff_output = tmp_path / "gff"
+    gff_output.mkdir()
+    formatted_gff = mod.format_gff(task, gff_output, False, False, formatted_cds_path=result["output_path"])
+    from validate_cds_gff_mapping import validate_single_species
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=result["output_path"], gff_file=formatted_gff["output_path"], strict=True), 10)
+    assert mapping["ok"], json.dumps(mapping)
+
+
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+@pytest.mark.parametrize("provided_cds", [False, True])
+def test_orphan_suffixes_preserve_disjoint_or_opposite_strand_coding_loci(tmp_path, mode, provided_cds):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    genome.write_text(">chr1\nATGAAACCCGGGTTTAAACCC\n>chr2\nATGAAACCC\n")
+    # Shared transcript span alone is insufficient; these CDSs are disjoint.
+    models = [("locusX.t1", "chr1", "+", 1, 6), ("locusX.t2", "chr1", "+", 10, 15),
+              ("locusX.t3", "chr1", "-", 1, 6), ("locusX.t4", "chr2", "+", 1, 6)]
+    rows = []
+    for tid, axis, strand, start, end in models:
+        rows.extend([
+            f"{axis}\tsrc\tmRNA\t1\t21\t.\t{strand}\t.\tID={tid}",
+            f"{axis}\tsrc\tCDS\t{start}\t{end}\t.\t{strand}\t0\tID=cds-{tid};Parent={tid}",
+        ])
+    gff.write_text("\n".join(rows) + "\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode=mode)
+    if provided_cds:
+        cds = tmp_path / "raw.fa"
+        cds.write_text("".join(f">{tid}\nATGAAA\n" for tid, *_ in models))
+        task["cds_path"] = cds
+    output = tmp_path / "cds"
+    output.mkdir()
+    result = mod.format_cds(task, output, False, False)
+    records = dict(mod.iter_fasta_records(result["output_path"]))
+    assert set(records) == {"Test_species_" + tid for tid, *_ in models}
+
+
+def test_suffix_grouping_keeps_explicit_gene_ids_and_connected_components(tmp_path):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    genome.write_text(">chr1\n" + "ATG" * 12 + "\n")
+    gff.write_text(
+        "chr1\tsrc\tmRNA\t1\t12\t.\t+\t.\tID=X.t1;gene_id=first\n"
+        "chr1\tsrc\tCDS\t1\t12\t.\t+\t0\tID=c1;Parent=X.t1\n"
+        "chr1\tsrc\tmRNA\t1\t12\t.\t+\t.\tID=X.t2;gene_id=second\n"
+        "chr1\tsrc\tCDS\t1\t12\t.\t+\t0\tID=c2;Parent=X.t2\n"
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=Y.t1\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c3;Parent=Y.t1\n"
+        "chr1\tsrc\tmRNA\t7\t15\t.\t+\t.\tID=Y.t2\n"
+        "chr1\tsrc\tCDS\t7\t15\t.\t+\t0\tID=c4;Parent=Y.t2\n"
+        "chr1\tsrc\tmRNA\t13\t21\t.\t+\t.\tID=Y.t3\n"
+        "chr1\tsrc\tCDS\t13\t21\t.\t+\t0\tID=c5;Parent=Y.t3\n"
+    )
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode="rescue_overlap")
+    records = dict(mod.derive_cds_records_from_gff_and_genome(task))
+    assert set(records) == {"X.t1 [gene=first]", "X.t2 [gene=second]",
+                            "Y.t1 [gene=Y]", "Y.t2 [gene=Y]", "Y.t3 [gene=Y]"}
+
+
+def test_orphan_suffix_does_not_collide_with_explicit_gene_or_late_parent(tmp_path):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
+    genome.write_text(">chr1\n" + "ATG" * 10 + "\n")
+    gff.write_text(
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=late.t1;Parent=actual_gene\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c1;Parent=late.t1\n"
+        "chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID=X.t1\n"
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=c2;Parent=X.t1\n"
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=X.t2\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c3;Parent=X.t2\n"
+        "chr1\tsrc\tCDS\t20\t28\t.\t+\t0\tID=explicit;gene_id=X\n"
+        "chr1\tsrc\tCDS\t10\t18\t.\t+\t0\tID=Z.t1\n"
+        "chr1\tsrc\tCDS\t22\t30\t.\t+\t0\tID=explicit_z;gene_id=Z\n"
+        "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=actual_gene\n"
+    )
+    task = dict(provider="direct", species_key="Test_species", gff_path=gff, genome_path=genome)
+    records = dict(mod.derive_cds_records_from_gff_and_genome(task))
+    assert set(records) == {"late.t1 [gene=actual_gene]", "explicit [gene=X]",
+                            "X.t1 [gene=X.t1]", "X.t2 [gene=X.t1]",
+                            "Z.t1 [gene=Z.t1]", "explicit_z [gene=Z]"}
+
+
 def test_non_coge_parentless_cds_preserves_distinct_feature_ids(tmp_path):
     mod = load_module()
     genome = tmp_path / "genome.fa"

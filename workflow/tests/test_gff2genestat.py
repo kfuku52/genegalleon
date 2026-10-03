@@ -52,6 +52,21 @@ def test_gff_sequence_identifiers_remain_literal_through_genomic_extraction(tmp_
     assert extract_genomic_candidates(traits, genome) == {identifier: 'ATGAAATAA' for identifier in identifiers}
 
 
+def test_parentless_coge_isoforms_are_separate_models_before_longest_selection(tmp_path):
+    gff = tmp_path / "Test_species.gff"
+    gff.write_text(
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t0\tID=X.mRNA1;Name=X.mRNA1;coge_fid=1\n"
+        "chr1\tCoGe\tCDS\t7\t12\t.\t+\t0\tID=X.mRNA1.CDS2;Name=X.mRNA1;coge_fid=1\n"
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t0\tID=X.mRNA2;Name=X.mRNA2;coge_fid=2\n"
+        "chr1\tCoGe\tCDS\t7\t9\t.\t+\t0\tID=X.mRNA2.CDS2;Name=X.mRNA2;coge_fid=2\n"
+    )
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    rows = process_single_gff(gff.name, str(tmp_path), ['Test_species_X'], 'CDS', 'longest', columns, OUT_COLS)
+    assert rows.gene_id.tolist() == ['Test_species_X']
+    assert rows.feature_size.tolist() == [9]
+    assert rows.feature_blocks.tolist() == ['1-3;7-12']
+
+
 def test_gff_identifier_conversion_keeps_other_missing_values_and_numeric_columns(tmp_path):
     from workflow.support.gff2genestat import read_gff_table
 

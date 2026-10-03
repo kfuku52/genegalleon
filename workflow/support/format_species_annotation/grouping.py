@@ -2,6 +2,7 @@
 
 import heapq
 import re
+import sys
 from collections import defaultdict
 
 try:
@@ -26,6 +27,7 @@ from .common import (
     extract_provider_transcript_id,
     first_token,
     gene_grouping_mode_for_task,
+    has_explicit_feature_gene_identity,
     merge_coordinate_intervals,
     parse_gff_attributes,
     transcript_feature_gene_token,
@@ -372,6 +374,26 @@ def build_gff_cds_grouping_index(task):
         candidate_gene_tokens_by_transcript[transcript_id] = candidate_gene_tokens
         if len(candidate_gene_tokens) > 1:
             ambiguous_gene_tokens_by_transcript[transcript_id] = candidate_gene_tokens
+    explicit_cache = {}
+    inferred_features = {}
+    protected_transcripts = set()
+    for transcript_id, features in cds_features_by_transcript.items():
+        tokens = candidate_gene_tokens_by_transcript.get(transcript_id, ())
+        if (
+            len(tokens) != 1
+            or resolved_authoritative_gene_tokens.get(transcript_id)
+            or fallback_gene_tokens.get(transcript_id)
+            or has_explicit_feature_gene_identity(transcript_id, feature_records, explicit_cache)
+        ):
+            protected_transcripts.add(transcript_id)
+        for feature in features:
+            feature["gene_token"] = tokens[0] if len(tokens) == 1 else ""
+        inferred_features[transcript_id] = features
+    suffix_tokens = build_suffix_gene_tokens_for_transcripts(task, inferred_features, protected_transcripts)
+    for transcript_id, token in suffix_tokens.items():
+        if transcript_id not in protected_transcripts:
+            candidate_gene_tokens_by_transcript[transcript_id] = (token,)
+
     if use_coordinate_rescue:
         for transcript_id, features in cds_features_by_transcript.items():
             candidate_gene_tokens = candidate_gene_tokens_by_transcript.get(transcript_id, ())
@@ -745,6 +767,85 @@ def should_rescue_overlapping_transcripts(left, right):
     ):
         return True
     return False
+
+
+def build_suffix_gene_tokens_for_transcripts(task, cds_features_by_transcript, protected_transcripts=()):
+    """Infer orphan transcript stems only within connected coding loci.
+
+    Explicit gene identities are preserved. The same suffix stem on disjoint
+    coding intervals, another sequence, or another strand remains separate.
+    This naming rule is independent of the optional model-overlap rescue.
+    """
+    resolved = {
+        transcript: transcript_feature_gene_token(features)
+        for transcript, features in cds_features_by_transcript.items()
+    }
+    protected = set(protected_transcripts)
+    groups = defaultdict(list)
+    provider = task["provider"]
+    for transcript, features in cds_features_by_transcript.items():
+        stem = collapse_transcript_suffix(provider, transcript)
+        if transcript in protected or stem == transcript or not stem:
+            continue
+        if resolved[transcript] not in (transcript, stem):
+            continue
+        groups[stem].append(build_transcript_grouping_entry(provider, transcript, features))
+
+    ambiguous_stems = []
+    token_owners = defaultdict(set)
+    for transcript, token in resolved.items():
+        token_owners[token].add(transcript)
+    for stem, entries in sorted(groups.items()):
+        group_ids = {entry["transcript_id"] for entry in entries}
+        collides = bool(token_owners[stem].difference(group_ids))
+        if len(entries) < 2 and not collides:
+            continue
+        parents = {entry["transcript_id"]: entry["transcript_id"] for entry in entries}
+
+        def root(identifier, parents=parents):
+            while parents[identifier] != identifier:
+                parents[identifier] = parents[parents[identifier]]
+                identifier = parents[identifier]
+            return identifier
+
+        intervals_by_axis = defaultdict(list)
+        for entry in entries:
+            if entry["rescue_ineligible"] or entry["strand"] not in ("+", "-"):
+                continue
+            for start, end in entry["merged_parts"]:
+                intervals_by_axis[(entry["seqid"], entry["strand"])].append(
+                    (start, end, entry["transcript_id"])
+                )
+        for intervals in intervals_by_axis.values():
+            furthest_end, owner = -1, ""
+            for start, end, transcript in sorted(intervals):
+                if start <= furthest_end:
+                    parents[root(transcript)] = root(owner)
+                if start > furthest_end or end > furthest_end:
+                    furthest_end, owner = end, transcript
+        components = defaultdict(list)
+        for transcript in parents:
+            components[root(transcript)].append(transcript)
+        if len(components) == 1 and not collides:
+            for transcript in parents:
+                resolved[transcript] = stem
+            continue
+        ambiguous_stems.append(stem)
+        for transcripts in components.values():
+            representative = min(transcripts)
+            if token_owners[representative].difference(transcripts):
+                raise ValueError("Orphan transcript gene identity collision: " + representative)
+            for transcript in transcripts:
+                resolved[transcript] = representative
+    if ambiguous_stems:
+        sys.stderr.write(
+            "Warning: {} orphan transcript suffix stem(s) in {} have separate CDS loci "
+            "or conflicting gene identities; retaining separate representatives: {}\n".format(
+                len(ambiguous_stems), task.get("species_prefix", task.get("species_key", "")),
+                ", ".join(ambiguous_stems[:5]),
+            )
+        )
+    return resolved
 
 
 def choose_rescue_cluster_gene_token(provider, entries):

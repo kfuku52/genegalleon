@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_longest_cds_selection.py"
 
 
@@ -259,6 +261,35 @@ def test_validate_longest_cds_selection_passes_for_gff_derived_inputs(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "[Arabidopsis_thaliana] Longest CDS validation OK:" in completed.stdout
+
+
+@pytest.mark.parametrize("old_output", [False, True])
+def test_longest_validator_rejects_unremoved_orphan_isoforms(tmp_path, old_output):
+    gff, genome = tmp_path / "source.gff", tmp_path / "genome.fa"
+    gff.write_text(
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=locusX.t1\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c1;Parent=locusX.t1\n"
+        "chr1\tsrc\tmRNA\t1\t6\t.\t+\t.\tID=locusX.t2\n"
+        "chr1\tsrc\tCDS\t1\t6\t.\t+\t0\tID=c2;Parent=locusX.t2\n"
+    )
+    genome.write_text(">chr1\nATGAAACCC\n")
+    cds_dir = tmp_path / "species_cds"
+    cds_dir.mkdir()
+    cds = cds_dir / "Test_species.fa.gz"
+    text = ">Test_species_locusX\nATGAAACCC\n"
+    if old_output:
+        text = ">Test_species_locusX.t1\nATGAAACCC\n>Test_species_locusX.t2\nATGAAA\n"
+    write_gzip_text(cds, text)
+    summary = tmp_path / "summary.tsv"
+    write_species_summary(summary, [dict(provider="direct", species_key="Test_species",
+        species_prefix="Test_species", cds_input_path=f"{gff} + {genome} (derived CDS)",
+        gff_input_path=str(gff), genome_input_path=str(genome), cds_output_path=str(cds),
+        cds_sequences_before=2, cds_sequences_after=2 if old_output else 1,
+        aggregated_cds_removed=0 if old_output else 1, gene_grouping_mode="strict")])
+    result = run_script("--species-cds-dir", str(cds_dir), "--species-summary", str(summary))
+    assert result.returncode == (1 if old_output else 0), result.stdout + result.stderr
+    if old_output:
+        assert "expected_after=1" in result.stdout + result.stderr
 
 
 def test_validate_longest_cds_selection_respects_rescue_overlap_mode(tmp_path):

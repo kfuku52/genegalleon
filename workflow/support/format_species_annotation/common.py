@@ -362,12 +362,43 @@ def resolve_feature_gene_token(feature_id, feature_records, provider, cache, act
                 if direct != "":
                     break
     if direct == "":
-        direct = choose_first_gff_attribute(attrs, ("Name", "ID"))
+        # A parentless transcript/CDS Name is a transcript identity, not an
+        # explicit gene identity. Coordinate-aware grouping checks the inferred
+        # suffix stem before using it to combine different transcripts.
+        fallback = choose_first_gff_attribute(attrs, ("Name", "ID")) or feature_text
+        direct = collapse_transcript_suffix(provider, fallback)
     if direct == "":
         direct = collapse_transcript_suffix(provider, feature_text)
     active.remove(feature_text)
     cache[feature_text] = str(direct or "").strip()
     return cache[feature_text]
+
+
+def has_explicit_feature_gene_identity(feature_id, feature_records, cache):
+    """Distinguish an annotated gene identity from a transcript-name fallback."""
+    if feature_id in cache:
+        return cache[feature_id]
+    pending = [feature_id]
+    visited = set()
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        if cache.get(current):
+            cache[feature_id] = True
+            return True
+        record = feature_records.get(current, {})
+        explicit = record.get("gene_token", "") or choose_first_gff_attribute(
+            record.get("attrs", {}),
+            ("gene", "gene_id", "locus_tag", "geneName", "Accession", "Parent_Accession"),
+        )
+        if explicit or record.get("feature_type") == "gene":
+            cache[feature_id] = True
+            return True
+        pending.extend(record.get("parents", ()))
+    cache[feature_id] = False
+    return False
 
 
 def build_coge_gff_gene_id_map(gff_path):
