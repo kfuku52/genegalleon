@@ -245,6 +245,13 @@ def main():
         args.dry_run,
         reuse_existing=args.reuse_existing,
     )
+    if cds_result["status"] == "empty":
+        raise ValueError(
+            "No nuclear CDS records for {}: supply a CDS FASTA or a GFF/GBFF with "
+            "nuclear coding annotations; source={}".format(
+                task["species_prefix"], task.get("gff_path") or task.get("gbff_path") or task.get("cds_path")
+            )
+        )
     gff_result = fsi.format_gff(
         task,
         output_gff_dir,

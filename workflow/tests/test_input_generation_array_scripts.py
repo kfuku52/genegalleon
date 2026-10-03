@@ -1345,6 +1345,103 @@ def test_completion_rejects_raw_changes_during_worker(tmp_path):
     assert not (Path(str(plan) + ".completed") / "1.json").exists()
 
 
+def test_array_worker_reports_empty_cds_before_formatting_genome(tmp_path):
+    raw = tmp_path / "raw"
+    write_direct_species_fixture(raw, "Arabidopsis_thaliana")
+    next(raw.glob("*/*.cds.fa")).unlink()
+    next(raw.glob("*/*.gff*")).write_text(
+        "##gff-version 3\nchr1\t.\tregion\t1\t9\t.\t+\t.\tID=chr1\n")
+    plan = tmp_path / "plan.json"
+    planned = run_python(PLAN_SCRIPT, "--provider", "direct", "--input-dir", str(raw),
+                         "--outfile", str(plan))
+    assert planned.returncode == 0, planned.stderr
+    genome_dir = tmp_path / "formatted_genome"
+    result = run_python(RUN_TASK_SCRIPT, "--task-plan", str(plan), "--task-index", "1",
+                        "--species-cds-dir", str(tmp_path / "cds"),
+                        "--species-gff-dir", str(tmp_path / "gff"),
+                        "--species-genome-dir", str(genome_dir))
+    assert result.returncode != 0
+    assert "No nuclear CDS records for Arabidopsis_thaliana" in result.stderr
+    assert not list(genome_dir.glob("*.fa.gz"))
+
+
+def test_completion_hashes_raw_receipt_alias_once(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+
+    raw = tmp_path / "raw.fa"
+    raw.write_text(">Species_a_gene1\nATG\n")
+    alias = tmp_path / "alias.fa"
+    alias.symlink_to(raw)
+    output = tmp_path / "output"
+    output.write_text("valid output\n")
+    plan = tmp_path / "plan.json"
+    expected = state.digest(raw)
+    plan.write_text(json.dumps({"task_count": 1, "tasks": [{
+        "species_prefix": "Species_a", "input_sha256": {str(alias): expected}}]}))
+    calls = []
+    original = state.digest
+
+    def counted(path):
+        calls.append(str(path))
+        return original(path)
+
+    monkeypatch.setattr(state, "digest", counted)
+    monkeypatch.setattr(sys, "argv", ["state", "complete", "--task-plan", str(plan),
+                        "--task-index", "1", "--file", str(raw), "--file", str(output)])
+    state.main()
+    assert calls.count(str(raw.resolve())) == 1
+    receipt = json.loads(state.receipt_path(plan, 1).read_text())
+    assert receipt["files"] == {str(raw.resolve()): expected, str(alias): expected,
+                               str(output.resolve()): original(output)}
+    assert state.verify_receipt(plan, 1)
+
+
+def test_completion_rejects_source_mutation_while_hashing_later_output(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+
+    raw = tmp_path / "raw"
+    raw.write_bytes(b"original")
+    output = tmp_path / "output"
+    output.write_bytes(b"result")
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"task_count": 1, "tasks": [{
+        "species_prefix": "Species_a", "input_sha256": {str(raw): state.digest(raw)}}]}))
+    original = state.digest
+
+    def mutate(path):
+        value = original(path)
+        if Path(path) == output:
+            raw.write_bytes(b"modified")
+        return value
+
+    monkeypatch.setattr(state, "digest", mutate)
+    monkeypatch.setattr(sys, "argv", ["state", "complete", "--task-plan", str(plan),
+                        "--task-index", "1", "--file", str(raw), "--file", str(output)])
+    with pytest.raises(OSError, match="changed while hashing"):
+        state.main()
+    assert not state.receipt_path(plan, 1).exists()
+
+
+def test_digest_paths_rejects_alias_target_replacement(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+
+    first, second, alias = (tmp_path / name for name in ("first", "second", "alias"))
+    first.write_bytes(b"identical")
+    second.write_bytes(b"identical")
+    alias.symlink_to(first)
+    original = state.digest
+
+    def replace(path):
+        result = original(path)
+        alias.unlink()
+        alias.symlink_to(second)
+        return result
+
+    monkeypatch.setattr(state, "digest", replace)
+    with pytest.raises(OSError, match="changed while hashing"):
+        state.digest_paths([alias])
+
+
 def test_custom_output_directory_cannot_be_claimed_by_two_workspaces(tmp_path):
     state = SUPPORT_DIR / "input_generation_array_state.py"
     raw = tmp_path / "raw"

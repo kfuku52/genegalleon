@@ -1,5 +1,12 @@
 source("workflow/support/species_label_utils.r")
 
+stopifnot(
+  identical(gg_species_label_from_filename("Oryza_sativa_Indica_Group_repair.cds.fa.gz"),
+            "Oryza_sativa_Indica_Group"),
+  identical(gg_species_label_from_filename("Oryza_sativa_Japonica_Group_gene1"),
+            "Oryza_sativa_Japonica_Group")
+)
+
 labels <- c(
   "Asimitellaria_furusei_var._furusei_longestCDS.fx2tab_cds.tsv",
   "Asimitellaria_furusei_var._subramosa_fx2tab_cds.tsv",

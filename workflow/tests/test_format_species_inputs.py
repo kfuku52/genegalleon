@@ -4222,6 +4222,58 @@ SQ   Sequence 9 BP; 3 A; 1 C; 1 G; 4 T; 0 other;
     assert validation.returncode == 0, validation.stderr + "\n" + validation.stdout
 
 
+def test_annotation_only_gff_does_not_load_genome(tmp_path, monkeypatch):
+    from format_species_annotation import genbank
+
+    gff = tmp_path / "assembly.gff"
+    gff.write_text("##gff-version 3\nchr1\t.\tregion\t1\t9\t.\t+\t.\tID=chr1\n")
+
+    def unexpected_load(path):
+        pytest.fail("A GFF without nuclear CDS must not load the genome")
+
+    monkeypatch.setattr(genbank, "load_genome_sequences", unexpected_load)
+    task = {"provider": "direct", "species_key": "Species_a", "species_prefix": "Species_a",
+            "gff_path": gff, "genome_path": tmp_path / "huge.fa"}
+    assert list(genbank.derive_cds_records_from_gff_and_genome(task)) == []
+
+
+@pytest.mark.parametrize("phase", [".", "0"])
+def test_coge_duplicate_complete_models_are_read_once(tmp_path, phase):
+    module = load_module()
+    genome = tmp_path / "sequence.fa"
+    genome.write_text(">chr1\nATGCCCTAA\n")
+    gff = tmp_path / "duplicate.gff"
+    gff.write_text("\n".join(
+        f"chr1\tCoGe\tCDS\t{start}\t{end}\t.\t+\t{phase}\t"
+        f"ID=gene1{suffix};Name=gene1;CDS=gene1;coge_fid={fid}"
+        for fid in (101, 102)
+        for start, end, suffix in ((1, 3, ""), (7, 9, ".CDS2"))
+    ) + "\n")
+    task = {"provider": "coge", "species_key": "Alpha_alba", "species_prefix": "Alpha_alba", "gff_path": gff, "genome_path": genome}
+    records = list(module.derive_cds_records_from_gff_and_genome(task))
+    assert len(records) == 1
+    assert records[0][1] == "ATGTAA"
+    from format_species_annotation.gff_repair import iter_repaired_gff_lines
+    counters = {"changed_lines": 0, "changed_values": 0, "changed_references": 0, "normalized_bare_attribute_lines": 0}
+    lines = list(iter_repaired_gff_lines(gff, {}, counters, coge=True))
+    assert len(lines) == 2
+    assert counters["duplicate_coge_cds_blocks_removed"] == 2
+
+
+def test_coge_duplicate_model_phase_conflict_still_fails(tmp_path):
+    module = load_module()
+    gff = tmp_path / "duplicate.gff"
+    gff.write_text("\n".join(
+        f"chr1\tCoGe\tCDS\t1\t3\t.\t+\t{phase}\tID=gene1;Name=gene1;CDS=gene1;coge_fid={fid}"
+        for fid, phase in ((101, "0"), (102, "1"))
+    ) + "\n")
+    with pytest.raises(ValueError, match="Conflicting CoGe CDS feature identity"):
+        list(module.derive_cds_records_from_gff_and_genome({"provider": "coge", "species_key": "Alpha_alba", "gff_path": gff, "genome_path": tmp_path / "missing.fa"}))
+    from format_species_annotation.gff_repair import iter_repaired_gff_lines
+    with pytest.raises(ValueError, match="Conflicting CoGe CDS feature identity"):
+        list(iter_repaired_gff_lines(gff, {}, {}, coge=True))
+
+
 def test_format_species_inputs_does_not_write_empty_gbff_derived_outputs(tmp_path):
     input_dir = tmp_path / "Direct" / "species_wise_original"
     species_dir = input_dir / "Fakus_emptyus"

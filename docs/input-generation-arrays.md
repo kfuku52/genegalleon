@@ -27,6 +27,16 @@ never trust a persistent size/mtime hash cache. Worker preflight checks both the
 original plan and resolved receipt in one pass, rejecting conflicting hashes.
 Hashing checks the open file and current path identity to reject modifications or
 replacement during the read. Plan and receipt formats are unchanged.
+At worker completion, raw sources and declared outputs share one fresh hashing
+pass. Canonical paths are read once even when a raw source is also an output or
+has a symlink alias; each original receipt key is retained, and alias replacement
+or a change during the batch rejects publication. An annotation with no nuclear
+CDS records fails formatting before genome output or BUSCO. GFF-derived CDS
+also detects an empty coding-feature set before loading the genome into memory.
+Repeated CoGe internal feature IDs with an identical source transcript name are
+collapsed only after their complete CDS models agree on coordinates, strand,
+phase and annotation attributes. Both CDS derivation and GFF repair apply this
+proof; conflicting or partial models still fail.
 
 For a new workspace/runtime, bound rows can reuse successful native staging
 receipts from a previous prepare, including a partially failed prepare. Supply

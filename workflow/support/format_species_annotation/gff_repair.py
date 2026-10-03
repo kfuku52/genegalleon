@@ -21,7 +21,7 @@ from .common import (
     parse_gff_attributes,
     sanitize_identifier,
 )
-from .genbank import _coge_export_transcript
+from .genbank import _coge_export_transcript, duplicate_coge_model_ids
 from .organelle import (
     count_organelle_gff_features,
     gff_data_line_is_organelle,
@@ -30,7 +30,7 @@ from .organelle import (
 )
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 6
+GFF_REPAIR_VERSION = 7
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -362,6 +362,7 @@ def canonicalize_coge_cds_attributes(parts, features, names):
 
 def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False):
     coge_features, coge_names = {}, {}
+    duplicate_features = duplicate_coge_model_ids(gff_path) if coge else set()
     for line in iter_non_organelle_gff_lines(gff_path):
         stripped = line.rstrip("\n\r")
         newline = line[len(stripped) :]
@@ -376,6 +377,10 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
         coge_changes = 0
         if feature_type == "cds":
             if coge and parts[1].strip().lower() == "coge":
+                attrs = parse_gff_attributes(parts[8])
+                if not attrs.get("Parent") and set(attrs.get("coge_fid", ())) & duplicate_features:
+                    counters["duplicate_coge_cds_blocks_removed"] = counters.get("duplicate_coge_cds_blocks_removed", 0) + 1
+                    continue
                 parts[8], coge_changes = canonicalize_coge_cds_attributes(parts, coge_features, coge_names)
             key = source_overlap_key(parts[8])
             marked = mark_source_overlap(parts[8], key in confirmed_overlaps)

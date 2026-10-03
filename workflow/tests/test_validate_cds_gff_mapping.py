@@ -70,6 +70,15 @@ def test_first_nonmatching_prefix_uses_exact_species_label():
     assert mod.first_nonmatching_prefix(["Species_a_gene1"], "Species_a") == ""
 
 
+def test_cultivar_group_prefix_is_preserved_and_distinct():
+    mod = load_module()
+    species = "Oryza_sativa_Indica_Group"
+    assert mod.species_prefix_from_name(species + "_repair.cds.fa.gz") == species
+    assert mod.first_nonmatching_prefix([species + "_BGIOSGA000001"], species) == ""
+    assert mod.first_nonmatching_prefix(["Oryza_sativa_Japonica_Group_gene1"], species)
+    assert mod.first_nonmatching_prefix([species + "_gene1"], "Oryza_sativa")
+
+
 def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

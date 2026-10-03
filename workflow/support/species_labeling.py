@@ -298,6 +298,11 @@ def species_prefix_token_count(parts):
         return 3
     if third in TAXONOMIC_INFRASPECIFIC_RANKS:
         return 4 if len(normalized) >= 4 else 3
+    # Cultivar Groups put the rank after its name (e.g. Indica Group), unlike
+    # "subsp. indica". The capitalized terminal rank is an explicit boundary.
+    if (len(normalized) >= 4 and normalized[3] == "Group"
+            and re.fullmatch(r"[A-Z][A-Za-z-]*", normalized[2])):
+        return 4
     return 2
 
 

@@ -253,6 +253,10 @@ gg_species_prefix_token_count <- function(parts) {
     if (third %in% GG_TAXONOMIC_INFRASPECIFIC_RANKS) {
         return(if (length(normalized) >= 4) 4 else 3)
     }
+    if (length(normalized) >= 4 && normalized[[4]] == "Group" &&
+        grepl("^[A-Z][A-Za-z-]*$", normalized[[3]])) {
+        return(4L)
+    }
     return(2)
 }
 

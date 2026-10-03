@@ -33,14 +33,16 @@ def digest_paths(paths):
     """Hash each path once within one verification boundary, never across stages."""
     paths = list(dict.fromkeys(str(path) for path in paths))
     before = {path: _stat_identity(os.stat(path)) for path in paths}
-    hashes = {path: digest(path) for path in paths}
+    targets = {path: str(Path(path).resolve(strict=True)) for path in paths}
+    hashes = {path: digest(path) for path in dict.fromkeys(targets.values())}
     # A source read early in the batch must not change while later files are
     # being hashed. Metadata only fences this fresh full read; it never grants
     # reuse of a checksum from an earlier phase or invocation.
     for path in paths:
-        if _stat_identity(os.stat(path)) != before[path]:
+        if (_stat_identity(os.stat(path)) != before[path]
+                or str(Path(path).resolve(strict=True)) != targets[path]):
             raise OSError("File changed while hashing: " + path)
-    return hashes
+    return {path: hashes[targets[path]] for path in paths}
 
 
 def atomic_json(path, value, immutable=False):
@@ -228,11 +230,16 @@ def main():
     if not args.file or any(not Path(p).is_file() or Path(p).stat().st_size == 0 for p in args.file):
         parser.error("Completion requires nonempty output files")
     expected_inputs = frozen_input_hashes(args.task_plan, plan, index)
-    if any(digest(p) != expected for p, expected in expected_inputs.items()):
+    # Raw sources are also declared receipt files by the worker. Verify the
+    # union once at this publication boundary, then fence the whole batch;
+    # no digest from an earlier stage or invocation is reused.
+    output_paths = [str(Path(p).resolve()) for p in args.file]
+    observed = digest_paths([*expected_inputs, *output_paths])
+    if any(observed[p] != expected for p, expected in expected_inputs.items()):
         parser.error("Raw inputs changed while the task was running")
     atomic_json(path, {"plan_sha256": digest(args.task_plan), "task_index": index,
                        "species_prefix": plan["tasks"][index-1]["species_prefix"],
-                       "files": {**{str(Path(p).resolve()): digest(p) for p in args.file}, **expected_inputs}})
+                       "files": {**{p: observed[p] for p in output_paths}, **expected_inputs}})
 
 
 if __name__ == "__main__":

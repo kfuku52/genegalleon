@@ -299,11 +299,48 @@ def _coge_export_transcript(attrs, seqid, strand, features, names):
     identity = (transcript, seqid, strand)
     canonical_name = sanitize_identifier(apply_common_replacements(transcript))
     if ((feature_id in features and features[feature_id] != identity)
-            or (canonical_name in names and names[canonical_name] != feature_id)):
+            or (canonical_name in names and names[canonical_name] != transcript)):
         raise ValueError("Conflicting CoGe CDS feature identity: " + str(feature_id))
     features[feature_id] = identity
-    names[canonical_name] = feature_id
+    names[canonical_name] = transcript
     return transcript
+
+
+def _coge_model_signature(seqid, strand, start, end, phase, attrs):
+    return (seqid, strand, int(start), int(end), str(phase), tuple(sorted(
+        (key, values) for key, values in attrs.items() if key not in {"ID", "coge_fid"}
+    )))
+
+
+def _duplicate_coge_model_ids(models):
+    duplicates = set()
+    for transcript, features in models.items():
+        signatures = [tuple(sorted(rows)) for rows in features.values()]
+        if any(signature != signatures[0] for signature in signatures[1:]):
+            raise ValueError("Conflicting CoGe CDS feature identity: " + transcript)
+        duplicates.update(list(features)[1:])
+    return duplicates
+
+
+def duplicate_coge_model_ids(gff_path):
+    """Prove complete equality before discarding repeated CoGe export models."""
+    models = defaultdict(lambda: defaultdict(list))
+    features, names = {}, {}
+    with open_text(gff_path, "rt", errors="replace") as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+            parts = line.rstrip("\n\r").split("\t")
+            if len(parts) < 9 or parts[1].lower() != "coge" or parts[2].lower() != "cds":
+                continue
+            attrs = parse_gff_attributes(parts[8])
+            if attrs.get("Parent") or not attrs.get("coge_fid"):
+                continue
+            transcript = _coge_export_transcript(attrs, parts[0], parts[6], features, names)
+            models[transcript][attrs["coge_fid"][0]].append(
+                _coge_model_signature(parts[0], parts[6], parts[3], parts[4], parts[7], attrs)
+            )
+    return _duplicate_coge_model_ids(models)
 
 
 def derive_cds_records_from_gff_and_genome(task):
@@ -312,12 +349,12 @@ def derive_cds_records_from_gff_and_genome(task):
     if gff_path is None or genome_path is None:
         raise ValueError("GFF+genome inputs are required to derive CDS for {}".format(task.get("species_key", "")))
 
-    genome_sequences = load_genome_sequences(genome_path)
     feature_records = {}
     cds_features_by_transcript = defaultdict(list)
     utr_features_by_transcript = defaultdict(list)
     gene_cache = {}
     coge_features, coge_names = {}, {}
+    coge_models = defaultdict(lambda: defaultdict(list))
     organelle_seqids = gff_organelle_seqids(gff_path)
 
     with open_text(gff_path, "rt", errors="replace") as handle:
@@ -375,12 +412,15 @@ def derive_cds_records_from_gff_and_genome(task):
             if start > end:
                 start, end = end, start
             transcript_ids = [value for value in parents if str(value).strip() != ""]
+            coge_feature_id = ""
             if len(transcript_ids) == 0:
                 fallback_id = ""
                 if task["provider"] == "coge" and _source.lower() == "coge":
                     fallback_id = _coge_export_transcript(
                         attrs, seqid, strand, coge_features, coge_names,
                     )
+                    if fallback_id:
+                        coge_feature_id = attrs["coge_fid"][0]
                 fallback_id = fallback_id or feature_id
                 if fallback_id == "":
                     fallback_id = choose_first_gff_attribute(attrs, ("transcript_id", "protein_id", "Name"))
@@ -403,8 +443,7 @@ def derive_cds_records_from_gff_and_genome(task):
                     )
                 if gene_token == "":
                     gene_token = collapse_transcript_suffix(task["provider"], transcript_id)
-                cds_features_by_transcript[transcript_id].append(
-                    {
+                feature = {
                         "seqid": str(seqid or "").strip(),
                         "start": start,
                         "end": end,
@@ -412,8 +451,32 @@ def derive_cds_records_from_gff_and_genome(task):
                         "gene_token": gene_token,
                         "attributes": attr_text,
                     }
-                )
+                if coge_feature_id:
+                    coge_models[transcript_id][coge_feature_id].append(
+                        (feature, _coge_model_signature(seqid, strand, start_text, end_text, phase_text, attrs))
+                    )
+                else:
+                    cds_features_by_transcript[transcript_id].append(feature)
 
+    for transcript, models in coge_models.items():
+        signatures = []
+        for rows in models.values():
+            signatures.append(tuple(sorted(
+                signature for _feature, signature in rows
+            )))
+        # CoGe can export the same complete model under two internal feature
+        # IDs. Only identical models may share an exact source transcript name;
+        # a partial, coordinate, phase or gene mismatch remains an error.
+        if any(signature != signatures[0] for signature in signatures[1:]):
+            raise ValueError("Conflicting CoGe CDS feature identity: " + transcript)
+        first_model = next(iter(models.values()))
+        cds_features_by_transcript[transcript].extend(f for f, _signature in first_model)
+
+    # Assembly-only and organelle-only GFFs cannot provide nuclear CDS. Keep
+    # the existing empty-result contract without loading a huge genome first.
+    if not cds_features_by_transcript:
+        return
+    genome_sequences = load_genome_sequences(genome_path)
     rescued_gene_tokens = build_rescued_gene_tokens_for_transcripts(task, cds_features_by_transcript)
     required_gff_seqids = {
         feature["seqid"]
