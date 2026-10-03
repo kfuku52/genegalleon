@@ -20,6 +20,13 @@ CHUNK_SIZE = 1024 * 1024
 _CACHE: "ContentDigestCache | None" = None
 
 
+def _sqlite_integer(value: int) -> int | bytes:
+    # SQLite INTEGER is signed 64-bit; SIF/overlay inode IDs can be unsigned.
+    # A decimal BLOB avoids INTEGER affinity rounding large text values to REAL.
+    value = int(value)
+    return value if -(2**63) <= value < 2**63 else str(value).encode("ascii")
+
+
 def _sha256_stream(handle: BinaryIO) -> tuple[str, int]:
     digest = hashlib.sha256()
     size = 0
@@ -150,10 +157,10 @@ class ContentDigestCache:
                         (
                             namespace,
                             str(path.absolute()),
-                            *signature,
+                            *(_sqlite_integer(value) for value in signature),
                             digest,
-                            int(logical_size),
-                            member_count,
+                            _sqlite_integer(logical_size),
+                            None if member_count is None else _sqlite_integer(member_count),
                         ),
                     )
         except (OSError, sqlite3.Error, ValueError):

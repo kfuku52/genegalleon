@@ -356,6 +356,34 @@ def test_fasta_sequence_store_compresses_sequences_and_enforces_a_size_cap(tmp_p
     assert "size limit" in capped.stderr
 
 
+@pytest.mark.parametrize("field", range(5))
+@pytest.mark.parametrize("value", [2**63, 2**64 - 1, -(2**63) - 1])
+def test_content_digest_cache_preserves_stat_integers_outside_sqlite_range(tmp_path, monkeypatch, field, value):
+    spec = spec_from_file_location("digest_cache_integer_audit", SUPPORT / "content_digest_cache.py")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "input.txt"
+    source.write_text("content\n")
+    signature = list(module.ContentDigestCache.signature(source))
+    signature[field] = value
+    monkeypatch.setattr(module.ContentDigestCache, "signature", staticmethod(lambda path: tuple(signature)))
+    database = tmp_path / "digests.sqlite3"
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    cache = module.ContentDigestCache(database)
+    try:
+        cache.put("file_sha256", source, digest, source.stat().st_size)
+        assert cache.get("file_sha256", source) == (digest, source.stat().st_size, None)
+    finally:
+        cache.close()
+    reopened = module.ContentDigestCache(database)
+    try:
+        assert reopened.get("file_sha256", source) == (digest, source.stat().st_size, None)
+        signature[field] += 1
+        assert reopened.get("file_sha256", source) is None
+    finally:
+        reopened.close()
+
+
 def test_content_digest_cache_is_shared_safely_across_threads(tmp_path: Path):
     files = []
     for index in range(32):
@@ -387,6 +415,31 @@ with sqlite3.connect(database) as connection:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "32"
+
+
+@pytest.mark.parametrize("size", [7, 2**64 - 1])
+def test_content_digest_cache_preserves_integer_rows_and_large_logical_sizes(tmp_path, size):
+    spec = spec_from_file_location("digest_cache_size_audit", SUPPORT / "content_digest_cache.py")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "input.txt"
+    source.write_text("content\n")
+    database = tmp_path / "digests.sqlite3"
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    cache = module.ContentDigestCache(database)
+    try:
+        cache.put("archive", source, digest, size, size)
+        assert cache.get("archive", source) == (digest, size, size)
+        with sqlite3.connect(database) as connection:
+            row = connection.execute("SELECT typeof(logical_size), typeof(member_count) FROM digest_cache").fetchone()
+        assert row == (("integer", "integer") if size == 7 else ("blob", "blob"))
+    finally:
+        cache.close()
+    reopened = module.ContentDigestCache(database)
+    try:
+        assert reopened.get("archive", source) == (digest, size, size)
+    finally:
+        reopened.close()
 
 
 def test_batch_busco_extraction_streams_inputs_once_for_both_modes(tmp_path: Path):
