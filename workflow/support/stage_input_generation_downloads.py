@@ -66,6 +66,8 @@ def explicit_manifest_task(task, row, download_root):
     actual["gff_selection_candidates"] = (
         (actual["gff_path"].name,) if actual["gff_path"] is not None else ()
     )
+    if row.get("paired_curation"):
+        actual["paired_curation"] = row["paired_curation"]
     return actual
 
 
@@ -113,6 +115,8 @@ def bound_local_manifest_task(task, verified_inputs=None):
     if task["provider"] == "coge" and actual["gff_path"] is not None:
         validate_coge_export_gff_file(actual["gff_path"], gid=row.get("id", ""))
     actual["gff_selection_candidates"] = (actual["gff_path"].name,) if actual["gff_path"] else ()
+    if row.get("paired_curation"):
+        actual["paired_curation"] = row["paired_curation"]
     return actual
 
 

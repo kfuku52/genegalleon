@@ -42,7 +42,8 @@ they do not certify nucleotide identity to the genome or repair source coordinat
 python workflow/support/curate_paired_species_inputs.py curate \
   --species Genus_species --cds Genus_species_cds.fa.gz \
   --gff Genus_species_annotations.gff.gz --genome Genus_species_genome.fa.gz \
-  --decision-manifest decisions.json --output-dir new-curated-source
+  --decision-manifest decisions.json --output-dir new-curated-source \
+  --download-manifest new-curated-download-plan.tsv
 ```
 
 The destination must not exist. The helper creates compressed CDS/GFF files and
@@ -54,9 +55,23 @@ cross-boundary Parents, cycles, unexpected IDs, and changed inputs fail before
 publication. Noncoding annotations on an approved missing reference are removed
 with that reference. No organelle inference is made from product descriptions.
 
-For subsequent native input generation, put the resulting CDS and GFF paths and
-the unchanged genome path in the existing `direct` local-download manifest. Keep
-the decision manifest and `curation.json` alongside that manifest. Use a new
-prepare → species worker array → finalize chain; changed CDS need fresh BUSCO.
-The ordinary formatter and completion checks still apply. Other CDS/GFF conflicts
-may remain source warnings; this helper is not a general scientific validator.
+The optional TSV freezes the complete `curation.json` receipt in its
+`paired_curation` column and binds the local CDS/GFF/genome archives. All three
+must be gzip files for this import mode. Use it in a new native prepare → species
+worker array → finalize chain; concatenate rows from multiple such TSVs under
+one header when preparing multiple species. Changed CDS need fresh BUSCO.
+
+Native formatting independently checks the receipt hashes, unique CDS/gene
+ownership, codon padding, accepted exceptions and paired reference coordinates.
+It then copies the three archives exactly. This prevents an already adopted
+partial CDS from being normalised a second time and changing retained CDS/GFF
+coordinates during an approved exclusion-only operation. The receipt persists
+in the species summary; longest-representative validation checks the exact
+approved CDS and independently checks source gene identities. Changed receipts,
+source files or existing outputs fail rather than falling back to reformatting.
+
+The API equivalent supplies `paired_curation` (the receipt object or its JSON)
+on the formatting task. Without this field, ordinary normalisation and default
+reference rejection remain unchanged. Keep the decision manifest and
+`curation.json` with the TSV. Other CDS/GFF conflicts may remain source warnings;
+this import mode does not certify nucleotide identity or repair source biology.

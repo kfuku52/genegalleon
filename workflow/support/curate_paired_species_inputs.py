@@ -8,6 +8,7 @@ or accepted as source exceptions. The reference genome is never rewritten.
 
 import argparse
 import contextlib
+import csv
 import gzip
 import hashlib
 import io
@@ -56,7 +57,7 @@ def gff_rows(path):
             yield line, parts, parse_gff_attributes(parts[8])
 
 
-def inspect_pair(species, cds, gff, genome):
+def inspect_pair(species, cds, gff, genome, *, require_reference_bounds=False):
     cds, gff, genome = (Path(path) for path in (cds, gff, genome))
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", species):
         raise ValueError("Invalid species prefix")
@@ -98,7 +99,13 @@ def inspect_pair(species, cds, gff, genome):
             raise ValueError("GFF ID spans present and absent references: " + node)
     for _line, parts, attrs in gff_rows(gff):
         if parts is None:
+            if require_reference_bounds and _line.startswith("##sequence-region "):
+                fields = _line.split()
+                if fields[1] not in mapping or not 1 <= int(fields[2]) <= int(fields[3]) <= index[mapping[fields[1]]]:
+                    raise ValueError("Curated GFF sequence-region exceeds paired genome")
             continue
+        if require_reference_bounds and (parts[0] not in mapping or int(parts[4]) > index[mapping[parts[0]]]):
+            raise ValueError("Curated GFF reference/coordinates exceed paired genome")
         for parent in attrs.get("Parent", ()):
             if parent in axes and any((parts[0] in missing) != (ref in missing) for ref in axes[parent]):
                 raise ValueError("GFF Parent crosses the reference exclusion boundary: " + parent)
@@ -149,12 +156,122 @@ def inspect_pair(species, cds, gff, genome):
     span_lengths = {identifier: sorted({sum(end - start for start, end in merge_coordinate_intervals(intervals))
                                        for intervals in models.values()}) for identifier, models in spans.items()}
     report = dict(contract_version=CONTRACT_VERSION, species=species, inputs=inputs,
-                  cds_records=len(lengths), missing_genome_references=sorted(missing),
+                  cds_records=len(lengths), genome_records=len(set(index.canonical_ids.values())), missing_genome_references=sorted(missing),
                   cds_on_missing_references=affected, cds_without_gff_counterpart=sorted(lengths.keys() - refs.keys()),
                   counting_unit="Already selected, formatted CDS record; explicit GFF Parent ownership",
                   does_not_certify_genome_CDS_sequence_identity=True)
     verify_inputs(inputs)
     return report, lengths, span_lengths, mapping
+
+
+def validated_formatted_pair(task):
+    """Validate an explicitly supplied native receipt before preserving its pair.
+
+    The receipt is frozen in the input manifest/plan and species summary. Hashes
+    alone are insufficient: independently check unique gene ownership, retained
+    exception evidence and every paired reference coordinate as well.
+    """
+    supplied = task.get("paired_curation")
+    if not supplied:
+        raise ValueError("An explicit paired_curation receipt is required")
+    receipt = json.loads(supplied) if isinstance(supplied, str) else supplied
+    if not isinstance(receipt, dict):
+        raise ValueError("paired_curation must be a native JSON receipt object")
+    seal = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    cached = task.get("_paired_curation_validation")
+    if cached and cached["seal"] == seal and all(str(Path(task[key + "_path"]).resolve()) == value["path"]
+                                                for key, value in cached["report"]["inputs"].items()):
+        verify_inputs(cached["report"]["inputs"])
+        return cached["report"]
+    if (task["provider"] not in ("direct", "local") or task.get("gbff_path")
+            or receipt.get("contract_version") != CONTRACT_VERSION
+            or receipt.get("species") != task["species_prefix"]
+            or receipt.get("original_sources_modified") is not False
+            or not receipt.get("decision_basis", "").strip()):
+        raise ValueError("Invalid explicit formatted-pair curation receipt")
+    expected = {"cds": receipt["cds_output"]["sha256"], "gff": receipt["gff_output"]["sha256"],
+                "genome": receipt["inputs"]["genome"]["sha256"]}
+    current = {key: fingerprint(task[key + "_path"]) for key in expected}
+    if {key: value["sha256"] for key, value in current.items()} != expected:
+        raise ValueError("Curated input hashes differ from paired_curation receipt")
+    report, lengths, spans, _mapping = inspect_pair(task["species_prefix"], task["cds_path"], task["gff_path"],
+                                                   task["genome_path"], require_reference_bounds=True)
+    if report["missing_genome_references"] or any(length % 3 for length in lengths.values()):
+        raise ValueError("Expected an already formatted, codon-padded curated pair")
+    retained = receipt["retained_source_exceptions"]
+    flags = {}
+    for row in retained:
+        identifier = row["cds_id"]
+        if identifier not in lengths or identifier in flags or row.get("action") != "retain_and_flag":
+            raise ValueError("Invalid retained curated CDS flag")
+        flags[identifier] = row
+        if row["reason"] == "missing_gff_counterpart":
+            if identifier not in report["cds_without_gff_counterpart"]:
+                raise ValueError("Curated missing-GFF flag is no longer observed")
+        elif row["reason"] == "coding_span_conflict":
+            observed = spans.get(identifier, ())
+            if row.get("cds_length") != lengths[identifier] or row.get("gff_coding_span_length") not in observed or lengths[identifier] in observed:
+                raise ValueError("Curated coding-span flag is no longer observed")
+        else:
+            raise ValueError("Unsupported curated retention flag")
+    if set(report["cds_without_gff_counterpart"]) != {key for key, row in flags.items() if row["reason"] == "missing_gff_counterpart"}:
+        raise ValueError("Unapproved curated CDS without GFF counterpart")
+    excluded = receipt["excluded_cds_ids"]
+    if (len(set(excluded)) != len(excluded) or set(excluded) & lengths.keys()
+            or len(lengths) != receipt["remaining_cds_records"]
+            or receipt["cds_records"] - len(excluded) != len(lengths)):
+        raise ValueError("Curated CDS count/exclusion evidence differs")
+    report["retained_source_exceptions"] = retained
+    report["paired_curation_receipt_sha256"] = hashlib.sha256(seal.encode()).hexdigest()
+    task["_paired_curation_validation"] = dict(seal=seal, report=report)
+    return report
+
+
+def preserve_formatted_role(task, role, output_path, overwrite, dry_run):
+    """Copy approved formatted pair/genome bytes, without another normalisation."""
+    if role not in ("cds", "gff", "genome"):
+        raise ValueError("Unsupported curated role")
+    report = validated_formatted_pair(task)
+    source = Path(task[role + "_path"])
+    output_path = Path(output_path)
+    if source.resolve() == output_path.resolve():
+        raise ValueError("Curated output must be separate from its immutable source")
+    if source.suffix != ".gz" or output_path.suffix != ".gz":
+        raise ValueError("Native curated pair/genome inputs must be gzip archives")
+    if dry_run:
+        status = "dry-run"
+    elif output_path.exists() and not overwrite:
+        if fingerprint(output_path)["sha256"] != report["inputs"][role]["sha256"]:
+            raise ValueError("Existing curated output differs from approved source")
+        status = "skip"
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=output_path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            shutil.copyfile(source, temporary)
+            verify_inputs(report["inputs"])
+            if fingerprint(temporary)["sha256"] != report["inputs"][role]["sha256"]:
+                raise OSError("Curated output copy differs from approved source")
+            temporary.replace(output_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        status = "write"
+    result = dict(status=status, output_path=output_path, paired_curation_receipt_sha256=report["paired_curation_receipt_sha256"])
+    if role == "cds":
+        result.update(input_path=str(source), written=report["cds_records"], before_count=report["cds_records"],
+                      after_count=report["cds_records"], duplicates=0,
+                      first_sequence_name=first_token(next(iter_fasta_records(source))[0]),
+                      grouping_source="approved_formatted_pair", gff_records_mapped=report["cds_records"]-len(report["cds_without_gff_counterpart"]),
+                      gff_records_unmapped=len(report["cds_without_gff_counterpart"]))
+    elif role == "gff":
+        with open_text(source, "rt") as handle:
+            lines = sum(1 for _ in handle)
+        result.update(lines=lines, repair_status="verified_curated_pair_no_edits")
+    elif role == "genome":
+        result.update(written=report["genome_records"], before_count=report["genome_records"],
+                      after_count=report["genome_records"], duplicates=0, input_path=str(source))
+    return result
 
 
 def verify_inputs(inputs):
@@ -285,14 +402,30 @@ def main():
     parser.add_argument("--decision-manifest")
     parser.add_argument("--output-dir")
     parser.add_argument("--report", help="Audit JSON destination (audit mode only).")
+    parser.add_argument("--download-manifest", help="Write an exclusive native direct-array TSV preserving this already formatted pair (curate only).")
     args = parser.parse_args()
     if args.mode == "curate" and (not args.decision_manifest or not args.output_dir):
         parser.error("curate requires --decision-manifest and --output-dir")
-    if args.mode == "audit" and (args.decision_manifest or args.output_dir):
+    if args.mode == "audit" and (args.decision_manifest or args.output_dir or args.download_manifest):
         parser.error("Use curate to apply explicit decisions")
     try:
+        if args.download_manifest and Path(args.download_manifest).exists():
+            raise FileExistsError("Curation download manifest already exists")
         if args.mode == "curate":
             report = curate_pair(args.species, args.cds, args.gff, args.genome, args.decision_manifest, args.output_dir)
+            if args.download_manifest:
+                row = dict(provider="direct", id=args.species, species_key=args.species, bind_local_sources="1",
+                           paired_curation=json.dumps(report, sort_keys=True, separators=(",", ":")))
+                for key in ("cds", "gff", "genome"):
+                    value = report[key + "_output"] if key != "genome" else report["inputs"][key]
+                    path = Path(value["path"]).resolve()
+                    if path.suffix != ".gz":
+                        raise ValueError("Native curated pair/genome inputs must be gzip archives")
+                    row.update({key + "_url": path.as_uri(), key + "_filename": path.name, key + "_sha256": value["sha256"]})
+                with Path(args.download_manifest).open("x", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=list(row), delimiter="\t", lineterminator="\n")
+                    writer.writeheader()
+                    writer.writerow(row)
         else:
             report = inspect_pair(args.species, args.cds, args.gff, args.genome)[0]
             if args.report:

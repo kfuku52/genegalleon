@@ -171,6 +171,8 @@ def build_task_from_summary_row(row):
         "gbff_path": None,
         "genome_path": None,
     }
+    if row.get("paired_curation"):
+        task["paired_curation"] = row["paired_curation"]
 
     cds_input_path = str(row.get("cds_input_path") or "").strip()
     if cds_input_path != "" and not cds_input_path.endswith(DERIVED_CDS_SUFFIX):
@@ -250,6 +252,19 @@ def read_fasta_records(path):
 
 
 def collect_expected_longest_records(task):
+    if task.get("paired_curation"):
+        from curate_paired_species_inputs import validated_formatted_pair
+        proof = validated_formatted_pair(task)
+        records, duplicates = read_fasta_records(task["cds_path"])
+        if duplicates or len(records) != proof["cds_records"]:
+            raise ValueError("Curated representative CDS identity/count differs")
+        source_check = SourceGeneSelection(task["gff_path"])
+        for identifier in records:
+            bare = identifier.removeprefix(task["species_prefix"] + "_")
+            source_check.observe(identifier + " [protein_id=" + bare + "]", identifier, True)
+        return {identifier: {"sequence": sequence, "raw_sequence_length": len(sequence), "transcript_id": identifier}
+                for identifier, sequence in records.items()}, {"transcripts_total": len(records), "genes_total": len(records),
+                                                             "multi_isoform_genes": 0, "aggregated_cds_removed": 0, **source_check.validate()}
     expected = {}
     transcripts_by_gene = defaultdict(int)
     transcript_total = 0

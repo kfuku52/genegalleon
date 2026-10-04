@@ -422,6 +422,7 @@ SPECIES_SUMMARY_COLUMNS = (
     "cds_gff_coordinate_rescued_groups",
     "overwrite",
     "dry_run",
+    "paired_curation",
 )
 
 PLASTID_GENETIC_CODE_LINEAGE_DEFAULTS = {

@@ -631,6 +631,9 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     else:
         output_name = build_derived_cds_output_basename(task)
     output_path = output_dir / output_name
+    if task.get("paired_curation"):
+        from curate_paired_species_inputs import preserve_formatted_role
+        return preserve_formatted_role(task, "cds", output_path, overwrite, dry_run)
 
     use_gff_grouping = task.get("cds_path") is not None and task.get("gff_path") is not None
     strict_mode = bool(task.get("format_strict", False)) if strict is None else bool(strict)
@@ -959,6 +962,9 @@ def format_genome(task, output_dir, overwrite, dry_run):
     else:
         output_name = build_derived_genome_output_basename(task)
     output_path = output_dir / output_name
+    if task.get("paired_curation"):
+        from curate_paired_species_inputs import preserve_formatted_role
+        return preserve_formatted_role(task, "genome", output_path, overwrite, dry_run)
     # gg-cache-guard: audited - the outer formatter contract deletes this species output on rebuild.
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         return {"status": "skip", "output_path": output_path, "written": 0}
@@ -1023,6 +1029,11 @@ def format_gff(
             "repair_collisions": 0,
         }
     output_path = output_dir / output_name
+    if task.get("paired_curation"):
+        from curate_paired_species_inputs import preserve_formatted_role
+        result = preserve_formatted_role(task, "gff", output_path, overwrite, dry_run)
+        result["repair_mode"] = repair_mode
+        return result
     # gg-cache-guard: audited - reuse is explicit or input/output hashes are checked below; outer provenance handles rebuild policy.
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         if reuse_existing:

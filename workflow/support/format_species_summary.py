@@ -1,6 +1,7 @@
 """Persistent per-species run summary handling."""
 
 import csv
+import json
 import os
 from pathlib import Path
 
@@ -167,4 +168,5 @@ def build_species_summary_row(
         "cds_gff_coordinate_rescued_groups": str(cds_result.get("gff_coordinate_rescued_groups", 0)),
         "overwrite": str(int(bool(overwrite))),
         "dry_run": str(int(bool(dry_run))),
+        "paired_curation": json.dumps(task["paired_curation"], sort_keys=True, separators=(",", ":")) if isinstance(task.get("paired_curation"), dict) else task.get("paired_curation", ""),
     }
