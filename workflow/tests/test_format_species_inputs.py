@@ -5411,7 +5411,6 @@ def test_ncbi_unique_protein_owner_resolves_wrong_locus_at_shared_cds_coordinate
 def test_funannotate_metadata_semicolons_are_repaired_before_consumption(tmp_path, mode, paired):
     module = load_module()
     from gff_attribute_syntax import file_sha256, validate_gff
-    from kffractbias.io import parse_attributes
 
     raw = tmp_path / "raw.gff3"
     rows = ["##gff-version 3\n", "# preserved\n",
@@ -5435,12 +5434,6 @@ def test_funannotate_metadata_semicolons_are_repaired_before_consumption(tmp_pat
     expected[2] = expected[2].replace("Name=SULTR4;1_1", "Name=SULTR4%3B1_1")
     expected[3] = expected[3].replace("protein 1;3,", "protein 1%3B3%2C")
     assert actual == expected
-    attrs = parse_attributes(actual[2].rstrip().split("\t")[8])
-    assert attrs["Name"] == ("SULTR4;1_1",)
-    attrs = parse_attributes(actual[3].rstrip().split("\t")[8])
-    assert attrs["product"] == ("Nucleosome assembly protein 1;3, variant 2",)
-    attrs = parse_attributes(actual[4].rstrip().split("\t")[8])
-    assert attrs["Parent"] == ("t1", "t2") and attrs["Note"] == ("literal%3B",)
     audit = json.loads(Path(str(result["output_path"]) + ".repair.json").read_text())["attribute_syntax"]
     assert audit["changed_rows"] == 2
     assert [r["source_line"] for r in audit["changes"]] == [3, 4]

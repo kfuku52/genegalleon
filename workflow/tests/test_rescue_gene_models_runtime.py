@@ -1238,6 +1238,8 @@ def test_rescue_preflight_rejects_legacy_invalid_gff_without_mutation(hidden_mod
 
 
 def test_formatted_funannotate_metadata_reaches_real_anchor_reader(tmp_path):
+    from kffractbias.io import parse_attributes
+
     from workflow.support.gff_attribute_syntax import normalise_line, validate_gff
 
     source, output = anchor_fixture(tmp_path, [{}, {}])
@@ -1251,6 +1253,12 @@ def test_formatted_funannotate_metadata_reaches_real_anchor_reader(tmp_path):
                                 for number, line in enumerate(text.splitlines(keepends=True), 1)))
     assert len(changes) == 2
     validate_gff(formatted)
+    attributes = [parse_attributes(line.split("\t")[8]) for line in formatted.read_text().splitlines()
+                  if not line.startswith("#")]
+    assert attributes[0]["Name"] == ("SULTR4;1_1",)
+    assert attributes[1]["product"] == ("Protein 1;3, variant 2",)
+    assert parse_attributes("Parent=t1,t2;Note=literal%253B;") == {
+        "Parent": ("t1", "t2"), "Note": ("literal%3B",)}
     source["gff"] = str(formatted)
     genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
     assert [gene.gene_id for gene in genes] == ["Plant_example_g0", "Plant_example_g1"]

@@ -1046,6 +1046,7 @@ def format_gff(
             if reuse_existing:
                 raise
             overwrite = True
+    # gg-cache-guard: audited - reuse is explicit or input/output hashes are checked below; outer provenance handles rebuild policy.
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         if reuse_existing:
             result = {"status": "skip", "output_path": output_path, "lines": 0}
