@@ -3,3 +3,4 @@ pytest
 openpyxl
 numpy<2
 pandas
+biopython
