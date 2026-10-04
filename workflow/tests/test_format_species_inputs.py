@@ -88,6 +88,23 @@ def test_overlap_rescue_preserves_distinct_declared_gene_parents_without_gene_ro
     }
 
 
+def test_genome_reference_index_reads_multiple_archived_fasta_members(tmp_path):
+    load_module()
+    from format_species_annotation.reference import genome_reference_index
+    archive_path = tmp_path / "genome.fa.tar.bz2"
+    with tarfile.open(archive_path, "w:bz2") as archive:
+        for name, text in (("nested/one.fa", ">acc1 OriSeqID=Chr1 Len=3\nATG\n"),
+                           ("two.fna", ">acc2\nAAACCC\n"), ("README.txt", "metadata\n")):
+            data = text.encode()
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    index = genome_reference_index(archive_path)
+    assert index["Chr1"] == index["acc1"] == 3
+    assert index["acc2"] == 6
+    assert index.canonical_ids["Chr1"] == "acc1"
+
+
 def load_module():
     spec = spec_from_file_location("format_species_inputs_module", SCRIPT_PATH)
     module = module_from_spec(spec)

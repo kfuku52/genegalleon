@@ -1,8 +1,12 @@
 """Keep GFF reference names consistent with the exported genome FASTA."""
 
+import io
 import re
+import tarfile
 from pathlib import Path
 
+from format_species_common import is_fasta_filename
+from format_species_constants import FASTA_ARCHIVE_EXTENSIONS
 from format_species_writers import apply_common_replacements, open_text
 
 from .common import build_gff_genome_seqid_map, first_token
@@ -15,6 +19,23 @@ class GenomeReferenceIndex(dict):
     def __init__(self):
         super().__init__()
         self.canonical_ids = {}
+
+
+def genome_text_handles(path):
+    if any(path.name.lower().endswith(suffix) for suffix in FASTA_ARCHIVE_EXTENSIONS):
+        with tarfile.open(path, "r:*") as archive:
+            members = [member for member in archive.getmembers() if member.isfile()]
+            selected = [member for member in members if is_fasta_filename(Path(member.name).name)]
+            if not selected and len(members) == 1:
+                selected = members
+            for member in selected:
+                extracted = archive.extractfile(member)
+                if extracted is not None:
+                    with io.TextIOWrapper(extracted, encoding="utf-8") as handle:
+                        yield handle
+    else:
+        with open_text(path, "rt") as handle:
+            yield handle
 
 
 def genome_reference_index(path):
@@ -47,9 +68,9 @@ def genome_reference_index(path):
             index[alias] = length
             index.canonical_ids[alias] = token
 
-    with open_text(path, "rt") as handle:
+    for handle in genome_text_handles(path):
         line_start = True
-        for line in iter(lambda: handle.readline(1024 * 1024), ""):
+        for line in iter(lambda handle=handle: handle.readline(1024 * 1024), ""):
             if line_start and line.startswith(">"):
                 if not line.endswith("\n") and len(line) == 1024 * 1024:
                     raise ValueError("Genome FASTA header exceeds 1 MiB")
@@ -60,7 +81,8 @@ def genome_reference_index(path):
                     raise ValueError("Genome sequence precedes its FASTA header")
                 length += len(re.sub(r"\s+", "", line))
             line_start = line.endswith("\n")
-    finish()
+        finish()
+        header, length = None, 0
     if before != tuple(getattr(path.stat(), field) for field in fields):
         raise OSError("Genome FASTA changed while reading reference names: " + str(path))
     if not seen:

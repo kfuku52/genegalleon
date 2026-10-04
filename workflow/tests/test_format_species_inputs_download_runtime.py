@@ -810,7 +810,7 @@ def test_download_manifest_insectbase_provider_resolves_from_api_and_formats_arc
     write_tar_bz2(
         data_dir / (species_token + ".genome.fa.tar.bz2"),
         {
-            "nested/" + species_token + ".genome.fa": ">chr1 insectbase\nATGCATGC\n",
+            "nested/" + species_token + ".genome.fa": ">chr1 insectbase\nATGCATGCA\n",
             "README.txt": "fixture\n",
         },
     )
@@ -894,16 +894,16 @@ def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):
 
     cds_content = ">NC_000001.11_cds_NP_000001.1_1\nATGAA\n"
     gff_content = (
-        "chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-gene1;locus_tag=gene1\n"
-        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=rna-1;Parent=gene-gene1;locus_tag=gene1\n"
-        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds-1;Parent=rna-1;protein_id=NP_000001.1;locus_tag=gene1\n"
+        "NC_000001.11\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-gene1;locus_tag=gene1\n"
+        "NC_000001.11\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=rna-1;Parent=gene-gene1;locus_tag=gene1\n"
+        "NC_000001.11\tsrc\tCDS\t1\t9\t.\t+\t0\tID=cds-1;Parent=rna-1;protein_id=NP_000001.1;locus_tag=gene1\n"
     )
     with gzip.open(ftp_dir / "GCF_000001405.40_GRCh38.p14_cds_from_genomic.fna.gz", "wt", encoding="utf-8") as handle:
         handle.write(cds_content)
     with gzip.open(ftp_dir / "GCF_000001405.40_GRCh38.p14_genomic.gff.gz", "wt", encoding="utf-8") as handle:
         handle.write(gff_content)
     with gzip.open(ftp_dir / "GCF_000001405.40_GRCh38.p14_genomic.fna.gz", "wt", encoding="utf-8") as handle:
-        handle.write(">NC_000001.11 chromosome 1\nATGCATGC\n")
+        handle.write(">NC_000001.11 chromosome 1\nATGCATGCA\n")
 
     handler = lambda *args, **kwargs: _NcbiFixtureHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
