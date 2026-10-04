@@ -554,7 +554,10 @@ Notes:
   comparing coding models. Block IDs such as `.CDS2` never become separate
   transcript or gene representatives. GFF-derived headers retain this model's
   resolved owner instead of reapplying the legacy provided-CDS header map,
-- formatting contract 19 invalidates earlier formatting provenance. Use
+- rescued GFF gene ownership follows the same historical ID replacements as
+  emitted GFF text (including `evm.model.`). A collision between distinct
+  normalized owners fails rather than losing the selected longest model,
+- formatting contract 20 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,

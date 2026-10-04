@@ -36,7 +36,7 @@ from .reference import gff_reference_mapping, normalize_gff_reference_lines
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 13
+GFF_REPAIR_VERSION = 14
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -484,11 +484,16 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             # select among all its isoforms, not just that namesake transcript.
             rescued_owners = set(index["rescued_transcript_gene_tokens"].values())
             rescued_owners.update(index["suffix_inferred_transcript_gene_tokens"].values())
-            rescued_genes = {
-                transcript: sanitize_identifier(gene)
-                for transcript, gene in index["transcript_gene_tokens"].items()
-                if gene in rescued_owners and sanitize_identifier(gene) in cds_gene_ids
-            }
+            for transcript, gene in index["transcript_gene_tokens"].items():
+                owner = sanitize_identifier(gene)
+                if gene not in rescued_owners or owner not in cds_gene_ids:
+                    continue
+                # The GFF iterator applies historical text replacements before
+                # parsing IDs. Use the same spelling for the source-owner lookup.
+                identifier = apply_common_replacements(transcript)
+                if identifier in rescued_genes and rescued_genes[identifier] != owner:
+                    raise ValueError("Conflicting normalized rescued GFF gene owners: " + identifier)
+                rescued_genes[identifier] = owner
         del index
     counters = {
         "changed_lines": 0,

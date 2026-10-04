@@ -1703,7 +1703,8 @@ def test_missing_parent_export_siblings_preserve_disjoint_coding_loci(tmp_path, 
 
 
 @pytest.mark.parametrize("provided_cds", [False, True])
-def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds):
+@pytest.mark.parametrize("prefix", ["", "evm.model.", "evm_27.model."])
+def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds, prefix):
     mod = load_module()
     genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
     genome.write_text(">chr1\n" + "ATG" * 9 + "\n")
@@ -1712,15 +1713,16 @@ def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds)
         "chr1\tCoGe\tCDS\t19\t27\t.\t+\t0\tID=modelA.CDS2;Name=modelA;coge_fid=101\n"
         "chr1\tCoGe\tCDS\t19\t27\t.\t+\t0\tID=modelB;Name=modelB;coge_fid=102\n"
     )
+    gff.write_text(gff.read_text().replace("modelA", prefix + "modelA").replace("modelB", prefix + "modelB"))
     task = dict(provider="coge", species_key="Test_species", species_prefix="Test_species",
                 gff_path=gff, genome_path=genome, gene_grouping_mode="rescue_overlap", gff_repair_mode="safe")
     if provided_cds:
         cds = tmp_path / "raw.fa"
-        cds.write_text(">modelA\n" + "ATG" * 5 + "\n>modelB\n" + "ATG" * 3 + "\n")
+        cds.write_text(">" + prefix + "modelA\n" + "ATG" * 5 + "\n>" + prefix + "modelB\n" + "ATG" * 3 + "\n")
         task["cds_path"] = cds
     index = mod.build_gff_cds_grouping_index(task)
     assert index["transcripts_total"] == 2
-    assert index["transcript_gene_tokens"] == {"modelA": "modelA", "modelB": "modelA"}
+    assert index["transcript_gene_tokens"] == {prefix + "modelA": prefix + "modelA", prefix + "modelB": prefix + "modelA"}
     output = tmp_path / "output"
     output.mkdir()
     result = mod.format_cds(task, output, False, False, strict=True)
@@ -5317,13 +5319,15 @@ def test_gff_gene_repair_detects_alignment_collisions_before_and_after_genes(tmp
 
 @pytest.mark.parametrize('provided', [False, True])
 @pytest.mark.parametrize('strand', ['+', '-'])
-def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, strand):
+@pytest.mark.parametrize('prefix', ['', 'evm.model.', 'evm_27.model.'])
+def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, strand, prefix):
     mod = load_module()
     gff, genome, cds = tmp_path/'source.gff', tmp_path/'genome.fa', tmp_path/'cds.fa'
     genome.write_text('>chr1\n'+'ATG'*30+'\n')
     parts = {'a.t1': [(1, 9), (31, 39)],
              'b.t1': [(1, 9), (21, 23), (31, 39), (61, 69)],
              'b.t2': [(1, 9), (31, 39), (61, 69)]}
+    parts = {prefix + name: intervals for name, intervals in parts.items()}
     lines = []
     for transcript, intervals in parts.items():
         lines.append(f'chr1\ts\ttranscript\t1\t69\t.\t{strand}\t.\tID={transcript}')
@@ -5355,7 +5359,27 @@ def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, 
     output_rows = [line.split('\t') for line in gzip.open(formatted['output_path'], 'rt').read().splitlines()]
     assert [r[:8] for r in output_rows] == [r[:8] for r in original_rows]
     for original, output in zip(original_rows, output_rows, strict=True):
-        assert output[8].startswith(original[8])
+        assert output[8].startswith(mod.apply_common_replacements(original[8]))
+
+
+def test_gff_rescued_owner_normalisation_rejects_distinct_owner_collision(tmp_path, monkeypatch):
+    load_module()
+    from format_species_annotation import gff_repair
+    gff, cds, output = tmp_path/'source.gff', tmp_path/'cds.fa', tmp_path/'output.gff.gz'
+    gff.write_text('chr1\ts\tCDS\t1\t6\t.\t+\t0\tParent=evm.model.t\n'
+                   'chr1\ts\tCDS\t20\t25\t.\t+\t0\tParent=t\n')
+    cds.write_text('>Test_species_gA\nATGAAA\n>Test_species_gB\nATGCCC\n')
+    # A legacy paired CDS can predate normalization; conflicting source owners
+    # must be rejected before their transcript IDs become identical in the GFF.
+    monkeypatch.setattr(gff_repair, 'build_gff_cds_grouping_index', lambda _task: {
+        'rescued_transcript_gene_tokens': {'evm.model.t': 'gA', 't': 'gB'},
+        'suffix_inferred_transcript_gene_tokens': {},
+        'transcript_gene_tokens': {'evm.model.t': 'gA', 't': 'gB'},
+    })
+    task = dict(provider='direct', species_key='Test_species', species_prefix='Test_species', gff_path=gff)
+    with pytest.raises(ValueError, match='Conflicting normalized rescued GFF gene owners'):
+        gff_repair.write_repaired_gff(gff, cds, output, 'Test_species', 'safe', source_task=task)
+    assert not output.exists()
 
 
 @pytest.mark.parametrize('strict', [False, True])
