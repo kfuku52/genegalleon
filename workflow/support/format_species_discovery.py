@@ -21,6 +21,7 @@ from format_species_annotation.cds_normalisation import (
     write_audit as write_cds_normalisation_audit,
 )
 from format_species_annotation.common import collapse_transcript_suffix, structured_coge_id
+from format_species_annotation.gff_repair import write_json_atomic
 from format_species_annotation.organelle import gff_organelle_seqids, iter_non_organelle_gff_lines
 from format_species_annotation.reference import gff_reference_mapping, normalize_gff_reference_lines
 from format_species_annotations import (
@@ -75,6 +76,7 @@ from format_species_writers import (
     write_fasta_records_gzip,
     write_gff_lines_gzip,
 )
+from gff_attribute_syntax import syntax_audit, validate_gff, validated_lines
 
 CDS_GFF_GROUPING_AUDIT_VERSION = 15
 
@@ -1031,10 +1033,19 @@ def format_gff(
     output_path = output_dir / output_name
     if task.get("paired_curation"):
         from curate_paired_species_inputs import preserve_formatted_role
+        if not dry_run:
+            validate_gff(task["gff_path"])
         result = preserve_formatted_role(task, "gff", output_path, overwrite, dry_run)
         result["repair_mode"] = repair_mode
         return result
     # gg-cache-guard: audited - reuse is explicit or input/output hashes are checked below; outer provenance handles rebuild policy.
+    if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
+        try:
+            validate_gff(output_path)
+        except ValueError:
+            if reuse_existing:
+                raise
+            overwrite = True
     if output_path.exists() and output_path.stat().st_size > 0 and not overwrite:
         if reuse_existing:
             result = {"status": "skip", "output_path": output_path, "lines": 0}
@@ -1089,18 +1100,23 @@ def format_gff(
             line_count = int(audit.get("line_count", 0) or 0)
             repair_fields = repair_result_fields(audit, output_path)
         else:
+            attribute_changes = []
             line_count, _feature_count = write_gff_lines_gzip(
                 output_path,
-                normalize_gff_reference_lines(
-                    iter_non_organelle_gff_lines(gff_path),
+                validated_lines(normalize_gff_reference_lines(
+                    iter_non_organelle_gff_lines(gff_path, attribute_changes=attribute_changes),
                     gff_reference_mapping(gff_path, task.get("genome_path")),
-                ),
+                ), output_path),
             )
+            write_json_atomic(gff_repair_audit_path(output_path),
+                              {"attribute_syntax": syntax_audit(gff_path, output_path, attribute_changes)})
             repair_fields = repair_result_fields(None, output_path)
             repair_fields["repair_mode"] = repair_mode
             repair_fields["repair_status"] = "not_applied"
+            repair_fields["repair_audit_path"] = gff_repair_audit_path(output_path)
     else:
-        line_count, feature_count = write_gff_lines_gzip(output_path, iter_gff_lines_from_gbff(task))
+        line_count, feature_count = write_gff_lines_gzip(
+            output_path, validated_lines(iter_gff_lines_from_gbff(task), output_path))
         repair_fields = repair_result_fields(None, output_path)
         repair_fields["repair_mode"] = repair_mode
         repair_fields["repair_status"] = "not_applicable"

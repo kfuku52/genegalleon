@@ -13,6 +13,7 @@ from format_species_writers import (
     open_text,
     write_gff_lines_gzip,
 )
+from gff_attribute_syntax import syntax_audit, validated_lines
 
 from .cds_normalisation import audit_path as cds_normalisation_audit_path
 from .cds_normalisation import current_audit as current_cds_normalisation_audit
@@ -36,7 +37,7 @@ from .reference import gff_reference_mapping, normalize_gff_reference_lines
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 15
+GFF_REPAIR_VERSION = 16
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -383,10 +384,11 @@ def canonicalize_coge_cds_attributes(parts, features, names):
 
 
 def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False, rescued_genes=None,
-                            cds_updates=None):
+                            cds_updates=None, attribute_changes=None):
     coge_features, coge_names = {}, {}
     duplicate_features = duplicate_coge_model_ids(gff_path) if coge else set()
-    for line in normalise_gff_lines(iter_non_organelle_gff_lines(gff_path), cds_updates or {}):
+    for line in normalise_gff_lines(iter_non_organelle_gff_lines(
+            gff_path, attribute_changes=attribute_changes), cds_updates or {}):
         stripped = line.rstrip("\n\r")
         newline = line[len(stripped) :]
         if stripped == "" or stripped.startswith("#"):
@@ -504,19 +506,22 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "changed_references": 0,
         "normalized_bare_attribute_lines": 0,
     }
+    attribute_changes = []
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
-        normalize_gff_reference_lines(iter_repaired_gff_lines(
+        validated_lines(normalize_gff_reference_lines(iter_repaired_gff_lines(
             gff_path, plan["id_mapping"], counters, confirmed_overlaps,
             coge=mode != "off" and (source_task or {}).get("provider") == "coge",
             rescued_genes=rescued_genes,
             cds_updates=cds_updates,
-        ), reference_mapping),
+            attribute_changes=attribute_changes,
+        ), reference_mapping), output_path),
     )
     status = (
         "repaired"
         if (
-            len(cds_updates) > 0
+            len(attribute_changes) > 0
+            or len(cds_updates) > 0
             or len(plan["id_mapping"]) > 0
             or counters["changed_values"] > 0
             or counters["normalized_bare_attribute_lines"] > 0
@@ -524,7 +529,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         )
         else "unchanged"
     )
-    if mode == "off" and not cds_updates:
+    if mode == "off" and not cds_updates and not attribute_changes:
         status = "off"
     audit = {
         "repair_version": GFF_REPAIR_VERSION,
@@ -558,6 +563,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "organelle_seqids": sorted(organelle_seqids),
         "organelle_features_excluded": organelle_features_excluded,
     }
+    audit["attribute_syntax"] = syntax_audit(gff_path, output_path, attribute_changes)
     audit.update(encoding_audit)
     audit_path = gff_repair_audit_path(output_path)
     write_json_atomic(audit_path, audit)

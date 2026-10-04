@@ -10,6 +10,7 @@ decision.
 import re
 
 from format_species_writers import apply_common_replacements, open_text
+from gff_attribute_syntax import normalise_line
 
 from .common import first_token, parse_gff_attributes
 from .source_identity import source_annotation_path
@@ -119,16 +120,18 @@ def gff_data_line_is_organelle(line, seqids):
     return len(parts) >= 9 and str(parts[0] or "").strip() in seqids
 
 
-def iter_non_organelle_gff_lines(path, seqids=None):
+def iter_non_organelle_gff_lines(path, seqids=None, *, attribute_changes=None):
     """Yield source GFF lines after removing complete organellar records."""
     excluded = gff_organelle_seqids(path) if seqids is None else frozenset(seqids)
     with open_text(source_annotation_path(path), "rt", errors="replace") as handle:
-        for raw_line in handle:
+        for line_number, raw_line in enumerate(handle, 1):
             if raw_line.startswith("##FASTA"):
                 break
             line = apply_common_replacements(raw_line)
             if not gff_data_line_is_organelle(line, excluded):
-                yield line
+                if attribute_changes is not None:
+                    raw_line = normalise_line(raw_line, path, line_number, attribute_changes)
+                yield apply_common_replacements(raw_line)
 
 
 def count_organelle_gff_features(path, seqids=None):

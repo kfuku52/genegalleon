@@ -158,3 +158,19 @@ def test_curator_cli_produces_an_exclusive_native_manifest(tmp_path):
     again = subprocess.run(command, capture_output=True, text=True)
     assert again.returncode != 0 and "manifest already exists" in again.stderr
     assert manifest.read_bytes() == before
+
+
+def test_approved_pair_import_rejects_invalid_attributes_without_editing_source(tmp_path):
+    task = curated_task(tmp_path)
+    source = task["gff_path"]
+    with gzip.open(source, "rt") as handle:
+        text = handle.read()
+    with gzip.open(source, "wt") as handle:
+        handle.write(text.replace("ID=g1\n", "ID=g1;Name=SULTR4;1;\n"))
+    receipt = json.loads(task["paired_curation"])
+    receipt["gff_output"]["sha256"] = fingerprint(source)["sha256"]
+    task["paired_curation"] = json.dumps(receipt)
+    before = source.read_bytes()
+    with pytest.raises(ValueError, match="regenerate with gg_input_generation"):
+        formatter.format_gff(task, tmp_path / "output", False, False)
+    assert source.read_bytes() == before and not (tmp_path / "output").exists()

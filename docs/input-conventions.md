@@ -562,7 +562,7 @@ Notes:
 - rescued GFF gene ownership follows the same historical ID replacements as
   emitted GFF text (including literal or percent-escaped `evm.model.`). A collision between distinct
   normalized owners fails rather than losing the selected longest model,
-- formatting contract 21 invalidates earlier formatting provenance. Use
+- formatting contract 22 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,
@@ -576,6 +576,13 @@ Notes:
 - malformed UTF-8 bytes in source GFF/GTF attributes are replaced during
   formatting so structural IDs remain usable; byte/line counts and sampled
   source line numbers are recorded in the neighboring repair audit,
+- formatting escapes recoverable unescaped semicolons in funannotate gene `Name`
+  and mRNA `product` numeric suffixes (for example `SULTR4;1` becomes
+  `SULTR4%3B1`). This runs independently of gene-ID repair and rescue flags.
+  Existing escapes, parent lists, IDs and coordinates are retained. The repair
+  audit records each changed source line and attribute, with source/output SHA256.
+  Unrecoverable attribute fragments fail with file/line context; rescue planning
+  validates frozen GFF inputs and directs invalid legacy inputs back to formatting,
 - GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
   interpreted as authoritative gene boundaries and emitted as standard
   `ID`/`Parent` plus `gene_id` attributes,

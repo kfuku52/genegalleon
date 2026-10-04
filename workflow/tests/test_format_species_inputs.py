@@ -5404,3 +5404,108 @@ def test_ncbi_unique_protein_owner_resolves_wrong_locus_at_shared_cds_coordinate
     assert gzip.open(result['output_path'], 'rt').read() == '>Test_species_g1\nATGATGATG\n>Test_species_g2\nATGATGATG\n'
     audit = json.loads(Path(str(result['output_path'])+'.gff-grouping.json').read_text())
     assert audit['stats']['ambiguous'] == 0
+
+
+@pytest.mark.parametrize("mode", ["off", "safe", "strict"])
+@pytest.mark.parametrize("paired", [False, True])
+def test_funannotate_metadata_semicolons_are_repaired_before_consumption(tmp_path, mode, paired):
+    module = load_module()
+    from gff_attribute_syntax import file_sha256, validate_gff
+    from kffractbias.io import parse_attributes
+
+    raw = tmp_path / "raw.gff3"
+    rows = ["##gff-version 3\n", "# preserved\n",
+            "chr1\tfunannotate\tgene\t1\t12\t.\t+\t.\tID=g1;Name=SULTR4;1_1;\n",
+            "chr1\tfunannotate\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g1;product=Nucleosome assembly protein 1;3, variant 2;Dbxref=PFAM:PF00956;note=COG:B,COG:D;\n",
+            "chr1\tfunannotate\tCDS\t1\t12\t.\t+\t0\tParent=t1,t2;Name=already%3Bescaped;Note=literal%253B;\n"]
+    raw.write_text("".join(rows))
+    original = raw.read_bytes()
+    cds = tmp_path / "Species_one.cds.fa"
+    cds.write_text(">Species_one_g1\nATGAAACCCTAA\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    task = {"provider": "local", "species_key": "Species_one", "gff_path": raw,
+            "species_prefix": "Species_one", "gff_repair_mode": mode}
+    result = module.format_gff(task, output, overwrite=False, dry_run=False,
+                               formatted_cds_path=cds if paired else None)
+    validate_gff(result["output_path"])
+    with gzip.open(result["output_path"], "rt") as handle:
+        actual = handle.readlines()
+    expected = rows.copy()
+    expected[2] = expected[2].replace("Name=SULTR4;1_1", "Name=SULTR4%3B1_1")
+    expected[3] = expected[3].replace("protein 1;3,", "protein 1%3B3%2C")
+    assert actual == expected
+    attrs = parse_attributes(actual[2].rstrip().split("\t")[8])
+    assert attrs["Name"] == ("SULTR4;1_1",)
+    attrs = parse_attributes(actual[3].rstrip().split("\t")[8])
+    assert attrs["product"] == ("Nucleosome assembly protein 1;3, variant 2",)
+    attrs = parse_attributes(actual[4].rstrip().split("\t")[8])
+    assert attrs["Parent"] == ("t1", "t2") and attrs["Note"] == ("literal%3B",)
+    audit = json.loads(Path(str(result["output_path"]) + ".repair.json").read_text())["attribute_syntax"]
+    assert audit["changed_rows"] == 2
+    assert [r["source_line"] for r in audit["changes"]] == [3, 4]
+    assert audit["source_sha256"] == file_sha256(raw)
+    assert audit["output_sha256"] == file_sha256(result["output_path"])
+    assert raw.read_bytes() == original
+    # Formatting the output again must not double escape it.
+    task["gff_path"] = result["output_path"]
+    another = tmp_path / "again"
+    another.mkdir()
+    rerun = module.format_gff(task, another, overwrite=False, dry_run=False,
+                              formatted_cds_path=cds if paired else None)
+    with gzip.open(rerun["output_path"], "rt") as handle:
+        assert handle.readlines() == actual
+
+
+@pytest.mark.parametrize("source,feature,attrs", [
+    ("funannotate", "gene", "ID=g1;1;Name=ABC"),
+    ("funannotate", "mRNA", "ID=t1;Parent=g1;2;product=ABC"),
+    ("other", "gene", "ID=g1;Name=SULTR4;1"),
+    ("funannotate", "gene", "ID=g1;Name=SULTR4;unknown"),
+    ("funannotate", "gene", "ID=g1;Name=SULTR4;1;2"),
+])
+def test_unrecoverable_gff_attributes_fail_without_publishing(tmp_path, source, feature, attrs):
+    module = load_module()
+    raw = tmp_path / "invalid.gff3"
+    raw.write_text(f"##gff-version 3\nchr1\t{source}\t{feature}\t1\t9\t.\t+\t.\t{attrs}\n")
+    original = raw.read_bytes()
+    out = tmp_path / "out"
+    out.mkdir()
+    task = {"gff_path": raw, "species_prefix": "Species_one"}
+    with pytest.raises(ValueError, match=r"invalid.gff3:2: Unrecoverable"):
+        module.format_gff(task, out, overwrite=False, dry_run=False)
+    assert not list(out.iterdir()) and raw.read_bytes() == original
+
+
+def test_attribute_syntax_preserves_gtf_quotes_and_ignores_embedded_fasta(tmp_path):
+    load_module()
+    from gff_attribute_syntax import normalise_attributes, validate_gff
+
+    text = 'gene_id "g1"; transcript_id "t1"; product "protein 1;2";'
+    assert normalise_attributes(text, "funannotate", "mRNA") == text
+    gff = tmp_path / "quoted.gtf"
+    gff.write_text("chr1\tsynthetic\tCDS\t1\t9\t.\t+\t0\t" + text + "\n##FASTA\n>chr1\nATGAAATAA\n")
+    validate_gff(gff)
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_invalid_legacy_gff_cache_is_never_silently_reused(tmp_path, reuse):
+    module = load_module()
+    raw = tmp_path / "raw.gff3"
+    raw.write_text("chr1\tfunannotate\tgene\t1\t9\t.\t+\t.\tID=g1;Name=SULTR4;1;\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    task = {"gff_path": raw, "species_prefix": "Species_one", "gff_repair_mode": "off"}
+    cached = output / module.normalize_gff_output_basename(raw.name, "Species_one")
+    with gzip.open(cached, "wt") as handle:
+        handle.write(raw.read_text())
+    before = cached.read_bytes()
+    if reuse:
+        with pytest.raises(ValueError, match="regenerate with gg_input_generation"):
+            module.format_gff(task, output, overwrite=False, dry_run=False, reuse_existing=True)
+        assert cached.read_bytes() == before
+    else:
+        result = module.format_gff(task, output, overwrite=False, dry_run=False)
+        assert result["status"] == "write"
+        with gzip.open(cached, "rt") as handle:
+            assert "Name=SULTR4%3B1" in handle.read()

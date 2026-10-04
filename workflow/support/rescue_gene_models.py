@@ -31,6 +31,7 @@ from Bio.Seq import Seq
 try:
     from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from gff_attribute_syntax import validate_gff
     from input_generation_array_state import atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from rescue_anchor_admission import prepare_rescue_genome
@@ -38,6 +39,7 @@ try:
 except ImportError:
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from .gff_attribute_syntax import validate_gff
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .rescue_anchor_admission import prepare_rescue_genome
@@ -97,6 +99,7 @@ def identities():
                "jcvi.compara.synteny", "jcvi.compara.blastfilter", "jcvi.apps.align")
     versions["source_hashes"] = {name: digest(importlib.util.find_spec(name).origin) for name in modules}
     versions["implementation"] = digest(__file__)
+    versions["attribute_syntax_implementation"] = digest(sys.modules[validate_gff.__module__].__file__)
     versions["mapping_implementation"] = digest(sys.modules[prepare_genome.__module__].__file__)
     versions["anchor_admission_implementation"] = digest(sys.modules[prepare_rescue_genome.__module__].__file__)
     versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
@@ -158,6 +161,7 @@ def build_plan(args):
                 return str(matches[0].resolve())
             cds = discover(args.cds_dir, (".fa", ".fas", ".fasta", ".fna"))
             gff = discover(args.gff_dir, (".gff", ".gff3"))
+            validate_gff(gff)
             genome = discover(args.genome_dir, (".fa", ".fas", ".fasta", ".fna"))
             busco = discover(args.busco_dir, (".busco.short.txt",))
             code = codes.get(name, args.genetic_code)

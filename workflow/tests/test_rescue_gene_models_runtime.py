@@ -1219,3 +1219,38 @@ def test_interval_index_and_competing_sweep_match_brute_force():
     identical = {"seqid": "chr1", "strand": "+", "problems": [], "query": "a", "evidence": {}, "cds": [[0, 60, 0]]}
     records = [copy.deepcopy(identical), copy.deepcopy(identical), {**identical, "cds": [[20, 80, 0]], "problems": []}]
     assert all(m["status"] == "unresolved" for m in rescue.consolidate(records, [], "Target_species"))
+
+
+def test_rescue_preflight_rejects_legacy_invalid_gff_without_mutation(hidden_models):
+    root, species, _ = hidden_models
+    gff = root / "gff" / (species[0] + ".gff3")
+    gff.write_text(gff.read_text().replace("\tsynthetic\tgene\t", "\tfunannotate\tgene\t", 1)
+                   .replace("ID=g0\n", "ID=g0;Name=SULTR4;1;\n", 1))
+    before = gff.read_bytes()
+    result = subprocess.run([sys.executable, str(SCRIPT), "plan", "--cds-dir", str(root / "cds"),
+                             "--gff-dir", str(root / "gff"), "--genome-dir", str(root / "genome"),
+                             "--busco-dir", str(root / "busco"), "--tree", str(root / "tree.nwk"),
+                             "--output", str(root / "rescue")], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert str(gff) + ":3:" in result.stderr and "regenerate with gg_input_generation" in result.stderr
+    assert not (root / "rescue" / "plan.json").exists()
+    assert gff.read_bytes() == before
+
+
+def test_formatted_funannotate_metadata_reaches_real_anchor_reader(tmp_path):
+    from workflow.support.gff_attribute_syntax import normalise_line, validate_gff
+
+    source, output = anchor_fixture(tmp_path, [{}, {}])
+    gff = Path(source["gff"])
+    text = gff.read_text().replace("\tsynthetic\t", "\tfunannotate\t")
+    text = text.replace("ID=g0\n", "ID=g0;Name=SULTR4;1_1;\n")
+    text = text.replace("ID=g0.t1;Parent=g0\n", "ID=g0.t1;Parent=g0;product=Protein 1;3, variant 2;\n")
+    changes = []
+    formatted = tmp_path / "formatted.gff3"
+    formatted.write_text("".join(normalise_line(line, gff, number, changes)
+                                for number, line in enumerate(text.splitlines(keepends=True), 1)))
+    assert len(changes) == 2
+    validate_gff(formatted)
+    source["gff"] = str(formatted)
+    genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert [gene.gene_id for gene in genes] == ["Plant_example_g0", "Plant_example_g1"]
