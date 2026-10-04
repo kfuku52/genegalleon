@@ -24,6 +24,7 @@ def build_arg_parser():
         help="Input provider type. Use 'all' with --input-dir pointing to a provider-root directory.",
     )
     parser.add_argument("--download-manifest", default="")
+    parser.add_argument("--genetic-code", type=int, default=1)
     parser.add_argument("--download-dir", default="")
     parser.add_argument("--stage-downloads", action="store_true", help="Require prepare to stage manifest inputs before workers run.")
     parser.add_argument("--require-gff", action="store_true", help="Reject local tasks without a nonempty GFF or GBFF source; staged manifest tasks are checked after download.")
@@ -111,6 +112,7 @@ def main():
             task["gene_grouping_mode"] = args.gene_grouping_mode
             task["gff_repair_mode"] = args.gff_repair_mode
             task["format_strict"] = bool(args.strict)
+            task["genetic_code"] = args.genetic_code
             task["input_sha256"] = digest_paths(task[key] for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if task.get(key))
             all_tasks.append(task)
         all_warnings.extend(warnings)
@@ -144,7 +146,8 @@ def main():
                               "manifest_row": row, "manifest_parent": str(manifest.parent),
                               "download_dir": str(Path(args.download_dir).expanduser().resolve()),
                               "gene_grouping_mode": args.gene_grouping_mode,
-                              "gff_repair_mode": args.gff_repair_mode, "format_strict": bool(args.strict)}
+                              "gff_repair_mode": args.gff_repair_mode, "format_strict": bool(args.strict),
+                              "genetic_code": args.genetic_code}
             reuse = reuse_reader.resolve(task)
             if reuse is not None:
                 if not args.stage_downloads:

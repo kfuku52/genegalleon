@@ -29,6 +29,10 @@ def build_arg_parser():
         )
     )
     parser.add_argument(
+        "--genetic-code", type=int, default=1,
+        help="NCBI genetic-code table for automatic CDS normalisation (default: 1).",
+    )
+    parser.add_argument(
         "--provider",
         choices=("all",) + PROVIDERS,
         required=True,

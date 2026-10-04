@@ -59,7 +59,7 @@ def test_native_longest_validation_does_not_trust_its_own_wrong_grouping(annotat
     task = dict(provider="direct", species_key="Species_one", species_prefix="Species_one",
                 gff_path=annotation, cds_path=annotation)
     monkeypatch.setattr(longest.formatter, "prepare_cds_identifier_task", lambda task: task)
-    monkeypatch.setattr(longest.formatter, "iter_task_cds_records", lambda task: iter([("t1", "ATGAAA"), ("t2", "ATGAAATTT")]))
+    monkeypatch.setattr(longest.formatter, "iter_normalised_cds_records", lambda task: iter([("t1", "ATGAAA", {}), ("t2", "ATGAAATTT", {})]))
     monkeypatch.setattr(longest.formatter, "build_formatted_cds_id", lambda task, header: header)
     monkeypatch.setattr(longest.formatter, "build_gene_aggregate_id", lambda task, header, tid: "Species_one_" + tid)
     with pytest.raises(ValueError, match="retained_isoform_gene_groups=1"):

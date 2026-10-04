@@ -179,6 +179,7 @@ def main():
             allowed_species_keys=allowed_species_keys,
         )
         for task in tasks:
+            task["genetic_code"] = args.genetic_code
             task["gene_grouping_mode"] = args.gene_grouping_mode
             task["gff_repair_mode"] = args.gff_repair_mode
             task["format_strict"] = bool(args.strict)
@@ -230,6 +231,9 @@ def main():
             formatted_cds_path=cds_result.get("output_path"),
         )
         genome_result = format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
+        if cds_result.get("cds_unresolved_records", 0):
+            sys.stderr.write("Warning: {}: retained {} CDS records without an evidenced correction; see {}.cds-normalisation.json\n".format(
+                task["species_prefix"], cds_result["cds_unresolved_records"], cds_result["output_path"]))
         stale_gff_outputs = []
         if gff_result["status"] in ("write", "skip"):
             stale_gff_outputs = remove_stale_ensembl_like_partial_gff_outputs(

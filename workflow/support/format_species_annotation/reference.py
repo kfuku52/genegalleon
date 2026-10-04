@@ -93,7 +93,7 @@ def genome_reference_index(path):
 def gff_reference_mapping(gff_path, genome_path):
     if genome_path is None:
         return None
-    seqids = set()
+    seqids, declared = set(), set()
     excluded = gff_organelle_seqids(gff_path)
     for line in iter_non_organelle_gff_lines(gff_path):
         parts = line.rstrip("\r\n").split("\t")
@@ -102,10 +102,16 @@ def gff_reference_mapping(gff_path, genome_path):
         elif line.startswith("##sequence-region "):
             directive = line.split()
             if len(directive) == 4 and directive[1] not in excluded:
-                seqids.add(directive[1])
-    mapping, missing = build_gff_genome_seqid_map(genome_reference_index(genome_path), seqids)
+                declared.add(directive[1])
+    index = genome_reference_index(genome_path)
+    mapping, missing = build_gff_genome_seqid_map(index, seqids)
     if missing:
         raise ValueError("GFF references absent from genome FASTA: " + ", ".join(missing[:20]))
+    # Earlier exports removed organelle features/genome records while leaving
+    # their sequence-region directives. An unused declaration is not a coding
+    # coordinate; keep it only when the exported genome contains that reference.
+    declared_mapping, _unused_missing = build_gff_genome_seqid_map(index, declared - seqids)
+    mapping.update(declared_mapping)
     return mapping
 
 

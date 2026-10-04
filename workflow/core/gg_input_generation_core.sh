@@ -90,7 +90,7 @@ gbif_taxon_map="${gbif_taxon_map:-}"
 gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
-format_contract_version=18
+format_contract_version=19
 
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"
@@ -935,6 +935,7 @@ run_format_stage_single() {
       --parameter "provider=${provider}"
       --parameter "gene_grouping_mode=${gene_grouping_mode}"
       --parameter "gff_repair_mode=${gff_repair_mode}"
+      --parameter "genetic_code=${GG_COMMON_GENETIC_CODE:-1}"
       --parameter "format_contract_version=${format_contract_version}"
       --parameter "strict=${strict}"
     )
@@ -990,6 +991,7 @@ run_format_stage_single() {
   cmd+=(--stats-output "${format_stats_file}")
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
   cmd+=(--gff-repair-mode "${gff_repair_mode}")
+  cmd+=(--genetic-code "${GG_COMMON_GENETIC_CODE:-1}")
 
   if [[ -n "${download_manifest}" ]]; then
     cmd+=(--download-manifest "${download_manifest}")
@@ -1990,6 +1992,7 @@ run_array_prepare_mode() {
   fi
   cmd+=(--gene-grouping-mode "${gene_grouping_mode}")
   cmd+=(--gff-repair-mode "${gff_repair_mode}")
+  cmd+=(--genetic-code "${GG_COMMON_GENETIC_CODE:-1}")
   if [[ ${strict} -eq 1 ]]; then
     cmd+=(--strict)
   fi
@@ -2163,6 +2166,7 @@ run_array_worker_mode() {
       --parameter "provider=${provider}"
       --parameter "gene_grouping_mode=${gene_grouping_mode}"
       --parameter "gff_repair_mode=${gff_repair_mode}"
+      --parameter "genetic_code=${GG_COMMON_GENETIC_CODE:-1}"
       --parameter "format_contract_version=${format_contract_version}"
       --parameter "strict=${strict}"
     )
@@ -2491,6 +2495,7 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  array_settings_cmd+=(--setting "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
   # Do not add empty resume fields to old immutable settings documents.
   if [[ -n "${resume_from_task_plan}${resume_from_task_plan_sha256}${resume_from_input_generation_root}" ]]; then
     for array_setting in resume_from_task_plan resume_from_task_plan_sha256 resume_from_input_generation_root; do

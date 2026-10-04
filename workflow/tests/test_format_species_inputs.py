@@ -101,6 +101,207 @@ def test_supplied_cds_uses_explicit_rna_parent_without_inventing_cds_coordinates
         assert handle.read() == ">Species_one_g1\nATGAAATTT\n"
 
 
+def normalisation_bundle(tmp_path, models, *, provided=True, code=1):
+    from Bio.Seq import Seq
+
+    cds, gff, genome = tmp_path / "source.cds.fa", tmp_path / "source.gff3", tmp_path / "source.genome.fa"
+    features, sequences, supplied = ["##gff-version 3"], [], []
+    for number, model in enumerate(models, 1):
+        key, strand = f"t{number}", model.get("strand", "+")
+        blocks = model.get("blocks", [(model.get("cds", "ATGAAATAA"), 0)])
+        utr5, utr3 = model.get("utr5", ""), model.get("utr3", "")
+        parts = [value for value, _ in blocks]
+        parts[0] = utr5 + parts[0]
+        parts[-1] += utr3
+        dna = "N" * 7
+        intervals = []
+        for index, (part, (coding, phase)) in enumerate(zip(parts, blocks, strict=True)):
+            start = len(dna)
+            intervals.append((start, start + len(part), start + (len(utr5) if index == 0 else 0),
+                              start + (len(utr5) if index == 0 else 0) + len(coding), phase))
+            dna += part + "N" * 7
+        if strand == "-":
+            dna = str(Seq(dna).reverse_complement())
+        sequences.append(f">chr{number}\n{dna}\n")
+        def row(kind, start, end, phase, attrs, dna=dna, strand=strand, number=number):
+            if strand == "-":
+                start, end = len(dna) - end, len(dna) - start
+            return f"chr{number}\tsynthetic\t{kind}\t{start + 1}\t{end}\t.\t{strand}\t{phase}\t{attrs}"
+        features += [row("gene", 0, len(dna), ".", f"ID=g{number}"),
+                     row("mRNA", 0, len(dna), ".", f"ID={key};Parent=g{number}" + model.get("attributes", ""))]
+        for start, end, left, right, phase in intervals:
+            features += [row("CDS", left, right, phase, f"Parent={key}"), row("exon", start, end, ".", f"Parent={key}")]
+        raw = model.get("supplied", "".join(value for value, _ in blocks))
+        supplied.append(f">{key}\n{raw}\n")
+    cds.write_text("".join(supplied))
+    gff.write_text("\n".join(features) + "\n")
+    genome.write_text("".join(sequences))
+    return dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                cds_path=cds if provided else None, gff_path=gff, genome_path=genome,
+                gene_grouping_mode="strict", genetic_code=code)
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("provided", [False, True])
+def test_formatting_normalises_partial_cds_and_paired_gff_without_rescue_flag(tmp_path, strand, provided, monkeypatch):
+    from Bio.Seq import Seq
+
+    monkeypatch.setenv("GG_INPUT_RUN_GENE_MODEL_RESCUE", "0")
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{}, {"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)], "strand": strand}], provided=provided)
+    before = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path")}
+    if provided:
+        before["cds_path"] = task["cds_path"].read_bytes()
+    output = tmp_path / "output"
+    output.mkdir()
+    result = module.format_cds(task, output, False, False)
+    assert result["cds_normalised_records"] == 1
+    records = dict(module.iter_fasta_records(result["output_path"]))
+    assert records["Test_species_g2"] == "ATGAAACCCTAA"
+    paired = module.format_gff(task, output, False, False, formatted_cds_path=result["output_path"])
+    with gzip.open(paired["output_path"], "rt") as handle:
+        rows = [line.rstrip().split("\t") for line in handle if "\tCDS\t" in line and "Parent=t2" in line]
+    rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [int(row[7]) for row in rows] == [0, 1]
+    genome = {header: sequence for header, sequence in module.iter_fasta_records(task["genome_path"])}
+    pieces = [genome[row[0]][int(row[3]) - 1:int(row[4])] for row in rows]
+    genomic = "".join(str(Seq(part).reverse_complement()) if strand == "-" else part for part in pieces)
+    assert genomic == records["Test_species_g2"]
+    assert all("gg_cds_normalisation=annotated_partial_frame" in row[8] for row in rows)
+    assert {name: Path(task[name]).read_bytes() for name in before} == before
+    audit = json.loads(Path(str(result["output_path"]) + ".cds-normalisation.json").read_text())
+    assert audit["records"][0]["selected_evidence"][0]["trailing_bases_omitted"] == 1
+    assert not list(tmp_path.glob("*.fai"))
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_formatting_removes_proven_utr_and_retains_unresolved_originals(tmp_path, strand):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [
+        {"cds": "ATGAAATAA", "utr5": "TAA", "supplied": "TAAATGAAATAA", "strand": strand},
+        {"cds": "ATGTGACCCTAA", "attributes": ";transl_except=(pos:4..6,aa:OTHER)"},
+        {"blocks": [("TAATGAAATAA", 1)]}])
+    result = module.format_cds(task, tmp_path, False, False)
+    records = dict(module.iter_fasta_records(result["output_path"]))
+    assert records == {"Test_species_g1": "ATGAAATAA", "Test_species_g2": "ATGTGACCCTAA", "Test_species_g3": "TAATGAAATAAN"}
+    assert (result["cds_normalised_records"], result["cds_unresolved_records"]) == (1, 2)
+    audit = json.loads(Path(str(result["output_path"]) + ".cds-normalisation.json").read_text())
+    assert audit["counts"] == {"normalised": 1, "retained_unresolved": 2}
+
+
+def test_formatting_chooses_longest_after_utr_correction(tmp_path):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"cds": "ATGAAATAA", "utr5": "TAATAATAA", "supplied": "TAATAATAAATGAAATAA"}])
+    with task["cds_path"].open("a") as handle:
+        handle.write(">t2\nATGCCCCCCTAA\n")
+    genome = task["genome_path"].read_text().splitlines()[1]
+    start = len(genome) + 1
+    task["genome_path"].write_text(">chr1\n" + genome + "ATGCCCCCCTAA\n")
+    lines = task["gff_path"].read_text().splitlines()
+    gene = lines[1].split("\t")
+    gene[4] = str(len(genome) + 12)
+    lines[1] = "\t".join(gene)
+    lines += [f"chr1\tsynthetic\tmRNA\t{start}\t{start + 11}\t.\t+\t.\tID=t2;Parent=g1",
+              f"chr1\tsynthetic\tCDS\t{start}\t{start + 11}\t.\t+\t0\tParent=t2"]
+    task["gff_path"].write_text("\n".join(lines) + "\n")
+    result = module.format_cds(task, tmp_path, False, False)
+    assert dict(module.iter_fasta_records(result["output_path"])) == {"Test_species_g1": "ATGCCCCCCTAA"}
+    with Path(str(result["output_path"]) + ".gff-grouping.tsv").open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert rows[0]["raw_sequence_length"] == "18" and rows[0]["effective_cds_length"] == "9"
+    assert rows[1]["selected_longest"] == "1"
+    from validate_longest_cds_selection import collect_expected_longest_records
+    assert collect_expected_longest_records(task)[0]["Test_species_g1"]["sequence"] == "ATGCCCCCCTAA"
+
+
+def test_formatting_normalisation_audit_controls_reuse_and_genetic_code(tmp_path):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"cds": "ATGTGACCCTAA"}], code=4)
+    first = module.format_cds(task, tmp_path, False, False)
+    assert first["cds_unresolved_records"] == 0
+    assert module.format_cds(task, tmp_path, False, False)["status"] == "skip"
+    task["genetic_code"] = 1
+    assert module.format_cds(task, tmp_path, False, False)["cds_unresolved_records"] == 1
+    audit_path = Path(str(first["output_path"]) + ".cds-normalisation.json")
+    audit = json.loads(audit_path.read_text())
+    assert audit["contract"]["genetic_code"] == 1
+    task["genome_path"].write_text(task["genome_path"].read_text().replace("ATGTGA", "ATGAGA"))
+    assert module.format_cds(task, tmp_path, False, False)["status"] == "write"
+
+
+def test_formatting_dry_run_does_not_publish_corrections_or_indexes(tmp_path):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAATAA", 2)]}])
+    output = tmp_path / "output"
+    output.mkdir()
+    assert module.format_cds(task, output, False, True)["status"] == "dry-run"
+    assert list(output.iterdir()) == [] and not list(tmp_path.glob("*.fai"))
+
+
+@pytest.mark.parametrize("provided", [True, False])
+def test_formatting_refuses_unverified_paired_corrections_and_rebuilds(tmp_path, provided):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)]}], provided=provided)
+    first = module.format_cds(task, tmp_path, False, False)
+    paired = module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])
+    output_before = paired["output_path"].read_bytes()
+    audit = Path(str(first["output_path"]) + ".cds-normalisation.json")
+    audit.write_text("{broken")
+    with pytest.raises(ValueError, match="Missing or stale CDS normalisation audit"):
+        module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])
+    assert paired["output_path"].read_bytes() == output_before
+    assert module.format_cds(task, tmp_path, False, False)["status"] == "write"
+    assert module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])["status"] == "write"
+    audit.unlink()
+    with pytest.raises(ValueError, match="Missing or stale CDS normalisation audit"):
+        module.format_gff(task, tmp_path, True, False, formatted_cds_path=first["output_path"])
+
+
+def test_formatting_normalises_against_archived_genome_with_original_seqid(tmp_path):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)]}])
+    dna = task["genome_path"].read_text().splitlines()[1]
+    contents = f">acc1 OriSeqID=chr1 Len={len(dna)}\n{dna}\n".encode()
+    archive = tmp_path / "genome.fa.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        member = tarfile.TarInfo("genome.fa")
+        member.size = len(contents)
+        handle.addfile(member, io.BytesIO(contents))
+    task["genome_path"] = archive
+    result = module.format_cds(task, tmp_path, False, False)
+    paired = module.format_gff(task, tmp_path, False, False, formatted_cds_path=result["output_path"])
+    assert result["cds_normalised_records"] == 1
+    with gzip.open(paired["output_path"], "rt") as handle:
+        assert all(line.split("\t")[0] == "acc1" for line in handle if not line.startswith("#"))
+    assert not list(tmp_path.glob("*.fai"))
+
+
+def test_formatting_bad_genome_coordinates_fail_before_cds_publication(tmp_path):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)]}])
+    task["genome_path"].write_text(">chr1\nA\n")
+    sources = {name: Path(task[name]).read_bytes() for name in ("cds_path", "gff_path", "genome_path")}
+    output = tmp_path / "output"
+    output.mkdir()
+    with pytest.raises(ValueError, match="outside anchor genome|exceeds genome"):
+        module.format_cds(task, output, False, False)
+    assert list(output.iterdir()) == []
+    assert {name: Path(task[name]).read_bytes() for name in sources} == sources
+
+
+def test_formatting_drops_unused_missing_sequence_region_declarations(tmp_path):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{}])
+    task["gff_path"].write_text("##sequence-region removed_plastid 1 150718\n" + task["gff_path"].read_text())
+    result = module.format_cds(task, tmp_path, False, False)
+    paired = module.format_gff(task, tmp_path, False, False, formatted_cds_path=result["output_path"])
+    with gzip.open(paired["output_path"], "rt") as handle:
+        assert "removed_plastid" not in handle.read()
+    task["gff_path"].write_text(task["gff_path"].read_text().replace("chr1", "removed_plastid"))
+    with pytest.raises(ValueError, match="absent from genome"):
+        module.format_gff(task, tmp_path, True, False, formatted_cds_path=result["output_path"])
+
+
 @pytest.mark.parametrize("header,source_id,canonical", [
     ("acc1 OriSeqID=Chr1 Len=9", "Chr1", "acc1"),
     ("lcl|chr1", "chr1", "lcl|chr1"),
@@ -1905,7 +2106,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 14
+    assert audit["version"] == 15
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -3236,7 +3437,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 14
+    assert audit["version"] == 15
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -3279,7 +3480,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 14
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 15
     assert skipped["status"] == "skip"
 
 

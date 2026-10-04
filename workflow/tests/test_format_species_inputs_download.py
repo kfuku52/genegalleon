@@ -586,7 +586,7 @@ def test_download_manifest_supports_coge_and_cngb_with_id_inference(tmp_path):
             encoding="utf-8",
         )
         genome_source.write_text(
-            ">chr1\nATGCATGC\n",
+            ">chr1\nATGAAATTT\n",
             encoding="utf-8",
         )
 
@@ -721,7 +721,7 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert (out_genome / (species_key + "_direct.genome.fa.gz")).exists()
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 14
+    assert audit["version"] == 15
     assert audit["grouping_source"] == "gff"
     assert audit["stats"]["mapped"] == 2
     assert audit["stats"]["unmapped"] == 0

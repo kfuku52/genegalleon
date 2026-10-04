@@ -165,6 +165,7 @@ def build_task_from_summary_row(row):
         "species_key": species_key,
         "species_prefix": species_prefix,
         "gene_grouping_mode": formatter.normalize_gene_grouping_mode(row.get("gene_grouping_mode", "strict")),
+        "genetic_code": int(row.get("cds_genetic_code") or 1),
         "cds_path": None,
         "gff_path": None,
         "gbff_path": None,
@@ -255,7 +256,7 @@ def collect_expected_longest_records(task):
     cds_identifier_task = formatter.prepare_cds_identifier_task(task)
     source_check = SourceGeneSelection(task.get("gff_path"))
 
-    for header, sequence in formatter.iter_task_cds_records(task):
+    for header, sequence, _decision in formatter.iter_normalised_cds_records(cds_identifier_task):
         transcript_total += 1
         transcript_id = formatter.build_formatted_cds_id(cds_identifier_task, header)
         gene_id = formatter.build_gene_aggregate_id(cds_identifier_task, header, transcript_id)

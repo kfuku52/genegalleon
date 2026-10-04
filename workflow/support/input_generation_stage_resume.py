@@ -21,12 +21,12 @@ from input_generation_array_state import (
     verify_receipt,
 )
 
-FORMAT_PARAMETERS = ("provider", "gene_grouping_mode", "gff_repair_mode", "strict",
+FORMAT_PARAMETERS = ("provider", "gene_grouping_mode", "gff_repair_mode", "strict", "genetic_code",
                      "require_cds", "require_gff", "require_genome")
 
 
 def parameters(settings, stage, format_contract_version):
-    result = {key: str(settings.get(key, "0" if key.startswith("require_") else ""))
+    result = {key: str(settings.get(key, "0" if key.startswith("require_") else "1" if key == "genetic_code" else ""))
               for key in FORMAT_PARAMETERS}
     result["format_contract_version"] = str(format_contract_version)
     if stage == "validate":

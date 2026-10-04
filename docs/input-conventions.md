@@ -554,7 +554,7 @@ Notes:
   comparing coding models. Block IDs such as `.CDS2` never become separate
   transcript or gene representatives. GFF-derived headers retain this model's
   resolved owner instead of reapplying the legacy provided-CDS header map,
-- formatting contract 16 invalidates earlier formatting provenance. Use
+- formatting contract 19 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,
@@ -571,7 +571,26 @@ Notes:
 - GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
   interpreted as authoritative gene boundaries and emitted as standard
   `ID`/`Parent` plus `gene_id` attributes,
-- CDS are padded to codon-length multiples and transcript-level redundancies are collapsed at gene level.
+- with a paired GFF and genome, ordinary formatting automatically repairs
+  evidenced UTR contamination and incorrectly exported partial-CDS frames before
+  selecting the longest isoform. It uses the same transcript's genomic CDS,
+  exon boundaries and coherent phase recurrence; a stop-free alternative frame
+  alone cannot establish a correction. Partial-frame corrections trim the
+  corresponding GFF CDS boundaries and recompute standard GFF3 phases. Genome
+  sequence and downloaded sources remain unchanged. This runs independently of
+  `GG_INPUT_RUN_GENE_MODEL_RESCUE`, including provided and GFF-derived CDS,
+- `*.fa.gz.cds-normalisation.json` records source/output SHA-256 hashes,
+  translation code, corrections, GFF coordinate changes and unresolved records.
+  Translation exceptions, pseudogenes, ambiguous phase conventions and
+  unexplained internal stops retain their supplied sequences and are reported
+  as `retained_unresolved`; stops are never deleted or masked. The species
+  summary records correction/unresolved counts before isoform selection and
+  `cds_genetic_code`. `--genetic-code` defaults to 1; input generation forwards
+  `GG_COMMON_GENETIC_CODE`. Changing sources, code or implementation invalidates
+  the normalisation audit. A missing/stale audit must be regenerated before
+  publishing its paired corrected GFF,
+- CDS are padded to codon-length multiples after correction and representative
+  selection; transcript-level redundancies are collapsed at gene level.
 - formatted GFF gene IDs are conservatively repaired against the final CDS IDs by default
   (`--gff-repair-mode safe`). Only unique, collision-free mappings are applied; the
   downloaded/source GFF is not modified. Use `off` to preserve source identifiers or

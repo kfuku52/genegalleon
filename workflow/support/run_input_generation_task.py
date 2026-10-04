@@ -161,6 +161,7 @@ def resolve_manifest_task(task, args, *, raw_input_error=None):
     actual["input_sha256"] = {**task.get("input_sha256", {}), **{path: observed[path] for path in actual_paths}}
     for key in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
         actual[key] = task[key]
+    actual["genetic_code"] = int(task.get("genetic_code", 1))
     atomic_json(resolved, {"plan_sha256": plan_sha256, "task_index": args.task_index,
                           "task": {key: str(value) if isinstance(value, Path) else value for key, value in actual.items()}})
     return actual
@@ -261,6 +262,10 @@ def main():
         reuse_existing=args.reuse_existing,
     )
     genome_result = fsi.format_genome(task, output_genome_dir, args.overwrite, args.dry_run)
+
+    if cds_result.get("cds_unresolved_records", 0):
+        sys.stderr.write("Warning: {}: retained {} CDS records with unresolved translation evidence; see CDS normalisation audit.\n".format(
+            task["species_prefix"], cds_result["cds_unresolved_records"]))
 
     if int(gff_result.get("invalid_utf8_bytes", 0) or 0) > 0:
         sys.stderr.write(

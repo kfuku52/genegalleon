@@ -29,14 +29,18 @@ from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
+    from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from input_generation_array_state import atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
+    from rescue_anchor_admission import prepare_rescue_genome
     from species_labeling import extract_species_label
 except ImportError:
+    from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
+    from .rescue_anchor_admission import prepare_rescue_genome
     from .species_labeling import extract_species_label
 
 SCHEMA = 1
@@ -94,6 +98,8 @@ def identities():
     versions["source_hashes"] = {name: digest(importlib.util.find_spec(name).origin) for name in modules}
     versions["implementation"] = digest(__file__)
     versions["mapping_implementation"] = digest(sys.modules[prepare_genome.__module__].__file__)
+    versions["anchor_admission_implementation"] = digest(sys.modules[prepare_rescue_genome.__module__].__file__)
+    versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
     return versions
@@ -344,13 +350,14 @@ def stage(root, relative, key, builder, guard=None):
 
 def prepared(root, plan, name):
     source = plan["request"]["sources"][name]
-    verify_sources(plan, [name], ["fasta", "gff"])
+    def guard():
+        verify_sources(plan, [name], ["fasta", "gff", "genome"])
+    guard()
     def build(tmp):
-        genes, meta = prepare_genome(source, tmp, "genes", 1.0)
-        verify_sources(plan, [name], ["fasta", "gff"])
+        genes, meta = prepare_rescue_genome(source, tmp, "genes", 1.0)
         atomic_json(tmp / "mapping.json", meta)
         atomic_json(tmp / "positions.json", [vars(g) for g in genes])
-    return stage(root, Path("prepared") / name, {"plan": digest(root / "plan.json"), "species": name}, build)
+    return stage(root, Path("prepared") / name, {"plan": digest(root / "plan.json"), "species": name}, build, guard)
 
 
 def parse_anchors(path):
@@ -880,6 +887,8 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
         ref = plan["request"]["sources"][donor]
         verify_sources(plan, [donor], ["genome", "gff"])
         mapping = {r["jcvi_id"]: r for r in table(root / "prepared" / donor / "genes.id_map.tsv") if r["status"] == "selected"}
+        admission = {r["original_id"]: r for r in json.loads(
+            (root / "prepared" / donor / "genes.anchor_admission.json").read_text())["records"]}
         transcripts = {}
         with open_text(Path(ref["gff"])) as handle:
             for line in handle:
@@ -899,6 +908,11 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
         # intervals in GeMoMa's selected-file lookup.
         for r in subset:
             row = mapping[r["query"]]
+            evidence = admission.get(row["original_id"], {}).get("selected_evidence", [])
+            if any(e.get("phase_convention") == "complementary" for e in evidence):
+                (directory / (r["id"] + ".skipped.json")).write_text(json.dumps(
+                    {"reason": "unsupported_reference_phase_convention", "evidence": evidence}) + "\n")
+                continue
             aliases = {row["original_id"], row["original_id"].removeprefix(donor + "_")}
             matches = sorted(set(transcripts) & aliases)
             if not matches:
@@ -967,9 +981,10 @@ def finalize(root, plan, names=None, destination=Path("augmented")):
         require_same_key(key, {"plan": digest(root / "plan.json"), "rescue_receipts": {
             n: digest(root / "rescued" / n / "receipt.json") for n in names}})
     def build(tmp):
-        for subdir in ("species_cds", "species_gff"):
+        for subdir in ("species_cds", "species_gff", "anchor_admission"):
             (tmp / subdir).mkdir()
         rows = []
+        admission_summaries = {}
         for name in names:
             source = plan["request"]["sources"][name]
             models = [m for m in json.loads((root / "rescued" / name / "models.json").read_text()) if m["status"] == "accepted"]
@@ -1028,8 +1043,14 @@ def finalize(root, plan, names=None, destination=Path("augmented")):
             check = tmp / ("check_" + name)
             check.mkdir()
             mapping = json.loads((root / "prepared" / name / "mapping.json").read_text())
-            prepare_genome({**source, "fasta": str(cds), "gff": str(gff), "feature": mapping["feature"],
-                            "attribute": mapping["attribute"]}, check, "check", 1.0)
+            _, checked_mapping = prepare_rescue_genome(
+                {**source, "fasta": str(cds), "gff": str(gff), "feature": mapping["feature"],
+                 "attribute": mapping["attribute"]}, check, "check", 1.0,
+                required_ids=[m["model_id"] for m in models])
+            admission_summaries[name] = checked_mapping["anchor_admission"]
+            for suffix in ("json", "tsv"):
+                shutil.copyfile(check / ("check.anchor_admission." + suffix),
+                                tmp / "anchor_admission" / (name + "." + suffix))
             shutil.rmtree(check)
             rows.append((name, len(existing_ids), len(models), len(existing_ids) + len(models),
                          source["quality"]["complete_pct"], str(root / destination / "species_cds" / cds.name),
@@ -1039,6 +1060,7 @@ def finalize(root, plan, names=None, destination=Path("augmented")):
         atomic_json(tmp / "summary.json", {"counting_unit": "new gene model", "species": len(rows),
                                            "rescued_models": sum(r[2] for r in rows), "changed_species": [r[0] for r in rows if r[2]],
                                            "common_references": plan["common_references"],
+                                           "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": digest(root / "plan.json")})
     return stage(root, destination, key, build, guard)
 

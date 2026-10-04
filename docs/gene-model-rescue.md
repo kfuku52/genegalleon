@@ -3,13 +3,19 @@
 `workflow/support/rescue_gene_models.py` is an independent, restartable CLI.
 Input generation optionally runs it after formatting, initial BUSCO and species
 taxonomy, before augmented CDS/GFF inputs are used in OrthoFinder. Enable it with
-`GG_INPUT_RUN_GENE_MODEL_RESCUE=1`; it is off by default.
+`GG_INPUT_RUN_GENE_MODEL_RESCUE=1`; it is off by default. Evidence-based repairs
+of existing CDS models already run during ordinary input formatting, before
+longest-isoform selection, independently of this flag. That step exports matching
+CDS/GFF corrections and an adjacent `*.cds-normalisation.json` audit while
+preserving acquired sources; see [input conventions](input-conventions.md).
+The rescue flag controls synteny searches for additional models.
 
 ```mermaid
 flowchart LR
   A[Formatted CDS, GFF, genomes] --> B[Initial BUSCO and initial tree]
   B --> C[Freeze five common references and three nearest donors]
-  C --> D[Deduplicated pair comparisons and unquota self synteny]
+  C --> J[Audit and admit existing protein anchors]
+  J --> D[Deduplicated pair comparisons and unquota self synteny]
   D --> E[Two-anchor candidate intervals]
   E --> F[miniprot and optional GeMoMa]
   F --> G[ORF and conflict validation]
@@ -22,13 +28,54 @@ flowchart LR
 Provide exactly one formatted CDS FASTA, GFF3 and genome FASTA per species.
 Species prefixes and IDs follow [input conventions](input-conventions.md).
 CDS-to-GFF mapping is complete and unambiguous; representative isoforms are
-selected with the existing synteny mapper. Original CDS must be translatable
-without internal stops or incomplete codons. Original files are never rewritten.
+selected with the existing synteny mapper. Existing models undergo automatic
+anchor admission before comparisons. Original files are never rewritten.
 Genome contig names must be unique, and every original coding-feature span and
 selected anchor must lie within a matching genome contig, including species with
 no candidates. FASTA indexing warnings fail the attempt and remain in its logs.
 These checks detect coordinate incompatibility; they do not establish exact
 sequence agreement between every original CDS and its genomic exons.
+
+### Existing-model anchor admission
+
+Ordinary stop-free CDS use their original translation under the species' genetic
+code. For an invalid translation, two narrowly supported normalisations are
+available as a fallback for legacy or externally formatted inputs, applied only
+to the temporary anchor protein:
+
+* UTR contamination requires agreement with the same model's annotated spliced
+  exons, and a stop-free, in-frame genomic CDS contained within that transcript
+  and the supplied sequence. At most two terminal formatter-added Ns and the
+  legacy conversion of ambiguity codes to N are allowed in identity comparisons.
+  If the supplied sequence matches an annotated CDS, that model takes precedence;
+  a shorter ORF in another isoform cannot reclassify its internal stop as UTR.
+* Partial CDS require agreement with the same model's genomic CDS and a coherent
+  chain of annotated phases. Standard GFF3 skip-count phases and complementary
+  frame fields are distinguished from their exon-length recurrence. Ambiguous
+  single-block models require unanimous informative evidence elsewhere in the
+  source GFF. Missing, inconsistent or mixed evidence cannot establish a frame.
+  Only complete codons after the annotated offset are translated; omitted
+  terminal bases are recorded. Newly rescued models never establish a source
+  file's phase convention.
+
+Translation exceptions, annotated pseudogenes, conflicting reconstructions and
+unexplained internal stops are withheld from both anchors and donor queries.
+Stops are neither deleted nor replaced with X, and a stop-free alternative frame
+alone is insufficient evidence. These records remain in exported CDS/GFF and in
+the original-feature overlap checks. Withholding a model is not a gene-loss call.
+If no usable anchors remain, preparation fails with its admission audit intact.
+New predictions still require the complete ORF and other checks below.
+
+Admission also recognises GeneGalleon's formatted NCBI `GeneID123` identifiers
+against `GeneID:123` in `Dbxref`, and GWH gene `Accession` identifiers. These
+exact aliases select the public annotation mapper's feature/attribute pair;
+full, unambiguous CDS-to-GFF mapping remains required. The general pairwise
+synteny command retains its existing strict translation and mapping behaviour.
+
+Admission JSON records the genomic transcript, phase decision, sequence hashes
+and reasons for every normalised or excluded representative; a TSV covers all
+representatives. The helper's identity and source genome hashes are frozen in
+the plan, and admission files participate in prepared/finalized receipts.
 
 All first-pass BUSCO short summaries must contain `C:`, dataset, BUSCO version,
 mode and marker count (`n:`). Comparisons require the same dataset/version/mode,
@@ -118,7 +165,8 @@ separately selected Java 8 was verified. This requirement should be rechecked wh
 updated, rather than changing the container's default JVM. Its CDS models undergo the same
 ORF/conflict checks and a donor-protein alignment for coverage/identity. Use
 standard genetic code 1 for this optional refinement. Ambiguous reference
-transcript mappings are recorded and skipped by GeMoMa; miniprot evidence remains.
+transcript mappings and references requiring complementary phase normalisation
+are recorded and skipped by GeMoMa; miniprot evidence remains.
 
 ## Commands and outputs
 
@@ -143,13 +191,15 @@ parallelism across jobs is supplied by the scheduler.
 | Output | Meaning |
 |---|---|
 | `plan.json`, `references.tsv`, `selection.nwk` | Frozen sources, selection and sparse job graph |
-| `prepared/SPECIES/` | Representative proteins, BED, ID map and original-source metadata |
+| `prepared/SPECIES/` | Admitted proteins, BED, ID map and original-source metadata |
+| `prepared/SPECIES/genes.anchor_admission.json`, `.tsv` | Existing-model decisions, evidence and counts |
 | `synteny/comparison_NNNNNN/` | Raw anchors, all blocks, commands and logs |
 | `rescued/SPECIES/candidates.json` | Donor gene, flanks, interval, orientation and comparison |
 | `rescued/SPECIES/models.json`, `audit.tsv` | Accepted, duplicate-support and unresolved models with reasons |
 | `effective/SPECIES/` | Validated per-species augmented inputs, ready for BUSCO workers |
 | `augmented/species_cds`, `augmented/species_gff` | Original records plus accepted new models |
 | `augmented/inputs.tsv`, `summary.json` | Explicit effective input paths and model counts |
+| `augmented/anchor_admission/SPECIES.json`, `.tsv` | Admission audits after full export validation |
 | `qc_report/before_after.tsv` | Initial/post-rescue BUSCO and changes, after the input-generation QC stage |
 
 Exported FASTA keeps all original IDs, headers and sequences. GFF keeps all

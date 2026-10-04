@@ -12,8 +12,226 @@ import pytest
 from Bio.Seq import Seq
 
 from workflow.support import rescue_gene_models as rescue
+from workflow.support.rescue_anchor_admission import prepare_rescue_genome
 
 SCRIPT = Path(rescue.__file__)
+
+
+def anchor_fixture(tmp_path, models, code=1):
+    """Real exon coordinates on both strands, with untouched source records."""
+    fasta, genome, features = [], [], ["##gff-version 3"]
+    for number, model in enumerate(models):
+        identifier, contig = f"g{number}", f"chr{number}"
+        blocks = model.get("blocks", [(model.get("cds", "ATGAAATAA"), 0)])
+        utr5, utr3 = model.get("utr5", ""), model.get("utr3", "")
+        parts = [sequence for sequence, _ in blocks]
+        parts[0] = utr5 + parts[0]
+        parts[-1] += utr3
+        dna = "NNNNNNN".join(parts)
+        strand = model.get("strand", "+")
+        if strand == "-":
+            dna = str(Seq(dna).reverse_complement())
+        genome.append(f">{contig}\n{dna}\n")
+        def row(kind, start, end, phase, attr, strand=strand, dna=dna, contig=contig):
+            if strand == "-":
+                start, end = len(dna) - end, len(dna) - start
+            return f"{contig}\tsynthetic\t{kind}\t{start + 1}\t{end}\t.\t{strand}\t{phase}\t{attr}"
+        features.extend([row("gene", 0, len(dna), ".", "ID=" + identifier),
+                         row("mRNA", 0, len(dna), ".", f"ID={identifier}.t1;Parent={identifier}" + model.get("attributes", ""))])
+        offset = 0
+        for index, ((sequence, phase), part) in enumerate(zip(blocks, parts, strict=True)):
+            left = offset + (len(utr5) if index == 0 else 0)
+            features.append(row("CDS", left, left + len(sequence), phase, f"Parent={identifier}.t1"))
+            if not model.get("no_exons"):
+                features.append(row("exon", offset, offset + len(part), ".", f"Parent={identifier}.t1"))
+            offset += len(part) + 7
+        supplied = model.get("supplied", "".join(sequence for sequence, _ in blocks))
+        fasta.append(f">Plant_example_{identifier} original header\n{supplied}\n")
+    paths = {key: tmp_path / (key + suffix) for key, suffix in (("fasta", ".fa"), ("gff", ".gff3"), ("genome", ".fa"))}
+    for key, contents in (("fasta", fasta), ("genome", genome), ("gff", ["\n".join(features) + "\n"])):
+        paths[key].write_text("".join(contents))
+    output = tmp_path / "prepared"
+    output.mkdir()
+    return {"species": "Plant_example", "mode": "cds", "feature": "gene", "attribute": "ID",
+            "genetic_code": code, **{key: str(path) for key, path in paths.items()}}, output
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("convention,phase", [("gff3", 2), ("complementary", 1)])
+def test_admission_utr_partial_and_original_preservation(tmp_path, strand, convention, phase):
+    coding, partial = "ATGAAACCCTAA", "TAATGAAACCCTAA"
+    second = (phase + 4 if convention == "complementary" else phase - 4) % 3
+    source, output = anchor_fixture(tmp_path, [
+        {"cds": coding},
+        {"cds": coding, "utr5": "TAA", "supplied": "TAA" + coding, "strand": strand},
+        {"blocks": [(partial[:4], phase), (partial[4:], second)], "strand": strand},
+        {"cds": "ATGTGACCCTAA"}], code=1)
+    before = {key: Path(source[key]).read_bytes() for key in ("fasta", "gff", "genome")}
+    genes, metadata = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 3
+    assert metadata["anchor_admission"]["counts"] == {"unchanged": 1, "normalised": 2, "excluded": 1}
+    assert {key: Path(source[key]).read_bytes() for key in before} == before
+    assert not list(tmp_path.glob("*.fai")) and not list(output.glob(".anchor-genome-*"))
+    proteins = {identifier: sequence for identifier, _, sequence in rescue.fasta_records(output / "genes.pep")}
+    assert proteins["Plant_example_g1"] == proteins["Plant_example_g2"] == "MKP"
+    assert "Plant_example_g3" not in proteins
+    mapping = rescue.table(output / "genes.id_map.tsv")
+    assert mapping[-1]["status"] == "translation_excluded"
+    audit = json.loads((output / "genes.anchor_admission.json").read_text())
+    assert audit["records"][1]["selected_evidence"][0]["phase_convention"] == convention
+
+
+@pytest.mark.parametrize("attributes,reason", [
+    (";transl_except=(pos:4..6,aa:OTHER)", "annotated_translation_exception"),
+    (";exception=unclassified transcription discrepancy", "annotated_translation_exception"),
+    (";pseudo=true", "annotated_pseudogene")])
+def test_admission_preserves_and_withholds_annotation_exceptions(tmp_path, attributes, reason):
+    source, output = anchor_fixture(tmp_path, [{}, {"cds": "ATGTGACCCTAA", "attributes": attributes}])
+    genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 1
+    record = json.loads((output / "genes.anchor_admission.json").read_text())["records"][0]
+    assert record["reason"] == reason
+
+
+@pytest.mark.parametrize("case", ["unannotated_utr", "mismatched_utr", "ambiguous_phase", "inconsistent_phase", "mixed_file_phase"])
+def test_admission_requires_independent_model_evidence(tmp_path, case):
+    model = {"cds": "ATGAAATAA", "utr5": "TAA", "supplied": "TAAATGAAATAA"}
+    models = [{}, model]
+    if case == "unannotated_utr":
+        model["no_exons"] = True
+    elif case == "mismatched_utr":
+        model["supplied"] = "TAACCCATGAAATAA"
+    elif case == "ambiguous_phase":
+        model.clear()
+        model["blocks"] = [("TAATGAAATAA", 1)]
+    elif case == "inconsistent_phase":
+        model.clear()
+        model["blocks"] = [("TAAT", 1), ("GAAATAA", 1)]
+    else:
+        models = [{"blocks": [("ATGA", 0), ("AATAA", 2)]},
+                  {"blocks": [("ATGA", 0), ("AATAA", 1)]}, {"blocks": [("TAATGAAATAA", 1)]}]
+    genes, metadata = prepare_rescue_genome(*anchor_fixture(tmp_path, models), "genes", 1.0)
+    assert len(genes) == len(models) - 1
+    assert metadata["anchor_admission"]["counts"]["excluded"] == 1
+
+
+def test_admission_genetic_code_and_strict_new_models(tmp_path):
+    source, output = anchor_fixture(tmp_path, [{"cds": "ATGTGACCCTAA"},
+                                               {"cds": "ATGAAATAA", "utr5": "TAA", "supplied": "TAAATGAAATAA"}], code=4)
+    genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 2
+    assert "MWP" in (output / "genes.pep").read_text()
+    with pytest.raises(ValueError, match="strict original-translation"):
+        prepare_rescue_genome(source, output, "genes", 1.0, required_ids=["Plant_example_g1"])
+    with pytest.raises(ValueError, match="internal stop"):
+        rescue.prepare_genome(source, output, "strict", 1.0)
+
+
+def test_admission_all_excluded_keeps_failure_audit(tmp_path):
+    source, output = anchor_fixture(tmp_path, [{"cds": "ATGTGACCCTAA"}])
+    with pytest.raises(ValueError, match="No usable rescue anchors"):
+        prepare_rescue_genome(source, output, "genes", 1.0)
+    assert json.loads((output / "genes.anchor_admission.json").read_text())["counts"] == {"excluded": 1}
+
+
+def test_admission_ambiguous_isoforms_are_withheld(tmp_path):
+    source, output = anchor_fixture(tmp_path, [{}, {"cds": "ATGAAATAA", "utr5": "TAA", "supplied": "TAAATGAAATAA"}])
+    gff = Path(source["gff"])
+    lines = ["chr1\tsynthetic\tmRNA\t1\t12\t.\t+\t.\tID=g1.t2;Parent=g1",
+             "chr1\tsynthetic\texon\t1\t12\t.\t+\t.\tParent=g1.t2",
+             "chr1\tsynthetic\tCDS\t7\t12\t.\t+\t0\tParent=g1.t2"]
+    gff.write_text(gff.read_text() + "\n".join(lines) + "\n")
+    genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 1
+    assert json.loads((output / "genes.anchor_admission.json").read_text())["records"][0]["reason"] == "ambiguous_genomic_translations"
+
+
+def test_admission_does_not_relabel_disrupted_cds_as_another_isoforms_utr(tmp_path):
+    source, output = anchor_fixture(tmp_path, [{}, {"cds": "ATGTGACCCTAA"}])
+    gff = Path(source["gff"])
+    gff.write_text(gff.read_text() + "chr1\tsynthetic\tmRNA\t1\t12\t.\t+\t.\tID=g1.t2;Parent=g1\n"
+                  "chr1\tsynthetic\texon\t1\t12\t.\t+\t.\tParent=g1.t2\n"
+                  "chr1\tsynthetic\tCDS\t7\t12\t.\t+\t0\tParent=g1.t2\n")
+    genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 1
+    record = json.loads((output / "genes.anchor_admission.json").read_text())["records"][0]
+    assert record["reason"] == "genomic_internal_stop_or_incomplete_codon" and record["bound_transcripts"] == ["g1.t1"]
+
+
+def test_admission_removes_only_proven_formatter_padding(tmp_path):
+    source, output = anchor_fixture(tmp_path, [{}, {"cds": "ATGAAATAA", "supplied": "ATGAAATAANN"},
+                                              {"cds": "ATGAAATAA", "supplied": "ATGAAATAANNN"}])
+    genes, metadata = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 2
+    assert metadata["anchor_admission"]["reasons"]["formatter_terminal_padding"] == 1
+
+
+@pytest.mark.parametrize("attribute,source_id,formatted_id", [("Dbxref", "GeneID:123", "GeneID123"),
+                                                            ("Accession", "GWHGAASQ123", "GWHGAASQ123")])
+def test_admission_maps_genegalleon_provider_gene_identifiers(tmp_path, attribute, source_id, formatted_id):
+    source, output = anchor_fixture(tmp_path, [{}, {"cds": "ATGAAATAA", "utr5": "TAA", "supplied": "TAAATGAAATAA"}])
+    fasta, gff = Path(source["fasta"]), Path(source["gff"])
+    fasta.write_text(fasta.read_text().replace("_g0 ", "_GeneID999 " if attribute == "Dbxref" else "_GWHGAASQ999 ")
+                    .replace("_g1 ", "_" + formatted_id + " "))
+    gff.write_text(gff.read_text().replace("ID=g0\n", "ID=g0;" + attribute + "=" + ("GeneID:999" if attribute == "Dbxref" else "GWHGAASQ999") + "\n")
+                  .replace("ID=g1\n", "ID=g1;" + attribute + "=" + source_id + "\n"))
+    source.update(feature="", attribute="")
+    genes, metadata = prepare_rescue_genome(source, output, "genes", 1.0)
+    assert len(genes) == 2 and metadata["attribute"] == attribute
+    assert genes[1].gene_id == "Plant_example_" + formatted_id
+    # Explicit source mapping follows the same canonical-ID contract.
+    source.update(feature="gene", attribute=attribute)
+    assert len(prepare_rescue_genome(source, output, "explicit", 1.0)[0]) == 2
+
+
+def test_admission_source_phase_evidence_is_not_changed_by_new_rescued_models(tmp_path):
+    source, output = anchor_fixture(tmp_path, [
+        {"blocks": [("ATGA", 0), ("AATAA", 1)]},
+        {"blocks": [("TAATGAAATAA", 1)]},
+        {"blocks": [("ATGA", 0), ("AATAA", 2)]}])
+    gff = Path(source["gff"])
+    gff.write_text("\n".join(line.replace("\tsynthetic\t", "\tgenegalleon_rescue\t") if "g2" in line else line
+                             for line in gff.read_text().splitlines()) + "\n")
+    genes, metadata = prepare_rescue_genome(source, output, "genes", 1.0, required_ids=["Plant_example_g2"])
+    assert len(genes) == 3 and metadata["anchor_admission"]["file_phase_convention"] == "complementary"
+    assert metadata["anchor_admission"]["counts"] == {"unchanged": 2, "normalised": 1}
+
+
+def test_gemoma_withholds_complementary_phase_reference_without_launching_java(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    donor, target = "Donor_species", "Target_species"
+    prepared = tmp_path / "prepared" / donor
+    prepared.mkdir(parents=True)
+    rescue.write_tsv(prepared / "genes.id_map.tsv", ("original_id", "jcvi_id", "locus_id", "status"),
+                     [(donor + "_g1", donor + "_g1", "g1", "selected")])
+    evidence = [{"phase_convention": "complementary", "offset": 2}]
+    (prepared / "genes.anchor_admission.json").write_text(json.dumps({"records": [
+        {"original_id": donor + "_g1", "status": "normalised", "selected_evidence": evidence}]}))
+    gff, jar, java = tmp_path / "donor.gff3", tmp_path / "test.jar", tmp_path / "java"
+    gff.write_text("chr1\tsynthetic\tmRNA\t1\t10\t.\t+\t.\tID=t1;Parent=g1\n")
+    jar.write_text("synthetic jar")
+    java.write_text("synthetic executable")
+    plan = {"request": {"gemoma_jar": str(jar), "gemoma_java": str(java),
+                        "files": {str(jar): rescue.digest(jar), str(java): rescue.digest(java)}, "parameters": {},
+                        "sources": {donor: {"gff": str(gff), "genome": str(tmp_path / "donor.fa")}}}}
+    monkeypatch.setattr(rescue, "verify_sources", lambda *_: None)
+    def unexpected(*_):
+        pytest.fail("GeMoMa must not launch on complementary source phases")
+    monkeypatch.setattr(rescue, "run", unexpected)
+    region = {"donor": donor, "query": donor + "_g1", "id": "query"}
+    rescue.refine_gemoma(tmp_path, tmp_path, plan, {"species": target}, [region], SimpleNamespace(), [], 1)
+    assert json.loads((tmp_path / ("gemoma_" + donor) / "query.skipped.json").read_text())["reason"] == "unsupported_reference_phase_convention"
+
+
+@pytest.mark.parametrize("invalid", ["coordinates", "duplicate_contig"])
+def test_admission_rejects_invalid_genome_and_leaves_no_source_index(tmp_path, invalid):
+    source, output = anchor_fixture(tmp_path, [{}, {"cds": "ATGTGACCCTAA"}])
+    genome = Path(source["genome"])
+    genome.write_text(genome.read_text() + ">chr1\nA\n" if invalid == "duplicate_contig" else ">chr0\nA\n>chr1\nA\n")
+    with pytest.raises(ValueError, match="Annotation.*genome|FASTA index warning"):
+        prepare_rescue_genome(source, output, "genes", 1.0)
+    assert not list(tmp_path.glob("*.fai")) and not list(output.glob(".anchor-genome-*"))
 
 
 def cli(*args):
@@ -76,6 +294,48 @@ def make_plan(fixture):
     cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
         "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output)
     return output, species, cds
+
+
+def test_rescue_exports_invalid_originals_and_audits_while_adding_intact_model(hidden_models, monkeypatch):
+    root, names, sequences = hidden_models
+    name = names[0]
+    # Two existing annotations cannot translate directly: one contains a UTR,
+    # the other has a genuine internal stop. Neither original is overwritten.
+    cds = root / "cds" / (name + ".cds.fa")
+    gff = root / "gff" / (name + ".gff3")
+    genome = root / "genome" / (name + ".genome.fa")
+    intact, disrupted = sequences[0], "ATGTGACCCTAA"
+    with cds.open("a") as handle:
+        handle.write(f">{name}_utr source UTR\nTAA{intact}\n>{name}_stop source disruption\n{disrupted}\n")
+    with genome.open("a") as handle:
+        handle.write(f">utr_contig\nTAA{intact}\n>stop_contig\n{disrupted}\n")
+    with gff.open("a") as handle:
+        for contig, identifier, length, first in (("utr_contig", "utr", len(intact) + 3, 4), ("stop_contig", "stop", len(disrupted), 1)):
+            handle.write(f"{contig}\tsynthetic\tgene\t1\t{length}\t.\t+\t.\tID={identifier}\n"
+                         f"{contig}\tsynthetic\tmRNA\t1\t{length}\t.\t+\t.\tID={identifier}.t;Parent={identifier}\n"
+                         f"{contig}\tsynthetic\texon\t1\t{length}\t.\t+\t.\tParent={identifier}.t\n"
+                         f"{contig}\tsynthetic\tCDS\t{first}\t{length}\t.\t+\t0\tParent={identifier}.t\n")
+    original_records = list(rescue.fasta_records(cds))
+    original_gff = gff.read_bytes()
+    output, _, _ = make_plan(hidden_models)
+    plan = rescue.load(output)
+    plan["donors"][name] = [names[1]]
+    plan["synteny_jobs"] = []
+    start = 8 * (len(sequences[0]) + 60)
+    monkeypatch.setattr(rescue, "candidates", lambda *_: [{"id": "query", "donor": names[1], "query": names[1] + "_g8",
+                       "seqid": "chr1", "start": start, "end": start + len(sequences[8]),
+                       "expected_start": start, "expected_end": start + len(sequences[8])}])
+    rescue.rescue(output, plan, name, 1)
+    exported = rescue.finalize(output, plan, [name])
+    records = list(rescue.fasta_records(exported / "species_cds" / (name + ".rescue.cds.fa")))
+    assert records[:len(original_records)] == original_records and len(records) == len(original_records) + 1
+    assert (exported / "species_gff" / (name + ".rescue.gff3")).read_bytes().startswith(original_gff)
+    summary = json.loads((exported / "summary.json").read_text())
+    assert summary["rescued_models"] == 1
+    assert summary["anchor_admission"][name]["counts"] == {"unchanged": 16, "normalised": 1, "excluded": 1}
+    assert (exported / "anchor_admission" / (name + ".tsv")).is_file()
+    assert name + "_stop" not in (output / "prepared" / name / "genes.pep").read_text()
+    assert not list((root / "genome").glob("*.fai"))
 
 
 def test_reference_plan_sparse_and_frozen(hidden_models):

@@ -275,6 +275,7 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
                                   **{path: observed_hashes[path] for path in actual_paths}}
         for setting in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
             actual[setting] = task[setting]
+        actual["genetic_code"] = int(task.get("genetic_code", 1))
         if fence:
             actual["staged_input_reuse"] = task["staged_input_reuse"]
         rows = [resolved_rows[key]]

@@ -308,7 +308,7 @@ def contract_args(plan, phase):
     return result
 
 
-def prepare_genome(source, directory, side, minimum_mapping_fraction):
+def prepare_genome(source, directory, side, minimum_mapping_fraction, *, protein_transform=None, annotation_mapper=None):
     sequences = {}
     aliases = {}
     species = source["species"]
@@ -326,8 +326,9 @@ def prepare_genome(source, directory, side, minimum_mapping_fraction):
             aliases[alias] = identifier
     if not sequences:
         raise ValueError(f"Empty FASTA: {source['fasta']}")
-    mapping = annotation_to_genes(source["gff"], set(aliases), feature=source["feature"] or None,
-                                  attribute=source["attribute"] or None)
+    mapping = (annotation_mapper(source, set(aliases)) if annotation_mapper is not None else
+               annotation_to_genes(source["gff"], set(aliases), feature=source["feature"] or None,
+                                   attribute=source["attribute"] or None))
     genes = tuple(replace(gene, gene_id=aliases[gene.gene_id]) for gene in mapping.genes)
     if len({gene.gene_id for gene in genes}) != len(genes):
         raise ValueError("Multiple GFF identifiers map to the same FASTA record")
@@ -336,25 +337,35 @@ def prepare_genome(source, directory, side, minimum_mapping_fraction):
     if len(genes) / len(sequences) < minimum_mapping_fraction:
         raise ValueError(f"Only {len(genes)}/{len(sequences)} FASTA identifiers mapped to {source['gff']}")
     mapping = select_isoforms(mapping, {key: len(value) for key, value in sequences.items()}, "longest")
-    selected = {gene.gene_id for gene in mapping.genes}
+    proteins = {}
+    for gene in mapping.genes:
+        sequence = sequences[gene.gene_id]
+        if protein_transform is not None:
+            sequence = protein_transform(gene, sequence, mapping)
+            if sequence is None:
+                continue
+        elif source["mode"] == "cds":
+            if len(sequence) % 3:
+                raise ValueError(f"CDS length is not divisible by three: {gene.gene_id}")
+            sequence = str(Seq(sequence).translate(table=source["genetic_code"]))
+        sequence = sequence.removesuffix("*")
+        if not sequence or "*" in sequence:
+            raise ValueError(f"Empty translation or internal stop: {gene.gene_id}")
+        proteins[gene.gene_id] = sequence
+    selected = set(proteins)
+    excluded = {gene.gene_id for gene in mapping.genes} - selected
+    mapping = replace(mapping, genes=tuple(g for g in mapping.genes if g.gene_id in selected))
     matched = {gene.gene_id for gene in genes}
     names = {identifier: species + "_" + identifier.removeprefix(species + "_") for identifier in selected}
     normalized = tuple(replace(gene, gene_id=names[gene.gene_id]) for gene in mapping.genes)
     write_bed(normalized, directory / f"{side}.bed")
     with (directory / f"{side}.pep").open("w", encoding="utf-8") as handle:
         for gene in mapping.genes:
-            sequence = sequences[gene.gene_id]
-            if source["mode"] == "cds":
-                if len(sequence) % 3:
-                    raise ValueError(f"CDS length is not divisible by three: {gene.gene_id}")
-                sequence = str(Seq(sequence).translate(table=source["genetic_code"]))
-            sequence = sequence.removesuffix("*")
-            if not sequence or "*" in sequence:
-                raise ValueError(f"Empty translation or internal stop: {gene.gene_id}")
-            handle.write(f">{names[gene.gene_id]}\n{sequence}\n")
+            handle.write(f">{names[gene.gene_id]}\n{proteins[gene.gene_id]}\n")
     write_tsv(directory / f"{side}.id_map.tsv", ("original_id", "locus_id", "jcvi_id", "status"),
               ((identifier, mapping.locus_by_id.get(identifier, ""), names.get(identifier, ""),
-                "selected" if identifier in selected else "isoform_excluded" if identifier in matched else "unmapped")
+                "selected" if identifier in selected else "translation_excluded" if identifier in excluded else
+                "isoform_excluded" if identifier in matched else "unmapped")
                for identifier in sorted(sequences, key=natural_key)))
     metadata = {**mapping.metadata(), "source": source, "fasta_sha256": digest(source["fasta"]),
                 "gff_sha256": digest(source["gff"]), "unmapped_count": len(sequences) - len(genes)}

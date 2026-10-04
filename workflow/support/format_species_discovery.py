@@ -8,6 +8,18 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from format_species_annotation.cds_normalisation import (
+    applicable as cds_normalisation_applicable,
+)
+from format_species_annotation.cds_normalisation import (
+    current_audit as current_cds_normalisation_audit,
+)
+from format_species_annotation.cds_normalisation import (
+    iter_normalised_cds_records,
+)
+from format_species_annotation.cds_normalisation import (
+    write_audit as write_cds_normalisation_audit,
+)
 from format_species_annotation.common import collapse_transcript_suffix, structured_coge_id
 from format_species_annotation.organelle import gff_organelle_seqids, iter_non_organelle_gff_lines
 from format_species_annotation.reference import gff_reference_mapping, normalize_gff_reference_lines
@@ -64,7 +76,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 14
+CDS_GFF_GROUPING_AUDIT_VERSION = 15
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -202,6 +214,9 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_
         "ignored_conflicting_locus_tag",
         "selected_gene_id",
         "raw_sequence_length",
+        "effective_cds_length",
+        "cds_normalisation_status",
+        "cds_normalisation_reason",
         "sequence_length",
         "selected_longest",
     )
@@ -216,6 +231,7 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_
         final_payload.update(
             {
                 "version": CDS_GFF_GROUPING_AUDIT_VERSION,
+                "cds_normalisation_required": cds_normalisation_applicable(task),
                 "provider": task["provider"],
                 "species_key": task["species_key"],
                 "species_prefix": task["species_prefix"],
@@ -620,6 +636,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     strict_mode = bool(task.get("format_strict", False)) if strict is None else bool(strict)
     audit_json_path, _audit_records_path = cds_gff_grouping_audit_paths(output_path)
     existing_audit = read_json(audit_json_path) if use_gff_grouping else None
+    existing_normalisation = current_cds_normalisation_audit(task, output_path) if output_path.exists() else None
     # gg-cache-guard: audited - the grouping audit covers inputs/parameters; the outer formatter contract handles rebuild policy.
     if (
         output_path.exists()
@@ -628,8 +645,8 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         and (
             reuse_existing
             or
-            not use_gff_grouping
-            or cds_gff_grouping_audit_matches(existing_audit, task, output_path, strict_mode)
+            ((not use_gff_grouping or cds_gff_grouping_audit_matches(existing_audit, task, output_path, strict_mode))
+             and (not cds_normalisation_applicable(task) or existing_normalisation is not None))
         )
     ):
         if use_gff_grouping and isinstance(existing_audit, dict) and all(
@@ -647,6 +664,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
                 "first_sequence_name": str(existing_audit.get("first_sequence_name", "") or ""),
             }
             result.update(cds_gff_result_fields(existing_audit))
+            result.update(cds_normalisation_result_fields(existing_normalisation))
             return result
         before_count = 0
         for _header, _sequence in iter_task_cds_records(task):
@@ -663,6 +681,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             "first_sequence_name": first_existing,
         }
         result.update(cds_gff_result_fields())
+        result.update(cds_normalisation_result_fields(existing_normalisation))
         if use_gff_grouping:
             # Explicit reuse can encounter an output predating the grouping audit.
             # Counts are observable, but its original grouping evidence is not.
@@ -685,7 +704,8 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     transcript_source_ids = {}
     structured_gene_sources = {}
     audit_rows = []
-    for header, sequence in iter_task_cds_records(cds_task):
+    normalisation_state = {"dry_run": dry_run}
+    for header, sequence, decision in iter_normalised_cds_records(cds_task, normalisation_state):
         before_count += 1
         transcript_id = build_formatted_cds_id(cds_task, header)
         source_id = extract_provider_transcript_id(cds_task["provider"], header)
@@ -728,7 +748,10 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
                 "candidate_gene_tokens": ",".join(gff_match.get("candidate_gene_tokens", ())),
                 "ignored_conflicting_locus_tag": gff_match.get("ignored_conflicting_locus_tag", ""),
                 "selected_gene_id": gene_id,
-                "raw_sequence_length": len(raw_seq),
+                "raw_sequence_length": decision["source_length"],
+                "effective_cds_length": len(raw_seq),
+                "cds_normalisation_status": decision["status"],
+                "cds_normalisation_reason": decision["reason"],
                 "sequence_length": len(seq),
                 "selected_longest": 0,
             }
@@ -750,7 +773,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
 
         previous_raw_sequence_length = previous["raw_sequence_length"]
         previous_transcript_id = previous["transcript_id"]
-        # Compare biological input lengths before codon padding; padded ties can otherwise hide a longer CDS.
+        # Compare corrected biological CDS lengths before padding.
         if len(raw_seq) > previous_raw_sequence_length or (
             len(raw_seq) == previous_raw_sequence_length and transcript_id < previous_transcript_id
         ):
@@ -892,6 +915,8 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             output_path,
             ((records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"]) for gene_id in ordered_ids),
         )
+        write_cds_normalisation_audit(cds_task, output_path, normalisation_state)
+        task["_cds_normalisation_required"] = cds_normalisation_applicable(task)
     if grouping_index is not None and not dry_run:
         audit_payload = write_cds_gff_grouping_audit(
             task,
@@ -913,7 +938,14 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         "first_sequence_name": first_sequence_name,
     }
     result.update(cds_gff_result_fields(audit_payload))
+    result.update(cds_normalisation_result_fields(normalisation_state))
     return result
+
+
+def cds_normalisation_result_fields(audit=None):
+    counts = (audit or {}).get("counts", {})
+    return {"cds_normalised_records": int(counts.get("normalised", 0)),
+            "cds_unresolved_records": int(counts.get("retained_unresolved", 0))}
 
 
 def format_genome(task, output_dir, overwrite, dry_run):

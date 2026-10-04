@@ -14,6 +14,9 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
+from .cds_normalisation import audit_path as cds_normalisation_audit_path
+from .cds_normalisation import current_audit as current_cds_normalisation_audit
+from .cds_normalisation import normalise_gff_lines, paired_audit
 from .common import (
     first_token,
     iter_fasta_records,
@@ -33,7 +36,7 @@ from .reference import gff_reference_mapping, normalize_gff_reference_lines
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 12
+GFF_REPAIR_VERSION = 13
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -111,6 +114,12 @@ def audit_matches_inputs(audit, mode, source_path, cds_path, output_path, source
             return False
         if audit.get(key) != current:
             return False
+    sidecar = cds_normalisation_audit_path(cds_path)
+    observed = file_fingerprint(sidecar) if sidecar.exists() else None
+    if audit.get("cds_normalisation_fingerprint") != observed:
+        return False
+    if source_task and sidecar.exists() and current_cds_normalisation_audit(source_task, cds_path) is None:
+        return False
     expected = source_overlap_input_fingerprints(source_task)
     return audit.get("source_overlap_input_fingerprints", {}) == expected
 
@@ -373,10 +382,11 @@ def canonicalize_coge_cds_attributes(parts, features, names):
     return ";".join(rewritten), changed
 
 
-def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False, rescued_genes=None):
+def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False, rescued_genes=None,
+                            cds_updates=None):
     coge_features, coge_names = {}, {}
     duplicate_features = duplicate_coge_model_ids(gff_path) if coge else set()
-    for line in iter_non_organelle_gff_lines(gff_path):
+    for line in normalise_gff_lines(iter_non_organelle_gff_lines(gff_path), cds_updates or {}):
         stripped = line.rstrip("\n\r")
         newline = line[len(stripped) :]
         if stripped == "" or stripped.startswith("#"):
@@ -443,6 +453,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     overlap_inputs = source_overlap_input_fingerprints(source_task)
     reference_mapping = gff_reference_mapping(gff_path, (source_task or {}).get("genome_path"))
+    normalisation = paired_audit(source_task, cds_path) if source_task else None
+    cds_updates = (normalisation or {}).get("gff_updates", {})
     confirmed_overlaps, overlap_audit = audit_source_overlaps(gff_path, source_task or {})
     plan = choose_gene_id_repairs(gff_path, cds_gene_ids) if mode != "off" else {
         "id_mapping": {},
@@ -490,19 +502,21 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             gff_path, plan["id_mapping"], counters, confirmed_overlaps,
             coge=mode != "off" and (source_task or {}).get("provider") == "coge",
             rescued_genes=rescued_genes,
+            cds_updates=cds_updates,
         ), reference_mapping),
     )
     status = (
         "repaired"
         if (
-            len(plan["id_mapping"]) > 0
+            len(cds_updates) > 0
+            or len(plan["id_mapping"]) > 0
             or counters["changed_values"] > 0
             or counters["normalized_bare_attribute_lines"] > 0
             or encoding_audit["invalid_utf8_bytes"] > 0
         )
         else "unchanged"
     )
-    if mode == "off":
+    if mode == "off" and not cds_updates:
         status = "off"
     audit = {
         "repair_version": GFF_REPAIR_VERSION,
@@ -513,6 +527,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "source_overlap_input_fingerprints": overlap_inputs,
         "source_overlap": overlap_audit,
         "genome_reference_mapping": reference_mapping,
+        "cds_normalisation": {"updated_cds_rows": len(cds_updates), "counts": (normalisation or {}).get("counts", {})},
+        "cds_normalisation_fingerprint": file_fingerprint(cds_normalisation_audit_path(cds_path)) if normalisation else None,
         "cds_fingerprint": cds_fingerprint,
         "output_fingerprint": file_fingerprint(output_path),
         "line_count": line_count,
