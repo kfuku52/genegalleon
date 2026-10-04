@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import format_species_inputs as formatter
+from validate_source_gene_selection import SourceGeneSelection
 
 FASTA_EXTENSIONS = (
     ".fa",
@@ -252,6 +253,7 @@ def collect_expected_longest_records(task):
     transcripts_by_gene = defaultdict(int)
     transcript_total = 0
     cds_identifier_task = formatter.prepare_cds_identifier_task(task)
+    source_check = SourceGeneSelection(task.get("gff_path"))
 
     for header, sequence in formatter.iter_task_cds_records(task):
         transcript_total += 1
@@ -261,6 +263,10 @@ def collect_expected_longest_records(task):
         seq = formatter.pad_to_codon_length(raw_seq)
         transcripts_by_gene[gene_id] += 1
         previous = expected.get(gene_id)
+        selected = (previous is None or len(raw_seq) > previous["raw_sequence_length"]
+                    or (len(raw_seq) == previous["raw_sequence_length"]
+                        and transcript_id < previous["transcript_id"]))
+        source_check.observe(header, gene_id, selected)
         if previous is None:
             expected[gene_id] = {
                 "sequence": seq,
@@ -287,6 +293,7 @@ def collect_expected_longest_records(task):
         "genes_total": len(expected),
         "multi_isoform_genes": sum(1 for count in transcripts_by_gene.values() if count > 1),
         "aggregated_cds_removed": max(0, transcript_total - len(expected)),
+        **source_check.validate(),
     }
 
 
@@ -341,6 +348,7 @@ def validate_single_species(task, missing_limit):
             "multi_isoform_genes": expected_stats["multi_isoform_genes"],
             "aggregated_cds_removed": expected_stats["aggregated_cds_removed"],
             "output_records": len(actual_records),
+            **{key: value for key, value in expected_stats.items() if key.startswith("source_gene_")},
         }
 
         failure_parts = []

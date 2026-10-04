@@ -131,6 +131,18 @@ Important behavior:
 
 ### GFF source and transcript identity
 
+Direct/local CDS downloads retain model identity from structured CoGe headers;
+the transport provider does not replace the CoGe model ID with the species name.
+Malformed structured CDS identities and identifier sanitization collisions fail.
+For supplied CDS, an explicit RNA-to-gene Parent remains usable when its GFF
+omits CDS blocks; this does not invent missing genomic coding coordinates.
+
+Longest-CDS validation separately follows source GFF gene parents and rejects
+retained isoforms or merges of distinct declared genes. Missing or ambiguous
+parent evidence is reported as unresolved rather than certified as a complete
+gene mapping. Older format/validation checkpoints must be regenerated under the
+current contracts before reuse can bypass these checks.
+
 `gff2genestat.py --multiple_hits longest` selects a single transcript by its
 unique CDS length, orders blocks in transcription direction, and reports genomic
 start/end bounds. Identical blocks are counted once. Conflicting equal-length

@@ -623,6 +623,25 @@ def extract_coge_id(header):
     return first_token(header)
 
 
+def structured_coge_id(header):
+    """Recognize CoGe CDS identity independently of its download transport."""
+    text = str(header or "")
+    if "||" not in text:
+        return ""
+    fields = [field.strip() for field in text.split("||")]
+    if len(fields) < 7 or fields[6].upper() != "CDS":
+        return ""
+    # A direct/local manifest describes transport, while these fields describe
+    # sequence identity. Never reduce a malformed structured export to its
+    # species name (the first whitespace token).
+    if (not all(fields[:5])
+            or fields[5] not in ("1", "-1", "+1")
+            or not fields[2].isdigit() or not fields[3].isdigit()
+            or not 1 <= int(fields[2]) <= int(fields[3])):
+        raise ValueError("Malformed CoGe CDS header: " + text[:160])
+    return fields[4]
+
+
 def extract_gwh_id(header):
     for tag in ("Gene", "OriGeneID"):
         candidate = extract_header_tag_value(header, tag)
@@ -632,6 +651,10 @@ def extract_gwh_id(header):
 
 
 def extract_provider_id(provider, header):
+    if provider in ("direct", "local", "coge"):
+        structured = structured_coge_id(header)
+        if structured:
+            return structured
     if provider in ENSEMBL_LIKE_PROVIDERS:
         return extract_ensembl_id(header)
     if provider == "phycocosm":

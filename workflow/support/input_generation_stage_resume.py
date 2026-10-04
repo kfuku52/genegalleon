@@ -30,7 +30,7 @@ def parameters(settings, stage, format_contract_version):
               for key in FORMAT_PARAMETERS}
     result["format_contract_version"] = str(format_contract_version)
     if stage == "validate":
-        result.update(validation_contract_version="1", run_validate_inputs=str(settings["run_validate_inputs"]))
+        result.update(validation_contract_version="2", run_validate_inputs=str(settings["run_validate_inputs"]))
     return result
 
 

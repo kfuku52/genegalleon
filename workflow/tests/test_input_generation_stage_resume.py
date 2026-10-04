@@ -45,6 +45,15 @@ def test_lineage_change_does_not_invalidate_upstream_stages(checkpoint, stage):
     assert resume.valid(plan, 1, root, stage, "10")
 
 
+def test_old_validation_checkpoint_cannot_bypass_source_gene_ownership_check(checkpoint):
+    plan, root, _ = checkpoint
+    path = resume.checkpoint_path(root, "Species_one", "validate")
+    payload = json.loads(path.read_text())
+    payload["parameters"]["validation_contract_version"] = "1"
+    path.write_text(json.dumps(payload))
+    assert not resume.valid(plan, 1, root, "validate", "10")
+
+
 @pytest.mark.parametrize("stage,label", [("format", "cds_path"), ("format", "gff_path"),
                                         ("format", "genome_path"), ("format", "cds_output_path"),
                                         ("validate", "cds_output_path"), ("validate", "gff_output_path")])

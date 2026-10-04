@@ -8,6 +8,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from format_species_annotation.common import collapse_transcript_suffix, structured_coge_id
 from format_species_annotation.organelle import gff_organelle_seqids, iter_non_organelle_gff_lines
 from format_species_annotation.reference import gff_reference_mapping, normalize_gff_reference_lines
 from format_species_annotations import (
@@ -63,7 +64,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 13
+CDS_GFF_GROUPING_AUDIT_VERSION = 14
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -681,12 +682,27 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         "excluded_anonymous_unmapped": 0,
     }
     raw_gff_tokens_by_gene_id = defaultdict(set)
+    transcript_source_ids = {}
+    structured_gene_sources = {}
     audit_rows = []
     for header, sequence in iter_task_cds_records(cds_task):
         before_count += 1
         transcript_id = build_formatted_cds_id(cds_task, header)
+        source_id = extract_provider_transcript_id(cds_task["provider"], header)
+        previous_source = transcript_source_ids.setdefault(transcript_id, source_id)
+        if previous_source != source_id:
+            raise ValueError("Distinct CDS source IDs collide after identifier sanitization: "
+                             + previous_source + ", " + source_id)
         gene_id, gff_match = resolve_gene_aggregate_id(cds_task, header, transcript_id)
         mapping_status = str(gff_match.get("status", "not_applicable") or "not_applicable")
+        if cds_task["provider"] in ("direct", "local", "coge") and mapping_status != "mapped":
+            model_id = structured_coge_id(header)
+            if model_id:
+                raw_gene = collapse_transcript_suffix(cds_task["provider"], model_id)
+                previous_gene = structured_gene_sources.setdefault(gene_id, raw_gene)
+                if previous_gene != raw_gene:
+                    raise ValueError("Distinct CoGe genes collide after identifier sanitization: "
+                                     + previous_gene + ", " + raw_gene)
         exclusion_reason = ""
         if is_unlinkable_anonymous_ncbi_cds(cds_task, header, mapping_status):
             mapping_status = "excluded_anonymous_unmapped"

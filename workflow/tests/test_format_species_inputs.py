@@ -22,6 +22,85 @@ VALIDATE_LONGEST_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" /
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
+@pytest.mark.parametrize("provider", ["direct", "local", "coge"])
+def test_structured_coge_headers_keep_gene_identity_under_any_transport(tmp_path, provider):
+    module = load_module()
+    raw = tmp_path / "Species_one.cds.fa"
+    raw.write_text(
+        ">Species one||chr1||1||6||model-1-mRNA-1||1||CDS||101||1\nATGAAA\n"
+        ">Species one||chr1||1||9||model-1-mRNA-2||1||CDS||102||2\nATGAAATTT\n"
+        ">Species one||chr1||20||25||model-2-mRNA-1||-1||CDS||103||3\nATGCCC\n")
+    task = dict(provider=provider, species_key="Species_one", species_prefix="Species_one",
+                cds_path=raw, gff_path=None, genome_path=None)
+    out = tmp_path / "out"
+    out.mkdir()
+    result = module.format_cds(task, out, overwrite=False, dry_run=False)
+    assert result["before_count"] == 3
+    assert result["after_count"] == 2
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.read() == ">Species_one_model-1\nATGAAATTT\n>Species_one_model-2\nATGCCC\n"
+
+
+@pytest.mark.parametrize("provider", ["direct", "local", "coge"])
+@pytest.mark.parametrize("model,start", [("", "1"), ("model1", "bad"), ("model1", "0")])
+def test_direct_coge_malformed_identity_is_never_collapsed_to_species(tmp_path, model, start, provider):
+    module = load_module()
+    raw = tmp_path / "Species_one.cds.fa"
+    raw.write_text(f">Species one||chr1||{start}||9||{model}||1||CDS||101||1\nATGAAATTT\n")
+    task = dict(provider=provider, species_key="Species_one", species_prefix="Species_one",
+                cds_path=raw, gff_path=None, genome_path=None)
+    with pytest.raises(ValueError, match="Malformed CoGe CDS header"):
+        module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False)
+    assert not (tmp_path / "out").exists()
+
+
+def test_header_only_cds_identifier_sanitization_collision_fails(tmp_path):
+    module = load_module()
+    raw = tmp_path / "Species_one.cds.fa"
+    raw.write_text(
+        ">Species one||chr1||1||6||gene:a-mRNA-1||1||CDS||101||1\nATGAAA\n"
+        ">Species one||chr2||1||6||gene_a-mRNA-1||1||CDS||102||2\nATGCCC\n")
+    task = dict(provider="direct", species_key="Species_one", species_prefix="Species_one",
+                cds_path=raw, gff_path=None, genome_path=None)
+    with pytest.raises(ValueError, match="Distinct CDS source IDs collide"):
+        module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False)
+
+
+@pytest.mark.parametrize("provider", ["direct", "local", "coge"])
+def test_structured_coge_gene_sanitization_collision_fails_across_different_isoform_ids(tmp_path, provider):
+    module = load_module()
+    raw = tmp_path / "Species_one.cds.fa"
+    raw.write_text(">Species one||chr1||1||6||gene:a-mRNA-1||1||CDS||101||1\nATGAAA\n"
+                   ">Species one||chr2||1||6||gene_a-mRNA-2||1||CDS||102||2\nATGCCC\n")
+    task = dict(provider=provider, species_key="Species_one", species_prefix="Species_one",
+                cds_path=raw, gff_path=None, genome_path=None)
+    with pytest.raises(ValueError, match="Distinct CoGe genes collide"):
+        module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False)
+
+
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+def test_supplied_cds_uses_explicit_rna_parent_without_inventing_cds_coordinates(tmp_path, mode):
+    module = load_module()
+    gff = tmp_path / "source.gff"
+    gff.write_text(
+        "chr1\ts\tgene\t1\t20\t.\t+\t.\tID=g1\n"
+        "chr1\ts\tmRNA\t1\t20\t.\t+\t.\tID=t1;Parent=g1;Accession=RNA1\n"
+        "chr1\ts\tCDS\t1\t6\t.\t+\t0\tParent=t1\n"
+        "chr1\ts\tmRNA\t1\t20\t.\t+\t.\tID=t2;Parent=g1;Accession=RNA2\n")
+    raw = tmp_path / "Species_one.cds.fa"
+    raw.write_text(">RNA1\nATGAAA\n>RNA2\nATGAAATTT\n")
+    task = dict(provider="direct", species_key="Species_one", species_prefix="Species_one",
+                cds_path=raw, gff_path=gff, genome_path=None, gene_grouping_mode=mode)
+    index = module.build_gff_cds_grouping_index(task)
+    assert index["transcript_gene_tokens"]["t2"] == "g1"
+    assert len(index["location_to_gene_tokens"]) == 1
+    (tmp_path / "out").mkdir()
+    result = module.format_cds(task, tmp_path / "out", overwrite=False, dry_run=False)
+    assert result["after_count"] == 1
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.read() == ">Species_one_g1\nATGAAATTT\n"
+
+
 @pytest.mark.parametrize("header,source_id,canonical", [
     ("acc1 OriSeqID=Chr1 Len=9", "Chr1", "acc1"),
     ("lcl|chr1", "chr1", "lcl|chr1"),
@@ -1826,7 +1905,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 13
+    assert audit["version"] == 14
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -3157,7 +3236,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 13
+    assert audit["version"] == 14
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -3200,7 +3279,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 13
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 14
     assert skipped["status"] == "skip"
 
 

@@ -362,6 +362,16 @@ def build_gff_cds_grouping_index(task):
                     }
                 )
 
+    # Supplied CDS can have a valid RNA->gene relationship even when its source
+    # GFF omitted CDS features. Keep identity evidence without inventing genomic
+    # CDS coordinates or treating the RNA as a coordinate-rescue candidate.
+    parent_only_transcripts = set()
+    for feature_id, record in feature_records.items():
+        if (record["feature_type"] in ("mrna", "transcript", "rna")
+                and record["parents"] and feature_id not in aliases_by_transcript):
+            aliases_by_transcript[feature_id].update(gff_alias_variants(feature_id))
+            parent_only_transcripts.add(feature_id)
+
     gene_cache = {}
     authoritative_gene_cache = {}
     gene_feature_id_cache = {}
@@ -491,6 +501,12 @@ def build_gff_cds_grouping_index(task):
             resolved_gene = candidate_gene_tokens[0] if len(candidate_gene_tokens) == 1 else ""
             original_gene_tokens[transcript_id] = resolved_gene
         resolved_gene_tokens = dict(original_gene_tokens)
+
+    for transcript_id in parent_only_transcripts:
+        tokens = candidate_gene_tokens_by_transcript[transcript_id]
+        if len(tokens) == 1 and gene_feature_ids_by_transcript[transcript_id]:
+            original_gene_tokens[transcript_id] = tokens[0]
+            resolved_gene_tokens[transcript_id] = tokens[0]
 
     reject_gff_gene_prefix_normalization_collisions(
         task,
