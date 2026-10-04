@@ -237,6 +237,11 @@ def resolve_grouping_feature_authoritative_gene_tokens(feature_id, feature_recor
             continue
         record = feature_records.get(current)
         if record is None:
+            # A declared gene-shaped Parent remains an identity boundary when
+            # its gene row is absent (including author-merged g6_g7 models).
+            # A missing initial transcript is not a declared parent identity.
+            if current != feature_text and re.fullmatch(r"(?:.+[.]g\d+|g\d+)(?:_.+[.]g\d+)*", current):
+                tokens.add("declared-gene-parent:" + current)
             continue
         tokens.update(record.get("authoritative_gene_tokens", ()))
         for parent_id in record.get("parents", ()):

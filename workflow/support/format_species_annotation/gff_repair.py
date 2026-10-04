@@ -29,10 +29,11 @@ from .organelle import (
     gff_organelle_seqids,
     iter_non_organelle_gff_lines,
 )
+from .reference import gff_reference_mapping, normalize_gff_reference_lines
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 11
+GFF_REPAIR_VERSION = 12
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -441,6 +442,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     organelle_features_excluded = count_organelle_gff_features(gff_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     overlap_inputs = source_overlap_input_fingerprints(source_task)
+    reference_mapping = gff_reference_mapping(gff_path, (source_task or {}).get("genome_path"))
     confirmed_overlaps, overlap_audit = audit_source_overlaps(gff_path, source_task or {})
     plan = choose_gene_id_repairs(gff_path, cds_gene_ids) if mode != "off" else {
         "id_mapping": {},
@@ -484,11 +486,11 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     }
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
-        iter_repaired_gff_lines(
+        normalize_gff_reference_lines(iter_repaired_gff_lines(
             gff_path, plan["id_mapping"], counters, confirmed_overlaps,
             coge=mode != "off" and (source_task or {}).get("provider") == "coge",
             rescued_genes=rescued_genes,
-        ),
+        ), reference_mapping),
     )
     status = (
         "repaired"
@@ -510,6 +512,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "source_fingerprint": source_fingerprint,
         "source_overlap_input_fingerprints": overlap_inputs,
         "source_overlap": overlap_audit,
+        "genome_reference_mapping": reference_mapping,
         "cds_fingerprint": cds_fingerprint,
         "output_fingerprint": file_fingerprint(output_path),
         "line_count": line_count,

@@ -90,7 +90,7 @@ gbif_taxon_map="${gbif_taxon_map:-}"
 gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
-format_contract_version=16
+format_contract_version=17
 
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"
@@ -1149,6 +1149,7 @@ run_validate_stage() {
       cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
       cmd+=(--species-cds-dir "${species_cds_dir}")
       cmd+=(--species-gff-dir "${species_gff_dir}")
+      cmd+=(--species-genome-dir "${species_genome_dir}")
       cmd+=(--species-summary "${species_summary_output}")
       cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
       cmd+=(--stats-output "${mapping_stats_file}")
@@ -1230,6 +1231,7 @@ run_validate_stage_one_worker() {
     cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
     cmd+=(--species-cds-dir "${species_cds_dir}")
     cmd+=(--species-gff-dir "${species_gff_dir}")
+    cmd+=(--species-genome-dir "${species_genome_dir}")
     cmd+=(--species-summary "${task_summary_file}")
     cmd+=(--nthreads 1)
     cmd+=(--stats-output "${mapping_stats_file}")

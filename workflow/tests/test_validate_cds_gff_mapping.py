@@ -9,6 +9,20 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
 
 
+@pytest.mark.parametrize("seqid,end,message", [("Chr1", 3, "absent from genome"), ("acc1", 4, "exceed genome")])
+def test_mapping_validation_checks_formatted_genome_even_without_strict(tmp_path, seqid, end, message):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">acc1 OriSeqID=Chr1 Len=3\nATG\n")
+    cds = tmp_path / "Test_species.fa"
+    cds.write_text(">Test_species_gene1\nATG\n")
+    gff = tmp_path / "Test_species.gff"
+    gff.write_text(seqid + "\tsrc\tCDS\t1\t" + str(end) + "\t.\t+\t0\tParent=gene1\n")
+    result = module.validate_single_species(dict(index=0, species_prefix="Test_species", cds_file=cds, gff_file=gff, genome_file=genome), 10)
+    assert result["ok"] is False
+    assert message in result["error"]
+
+
 def run_script(*args):
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH), *args],

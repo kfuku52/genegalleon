@@ -140,6 +140,13 @@ they must not multiply rows in the downstream branch table.
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
 coordinates and other columns retain their usual type and missing-value handling.
+Input generation canonicalizes exact source `OriSeqID` and unique `lcl|` aliases
+to the exported genome FASTA IDs, including `##sequence-region` directives.
+It rejects unresolved or ambiguous reference aliases; final validation also
+checks reference IDs and coordinate bounds whenever a genome is supplied.
+Reference normalization preserves gene/transcript identifiers and coordinates.
+Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
+such as `499.g7` when the corresponding gene rows are absent.
 
 Prefer one annotation source per species. Where a workflow retains multiple
 sources, `gg_gene_evolution` passes its read-only FASTA sequence store to

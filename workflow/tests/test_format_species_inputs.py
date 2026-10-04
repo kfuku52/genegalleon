@@ -22,6 +22,72 @@ VALIDATE_LONGEST_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" /
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
+@pytest.mark.parametrize("header,source_id,canonical", [
+    ("acc1 OriSeqID=Chr1 Len=9", "Chr1", "acc1"),
+    ("lcl|chr1", "chr1", "lcl|chr1"),
+    ("evm.model.chr1", "evm.model.chr1", "chr1"),
+])
+@pytest.mark.parametrize("with_cds", [False, True])
+def test_formatted_gff_references_match_exported_genome(tmp_path, header, source_id, canonical, with_cds):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">" + header + "\nATGAAATTT\n")
+    gff = tmp_path / "source.gff"
+    gff.write_text("##sequence-region " + source_id + " 1 9\n" + source_id + "\tsrc\tCDS\t1\t9\t.\t+\t0\tID=gene1;Parent=gene1\n")
+    cds = tmp_path / "selected.fa"
+    cds.write_text(">Test_species_gene1\nATGAAATTT\n")
+    task = dict(provider="direct", species_prefix="Test_species", gff_path=gff, genome_path=genome,
+                gene_grouping_mode="strict", gff_repair_mode="safe")
+    result = module.format_gff(task, tmp_path, False, False, formatted_cds_path=cds if with_cds else None)
+    with gzip.open(result["output_path"], "rt") as handle:
+        lines = handle.read().splitlines()
+    assert lines[0] == "##sequence-region " + canonical + " 1 9"
+    assert lines[1].split("\t")[0] == canonical
+    from format_species_annotation.reference import validate_gff_genome_references
+    output_genome = module.format_genome(task, tmp_path, False, False)["output_path"]
+    assert validate_gff_genome_references(result["output_path"], output_genome) == 1
+
+
+@pytest.mark.parametrize("headers,message", [
+    (">chr2\nATG\n", "absent from genome"),
+    (">acc1 OriSeqID=chr1 Len=3\nATG\n>acc2 OriSeqID=chr1 Len=3\nATG\n", "Ambiguous"),
+    (">chr1\nATG\n>chr1\nATG\n", "duplicate"),
+    (">acc1 OriSeqID=chr1 Len=4\nATG\n", "length disagrees"),
+])
+def test_reference_normalization_rejects_unresolved_or_ambiguous_genomes(tmp_path, headers, message):
+    load_module()
+    from format_species_annotation.reference import gff_reference_mapping
+    genome = tmp_path / "genome.fa"
+    genome.write_text(headers)
+    gff = tmp_path / "source.gff"
+    gff.write_text("chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tParent=gene1\n")
+    with pytest.raises(ValueError, match=message):
+        gff_reference_mapping(gff, genome)
+
+
+@pytest.mark.parametrize("provided_cds", [False, True])
+def test_overlap_rescue_preserves_distinct_declared_gene_parents_without_gene_rows(tmp_path, provided_cds):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">chr1\n" + "ATG" * 10 + "\n")
+    gff = tmp_path / "source.gff"
+    models = [("499.g6.t1_499.g7.t1", "499.g6_499.g7", 18), ("499.g7.t1.1.hash", "499.g7", 12)]
+    gff.write_text("".join(
+        f"chr1\tsrc\tmRNA\t1\t{end}\t.\t+\t.\tID={tid};Parent={parent}\n"
+        f"chr1\tsrc\tCDS\t1\t{end}\t.\t+\t0\tParent={tid}\n" for tid, parent, end in models))
+    task = dict(provider="direct", species_prefix="Test_species", species_key="Test_species",
+                gff_path=gff, genome_path=genome, gene_grouping_mode="rescue_overlap", gff_repair_mode="safe")
+    if provided_cds:
+        cds = tmp_path / "source.cds"
+        cds.write_text("".join(f">{tid}\n" + "ATG" * (end // 3) + "\n" for tid, parent, end in models))
+        task["cds_path"] = cds
+    result = module.format_cds(task, tmp_path, False, False, strict=True)
+    assert dict(module.iter_fasta_records(result["output_path"])) == {
+        "Test_species_499.g6_499.g7": "ATG" * 6,
+        "Test_species_499.g7": "ATG" * 4,
+    }
+
+
 def load_module():
     spec = spec_from_file_location("format_species_inputs_module", SCRIPT_PATH)
     module = module_from_spec(spec)
@@ -1743,7 +1809,7 @@ def test_format_species_inputs_uses_gff_hierarchy_for_provided_cds_longest_selec
         assert handle.read() == ">Arabidopsis_thaliana_gene_from_xff\nATGCCCAAAGGGTTT\n"
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 12
+    assert audit["version"] == 13
     assert len(audit["cds_input"]["sha256"]) == 64
     assert len(audit["gff_input"]["sha256"]) == 64
 
@@ -3074,7 +3140,7 @@ def test_provided_cds_longest_selection_compares_lengths_before_padding(tmp_path
         audit = json.load(handle)
     with open(audit_tsv_path, "rt", encoding="utf-8", newline="") as handle:
         audit_rows = list(csv.DictReader(handle, delimiter="\t"))
-    assert audit["version"] == 12
+    assert audit["version"] == 13
     assert [row["raw_sequence_length"] for row in audit_rows] == ["8", "9"]
     assert [row["sequence_length"] for row in audit_rows] == ["9", "9"]
     assert [row["selected_longest"] for row in audit_rows] == ["0", "1"]
@@ -3117,7 +3183,7 @@ def test_provided_cds_gff_grouping_regenerates_older_audit_version(tmp_path):
     skipped = module.format_cds(task, output_dir, overwrite=False, dry_run=False)
 
     assert regenerated["status"] == "write"
-    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 12
+    assert json.loads(audit_path.read_text(encoding="utf-8"))["version"] == 13
     assert skipped["status"] == "skip"
 
 

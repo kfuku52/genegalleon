@@ -17,6 +17,7 @@ SUPPORT_DIR = Path(__file__).resolve().parent
 if str(SUPPORT_DIR) not in sys.path:
     sys.path.insert(0, str(SUPPORT_DIR))
 
+from format_species_annotation.reference import validate_gff_genome_references
 from format_species_constants import KNOWN_ALLOWED_MISSING_CDS_IDS, gff_mapping_fallback_is_tolerable
 from species_labeling import extract_species_label
 
@@ -53,6 +54,7 @@ def build_arg_parser():
     )
     parser.add_argument("--species-cds-dir", required=True, help="Directory containing formatted species CDS FASTA files.")
     parser.add_argument("--species-gff-dir", required=True, help="Directory containing formatted species GFF files.")
+    parser.add_argument("--species-genome-dir", default="", help="Also validate exact GFF reference IDs and coordinate bounds against formatted genome FASTA files.")
     parser.add_argument(
         "--species-summary",
         default="",
@@ -263,6 +265,8 @@ def validate_single_species(task, missing_limit):
     cds_file = task["cds_file"]
     gff_file = task["gff_file"]
     try:
+        if task.get("genome_file") is not None:
+            validate_gff_genome_references(gff_file, task["genome_file"])
         cds_ids = read_fasta_ids(cds_file)
         if len(cds_ids) == 0:
             return {
@@ -524,6 +528,26 @@ def main():
 
     for task in tasks:
         task["strict"] = bool(args.strict)
+    if args.species_genome_dir:
+        genome_dir = Path(args.species_genome_dir).expanduser().resolve()
+        if not genome_dir.is_dir():
+            parser.error("--species-genome-dir not found: {}".format(genome_dir))
+        if species_summary is not None:
+            with open(species_summary, encoding="utf-8", newline="") as handle:
+                genomes = {row["species_prefix"]: row.get("genome_output_path", "").strip()
+                           for row in csv.DictReader(handle, delimiter="\t")}
+            for task in tasks:
+                path = genomes.get(task["species_prefix"], "")
+                if path:
+                    task["genome_file"] = Path(path).expanduser().resolve()
+        else:
+            genome_files = list_nonhidden_files(genome_dir, FASTA_EXTENSIONS)
+            for task in tasks:
+                matching = [path for path in genome_files if species_prefix_from_name(path.name) == task["species_prefix"]]
+                if len(matching) != 1:
+                    errors.append("[{}] Expected one genome FASTA, found {}".format(task["species_prefix"], len(matching)))
+                else:
+                    task["genome_file"] = matching[0]
 
     for result in run_validation_tasks(tasks=tasks, missing_limit=args.missing_limit, nthreads=nthreads):
         if result.get("stats_ready", False):

@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from format_species_annotation.organelle import gff_organelle_seqids, iter_non_organelle_gff_lines
+from format_species_annotation.reference import gff_reference_mapping, normalize_gff_reference_lines
 from format_species_annotations import (
     audit_matches_inputs,
     build_coge_gff_gene_id_map,
@@ -62,7 +63,7 @@ from format_species_writers import (
     write_gff_lines_gzip,
 )
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 12
+CDS_GFF_GROUPING_AUDIT_VERSION = 13
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -926,7 +927,12 @@ def format_genome(task, output_dir, overwrite, dry_run):
                 record_id = first_token(apply_common_replacements(header))
                 if record_id == "":
                     record_id = "unnamed"
-                if record_id in organelle_seqids or record_id.removeprefix("lcl|") in organelle_seqids:
+                original_id = extract_header_tag_value(header, "OriSeqID").rstrip(";")
+                if (
+                    record_id in organelle_seqids
+                    or record_id.removeprefix("lcl|") in organelle_seqids
+                    or apply_common_replacements(original_id) in organelle_seqids
+                ):
                     continue
                 seq = re.sub(r"\s+", "", sequence).upper()
                 written += 1
@@ -1026,7 +1032,10 @@ def format_gff(
         else:
             line_count, _feature_count = write_gff_lines_gzip(
                 output_path,
-                iter_non_organelle_gff_lines(gff_path),
+                normalize_gff_reference_lines(
+                    iter_non_organelle_gff_lines(gff_path),
+                    gff_reference_mapping(gff_path, task.get("genome_path")),
+                ),
             )
             repair_fields = repair_result_fields(None, output_path)
             repair_fields["repair_mode"] = repair_mode
