@@ -155,7 +155,9 @@ coordinates and other columns retain their usual type and missing-value handling
 Input generation canonicalizes exact source `OriSeqID` and unique `lcl|` aliases
 to the exported genome FASTA IDs, including `##sequence-region` directives.
 It rejects unresolved or ambiguous reference aliases; final validation also
-checks reference IDs and coordinate bounds whenever a genome is supplied.
+checks reference IDs, coordinate bounds, and explicit gene/RNA parent reference
+and strand consistency whenever a genome is supplied. A disagreement remains
+an error even when each feature's coordinates fit its own reference sequence.
 Reference normalization preserves gene/transcript identifiers and coordinates.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.

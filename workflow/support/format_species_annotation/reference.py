@@ -9,7 +9,7 @@ from format_species_common import is_fasta_filename
 from format_species_constants import FASTA_ARCHIVE_EXTENSIONS
 from format_species_writers import apply_common_replacements, open_text
 
-from .common import build_gff_genome_seqid_map, first_token
+from .common import build_gff_genome_seqid_map, first_token, parse_gff_attributes
 from .organelle import gff_organelle_seqids, iter_non_organelle_gff_lines
 
 
@@ -135,6 +135,8 @@ def validate_gff_genome_references(gff_path, genome_path):
     index = genome_reference_index(genome_path)
     canonical = {name: index[name] for name in set(index.canonical_ids.values())}
     checked = 0
+    gene_axes = {}
+    rna_parents = []
     for line in iter_non_organelle_gff_lines(gff_path):
         if line.startswith("##sequence-region "):
             parts = line.split()
@@ -150,5 +152,23 @@ def validate_gff_genome_references(gff_path, genome_path):
         start, end = int(parts[3]), int(parts[4])
         if not 1 <= start <= end <= canonical[parts[0]]:
             raise ValueError("GFF coordinates exceed genome sequence '{}': {}-{}".format(parts[0], start, end))
+        feature_type = parts[2].lower()
+        if feature_type in ("gene", "mrna", "rna", "transcript"):
+            attrs = parse_gff_attributes(parts[8])
+            if feature_type == "gene":
+                for gene_id in attrs.get("ID", ()):
+                    gene_axes.setdefault(gene_id, set()).add((parts[0], parts[6]))
+            else:
+                for parent in attrs.get("Parent", ()):
+                    rna_parents.append((parent, parts[0], parts[6]))
         checked += 1
+    for parent, seqid, strand in rna_parents:
+        axes = gene_axes.get(parent)
+        # A missing gene row can still carry an authoritative declared Parent.
+        # Validate existing rows without inventing a replacement gene identity.
+        if axes and not any(
+            gene_seqid == seqid and (gene_strand not in ("+", "-") or strand not in ("+", "-") or gene_strand == strand)
+            for gene_seqid, gene_strand in axes
+        ):
+            raise ValueError("Formatted GFF gene/RNA reference or strand disagreement for Parent '{}'".format(parent))
     return checked

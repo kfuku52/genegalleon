@@ -23,6 +23,44 @@ def test_mapping_validation_checks_formatted_genome_even_without_strict(tmp_path
     assert message in result["error"]
 
 
+@pytest.mark.parametrize("gene_seqid,gene_strand", [("chr2", "+"), ("chr1", "-")])
+def test_non_strict_mapping_rejects_gene_RNA_axis_disagreement_with_valid_bounds(tmp_path, gene_seqid, gene_strand):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">chr1\nATGATG\n>chr2\nATGATG\n")
+    cds = tmp_path / "Test_species.fa"
+    cds.write_text(">Test_species_gene1\nATG\n")
+    gff = tmp_path / "Test_species.gff"
+    gff.write_text(
+        f"{gene_seqid}\tsrc\tgene\t1\t3\t.\t{gene_strand}\t.\tID=gene1\n"
+        "chr1\tsrc\tmRNA\t1\t3\t.\t+\t.\tID=tx1;Parent=gene1\n"
+        "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tParent=tx1\n"
+    )
+    result = module.validate_single_species(dict(index=0, species_prefix="Test_species", cds_file=cds, gff_file=gff, genome_file=genome), 10)
+    assert result["ok"] is False
+    assert "gene/RNA reference or strand disagreement" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "genes,parent,rna_type",
+    [
+        ("", "declared.g7", "mRNA"),
+        ("chr1\tsrc\tgene\t1\t3\t.\t.\t.\tID=g1\n", "g1", "RNA"),
+        ("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g%3B1\n", "g%3B1", "transcript"),
+        ("chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\nchr2\tsrc\tgene\t1\t3\t.\t+\t.\tID=g1\n", "g1", "mRNA"),
+    ],
+)
+def test_reference_validation_preserves_declared_missing_parents_and_compatible_gene_axes(tmp_path, genes, parent, rna_type):
+    load_module()
+    from format_species_annotation.reference import validate_gff_genome_references
+
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">chr1\nATGATG\n>chr2\nATGATG\n")
+    gff = tmp_path / "models.gff"
+    gff.write_text(genes + f"chr1\tsrc\t{rna_type}\t1\t3\t.\t+\t.\tID=tx1;Parent={parent}\nchr1\tsrc\tCDS\t1\t3\t.\t+\t0\tParent=tx1\n")
+    assert validate_gff_genome_references(gff, genome) == genes.count("\n") + 2
+
+
 def run_script(*args):
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH), *args],
