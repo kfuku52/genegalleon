@@ -570,6 +570,12 @@ Notes:
   CDS-only annotations do not establish biological gene/isoform uniqueness.
   Coverage is printed explicitly and retained in the validation JSON; native
   validation checkpoints and worker receipts bind its contents,
+- NCBI protein accessions reused at different loci are independently checked
+  against exact source GFF CDS intervals, reference and strand. This resolves
+  declared gene ancestry without grouping genes by proximity or overlap.
+  Conflicting identifiers/locations fail; missing or ambiguous evidence remains
+  explicit. Validation contract 4 rejects earlier validation checkpoints while
+  allowing unchanged formatting and BUSCO stages to be reused,
 - reverse complementation includes every IUPAC DNA ambiguity symbol,
 - formatting contract 24 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF

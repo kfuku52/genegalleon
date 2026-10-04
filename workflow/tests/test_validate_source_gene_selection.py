@@ -111,3 +111,80 @@ def test_missing_parent_conflicting_axes_fail_without_guessing(tmp_path, axis):
                     f"{axis[0]}\ts\tmRNA\t1\t9\t.\t{axis[1]}\t.\tID=t2;Parent=g1\n")
     with pytest.raises(ValueError, match="Conflicting axes"):
         SourceGeneSelection(path)
+
+
+@pytest.fixture
+def reused_accession(tmp_path):
+    path = tmp_path / "reused_accession.gff"
+    path.write_text(
+        "chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g1;Name=LOC1\n"
+        "chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n"
+        "chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=cds-P1;Parent=t1;protein_id=P1\n"
+        "chr2\ts\tgene\t11\t29\t.\t-\t.\tID=g2;Name=LOC1\n"
+        "chr2\ts\tmRNA\t11\t29\t.\t-\t.\tID=t2;Parent=g2\n"
+        "chr2\ts\tCDS\t11\t13\t.\t-\t0\tID=cds-P1;Parent=t2;protein_id=P1\n"
+        "chr2\ts\tCDS\t24\t29\t.\t-\t0\tID=cds-P1;Parent=t2;protein_id=P1\n")
+    return path
+
+
+@pytest.mark.parametrize("location", ["1..9", "<1..>9", "join(1..9)", "order(1..9)"])
+def test_exact_source_location_disambiguates_reused_protein_accession(reused_accession, location):
+    check = SourceGeneSelection(reused_accession)
+    assert check.header_roots(f"lcl|chr1_cds_P1_1 [protein_id=P1] [gene=LOC1] [location={location}]") == {"g1"}
+    assert check.header_roots("lcl|chr2_cds_P1_2 [protein_id=P1] [location=complement(join(11..13,24..29))]") == {"g2"}
+
+
+def test_reused_accession_cannot_hide_a_distinct_gene_merge(reused_accession):
+    check = SourceGeneSelection(reused_accession)
+    check.observe("lcl|chr1_cds_P1_1 [location=1..9]", "merged", True)
+    check.observe("lcl|chr2_cds_P1_2 [location=complement(join(11..13,24..29))]", "merged", False)
+    with pytest.raises(ValueError, match="distinct_source_gene_merges=1"):
+        check.validate()
+
+
+def test_exact_locations_still_reject_two_selected_isoforms(reused_accession):
+    check = SourceGeneSelection(reused_accession)
+    header = "lcl|chr1_cds_P1_1 [location=1..9]"
+    check.observe(header, "first", True)
+    check.observe(header, "second", True)
+    with pytest.raises(ValueError, match="retained_isoform_gene_groups=1"):
+        check.validate()
+
+
+def test_correct_reused_accession_selection_has_complete_ownership(reused_accession):
+    check = SourceGeneSelection(reused_accession)
+    check.observe("lcl|chr1_cds_P1_1 [location=1..9]", "first", True)
+    check.observe("lcl|chr2_cds_P1_2 [location=complement(join(11..13,24..29))]", "second", True)
+    assert check.validate()["source_gene_complete"]
+    assert check.validate()["source_gene_unresolved_records"] == 0
+
+
+@pytest.mark.parametrize("header", [
+    "lcl|chr1_cds_P1_1", "lcl|chr1_cds_P1_1 [location=1..8]",
+    "lcl|chr1_cds_P1_1 [location=complement(1..9)]",
+    "lcl|chr3_cds_P1_1 [location=1..9]",
+    "lcl|chr1_cds_P1_1 [location=9..1]",
+    "lcl|chr1_cds_P1_1 [location=0..9]",
+    "lcl|chr1_cds_P1_1 [location=join(1..9,complement(24..29))]",
+    "chr1_cds_P1_1 [protein_id=P1] [location=1..9]",
+])
+def test_inexact_or_unsupported_locations_do_not_guess_an_owner(reused_accession, header):
+    check = SourceGeneSelection(reused_accession)
+    check.observe(header, "first", True)
+    assert not check.validate()["source_gene_complete"]
+    assert check.validate()["source_gene_unresolved_records"] == 1
+
+
+def test_identifier_location_conflict_is_rejected(reused_accession):
+    check = SourceGeneSelection(reused_accession)
+    with pytest.raises(ValueError, match="identifier and exact GFF location disagree"):
+        check.header_roots("lcl|chr2_cds_unused_1 [transcript_id=t1] [location=complement(join(11..13,24..29))]")
+
+
+def test_exact_shared_coordinates_do_not_define_one_gene(reused_accession):
+    with reused_accession.open("a") as handle:
+        handle.write("chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g3\n"
+                     "chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=cds-P2;Parent=g3;protein_id=P2\n")
+    check = SourceGeneSelection(reused_accession)
+    check.observe("lcl|chr1_cds_anonymous_1 [location=1..9]", "first", True)
+    assert not check.validate()["source_gene_complete"]

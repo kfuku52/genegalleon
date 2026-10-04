@@ -46,7 +46,7 @@ def test_lineage_change_does_not_invalidate_upstream_stages(checkpoint, stage):
     assert resume.valid(plan, 1, root, stage, "10")
 
 
-@pytest.mark.parametrize("old_contract", ["1", "2"])
+@pytest.mark.parametrize("old_contract", ["1", "2", "3"])
 def test_old_validation_checkpoint_cannot_bypass_source_gene_ownership_check(checkpoint, old_contract):
     plan, root, _ = checkpoint
     path = resume.checkpoint_path(root, "Species_one", "validate")
