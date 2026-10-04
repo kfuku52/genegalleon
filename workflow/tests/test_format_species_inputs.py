@@ -1703,8 +1703,8 @@ def test_missing_parent_export_siblings_preserve_disjoint_coding_loci(tmp_path, 
 
 
 @pytest.mark.parametrize("provided_cds", [False, True])
-@pytest.mark.parametrize("prefix", ["", "evm.model.", "evm_27.model."])
-def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds, prefix):
+@pytest.mark.parametrize("prefix,encoded", [("", False), ("evm.model.", False), ("evm_27.model.", False), ("evm.model.", True)])
+def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds, prefix, encoded):
     mod = load_module()
     genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
     genome.write_text(">chr1\n" + "ATG" * 9 + "\n")
@@ -1714,6 +1714,8 @@ def test_coge_overlap_rescue_uses_complete_export_models(tmp_path, provided_cds,
         "chr1\tCoGe\tCDS\t19\t27\t.\t+\t0\tID=modelB;Name=modelB;coge_fid=102\n"
     )
     gff.write_text(gff.read_text().replace("modelA", prefix + "modelA").replace("modelB", prefix + "modelB"))
+    if encoded:
+        gff.write_text(gff.read_text().replace(prefix, prefix.replace('.', '%2E')))
     task = dict(provider="coge", species_key="Test_species", species_prefix="Test_species",
                 gff_path=gff, genome_path=genome, gene_grouping_mode="rescue_overlap", gff_repair_mode="safe")
     if provided_cds:
@@ -5319,8 +5321,8 @@ def test_gff_gene_repair_detects_alignment_collisions_before_and_after_genes(tmp
 
 @pytest.mark.parametrize('provided', [False, True])
 @pytest.mark.parametrize('strand', ['+', '-'])
-@pytest.mark.parametrize('prefix', ['', 'evm.model.', 'evm_27.model.'])
-def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, strand, prefix):
+@pytest.mark.parametrize('prefix,encoded', [('', False), ('evm.model.', False), ('evm_27.model.', False), ('evm.model.', True)])
+def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, strand, prefix, encoded):
     mod = load_module()
     gff, genome, cds = tmp_path/'source.gff', tmp_path/'genome.fa', tmp_path/'cds.fa'
     genome.write_text('>chr1\n'+'ATG'*30+'\n')
@@ -5334,6 +5336,8 @@ def test_overlap_rescue_keeps_existing_isoform_group_atomic(tmp_path, provided, 
         for start, end in intervals:
             lines.append(f'chr1\ts\tCDS\t{start}\t{end}\t.\t{strand}\t0\tParent={transcript}')
     gff.write_text('\n'.join(lines)+'\n')
+    if encoded:
+        gff.write_text(gff.read_text().replace(prefix, prefix.replace('.', '%2E')))
     task = dict(provider='direct', species_key='Test_species', species_prefix='Test_species',
                 gff_path=gff, genome_path=genome, gene_grouping_mode='rescue_overlap', format_strict=True)
     if provided:

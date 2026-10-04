@@ -555,9 +555,9 @@ Notes:
   transcript or gene representatives. GFF-derived headers retain this model's
   resolved owner instead of reapplying the legacy provided-CDS header map,
 - rescued GFF gene ownership follows the same historical ID replacements as
-  emitted GFF text (including `evm.model.`). A collision between distinct
+  emitted GFF text (including literal or percent-escaped `evm.model.`). A collision between distinct
   normalized owners fails rather than losing the selected longest model,
-- formatting contract 20 invalidates earlier formatting provenance. Use
+- formatting contract 21 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,

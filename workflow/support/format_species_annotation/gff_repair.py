@@ -36,7 +36,7 @@ from .reference import gff_reference_mapping, normalize_gff_reference_lines
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 14
+GFF_REPAIR_VERSION = 15
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -404,6 +404,9 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             identifiers = attrs.get("ID", ()) if feature_type != "cds" else attrs.get("Parent", ())
             if feature_type == "cds" and not identifiers and parts[1].strip().lower() == "coge":
                 identifiers = attrs.get("Name", ())
+            # Percent-escaped attributes are decoded by the parser after the
+            # text iterator's replacements, so normalize their decoded IDs too.
+            identifiers = tuple(apply_common_replacements(identifier) for identifier in identifiers)
             owners = {rescued_genes[identifier] for identifier in identifiers if identifier in rescued_genes}
             if owners:
                 if len(owners) != 1 or any(identifier not in rescued_genes for identifier in identifiers):
