@@ -1,5 +1,6 @@
 import gzip
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -162,3 +163,17 @@ def test_curated_pair_remains_a_native_formatting_input(tmp_path):
     assert cds["after_count"] == 1
     assert list(fsi.iter_fasta_records(cds["output_path"])) == [("Test_species_good", "ATGAAA")]
     assert gff["status"] == "write"
+
+
+def test_public_cli_and_string_path_API(tmp_path):
+    paths = pair(tmp_path)
+    assert inspect_pair("Test_species", *(str(path) for path in paths))[0]["cds_records"] == 2
+    script = Path(__file__).resolve().parents[1] / "support/curate_paired_species_inputs.py"
+    args = ["--species", "Test_species", "--cds", str(paths[0]), "--gff", str(paths[1]), "--genome", str(paths[2])]
+    audit = subprocess.run([sys.executable, str(script), "audit", *args, "--report", str(tmp_path / "audit.json")], text=True, capture_output=True)
+    assert audit.returncode == 0, audit.stderr
+    assert json.loads(audit.stdout)["cds_on_missing_references"] == 1
+    curated = subprocess.run([sys.executable, str(script), "curate", *args, "--decision-manifest", str(policy(tmp_path, paths)),
+                              "--output-dir", str(tmp_path / "cli-curated")], text=True, capture_output=True)
+    assert curated.returncode == 0, curated.stderr
+    assert json.loads(curated.stdout)["remaining_cds_records"] == 1

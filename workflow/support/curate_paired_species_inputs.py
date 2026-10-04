@@ -57,6 +57,7 @@ def gff_rows(path):
 
 
 def inspect_pair(species, cds, gff, genome):
+    cds, gff, genome = (Path(path) for path in (cds, gff, genome))
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", species):
         raise ValueError("Invalid species prefix")
     inputs = {key: fingerprint(value) for key, value in dict(cds=cds, gff=gff, genome=genome).items()}
