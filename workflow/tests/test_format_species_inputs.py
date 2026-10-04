@@ -5470,6 +5470,34 @@ def test_ncbi_unique_protein_owner_resolves_wrong_locus_at_shared_cds_coordinate
 
 @pytest.mark.parametrize("mode", ["off", "safe", "strict"])
 @pytest.mark.parametrize("paired", [False, True])
+def test_augustus_metadata_colon_separators_preserve_literal_values(tmp_path, mode, paired):
+    module = load_module()
+    from gff_attribute_syntax import validate_gff
+
+    value = "Protein 1, other OS=Plant|Ontology_id GO:1"
+    raw = tmp_path / "raw.gff3"
+    rows = ["chr1\tAUGUSTUS\tgene\t1\t12\t.\t+\t.\tID=g1;Name:" + value + ";\n",
+            "chr1\tAUGUSTUS\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g1;Blast2Go:" + value + ";\n",
+            "chr1\tAUGUSTUS\tCDS\t1\t12\t.\t+\t0\tParent=t1; 5_prime_partial=true;Note=literal%253B;\n"]
+    raw.write_text("".join(rows))
+    cds = tmp_path / "Species_one.cds.fa"
+    cds.write_text(">Species_one_g1\nATGAAACCCTAA\n")
+    task = {"provider": "local", "species_key": "Species_one", "species_prefix": "Species_one",
+            "gff_path": raw, "gff_repair_mode": mode}
+    output = tmp_path / "out"
+    output.mkdir()
+    result = module.format_gff(task, output, overwrite=False, dry_run=False,
+                              formatted_cds_path=cds if paired else None)
+    validate_gff(result["output_path"])
+    expected = "".join(rows).replace("Name:" + value, "Name=" + value.replace(",", "%2C").replace("=", "%3D"))
+    expected = expected.replace("Blast2Go:" + value, "Blast2Go=" + value.replace(",", "%2C").replace("=", "%3D"))
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.read() == expected
+    assert raw.read_text() == "".join(rows)
+
+
+@pytest.mark.parametrize("mode", ["off", "safe", "strict"])
+@pytest.mark.parametrize("paired", [False, True])
 def test_funannotate_metadata_semicolons_are_repaired_before_consumption(tmp_path, mode, paired):
     module = load_module()
     from gff_attribute_syntax import file_sha256, validate_gff

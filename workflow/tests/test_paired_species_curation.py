@@ -58,6 +58,49 @@ def test_approved_curation_preserves_sequences_and_coordinates_and_default_error
         run(tmp_path, paths, policy(tmp_path, paths))
 
 
+def test_curation_repairs_augustus_metadata_without_changing_retained_geometry(tmp_path):
+    paths = pair(tmp_path)
+    value = "Protein 1, other OS=Plant|Ontology_id GO:1"
+    text = paths[1].read_text().replace("chr1\tx\t", "chr1\tAUGUSTUS\t")
+    text = text.replace("ID=good\n", "ID=good;Name:" + value + ";\n")
+    text = text.replace("ID=good.t;Parent=good\n", "ID=good.t;Parent=good;Blast2Go:" + value + ";\n")
+    paths[1].write_text(text)
+    originals = [p.read_bytes() for p in paths]
+    result = run(tmp_path, paths, policy(tmp_path, paths))
+    observed = gzip.decompress(Path(result["gff_output"]["path"]).read_bytes()).decode()
+    expected = "".join(line for line in text.splitlines(keepends=True) if "absent" not in line)
+    expected = expected.replace("Name:" + value, "Name=" + value.replace(",", "%2C").replace("=", "%3D"))
+    expected = expected.replace("Blast2Go:" + value, "Blast2Go=" + value.replace(",", "%2C").replace("=", "%3D"))
+    assert observed == expected
+    syntax = result["gff_attribute_syntax"]
+    assert syntax["changed_rows"] == 2
+    audit_path = Path(syntax["changes"]["path"])
+    assert fingerprint(audit_path)["sha256"] == syntax["changes"]["sha256"]
+    with gzip.open(audit_path, "rt") as handle:
+        changes = [json.loads(line) for line in handle]
+    assert [change["source_line"] for change in changes] == [4, 5]
+    assert all(change["reason"] == "canonicalised_augustus_metadata_separator" for change in changes)
+    assert [p.read_bytes() for p in paths] == originals
+
+
+def test_curation_accepts_attribute_separator_whitespace_without_edit(tmp_path):
+    paths = pair(tmp_path)
+    paths[1].write_text(paths[1].read_text().replace("Parent=good.t", "Parent=good.t; 5_prime_partial=true"))
+    result = run(tmp_path, paths, policy(tmp_path, paths))
+    assert result["gff_attribute_syntax"]["changed_rows"] == 0
+    observed = gzip.decompress(Path(result["gff_output"]["path"]).read_bytes()).decode()
+    assert "; 5_prime_partial=true" in observed
+
+
+@pytest.mark.parametrize("fragment", ["ID:good", "Parent:good", "Name:protein;ambiguous"])
+def test_curation_never_guesses_unknown_or_structural_colon_attributes(tmp_path, fragment):
+    paths = pair(tmp_path)
+    paths[1].write_text(paths[1].read_text().replace("ID=good\n", "ID=good;" + fragment + "\n"))
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        run(tmp_path, paths, policy(tmp_path, paths))
+    assert not (tmp_path / "curated").exists()
+
+
 @pytest.mark.parametrize("records,approve,match", [
     ([], True, "exclusion IDs differ"),
     ([dict(cds_id="Test_species_good", action="exclude", reason="missing_genome_reference")], True, "exclusion IDs differ"),

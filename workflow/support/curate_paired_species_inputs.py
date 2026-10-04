@@ -16,7 +16,7 @@ import json
 import re
 import shutil
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from format_species_annotation.common import (
@@ -28,6 +28,7 @@ from format_species_annotation.common import (
 )
 from format_species_annotation.reference import genome_reference_index, validate_gff_genome_references
 from format_species_writers import open_text
+from gff_attribute_syntax import GFF_ATTRIBUTE_SYNTAX_VERSION, normalise_line, validate_gff
 
 CONTRACT_VERSION = 1
 STAT_FIELDS = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
@@ -346,8 +347,10 @@ def curate_pair(species, cds, gff, genome, decision_manifest, output_dir):
                     keep = first_token(line[1:]) not in excluded
                 if keep:
                     dest.write(line)
-        with gzip_text(gff_output) as dest:
-            for line, parts, _attrs in gff_rows(gff):
+        syntax_output = root / (species + "_gff_attribute_syntax_changes.jsonl.gz")
+        syntax_counts = Counter()
+        with gzip_text(gff_output) as dest, gzip_text(syntax_output) as audit:
+            for number, (line, parts, _attrs) in enumerate(gff_rows(gff), 1):
                 if parts is not None:
                     if parts[0] not in mapping:
                         removed_features += 1
@@ -364,7 +367,13 @@ def curate_pair(species, cds, gff, genome, decision_manifest, output_dir):
                     if mapping[fields[1]] != fields[1]:
                         fields[1] = mapping[fields[1]]
                         line = " ".join(fields) + "\n"
+                changes = []
+                line = normalise_line(line, gff, number, changes)
+                for change in changes:
+                    audit.write(json.dumps(change, sort_keys=True) + "\n")
+                    syntax_counts[change["reason"]] += 1
                 dest.write(line)
+        validate_gff(gff_output)
         checked = validate_gff_genome_references(gff_output, genome)
         if not checked:
             raise ValueError("Curation would remove every GFF feature")
@@ -378,6 +387,13 @@ def curate_pair(species, cds, gff, genome, decision_manifest, output_dir):
                       remaining_cds_records=len(observed), excluded_gff_features=removed_features,
                       checked_gff_features=checked, original_sources_modified=False,
                       cds_output=fingerprint(cds_output), gff_output=fingerprint(gff_output))
+        syntax_fingerprint = fingerprint(syntax_output)
+        syntax_fingerprint["path"] = str(target / syntax_output.name)
+        syntax_fingerprint.pop("stat")
+        report["gff_attribute_syntax"] = dict(version=GFF_ATTRIBUTE_SYNTAX_VERSION,
+                                             changed_rows=sum(syntax_counts.values()),
+                                             reason_counts=dict(syntax_counts), changes=syntax_fingerprint,
+                                             coordinates_phases_and_structural_ownership_unchanged=True)
         for key in ("cds_output", "gff_output"):
             report[key]["path"] = str(target / Path(report[key]["path"]).name)
             report[key].pop("stat")

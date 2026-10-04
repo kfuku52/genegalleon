@@ -49,7 +49,13 @@ python workflow/support/curate_paired_species_inputs.py curate \
 The destination must not exist. The helper creates compressed CDS/GFF files and
 `curation.json`, binding the decisions, input/output hashes, excluded IDs and
 feature counts, retained exceptions and verified remaining reference bounds.
-Retained CDS lines and GFF coordinates/phases are preserved. Unique supported
+Retained CDS lines and GFF coordinates/phases are preserved. Known recoverable
+GFF metadata syntax is canonicalized by the ordinary native syntax normalizer,
+with each changed row recorded in a compressed JSONL audit bound to the receipt.
+AUGUSTUS gene `Name:` and mRNA `Blast2Go:` become key=value attributes; embedded
+commas and equals signs remain literal metadata through escaping. Whitespace
+around attribute separators remains acceptable without changing the source text.
+Unknown fragments or malformed structural attributes still fail. Unique supported
 reference aliases are canonicalized; ambiguous aliases, mixed reference owners,
 cross-boundary Parents, cycles, unexpected IDs, and changed inputs fail before
 publication. Noncoding annotations on an approved missing reference are removed

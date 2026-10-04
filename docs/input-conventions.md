@@ -571,7 +571,7 @@ Notes:
   Coverage is printed explicitly and retained in the validation JSON; native
   validation checkpoints and worker receipts bind its contents,
 - reverse complementation includes every IUPAC DNA ambiguity symbol,
-- formatting contract 23 invalidates earlier formatting provenance. Use
+- formatting contract 24 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,
