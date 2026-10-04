@@ -121,3 +121,54 @@ def test_import_rejects_changed_donor_plan(checkpoint, tmp_path):
                               root=tmp_path / "new_root", source_plan_sha256="0" * 64)
     with pytest.raises(ValueError, match="sealed resume SHA-256"):
         resume.import_stages(args)
+
+
+@pytest.mark.parametrize("stage", ["format", "validate"])
+def test_donor_checkpoint_resolves_its_own_container_namespace(checkpoint, stage):
+    plan, root, paths = checkpoint
+    workspace = root.parent.parent
+    def alias(path):
+        return "/workspace/" + str(Path(path).relative_to(workspace))
+    meta_path = root / "tmp/task_meta_shards/1.json"
+    meta = json.loads(meta_path.read_text())
+    meta.update({key: alias(path) for key, path in paths.items()})
+    meta_path.write_text(json.dumps(meta))
+    saved_path = resume.checkpoint_path(root, "Species_one", stage)
+    saved = json.loads(saved_path.read_text())
+    for entry in saved["files"].values():
+        entry["path"] = alias(entry["path"])
+    saved_path.write_text(json.dumps(saved))
+    assert resume.valid(plan, 1, root, stage, "10", namespace_root=workspace)
+    assert not resume.valid(plan, 1, root, stage, "10", namespace_root=workspace / "foreign")
+    Path(paths["cds_output_path"]).write_text("changed donor contents\n")
+    assert not resume.valid(plan, 1, root, stage, "10", namespace_root=workspace)
+
+
+def test_donor_owner_prepared_and_receipt_resolve_namespace_without_rewriting(checkpoint):
+    from input_generation_array_state import namespace_path
+
+    plan, root, paths = checkpoint
+    workspace = root.parent.parent
+    def alias(path):
+        return "/workspace/" + str(Path(path).relative_to(workspace))
+    owner = root / ".array-plan.json"
+    owner.write_text(json.dumps({"task_plan": alias(plan), "plan_sha256": resume.digest(plan), "workspace": alias(root)}))
+    files = {alias(paths["cds_output_path"]): resume.digest(paths["cds_output_path"])}
+    prepared = Path(str(plan) + ".prepared.json")
+    prepared.write_text(json.dumps({"plan_sha256": resume.digest(plan),
+                                   "settings_sha256": resume.digest(str(plan) + ".settings.json"), "files": files}))
+    receipt = Path(str(plan) + ".completed/1.json")
+    receipt.parent.mkdir()
+    receipt.write_text(json.dumps({"plan_sha256": resume.digest(plan), "task_index": 1, "files": files}))
+    before = {path: path.read_bytes() for path in (owner, prepared, receipt)}
+    resume.claim_workspace(plan, root, namespace_root=workspace)
+    assert resume.prepared(plan, namespace_root=workspace)
+    assert resume.verify_receipt(plan, 1, namespace_root=workspace)
+    assert before == {path: path.read_bytes() for path in before}
+    with pytest.raises(ValueError, match="another array plan"):
+        resume.claim_workspace(plan, root, namespace_root=workspace / "foreign")
+    with pytest.raises(ValueError, match="parent traversal"):
+        namespace_path("/workspace/../foreign", workspace)
+    Path(paths["cds_output_path"]).write_text("changed donor contents\n")
+    assert not resume.prepared(plan, namespace_root=workspace)
+    assert not resume.verify_receipt(plan, 1, namespace_root=workspace)

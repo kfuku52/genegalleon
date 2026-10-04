@@ -17,6 +17,7 @@ from input_generation_array_state import (
     digest,
     digest_paths,
     load_plan,
+    namespace_path,
     prepared,
     verify_receipt,
 )
@@ -38,7 +39,7 @@ def checkpoint_path(root, species, stage):
     return root / "tmp/stage_checkpoints" / f"{stage}.{species}.json"
 
 
-def context(plan_path, index, root, stage):
+def context(plan_path, index, root, stage, *, namespace_root=None):
     plan = load_plan(plan_path)
     task = plan["tasks"][index - 1]
     settings = json.loads(Path(str(plan_path) + ".settings.json").read_text())
@@ -57,6 +58,7 @@ def context(plan_path, index, root, stage):
         paths["ownership_qc"] = str(root / "tmp/task_stats_shards" / f"{index}.longest.json")
         if "gff" in paths:
             paths["mapping_qc"] = str(root / "tmp/task_stats_shards" / f"{index}.mapping.json")
+    paths = {label: str(namespace_path(path, namespace_root)) for label, path in paths.items()}
     return task, settings, meta, paths
 
 
@@ -77,14 +79,15 @@ def record(plan_path, index, root, stage, format_contract_version):
     })
 
 
-def valid(plan_path, index, root, stage, format_contract_version):
+def valid(plan_path, index, root, stage, format_contract_version, *, namespace_root=None):
     try:
-        task, settings, _, paths = context(plan_path, index, root, stage)
+        task, settings, _, paths = context(plan_path, index, root, stage, namespace_root=namespace_root)
         saved = json.loads(checkpoint_path(root, task["species_prefix"], stage).read_text())
         return (saved.get("schema_version") == 1 and saved.get("stage") == stage
                 and saved.get("species") == task["species_prefix"]
                 and saved.get("parameters") == parameters(settings, stage, format_contract_version)
-                and saved.get("files") == snapshot(paths))
+                and {label: {**item, "path": str(namespace_path(item["path"], namespace_root))}
+                     for label, item in saved["files"].items()} == snapshot(paths))
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return False
 
@@ -139,6 +142,7 @@ def import_stages(args):
     if source_plan == args.task_plan.resolve():
         raise ValueError("Stage import requires a separate frozen plan/output workspace")
     source_root = args.source_root.resolve(strict=True)
+    source_namespace = source_root.parent.parent
     if source_root == args.root.resolve():
         raise ValueError("Stage import cannot share the donor output workspace")
     with (source_root / ".array-phase.lock").open("a") as lock:
@@ -148,12 +152,15 @@ def import_stages(args):
             raise ValueError("Source input-generation workspace has active workers/shared stages") from exc
         if digest(source_plan) != args.source_plan_sha256:
             raise ValueError("Source plan differs from the sealed resume SHA-256")
-        if not prepared(source_plan):
+        if not prepared(source_plan, namespace_root=source_namespace):
             raise ValueError("Source prepare/settings evidence is missing or stale")
-        claim_workspace(source_plan, source_root)
+        claim_workspace(source_plan, source_root, namespace_root=source_namespace)
         claim_workspace(args.task_plan, args.root)
         source = load_plan(source_plan)
         source_settings = json.loads(Path(str(source_plan) + ".settings.json").read_text())
+        source_settings = {key: str(namespace_path(value, source_namespace))
+                           if isinstance(value, str) and (value == "/workspace" or value.startswith("/workspace/")) else value
+                           for key, value in source_settings.items()}
         target = load_plan(args.task_plan)
         target_settings = json.loads(Path(str(args.task_plan) + ".settings.json").read_text())
         if parameters(source_settings, "format", args.format_contract_version) != parameters(target_settings, "format", args.format_contract_version):
@@ -170,13 +177,15 @@ def import_stages(args):
             donor_task = source["tasks"][old_index - 1]
             if any(task.get(key) != donor_task.get(key) for key in ("provider", "species_key")):
                 raise ValueError("Source/target species identity differs: " + species)
-            complete = verify_receipt(source_plan, old_index, args.source_plan_sha256)
-            format_valid = valid(source_plan, old_index, source_root, "format", args.format_contract_version)
+            complete = verify_receipt(source_plan, old_index, args.source_plan_sha256, namespace_root=source_namespace)
+            format_valid = valid(source_plan, old_index, source_root, "format", args.format_contract_version, namespace_root=source_namespace)
             if not complete and not format_valid:
                 skipped.append(species)
                 continue
-            _, _, old_meta, old_paths = context(source_plan, old_index, source_root, "format")
+            _, _, old_meta, old_paths = context(source_plan, old_index, source_root, "format", namespace_root=source_namespace)
             receipt = json.loads(Path(str(source_plan) + f".completed/{old_index}.json").read_text()) if complete else {}
+            if receipt:
+                receipt["files"] = {str(namespace_path(path, source_namespace)): value for path, value in receipt["files"].items()}
             if complete and not format_valid:
                 # Old workers bound their metadata/shards and formatted outputs
                 # to completion, and their format manifest declared this contract.
@@ -194,6 +203,8 @@ def import_stages(args):
             original_files = snapshot(old_paths)
             if format_valid:
                 saved_files = json.loads(checkpoint_path(source_root, species, "format").read_text())["files"]
+                saved_files = {label: {**item, "path": str(namespace_path(item["path"], source_namespace))}
+                               for label, item in saved_files.items()}
                 if original_files != saved_files:
                     raise ValueError("Source format files changed after verification: " + species)
             elif any(item["sha256"] != receipt["files"][item["path"]] for item in original_files.values()):
@@ -224,7 +235,8 @@ def import_stages(args):
             with Path(old_paths["summary"]).open(newline="") as handle:
                 reader = csv.DictReader(handle, delimiter="\t")
                 fields = reader.fieldnames
-                rows = [{key: replacements.get(value, value) for key, value in row.items()} for row in reader]
+                rows = [{key: replacements.get(str(namespace_path(value, source_namespace)), value)
+                         for key, value in row.items()} for row in reader]
             if len(rows) != 1 or rows[0].get("species_prefix") != species:
                 raise ValueError("Source summary shard does not identify exactly one requested species")
             destination = Path(new_paths["summary"])
@@ -238,9 +250,9 @@ def import_stages(args):
             record(args.task_plan, index, args.root, "format", args.format_contract_version)
             import_fx2tab(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
                           source_settings, target_settings)
-            validation_valid = valid(source_plan, old_index, source_root, "validate", args.format_contract_version)
+            validation_valid = valid(source_plan, old_index, source_root, "validate", args.format_contract_version, namespace_root=source_namespace)
             if (source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1"
-                    and (complete or validation_valid)):
+                    and validation_valid):
                 ownership = source_root / "tmp/task_stats_shards" / f"{old_index}.longest.json"
                 receipt_files = receipt.get("files", {})
                 if not ownership.is_file() or (not validation_valid and str(ownership) not in receipt_files):

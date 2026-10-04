@@ -86,14 +86,27 @@ def receipt_path(plan, index):
     return Path(str(plan) + ".completed") / (str(index) + ".json")
 
 
-def verify_receipt(plan, index, plan_sha256=None):
+def namespace_path(path, namespace_root=None):
+    """Resolve a donor's saved /workspace paths in that donor's own mount."""
+    path = Path(path)
+    virtual = Path("/workspace")
+    if namespace_root is not None and (path == virtual or virtual in path.parents):
+        relative = path.relative_to(virtual)
+        if ".." in relative.parts:
+            raise ValueError("Saved workspace path contains parent traversal")
+        return Path(namespace_root) / relative
+    return path
+
+
+def verify_receipt(plan, index, plan_sha256=None, *, namespace_root=None):
     try:
         receipt = json.loads(receipt_path(plan, index).read_text())
         if receipt["plan_sha256"] != (plan_sha256 or digest(plan)) or receipt["task_index"] != index:
             return False
         if not isinstance(receipt["files"], dict) or not receipt["files"]:
             return False
-        return all(Path(path).is_file() and digest(path) == value for path, value in receipt["files"].items())
+        return all(namespace_path(path, namespace_root).is_file()
+                   and digest(namespace_path(path, namespace_root)) == value for path, value in receipt["files"].items())
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
@@ -135,17 +148,17 @@ def export_manifest(plan, outfile, tasks=None):
         temp.unlink(missing_ok=True)
 
 
-def prepared(plan):
+def prepared(plan, *, namespace_root=None):
     try:
         marker = json.loads(Path(str(plan) + ".prepared.json").read_text())
         if marker["plan_sha256"] != digest(plan) or marker["settings_sha256"] != digest(str(plan) + ".settings.json"):
             return False
-        return all(digest(path) == value for path, value in marker.get("files", {}).items())
+        return all(digest(namespace_path(path, namespace_root)) == value for path, value in marker.get("files", {}).items())
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
 
-def claim_workspace(plan, workspace, create=False, output_dirs=()):
+def claim_workspace(plan, workspace, create=False, output_dirs=(), *, namespace_root=None):
     """A workspace's shard namespace belongs to exactly one immutable plan."""
     markers = [Path(workspace) / ".array-plan.json"]
     markers.extend(Path(str(Path(path).resolve()) + ".gg-input-generation-owner.json") for path in output_dirs)
@@ -153,8 +166,13 @@ def claim_workspace(plan, workspace, create=False, output_dirs=()):
                 "workspace": str(Path(workspace).resolve())}
     # All output locks are held by the core before checking or creating claims.
     for marker in markers:
-        if marker.exists() and json.loads(marker.read_text()) != identity:
-            raise ValueError("Output location belongs to another array plan: " + str(marker))
+        if marker.exists():
+            saved = json.loads(marker.read_text())
+            if namespace_root is not None:
+                for key in ("task_plan", "workspace"):
+                    saved[key] = str(namespace_path(saved[key], namespace_root).resolve())
+            if saved != identity:
+                raise ValueError("Output location belongs to another array plan: " + str(marker))
         if not create and not marker.is_file():
             raise ValueError("This output location is not prepared for this task plan: " + str(marker))
     if create:

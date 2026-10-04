@@ -8,6 +8,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1084,7 +1085,9 @@ def _forbid_format_and_validation(fake_bin):
     _write_text(seqkit, f'#!/bin/sh\n[ "$1" != fx2tab ] || exit 93\nexec "{allowed}" "$@"\n', mode=0o755)
 
 
-def test_array_lineage_change_imports_legacy_completed_format_and_validation(tmp_path):
+@pytest.mark.parametrize("container_namespace", [False, True])
+@pytest.mark.parametrize("validation_proof", ["current", "obsolete", "absent"])
+def test_array_lineage_change_imports_only_current_validation(tmp_path, container_namespace, validation_proof):
     input_dir = _write_direct_species_fixture(tmp_path)
     source_workspace = tmp_path / "legacy_workspace"
     fake_bin = _install_fake_toolchain(tmp_path)
@@ -1093,10 +1096,30 @@ def test_array_lineage_change_imports_legacy_completed_format_and_validation(tmp
     _run_core(source_workspace, input_dir, fake_bin, "array_prepare")
     _run_core(source_workspace, input_dir, fake_bin, "array_worker", 1)
     source_root = source_workspace / "output/input_generation"
-    # Model a worker completed before per-stage checkpoints were introduced.
-    for path in (source_root / "tmp/stage_checkpoints").glob("*.json"):
-        path.unlink()
+    # Completion alone cannot certify the current validation contract.
+    checkpoints = source_root / "tmp/stage_checkpoints"
+    if validation_proof == "absent":
+        for path in checkpoints.glob("*.json"):
+            path.unlink()
+    elif validation_proof == "obsolete":
+        path = checkpoints / "validate.Arabidopsis_thaliana.json"
+        checkpoint = json.loads(path.read_text())
+        checkpoint["parameters"]["validation_contract_version"] = "3"
+        path.write_text(json.dumps(checkpoint))
     source_plan = source_root / "tmp/task_plan.json"
+    if container_namespace:
+        def alias(path):
+            return "/workspace/" + str(Path(path).relative_to(source_workspace))
+        owner_path = source_root / ".array-plan.json"
+        owner = json.loads(owner_path.read_text())
+        for key in ("task_plan", "workspace"):
+            owner[key] = alias(owner[key])
+        owner_path.write_text(json.dumps(owner))
+        for path in (Path(str(source_plan) + ".prepared.json"), Path(str(source_plan) + ".completed/1.json")):
+            payload = json.loads(path.read_text())
+            payload["files"] = {alias(name) if source_workspace in Path(name).parents else name: sha
+                                for name, sha in payload["files"].items()}
+            path.write_text(json.dumps(payload))
     source_bytes = source_plan.read_bytes()
     import hashlib
     workspace = tmp_path / "embryophyta_workspace"
@@ -1111,15 +1134,22 @@ def test_array_lineage_change_imports_legacy_completed_format_and_validation(tmp
     result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=prepare_env,
                             capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"validation": true' in result.stdout
+    reuse_validation = validation_proof == "current"
+    assert ('"validation": true' if reuse_validation else '"validation": false') in result.stdout
     _forbid_format_and_validation(fake_bin)
+    if not reuse_validation:
+        path = fake_bin / "python"
+        path.write_text(path.read_text().replace(
+            "*/validate_cds_gff_mapping.py|*/validate_longest_cds_selection.py) exit 92 ;;", ""))
     worker_env = _core_env(workspace, input_dir, fake_bin, "array_worker", 1)
     worker_env.update(common)
     result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=worker_env,
                             capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Reused verified input formatting" in result.stdout
-    assert "Reused verified CDS/GFF validation" in result.stdout
+    assert ("Reused verified CDS/GFF validation" in result.stdout) == reuse_validation
+    if not reuse_validation:
+        assert "Validate formatted species input" in result.stdout
     provenance = json.loads((workspace / "output/input_generation/artifact_provenance/busco.Arabidopsis_thaliana.json").read_text())
     assert provenance["parameters"]["busco_lineage_resolved"] == "embryophyta_odb12"
     assert source_plan.read_bytes() == source_bytes

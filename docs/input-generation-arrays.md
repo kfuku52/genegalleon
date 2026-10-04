@@ -230,6 +230,12 @@ Native prepare imports verified formatting, validation and available fx2tab
 outputs for matching species and identical raw content. Formatting parameters
 and required-output settings must agree. It remaps shard indices and output
 paths, writes new stage checkpoints and preserves the donor plan/workspace.
+Saved `/workspace` paths are resolved against the sealed donor workspace, including
+its owner marker, prepare files, completion receipts and stage checkpoints.
+The importer retains the original records and verifies their content hashes.
+Validation is reused only from a valid checkpoint for the current validation
+contract. A completed legacy worker can supply verified formatting, but its
+completion receipt alone does not certify updated source-gene checks.
 BUSCO results are not imported: the new lineage is assessed normally and
 produces new BUSCO provenance. The donor workspace must be inactive; its phase
 lock prevents copying during workers, prepare or finalize.
