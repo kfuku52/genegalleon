@@ -562,7 +562,16 @@ Notes:
 - rescued GFF gene ownership follows the same historical ID replacements as
   emitted GFF text (including literal or percent-escaped `evm.model.`). A collision between distinct
   normalized owners fails rather than losing the selected longest model,
-- formatting contract 22 invalidates earlier formatting provenance. Use
+- an RNA's explicit missing `Parent` retains its gene ownership even for
+  disconnected sibling CDS models. Conflicting sequence/strand axes fail;
+  different explicit Parents remain separate during overlap rescue,
+- source-gene validation reports `source_gene_complete=false` and
+  `partial_explicit_parent` or `unresolved` when source ownership is unavailable.
+  CDS-only annotations do not establish biological gene/isoform uniqueness.
+  Coverage is printed explicitly and retained in the validation JSON; native
+  validation checkpoints and worker receipts bind its contents,
+- reverse complementation includes every IUPAC DNA ambiguity symbol,
+- formatting contract 23 invalidates earlier formatting provenance. Use
   `artifact_stale_policy=rebuild` to regenerate affected CDS and paired GFF
   from the existing sources; an explicit `reuse` keeps the older artifact and
   does not apply this grouping correction,

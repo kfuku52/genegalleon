@@ -246,12 +246,20 @@ def test_formatting_refuses_unverified_paired_corrections_and_rebuilds(tmp_path,
     paired = module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])
     output_before = paired["output_path"].read_bytes()
     audit = Path(str(first["output_path"]) + ".cds-normalisation.json")
+    audit_before = audit.stat()
     audit.write_text("{broken")
     with pytest.raises(ValueError, match="Missing or stale CDS normalisation audit"):
         module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])
     assert paired["output_path"].read_bytes() == output_before
     assert module.format_cds(task, tmp_path, False, False)["status"] == "write"
-    assert module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])["status"] == "write"
+    # Filesystems with coarse timestamps can recreate the identical audited pair
+    # within one tick. Explicitly invalidate the recorded sidecar fingerprint.
+    os.utime(audit, ns=(audit_before.st_atime_ns, audit_before.st_mtime_ns + 2_000_000_000))
+    rebuilt = module.format_gff(task, tmp_path, False, False, formatted_cds_path=first["output_path"])
+    assert rebuilt["status"] == "write"
+    with gzip.open(rebuilt["output_path"], "rt") as handle:
+        rebuilt_lines = handle.read()
+    assert rebuilt_lines == gzip.decompress(output_before).decode()
     audit.unlink()
     with pytest.raises(ValueError, match="Missing or stale CDS normalisation audit"):
         module.format_gff(task, tmp_path, True, False, formatted_cds_path=first["output_path"])
@@ -1688,7 +1696,7 @@ def test_missing_parent_siblings_keep_shared_owner_with_export_suffix(
 
 
 @pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
-def test_missing_parent_export_siblings_preserve_disjoint_coding_loci(tmp_path, mode):
+def test_missing_parent_export_siblings_preserve_declared_owner(tmp_path, mode):
     mod = load_module()
     gff = tmp_path / "annotation.gff"
     gff.write_text(
@@ -1699,7 +1707,21 @@ def test_missing_parent_export_siblings_preserve_disjoint_coding_loci(tmp_path, 
     )
     index = mod.build_gff_cds_grouping_index(dict(provider="direct", species_key="Test_species",
         gff_path=gff, gene_grouping_mode=mode))
-    assert len(set(index["transcript_gene_tokens"].values())) == 2
+    assert set(index["transcript_gene_tokens"].values()) == {"locusX"}
+
+
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+def test_overlapping_missing_parent_genes_remain_distinct(tmp_path, mode):
+    mod = load_module()
+    gff = tmp_path / "annotation.gff"
+    gff.write_text(
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=gene%3Ag1\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c1;Parent=t1\n"
+        "chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=t2;Parent=g2\n"
+        "chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tID=c2;Parent=t2\n")
+    index = mod.build_gff_cds_grouping_index(dict(provider="direct", species_key="Test_species",
+        gff_path=gff, gene_grouping_mode=mode))
+    assert index["transcript_gene_tokens"] == {"t1": "g1", "t2": "g2"}
 
 
 @pytest.mark.parametrize("provided_cds", [False, True])
@@ -1754,9 +1776,8 @@ def test_disconnected_missing_parent_numeric_models_project_complete_gene_to_gff
     genome, gff = tmp_path / "genome.fa", tmp_path / "annotation.gff"
     sequence = "ATG" * 15
     genome.write_text(">chr1\n" + sequence + "\n")
-    # The representative's name is a short transcript at the first locus.
-    # Another isoform is longest there; the same missing Parent also names
-    # a disconnected second locus that must retain its own representative.
+    # The source explicitly assigns all transcripts to the same missing gene.
+    # Its ownership takes precedence over suffix or coding-locus inference.
     root = "Calam.05G208800"
     models = [(root + ".1", 1, 6), (root + ".6", 1, 12),
               (root + ".7", 31, 39)]
@@ -1779,9 +1800,9 @@ def test_disconnected_missing_parent_numeric_models_project_complete_gene_to_gff
     output = tmp_path / "output"
     output.mkdir()
     result = mod.format_cds(task, output, False, False, strict=True)
-    ids = ["Test_species_" + root + suffix for suffix in (".1", ".7")]
+    ids = ["Test_species_" + root]
     assert dict(mod.iter_fasta_records(result["output_path"])) == {
-        ids[0]: coding[root + ".6"], ids[1]: coding[root + ".7"],
+        ids[0]: coding[root + ".6"],
     }
     formatted = mod.format_gff(task, output, False, False, formatted_cds_path=result["output_path"])
     with gzip.open(formatted["output_path"], "rt") as handle:
@@ -1793,7 +1814,47 @@ def test_disconnected_missing_parent_numeric_models_project_complete_gene_to_gff
         "CDS", "longest",
         ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"],
         ["gene_id", "feature_size"])
-    assert dict(zip(traits.gene_id, traits.feature_size, strict=True)) == {ids[0]: 12, ids[1]: 9}
+    assert dict(zip(traits.gene_id, traits.feature_size, strict=True)) == {ids[0]: 12}
+
+
+def test_reverse_complement_preserves_complete_iupac_dna_alphabet():
+    from Bio.Seq import Seq
+    from format_species_annotation.common import reverse_complement
+    sequence = "ACGTRYSWKMBDHVNacgtryswkmbdhvn"
+    assert reverse_complement(sequence) == str(Seq(sequence).reverse_complement())
+    assert reverse_complement(reverse_complement(sequence)) == sequence
+
+
+def test_minus_strand_multiexon_iupac_cds_matches_independent_genome_reconstruction(tmp_path):
+    from Bio.Seq import Seq
+    mod = load_module()
+    sequence = "ACGTRYSWKMBD" + "NNNNNN" + "HVNRYSWKMBDH"
+    genome, gff = tmp_path / "genome.fa", tmp_path / "source.gff"
+    genome.write_text(">chr1\n" + sequence + "\n")
+    gff.write_text(
+        "chr1\ts\tgene\t1\t30\t.\t-\t.\tID=g1\n"
+        "chr1\ts\tmRNA\t1\t30\t.\t-\t.\tID=t1;Parent=g1\n"
+        "chr1\ts\tCDS\t1\t12\t.\t-\t0\tID=c1;Parent=t1\n"
+        "chr1\ts\tCDS\t19\t30\t.\t-\t0\tID=c2;Parent=t1\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                genome_path=genome, gff_path=gff, gene_grouping_mode="rescue_overlap")
+    expected = str(Seq(sequence[:12] + sequence[18:30]).reverse_complement())
+    out = tmp_path / "output"
+    out.mkdir()
+    result = mod.format_cds(task, out, False, False, strict=True)
+    assert dict(mod.iter_fasta_records(result["output_path"])) == {"Test_species_g1": expected}
+
+
+@pytest.mark.parametrize("axis", [("chr2", "+"), ("chr1", "-")])
+def test_formatter_missing_parent_rejects_conflicting_axes(tmp_path, axis):
+    mod = load_module()
+    gff = tmp_path / "source.gff"
+    gff.write_text("chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n"
+                   f"{axis[0]}\ts\tmRNA\t1\t9\t.\t{axis[1]}\t.\tID=t2;Parent=g1\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, gene_grouping_mode="rescue_overlap")
+    with pytest.raises(ValueError, match="Conflicting axes"):
+        mod.build_gff_cds_grouping_index(task)
 
 
 def test_suffix_grouping_keeps_explicit_gene_ids_and_connected_components(tmp_path):
@@ -5378,6 +5439,7 @@ def test_gff_rescued_owner_normalisation_rejects_distinct_owner_collision(tmp_pa
     monkeypatch.setattr(gff_repair, 'build_gff_cds_grouping_index', lambda _task: {
         'rescued_transcript_gene_tokens': {'evm.model.t': 'gA', 't': 'gB'},
         'suffix_inferred_transcript_gene_tokens': {},
+        'explicit_missing_parent_gene_tokens': (),
         'transcript_gene_tokens': {'evm.model.t': 'gA', 't': 'gB'},
     })
     task = dict(provider='direct', species_key='Test_species', species_prefix='Test_species', gff_path=gff)

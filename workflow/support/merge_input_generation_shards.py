@@ -73,7 +73,11 @@ def main():
         path for path in all_json_paths
         if re.fullmatch(r"[1-9][0-9]*\.mapping\.json", path.name)
     )
-    if len(stats_paths) + len(mapping_qc_paths) != len(all_json_paths):
+    ownership_qc_paths = sorted(
+        path for path in all_json_paths
+        if re.fullmatch(r"[1-9][0-9]*\.longest\.json", path.name)
+    )
+    if len(stats_paths) + len(mapping_qc_paths) + len(ownership_qc_paths) != len(all_json_paths):
         parser.error("Task stats directory contains an unexpected JSON file")
 
     if args.expected_task_count > 0 and len(stats_paths) != args.expected_task_count:
@@ -93,13 +97,14 @@ def main():
         expected_summaries = {str(index) + ".tsv" for index in indices}
         if {path.name for path in stats_paths} != expected_stats or {path.name for path in shard_paths} != expected_summaries:
             parser.error("Shard identities do not match the immutable task plan")
-        for qc_path in mapping_qc_paths:
+        for qc_path in mapping_qc_paths + ownership_qc_paths:
+            label = "Mapping QC" if qc_path in mapping_qc_paths else "Source ownership QC"
             index = int(qc_path.name.split(".", 1)[0])
             if index not in indices:
-                parser.error("Mapping QC index is outside the immutable task plan")
+                parser.error(label + " index is outside the immutable task plan")
             receipt = json.loads(receipt_path(args.task_plan, index).read_text())
             if str(qc_path.resolve()) not in receipt.get("files", {}):
-                parser.error("Mapping QC is not bound to the worker completion receipt")
+                parser.error(label + " is not bound to the worker completion receipt")
         for index, task in enumerate(plan["tasks"], start=1):
             stats = read_task_stats(task_stats_dir / (str(index) + ".json"))
             rows = fsi.read_species_summary_rows(species_summary_shard_dir / (str(index) + ".tsv"))
@@ -133,6 +138,18 @@ def main():
     cds_gff_coordinate_rescued_groups = 0
     phase_conflicts_total = 0
     utr_conflicts_total = 0
+    source_gene_validation = {}
+
+    for qc_path in ownership_qc_paths:
+        index = qc_path.name.split(".", 1)[0]
+        stats_path = task_stats_dir / (index + ".json")
+        if not stats_path.is_file():
+            parser.error("Source ownership QC has no matching task stats")
+        species = read_task_stats(stats_path).get("species_prefix")
+        ownership = read_task_stats(qc_path).get("source_gene_validation")
+        if not species or not isinstance(ownership, dict) or set(ownership) != {species}:
+            parser.error("Source ownership QC species does not match its task")
+        source_gene_validation.update(ownership)
 
     for qc_path in mapping_qc_paths:
         qc = read_task_stats(qc_path)
@@ -218,6 +235,8 @@ def main():
                 "merged_species_summary_rows": len(merged_rows),
                 "task_stats_files": len(stats_paths),
                 "mapping_qc_files": len(mapping_qc_paths),
+                "ownership_qc_files": len(ownership_qc_paths),
+                "source_gene_validation": source_gene_validation,
                 "phase_conflicts_total": phase_conflicts_total,
                 "utr_conflicts_total": utr_conflicts_total,
                 "task_species_summary_shards": shard_row_count,

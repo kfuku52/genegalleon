@@ -1098,7 +1098,8 @@ def test_run_input_generation_task_and_merge_shards(tmp_path: Path):
     assert payload["cds_gff_records_unmapped"] == 0
 
 
-def test_merge_requires_mapping_qc_to_be_bound_to_worker_receipt(tmp_path: Path):
+@pytest.mark.parametrize("qc_kind", ["mapping", "longest"])
+def test_merge_requires_validation_qc_to_be_bound_to_worker_receipt(tmp_path: Path, qc_kind):
     raw = tmp_path / "Direct" / "species_wise_original"
     write_direct_species_fixture(raw, "Arabidopsis_thaliana")
     plan = tmp_path / "plan.json"
@@ -1122,8 +1123,12 @@ def test_merge_requires_mapping_qc_to_be_bound_to_worker_receipt(tmp_path: Path)
     receipt_args = ("complete", "--task-plan", str(plan), "--task-index", "1",
                     "--file", str(summary), "--file", str(stats))
     assert run_python(state, *receipt_args).returncode == 0
-    qc = stats_dir / "1.mapping.json"
-    qc.write_text(json.dumps({"phase_conflicts_total": 2, "utr_conflicts_total": 1}), encoding="utf-8")
+    qc = stats_dir / ("1." + qc_kind + ".json")
+    payload = ({"phase_conflicts_total": 2, "utr_conflicts_total": 1} if qc_kind == "mapping" else
+               {"source_gene_validation": {"Arabidopsis_thaliana": {
+                   "source_gene_complete": False, "source_gene_check": "unresolved",
+                   "source_gene_unresolved_records": 2}}})
+    qc.write_text(json.dumps(payload), encoding="utf-8")
     merge_args = (
         "--species-summary-shard-dir", str(shard_dir),
         "--species-summary-output", str(tmp_path / "merged.tsv"),
@@ -1133,10 +1138,14 @@ def test_merge_requires_mapping_qc_to_be_bound_to_worker_receipt(tmp_path: Path)
     )
     unbound = run_python(MERGE_SCRIPT, *merge_args)
     assert unbound.returncode != 0
-    assert "Mapping QC is not bound" in unbound.stderr
+    assert ("Mapping QC" if qc_kind == "mapping" else "Source ownership QC") + " is not bound" in unbound.stderr
     assert run_python(state, *receipt_args, "--file", str(qc)).returncode == 0
     merged = run_python(MERGE_SCRIPT, *merge_args)
     assert merged.returncode == 0, merged.stderr
+    if qc_kind == "longest":
+        aggregate = json.loads((tmp_path / "aggregate.json").read_text())
+        assert aggregate["ownership_qc_files"] == 1
+        assert aggregate["source_gene_validation"] == payload["source_gene_validation"]
     qc.write_text(json.dumps({"phase_conflicts_total": 0}), encoding="utf-8")
     assert run_python(MERGE_SCRIPT, *merge_args).returncode != 0
 

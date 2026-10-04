@@ -362,6 +362,32 @@ def build_gff_cds_grouping_index(task):
                     }
                 )
 
+    # An RNA's explicit absent Parent is still an author-declared gene boundary.
+    # Do not turn it into suffix/overlap inference: disjoint sibling transcripts
+    # on the same axis retain that owner, and different Parents cannot merge.
+    missing_parent_children = defaultdict(list)
+    for record in feature_records.values():
+        kind = record["feature_type"]
+        if kind.endswith("rna") or "transcript" in kind:
+            for parent in record["parents"]:
+                if parent not in feature_records:
+                    missing_parent_children[parent].append(record)
+    for parent, children in missing_parent_children.items():
+        axes = {(child["coordinates"][0], child["coordinates"][1]) for child in children}
+        if len(axes) != 1:
+            raise ValueError("Conflicting axes for explicit missing GFF Parent: " + parent)
+        seqid, strand = next(iter(axes))
+        feature_records[parent] = {
+            "feature_type": "gene", "parents": (),
+            "gene_token": strip_gff_feature_prefix(parent),
+            "authoritative_gene_tokens": (), "aliases": (parent,),
+            "line_number": min(child["line_number"] for child in children),
+            "coordinates": (seqid, strand,
+                            str(min(int(child["coordinates"][2]) for child in children)),
+                            str(max(int(child["coordinates"][3]) for child in children))),
+            "is_ordered_gene": False,
+        }
+
     # Supplied CDS can have a valid RNA->gene relationship even when its source
     # GFF omitted CDS features. Keep identity evidence without inventing genomic
     # CDS coordinates or treating the RNA as a coordinate-rescue candidate.
@@ -596,6 +622,8 @@ def build_gff_cds_grouping_index(task):
     )
     return {
         "gff_path": str(gff_path),
+        "explicit_missing_parent_gene_tokens": tuple(sorted(
+            strip_gff_feature_prefix(parent) for parent in missing_parent_children)),
         "alias_to_gene_tokens": {
             alias: tuple(sorted(gene_tokens)) for alias, gene_tokens in alias_to_gene_tokens.items()
         },

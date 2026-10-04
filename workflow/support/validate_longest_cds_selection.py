@@ -421,13 +421,17 @@ def validate_single_species(task, missing_limit):
             "stats_ready": True,
             "stats": stats,
             "message": (
-                "[{}] Longest CDS validation OK: genes={}, transcripts={}, multi_isoform_genes={}, aggregated={}"
+                "[{}] Longest CDS validation OK: genes={}, transcripts={}, multi_isoform_genes={}, aggregated={}; "
+                "source_gene_check={}, source_gene_complete={}, source_gene_unresolved_records={}"
             ).format(
                 species_prefix,
                 expected_stats["genes_total"],
                 expected_stats["transcripts_total"],
                 expected_stats["multi_isoform_genes"],
                 expected_stats["aggregated_cds_removed"],
+                expected_stats["source_gene_check"],
+                expected_stats["source_gene_complete"],
+                expected_stats["source_gene_unresolved_records"],
             ),
         }
     except Exception as exc:
@@ -519,6 +523,7 @@ def main():
         "multi_isoform_genes_total": 0,
         "aggregated_cds_removed_total": 0,
         "nthreads": nthreads,
+        "source_gene_validation": {},
     }
 
     tasks = []
@@ -561,6 +566,12 @@ def main():
             stats["transcripts_total"] += int(result["stats"]["transcripts_total"])
             stats["multi_isoform_genes_total"] += int(result["stats"]["multi_isoform_genes"])
             stats["aggregated_cds_removed_total"] += int(result["stats"]["aggregated_cds_removed"])
+            ownership = {key: value for key, value in result["stats"].items() if key.startswith("source_gene_")}
+            stats["source_gene_validation"][result["species_prefix"]] = ownership
+            if ownership["source_gene_check"] in ("partial_explicit_parent", "unresolved"):
+                warnings.append("[{}] Source gene/isoform ownership is incomplete: unresolved_records={}; "
+                                "longest-selection agreement does not establish biological gene uniqueness.".format(
+                                    result["species_prefix"], ownership["source_gene_unresolved_records"]))
         if result["ok"]:
             stats["species_passed"] += 1
             print(result["message"])

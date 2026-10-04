@@ -213,7 +213,12 @@ def pad_to_codon_length(seq):
 
 
 def reverse_complement(seq):
-    return seq.translate(str.maketrans("ACGTNacgtn", "TGCANtgcan"))[::-1]
+    # Ambiguous bases must be complemented too; leaving R/Y, K/M, B/V or
+    # D/H unchanged silently corrupts otherwise valid minus-strand CDS.
+    alphabet = "ACGTRYSWKMBDHVNU"
+    complements = "TGCAYRSWMKVHDBNA"
+    return seq.translate(str.maketrans(alphabet + alphabet.lower(),
+                                       complements + complements.lower()))[::-1]
 
 
 def normalize_gff_attribute_value(raw_value):

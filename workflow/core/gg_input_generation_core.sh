@@ -90,7 +90,7 @@ gbif_taxon_map="${gbif_taxon_map:-}"
 gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
-format_contract_version=22
+format_contract_version=23
 
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"
@@ -1185,7 +1185,7 @@ run_validate_stage() {
         exit 1
       fi
       rm -f -- "${mapping_stats_file}"
-      rm -f -- "${longest_cds_stats_file}"
+      # Retain source-ownership coverage alongside the selection result.
     fi
   fi
   stage_validate_status="ok"
@@ -1266,9 +1266,8 @@ run_validate_stage_one_worker() {
     echo "Failed: ${task} (longest CDS selection)"
     exit 1
   fi
-  # Keep mapping QC for this species so reported phase/UTR conflicts remain
-  # inspectable and are bound to the worker's completion receipt.
-  rm -f -- "${longest_stats_file}"
+  # Keep both mapping and source-ownership QC, bound to the validation
+  # checkpoint and worker completion receipt.
   python "${gg_support_dir}/input_generation_stage_resume.py" record \
     --task-plan "${task_plan_output}" --root "${input_generation_root}" \
     --format-contract-version "${format_contract_version}" \
@@ -2251,6 +2250,13 @@ run_array_worker_mode() {
     --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
     --file "${cds_output_path}")
   [[ -z "${gff_output_path}" || ! -s "${gff_output_path}" ]] || receipt_cmd+=(--file "${gff_output_path}")
+  if [[ ${stage_validate_status} == "ok" ]]; then
+    [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.longest.json" ]] || {
+      echo "CDS selection/source ownership QC is missing for task ${GG_ARRAY_TASK_ID}" >&2
+      exit 1
+    }
+    receipt_cmd+=(--file "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.longest.json")
+  fi
   if [[ ${run_validate_inputs} -eq 1 && -n "${gff_output_path}" ]]; then
     [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json" ]] || {
       echo "CDS/GFF mapping QC is missing for task ${GG_ARRAY_TASK_ID}" >&2

@@ -35,6 +35,8 @@ class SourceGeneSelection:
         self.unresolved_records = 0
         if not self.active:
             return
+        declared_nodes = set()
+        missing_parent_axes = defaultdict(set)
         with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
             for line in handle:
                 if line.startswith("##FASTA"):
@@ -52,6 +54,10 @@ class SourceGeneSelection:
                 ids = attrs.get("id", [])
                 parents = set(attrs.get("parent", []))
                 kind = fields[2].lower()
+                declared_nodes.update(ids)
+                if kind.endswith("rna") or "transcript" in kind:
+                    for parent in parents - set(ids):
+                        missing_parent_axes[parent].add((fields[0], fields[6]))
                 if kind in ("gene", "pseudogene"):
                     self.genes.update(ids)
                 for identifier in ids:
@@ -62,6 +68,12 @@ class SourceGeneSelection:
                     for value in attrs.get(key, []):
                         for alias in aliases(value):
                             self.nodes_by_alias[alias].update(targets)
+        for parent, axes in missing_parent_axes.items():
+            if parent in declared_nodes:
+                continue
+            if len(axes) != 1:
+                raise ValueError("Conflicting axes for explicit missing GFF Parent: " + parent)
+            self.genes.add(parent)
 
     def roots(self, node):
         if node not in self.cache:
@@ -126,7 +138,13 @@ class SourceGeneSelection:
             raise ValueError("Source GFF gene ownership failed: retained_isoform_gene_groups={} "
                              "distinct_source_gene_merges={} sample={}".format(
                                  len(splits), len(merges), list(splits.items())[:3] + list(merges.items())[:3]))
-        return dict(source_gene_check="explicit_parent" if self.active else "not_applicable",
+        complete = self.active and self.resolved_records > 0 and self.unresolved_records == 0
+        status = ("explicit_parent" if complete else
+                  "partial_explicit_parent" if self.resolved_records else "unresolved")
+        return dict(source_gene_check=status if self.active else "not_applicable",
+                    source_gene_complete=complete,
                     source_gene_resolved_records=self.resolved_records,
                     source_gene_unresolved_records=self.unresolved_records,
+                    source_gene_unresolved_selected_records=sum(
+                        len(roots) != 1 for roots in self.selected_roots.values()),
                     source_gene_retained_isoform_groups=0, source_gene_distinct_merges=0)

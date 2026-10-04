@@ -111,6 +111,27 @@ def test_validate_longest_cds_selection_passes_for_raw_cds_inputs(tmp_path):
     assert stats["multi_isoform_genes_total"] == 1
 
 
+def test_cli_retains_and_reports_unresolved_source_gene_coverage(tmp_path):
+    raw, gff, formatted = tmp_path / "raw.fa", tmp_path / "source.gff", tmp_path / "species_cds/Test_species.fa.gz"
+    formatted.parent.mkdir()
+    raw.write_text(">model1 [gene=model1]\nATGAAATTT\n")
+    gff.write_text("chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=model1\n")
+    write_gzip_text(formatted, ">Test_species_model1\nATGAAATTT\n")
+    summary, stats_path = tmp_path / "summary.tsv", tmp_path / "qc.json"
+    write_species_summary(summary, [dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+        cds_input_path=str(raw), gff_input_path=str(gff), genome_input_path="", cds_output_path=str(formatted),
+        cds_sequences_before="1", cds_sequences_after="1", aggregated_cds_removed="0", gene_grouping_mode="strict")])
+    completed = run_script("--species-cds-dir", str(formatted.parent), "--species-summary", str(summary),
+                           "--stats-output", str(stats_path))
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "source_gene_check=unresolved, source_gene_complete=False" in completed.stdout
+    assert "does not establish biological gene uniqueness" in completed.stderr
+    ownership = json.loads(stats_path.read_text())["source_gene_validation"]["Test_species"]
+    assert not ownership["source_gene_complete"]
+    assert ownership["source_gene_unresolved_records"] == 1
+    assert ownership["source_gene_unresolved_selected_records"] == 1
+
+
 def test_validate_longest_cds_selection_fails_when_shorter_isoform_is_kept(tmp_path):
     raw_dir = tmp_path / "raw"
     cds_dir = tmp_path / "species_cds"

@@ -26,7 +26,8 @@ def checkpoint(tmp_path):
     meta = root / "tmp/task_meta_shards/1.json"
     meta.parent.mkdir()
     meta.write_text(json.dumps({"task_index": 1, "species_prefix": "Species_one", **paths}))
-    for name in ("task_stats_shards/1.json", "task_stats_shards/1.mapping.json", "species_summary_shards/1.tsv"):
+    for name in ("task_stats_shards/1.json", "task_stats_shards/1.mapping.json",
+                 "task_stats_shards/1.longest.json", "species_summary_shards/1.tsv"):
         path = root / "tmp" / name
         path.parent.mkdir(exist_ok=True)
         path.write_text("validated shard\n")
@@ -45,11 +46,12 @@ def test_lineage_change_does_not_invalidate_upstream_stages(checkpoint, stage):
     assert resume.valid(plan, 1, root, stage, "10")
 
 
-def test_old_validation_checkpoint_cannot_bypass_source_gene_ownership_check(checkpoint):
+@pytest.mark.parametrize("old_contract", ["1", "2"])
+def test_old_validation_checkpoint_cannot_bypass_source_gene_ownership_check(checkpoint, old_contract):
     plan, root, _ = checkpoint
     path = resume.checkpoint_path(root, "Species_one", "validate")
     payload = json.loads(path.read_text())
-    payload["parameters"]["validation_contract_version"] = "1"
+    payload["parameters"]["validation_contract_version"] = old_contract
     path.write_text(json.dumps(payload))
     assert not resume.valid(plan, 1, root, "validate", "10")
 
@@ -64,7 +66,7 @@ def test_content_change_cannot_reuse_checkpoint(checkpoint, stage, label):
 
 
 @pytest.mark.parametrize("name", ["task_stats_shards/1.json", "species_summary_shards/1.tsv",
-                                 "task_stats_shards/1.mapping.json"])
+                                 "task_stats_shards/1.mapping.json", "task_stats_shards/1.longest.json"])
 def test_missing_validation_evidence_cannot_be_skipped(checkpoint, name):
     plan, root, _ = checkpoint
     (root / "tmp" / name).unlink()

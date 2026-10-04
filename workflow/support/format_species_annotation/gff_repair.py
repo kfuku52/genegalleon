@@ -489,6 +489,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             # select among all its isoforms, not just that namesake transcript.
             rescued_owners = set(index["rescued_transcript_gene_tokens"].values())
             rescued_owners.update(index["suffix_inferred_transcript_gene_tokens"].values())
+            rescued_owners.update(index["explicit_missing_parent_gene_tokens"])
             for transcript, gene in index["transcript_gene_tokens"].items():
                 owner = sanitize_identifier(gene)
                 if gene not in rescued_owners or owner not in cds_gene_ids:

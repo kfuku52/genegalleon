@@ -30,7 +30,7 @@ def parameters(settings, stage, format_contract_version):
               for key in FORMAT_PARAMETERS}
     result["format_contract_version"] = str(format_contract_version)
     if stage == "validate":
-        result.update(validation_contract_version="2", run_validate_inputs=str(settings["run_validate_inputs"]))
+        result.update(validation_contract_version="3", run_validate_inputs=str(settings["run_validate_inputs"]))
     return result
 
 
@@ -53,8 +53,10 @@ def context(plan_path, index, root, stage):
         if meta.get("genome_output_path"):
             paths["genome"] = meta["genome_output_path"]
         paths.update({key: meta[key] for key in ("cds_path", "gff_path", "genome_path", "gbff_path") if meta.get(key)})
-    elif "gff" in paths:
-        paths["mapping_qc"] = str(root / "tmp/task_stats_shards" / f"{index}.mapping.json")
+    else:
+        paths["ownership_qc"] = str(root / "tmp/task_stats_shards" / f"{index}.longest.json")
+        if "gff" in paths:
+            paths["mapping_qc"] = str(root / "tmp/task_stats_shards" / f"{index}.mapping.json")
     return task, settings, meta, paths
 
 
@@ -239,6 +241,16 @@ def import_stages(args):
             validation_valid = valid(source_plan, old_index, source_root, "validate", args.format_contract_version)
             if (source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1"
                     and (complete or validation_valid)):
+                ownership = source_root / "tmp/task_stats_shards" / f"{old_index}.longest.json"
+                receipt_files = receipt.get("files", {})
+                if not ownership.is_file() or (not validation_valid and str(ownership) not in receipt_files):
+                    imported.append({"species": species, "validation": False})
+                    continue
+                ownership_sha256 = (json.loads(checkpoint_path(source_root, species, "validate").read_text())
+                                    ["files"]["ownership_qc"]["sha256"] if validation_valid else receipt_files[str(ownership)])
+                copy_atomic(ownership, args.root / "tmp/task_stats_shards" / f"{index}.longest.json")
+                if digest(args.root / "tmp/task_stats_shards" / f"{index}.longest.json") != ownership_sha256:
+                    raise ValueError("Copied source ownership QC differs from its verified source: " + species)
                 mapping = source_root / "tmp/task_stats_shards" / f"{old_index}.mapping.json"
                 if old_meta.get("gff_output_path"):
                     receipt_files = receipt.get("files", {})
