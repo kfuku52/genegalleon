@@ -174,6 +174,41 @@ def test_formatting_normalises_partial_cds_and_paired_gff_without_rescue_flag(tm
     assert not list(tmp_path.glob("*.fai"))
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path, monkeypatch, explicit):
+    import tempfile
+
+    import cds_model_normalisation
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    override = tmp_path / "override"
+    override.mkdir()
+    monkeypatch.setenv("TMPDIR", str(runtime))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    selected = override if explicit else runtime
+    original = tempfile.TemporaryDirectory
+    created = []
+
+    def temporary_directory(*args, **kwargs):
+        if kwargs.get("prefix") == ".anchor-genome-":
+            assert Path(kwargs["dir"]) == selected
+            created.append(Path(kwargs["dir"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cds_model_normalisation.tempfile, "TemporaryDirectory", temporary_directory)
+    task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)]}])
+    if explicit:
+        task["_normalisation_scratch"] = override
+    output = tmp_path / "output"
+    output.mkdir()
+    module = load_module()
+    result = module.format_cds(task, output, False, False)
+    assert dict(module.iter_fasta_records(result["output_path"])) == {"Test_species_g1": "ATGAAACCCTAA"}
+    assert created == [selected]
+    assert not list(selected.iterdir())
+
+
 @pytest.mark.parametrize("strand", ["+", "-"])
 def test_formatting_removes_proven_utr_and_retains_unresolved_originals(tmp_path, strand):
     module = load_module()

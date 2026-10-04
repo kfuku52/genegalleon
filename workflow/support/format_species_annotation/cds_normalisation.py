@@ -1,6 +1,7 @@
 """Normalise evidenced CDS/GFF inconsistencies before representative selection."""
 import hashlib
 import json
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import quote
@@ -126,7 +127,7 @@ def iter_normalised_cds_records(task, state=None):
                 yield line
     normaliser = CdsModelNormaliser(
         {"species": task["species_prefix"], "gff": str(task["gff_path"]), "genome": str(task["genome_path"]), "genetic_code": code},
-        Path(task.get("_normalisation_scratch", "/tmp")), "format", genome_records=genome_records,
+        Path(task.get("_normalisation_scratch", tempfile.gettempdir())), "format", genome_records=genome_records,
         reference_mapping=reference_mapping, attribute_parser=attribute_parser, gff_lines=gff_lines)
     index = task.get("_gff_cds_grouping_index")
     if index is None:
