@@ -178,6 +178,9 @@ def test_formatting_normalises_partial_cds_and_paired_gff_without_rescue_flag(tm
 def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path, monkeypatch, explicit):
     import tempfile
 
+    # Load process-wide annotation caches before changing this task's scratch.
+    # The test must also work in isolation, without an earlier module import.
+    module = load_module()
     import cds_model_normalisation
 
     runtime = tmp_path / "runtime"
@@ -202,7 +205,6 @@ def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path,
         task["_normalisation_scratch"] = override
     output = tmp_path / "output"
     output.mkdir()
-    module = load_module()
     result = module.format_cds(task, output, False, False)
     assert dict(module.iter_fasta_records(result["output_path"])) == {"Test_species_g1": "ATGAAACCCTAA"}
     assert created == [selected]
