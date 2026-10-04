@@ -131,6 +131,11 @@ Important behavior:
 
 ### GFF source and transcript identity
 
+For an explicitly reviewed omission of annotations on references missing from a
+paired genome, or retention of individually flagged source conflicts, see
+[paired-input curation](paired-input-curation.md). Its decisions are bound to
+exact input hashes; ordinary input-generation reference checks remain unchanged.
+
 Direct/local CDS downloads retain model identity from structured CoGe headers;
 the transport provider does not replace the CoGe model ID with the species name.
 Malformed structured CDS identities and identifier sanitization collisions fail.
