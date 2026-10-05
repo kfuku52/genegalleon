@@ -2557,7 +2557,32 @@ prepare_gene_model_refinement() {
 finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
   python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
+  local refinement_review_dir="${gene_model_refinement_dir}.review"
+  python "${gg_support_dir}/plot_gene_model_refinement.py" --output "${gene_model_refinement_dir}" \
+    --report "${refinement_review_dir}" --cds-dir "${species_cds_dir}"
+  if [[ ${run_species_busco} -eq 1 ]]; then
+    local refinement_busco_db refinement_busco_jobs=1 refinement_busco_memory_cap
+    ensure_shared_busco_lineage_ready "${task_plan_output}"
+    refinement_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}")
+    if [[ "${species_busco_parallel_jobs}" == auto ]]; then
+      refinement_busco_jobs=${GG_TASK_CPUS}
+      [[ ${refinement_busco_jobs} -le 4 ]] || refinement_busco_jobs=4
+    elif [[ "${species_busco_parallel_jobs}" =~ ^[1-9][0-9]*$ ]]; then
+      refinement_busco_jobs=${species_busco_parallel_jobs}
+      [[ ${refinement_busco_jobs} -le ${GG_TASK_CPUS} ]] || refinement_busco_jobs=${GG_TASK_CPUS}
+    else
+      echo "Invalid species_busco_parallel_jobs: ${species_busco_parallel_jobs}" >&2
+      return 2
+    fi
+    refinement_busco_memory_cap=$(gg_memory_parallel_job_cap "${GG_MEM_TOOL_GB}" "${species_busco_memory_gb_per_job}")
+    [[ ${refinement_busco_jobs} -le ${refinement_busco_memory_cap} ]] || refinement_busco_jobs=${refinement_busco_memory_cap}
+    python "${gg_support_dir}/gene_model_refinement_busco.py" --output "${gene_model_refinement_dir}" \
+      --report "${refinement_review_dir}/busco" --cds-dir "${species_cds_dir}" \
+      --lineage "${refinement_busco_db}/lineages/${busco_lineage_resolved}" --download-path "${refinement_busco_db}" \
+      --jobs "${refinement_busco_jobs}" --cpus "$((GG_TASK_CPUS / refinement_busco_jobs))"
+  fi
   echo "Selected CDS/protein/GFF inputs: ${gene_model_refinement_dir}/effective/inputs.tsv"
+  echo "Refinement review and paired BUSCO comparison: ${refinement_review_dir}"
 }
 
 ensure_dir "${input_generation_root}"

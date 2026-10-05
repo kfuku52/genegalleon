@@ -215,12 +215,16 @@ After `qc` succeeds, render a separate review directory in the same runtime:
 ```bash
 python workflow/support/plot_gene_model_refinement.py \
   --output /path/to/refinement --report /path/to/refinement-review \
+  --cds-dir /path/to/all-dataset-species-cds \
   --max-loci 200 --preferred-species Species_name
 ```
 
 The helper verifies the consumed publication hashes, produces `summary.png`
 and `summary.svg`, and embeds the summary and locus diagrams in a self-contained
-`review.html`. The summary counts every species; the detailed gallery is bounded
+`review.html`. The summary counts every native species. `--cds-dir` also includes
+species without a matching genome/GFF in the plan, with grey rows marked
+`not analysed` and unavailable counts instead of zero improvements. Their CDS
+remains unchanged. The detailed gallery is bounded
 by `--max-loci`, prioritizes the requested species and changed/accepted loci, then
 fills remaining slots with prediction proposals. Search the gallery by species,
 gene identifier or selection decision. `review_data.json` retains the report's
@@ -237,6 +241,36 @@ Whole RNA-chain support does not establish translation initiation or protein
 function. Review files are never added to the immutable refinement publication.
 Source coding-path phase resolutions can fill unused gallery slots. Their
 original phase blocks and inference basis are available in the evidence panel.
+
+When `run_species_busco=1`, input generation also evaluates the before/after
+representative DNA CDS sets and writes `busco_comparison.png`, `.svg`, `.tsv`
+and `.json` under `gene_model_refinement_dir.review/busco`. The review is separate
+from the immutable native publication. Both evaluations use transcriptome mode,
+e-value `1e-03`, limit 20, the same BUSCO/tool binaries and one local lineage
+whose contents are hashed. The before set is the frozen refinement source,
+including earlier rescued genes when supplied; the after set is selected
+representative DNA, rather than all candidate isoforms or the admitted-only
+protein view. Grey CDS-only species remain visible and are evaluated unchanged.
+Exact unchanged input bytes reuse the corresponding evaluation. Per-species
+receipts permit verified restarts; changed inputs, implementation or settings
+require a new report directory. Failed or incomparable evaluations do not
+produce a completed comparison. Deltas use integer BUSCO counts, avoiding
+rounding errors in the displayed summary percentages.
+
+For an existing verified publication, the same comparison is available directly:
+
+```bash
+python workflow/support/gene_model_refinement_busco.py \
+  --output /path/to/refinement --report /path/to/paired-busco \
+  --cds-dir /path/to/all-dataset-species-cds \
+  --lineage /path/to/busco_downloads/lineages/embryophyta_odb12 \
+  --download-path /path/to/busco_downloads --jobs 2 --cpus 4
+```
+
+`jobs * cpus` is the total CPU allocation. Input generation respects the existing
+`species_busco_parallel_jobs` and per-job memory budget. BUSCO complete scores
+do not measure all model repairs or isoform improvements; inspect duplication
+and the locus evidence alongside completeness.
 
 ## Outputs and downstream use
 

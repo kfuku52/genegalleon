@@ -33,7 +33,7 @@ def table(path):
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
-def collect(root, max_loci=200, preferred_species=""):
+def collect(root, max_loci=200, preferred_species="", cds_dir=None):
     """Count the entire publication; bound only the detailed locus gallery."""
     rows = verify_inputs(root / "effective" / "inputs.tsv")
     plan_hash = digest(root / "plan.json")
@@ -50,6 +50,7 @@ def collect(root, max_loci=200, preferred_species=""):
         selected = [r for r in changes if r["species"] == name]
         accepted = [r for r in models if r["status"] == "accepted"]
         stats[name] = {
+            "refinement_status": "analysed", "refinement_reason": "",
             "source_loci": metadata["summary"]["loci"],
             "source_candidates": metadata["summary"]["candidates"],
             "accepted_repair_paths": sum(r["change_type"] == "model_revision" for r in accepted),
@@ -136,6 +137,12 @@ def collect(root, max_loci=200, preferred_species=""):
     performance = {}
     for path in sorted(root.glob("*/performance.json")) + sorted(root.glob("*/*/performance.json")):
         performance[str(path.parent.relative_to(root))] = verified_json(path.parent, path.name, plan_hash)
+    if cds_dir:
+        from gene_model_refinement_busco import input_pairs
+        for pair in input_pairs(root, cds_dir):
+            if pair["species"] not in stats:
+                stats[pair["species"]] = {"refinement_status": "not_analysed", "refinement_reason": pair["reason"]}
+    stats = dict(sorted(stats.items()))
     return {
         "schema": 1, "plan_sha256": plan_hash,
         "effective_receipt_sha256": digest(root / "effective" / "receipt.json"),
@@ -158,11 +165,11 @@ def plot_summary(data, output):
     fig, axes = plt.subplots(1, 4, figsize=(18, max(6, len(names) * .32)),
                              sharey=True, gridspec_kw={"wspace": .15})
     ys = list(range(len(names)))
-    repairs = [s["accepted_repair_paths"] for s in stats]
-    isoforms = [s["accepted_isoform_paths"] for s in stats]
+    repairs = [s.get("accepted_repair_paths", 0) for s in stats]
+    isoforms = [s.get("accepted_isoform_paths", 0) for s in stats]
     axes[0].barh(ys, repairs, color="#187d97", label="Repair coding paths")
     axes[0].barh(ys, isoforms, left=repairs, color="#d38b21", label="Additional isoform paths")
-    axes[1].barh(ys, [s["changed_representatives"] for s in stats], color="#5275b5")
+    axes[1].barh(ys, [s.get("changed_representatives", 0) for s in stats], color="#5275b5")
     axes[2].barh(ys, [s.get("phase_resolved_representatives", 0) for s in stats], color="#32856b")
     axes[3].barh(ys, [s.get("effective_exclusions", 0) for s in stats], color="#a14c57", label="Source/structure mismatch")
     axes[3].barh(ys, [s.get("translation_withheld", 0) - s.get("effective_exclusions", 0) for s in stats],
@@ -170,19 +177,24 @@ def plot_summary(data, output):
     for ax, title in zip(axes, ("Accepted coding paths", "Changed representatives", "Phase-resolved representatives", "Withheld from coding analysis"), strict=True):
         ax.set_title(title, fontweight="bold")
         ax.set_xlabel("Count")
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=3, integer=True))
         ax.spines[["top", "right"]].set_visible(False)
         ax.grid(axis="x", alpha=.15)
         ax.set_axisbelow(True)
         ax.set_xlim(left=0)
-    axes[0].set_yticks(ys, [n.replace("_", " ") for n in names], fontstyle="italic")
+        for i, s in enumerate(stats):
+            if s.get("refinement_status") == "not_analysed":
+                ax.axhspan(i - .5, i + .5, color="#eef0f3", zorder=0)
+                ax.text(.02, i, "Not analysed", transform=ax.get_yaxis_transform(), va="center", color="#647383", fontsize=9)
+    axes[0].set_yticks(ys, [n.replace("_", " ") + (" [not analysed]" if stats[i].get("refinement_status") == "not_analysed" else "") for i, n in enumerate(names)], fontstyle="italic")
     axes[0].invert_yaxis()
-    axes[0].legend(loc="lower center", bbox_to_anchor=(.5, -0.18), frameon=False, fontsize=9)
-    axes[3].legend(loc="lower center", bbox_to_anchor=(.5, -0.18), frameon=False, fontsize=9)
+    handles, labels = axes[0].get_legend_handles_labels()
+    other_handles, other_labels = axes[3].get_legend_handles_labels()
+    fig.legend(handles + other_handles, labels + other_labels, loc="lower left", bbox_to_anchor=(.25, .06), ncol=2, frameon=False, fontsize=9)
     fig.suptitle("Synteny-guided gene-model refinement", x=.32, y=.995, ha="left", fontweight="bold", fontsize=16)
-    fig.subplots_adjust(left=.22, right=.99, top=.94, bottom=.15)
-    fig.text(.22, .025, "Coding paths and genes are counted separately. Withheld paths remain in the source archive.\n"
-             "Acceptance and representative adoption use separate gates; ranking scores are not confidence probabilities.", fontsize=9)
+    fig.subplots_adjust(left=.25, right=.99, top=.92, bottom=.20)
+    fig.text(.25, .02, "Grey rows: no matching genome/GFF in the plan; structural refinement not analysed, CDS retained unchanged.\n"
+             "Coding paths and genes are counted separately. Ranking scores are not confidence probabilities.", fontsize=9)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("summary." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
@@ -278,9 +290,11 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
                ("Predicted representatives", "predicted_representatives"), ("Proposal paths", "proposed_paths"),
                ("Phase-resolved representatives", "phase_resolved_representatives"),
                ("Sequence/GFF exclusions", "effective_exclusions"), ("Translations withheld", "translation_withheld")]
-    html_text += "".join(f'<th>{label}</th>' for label, _ in columns) + '</tr></thead><tbody>'
+    html_text += '<th>Refinement status / reason</th>' + "".join(f'<th>{label}</th>' for label, _ in columns) + '</tr></thead><tbody>'
     for name, stats in data["species"].items():
-        html_text += '<tr>' + "".join('<td>' + (html.escape(name.replace("_", " ")) if not key else f'{stats.get(key, 0):,}') + '</td>'
+        status = stats.get("refinement_status", "analysed")
+        html_text += '<tr><td>' + html.escape(status + (": " + stats["refinement_reason"] if stats.get("refinement_reason") else "")) + '</td>'
+        html_text += "".join('<td>' + (html.escape(name.replace("_", " ")) if not key else "Not analysed" if status == "not_analysed" else f'{stats.get(key, 0):,}') + '</td>'
                                     for _, key in columns) + '</tr>'
     html_text += '</tbody></table></div></details>'
     html_text += f'<p>Gallery: {len(cards)} loci; all changed/accepted loci available: {data["changed_loci_available"]}. '
@@ -302,13 +316,14 @@ def main():
     parser.add_argument("--report", type=Path, required=True, help="Separate review output directory")
     parser.add_argument("--max-loci", type=int, default=200)
     parser.add_argument("--preferred-species", default="")
+    parser.add_argument("--cds-dir", type=Path, help="Include all dataset CDS species; mark species absent from the native plan as not analysed")
     args = parser.parse_args()
     if args.max_loci < 1:
         parser.error("--max-loci must be positive")
     root, report = args.output.resolve(), args.report.resolve()
     if report == root or report in root.parents or root in report.parents:
         parser.error("--report must be separate from the immutable refinement tree")
-    data = collect(root, args.max_loci, args.preferred_species)
+    data = collect(root, args.max_loci, args.preferred_species, args.cds_dir)
     report.mkdir(parents=True, exist_ok=True)
     plot_summary(data, report)
     write_review(data, report)
