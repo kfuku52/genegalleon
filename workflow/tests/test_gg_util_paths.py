@@ -154,7 +154,8 @@ gg_require_versions_dump fixture
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called", "called"]
 
 
-def test_version_inventory_follows_docker_content_when_tag_is_replaced(tmp_path):
+@pytest.mark.parametrize("copied_shim", [False, True])
+def test_version_inventory_follows_docker_content_when_tag_is_replaced(tmp_path, copied_shim):
     workspace = tmp_path / "workspace"
     docker = tmp_path / "bin/docker"
     docker.parent.mkdir()
@@ -163,6 +164,13 @@ def test_version_inventory_follows_docker_content_when_tag_is_replaced(tmp_path)
     docker.write_text("#!/bin/sh\ncat " + shlex.quote(str(image_id)) + "\n")
     docker.chmod(0o755)
     calls = tmp_path / "calls"
+    runtime = GG_UTIL_PATH.parent / "gg_wrapper_bin/singularity"
+    if copied_shim:
+        installed = tmp_path / "custom-runtime/singularity"
+        installed.parent.mkdir()
+        installed.write_bytes(runtime.read_bytes())
+        installed.chmod(0o755)
+        runtime = installed
     script = f"""
 set -euo pipefail
 source {shlex.quote(str(GG_UTIL_PATH))}
@@ -172,7 +180,7 @@ gg_workspace_dir={shlex.quote(str(workspace))}
 gg_container_image_path={shlex.quote(str(tmp_path / 'missing.sif'))}
 export GG_CONTAINER_DOCKER_IMAGE=fixture:latest GG_WRAPPER_IMAGE=fixture:latest
 gg_container_shell_command_is_set() {{ return 0; }}
-gg_container_shell_command_runtime_bin() {{ echo {shlex.quote(str(GG_UTIL_PATH.parent / 'gg_wrapper_bin/singularity'))}; }}
+gg_container_shell_command_runtime_bin() {{ echo {shlex.quote(str(runtime))}; }}
 gg_container_bind_destination_exists() {{ return 0; }}
 gg_print_version_summary() {{ :; }}
 gg_run_container_shell_script() {{ echo "$GG_CONTAINER_DOCKER_IMAGE" >> {shlex.quote(str(calls))}; echo "image=$GG_CONTAINER_DOCKER_IMAGE"; }}

@@ -84,7 +84,9 @@ gg_trigger_versions_dump() {
       container_key_seed="${container_key_seed};versions_script_cksum=${versions_script_hash}"
     fi
   fi
-  if [[ "${container_runtime_bin}" -ef "$(gg_docker_singularity_shim_source_path)" ]]; then
+  # The installer can copy the adapter when the filesystem rejects symlinks.
+  if [[ "${container_runtime_bin}" -ef "$(gg_docker_singularity_shim_source_path)" ]] \
+    || cmp -s "${container_runtime_bin}" "$(gg_docker_singularity_shim_source_path)"; then
     docker_image_id=$(docker image inspect --format '{{.Id}}' "${GG_CONTAINER_DOCKER_IMAGE:-${GG_WRAPPER_IMAGE:-}}") || return 1
     if [[ ! "${docker_image_id}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
       echo "gg_trigger_versions_dump: invalid Docker image content identity." >&2
