@@ -11,7 +11,21 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# BH is calculated once in the database and preserved in all support views.
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from csubst_scan_support import (  # noqa: E402
+    SUPPORT_Q_COLUMN,
+    support_filtered_bh,
+    support_mask,
+    support_view_prefix,
+    validate_minimum,
+    validated_analytical_pvalues,
+    validated_counts,
+)
+
+# Full-family BH remains diagnostic; support views have their own filtered BH family.
 P_PRIORITY = ["p_rate_enrichment_asymptotic"]
 DIAGNOSTIC_Q_COLUMNS = ["q_rate_enrichment_asymptotic_global"]
 PVALUE_QVALUE_METHODS = [
@@ -84,8 +98,8 @@ def parse_args():
         metavar="PATH_PREFIX",
         required=True,
         help=(
-            "Prefix for plot PDFs. Writes min_support_2 primary outputs plus "
-            "min_support_3 and higher sensitivity outputs in the same directory."
+            "Prefix for legacy unit views, the complete candidate table, and "
+            "views filtered by both support bounds."
         ),
     )
     parser.add_argument(
@@ -97,6 +111,10 @@ def parse_args():
         ),
     )
     parser.add_argument("--table", metavar="NAME", default="aa_change", help="Database table name. Default: aa_change.")
+    parser.add_argument("--min_unit_support", type=int, default=PRIMARY_MIN_SUPPORT,
+                        help="Minimum support_unit_count in additional support views; 0 disables this condition.")
+    parser.add_argument("--min_lineage_support", type=int, default=0,
+                        help="Minimum support_lineage_count (foreground IDs); 0 disables this condition.")
     return parser.parse_args()
 
 
@@ -238,6 +256,8 @@ def attach_orthogroup_besthits(df, annotation_path):
 
 
 def choose_score_column(df):
+    if SUPPORT_Q_COLUMN in df.columns:
+        return SUPPORT_Q_COLUMN, "BH-FDR"
     if "q_rate_enrichment_asymptotic_global" in df.columns:
         return "q_rate_enrichment_asymptotic_global", "BH-FDR"
     # Direct score-only input can still be ranked without inventing FDR values.
@@ -328,7 +348,8 @@ def remove_stale_min_support_sensitivity_outputs(out_prefix, thresholds):
     )
     for pattern in patterns:
         for candidate in output_dir.glob(pattern):
-            if candidate not in expected:
+            # Restrict cleanup to the legacy unit-only series.
+            if re.fullmatch(rf"{re.escape(stem)}_min_support_[0-9]+_(summary\.tsv|pvalue_qvalue_distributions\.pdf)", candidate.name) and candidate not in expected:
                 candidate.unlink()
     paths["manifest"].unlink(missing_ok=True)
 
@@ -362,7 +383,11 @@ def remove_legacy_min_support_output_layout(out_prefix):
 
 
 def write_min_support_sensitivity(df, out_prefix):
+    if "support_unit_count" in df:
+        validated_counts(df, "support_unit_count", out_prefix)
     thresholds = min_support_sensitivity_thresholds(df)
+    if thresholds:
+        validated_analytical_pvalues(df, out_prefix)
     remove_stale_min_support_sensitivity_outputs(out_prefix, thresholds)
     if not thresholds:
         print(
@@ -374,18 +399,16 @@ def write_min_support_sensitivity(df, out_prefix):
 
     paths = min_support_sensitivity_paths(out_prefix)
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
-    support = numeric_column(df, "support_unit_count")
     manifest_rows = []
     for threshold in thresholds:
         threshold_paths = min_support_sensitivity_paths(out_prefix, threshold)
-        subset = df.loc[support >= threshold].copy()
-        probability_columns = [col for col in P_PRIORITY + DIAGNOSTIC_Q_COLUMNS if col in subset.columns]
+        subset, _, _ = ranked_candidates(support_filtered_bh(df, threshold, 0, out_prefix))
+        probability_columns = [col for col in P_PRIORITY + DIAGNOSTIC_Q_COLUMNS + [SUPPORT_Q_COLUMN] if col in subset.columns]
         subset.to_csv(threshold_paths["summary_tsv"], sep="\t", index=False)
         write_pvalue_qvalue_distributions(subset, threshold_paths["plot_pdf"])
         row = {
             "min_support": threshold,
-            "probability_policy": "global_bh_preserved_across_support_views",
-            "inference_scope": "display_filter_of_global_candidate_bh_family",
+            **subset.attrs["support_bh_metadata"],
             "candidate_rows": int(subset.shape[0]),
             "summary_tsv": threshold_paths["summary_tsv"].name,
             "plot_pdf": threshold_paths["plot_pdf"].name,
@@ -408,6 +431,54 @@ def plot_paths(out_prefix):
         "substitution_spectrum": f"{primary_prefix}_substitution_spectrum.pdf",
         "pvalue_qvalue_distributions": f"{primary_prefix}_pvalue_qvalue_distributions.pdf",
     }
+
+
+def write_support_views(df, out_prefix, min_unit_support, min_lineage_support):
+    """Write one fixed lineage bound and an ascending unit-bound series."""
+    selected = support_filtered_bh(df, min_unit_support, min_lineage_support, out_prefix)
+    maximum = max([min_unit_support, *min_support_sensitivity_thresholds(selected, start=0)]) if min_unit_support else 0
+    manifest = f"{support_view_prefix(out_prefix, min_unit_support, min_lineage_support)}_manifest.tsv"
+    thresholds = range(min_unit_support, maximum + 1)
+    expected = {Path(manifest)}
+    for threshold in thresholds:
+        prefix = support_view_prefix(out_prefix, threshold, min_lineage_support)
+        expected.update(Path(f"{prefix}_{suffix}") for suffix in ("summary.tsv", "pvalue_qvalue_distributions.pdf"))
+        if threshold == min_unit_support:
+            expected.update(Path(f"{prefix}_{suffix}") for suffix in ("support_significance_rate.pdf", "substitution_spectrum.pdf"))
+    base = Path(out_prefix)
+    pattern = re.compile(
+        rf"^{re.escape(base.name)}_min_unit_support_[0-9]+_min_lineage_support_{min_lineage_support}_"
+        r"(summary\.tsv|manifest\.tsv|pvalue_qvalue_distributions\.pdf|support_significance_rate\.pdf|substitution_spectrum\.pdf)$"
+    )
+    for candidate in base.parent.glob(f"{base.name}_min_unit_support_*_min_lineage_support_{min_lineage_support}_*"):
+        if pattern.fullmatch(candidate.name) and candidate not in expected:
+            candidate.unlink()
+    rows = []
+    for threshold in thresholds:
+        subset, _, _ = ranked_candidates(support_filtered_bh(df, threshold, min_lineage_support, out_prefix))
+        prefix = support_view_prefix(out_prefix, threshold, min_lineage_support)
+        summary_path = f"{prefix}_summary.tsv"
+        plot_path = f"{prefix}_pvalue_qvalue_distributions.pdf"
+        ensure_parent(summary_path)
+        subset.to_csv(summary_path, sep="\t", index=False)
+        write_pvalue_qvalue_distributions(subset, plot_path)
+        if threshold == min_unit_support:
+            write_support_significance_rate(subset, f"{prefix}_support_significance_rate.pdf")
+            write_substitution_spectrum(subset, f"{prefix}_substitution_spectrum.pdf")
+        row = {
+            "min_unit_support": threshold,
+            "min_lineage_support": min_lineage_support,
+            **subset.attrs["support_bh_metadata"],
+            "candidate_rows": len(subset),
+            "summary_tsv": Path(summary_path).name,
+            "plot_pdf": Path(plot_path).name,
+        }
+        for column in P_PRIORITY + DIAGNOSTIC_Q_COLUMNS + [SUPPORT_Q_COLUMN]:
+            if column in subset:
+                row.update({f"{column}_{key}": value for key, value in qvalue_manifest_metrics(subset[column]).items()})
+        rows.append(row)
+    pd.DataFrame(rows).to_csv(manifest, sep="\t", index=False)
+    return manifest
 
 
 def ensure_parent(path):
@@ -446,9 +517,29 @@ def probability_count_label(method, values):
     return f"{method['short_label']}: " + " / ".join(f"{count:,}" for count in counts)
 
 
+def probability_methods(df):
+    if SUPPORT_Q_COLUMN in df:
+        return [{**method, "label": "Analytical P / support-filtered BH-FDR", "q_column": SUPPORT_Q_COLUMN}
+                for method in PVALUE_QVALUE_METHODS]
+    return PVALUE_QVALUE_METHODS
+
+
+def bh_caption(df):
+    if SUPPORT_Q_COLUMN not in df:
+        return "BH across all imported candidate rows"
+    metadata = df.attrs.get("support_bh_metadata")
+    if metadata is None:
+        if df.empty or "support_bh_test_count" not in df:
+            return "BH after unit and lineage support filters"
+        metadata = df.iloc[0]
+    return (f"BH after unit >= {metadata['support_bh_min_unit_support']} and "
+            f"lineage >= {metadata['support_bh_min_lineage_support']}; "
+            f"{metadata['support_bh_test_count']:,} finite tests")
+
+
 def probability_series(df, column_key):
     series = []
-    for method in PVALUE_QVALUE_METHODS:
+    for method in probability_methods(df):
         column = method[column_key]
         values = finite_probability_values(df, column)
         if values.size == 0:
@@ -589,7 +680,7 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
     p_series = probability_series(df, "p_column")
     q_series = probability_series(df, "q_column")
     if not p_series and not q_series:
-        write_empty_plot(out_pdf, "No finite analytical P or global BH-FDR values were available.")
+        write_empty_plot(out_pdf, "No finite analytical P or BH-FDR values were available.")
         return
 
     with plt.rc_context(
@@ -622,7 +713,7 @@ def write_pvalue_qvalue_distributions(df, out_pdf):
             0.952,
             (
                 f"All {df.shape[0]:,} candidate state-change rows; "
-                "BH across all imported candidate rows; unchanged in support views"
+                f"{bh_caption(df)}"
             ),
             ha="left",
             va="top",
@@ -670,7 +761,7 @@ def support_significance_data(
     )
 
     method_series = []
-    for method in PVALUE_QVALUE_METHODS:
+    for method in probability_methods(df):
         column = method["q_column"] or method["p_column"]
         if column not in df.columns:
             continue
@@ -813,7 +904,7 @@ def write_support_significance_rate(df, out_pdf):
         fig.text(
             0.09,
             0.945,
-            "Global analytical BH-FDR cutoffs, preserved across support views",
+            bh_caption(df),
             ha="left",
             va="top",
             fontsize=9,
@@ -882,25 +973,48 @@ def write_substitution_spectrum(df, out_pdf):
 
 def main():
     args = parse_args()
-    remove_legacy_min_support_output_layout(args.out_prefix)
+    validate_minimum(args.min_unit_support, "--min_unit_support")
+    validate_minimum(args.min_lineage_support, "--min_lineage_support")
+    custom_support = (args.min_unit_support, args.min_lineage_support) != (PRIMARY_MIN_SUPPORT, 0)
     paths = plot_paths(args.out_prefix)
-    ensure_parent(args.out_tsv)
 
     if not os.path.exists(args.dbpath):
+        if custom_support:
+            raise FileNotFoundError(f"Database not found: {args.dbpath}")
+        ensure_parent(args.out_tsv)
         pd.DataFrame().to_csv(args.out_tsv, sep="\t", index=False)
+        ensure_parent(f"{args.out_prefix}_all_candidates_summary.tsv")
+        pd.DataFrame().to_csv(f"{args.out_prefix}_all_candidates_summary.tsv", sep="\t", index=False)
         write_empty_plot_set(paths, f"Database not found: {args.dbpath}")
+        write_support_views(pd.DataFrame(columns=["support_unit_count", P_PRIORITY[0]]), args.out_prefix,
+                            args.min_unit_support, args.min_lineage_support)
         return 0
 
     with sqlite3.connect(args.dbpath) as conn:
         if not table_exists(conn, args.table):
+            if custom_support:
+                raise ValueError(f"{args.dbpath}: table not found: {args.table}")
+            ensure_parent(args.out_tsv)
             pd.DataFrame().to_csv(args.out_tsv, sep="\t", index=False)
+            ensure_parent(f"{args.out_prefix}_all_candidates_summary.tsv")
+            pd.DataFrame().to_csv(f"{args.out_prefix}_all_candidates_summary.tsv", sep="\t", index=False)
             write_empty_plot_set(paths, f"Table not found: {args.table}")
+            write_support_views(pd.DataFrame(columns=["support_unit_count", P_PRIORITY[0]]), args.out_prefix,
+                                args.min_unit_support, args.min_lineage_support)
             return 0
         df = read_table(conn, args.table)
 
     df = attach_orthogroup_besthits(df, args.orthogroup_annotation_tsv)
     ranked, score_col, score_kind = ranked_candidates(df)
+    # Validate the whole source before replacing or cleaning up any outputs.
+    validated_counts(ranked, "support_unit_count", f"{args.dbpath}:{args.table}")
+    support_mask(ranked, args.min_unit_support, args.min_lineage_support, f"{args.dbpath}:{args.table}")
+    validated_analytical_pvalues(ranked, f"{args.dbpath}:{args.table}")
+    remove_legacy_min_support_output_layout(args.out_prefix)
+    ensure_parent(args.out_tsv)
+    ensure_parent(f"{args.out_prefix}_all_candidates_summary.tsv")
     ranked.to_csv(args.out_tsv, sep="\t", index=False)
+    ranked.to_csv(f"{args.out_prefix}_all_candidates_summary.tsv", sep="\t", index=False)
     if ranked.empty:
         remove_stale_min_support_sensitivity_outputs(args.out_prefix, [])
         write_empty_plot_set(paths, "No CSUBST scan candidates in aa_change.")
@@ -912,6 +1026,7 @@ def main():
         write_pvalue_qvalue_distributions(ranked, paths["pvalue_qvalue_distributions"])
     if not ranked.empty:
         write_min_support_sensitivity(ranked, args.out_prefix)
+    write_support_views(ranked, args.out_prefix, args.min_unit_support, args.min_lineage_support)
     return 0
 
 

@@ -2220,7 +2220,7 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     assert "remove_legacy_min_support_output_layout" in plot_script
     assert "write_min_support_sensitivity" in plot_script
     assert "recalculate_sensitivity_qvalues" not in plot_script
-    assert "global_bh_preserved_across_support_views" in plot_script
+    assert "support_filtered_bh" in plot_script
     assert '"--out_prefix"' in plot_script
     assert "required=True" in plot_script
     assert '"--out_pdf"' not in plot_script
@@ -2240,7 +2240,7 @@ def test_gene_summary_csubst_scan_candidate_sites_are_opt_in_and_threshold_packa
     assert "run_csubst_scan_candidate_sites" in config_vars
     assert 'csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"' in entrypoint
     assert (
-        'csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_global}"'
+        'csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_support_filtered}"'
         in entrypoint
     )
     assert (

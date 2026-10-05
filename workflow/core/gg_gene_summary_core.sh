@@ -25,8 +25,11 @@ run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
 csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
+csubst_scan_summary_min_unit_support="${csubst_scan_summary_min_unit_support:-2}"
+csubst_scan_summary_min_lineage_support="${csubst_scan_summary_min_lineage_support:-0}"
 csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}"
-csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_global}"
+csubst_scan_candidate_sites_min_lineage_support="${csubst_scan_candidate_sites_min_lineage_support:-0}"
+csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_support_filtered}"
 csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}"
 csubst_scan_candidate_sites_max_candidates="${csubst_scan_candidate_sites_max_candidates:-0}"
 csubst_scan_candidate_sites_pdb=$(echo "${csubst_scan_candidate_sites_pdb:-none}" | tr '[:upper:]' '[:lower:]')
@@ -115,6 +118,18 @@ validate_binary_flag "run_hgt_candidate_summary" "${run_hgt_candidate_summary}"
 validate_binary_flag "run_hgt_summary_plots" "${run_hgt_summary_plots}"
 validate_binary_flag "run_csubst_site_convergence_summary" "${run_csubst_site_convergence_summary}"
 validate_binary_flag "presence_absence_include_incomplete" "${presence_absence_include_incomplete}"
+
+for support_parameter in csubst_scan_summary_min_unit_support csubst_scan_summary_min_lineage_support \
+  csubst_scan_candidate_sites_min_support csubst_scan_candidate_sites_min_lineage_support; do
+  if [[ ! "${!support_parameter}" =~ ^[0-9]+$ ]]; then
+    echo "${support_parameter} must be a nonnegative integer (0 disables the condition)." >&2
+    exit 1
+  fi
+  support_value="${!support_parameter}"
+  while [[ ${#support_value} -gt 1 && "${support_value}" == 0* ]]; do support_value="${support_value#0}"; done
+  printf -v "${support_parameter}" '%s' "${support_value}"
+done
+unset support_parameter support_value
 
 case "${csubst_scan_candidate_sites_pdb}" in
   none|besthit)
@@ -792,6 +807,7 @@ run_csubst_scan_aa_change_summary_for_source() {
   local aa_summary_tsv="${summary_output_dir}/${gene_family_source}_csubst_aa_change_min_support_2_summary.tsv"
   local aa_summary_prefix="${summary_output_dir}/${gene_family_source}_csubst_aa_change"
   local aa_summary_needs_update=0
+  local aa_support_prefix="${aa_summary_prefix}_min_unit_support_${csubst_scan_summary_min_unit_support}_min_lineage_support_${csubst_scan_summary_min_lineage_support}"
   local aa_summary_provenance_args=(
     --manifest "${summary_output_dir}/artifact_provenance/${gene_family_source}.csubst_aa_change_summary.json"
     --step "csubst_aa_change_summary"
@@ -800,12 +816,21 @@ run_csubst_scan_aa_change_summary_for_source() {
     --workspace-root "${gg_workspace_dir}"
     --input "database=${file_gene_family_db}"
     --output "summary_tsv=${aa_summary_tsv}"
+    --output "all_candidates_tsv=${aa_summary_prefix}_all_candidates_summary.tsv"
     --output "support_plot=${aa_summary_prefix}_min_support_2_support_significance_rate.pdf"
     --output "spectrum_plot=${aa_summary_prefix}_min_support_2_substitution_spectrum.pdf"
     --output "pvalue_plot=${aa_summary_prefix}_min_support_2_pvalue_qvalue_distributions.pdf"
+    --output "filtered_summary=${aa_support_prefix}_summary.tsv"
+    --output "filtered_support_plot=${aa_support_prefix}_support_significance_rate.pdf"
+    --output "filtered_spectrum_plot=${aa_support_prefix}_substitution_spectrum.pdf"
+    --output "filtered_pvalue_plot=${aa_support_prefix}_pvalue_qvalue_distributions.pdf"
+    --output "filtered_manifest=${aa_support_prefix}_manifest.tsv"
     --optional-output "sensitivity_manifest=${aa_summary_prefix}_min_support_manifest.tsv"
     --parameter "primary_min_support=2"
+    --parameter "min_unit_support=${csubst_scan_summary_min_unit_support}"
+    --parameter "min_lineage_support=${csubst_scan_summary_min_lineage_support}"
     --parameter "scan_inference_contract=analytical_bh_global_v1"
+    --parameter "support_bh_policy=bh_after_unit_and_lineage_support_filter_v1"
   )
   if [[ "${gene_family_source}" == "orthogroup" && -n "${file_orthogroup_genecount_annotated}" ]]; then
     aa_summary_provenance_args+=(--input "orthogroup_annotations=${file_orthogroup_genecount_annotated}")
@@ -829,6 +854,8 @@ run_csubst_scan_aa_change_summary_for_source() {
     --dbpath "${file_gene_family_db}"
     --out_prefix "${aa_summary_prefix}"
     --out_tsv "${aa_summary_tsv}"
+    --min_unit_support "${csubst_scan_summary_min_unit_support}"
+    --min_lineage_support "${csubst_scan_summary_min_lineage_support}"
   )
   if [[ "${gene_family_source}" == "orthogroup" ]]; then
     if [[ -n "${file_orthogroup_genecount_annotated}" ]]; then
@@ -862,6 +889,7 @@ run_csubst_scan_candidate_sites_for_source() {
     --file_trait "${candidate_trait_file}" \
     --out_dir "${summary_output_dir}" \
     --min_support "${csubst_scan_candidate_sites_min_support}" \
+    --min_lineage_support "${csubst_scan_candidate_sites_min_lineage_support}" \
     --probability_column "${csubst_scan_candidate_sites_probability_column}" \
     --probability_threshold "${csubst_scan_candidate_sites_probability_threshold}" \
     --max_candidates "${csubst_scan_candidate_sites_max_candidates}" \

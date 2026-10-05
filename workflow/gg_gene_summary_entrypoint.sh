@@ -115,10 +115,15 @@ taxonomy_taxid_override="" # One explicit species:TaxID correction for a schedul
 # Output and shared summary parameters
 summary_output_dir="${summary_output_dir:-auto}" # Output directory for source-specific gene summaries.
 
+# CSUBST scan summary support parameters
+csubst_scan_summary_min_unit_support="${csubst_scan_summary_min_unit_support:-2}" # Inclusive support_unit_count bound for filtered summary views; 0 disables the condition.
+csubst_scan_summary_min_lineage_support="${csubst_scan_summary_min_lineage_support:-0}" # Inclusive support_lineage_count bound (foreground IDs); 0 disables the condition.
+
 # CSUBST scan candidate-site parameters
-csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}" # Lowest post-hoc support threshold; ZIPs are generated from the observed maximum down to this value.
-csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_global}" # BH-FDR column calculated from analytical P across all imported scan candidates.
-csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}" # Inclusive cutoff applied to preserved P/FDR values in each support view.
+csubst_scan_candidate_sites_min_support="${csubst_scan_candidate_sites_min_support:-5}" # Lowest post-hoc unit threshold; 0 generates one ZIP without the unit condition.
+csubst_scan_candidate_sites_min_lineage_support="${csubst_scan_candidate_sites_min_lineage_support:-0}" # Independent foreground-lineage support bound for candidate ZIPs; 0 disables the condition.
+csubst_scan_candidate_sites_probability_column="${csubst_scan_candidate_sites_probability_column:-q_rate_enrichment_asymptotic_support_filtered}" # BH-FDR from analytical P after both unit and foreground-lineage support bounds.
+csubst_scan_candidate_sites_probability_threshold="${csubst_scan_candidate_sites_probability_threshold:-0.05}" # Inclusive cutoff applied after support-filtered BH correction.
 csubst_scan_candidate_sites_max_candidates="${csubst_scan_candidate_sites_max_candidates:-0}" # Maximum candidates per threshold ZIP; 0 keeps all selected candidates.
 csubst_scan_candidate_sites_pdb="${csubst_scan_candidate_sites_pdb:-none}" # none|besthit; optional csubst protein-structure search for unique candidates.
 

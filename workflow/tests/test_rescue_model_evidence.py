@@ -38,11 +38,29 @@ def test_same_species_isoforms_are_one_donor_and_inversion_is_advisory():
 
 @pytest.mark.parametrize("begin,end,flags", [(0, 100, set()), (5, 100, {"donor_n_terminus_unaligned"}),
                                           (0, 95, {"donor_c_terminus_unaligned"}),
-                                          (5, 95, {"donor_n_terminus_unaligned", "donor_c_terminus_unaligned"})])
+                                          (2, 97, {"donor_n_terminus_unaligned", "donor_c_terminus_unaligned"})])
 def test_95pct_coverage_is_not_native_terminal_completeness(begin, end, flags):
     quality = model_quality({"sequence": "ATGAAATAA", "coverage": .95, "query_start": begin,
                              "query_end": end, "query_length": 100})
+    if end - begin > 95:
+        flags = flags | {"donor_internal_unaligned_query"}
     assert set(quality["flags"]) == flags
+    assert quality["native_terminal_completeness"] == "not_established"
+
+
+def test_end_residues_aligned_do_not_hide_a_large_internal_deletion():
+    from Bio.Align import PairwiseAligner
+    donor, fragment = "M" + "W" * 100 + "K", "MK"
+    aligned = PairwiseAligner(mode="global", match_score=2, mismatch_score=-1,
+                             open_gap_score=-5, extend_gap_score=-1).align(donor, fragment)[0]
+    paired = int(sum(b - a for a, b in aligned.aligned[0]))
+    quality = model_quality({"query_start": int(aligned.aligned[0][0][0]),
+                             "query_end": int(aligned.aligned[0][-1][1]), "query_length": len(donor),
+                             "coverage": paired / len(donor)})
+    assert quality["terminal_alignment"]["n_aligned"] and quality["terminal_alignment"]["c_aligned"]
+    assert quality["query_alignment"]["aligned_query_fraction"] == pytest.approx(2 / 102)
+    assert quality["query_alignment"]["internal_unaligned_query_fraction"] == pytest.approx(100 / 102)
+    assert "donor_internal_unaligned_query" in quality["flags"]
     assert quality["native_terminal_completeness"] == "not_established"
 
 
@@ -100,6 +118,28 @@ def test_literal_identifiers_in_rna_are_not_split_or_reinterpreted():
     assert evidence.transcript_parents('transcript_id "iso,1=a";') == ["iso,1=a"]
 
 
+def test_escaped_gtf_identifier_does_not_merge_distinct_rna_paths():
+    assert evidence.transcript_parents(r'transcript_id "iso\"1;=a"; gene_id "g";') == ['iso"1;=a']
+    assert evidence.transcript_parents(r'transcript_id "iso\\1";') == [r"iso\1"]
+
+
+@pytest.mark.parametrize("text", ['Parent=t1;Parent=t2', 'transcript_id "t1"; transcript_id "t2";'])
+def test_ambiguous_transcript_identity_fails(text):
+    with pytest.raises(ValueError, match="Duplicate"):
+        evidence.transcript_parents(text)
+
+
+def test_escaped_transcripts_cannot_fabricate_a_complete_spliced_path(tmp_path):
+    track = tmp_path / "rna.gtf"
+    track.write_text('chr\ts\texon\t1\t20\t.\t+\t.\ttranscript_id "iso\\\"1";\n'
+                     'chr\ts\texon\t31\t50\t.\t+\t.\ttranscript_id "iso\\\"2";\n')
+    spec = {"rna_transcripts": [{"path": str(track), "independence_group": "leaf"}]}
+    junctions, transcripts, _ = evidence.load_tracks(spec, {"chr": 50})
+    result = evidence.rna_evidence({"seqid": "chr", "strand": "+", "cds": [[10, 20, 0], [30, 40, 2]]},
+                                   spec, junctions, transcripts)
+    assert result["exon_chain_transcripts"] == []
+
+
 def fixture(tmp_path, strand="+"):
     root = tmp_path / "rescue"
     worker = root / "rescued" / "Plant_example"
@@ -135,6 +175,104 @@ def test_audit_legacy_models_missing_inputs_and_preserved_sources(tmp_path, stra
     assert evidence.audit(args) == summary
     (args.output / "evidence.json").write_text("corrupt")
     assert evidence.audit(args) == summary
+
+
+def test_plan_changed_after_read_cannot_label_old_parsed_values_with_new_hash(tmp_path, monkeypatch):
+    args, _ = fixture(tmp_path)
+    path = args.rescue_output / "plan.json"
+    old = path.read_bytes()
+    original = json.loads
+    changed = []
+    def changing_loads(value, *positional, **kwargs):
+        parsed = original(value, *positional, **kwargs)
+        if not changed and (value.encode() if isinstance(value, str) else value) == old:
+            changed.append(True)
+            new = copy.deepcopy(parsed)
+            new["request"]["sources"][args.species]["genetic_code"] = 2
+            path.write_text(json.dumps(new))
+            receipt = args.rescue_output / "rescued" / args.species / "receipt.json"
+            saved = original(receipt.read_text())
+            saved["key"]["plan"] = digest(path)
+            receipt.write_text(json.dumps(saved))
+        return parsed
+    monkeypatch.setattr(json, "loads", changing_loads)
+    with pytest.raises(ValueError):
+        evidence.audit(args)
+    assert changed and not (args.output / "receipt.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["models", "genome"])
+def test_frozen_file_changed_after_initial_verification_is_not_rebound(tmp_path, monkeypatch, kind):
+    args, genome = fixture(tmp_path)
+    path = args.rescue_output / "rescued" / args.species / "models.json" if kind == "models" else genome
+    original = evidence.digest
+    changed = []
+    def changing_digest(value):
+        result = original(value)
+        if Path(value) == path and not changed:
+            changed.append(True)
+            path.write_text("[]" if kind == "models" else ">chr\nCTGAAATAA\n")
+        return result
+    monkeypatch.setattr(evidence, "digest", changing_digest)
+    with pytest.raises(ValueError):
+        evidence.audit(args)
+    assert changed and not (args.output / "receipt.json").exists()
+
+
+def test_manifest_changed_after_parse_cannot_hide_supplied_rna(tmp_path, monkeypatch):
+    args, genome = fixture(tmp_path)
+    track = tmp_path / "rna.gtf"
+    track.write_text('chr\ts\texon\t1\t9\t.\t+\t.\ttranscript_id "t";\n')
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({"schema_version": 1, "species": {args.species: {
+        "reference_genome_sha256": digest(genome)}}}))
+    args.evidence_manifest = path
+    old = path.read_bytes()
+    original = json.loads
+    changed = []
+    def changing_loads(value, *positional, **kwargs):
+        parsed = original(value, *positional, **kwargs)
+        if not changed and (value.encode() if isinstance(value, str) else value) == old:
+            changed.append(True)
+            new = copy.deepcopy(parsed)
+            new["species"][args.species]["rna_transcripts"] = [{"path": str(track), "format": "exon_gff_gtf",
+                                                              "independence_group": "leaf"}]
+            path.write_text(json.dumps(new))
+        return parsed
+    monkeypatch.setattr(json, "loads", changing_loads)
+    with pytest.raises(ValueError, match="Input changed while loading"):
+        evidence.audit(args)
+    assert changed and not (args.output / "receipt.json").exists()
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_dna_split_initiator_follows_spliced_transcription_order(tmp_path, strand):
+    coding, genomic = "TTGAAATAA", "TGTAGTGAAATAA"
+    blocks = [[0, 1, 0], [5, 13, 2]]
+    if strand == "-":
+        genomic = str(Seq(genomic).reverse_complement())
+        blocks = [[12, 13, 0], [0, 8, 2]]
+    genome_path, bam_path = tmp_path / "genome.fa", tmp_path / "reads.bam"
+    genome_path.write_text(">chr\n" + genomic + "\n")
+    pysam.faidx(str(genome_path))
+    with pysam.AlignmentFile(str(bam_path), "wb", header={"SQ": [{"SN": "chr", "LN": 13}]}) as bam:
+        for number, (mapq, baseq) in enumerate([(60, "I"), (255, "I"), (10, "I"), (60, "!")]):
+            read = pysam.AlignedSegment()
+            read.query_name, read.query_sequence = str(number), genomic
+            read.flag, read.reference_id, read.reference_start = 0, 0, 0
+            read.mapping_quality, read.cigar = mapq, [(0, 13)]
+            read.query_qualities = pysam.qualitystring_to_array(baseq * 13)
+            bam.write(read)
+    pysam.index(str(bam_path))
+    model = {"seqid": "chr", "strand": strand, "cds": blocks, "sequence": coding}
+    spec = {"dna": {"min_mapq": 20, "min_baseq": 20}}
+    with pysam.FastaFile(str(genome_path)) as genome, pysam.AlignmentFile(str(bam_path), "rb") as bam:
+        evidence.check_model(model, genome)
+        result = evidence.dna_evidence(model, spec, bam, genome)
+    assert result["reference_identity"] == "not_verified"
+    assert result["hq_depth_min"] == result["hq_depth_median"] == 1
+    assert [row["genomic_position_1based"] for row in result["start_base_support"]] == ([1, 6, 7] if strand == "+" else [13, 8, 7])
+    assert [row["matching"] for row in result["start_base_support"]] == [1, 1, 1]
 
 
 @pytest.mark.parametrize("fault", ["model", "receipt", "genome", "inside", "ancestor"])
@@ -181,12 +319,14 @@ def test_real_bam_start_bases_repeat_and_rna_are_advisory(tmp_path, strand):
     args, genome = fixture(tmp_path, strand)
     bam_path = tmp_path / "reads.bam"
     with pysam.AlignmentFile(str(bam_path), "wb", header={"HD": {"SO": "coordinate"}, "SQ": [{"SN": "chr", "LN": 9}]}) as bam:
-        for number, flag in enumerate([0, 0, 256, 2048, 1024, 512]):
+        for number, flag in enumerate([0, 0, 256, 2048, 1024, 512, 0]):
             read = pysam.AlignedSegment()
             read.query_name = str(number)
             read.query_sequence = genome.read_text().splitlines()[1]
             read.flag, read.reference_id, read.reference_start = flag, 0, 0
             read.mapping_quality, read.cigar = 60, [(0, 9)]
+            if number == 6:
+                read.mapping_quality = 255  # unavailable, rather than very high quality
             read.query_qualities = pysam.qualitystring_to_array("I" * 9)
             bam.write(read)
     pysam.index(str(bam_path))
@@ -219,7 +359,7 @@ def test_real_bam_start_bases_repeat_and_rna_are_advisory(tmp_path, strand):
 
 
 @pytest.mark.parametrize("fault", [None, "no_reference", "changed_bases", "changed_length",
-                                  "missing_target", "wrong_original_header", "duplicate_fasta"])
+                                  "missing_target", "wrong_original_header", "duplicate_fasta", "blank_header", "empty_record"])
 def test_pre_filter_bam_requires_verified_original_reference(tmp_path, fault):
     args, genome = fixture(tmp_path)
     original = tmp_path / "original.fa"
@@ -228,6 +368,9 @@ def test_pre_filter_bam_requires_verified_original_reference(tmp_path, fault):
     if fault == "duplicate_fasta":
         with original.open("a") as handle:
             handle.write(">excluded\nACGT\n")
+    if fault in {"blank_header", "empty_record"}:
+        with original.open("a") as handle:
+            handle.write(">\n" if fault == "blank_header" else ">empty\n")
     refs = [{"SN": "chr", "LN": 10 if fault == "changed_length" else 9}, {"SN": "excluded", "LN": 4}]
     if fault == "missing_target":
         refs = refs[1:]

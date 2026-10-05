@@ -30,6 +30,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import csubst_site_wrapper as site_wrapper  # noqa: E402, I001
+from csubst_scan_support import (  # noqa: E402
+    ANALYTICAL_P_COLUMN, SUPPORT_BH_COLUMNS, SUPPORT_BH_POLICY, SUPPORT_BH_SCOPE, SUPPORT_Q_COLUMN,
+    rate_testable_mask, support_filtered_bh, validate_minimum, validated_analytical_pvalues, validated_counts,
+)
 from safe_zip_extract import (  # noqa: E402
     SafeZipError,
     extract_expected_prefix,
@@ -38,9 +42,10 @@ from safe_zip_extract import (  # noqa: E402
 
 
 DEFAULT_MIN_SUPPORT = 5
-DEFAULT_PROBABILITY_COLUMN = "q_rate_enrichment_asymptotic_global"
+DEFAULT_PROBABILITY_COLUMN = SUPPORT_Q_COLUMN
 DEFAULT_PROBABILITY_THRESHOLD = 0.05
 PROBABILITY_COLUMNS = {
+    SUPPORT_Q_COLUMN,
     "p_rate_enrichment_asymptotic",
     "q_rate_enrichment_asymptotic_by_trait_match",
     "q_rate_enrichment_asymptotic_global",
@@ -88,9 +93,14 @@ INTERNAL_COLUMNS = {
     "_required_input_signature",
     "_source_summary_tsv",
     "_selection_min_support",
+    "_selection_min_lineage_support",
 }
 ARCHIVE_MANIFEST_COLUMNS = [
     "min_support",
+    "min_lineage_support",
+    "probability_policy",
+    "inference_scope",
+    *SUPPORT_BH_COLUMNS,
     "candidate_count",
     "packaged_candidate_count",
     "skipped_candidate_count",
@@ -123,6 +133,8 @@ CANDIDATE_MANIFEST_COLUMNS = [
     "support_lineage_count",
     "support_lineage_fraction",
     "support_lineage_ids",
+    "selection_min_support",
+    "selection_min_lineage_support",
     "probability_column",
     "probability_value",
     "candidate_tsv",
@@ -132,6 +144,7 @@ CANDIDATE_MANIFEST_COLUMNS = [
 ]
 SKIPPED_CANDIDATE_COLUMNS = [
     "min_support",
+    "min_lineage_support",
     "candidate_rank",
     "candidate_id",
     "orthogroup",
@@ -171,7 +184,10 @@ def parse_args():
     parser.add_argument("--file_trait", metavar="PATH", required=True)
     parser.add_argument("--out_dir", metavar="PATH", required=True)
     parser.add_argument("--min_support", metavar="INT", default=DEFAULT_MIN_SUPPORT, type=int)
-    parser.add_argument("--probability_column", metavar="COLUMN", default=DEFAULT_PROBABILITY_COLUMN)
+    parser.add_argument("--min_lineage_support", metavar="INT", default=0, type=int,
+                        help="Minimum support_lineage_count (foreground IDs); 0 disables this condition.")
+    parser.add_argument("--probability_column", metavar="COLUMN", default=DEFAULT_PROBABILITY_COLUMN,
+                        help="Default: BH after both support bounds, before probability selection and candidate cap.")
     parser.add_argument("--probability_threshold", metavar="FLOAT", default=DEFAULT_PROBABILITY_THRESHOLD, type=float)
     parser.add_argument(
         "--max_candidates",
@@ -197,8 +213,9 @@ def parse_args():
 
 
 def validate_args(args):
-    if args.min_support < 2:
-        raise ValueError("--min_support must be an integer >= 2.")
+    args.min_lineage_support = getattr(args, "min_lineage_support", 0)
+    validate_minimum(args.min_support, "--min_support")
+    validate_minimum(args.min_lineage_support, "--min_lineage_support")
     if not np.isfinite(args.probability_threshold) or not 0.0 <= args.probability_threshold <= 1.0:
         raise ValueError("--probability_threshold must be between 0 and 1.")
     if args.max_candidates < 0:
@@ -314,8 +331,49 @@ def analysis_engine_signature():
     return digest.hexdigest()
 
 
-def discover_summary_tables(summary_prefix, minimum_support):
+def discover_summary_tables(summary_prefix, minimum_support, minimum_lineage_support=0, support_bh_family=False):
     prefix = Path(summary_prefix)
+    full_summary = Path(f"{prefix}_all_candidates_summary.tsv")
+    if support_bh_family:
+        if full_summary.is_file():
+            source = full_summary
+        else:
+            pattern = re.compile(rf"^{re.escape(prefix.name)}_min_support_([0-9]+)_summary\.tsv$")
+            legacy = {int(match.group(1)): path
+                      for path in prefix.parent.glob(f"{prefix.name}_min_support_*_summary.tsv")
+                      if (match := pattern.fullmatch(path.name))}
+            if minimum_support < 2 or not legacy or min(legacy) > minimum_support:
+                raise FileNotFoundError(
+                    f"{full_summary} or a legacy summary covering min_support={minimum_support} is required; "
+                    "regenerate summaries from the existing database."
+                )
+            source = legacy[min(legacy)]
+        # Every threshold must derive from one complete pool. Per-threshold
+        # files can be stale after an interrupted summary run, changing BH m.
+        frame = pd.read_csv(source, sep="\t", low_memory=False, dtype={"support_lineage_ids": "string"})
+        support = validated_counts(frame, "support_unit_count", source)
+        if minimum_lineage_support:
+            validated_counts(frame, "support_lineage_count", source)
+        validated_analytical_pvalues(frame, source)
+        if minimum_support == 0:
+            return {0: source}
+        maximum = int(support.max()) if not frame.empty else minimum_support - 1
+        return {threshold: source for threshold in range(maximum, minimum_support - 1, -1)}
+    full_series = None
+    if full_summary.is_file():
+        frame = pd.read_csv(full_summary, sep="\t", low_memory=False, dtype={"support_lineage_ids": "string"})
+        support = validated_counts(frame, "support_unit_count", full_summary)
+        if minimum_lineage_support:
+            validated_counts(frame, "support_lineage_count", full_summary)
+        if minimum_support == 0:
+            # One unbounded unit view, rather than a redundant threshold series.
+            return {0: full_summary}
+        maximum = int(support.max()) if not frame.empty else minimum_support - 1
+        full_series = {threshold: full_summary for threshold in range(maximum, minimum_support - 1, -1)}
+    if minimum_support < 2 and full_series is None:
+        raise FileNotFoundError(
+            f"{full_summary} is required for min_support < 2; regenerate summaries from the existing database."
+        )
     pattern = re.compile(rf"^{re.escape(prefix.name)}_min_support_([0-9]+)_summary\.tsv$")
     all_discovered = {}
     for candidate in prefix.parent.glob(f"{prefix.name}_min_support_*_summary.tsv"):
@@ -324,9 +382,19 @@ def discover_summary_tables(summary_prefix, minimum_support):
             continue
         threshold = int(match.group(1))
         all_discovered[threshold] = candidate
+    discovered = {threshold: path for threshold, path in all_discovered.items() if threshold >= minimum_support}
+    if full_series is not None:
+        # Preserve archive reuse against unchanged legacy source views. The
+        # complete table can supply thresholds when that series is unavailable.
+        return {threshold: discovered.get(threshold, full_summary) for threshold in full_series}
     if not all_discovered:
         raise FileNotFoundError(f"No min_support summary TSVs were found for prefix: {prefix}")
-    discovered = {threshold: path for threshold, path in all_discovered.items() if threshold >= minimum_support}
+    if minimum_lineage_support:
+        # Validate the broadest available legacy pool even if no unit threshold
+        # meets the requested bound. A missing lineage count is never inferred.
+        broadest = all_discovered[min(all_discovered)]
+        source = pd.read_csv(broadest, sep="\t", low_memory=False, dtype={"support_lineage_ids": "string"})
+        validated_counts(source, "support_lineage_count", broadest)
     if not discovered and max(all_discovered) < minimum_support:
         return {}
     maximum_support = max(discovered)
@@ -438,23 +506,36 @@ def load_threshold_candidates(
     max_candidates,
     csubst_nonsyn_recode,
     pdb,
+    minimum_lineage_support=0,
+    filter_unit_support=False,
 ):
+    validate_minimum(minimum_support, "min_support")
+    validate_minimum(minimum_lineage_support, "min_lineage_support")
     frame = pd.read_csv(
         summary_path, sep="\t", low_memory=False,
         dtype={"support_lineage_ids": "string"},
     )
     if probability_column not in PROBABILITY_COLUMNS:
         raise ValueError(f"Unsupported scan probability column: {probability_column}. Use a current CSUBST source P/q column.")
-    required = [*CANDIDATE_REQUIRED_COLUMNS, probability_column]
+    filtered_bh = probability_column == SUPPORT_Q_COLUMN
+    required = [*CANDIDATE_REQUIRED_COLUMNS, ANALYTICAL_P_COLUMN if filtered_bh else probability_column]
     missing = [column for column in required if column not in frame.columns]
     if missing:
         raise ValueError(f"{summary_path} is missing required candidate column(s): {', '.join(missing)}")
-    support = pd.to_numeric(frame["support_unit_count"], errors="coerce")
-    invalid_support = ~np.isfinite(support.to_numpy(dtype=float)) | (support < minimum_support)
-    if invalid_support.any():
+    support = validated_counts(frame, "support_unit_count", summary_path)
+    lineage = validated_counts(frame, "support_lineage_count", summary_path) if minimum_lineage_support else None
+    invalid_support = support < minimum_support
+    if not filter_unit_support and invalid_support.any():
         raise ValueError(
             f"{summary_path} contains {int(invalid_support.sum()):,} row(s) below min_support={minimum_support}."
         )
+    if filtered_bh:
+        # Always recompute from P for these actual bounds, even if a source view
+        # already contains filtered q values for a different lineage bound.
+        frame = support_filtered_bh(frame, minimum_support, minimum_lineage_support, summary_path)
+        support = support.loc[frame.index]
+        if lineage is not None:
+            lineage = lineage.loc[frame.index]
     raw_probability = frame[probability_column]
     qvalues = pd.to_numeric(raw_probability, errors="coerce")
     invalid = (raw_probability.notna() & qvalues.isna()) | (qvalues.notna() & (~np.isfinite(qvalues) | ~qvalues.between(0, 1)))
@@ -463,10 +544,13 @@ def load_threshold_candidates(
     # Missing FDR remains missing; never substitute another probability column.
     finite = qvalues.notna()
     if finite.any() and "scan_rate_testable" in frame:
-        testable = frame["scan_rate_testable"].astype(str).str.lower().isin(["true", "1"])
+        testable = rate_testable_mask(frame["scan_rate_testable"])
         if (finite & ~testable).any():
             raise ValueError(f"{summary_path}: an untestable candidate has a finite probability.")
     keep = np.isfinite(qvalues.to_numpy(dtype=float)) & (qvalues <= probability_threshold)
+    keep &= support >= minimum_support
+    if lineage is not None:
+        keep &= lineage >= minimum_lineage_support
     selected = frame.loc[keep, :].copy()
     selected[probability_column] = qvalues.loc[keep].astype(float)
     selected["support_unit_count"] = support.loc[keep].astype(int)
@@ -507,6 +591,7 @@ def load_threshold_candidates(
     selected["_candidate_rank"] = np.arange(1, selected.shape[0] + 1, dtype=int)
     selected["_source_summary_tsv"] = Path(summary_path).name
     selected["_selection_min_support"] = int(minimum_support)
+    selected["_selection_min_lineage_support"] = int(minimum_lineage_support)
     return selected
 
 
@@ -591,6 +676,7 @@ def skipped_candidate_frame(candidates):
         rows.append(
             {
                 "min_support": int(row["_selection_min_support"]),
+                "min_lineage_support": int(row.get("_selection_min_lineage_support", 0)),
                 "candidate_rank": int(row["_candidate_rank"]),
                 "candidate_id": row["_candidate_id"],
                 "orthogroup": row["orthogroup"],
@@ -897,10 +983,14 @@ def candidate_annotation_text(row, probability_column, probability_threshold):
         "Selection",
         "",
         f"min_support: {int(row['_selection_min_support'])}",
+        f"min_lineage_support: {int(row.get('_selection_min_lineage_support', 0))}",
         f"Probability column: {probability_column}",
         f"Probability threshold: <= {format_float_token(probability_threshold)}",
         f"Probability value: {printable_value(row[probability_column])}",
         f"Asymptotic P (exploratory): {printable_value(row.get('p_rate_enrichment_asymptotic', np.nan))}",
+        f"Full-candidate global BH-FDR: {printable_value(row.get('q_rate_enrichment_asymptotic_global', np.nan))}",
+        f"Support-filtered BH-FDR: {printable_value(row.get(SUPPORT_Q_COLUMN, np.nan))}",
+        f"Support-filtered BH finite tests: {printable_value(row.get('support_bh_test_count', np.nan))}",
         f"Source summary: {row['_source_summary_tsv']}",
         "",
         "Representative best hits",
@@ -918,6 +1008,7 @@ def candidate_output_frame(row, probability_column, probability_threshold):
     output.insert(2, "selection_min_support", int(row["_selection_min_support"]))
     output.insert(3, "selection_probability_column", probability_column)
     output.insert(4, "selection_probability_threshold", float(probability_threshold))
+    output.insert(5, "selection_min_lineage_support", int(row.get("_selection_min_lineage_support", 0)))
     output["support_branch_ids"] = row["_canonical_support_branch_ids"]
     return output
 
@@ -1014,6 +1105,8 @@ def package_candidate(row, package_root, cache_root, probability_column, probabi
         "support_lineage_count": row.get("support_lineage_count", np.nan),
         "support_lineage_fraction": row.get("support_lineage_fraction", np.nan),
         "support_lineage_ids": row.get("support_lineage_ids", np.nan),
+        "selection_min_support": int(row["_selection_min_support"]),
+        "selection_min_lineage_support": int(row.get("_selection_min_lineage_support", 0)),
         "probability_column": probability_column,
         "probability_value": row[probability_column],
         "candidate_tsv": f"{candidate_dir_name}/{candidate_tsv.name}",
@@ -1033,15 +1126,26 @@ def write_package_readme(
     skipped_candidate_count,
     skipped_gene_family_count,
     source_summary,
+    minimum_lineage_support=0,
+    bh_metadata=None,
 ):
+    policy = (
+        "BH is calculated across all finite analytical P values after BOTH unit and lineage support bounds, "
+        "pooling orthogroups, traits and match classes. Probability cutoff, candidate cap and missing report "
+        "inputs are applied afterward. Original analytical P and full-candidate global q remain diagnostic."
+        if probability_column == SUPPORT_Q_COLUMN else
+        "The explicitly selected source P/q column is preserved; no support-filtered BH selection is applied."
+    )
     text = "\n".join(
         [
             "CSUBST scan candidate sites",
-            "Exploratory candidate report. Analytical P and BH-FDR values are preserved across support views.",
-            "Global BH uses all imported scan candidate rows; its validity depends on the analytical P model.",
+            "Exploratory candidate report. BH-FDR validity depends on the analytical P model and candidate selection.",
+            policy,
+            f"Support-filtered BH metadata: {json.dumps(bh_metadata or {}, sort_keys=True)}",
             "",
             f"Source summary: {source_summary}",
             f"Selection: support_unit_count >= {threshold}",
+            f"Selection: support_lineage_count >= {minimum_lineage_support}" if minimum_lineage_support else "Lineage support condition: disabled",
             f"Selection: {probability_column} <= {format_float_token(probability_threshold)}",
             f"Selected candidates: {selected_candidate_count}",
             f"Packaged candidates: {packaged_candidate_count}",
@@ -1068,11 +1172,15 @@ def write_package_metadata(
     skipped_candidate_count,
     skipped_gene_family_count,
     source_summary,
+    minimum_lineage_support=0,
+    bh_metadata=None,
 ):
     pd.DataFrame(
         [
             {
                 "min_support": int(threshold),
+                "min_lineage_support": int(minimum_lineage_support),
+                **(bh_metadata or {}),
                 "probability_column": probability_column,
                 "probability_threshold": float(probability_threshold),
                 "candidate_count": int(packaged_candidate_count),
@@ -1139,6 +1247,10 @@ def archive_matches_source(
     source_summary,
     expected_candidates=None,
     expected_skipped_candidates=None,
+    minimum_support=None,
+    minimum_lineage_support=0,
+    probability_column=None,
+    probability_threshold=None,
 ):
     archive_path = Path(archive_path)
     if not archive_path.is_file() or not zipfile.is_zipfile(archive_path):
@@ -1173,11 +1285,74 @@ def archive_matches_source(
                 candidate_manifest = pd.read_csv(handle, sep="\t", dtype=str, keep_default_na=False)
             with archive.open(skipped_manifest_member) as handle:
                 skipped_manifest = pd.read_csv(handle, sep="\t", dtype=str, keep_default_na=False)
-            if candidate_manifest.columns.tolist() != CANDIDATE_MANIFEST_COLUMNS:
+            legacy_candidate_columns = [column for column in CANDIDATE_MANIFEST_COLUMNS
+                                        if column not in {"selection_min_support", "selection_min_lineage_support"}]
+            legacy_skipped_columns = [column for column in SKIPPED_CANDIDATE_COLUMNS if column != "min_lineage_support"]
+            if candidate_manifest.columns.tolist() != CANDIDATE_MANIFEST_COLUMNS and not (
+                minimum_lineage_support == 0 and candidate_manifest.columns.tolist() == legacy_candidate_columns
+            ):
                 return False
-            if skipped_manifest.columns.tolist() != SKIPPED_CANDIDATE_COLUMNS:
+            if skipped_manifest.columns.tolist() != SKIPPED_CANDIDATE_COLUMNS and not (
+                minimum_lineage_support == 0 and skipped_manifest.columns.tolist() == legacy_skipped_columns
+            ):
                 return False
+            if "min_lineage_support" not in skipped_manifest:
+                skipped_manifest["min_lineage_support"] = "0"
+                skipped_manifest = skipped_manifest.loc[:, SKIPPED_CANDIDATE_COLUMNS]
             if package_metadata.shape[0] != 1:
+                return False
+            recorded_probability = package_metadata.loc[0, "probability_column"]
+            recorded_threshold = float(package_metadata.loc[0, "probability_threshold"])
+            if recorded_probability not in PROBABILITY_COLUMNS or not np.isfinite(recorded_threshold) or not 0 <= recorded_threshold <= 1:
+                return False
+            if probability_column is None and expected_candidates is not None and expected_candidates.attrs.get("support_bh_metadata"):
+                probability_column = SUPPORT_Q_COLUMN
+            if probability_column is not None and recorded_probability != probability_column:
+                return False
+            if probability_threshold is not None and recorded_threshold != probability_threshold:
+                return False
+            if not candidate_manifest["probability_column"].eq(recorded_probability).all():
+                return False
+            observed_probabilities = np.array([float(value) for value in candidate_manifest["probability_value"]])
+            if not (np.isfinite(observed_probabilities) & (observed_probabilities >= 0)
+                    & (observed_probabilities <= recorded_threshold)).all():
+                return False
+            if package_metadata.loc[0, "probability_column"] == SUPPORT_Q_COLUMN:
+                if package_metadata.loc[0].get("probability_policy") != SUPPORT_BH_POLICY:
+                    return False
+                if package_metadata.loc[0].get("inference_scope") != SUPPORT_BH_SCOPE:
+                    return False
+                bh_counts = {column: int(package_metadata.loc[0, column]) for column in SUPPORT_BH_COLUMNS}
+                if any(value < 0 for value in bh_counts.values()):
+                    return False
+                if (bh_counts["support_bh_candidate_count"] != bh_counts["support_bh_test_count"]
+                        + bh_counts["support_bh_undefined_count"]
+                        or bh_counts["support_bh_min_unit_support"] != int(package_metadata.loc[0, "min_support"])
+                        or bh_counts["support_bh_min_lineage_support"] != int(package_metadata.loc[0, "min_lineage_support"])
+                        or bh_counts["support_bh_test_count"] < int(package_metadata.loc[0, "selected_candidate_count"])):
+                    return False
+                if expected_candidates is not None:
+                    metadata = expected_candidates.attrs.get("support_bh_metadata")
+                    if metadata is None or any(str(package_metadata.loc[0].get(key)) != str(value)
+                                               for key, value in metadata.items()):
+                        return False
+            recorded_lineage_support = int(package_metadata.loc[0, "min_lineage_support"]) if "min_lineage_support" in package_metadata else 0
+            recorded_unit_support = int(package_metadata.loc[0, "min_support"])
+            if recorded_unit_support < 0 or recorded_lineage_support < 0:
+                return False
+            if recorded_lineage_support != minimum_lineage_support:
+                return False
+            if minimum_support is not None and recorded_unit_support != minimum_support:
+                return False
+            if "selection_min_support" in candidate_manifest and not (
+                pd.to_numeric(candidate_manifest["selection_min_support"], errors="coerce").eq(recorded_unit_support)
+                & pd.to_numeric(candidate_manifest["selection_min_lineage_support"], errors="coerce").eq(recorded_lineage_support)
+            ).all():
+                return False
+            if not (
+                pd.to_numeric(skipped_manifest["min_support"], errors="coerce").eq(recorded_unit_support)
+                & pd.to_numeric(skipped_manifest["min_lineage_support"], errors="coerce").eq(recorded_lineage_support)
+            ).all():
                 return False
             if int(package_metadata.loc[0, "candidate_count"]) != candidate_manifest.shape[0]:
                 return False
@@ -1199,6 +1374,9 @@ def archive_matches_source(
                 observed_identities = candidate_manifest.loc[:, ["candidate_id", "required_input_signature"]]
                 observed_identities.columns = expected_identities.columns
                 if observed_identities.to_dict(orient="records") != expected_identities.to_dict(orient="records"):
+                    return False
+                if not expected_candidates.empty and (recorded_probability not in expected_candidates
+                        or not np.array_equal(observed_probabilities, expected_candidates[recorded_probability].to_numpy(dtype=float))):
                     return False
             if expected_skipped_candidates is not None:
                 expected_skipped = expected_skipped_candidates.loc[:, SKIPPED_CANDIDATE_COLUMNS].fillna("").astype(str)
@@ -1280,7 +1458,10 @@ def package_threshold(
     probability_column,
     probability_threshold,
     skipped_candidates=None,
+    minimum_lineage_support=0,
 ):
+    if probability_column == SUPPORT_Q_COLUMN and "support_bh_metadata" not in candidates.attrs:
+        raise ValueError("Support-filtered BH packaging requires metadata from load_threshold_candidates.")
     if skipped_candidates is None:
         skipped_candidates = pd.DataFrame(columns=SKIPPED_CANDIDATE_COLUMNS)
     selected_candidate_count = candidates.shape[0] + skipped_candidates.shape[0]
@@ -1317,6 +1498,8 @@ def package_threshold(
             skipped_candidate_count=skipped_candidates.shape[0],
             skipped_gene_family_count=skipped_gene_family_count,
             source_summary=Path(source_summary).name,
+            minimum_lineage_support=minimum_lineage_support,
+            bh_metadata=candidates.attrs.get("support_bh_metadata"),
         )
         write_package_metadata(
             package_root / "package_metadata.tsv",
@@ -1328,6 +1511,8 @@ def package_threshold(
             skipped_candidate_count=skipped_candidates.shape[0],
             skipped_gene_family_count=skipped_gene_family_count,
             source_summary=source_summary,
+            minimum_lineage_support=minimum_lineage_support,
+            bh_metadata=candidates.attrs.get("support_bh_metadata"),
         )
         create_zip_atomic(package_root, archive_path)
         if not archive_matches_source(
@@ -1335,6 +1520,10 @@ def package_threshold(
             source_summary,
             expected_candidates=candidates,
             expected_skipped_candidates=skipped_candidates,
+            minimum_support=threshold,
+            minimum_lineage_support=minimum_lineage_support,
+            probability_column=probability_column,
+            probability_threshold=probability_threshold,
         ):
             raise RuntimeError(f"Candidate-site ZIP validation failed: {archive_path}")
     except Exception:
@@ -1343,13 +1532,15 @@ def package_threshold(
         shutil.rmtree(package_root)
 
 
-def output_suffix(probability_column, probability_threshold, max_candidates, nonsyn_recode, pdb):
+def output_suffix(probability_column, probability_threshold, max_candidates, nonsyn_recode, pdb, minimum_lineage_support=0):
     suffix = f"{sanitize_token(probability_column)}_le_{sanitize_token(format_float_token(probability_threshold))}"
     if max_candidates > 0:
         suffix += f"_top{max_candidates}"
     suffix += site_wrapper.csubst_nonsyn_recode_output_suffix(nonsyn_recode)
     if pdb != "none":
         suffix += f"_pdb-{sanitize_token(pdb)}"
+    if minimum_lineage_support:
+        suffix += f"_min_lineage_support_{minimum_lineage_support}"
     return suffix
 
 
@@ -1362,8 +1553,9 @@ def archive_path_for_threshold(
     max_candidates,
     nonsyn_recode,
     pdb,
+    minimum_lineage_support=0,
 ):
-    suffix = output_suffix(probability_column, probability_threshold, max_candidates, nonsyn_recode, pdb)
+    suffix = output_suffix(probability_column, probability_threshold, max_candidates, nonsyn_recode, pdb, minimum_lineage_support)
     return Path(out_dir) / (f"{Path(summary_prefix).name}_candidate_sites_min_support_{threshold}_{suffix}.zip")
 
 
@@ -1460,6 +1652,7 @@ def run(args):
         args.max_candidates,
         args.csubst_nonsyn_recode,
         args.pdb,
+        args.min_lineage_support,
     )
     lock_path = output_dir / (f".{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}.lock")
     with exclusive_run_lock(lock_path):
@@ -1467,16 +1660,14 @@ def run(args):
 
 
 def run_locked(args, output_dir, run_suffix):
-    summary_tables = discover_summary_tables(args.summary_prefix, args.min_support)
+    summary_tables = discover_summary_tables(args.summary_prefix, args.min_support, args.min_lineage_support,
+                                            support_bh_family=args.probability_column == SUPPORT_Q_COLUMN)
     manifest_path = output_dir / (f"{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}_manifest.tsv")
     work_root = output_dir / (f".{Path(args.summary_prefix).name}_candidate_sites_{run_suffix}.work")
     cache_root = work_root / "cache"
     packages_root = work_root / "packages"
     materialization_parent = work_root / "materialized"
     trait_color_dir = work_root / "trait_colors"
-    for path in (cache_root, packages_root, materialization_parent, trait_color_dir):
-        path.mkdir(parents=True, exist_ok=True)
-
     threshold_candidates = {}
     all_orthogroups = set()
     for threshold, summary_path in summary_tables.items():
@@ -1488,10 +1679,16 @@ def run_locked(args, output_dir, run_suffix):
             max_candidates=args.max_candidates,
             csubst_nonsyn_recode=args.csubst_nonsyn_recode,
             pdb=args.pdb,
+            minimum_lineage_support=args.min_lineage_support,
+            filter_unit_support=args.probability_column == SUPPORT_Q_COLUMN or summary_path == Path(f"{args.summary_prefix}_all_candidates_summary.tsv") or (
+                threshold == 2 and Path(f"{args.summary_prefix}_all_candidates_summary.tsv").is_file()
+            ),
         )
         threshold_candidates[threshold] = candidates
         all_orthogroups.update(candidates["orthogroup"].dropna().astype(str).tolist())
 
+    for path in (cache_root, packages_root, materialization_parent, trait_color_dir):
+        path.mkdir(parents=True, exist_ok=True)
     input_states = inspect_required_report_inputs(args.dir_orthogroup, all_orthogroups)
     eligible_by_threshold = {}
     skipped_by_threshold = {}
@@ -1530,10 +1727,13 @@ def run_locked(args, output_dir, run_suffix):
             max_candidates=args.max_candidates,
             nonsyn_recode=args.csubst_nonsyn_recode,
             pdb=args.pdb,
+            minimum_lineage_support=args.min_lineage_support,
         )
         archive_rows.append(
             {
                 "min_support": threshold,
+                "min_lineage_support": args.min_lineage_support,
+                **candidates.attrs.get("support_bh_metadata", {}),
                 "candidate_count": int(candidates.shape[0]),
                 "packaged_candidate_count": int(eligible.shape[0]),
                 "skipped_candidate_count": int(skipped.shape[0]),
@@ -1566,6 +1766,10 @@ def run_locked(args, output_dir, run_suffix):
             summary_tables[threshold],
             expected_candidates=candidates,
             expected_skipped_candidates=skipped,
+            minimum_support=threshold,
+            minimum_lineage_support=args.min_lineage_support,
+            probability_column=args.probability_column,
+            probability_threshold=args.probability_threshold,
         ):
             archive_rows[row_index].update(archived_diagnostic_provenance(archive_path))
             archive_rows[row_index]["status"] = "existing_with_skips" if not skipped.empty else "existing"
@@ -1613,6 +1817,7 @@ def run_locked(args, output_dir, run_suffix):
                 probability_column=args.probability_column,
                 probability_threshold=args.probability_threshold,
                 skipped_candidates=skipped,
+                minimum_lineage_support=args.min_lineage_support,
             )
         except Exception as error:
             failures_detected = True

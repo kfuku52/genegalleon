@@ -21,6 +21,197 @@ def load_module():
     return module
 
 
+@pytest.mark.parametrize("units,lineages,expected", [
+    (6, 4, ["OG0003"]), (5, 4, ["OG0002", "OG0003"]), (6, 0, ["OG0001", "OG0003"]),
+    (0, 4, ["OG0002", "OG0003"]), (0, 0, ["OG0002", "OG0001", "OG0003"]), (8, 4, []),
+])
+def test_candidate_selection_applies_filtered_bh_and_preserves_source_probabilities(tmp_path, units, lineages, expected):
+    mod = load_module()
+    source = candidate_rows()
+    source["support_lineage_count"] = [4, 3, 4]
+    source[mod.DEFAULT_PROBABILITY_COLUMN] = [0.02, 0.01, 0.03]
+    summary = tmp_path / "all_candidates.tsv"
+    write_summary(summary, source)
+    selected = mod.load_threshold_candidates(summary, units, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0,
+                                             "no", "none", lineages, filter_unit_support=True)
+    assert selected["orthogroup"].tolist() == expected
+    for row in selected.itertuples():
+        original = source.loc[source["orthogroup"].eq(row.orthogroup)].iloc[0]
+        assert row.q_rate_enrichment_asymptotic_global == original["q_rate_enrichment_asymptotic_global"]
+        assert row.p_rate_enrichment_asymptotic == original["p_rate_enrichment_asymptotic"]
+    assert selected["_selection_min_lineage_support"].eq(lineages).all()
+    expected_q = {(6, 4): [0.02], (5, 4): [0.002, 0.02], (6, 0): [0.004, 0.02],
+                  (0, 4): [0.002, 0.02], (0, 0): [0.003, 0.003, 0.02], (8, 4): []}
+    assert selected[mod.DEFAULT_PROBABILITY_COLUMN].tolist() == pytest.approx(expected_q[(units, lineages)])
+    assert selected.attrs["support_bh_metadata"]["support_bh_test_count"] == len(expected)
+
+
+def test_candidate_cap_applies_after_lineage_filter_and_preserves_analysis_identity(tmp_path):
+    mod = load_module()
+    source = candidate_rows().iloc[:2].copy()
+    source["support_lineage_count"] = [4, 3]
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, source)
+    unfiltered = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+    selected = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 1, "no", "none", 4)
+    assert selected["orthogroup"].tolist() == ["OG0002"]
+    same_candidate = unfiltered.loc[unfiltered["orthogroup"].eq("OG0002")].iloc[0]
+    assert selected.iloc[0]["_analysis_key"] == same_candidate["_analysis_key"]
+
+
+@pytest.mark.parametrize("count", [None, float("inf"), -1, 1.5, "unknown", "missing_column"])
+def test_lineage_filter_rejects_invalid_counts_even_outside_selected_pool(tmp_path, count):
+    mod = load_module()
+    source = candidate_rows()
+    source["support_lineage_count"] = pd.Series([4, 4, 4], dtype=object)
+    if count == "missing_column":
+        source = source.drop(columns="support_lineage_count")
+    else:
+        source.loc[0, "support_lineage_count"] = count
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, source)
+    with pytest.raises(ValueError, match="support_lineage_count"):
+        mod.load_threshold_candidates(summary, 6, mod.DEFAULT_PROBABILITY_COLUMN, 0.001, 1, "no", "none", 4,
+                                      filter_unit_support=True)
+
+
+def test_full_source_discovery_supports_disabled_unit_filter_and_ignores_filtered_views(tmp_path):
+    mod = load_module()
+    prefix = tmp_path / "scan"
+    full = Path(f"{prefix}_all_candidates_summary.tsv")
+    write_summary(full, candidate_rows())
+    Path(f"{prefix}_min_unit_support_6_min_lineage_support_4_summary.tsv").write_text("irrelevant\n")
+    assert mod.discover_summary_tables(prefix, 0) == {0: full}
+    assert list(mod.discover_summary_tables(prefix, 5)) == [7, 6, 5]
+    assert list(mod.discover_summary_tables(prefix, 1)) == list(range(7, 0, -1))
+    assert mod.discover_summary_tables(prefix, 8) == {}
+    # Even an empty selected pool cannot silently conceal a missing lineage column.
+    with pytest.raises(ValueError, match="support_lineage_count"):
+        mod.discover_summary_tables(prefix, 8, 4)
+
+
+def test_complete_unit_series_retains_legacy_sources_for_archive_reuse(tmp_path):
+    mod = load_module()
+    prefix = tmp_path / "orthogroup_csubst_aa_change"
+    source = candidate_rows()
+    source["support_lineage_count"] = 4
+    full = Path(f"{prefix}_all_candidates_summary.tsv")
+    write_summary(full, source)
+    write_run_summaries(tmp_path)
+    assert mod.discover_summary_tables(prefix, 5) == {
+        value: Path(f"{prefix}_min_support_{value}_summary.tsv") for value in (7, 6, 5)
+    }
+    assert mod.discover_summary_tables(prefix, 0, 4) == {0: full}
+    below_legacy_minimum = mod.discover_summary_tables(prefix, 1)
+    assert below_legacy_minimum[1] == full
+    assert below_legacy_minimum[5] == Path(f"{prefix}_min_support_5_summary.tsv")
+
+
+def test_legacy_lineage_preflight_validates_counts_when_unit_bound_selects_no_threshold(tmp_path):
+    mod = load_module()
+    write_run_summaries(tmp_path)
+    prefix = tmp_path / "orthogroup_csubst_aa_change"
+    assert mod.discover_summary_tables(prefix, 8) == {}
+    with pytest.raises(ValueError, match="support_lineage_count"):
+        mod.discover_summary_tables(prefix, 8, 4)
+
+
+def test_lineage_preflight_preserves_existing_archives_and_manifests(tmp_path):
+    mod = load_module()
+    args = make_run_args(tmp_path)
+    args.min_lineage_support = 4
+    write_run_summaries(tmp_path)
+    for threshold in (6, 7):
+        path = tmp_path / f"orthogroup_csubst_aa_change_min_support_{threshold}_summary.tsv"
+        frame = pd.read_csv(path, sep="\t")
+        frame["support_lineage_count"] = 4
+        write_summary(path, frame)
+    output = Path(args.out_dir)
+    output.mkdir()
+    suffix = mod.output_suffix(args.probability_column, args.probability_threshold, 0, "no", "none", 4)
+    existing = [output / f"orthogroup_csubst_aa_change_candidate_sites_{suffix}_manifest.tsv",
+                output / f"orthogroup_csubst_aa_change_candidate_sites_min_support_5_{suffix}.zip"]
+    for path in existing:
+        path.write_bytes(b"preserve")
+    with pytest.raises(ValueError, match="support_lineage_count"):
+        mod.run(args)
+    assert all(path.read_bytes() == b"preserve" for path in existing)
+    assert not list(output.glob("*.work"))
+
+
+@pytest.mark.parametrize("minimum,expected_thresholds", [(0, [0]), (5, [7, 6, 5])])
+def test_run_full_candidate_source_uses_independent_lineage_bound(tmp_path, monkeypatch, minimum, expected_thresholds):
+    mod = load_module()
+    args = make_run_args(tmp_path)
+    args.min_support = minimum
+    args.min_lineage_support = 4
+    source = candidate_rows()
+    source["support_lineage_count"] = [4, 3, 4]
+    source[args.probability_column] = 0.01
+    write_summary(Path(f"{args.summary_prefix}_all_candidates_summary.tsv"), source)
+    selected_by_threshold = {}
+    def fake_package(candidates, threshold, minimum_lineage_support, **kwargs):
+        assert minimum_lineage_support == 4
+        selected_by_threshold[threshold] = candidates["orthogroup"].tolist()
+    monkeypatch.setattr(mod, "package_threshold", fake_package)
+    monkeypatch.setattr(mod, "archive_matches_source", lambda *args, **kwargs: False)
+    monkeypatch.setattr(mod, "inspect_required_report_inputs", available_input_states)
+    monkeypatch.setattr(mod, "ensure_candidate_analyses", lambda **kwargs: [])
+    manifest = pd.read_csv(mod.run(args), sep="\t")
+    assert manifest["min_support"].tolist() == expected_thresholds
+    assert manifest["min_lineage_support"].eq(4).all()
+    assert all("_min_lineage_support_4" in name for name in manifest["archive_zip"])
+    if minimum == 0:
+        assert selected_by_threshold == {0: ["OG0002", "OG0003"]}
+    else:
+        assert selected_by_threshold == {7: ["OG0003"], 6: ["OG0003"], 5: ["OG0002", "OG0003"]}
+
+
+def test_lineage_filtered_zip_records_and_validates_both_bounds(tmp_path):
+    mod = load_module()
+    source = candidate_rows().iloc[[1]].copy()
+    source["support_lineage_count"] = 4
+    source["support_lineage_ids"] = "001,7,11,13"
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, source)
+    candidates = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none", 4)
+    candidates["_required_input_signature"] = "input-signature"
+    row = candidates.iloc[0]
+    cache = tmp_path / "cache"
+    make_candidate_cache(mod, cache, row)
+    archive = mod.archive_path_for_threshold(tmp_path / "scan", tmp_path, 5, mod.DEFAULT_PROBABILITY_COLUMN,
+                                             0.05, 0, "no", "none", 4)
+    assert archive.name.endswith("_min_lineage_support_4.zip")
+    mod.package_threshold(candidates, 5, summary, archive, tmp_path / "packages", cache,
+                          mod.DEFAULT_PROBABILITY_COLUMN, 0.05, minimum_lineage_support=4)
+    assert mod.archive_matches_source(archive, summary, minimum_support=5, minimum_lineage_support=4)
+    assert not mod.archive_matches_source(archive, summary, minimum_support=5, minimum_lineage_support=3)
+    assert not mod.archive_matches_source(archive, summary, minimum_support=6, minimum_lineage_support=4)
+    with zipfile.ZipFile(archive) as zipped:
+        root = archive.stem
+        metadata = pd.read_csv(zipped.open(f"{root}/package_metadata.tsv"), sep="\t").iloc[0]
+        manifest = pd.read_csv(zipped.open(f"{root}/candidate_manifest.tsv"), sep="\t").iloc[0]
+        candidate = pd.read_csv(zipped.open(f"{root}/{manifest['candidate_tsv']}"), sep="\t").iloc[0]
+        assert metadata["min_support"] == manifest["selection_min_support"] == candidate["selection_min_support"] == 5
+        assert metadata["min_lineage_support"] == manifest["selection_min_lineage_support"] == candidate["selection_min_lineage_support"] == 4
+        assert candidate[mod.DEFAULT_PROBABILITY_COLUMN] == 0.002
+        assert candidate["q_rate_enrichment_asymptotic_global"] == 0.01
+        assert metadata["support_bh_test_count"] == 1
+        assert metadata["support_bh_candidate_count"] == 1
+        assert metadata["probability_policy"] == "bh_after_unit_and_lineage_support_filter_v1"
+        assert "support_lineage_count >= 4" in zipped.read(f"{root}/README.txt").decode()
+    assert "min_lineage_support: 4" in mod.candidate_annotation_text(row, mod.DEFAULT_PROBABILITY_COLUMN, 0.05)
+
+
+@pytest.mark.parametrize("parameter", ["min_support", "min_lineage_support"])
+def test_validate_args_rejects_negative_support_bounds(tmp_path, parameter):
+    mod = load_module()
+    args = make_run_args(tmp_path)
+    setattr(args, parameter, -1)
+    with pytest.raises(ValueError, match="integer >= 0"):
+        mod.validate_args(args)
+
+
 def candidate_rows():
     return pd.DataFrame(
         [
@@ -791,10 +982,28 @@ def test_package_threshold_writes_valid_empty_zip(tmp_path):
     )
 
     assert mod.archive_matches_source(archive, summary)
+    # Existing archives imply disabled lineage filtering when the additive
+    # selection columns and metadata field are absent.
     with zipfile.ZipFile(archive) as zipped:
         manifest = pd.read_csv(zipped.open(f"{archive.stem}/candidate_manifest.tsv"), sep="\t")
         assert manifest.empty
         assert manifest.columns.tolist() == mod.CANDIDATE_MANIFEST_COLUMNS
+    temporary = archive.with_suffix(".legacy.zip")
+    with zipfile.ZipFile(archive) as original, zipfile.ZipFile(temporary, "w") as legacy:
+        for member in original.namelist():
+            data = original.read(member)
+            drops = {
+                "package_metadata.tsv": ["min_lineage_support"],
+                "candidate_manifest.tsv": ["selection_min_support", "selection_min_lineage_support"],
+                "skipped_candidates.tsv": ["min_lineage_support"],
+            }
+            if Path(member).name in drops:
+                frame = pd.read_csv(io.BytesIO(data), sep="\t").drop(columns=drops[Path(member).name])
+                data = frame.to_csv(sep="\t", index=False).encode()
+            legacy.writestr(member, data)
+    os.replace(temporary, archive)
+    assert mod.archive_matches_source(archive, summary, minimum_support=5)
+    assert not mod.archive_matches_source(archive, summary, minimum_support=5, minimum_lineage_support=4)
 
 
 def make_run_args(tmp_path):
@@ -1292,7 +1501,7 @@ def test_candidate_selection_rejects_invalid_source_probabilities(tmp_path, valu
     source = tmp_path / "summary.tsv"
     write_summary(source, frame)
     with pytest.raises(ValueError, match="invalid probabilities"):
-        mod.load_threshold_candidates(source, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+        mod.load_threshold_candidates(source, 5, "q_rate_enrichment_asymptotic_global", 0.05, 0, "no", "none")
 
 
 def test_missing_fdr_never_uses_asymptotic_values(tmp_path):
@@ -1302,12 +1511,12 @@ def test_missing_fdr_never_uses_asymptotic_values(tmp_path):
     frame["scan_calibration_status"] = "unavailable_failed_trials"
     source = tmp_path / "summary.tsv"
     write_summary(source, frame)
-    selected = mod.load_threshold_candidates(source, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+    selected = mod.load_threshold_candidates(source, 5, "q_rate_enrichment_asymptotic_global", 0.05, 0, "no", "none")
     assert selected.empty
     frame = frame.drop(columns="q_rate_enrichment_asymptotic_global")
     write_summary(source, frame)
     with pytest.raises(ValueError, match="missing required candidate column"):
-        mod.load_threshold_candidates(source, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, "no", "none")
+        mod.load_threshold_candidates(source, 5, "q_rate_enrichment_asymptotic_global", 0.05, 0, "no", "none")
 
 
 
@@ -1336,3 +1545,207 @@ def test_missing_3di_source_alphabet_is_not_treated_as_a_match():
     frame["nonsyn_recode"] = None
     with pytest.raises(ValueError, match="differs from requested"):
         mod.assign_candidate_ids(frame, "3di20", "none")
+
+
+def test_filtered_bh_pools_traits_and_matches_before_cutoff_and_cap(tmp_path):
+    mod = load_module()
+    source = candidate_rows()
+    source['trait'] = ['aquatic', 'terrestrial', 'aquatic']
+    source['scan_match'] = ['m1', 'm2', 'm2']
+    source['support_lineage_count'] = [4, 4, 4]
+    source['p_rate_enrichment_asymptotic'] = [0.01, 0.03, float('nan')]
+    source[mod.DEFAULT_PROBABILITY_COLUMN] = 0.00001  # Stale view q must be recomputed.
+    summary = tmp_path / 'summary.tsv'
+    write_summary(summary, source)
+    selected = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN,
+                                             0.025, 1, 'no', 'none', 4)
+    assert selected['orthogroup'].tolist() == ['OG0002']
+    assert selected.iloc[0][mod.DEFAULT_PROBABILITY_COLUMN] == 0.02
+    metadata = selected.attrs['support_bh_metadata']
+    assert metadata['support_bh_candidate_count'] == 3
+    assert metadata['support_bh_test_count'] == 2
+    assert metadata['support_bh_undefined_count'] == 1
+    assert selected.iloc[0]['q_rate_enrichment_asymptotic_global'] == 0.02
+
+
+def test_filtered_bh_empty_selection_keeps_full_family_metadata(tmp_path):
+    mod = load_module()
+    source = candidate_rows()
+    source['p_rate_enrichment_asymptotic'] = [0.04, 0.1, 0.6]
+    source['support_lineage_count'] = [4, 3, 3]
+    summary = tmp_path / 'summary.tsv'
+    write_summary(summary, source)
+    selected = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN,
+                                             0.05, 1, 'no', 'none', 0)
+    assert selected.empty  # q for the smallest P is .12, even with cap 1.
+    assert selected.attrs['support_bh_metadata']['support_bh_test_count'] == 3
+    selected = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN,
+                                             0.05, 1, 'no', 'none', 4)
+    assert selected['orthogroup'].tolist() == ['OG0002']
+    assert selected.iloc[0][mod.DEFAULT_PROBABILITY_COLUMN] == 0.04
+
+
+@pytest.mark.parametrize('value', [-0.01, 1.01, float('inf'), 'invalid'])
+def test_filtered_bh_rejects_invalid_p_even_outside_support_pool(tmp_path, value):
+    mod = load_module()
+    source = candidate_rows().astype({'p_rate_enrichment_asymptotic': object})
+    source.loc[0, 'p_rate_enrichment_asymptotic'] = value
+    source['support_lineage_count'] = [3, 4, 4]
+    summary = tmp_path / 'summary.tsv'
+    write_summary(summary, source)
+    with pytest.raises(ValueError, match='invalid probabilities'):
+        mod.load_threshold_candidates(summary, 6, mod.DEFAULT_PROBABILITY_COLUMN,
+                                      0.05, 0, 'no', 'none', 4, filter_unit_support=True)
+
+
+def test_filtered_bh_requires_p_and_does_not_use_missing_or_global_q(tmp_path):
+    mod = load_module()
+    source = candidate_rows()
+    source['p_rate_enrichment_asymptotic'] = float('nan')
+    summary = tmp_path / 'summary.tsv'
+    write_summary(summary, source)
+    selected = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, 'no', 'none')
+    assert selected.empty
+    assert selected.attrs['support_bh_metadata']['support_bh_undefined_count'] == 3
+    source = source.drop(columns='p_rate_enrichment_asymptotic')
+    write_summary(summary, source)
+    with pytest.raises(ValueError, match='missing required candidate column'):
+        mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, 'no', 'none')
+
+
+def test_filtered_bh_family_survives_cap_missing_inputs_empty_zip_and_archive_reuse(tmp_path, monkeypatch):
+    mod = load_module()
+    args = make_run_args(tmp_path)
+    args.min_support = 0
+    args.min_lineage_support = 4
+    args.probability_column = mod.DEFAULT_PROBABILITY_COLUMN
+    args.max_candidates = 1
+    source = candidate_rows()
+    source['support_lineage_count'] = 4
+    write_summary(Path(f'{args.summary_prefix}_all_candidates_summary.tsv'), source)
+    def missing_inputs(_directory, orthogroups):
+        return {orthogroup: {'missing_required_inputs': ['iqtree_anc/missing'],
+                            'required_input_signature': f'missing-{orthogroup}'} for orthogroup in orthogroups}
+    monkeypatch.setattr(mod, 'inspect_required_report_inputs', missing_inputs)
+    monkeypatch.setattr(mod, 'ensure_candidate_analyses', lambda **kwargs: [])
+    manifest_path = mod.run(args)
+    manifest = pd.read_csv(manifest_path, sep='\t').iloc[0]
+    assert manifest['support_bh_test_count'] == manifest['support_bh_candidate_count'] == 3
+    assert manifest['candidate_count'] == manifest['skipped_candidate_count'] == 1
+    assert manifest['packaged_candidate_count'] == 0
+    archive_path = Path(args.out_dir) / manifest['archive_zip']
+    with zipfile.ZipFile(archive_path) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+        metadata_name = f'{archive_path.stem}/package_metadata.tsv'
+        metadata = pd.read_csv(io.BytesIO(members[metadata_name]), sep='\t')
+        assert metadata.loc[0, 'support_bh_test_count'] == 3
+        assert metadata.loc[0, 'packaged_candidate_count'] == 0
+    assert pd.read_csv(mod.run(args), sep='\t').loc[0, 'status'] == 'existing_with_skips'
+    for column, value in [('probability_policy', 'old_policy'), ('support_bh_test_count', 2)]:
+        corrupted = metadata.copy()
+        corrupted.loc[0, column] = value
+        with zipfile.ZipFile(archive_path, 'w') as archive:
+            for name, content in members.items():
+                archive.writestr(name, corrupted.to_csv(sep='\t', index=False) if name == metadata_name else content)
+        assert not mod.archive_matches_source(archive_path, Path(f'{args.summary_prefix}_all_candidates_summary.tsv'),
+                                              minimum_support=0, minimum_lineage_support=4)
+
+
+def test_filtered_bh_accepts_nullable_sqlite_testable_flags_and_rejects_untestable_p(tmp_path):
+    mod = load_module()
+    assert mod.rate_testable_mask(pd.Series([1, pd.NA, 0], dtype="Int64")).tolist() == [True, False, False]
+    source = candidate_rows()
+    # SQLite integer flags with NULL become float64 on a pandas read.
+    source['scan_rate_testable'] = [1.0, 1.0, float('nan')]
+    source['p_rate_enrichment_asymptotic'] = [0.01, 0.03, float('nan')]
+    summary = tmp_path / 'summary.tsv'
+    write_summary(summary, source)
+    selected = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 1.0, 0, 'no', 'none')
+    assert selected[mod.DEFAULT_PROBABILITY_COLUMN].tolist() == pytest.approx([0.02, 0.03])
+    source.loc[0, 'scan_rate_testable'] = 0.0
+    write_summary(summary, source)
+    with pytest.raises(ValueError, match='untestable'):
+        mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 1.0, 0, 'no', 'none')
+
+
+def test_filtered_bh_run_uses_full_family_instead_of_stale_threshold_views(tmp_path, monkeypatch):
+    mod = load_module()
+    args = make_run_args(tmp_path)
+    args.probability_column = mod.DEFAULT_PROBABILITY_COLUMN
+    args.min_lineage_support = 4
+    source = candidate_rows().iloc[:2].copy()
+    source['support_unit_count'] = 5
+    source['support_lineage_count'] = 4
+    source['p_rate_enrichment_asymptotic'] = [0.03, 0.9]
+    write_summary(Path(f'{args.summary_prefix}_all_candidates_summary.tsv'), source)
+    # The stale table omits a nonsignificant hypothesis from the BH family.
+    write_summary(Path(f'{args.summary_prefix}_min_support_5_summary.tsv'), source.iloc[:1])
+    observed = {}
+    def package(candidates, threshold, **kwargs):
+        observed[threshold] = (len(candidates), candidates.attrs['support_bh_metadata']['support_bh_test_count'])
+    monkeypatch.setattr(mod, 'package_threshold', package)
+    monkeypatch.setattr(mod, 'archive_matches_source', lambda *args, **kwargs: False)
+    monkeypatch.setattr(mod, 'inspect_required_report_inputs', available_input_states)
+    monkeypatch.setattr(mod, 'ensure_candidate_analyses', lambda **kwargs: [])
+    mod.run(args)
+    assert observed == {5: (0, 2)}  # q=.06: both P values must enter BH.
+
+
+@pytest.mark.parametrize('member_name,column,value', [
+    ('package_metadata.tsv', 'probability_column', 'q_rate_enrichment_asymptotic_global'),
+    ('package_metadata.tsv', 'probability_threshold', 0.01),
+    ('candidate_manifest.tsv', 'probability_value', 0.003),
+])
+def test_filtered_bh_archive_does_not_reuse_a_different_probability_policy(tmp_path, member_name, column, value):
+    mod = load_module()
+    source = candidate_rows().iloc[[1]].copy()
+    source['support_lineage_count'] = 4
+    summary = tmp_path / 'source.tsv'
+    write_summary(summary, source)
+    candidates = mod.load_threshold_candidates(summary, 5, mod.DEFAULT_PROBABILITY_COLUMN, 0.05, 0, 'no', 'none', 4)
+    candidates['_required_input_signature'] = 'input-signature'
+    row = candidates.iloc[0]
+    cache = tmp_path / 'cache'
+    make_candidate_cache(mod, cache, row)
+    archive = mod.archive_path_for_threshold(tmp_path / 'scan', tmp_path, 5, mod.DEFAULT_PROBABILITY_COLUMN,
+                                             0.05, 0, 'no', 'none', 4)
+    mod.package_threshold(candidates, 5, summary, archive, tmp_path / 'packages', cache,
+                          mod.DEFAULT_PROBABILITY_COLUMN, 0.05, minimum_lineage_support=4)
+    with zipfile.ZipFile(archive) as zipped:
+        members = {name: zipped.read(name) for name in zipped.namelist()}
+    metadata_name = f'{archive.stem}/{member_name}'
+    metadata = pd.read_csv(io.BytesIO(members[metadata_name]), sep='\t')
+    metadata.loc[0, column] = value
+    with zipfile.ZipFile(archive, 'w') as zipped:
+        for name, content in members.items():
+            zipped.writestr(name, metadata.to_csv(sep='\t', index=False) if name == metadata_name else content)
+    assert not mod.archive_matches_source(archive, summary, expected_candidates=candidates,
+                                          minimum_support=5, minimum_lineage_support=4,
+                                          probability_column=mod.DEFAULT_PROBABILITY_COLUMN, probability_threshold=0.05)
+
+
+def test_filtered_bh_legacy_fallback_uses_broadest_pool_for_every_threshold(tmp_path):
+    mod = load_module()
+    prefix = tmp_path / 'scan'
+    source = candidate_rows()
+    source['support_lineage_count'] = [4, 4, 4]
+    source['p_rate_enrichment_asymptotic'] = [0.01, 0.03, 0.9]
+    broadest = Path(f'{prefix}_min_support_2_summary.tsv')
+    write_summary(broadest, source)
+    write_summary(Path(f'{prefix}_min_support_6_summary.tsv'), source.iloc[[1]])
+    discovered = mod.discover_summary_tables(prefix, 5, 4, support_bh_family=True)
+    assert discovered == {7: broadest, 6: broadest, 5: broadest}
+    candidates = mod.load_threshold_candidates(discovered[6], 6, mod.DEFAULT_PROBABILITY_COLUMN,
+                                               0.05, 0, 'no', 'none', 4, filter_unit_support=True)
+    assert candidates.empty  # Both .03 and .9 enter BH; q=.06.
+    assert candidates.attrs['support_bh_metadata']['support_bh_test_count'] == 2
+
+
+def test_filtered_bh_source_preflight_checks_p_when_unit_bound_selects_no_threshold(tmp_path):
+    mod = load_module()
+    prefix = tmp_path / 'scan'
+    source = candidate_rows().astype({'p_rate_enrichment_asymptotic': object})
+    source.loc[0, 'p_rate_enrichment_asymptotic'] = 'invalid'
+    write_summary(Path(f'{prefix}_all_candidates_summary.tsv'), source)
+    with pytest.raises(ValueError, match='invalid probabilities'):
+        mod.discover_summary_tables(prefix, 99, 0, support_bh_family=True)
