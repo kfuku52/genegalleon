@@ -363,6 +363,8 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
     before insertion, so a late text value cannot change a numeric SQL schema.
     """
     options = dict(sep="\t", header=0, usecols=filtered_cols, low_memory=True)
+    if "support_lineage_ids" in filtered_cols:
+        options["dtype"] = {"support_lineage_ids": "string"}
 
     if chunksize is not None:
         # Count physical line breaks in a bounded small-file buffer. They are
@@ -458,7 +460,7 @@ def read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, 
             return
 
     with ExitStack() as stack:
-        reader = stack.enter_context(pd.read_csv(source(stack), chunksize=chunksize, dtype=dtypes, **options))
+        reader = stack.enter_context(pd.read_csv(source(stack), chunksize=chunksize, **dict(options, dtype=dtypes)))
         yield from reader
 
 
@@ -516,7 +518,12 @@ def iter_processed_file_chunks(
         for df in read_csv_chunks(file_path, filtered_cols, chunksize, store, logical_subdir, logical_name):
             if fill_missing_columns:
                 for col in missing_cols:
-                    df[col] = np.nan
+                    if col == "support_lineage_ids":
+                        # An older family may be inserted first. Its missing
+                        # IDs must establish a TEXT column rather than FLOAT.
+                        df[col] = pd.Series(pd.NA, index=df.index, dtype="string")
+                    else:
+                        df[col] = np.nan
             df["orthogroup"] = og
             yield df[columns_to_read]
 

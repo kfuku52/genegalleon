@@ -234,6 +234,28 @@ def test_load_threshold_candidates_filters_q_and_canonicalizes_branches(tmp_path
     assert selected["_candidate_id"].str.contains(r"_[0-9a-f]{16}$").all()
 
 
+@pytest.mark.parametrize("identifier", ["001", "9007199254740993", "18446744073709551615"])
+def test_candidate_reader_preserves_single_foreground_id_as_text(tmp_path, identifier):
+    mod = load_module()
+    source = candidate_rows().iloc[[1]].copy()
+    source["support_lineage_ids"] = identifier
+    source["support_lineage_count"] = 1
+    source["lineage_total"] = 2
+    source["support_lineage_fraction"] = 0.5
+    summary = tmp_path / "summary.tsv"
+    write_summary(summary, source)
+    selected = mod.load_threshold_candidates(
+        summary, 5, "q_rate_enrichment_asymptotic_global", 0.05, 0, "no", "none",
+    )
+    assert selected.loc[0, "support_lineage_ids"] == identifier
+    row = selected.iloc[0]
+    assert f"Support foreground lineage IDs: {identifier}" in mod.candidate_annotation_text(
+        row, "q_rate_enrichment_asymptotic_global", 0.05,
+    )
+    output = mod.candidate_output_frame(row, "q_rate_enrichment_asymptotic_global", 0.05)
+    assert output.loc[0, "support_lineage_ids"] == identifier
+
+
 def test_candidate_analysis_identity_is_stable_across_recalculated_probability_values(tmp_path):
     mod = load_module()
     first_path = tmp_path / "first.tsv"
@@ -483,7 +505,16 @@ def make_candidate_cache(mod, cache_root, row):
 def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
     mod = load_module()
     summary = tmp_path / "summary.tsv"
-    write_summary(summary, candidate_rows().iloc[[1]].copy())
+    source = candidate_rows().iloc[[1]].copy()
+    lineage_support = {
+        "lineage_total": 4,
+        "support_lineage_count": 3,
+        "support_lineage_fraction": 0.75,
+        "support_lineage_ids": "7,11,13",
+    }
+    for column, value in lineage_support.items():
+        source[column] = value
+    write_summary(summary, source)
     candidates = mod.load_threshold_candidates(
         summary_path=summary,
         minimum_support=5,
@@ -495,6 +526,12 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
     )
     candidates["_required_input_signature"] = "test-input-signature"
     row = candidates.iloc[0]
+    annotation = mod.candidate_annotation_text(row, "q_rate_enrichment_asymptotic_global", 0.05)
+    assert "Support unit count: 6" in annotation
+    assert "Foreground lineage total: 4" in annotation
+    assert "Support lineage count (grouped by foreground ID): 3" in annotation
+    assert "Support lineage fraction: 0.75" in annotation
+    assert "Support foreground lineage IDs: 7,11,13" in annotation
     cache_root = tmp_path / "cache"
     make_candidate_cache(mod, cache_root, row)
     archive = tmp_path / "candidate_sites_min_support_5.zip"
@@ -526,6 +563,10 @@ def test_package_threshold_writes_self_contained_zip(monkeypatch, tmp_path):
         assert candidate_table.loc[0, "selection_min_support"] == 5
         assert candidate_table.loc[0, "selection_probability_column"] == "q_rate_enrichment_asymptotic_global"
         assert candidate_table.loc[0, "besthit_0.05"] == "protein A"
+        candidate_manifest = pd.read_csv(zipped.open(f"{archive.stem}/candidate_manifest.tsv"), sep="\t")
+        for column, value in lineage_support.items():
+            assert candidate_table.loc[0, column] == value
+            assert candidate_manifest.loc[0, column] == value
         output_manifest = pd.read_csv(
             zipped.open(f"{candidate_prefix}/csubst_sites/csubst.branch_id8,9/csubst.outputs.tsv"),
             sep="\t",

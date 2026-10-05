@@ -32,6 +32,10 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
                 "score_rate_enrichment": 0.03,
                 "q_rate_enrichment_asymptotic_global": 0.04,
                 "q_rate_enrichment_empirical_by_trait_match": 0.05,
+                "lineage_total": 4,
+                "support_lineage_count": 3,
+                "support_lineage_fraction": 0.75,
+                "support_lineage_ids": "7,11,13",
                 "future_csubst_metric": 42.0,
             }
         ]
@@ -48,6 +52,10 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
         "score_rate_enrichment",
         "q_rate_enrichment_asymptotic_global",
         "q_rate_enrichment_empirical_by_trait_match",
+        "lineage_total",
+        "support_lineage_count",
+        "support_lineage_fraction",
+        "support_lineage_ids",
         "future_csubst_metric",
     }
     assert expected_columns.issubset(observed.columns)
@@ -60,6 +68,10 @@ def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp
     assert ranked.shape[0] == 1
     assert score_column == "q_rate_enrichment_asymptotic_global"
     assert score_kind == "BH-FDR"
+    assert ranked.loc[0, "lineage_total"] == 4
+    assert ranked.loc[0, "support_lineage_count"] == 3
+    assert ranked.loc[0, "support_lineage_fraction"] == 0.75
+    assert ranked.loc[0, "support_lineage_ids"] == "7,11,13"
 
 
 def test_attach_orthogroup_besthits_is_many_to_one_and_orders_columns(tmp_path):
