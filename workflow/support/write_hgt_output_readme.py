@@ -18,6 +18,7 @@ from score_hgt_candidates import (
     taxonomy_rank_column,
     taxonomy_rank_list_column,
 )
+from summarize_hgt_transfer_context import AUX_COLUMNS, EVENT_COLUMNS, IDENTITY_COLUMNS, LINK_COLUMNS, SIDE_COLUMNS
 
 ColumnSpec = Tuple[str, str]
 
@@ -362,6 +363,58 @@ for _side in ("recipient", "donor"):
     ORTHOGROUP_SPECS[_lineage_column] = BRANCH_SPECS[_lineage_column]
 
 
+EVENT_SPECS = {
+    **COMMON_SPECS,
+    "event_id": ("orthogroup:branch_id:event_index。枝内の各transferを区別するID。", "文字列"),
+    "branch_id": BRANCH_SPECS["branch_id"],
+    "node_name": BRANCH_SPECS["node_name"],
+    "event_index": ("元transfer注釈内の1始まりのイベント位置。", "正の整数"),
+    "generax_transfer": ("このイベントだけのGeneRax Y@donor@recipient注釈。", "文字列 / 空欄"),
+    "generax_donor_node": ("GeneRax種系統樹のdonor枝。best-hit proxyとは独立。", "枝名 / 空欄"),
+    "generax_recipient_node": ("GeneRax種系統樹のrecipient枝。", "枝名 / 空欄"),
+    "mapping_status": ("transfer端点と候補枝の全下流gene集合がXMLイベントに一意に一致したか。", "matched / unresolved"),
+    "mapping_reason": ("対応根拠または保留理由。XML欠測・曖昧対応等を合格扱いしません。", "文字列"),
+    "xml_event_id": ("XML内の1始まりclade位置:recipient子位置。", "文字列 / 空欄"),
+    "species_tree_mapping_status": ("XMLの種枝と指定種系統樹の下流種集合の対応状態。", "matched_external_tree / xml_species_tree_only / external_tree_mismatch / 空欄"),
+    "generax_xml_sha256": ("対応に使用したGeneRax XMLのSHA256。", "SHA256 / 空欄"),
+    "stat_branch_sha256": ("支持値に使用したstat_branch表のSHA256。", "SHA256 / 空欄"),
+    "reconciliation_species_tree_sha256": ("XML内spTree要素のSHA256。Newickファイルのハッシュとは別。", "SHA256 / 空欄"),
+    "support_generax_ufboot": ("同じfamily・branch_id・下流gene集合に対応するGeneRax UFBoot。末端・欠測は空欄。", "0--100 / 空欄"),
+    "support_status": ("枝対応・末端・欠測を区別した支持値の状態。", "measured / missing_stat_branch / stat_branch_mismatch / terminal_branch / missing_ufboot"),
+    "support_source": ("支持値の元列。support_unrootedへの自動代用はしません。", "stat_branch.support_generax_ufboot / 空欄"),
+}
+_side_meanings = {
+    "branch_type": ("GeneRax種枝の種類。", "terminal / internal / 空欄"),
+    "evidence_basis": ("内部枝の確認は現存子孫ゲノムによる代理で、祖先scaffoldの復元ではありません。", "extant_terminal_genome / extant_descendant_proxy / 空欄"),
+    "descendant_species": ("XML種枝の全下流種。", "種名の ; 区切り / 空欄"),
+    "context_status": ("継続系統の遺伝子・scaffold情報の可用性。measuredは閾値合格ではありません。", "measured / partial / no_retained_extant_gene / no_mapped_scaffold / 空欄"),
+    "all_descendant_gene_count": ("XMLのこの側の全下流gene数。後続transferで移ったgeneも含む。", "0以上の整数 / 空欄"),
+    "retained_gene_count": ("後続transferを除き、元種枝の子孫種に残るgene数。", "0以上の整数 / 空欄"),
+    "excluded_gene_count": ("後続transfer・種枝外・種不明で集約から外したgene数。", "0以上の整数 / 空欄"),
+    "mapped_gene_count": ("継続系統のうちscaffoldを測定できたgene数。", "0以上の整数 / 空欄"),
+    "scaffold_count": ("重複なしspecies+scaffold数。同一scaffold上のコピーを重複加算しません。", "0以上の整数 / 空欄"),
+    "retained_genes": ("継続系統gene ID。", "gene IDの ; 区切り / 空欄"),
+}
+for _side in ("donor", "recipient"):
+    for _column in SIDE_COLUMNS:
+        _meaning, _range = _side_meanings[_column]
+        EVENT_SPECS[f"{_side}_{_column}"] = (_side + "側。" + _meaning, _range)
+    for _column in CONTEXT_COLUMNS:
+        _meaning, _range = GENE_SPECS[_column]
+        EVENT_SPECS[f"{_side}_{_column}"] = (_side + "側の重複なしspecies+scaffoldの件数から再計算。" + _meaning, _range)
+LINK_SPECS = {c: EVENT_SPECS[c] for c in IDENTITY_COLUMNS}
+LINK_SPECS.update({c: GENE_SPECS[c] for c in (*AUX_COLUMNS, *CONTEXT_COLUMNS,
+                  "host_scaffold_status", "host_scaffold_id", "host_scaffold_locus_id", "host_scaffold_count_unit")})
+LINK_SPECS.update({
+    "side": ("XMLイベントに対する役割。", "donor / recipient"),
+    "gene_id": ("XMLの現存gene ID。", "文字列"),
+    "gene_species": ("XML leafのspeciesLocation。best hitから推定しません。", "種名 / 空欄"),
+    "lineage_status": ("後続transferと元種枝との対応を確認した系統状態。", "retained / transferred_out / outside_species_branch / species_unresolved"),
+    "eligible_for_context": ("継続系統かつ元種枝の子孫種で、側の集約対象となるか。", "True / False"),
+    "context_reason": ("系統除外またはscaffold情報の欠測理由。", "文字列 / 空欄"),
+})
+
+
 TABLES: Sequence[Tuple[str, str, Sequence[str], Dict[str, ColumnSpec]]] = (
     (
         "hgt_branch_candidates.tsv",
@@ -381,6 +434,8 @@ TABLES: Sequence[Tuple[str, str, Sequence[str], Dict[str, ColumnSpec]]] = (
         ORTHOGROUP_OUTPUT_COLUMNS,
         ORTHOGROUP_SPECS,
     ),
+    ("hgt_transfer_events.tsv", "orthogroup × 遺伝子枝 × 個別transferイベント", EVENT_COLUMNS, EVENT_SPECS),
+    ("hgt_transfer_event_genes.tsv", "イベント × donor/recipient側 × 現存遺伝子", LINK_COLUMNS, LINK_SPECS),
 )
 
 
@@ -390,6 +445,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--branch_tsv", required=True, type=str)
     parser.add_argument("--gene_tsv", required=True, type=str)
     parser.add_argument("--orthogroup_tsv", required=True, type=str)
+    parser.add_argument("--event_tsv", default="", type=str)
+    parser.add_argument("--event_gene_tsv", default="", type=str)
     return parser
 
 
@@ -431,7 +488,7 @@ def build_readme(paths: Dict[str, str]) -> str:
     lines = [
         "# GeneGalleon HGT output tables",
         "",
-        "このREADMEは、HGT評価で生成される3つのTSVの列定義です。",
+        "このREADMEは、HGT評価とイベント別scaffold集約で生成されるTSVの列定義です。",
         "",
         "## まず押さえる点",
         "",
@@ -442,6 +499,8 @@ def build_readme(paths: Dict[str, str]) -> str:
         "- `candidate_branch_count` / `hgt_branch_count` は枝数、`candidate_gene_count` / `hgt_gene_count` は遺伝子数です。これらはカウントであり、信頼度スコアではありません。",
         "- taxonomy rankで表を絞り込む場合は、gene表の`recipient_<rank>` / `donor_<rank>`を使ってください。branch・orthogroup表には同じrankの重複なしリスト列があります。",
         "- rank列はtaxonomy DBで該当rankを解決できた場合だけ埋まります。空欄は「そのrankではない」ではなく、taxonomy DB・taxid・lineageのいずれかが不足していることを示します。`recipient_taxonomy` / `donor_taxonomy` は標準列にないnamed rankも含む全lineageです。",
+        "- 既存gene/branch表の`donor_*`分類はbest-hit proxyで、GeneRax transfer元の確定情報ではありません。方向と両側の背景確認には新しいイベント表の`generax_donor_node` / `generax_recipient_node`を使います。",
+        "- イベント表はXMLのdonor継続側とtransferBack側を個別に追跡し、後続transferを経たgeneを背景集約から除外します。内部種枝のscaffold確認は現存子孫による代理確認です。自動閾値・自動除外は適用しません。",
         "- branch表の`representative_*`列は枝内の全gene注釈を置き換えるものではありません。best-hit注釈の最頻組み合わせから1件を抜き出した代表値なので、全遺伝子の詳細はgene表で確認してください。",
         "- plot出力の`hgt_transfer_edges.tsv`は`generax_transfer`の`Y@src@dest`を方向別イベント数へ集約した表です。`hgt_transfer_tree.pdf`は双方向を1本の曲線で示し、各先端側半分の太さがその先端へ向かうイベント数を表します（最小0.35 pt）。遠距離ほど濃い青です。表示は件数順位と距離順位を交互に採用し、既存の逆方向を追加します。`phylogenetic_distance`は端点ノード間の経路長、`distance_metric`はbranch_lengthまたはtopology_edges、`selection_reason`はcount/distance/all/reciprocal/not_displayedです。未対応ペアの距離は欠損です。詳しくはplots/README.mdを参照してください。",
         "",
@@ -452,10 +511,12 @@ def build_readme(paths: Dict[str, str]) -> str:
         "| `hgt_branch_candidates.tsv` | orthogroup × 候補枝 | `candidate_genes` に枝の下流遺伝子を列挙 |",
         "| `hgt_gene_candidates.tsv` | orthogroup × gene_id | `candidate_branch_ids` にその遺伝子を含む候補枝を列挙 |",
         "| `hgt_orthogroup_summary.tsv` | orthogroup | 候補枝数・候補遺伝子数を集約 |",
+        "| `hgt_transfer_events.tsv` | 個別transferイベント | donor/recipient側のscaffold背景を対称に集約 |",
+        "| `hgt_transfer_event_genes.tsv` | イベント × 側 × gene | 継続系統・後続transfer・座位・既存補助証拠を追跡 |",
         "",
     ]
     for filename, grain, expected_columns, specs in TABLES:
-        path = paths[filename]
+        path = paths.get(filename, "")
         actual_columns = read_header(path)
         status = "ヘッダー確認済み" if actual_columns else "ファイル未生成またはヘッダーを読めません"
         lines.extend(
@@ -493,6 +554,8 @@ def main() -> None:
         "hgt_branch_candidates.tsv": args.branch_tsv,
         "hgt_gene_candidates.tsv": args.gene_tsv,
         "hgt_orthogroup_summary.tsv": args.orthogroup_tsv,
+        "hgt_transfer_events.tsv": args.event_tsv,
+        "hgt_transfer_event_genes.tsv": args.event_gene_tsv,
     }
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

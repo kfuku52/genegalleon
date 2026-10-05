@@ -78,6 +78,8 @@ def build_arg_parser():
     )
     parser.add_argument("--branch_tsv", metavar="PATH", required=True, type=str)
     parser.add_argument("--gene_tsv", metavar="PATH", required=True, type=str)
+    parser.add_argument("--transfer_event_tsv", metavar="PATH", default="", type=str,
+                        help="Optional event-resolved or prefiltered transfer table for the species-tree plot.")
     parser.add_argument("--overview_pdf", metavar="PATH", required=True, type=str)
     parser.add_argument("--taxonomy_flow_pdf", metavar="PATH", required=True, type=str)
     parser.add_argument("--taxonomy_dbfile", metavar="PATH", default="", type=str)
@@ -1119,6 +1121,15 @@ def main():
 
     branch_df = safe_read_tsv(args.branch_tsv)
     gene_df = safe_read_tsv(args.gene_tsv)
+    transfer_df = branch_df
+    if args.transfer_event_tsv:
+        if not os.path.isfile(args.transfer_event_tsv):
+            raise ValueError("Transfer-event table was not found")
+        transfer_df = safe_read_tsv(args.transfer_event_tsv)
+        if not {"event_id", "orthogroup", "generax_transfer"}.issubset(transfer_df.columns):
+            raise ValueError("Transfer-event table requires event_id, orthogroup, generax_transfer")
+        if transfer_df["event_id"].isna().any() or transfer_df["event_id"].duplicated().any():
+            raise ValueError("Missing/duplicate transfer event_id")
     resolver = TaxonomyResolver(args.taxonomy_dbfile)
 
     plot_overview(branch_df, args.overview_pdf)
@@ -1135,7 +1146,7 @@ def main():
         else:
             transfer_pdf = args.transfer_tree_pdf
         plot_transfer_tree(
-            branch_df=branch_df,
+            branch_df=transfer_df,
             out_pdf=transfer_pdf,
             species_tree_path=args.species_tree,
             edges_tsv=args.transfer_edges_tsv,

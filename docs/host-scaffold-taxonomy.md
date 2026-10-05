@@ -112,3 +112,45 @@ GFF loci and fallback CDS IDs use separate counting namespaces.
 Numeric internal species-tree names are retained verbatim (including leading
 zeros and long identifiers). Duplicate names or space/underscore alias
 collisions are rejected rather than assigned to an arbitrary branch.
+
+## Event-resolved donor and recipient context
+
+With `run_hgt_candidate_summary=1`, `gg_gene_summary` also writes
+`hgt_transfer_events.tsv` and `hgt_transfer_event_genes.tsv` in the selected
+HGT output directory. Existing branch/gene/orthogroup tables retain their
+schemas and meaning. No threshold or automatic filtering is introduced.
+
+The event table has one row per family × gene-tree branch × transfer-token
+position, including unresolved events. It matches `Y@donor@recipient` and the
+branch's exact descendant-gene set to one GeneRax XML `branchingOut` / child
+`transferBack` pair. Missing or ambiguous matches remain unresolved with
+blank measurements. Raw and ZIP-backed reconciliations use the same logical
+gene-family store reader. XML species-tree branch labels and descendant sets
+are authoritative; a supplied species tree must agree with their named clades.
+
+Each side follows its continuation lineage and excludes later `transferBack`
+descendants and leaves outside the original species branch from aggregation.
+The event-gene table retains these excluded links with their reasons. It joins
+existing gene-level scaffold measurements by family and gene, verifying the
+XML leaf species against the gene's own host. Best-hit-derived `donor_*`
+taxonomy columns in older tables are never used to assign transfer roles.
+
+`donor_host_scaffold_*` and `recipient_host_scaffold_*` pool counts over unique
+`(species, scaffold)` pairs and recalculate fractions; repeated copies on the
+same scaffold do not multiply its background. The existing candidate-free
+background exclusion set is retained. Per-gene measurements, locus identifiers,
+count units, and available auxiliary evidence are preserved in the link table.
+Missing measurements stay blank. `measured` describes availability, not a pass.
+
+Terminal species branches use `extant_terminal_genome` evidence; internal
+branches use `extant_descendant_proxy`. Neither reconstructs ancestral scaffold
+structure or proves physical integration. Event counts, unique genes, and
+unique families must be reported separately. The event's UFBoot is read only
+from the same `stat_branch` family/branch/descendant-set match; terminal branches
+and missing values remain unavailable, with no generic-support substitution.
+
+The native species-tree summary plot consumes the event table when available.
+For a project-filtered figure, pass its selected rows to
+`plot_hgt_summary.py --transfer_event_tsv PATH` alongside the existing
+branch/gene overview inputs. Each row counts as one event; unique families are
+counted separately. The drawing and direction/count conventions are unchanged.

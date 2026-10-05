@@ -37,6 +37,8 @@ default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contaminat
 file_hgt_branch="${dir_hgt}/hgt_branch_candidates.tsv"
 file_hgt_gene="${dir_hgt}/hgt_gene_candidates.tsv"
 file_hgt_orthogroup="${dir_hgt}/hgt_orthogroup_summary.tsv"
+file_hgt_events="${dir_hgt}/hgt_transfer_events.tsv"
+file_hgt_event_genes="${dir_hgt}/hgt_transfer_event_genes.tsv"
 file_hgt_readme="${dir_hgt}/README.md"
 dir_hgt_plot="${dir_hgt}/plots"
 dir_hgt_tree_plot="${dir_hgt}/tree_plot"
@@ -354,6 +356,38 @@ if [[ ${run_hgt_eval} -eq 1 && ${hgt_eval_needs_update} -eq 1 ]]; then
   fi
 fi
 
+hgt_context_provenance_args=()
+gg_artifact_contract_init \
+  hgt_context_provenance_args \
+  "hgt_transfer_context" \
+  "all_gene_families" \
+  "${dir_hgt_provenance}/hgt_transfer_context.json"
+hgt_context_provenance_args+=(
+  --input "branch_candidates=${file_hgt_branch}"
+  --input "gene_candidates=${file_hgt_gene}"
+  --input "context_summarizer=${gg_support_dir}/summarize_hgt_transfer_context.py"
+  --input "scaffold_taxonomy_helper=${gg_support_dir}/scaffold_taxonomy.py"
+  --input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"
+  --input-gene-family-store "reconciliations=${dir_orthogroup}"
+  --output "transfer_events=${file_hgt_events}"
+  --output "transfer_event_genes=${file_hgt_event_genes}"
+  --parameter "schema_version=1"
+)
+gg_artifact_add_input_if_present hgt_context_provenance_args "species_tree" "${hgt_species_tree_path}"
+if [[ ${run_hgt_eval} -eq 1 && -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
+  gg_artifact_prepare_stage hgt_context_needs_update run_hgt_eval "${hgt_context_provenance_args[@]}" || exit $?
+  if [[ ${hgt_context_needs_update} -eq 1 ]]; then
+    python "${gg_support_dir}/summarize_hgt_transfer_context.py" \
+      --branch_tsv "${file_hgt_branch}" \
+      --gene_tsv "${file_hgt_gene}" \
+      --dir_gene_family "${dir_orthogroup}" \
+      --species_tree "${hgt_species_tree_path}" \
+      --event_out "${file_hgt_events}" \
+      --event_gene_out "${file_hgt_event_genes}"
+    gg_artifact_record "${hgt_context_provenance_args[@]}"
+  fi
+fi
+
 hgt_output_readme_run=1
 hgt_output_readme_provenance_args=()
 gg_artifact_contract_init \
@@ -368,9 +402,12 @@ hgt_output_readme_provenance_args+=(
   --input "readme_generator=${gg_support_dir}/write_hgt_output_readme.py"
   --input "table_schema=${gg_support_dir}/score_hgt_candidates.py"
   --input "scaffold_schema=${gg_support_dir}/scaffold_taxonomy.py"
+  --input "transfer_context_schema=${gg_support_dir}/summarize_hgt_transfer_context.py"
   --output "readme=${file_hgt_readme}"
   --parameter "schema_version=2"
 )
+gg_artifact_add_input_if_present hgt_output_readme_provenance_args "transfer_events" "${file_hgt_events}"
+gg_artifact_add_input_if_present hgt_output_readme_provenance_args "transfer_event_genes" "${file_hgt_event_genes}"
 gg_artifact_prepare_stage \
   hgt_output_readme_needs_update \
   hgt_output_readme_run \
@@ -380,7 +417,9 @@ if [[ ${hgt_output_readme_run} -eq 1 && ${hgt_output_readme_needs_update} -eq 1 
     --output "${file_hgt_readme}" \
     --branch_tsv "${file_hgt_branch}" \
     --gene_tsv "${file_hgt_gene}" \
-    --orthogroup_tsv "${file_hgt_orthogroup}"
+    --orthogroup_tsv "${file_hgt_orthogroup}" \
+    --event_tsv "${file_hgt_events}" \
+    --event_gene_tsv "${file_hgt_event_genes}"
   gg_artifact_record "${hgt_output_readme_provenance_args[@]}"
 fi
 
@@ -420,6 +459,7 @@ hgt_summary_plot_provenance_args+=(
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_tree" "${hgt_species_tree_path}"
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait" "${hgt_species_trait_path}"
+gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "transfer_events" "${file_hgt_events}"
 if [[ -n "${hgt_species_trait_path}" ]]; then
   gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_schema" "${hgt_species_trait_path}.schema.json"
   gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_metadata" "${hgt_species_trait_path}.metadata.json"
@@ -437,6 +477,10 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       hgt_taxonomy_dbfile=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
       gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_dbfile}"
     fi
+    hgt_transfer_plot_args=()
+    if [[ -s "${file_hgt_events}" ]]; then
+      hgt_transfer_plot_args+=(--transfer_event_tsv "${file_hgt_events}")
+    fi
     python "${gg_support_dir}/plot_hgt_summary.py" \
       --branch_tsv "${file_hgt_branch}" \
       --gene_tsv "${file_hgt_gene}" \
@@ -449,7 +493,8 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       --transfer_edges_tsv "${file_hgt_transfer_edges}" \
       --species_tree "${hgt_species_tree_path}" \
       --species_trait "${hgt_species_trait_path}" \
-      --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}"
+      --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}" \
+      "${hgt_transfer_plot_args[@]}"
     gg_artifact_record "${hgt_summary_plot_provenance_args[@]}"
   fi
 fi

@@ -13,6 +13,28 @@ import plot_hgt_summary as plotter  # noqa: E402
 SCRIPT_PATH = SUPPORT_DIR / "plot_hgt_summary.py"
 
 
+def test_cli_transfer_event_table_selects_tree_input_without_changing_overview(tmp_path, monkeypatch):
+    branch = tmp_path / "branches.tsv"
+    gene = tmp_path / "genes.tsv"
+    event = tmp_path / "events.tsv"
+    pandas.DataFrame([dict(orthogroup="OG1", branch_id=3, generax_transfer="Y@A@B")]).to_csv(branch, sep="\t", index=False)
+    pandas.DataFrame(columns=["orthogroup", "gene_id"]).to_csv(gene, sep="\t", index=False)
+    pandas.DataFrame([dict(event_id="OG1:3:2", orthogroup="OG1", generax_transfer="Y@C@B")]).to_csv(event, sep="\t", index=False)
+    captured = {}
+    monkeypatch.setattr(plotter, "plot_overview", lambda df, path: captured.update(overview=df))
+    monkeypatch.setattr(plotter, "plot_taxonomy_flow", lambda **kwargs: None)
+    monkeypatch.setattr(plotter, "plot_transfer_tree", lambda **kwargs: captured.update(tree=kwargs["branch_df"]))
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT_PATH), "--branch_tsv", str(branch), "--gene_tsv", str(gene),
+                         "--transfer_event_tsv", str(event), "--overview_pdf", str(tmp_path / "overview.pdf"),
+                         "--taxonomy_flow_pdf", str(tmp_path / "flow.pdf"), "--transfer_tree_pdf", str(tmp_path / "tree.pdf")])
+    plotter.main()
+    assert captured["overview"].iloc[0].generax_transfer == "Y@A@B"
+    assert captured["tree"].iloc[0].generax_transfer == "Y@C@B"
+    pandas.concat([pandas.read_csv(event, sep="\t")] * 2).to_csv(event, sep="\t", index=False)
+    with pytest.raises(ValueError, match="duplicate transfer event_id"):
+        plotter.main()
+
+
 def test_transfer_tree_preserves_numeric_internal_branch_labels(tmp_path):
     path = tmp_path / "tree.nwk"
     path.write_text("((A:1,B:1)42:1,C:2)99;")

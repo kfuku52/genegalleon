@@ -6,6 +6,7 @@ SUPPORT_DIR = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT_DIR))
 
 from score_hgt_candidates import BRANCH_OUTPUT_COLUMNS, GENE_OUTPUT_COLUMNS, ORTHOGROUP_OUTPUT_COLUMNS  # noqa: E402
+from summarize_hgt_transfer_context import EVENT_COLUMNS, LINK_COLUMNS  # noqa: E402
 
 SCRIPT_PATH = SUPPORT_DIR / "write_hgt_output_readme.py"
 
@@ -45,5 +46,5 @@ def test_hgt_output_readme_documents_all_hgt_table_columns(tmp_path: Path):
     assert "# GeneGalleon HGT output tables" in readme_text
     assert "空欄は「陰性」ではなく「未測定・比較不能」" in readme_text
     assert "未定義" not in readme_text
-    for column in BRANCH_OUTPUT_COLUMNS + GENE_OUTPUT_COLUMNS + ORTHOGROUP_OUTPUT_COLUMNS:
+    for column in BRANCH_OUTPUT_COLUMNS + GENE_OUTPUT_COLUMNS + ORTHOGROUP_OUTPUT_COLUMNS + EVENT_COLUMNS + LINK_COLUMNS:
         assert f"| `{column}` |" in readme_text
