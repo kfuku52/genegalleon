@@ -1079,6 +1079,7 @@ run_validate_stage() {
   local gff_files=()
   local genome_files=()
   local set_status=0
+  local validation_reuse_args=()
 
   if [[ ${run_validate_inputs} -ne 1 || ${run_format_inputs} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
@@ -1088,6 +1089,10 @@ run_validate_stage() {
 
   gg_step_start "${task}"
   stage_validate_status="running"
+  if [[ "${input_generation_mode}" == array_finalize ]]; then
+    validation_reuse_args=(--reuse-validation-root "${input_generation_root}"
+      --reuse-task-plan "${task_plan_output}" --format-contract-version "${format_contract_version}")
+  fi
   while IFS= read -r path; do
     [[ -n "${path}" ]] || continue
     cds_files+=( "${path}" )
@@ -1155,6 +1160,7 @@ run_validate_stage() {
       cmd+=(--species-summary "${species_summary_output}")
       cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
       cmd+=(--stats-output "${mapping_stats_file}")
+      cmd+=("${validation_reuse_args[@]}")
       if [[ ${strict} -eq 1 ]]; then
         cmd+=(--strict)
       fi
@@ -1176,6 +1182,7 @@ run_validate_stage() {
       cmd+=(--species-summary "${species_summary_output}")
       cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
       cmd+=(--stats-output "${longest_cds_stats_file}")
+      cmd+=("${validation_reuse_args[@]}")
       echo "Running: ${cmd[*]}"
       if "${cmd[@]}"; then
         :

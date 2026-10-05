@@ -277,6 +277,14 @@ def test_current_csubst_scan_output_imports_into_gene_family_database(tmp_path, 
         max_candidates=0, csubst_nonsyn_recode="no", pdb="none",
     )
     assert len(selected) == (0 if empty else 1)
+    # Optional columns must preserve values throughout scan -> SQL -> summary
+    # -> candidate selection, including when the installed producer adds them.
+    lineage_columns = scan_df.columns.intersection([
+        "lineage_total", "support_lineage_count", "support_lineage_fraction", "support_lineage_ids",
+    ])
+    for column in lineage_columns:
+        assert db_scan[column].tolist() == scan_df[column].tolist()
+        assert selected[column].tolist() == scan_df[column].tolist()
 
 
 def test_scan_core_command_is_analytical_only_and_preserves_audit(tmp_path):

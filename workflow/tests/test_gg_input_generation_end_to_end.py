@@ -1085,6 +1085,84 @@ def _forbid_format_and_validation(fake_bin):
     _write_text(seqkit, f'#!/bin/sh\n[ "$1" != fx2tab ] || exit 93\nexec "{allowed}" "$@"\n', mode=0o755)
 
 
+@pytest.mark.parametrize("proof", ["current", "obsolete", "missing_details", "changed_implementation",
+                                  "different_options", "missing_genome", "changed_summary",
+                                  "changed_raw_genome", "changed_formatted_genome"])
+def test_array_finalize_reuses_only_complete_current_qc(tmp_path, proof):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / "workspace"
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    _run_core(workspace, input_dir, fake_bin, "array_prepare")
+    for index in (1, 2):
+        _run_core(workspace, input_dir, fake_bin, "array_worker", index)
+    root = workspace / "output/input_generation"
+    checkpoint = root / "tmp/stage_checkpoints/validate.Arabidopsis_thaliana.json"
+    if proof == "obsolete":
+        payload = json.loads(checkpoint.read_text())
+        payload["parameters"]["validation_contract_version"] = "obsolete"
+        checkpoint.write_text(json.dumps(payload))
+    elif proof in ("missing_details", "changed_implementation", "different_options"):
+        # Legacy aggregate QC remains valid data, but cannot restore diagnostics.
+        for stage in ("mapping", "longest"):
+            qc = root / f"tmp/task_stats_shards/1.{stage}.json"
+            payload = json.loads(qc.read_text())
+            if proof == "missing_details":
+                payload.pop("species_results")
+            elif proof == "changed_implementation":
+                payload["validation_implementation"] = "0" * 64
+            else:
+                payload["validation_options"]["missing_limit"] = 1
+            qc.write_text(json.dumps(payload))
+        sys.path.insert(0, str(REPO_ROOT / "workflow/support"))
+        from input_generation_array_state import digest
+        receipt = root / "tmp/task_plan.json.completed/1.json"
+        payload = json.loads(receipt.read_text())
+        for path in list(payload["files"]):
+            payload["files"][path] = digest(path)
+        receipt.write_text(json.dumps(payload))
+        payload = json.loads(checkpoint.read_text())
+        for entry in payload["files"].values():
+            entry["sha256"] = digest(entry["path"])
+        checkpoint.write_text(json.dumps(payload))
+    elif proof == "missing_genome":
+        formatted = root / "tmp/stage_checkpoints/format.Arabidopsis_thaliana.json"
+        payload = json.loads(formatted.read_text())
+        del payload["files"]["genome"]
+        formatted.write_text(json.dumps(payload))
+    elif proof == "changed_summary":
+        formatted = root / "tmp/stage_checkpoints/format.Arabidopsis_thaliana.json"
+        payload = json.loads(formatted.read_text())
+        payload["files"]["summary"]["sha256"] = "0" * 64
+        formatted.write_text(json.dumps(payload))
+    elif proof == "changed_raw_genome":
+        path = input_dir / "Arabidopsis_thaliana/Arabidopsis_thaliana.genome.fa"
+        path.write_text(path.read_text() + "A\n")
+    elif proof == "changed_formatted_genome":
+        path = next((root / "species_genome").glob("Arabidopsis_thaliana*"))
+        path.write_bytes(path.read_bytes() + b"changed")
+    result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT,
+                            env=_core_env(workspace, input_dir, fake_bin, "array_finalize"),
+                            capture_output=True, text=True, timeout=180)
+    if proof == "current":
+        assert result.returncode == 0, result.stdout + result.stderr
+        for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+            assert f"Reused verified mapping QC: {species}" in result.stdout
+            assert f"Reused verified ownership QC: {species}" in result.stdout
+        assert json.loads((root / "tmp/gg_input_generation_longest_cds_stats.json").read_text())["species_passed"] == 2
+    elif proof.startswith("changed_") and proof.endswith("genome"):
+        assert result.returncode != 0
+        assert "Missing, stale, or changed worker completion receipts" in result.stdout + result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Reused verified mapping QC: Arabidopsis_thaliana" not in result.stdout
+        assert "Reused verified ownership QC: Arabidopsis_thaliana" not in result.stdout
+        assert "Reused verified mapping QC: Oryza_sativa" in result.stdout
+        assert "Reused verified ownership QC: Oryza_sativa" in result.stdout
+        assert "[Arabidopsis_thaliana] Longest CDS validation OK" in result.stdout
+
+
 @pytest.mark.parametrize("container_namespace", [False, True])
 @pytest.mark.parametrize("validation_proof", ["current", "obsolete", "absent"])
 def test_array_lineage_change_imports_only_current_validation(tmp_path, container_namespace, validation_proof):

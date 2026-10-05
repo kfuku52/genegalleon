@@ -350,6 +350,66 @@ def test_gene_family_id_from_path_recognizes_csubst_scan_suffixes():
     assert mod.gene_family_id_from_path("/tmp/HOG0002.csubst_scan_units.tsv") == "HOG0002"
 
 
+@pytest.mark.parametrize("chunk_size", [None, 1, 100])
+def test_lineage_id_list_reader_preserves_numeric_looking_ids(tmp_path, chunk_size):
+    mod = load_module()
+    infile = tmp_path / "OG0001_csubst_scan.tsv"
+    identifiers = ["001", "9007199254740993", "18446744073709551615"]
+    infile.write_text("support_lineage_ids\tnumber\n" + "".join(
+        f"{identifier}\t{number}\n" for identifier, number in zip(identifiers, ["1", "2.5", "3"], strict=True)
+    ))
+    frames = list(mod.iter_processed_file_chunks(
+        str(infile), ["orthogroup", "support_lineage_ids", "number"], chunksize=chunk_size,
+    ))
+    assert pandas.concat(frames)["support_lineage_ids"].tolist() == identifiers
+    assert pandas.concat(frames)["number"].tolist() == [1.0, 2.5, 3.0]
+
+
+@pytest.mark.parametrize("missing_first", [False, True])
+def test_database_preserves_lineage_id_text_with_mixed_scan_versions(tmp_path, missing_first):
+    stat_tree = tmp_path / "stat_tree"
+    stat_branch = tmp_path / "stat_branch"
+    scan_dir = tmp_path / "csubst_scan"
+    for directory in [stat_tree, stat_branch, scan_dir]:
+        directory.mkdir()
+    stat_tree_frame().to_csv(stat_tree / "OG0001_stat.tree.tsv", sep="\t", index=False)
+    stat_branch_frame().to_csv(stat_branch / "OG0001_stat.branch.tsv", sep="\t", index=False)
+    identifiers = ["001", "9007199254740993", "18446744073709551615"]
+    source = pandas.DataFrame({
+        "trait": ["traitA"] * 3,
+        "state_change": ["1K", "2K", "3K"],
+        "site_rate_categorized": [1.0] * 3,
+        "score_rate_enrichment": [2.0] * 3,
+        "p_rate_enrichment_asymptotic": [0.01] * 3,
+        "q_rate_enrichment_asymptotic_by_trait_match": [0.01] * 3,
+        "scan_inference_status": ["exploratory_asymptotic"] * 3,
+        "scan_rate_testable": [True] * 3,
+        "support_lineage_ids": identifiers,
+    })
+    source.to_csv(scan_dir / "OG0001_csubst_scan.tsv", sep="\t", index=False)
+    if missing_first:
+        source.iloc[[0]].drop(columns="support_lineage_ids").to_csv(
+            scan_dir / "OG0000_csubst_scan.tsv", sep="\t", index=False,
+        )
+    database = tmp_path / "scan.db"
+    result = subprocess.run([
+        sys.executable, str(SCRIPT_PATH), "--overwrite", "1", "--dbpath", str(database),
+        "--dir_stat_tree", str(stat_tree), "--dir_stat_branch", str(stat_branch),
+        "--dir_csubst_aa_change", str(scan_dir), "--ncpu", "1",
+    ], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    with sqlite3.connect(database) as connection:
+        observed = connection.execute(
+            "SELECT support_lineage_ids, typeof(support_lineage_ids) FROM aa_change "
+            "WHERE orthogroup='OG0001' ORDER BY state_change"
+        ).fetchall()
+        assert observed == [(value, "text") for value in identifiers]
+        if missing_first:
+            assert connection.execute(
+                "SELECT support_lineage_ids FROM aa_change WHERE orthogroup='OG0000'"
+            ).fetchone() == (None,)
+
+
 def test_database_builder_computes_analytical_global_bh(tmp_path):
     stat_tree = tmp_path / "stat_tree"
     stat_branch = tmp_path / "stat_branch"
@@ -365,6 +425,10 @@ def test_database_builder_computes_analytical_global_bh(tmp_path):
             {
                 "trait": "traitA",
                 "state_change": "10K",
+                "lineage_total": 4,
+                "support_lineage_count": 3,
+                "support_lineage_fraction": 0.75,
+                "support_lineage_ids": "7,11,13",
                 "site_rate": 0.15,
                 "site_rate_categorized": 2.0,
                 "p_rate_enrichment_asymptotic": 1e-7,
@@ -378,6 +442,10 @@ def test_database_builder_computes_analytical_global_bh(tmp_path):
             {
                 "trait": "traitA",
                 "state_change": "12S",
+                "lineage_total": 4,
+                "support_lineage_count": 1,
+                "support_lineage_fraction": 0.25,
+                "support_lineage_ids": "11",
                 "site_rate": 0.25,
                 "site_rate_categorized": 3.0,
                 "p_rate_enrichment_asymptotic": 0.04,
@@ -431,6 +499,10 @@ def test_database_builder_computes_analytical_global_bh(tmp_path):
         assert {row[1] for row in conn.execute("PRAGMA table_info(aa_change)") if row[1].endswith("_global")} == {"q_rate_enrichment_asymptotic_global"}
         assert conn.execute("SELECT test_count, undefined_count FROM aa_change_fdr_metadata").fetchone() == (2, 0)
         assert [row[0] for row in conn.execute("SELECT q_rate_enrichment_asymptotic_global FROM aa_change ORDER BY state_change")] == pytest.approx([2e-7, 0.04])
+        assert conn.execute(
+            "SELECT lineage_total, support_lineage_count, support_lineage_fraction, "
+            "support_lineage_ids FROM aa_change ORDER BY state_change"
+        ).fetchall() == [(4, 3, 0.75, "7,11,13"), (4, 1, 0.25, "11")]
         aa_df = pandas.read_sql_query(
             "SELECT orthogroup, state_change, site_rate, site_rate_categorized, "
             "q_rate_enrichment_empirical_by_trait_match, p_rate_enrichment_asymptotic, "

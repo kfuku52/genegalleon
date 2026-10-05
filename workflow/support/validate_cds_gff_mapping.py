@@ -19,6 +19,8 @@ if str(SUPPORT_DIR) not in sys.path:
 
 from format_species_annotation.reference import validate_gff_genome_references
 from format_species_constants import KNOWN_ALLOWED_MISSING_CDS_IDS, gff_mapping_fallback_is_tolerable
+from input_validation_reuse import add_arguments as add_reuse_arguments
+from input_validation_reuse import implementation_identity, partition
 from species_labeling import extract_species_label
 
 FASTA_EXTENSIONS = (
@@ -88,6 +90,7 @@ def build_arg_parser():
         action="store_true",
         help="Reject every unexpected CDS/GFF mismatch and malformed CDS phase or UTR annotation.",
     )
+    add_reuse_arguments(parser)
     return parser
 
 
@@ -484,6 +487,9 @@ def main():
         "phase_conflicts_total": 0,
         "utr_conflicts_total": 0,
         "nthreads": nthreads,
+        "species_results": {},
+        "validation_options": {"missing_limit": args.missing_limit},
+        "validation_implementation": implementation_identity() if args.stats_output else "",
     }
 
     tasks = []
@@ -528,6 +534,11 @@ def main():
 
     for task in tasks:
         task["strict"] = bool(args.strict)
+    if species_summary is not None:
+        with species_summary.open(encoding="utf-8", newline="") as handle:
+            summary_rows = {row["species_prefix"]: row for row in csv.DictReader(handle, delimiter="\t")}
+        for task in tasks:
+            task["summary_row"] = summary_rows[task["species_prefix"]]
     if args.species_genome_dir:
         genome_dir = Path(args.species_genome_dir).expanduser().resolve()
         if not genome_dir.is_dir():
@@ -549,7 +560,11 @@ def main():
                 else:
                     task["genome_file"] = matching[0]
 
-    for result in run_validation_tasks(tasks=tasks, missing_limit=args.missing_limit, nthreads=nthreads):
+    reused, pending = partition(tasks, args, parser, "mapping")
+    results = reused + run_validation_tasks(tasks=pending, missing_limit=args.missing_limit, nthreads=nthreads)
+    species_by_index = {task["index"]: task["species_prefix"] for task in tasks}
+    for result in sorted(results, key=lambda item: item["index"]):
+        stats["species_results"][species_by_index[result["index"]]] = result
         if result.get("stats_ready", False):
             stats["species_checked"] += 1
             stats["cds_ids_total"] += int(result["stats"]["cds_ids"])

@@ -22,6 +22,54 @@ VALIDATE_LONGEST_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" /
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
+@pytest.mark.parametrize("strand,expected", [("+", "ATGAAATAA"), ("-", "TTATTTCAT")])
+def test_normalisation_indexes_reference_lengths_once(tmp_path, monkeypatch, strand, expected):
+    load_module()
+    import cds_model_normalisation
+    import pysam
+
+    genome, gff = tmp_path / "genome.fa", tmp_path / "source.gff"
+    genome.write_text(">chr1\nATGAAATAA\n>chr2\nACGT\n")
+    gff.write_text("##gff-version 3\n")
+    real_fasta = pysam.FastaFile
+    calls = {"references": 0, "lengths": 0}
+
+    class CountingFasta:
+        def __init__(self, path):
+            self.delegate = real_fasta(path)
+
+        @property
+        def references(self):
+            calls["references"] += 1
+            return self.delegate.references
+
+        @property
+        def lengths(self):
+            calls["lengths"] += 1
+            return self.delegate.lengths
+
+        def fetch(self, *args):
+            return self.delegate.fetch(*args)
+
+        def close(self):
+            self.delegate.close()
+
+    monkeypatch.setattr(pysam, "FastaFile", CountingFasta)
+    normaliser = cds_model_normalisation.CdsModelNormaliser(
+        {"genome": str(genome), "gff": str(gff)}, tmp_path, "test")
+    row = {"seqid": "chr1", "strand": strand, "start": 0, "end": 9}
+    try:
+        for _ in range(3):
+            assert normaliser.fetch([row]) == expected
+        assert calls == {"references": 1, "lengths": 1}
+        for changed in ({"seqid": "missing"}, {"start": -1}, {"end": 10}, {"end": 0}):
+            with pytest.raises(ValueError, match="outside anchor genome"):
+                normaliser.fetch([{**row, **changed}])
+    finally:
+        normaliser.close()
+    assert not list(tmp_path.glob(".anchor-genome-*"))
+
+
 @pytest.mark.parametrize("provider", ["direct", "local", "coge"])
 def test_structured_coge_headers_keep_gene_identity_under_any_transport(tmp_path, provider):
     module = load_module()

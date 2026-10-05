@@ -105,6 +105,8 @@ Detailed guides are split by topic:
 - [Container Build and Runtime](docs/container-build-and-runtime.md)
 - [Workspace Layout and Data Model](docs/workspace-layout-and-data-model.md)
 - [Input Conventions](docs/input-conventions.md)
+- [Input Validation Performance](docs/input-validation-performance.md)
+- [BUSCO-Filtered Input Export Plans](docs/input-cohort-export.md)
 - [Reliable Input Downloads](docs/download-reliability.md)
 - [Main Stages and What They Do](docs/main-stages-and-what-they-do.md)
 - [Pairwise Genome Synteny](docs/pairwise-synteny.md)

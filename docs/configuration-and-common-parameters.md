@@ -511,6 +511,18 @@ spectrum and P/FDR distribution PDFs. Ranking uses global BH-FDR, breaking ties
 with the rate score. The `min_support_2` filename reflects the default scan
 support; changing discovery support requires rerunning scan.
 
+When present in CSUBST scan output, `lineage_total`, `support_lineage_count`,
+`support_lineage_fraction` and `support_lineage_ids` are retained in summaries,
+candidate TSVs and manifests, and shown in candidate reports. These count
+support grouped by the nonzero IDs in the existing foreground table. Paralogs
+or species assigned to one phenotypic origin can share an ID; the grouped
+count then counts that ID once across disconnected clade units. The total
+includes only IDs with analyzable candidate branches, and the fraction divides
+support by that total. This grouping does not infer phenotypic origins or
+change P/FDR or the unit-based support filters. Older scan tables without these
+columns remain readable. See
+[CSUBST's grouped-support definition](https://github.com/kfuku52/csubst/blob/master/docs/SCAN_INFERENCE.md#support-grouped-by-foreground-lineage-id).
+
 The five `besthit_*` annotations are joined by orthogroup from the annotated
 Orthogroups gene-count table when available. They propagate to the filtered
 support views. Query2family summaries do not require these annotations.

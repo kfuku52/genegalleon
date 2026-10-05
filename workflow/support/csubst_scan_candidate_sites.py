@@ -119,6 +119,10 @@ CANDIDATE_MANIFEST_COLUMNS = [
     "support_unit_count",
     "support_unit_ids",
     "support_branch_ids",
+    "lineage_total",
+    "support_lineage_count",
+    "support_lineage_fraction",
+    "support_lineage_ids",
     "probability_column",
     "probability_value",
     "candidate_tsv",
@@ -435,7 +439,10 @@ def load_threshold_candidates(
     csubst_nonsyn_recode,
     pdb,
 ):
-    frame = pd.read_csv(summary_path, sep="\t", low_memory=False)
+    frame = pd.read_csv(
+        summary_path, sep="\t", low_memory=False,
+        dtype={"support_lineage_ids": "string"},
+    )
     if probability_column not in PROBABILITY_COLUMNS:
         raise ValueError(f"Unsupported scan probability column: {probability_column}. Use a current CSUBST source P/q column.")
     required = [*CANDIDATE_REQUIRED_COLUMNS, probability_column]
@@ -876,6 +883,16 @@ def candidate_annotation_text(row, probability_column, probability_threshold):
         f"Support unit count: {int(row['support_unit_count'])}",
         f"Support unit IDs: {printable_value(row['support_unit_ids'])}",
         f"Support branch IDs: {row['_canonical_support_branch_ids']}",
+    ]
+    for column, label in [
+        ("lineage_total", "Foreground lineage total"),
+        ("support_lineage_count", "Support lineage count (grouped by foreground ID)"),
+        ("support_lineage_fraction", "Support lineage fraction"),
+        ("support_lineage_ids", "Support foreground lineage IDs"),
+    ]:
+        if column in row:
+            lines.append(f"{label}: {printable_value(row[column])}")
+    lines.extend([
         "",
         "Selection",
         "",
@@ -888,7 +905,7 @@ def candidate_annotation_text(row, probability_column, probability_threshold):
         "",
         "Representative best hits",
         "",
-    ]
+    ])
     lines.extend(f"{column}: {printable_value(row.get(column, np.nan))}" for column in BESTHIT_COLUMNS)
     return "\n\n".join(lines)
 
@@ -993,6 +1010,10 @@ def package_candidate(row, package_root, cache_root, probability_column, probabi
         "support_unit_count": int(row["support_unit_count"]),
         "support_unit_ids": row["support_unit_ids"],
         "support_branch_ids": row["_canonical_support_branch_ids"],
+        "lineage_total": row.get("lineage_total", np.nan),
+        "support_lineage_count": row.get("support_lineage_count", np.nan),
+        "support_lineage_fraction": row.get("support_lineage_fraction", np.nan),
+        "support_lineage_ids": row.get("support_lineage_ids", np.nan),
         "probability_column": probability_column,
         "probability_value": row[probability_column],
         "candidate_tsv": f"{candidate_dir_name}/{candidate_tsv.name}",
