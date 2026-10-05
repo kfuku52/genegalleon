@@ -86,3 +86,21 @@ them as disjoint I/O. Fingerprints exclude lock-owner diagnostics. Genome indexe
 already live in task scratch and are reused within a normalizer. Broader index
 sharing should follow measurements of the new indexing phase rather than
 changing independent gene-selection parsers.
+
+On 2026-10-05, comparison with v0.8.132 in the same qualified Docker runtime
+(Linux arm64, Python 3.12.14) used a 1,024 MiB nominal synthetic genome, warm
+filesystem caches, one warmup and three alternating measured trials:
+
+| Operation | Baseline median | Updated median | SHA-256 bytes, baseline → updated |
+| --- | ---: | ---: | ---: |
+| Initial local staging | 1.469 s | 1.014 s | 3,222,271,619 → 2,148,181,556 |
+| Native checkpoint import | 7.602 s | 5.323 s | 12,876,516,732 → 8,584,346,448 |
+
+Both comparisons produced identical fingerprints. Median peak process RSS
+stayed about 66–67 MiB. Hash counters in the import comparison cover the parent
+process, including copy-stream hashes; the unchanged metadata subprocess also
+reads inputs. These results establish approximately 31%/30% lower times for
+these isolated operations, not an HPC or whole-project speedup. Other staging
+phases were similar within run-to-run variation. No production speedup is
+claimed for inventory caching or fs-verity; the qualified test filesystem did
+not provide enabled fs-verity images.

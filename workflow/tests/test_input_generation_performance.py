@@ -40,6 +40,22 @@ def test_prepare_checks_only_source_contract(native_import, monkeypatch):
     assert not (native_import.root / "tmp/task_meta_shards/1.json").exists()
 
 
+def test_worker_import_selects_only_its_task(native_import, capsys):
+    plan = json.loads(native_import.task_plan.read_text())
+    plan["tasks"].append({**plan["tasks"][0], "species_prefix": "Other_species", "species_key": "Other_species"})
+    plan["task_count"] = 2
+    resume.atomic_json(native_import.task_plan, plan)
+    owner_path = native_import.root / ".array-plan.json"
+    owner = json.loads(owner_path.read_text())
+    owner["plan_sha256"] = resume.digest(native_import.task_plan)
+    resume.atomic_json(owner_path, owner)
+    resume.import_stages(native_import)
+    report = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert report["without_verified_format"] == []
+    assert [item["species"] for item in report["imported"]] == ["Example_species"]
+    assert not (native_import.root / "tmp/task_meta_shards/2.json").exists()
+
+
 def test_import_allows_other_readers_but_excludes_same_species_writer(native_import):
     donor_lock = Path(str(native_import.source_plan) + ".locks/1.lock")
     with namespace_lock(native_import.source_root / ".array-phase.lock", exclusive=False):
