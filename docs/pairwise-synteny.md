@@ -17,6 +17,10 @@ CDS translation uses `genetic_code` and the existing per-species
 internal stops, duplicate FASTA IDs, ambiguous ID aliases and conflicting
 annotation coordinates are errors.
 
+The planning CLI's `--representative-map` and `--representative-inputs` paths
+are optional. Omission uses ordinary inputs; an explicit path must still name
+a valid file and retains the existing hash-bound bundle checks.
+
 Create `workspace/input/synteny_pairs.tsv` with these required columns:
 
 ```tsv

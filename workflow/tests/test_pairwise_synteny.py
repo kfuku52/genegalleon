@@ -145,6 +145,45 @@ def test_manual_effective_manifest_binds_admitted_protein_to_raw_phase_aware_cds
     assert paths['cds'].read_bytes() == original
 
 
+@pytest.mark.parametrize('with_map', [False, True])
+def test_plan_cli_omitted_optional_paths_do_not_read_workspace(tmp_path, monkeypatch, with_map):
+    for directory in ('species_protein', 'species_gff'):
+        (tmp_path / 'input' / directory).mkdir(parents=True)
+    species_names = ('Target_species', 'Query_species')
+    for species in species_names:
+        (tmp_path / 'input/species_protein' / f'{species}.protein.fa').write_text(
+            f'>{species}_g1\nMPEPTIDE\n')
+        (tmp_path / 'input/species_gff' / f'{species}.gff3').write_text(
+            '##gff-version 3\n##sequence-region chr1 1 2000000\n'
+            'chr1\ttest\tgene\t1\t100\t.\t+\t.\tID=g1\n')
+    pairs = tmp_path / 'input/pairs.tsv'
+    pairs.write_text('analysis_id\ttarget_species\tquery_species\n'
+                     'pair\tTarget_species\tQuery_species\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         + ''.join(f'{species}\t{species}_g1\t{species}_c1\tt1\tselected\t1\t0.2\tconserved\n'
+                                   for species in species_names))
+    outfile = tmp_path / 'plan.json'
+    options = ['--representative-map', str(selection)] if with_map else []
+    monkeypatch.setattr(synteny, 'tool_identity', lambda: {})
+    assert synteny.main(['plan', '--workspace', str(tmp_path), '--pairs', 'input/pairs.tsv',
+                         '--outfile', str(outfile), *options]) == 0
+    plan = json.loads(outfile.read_text())
+    assert 'representative_inputs' not in plan
+    assert plan['parameters']['isoform_policy'] == ('representative_map' if with_map else 'longest')
+    assert str(tmp_path) not in plan['input_hashes']
+    if with_map:
+        assert plan['pairs'][0]['target']['representative_map'] == str(selection)
+        assert plan['input_hashes'][str(selection)] == synteny.digest(selection)
+    else:
+        assert 'representative_map' not in plan['pairs'][0]['target']
+    saved = outfile.read_bytes()
+    for option in ('--representative-map', '--representative-inputs'):
+        assert synteny.main(['plan', '--workspace', str(tmp_path), '--pairs', 'input/pairs.tsv',
+                             '--outfile', str(outfile), option, str(tmp_path)]) == 1
+        assert outfile.read_bytes() == saved
+
+
 @pytest.mark.parametrize('analysis_view', [False, True])
 def test_plan_uses_hash_bound_effective_inputs_as_one_bundle(tmp_path, monkeypatch, analysis_view):
     fields = ['species', 'cds', 'protein', 'gff', 'genome', 'representative_map', 'genetic_code',
@@ -193,6 +232,13 @@ def test_plan_uses_hash_bound_effective_inputs_as_one_bundle(tmp_path, monkeypat
     assert plan['representative_inputs'] == str(manifest)
     assert str(manifest) in plan['input_hashes']
     assert 'representative_inputs=' + str(manifest) in synteny.contract_args(plan, 'analysis')
+    # The CLI must retain the same verified bundle when the independent map
+    # option is omitted; omission must not become Path('.') during parsing.
+    outfile = tmp_path / 'cli-plan.json'
+    assert synteny.main(['plan', '--workspace', str(tmp_path), '--pairs', str(pairs),
+                         '--representative-inputs', str(manifest), '--formats', 'svg',
+                         '--outfile', str(outfile)]) == 0
+    assert json.loads(outfile.read_text()) == plan
     # A user-authored external manifest has no published receipt authority;
     # its explicit metadata remains editable while every file stays hash-bound.
     external = selected / 'external.tsv'
