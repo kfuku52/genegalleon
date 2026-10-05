@@ -255,6 +255,17 @@ gg_bind_native_array_sources() {
   gg_sync_container_bind_envs || return 1
 }
 
+gg_bind_requested_project_root() {
+  local project_root=${GG_CONTAINER_PROJECT_ROOT_BIND%%:*}
+  if [[ "${project_root}" != /* || "${GG_CONTAINER_PROJECT_ROOT_BIND}" != "${project_root}:${project_root}" || \
+        "${project_root}" == *','* || "${project_root}" == *'/../'* || "${project_root}" == *'/./'* || \
+        ! -d "${project_root}" || -L "${project_root}" ]]; then
+    echo "set_singularity_command: invalid GG_CONTAINER_PROJECT_ROOT_BIND" >&2
+    return 1
+  fi
+  gg_add_container_bind_mount "${GG_CONTAINER_PROJECT_ROOT_BIND}"
+}
+
 gg_site_container_shell_command() {
   local runtime_bin=$1
   local out_var=${2:-}
@@ -267,14 +278,7 @@ gg_site_container_shell_command() {
     audrey1)
       echo "${echo_header}site profile = audrey1"
       if [[ -n "${GG_CONTAINER_PROJECT_ROOT_BIND:-}" ]]; then
-        local project_root=${GG_CONTAINER_PROJECT_ROOT_BIND%%:*}
-        if [[ "${project_root}" != /* || "${GG_CONTAINER_PROJECT_ROOT_BIND}" != "${project_root}:${project_root}" || \
-              "${project_root}" == *','* || "${project_root}" == *'/../'* || "${project_root}" == *'/./'* || \
-              ! -d "${project_root}" || -L "${project_root}" ]]; then
-          echo "${echo_header}invalid GG_CONTAINER_PROJECT_ROOT_BIND" >&2
-          return 1
-        fi
-        gg_add_container_bind_mount "${GG_CONTAINER_PROJECT_ROOT_BIND}" || return 1
+        gg_bind_requested_project_root || return 1
         gg_bind_native_array_sources source_bind_args || return 1
         gg_set_command_array "${out_var}" "${runtime_bin}" exec --contain "${source_bind_args[@]}" || return 1
       else
@@ -299,7 +303,11 @@ gg_site_container_shell_command() {
       if [[ -e /home/geadmin/UGER/uger/spool ]]; then
         gg_add_container_bind_mount "/home/geadmin/UGER/uger/spool:/home/geadmin/UGER/uger/spool"
       fi
-      gg_set_command_array "${out_var}" "${runtime_bin}" exec || return 1
+      if [[ -n "${GG_CONTAINER_PROJECT_ROOT_BIND:-}" ]]; then
+        gg_bind_requested_project_root || return 1
+        gg_bind_native_array_sources source_bind_args || return 1
+      fi
+      gg_set_command_array "${out_var}" "${runtime_bin}" exec "${source_bind_args[@]}" || return 1
       ;;
     nhr-fau)
       echo "${echo_header}site profile = nhr-fau"

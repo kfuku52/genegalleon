@@ -12,10 +12,10 @@ from workflow.support.local_input_manifest_binds import source_files
 UTIL = WORKFLOW_DIR / "support" / "gg_util.sh"
 
 
-def run_site_command(tmp_path: Path, bind: str, setup: str = "") -> subprocess.CompletedProcess[str]:
+def run_site_command(tmp_path: Path, bind: str, setup: str = "", site: str = "audrey1") -> subprocess.CompletedProcess[str]:
     command = (
         f"source {shlex.quote(str(UTIL))}; "
-        "hostname() { printf 'audrey1\\n'; }; "
+        f"export GG_SITE_PROFILE={shlex.quote(site)}; "
         f"export GG_CONTAINER_PROJECT_ROOT_BIND={shlex.quote(bind)}; "
         + setup + "gg_site_container_shell_command singularity singularity_command; "
         "printf 'command=%s\\n' \"${singularity_command[*]}\"; "
@@ -40,21 +40,24 @@ def test_audrey1_isolates_shm_and_keeps_project_paths_visible(tmp_path):
     assert f"bind={root}:{root}" in result.stdout
 
 
-def test_audrey1_rejects_unreviewed_bind(tmp_path):
+@pytest.mark.parametrize("site", ["audrey1", "nig"])
+def test_sites_reject_unreviewed_bind(tmp_path, site):
     root = tmp_path / "project"
     root.mkdir()
-    result = run_site_command(tmp_path, f"{root}:/unrelated")
+    result = run_site_command(tmp_path, f"{root}:/unrelated", site=site)
     assert result.returncode != 0
     assert "invalid GG_CONTAINER_PROJECT_ROOT_BIND" in result.stderr
 
 
-def test_audrey1_existing_unbound_runs_keep_previous_runtime(tmp_path):
-    result = run_site_command(tmp_path, "")
+@pytest.mark.parametrize("site", ["audrey1", "nig"])
+def test_sites_existing_unbound_runs_keep_previous_runtime(tmp_path, site):
+    result = run_site_command(tmp_path, "", site=site)
     assert result.returncode == 0, result.stderr
     assert "command=singularity exec\n" in result.stdout
 
 
-def test_native_array_mounts_only_declared_sources_read_only(tmp_path):
+@pytest.mark.parametrize("site", ["audrey1", "nig"])
+def test_native_array_mounts_only_declared_sources_read_only(tmp_path, site):
     root = tmp_path / "project"
     root.mkdir()
     workspace = root / "work"
@@ -66,12 +69,13 @@ def test_native_array_mounts_only_declared_sources_read_only(tmp_path):
     manifest.write_text("provider\tid\tcds_url\nlocal\tTest_species\t" + external.as_uri() + "\n")
     setup = (f"gg_workspace_dir={shlex.quote(str(workspace))}; "
              "export GG_INPUT_INPUT_GENERATION_MODE=array_prepare GG_INPUT_DOWNLOAD_MANIFEST=/workspace/download.tsv; ")
-    result = run_site_command(tmp_path, f"{root}:{root}", setup)
+    result = run_site_command(tmp_path, f"{root}:{root}", setup, site=site)
     assert result.returncode == 0, result.stderr
+    assert f"{root}:{root}" in result.stdout
     assert f"{external}:{external}:ro" in result.stdout
     assert "unrelated.fa" not in result.stdout
     external.unlink()
-    result = run_site_command(tmp_path, f"{root}:{root}", setup)
+    result = run_site_command(tmp_path, f"{root}:{root}", setup, site=site)
     assert result.returncode != 0
     assert "No such file" in result.stderr
 
@@ -114,7 +118,8 @@ def test_local_binds_reject_directory_and_remote_file_authority(tmp_path):
         source_files(manifest, tmp_path)
 
 
-def test_native_source_bind_overrides_existing_write_access(tmp_path):
+@pytest.mark.parametrize("site", ["audrey1", "nig"])
+def test_native_source_bind_overrides_existing_write_access(tmp_path, site):
     root = tmp_path / "project"
     root.mkdir()
     source = tmp_path / "source.fa"
@@ -124,7 +129,7 @@ def test_native_source_bind_overrides_existing_write_access(tmp_path):
     setup = (f"gg_workspace_dir={shlex.quote(str(root))}; "
              f"export SINGULARITY_BINDPATH={shlex.quote(str(source)+':'+str(source)+':rw')}; "
              "export GG_INPUT_INPUT_GENERATION_MODE=array_prepare GG_INPUT_DOWNLOAD_MANIFEST=/workspace/download.tsv; ")
-    result = run_site_command(tmp_path, f"{root}:{root}", setup)
+    result = run_site_command(tmp_path, f"{root}:{root}", setup, site=site)
     assert result.returncode == 0, result.stderr
     assert f"{source}:{source}:ro" in result.stdout
     assert f"{source}:{source}:rw" not in result.stdout

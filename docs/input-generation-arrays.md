@@ -274,6 +274,8 @@ absolute project directory on both sides of the bind runs Apptainer with
 preserving project-local absolute paths. The project root must contain all
 absolute inputs and shared resources needed inside the container; existing
 launches without this bind retain their previous runtime behavior.
+On NIG, the same explicit bind keeps sibling project inputs visible while
+preserving the site's existing scheduler and package mounts.
 
 ## Shared database request limits
 
@@ -356,7 +358,7 @@ CDS-only species can run validation and BUSCO with `require_cds=1` and
 mapping QC is produced and receipt-bound only when that task supplies a GFF.
 A supplied or required GFF that is missing still fails validation.
 
-For contained native arrays on audrey1, explicitly declared local CDS, GFF,
+For native arrays with this project bind on audrey1 or NIG, explicitly declared local CDS, GFF,
 GenBank/EMBL and genome files are mounted individually read-only. Prepare reads
 the explicit download manifest; workers and finalize read the frozen task plan.
 Files may live outside the workspace/project without exposing their surrounding
