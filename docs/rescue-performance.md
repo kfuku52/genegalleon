@@ -54,6 +54,17 @@ optimized 16.20–20.57 s), so the ratio describes this bounded workload and is
 not a predicted full-workflow speedup. The Python parent's maximum RSS was
 about 132 MiB, excluding miniprot and the shared index build.
 
+The full Ancistrocladus equivalence check also passed: all 41,149 interval GFFs
+and the expanded whole-genome evidence for 332,914 original queries (148,189
+unique proteins) matched the original 0.8.124 producer receipts. The combined
+interval SHA256 was
+`3757ba950e54dbf5b3e4cf2544459956e98f3803f88b7b19cd6b378f3579dbd1`;
+the full genome GFF SHA256 was
+`d7867cb9640187dedc132cd2ddf76c7fe0faeab9f3ce0fe09a15508f5e417136`.
+Frozen source files and receipts were rechecked unchanged afterward. This was
+one optimized run without a legacy rerun or warmup, so its timings are diagnostic
+and do not establish an additional controlled speedup ratio.
+
 ## Reproducible bounded benchmark
 
 Use the repository runtime wrapper with completed real rescue evidence. It
