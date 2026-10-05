@@ -10,6 +10,11 @@ CDS/GFF corrections and an adjacent `*.cds-normalisation.json` audit while
 preserving acquired sources; see [input conventions](input-conventions.md).
 The rescue flag controls synteny searches for additional models.
 
+Rescue also exports advisory start/terminal/copy evidence. Optional target RNA,
+RepeatMasker and indexed DNA BAM evidence can be audited separately, including
+for frozen older runs; see [model evidence](gene-model-evidence.md). Review flags
+do not silently change model admission or claim experimentally confirmed function.
+
 ```mermaid
 flowchart LR
   A[Formatted CDS, GFF, genomes] --> B[Initial BUSCO and initial tree]

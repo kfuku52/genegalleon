@@ -37,6 +37,7 @@ try:
     from input_generation_array_state import atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from rescue_anchor_admission import prepare_rescue_genome
+    from rescue_model_quality import model_quality
     from species_labeling import extract_species_label
 except ImportError:
     from .cds_model_normalisation import CdsModelNormaliser
@@ -45,6 +46,7 @@ except ImportError:
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .rescue_anchor_admission import prepare_rescue_genome
+    from .rescue_model_quality import model_quality
     from .species_labeling import extract_species_label
 
 SCHEMA = 1
@@ -125,6 +127,7 @@ def identities():
     versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
+    versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
     return versions
 
 
@@ -984,7 +987,16 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         # Recheck sources before publication, including the target genome.
         verify_sources(plan, [name], ["genome", "fasta", "gff"])
         models = consolidate(validated, existing, name)
+        for model in models:
+            model["quality_evidence"] = model_quality(model, source["genetic_code"])
         atomic_json(tmp / "models.json", models)
+        write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
+                  "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags"),
+                  [(m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
+                    m["quality_evidence"]["terminal_alignment"]["n_aligned"],
+                    m["quality_evidence"]["terminal_alignment"]["c_aligned"],
+                    ",".join(m["quality_evidence"]["donor_species"]), ",".join(m["quality_evidence"]["flags"]))
+                   for m in models])
         detected = {m["query"] for m in validated}
         audit = [{"candidate": m["query"], "donor_gene": m["evidence"]["query"], "status": m["status"],
                   "reasons": ",".join(m["problems"]), "coverage": m["coverage"], "identity": m["identity"],
@@ -1142,6 +1154,10 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                               for k in range(b - a)) if alignment else 0
                 checked["coverage"] = aligned / len(reference)
                 checked["identity"] = matches / aligned if aligned else 0
+                if aligned:
+                    checked.update(query_start=int(alignment.aligned[0][0][0]),
+                                   query_end=int(alignment.aligned[0][-1][1]), query_length=len(reference))
+                    checked["query_span_coverage"] = (checked["query_end"] - checked["query_start"]) / len(reference)
                 if checked["coverage"] < params["minimum_coverage"]:
                     checked["problems"].append("low_coverage")
                 if checked["identity"] < params["minimum_identity"]:
