@@ -60,6 +60,9 @@ The default private inventory cache is `downloads/version_inventory`. Set
 by the executing user with mode 700. Different bindings or relevant environments
 collect separately. Only successful inventories are cached, their content hash
 is checked on reuse, and collection failures still fail the entrypoint.
+Cache initialization serializes concurrent creators and explicitly restricts
+new directories when an NFS server overrides the requested creation mode.
+Existing caches with unsafe permissions remain an error.
 Docker inventories use the currently resolved immutable image ID and collect
 with that ID, so replacing a tag invalidates its cached inventory.
 

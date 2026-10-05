@@ -5,6 +5,7 @@ import json
 import os
 import struct
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -220,6 +221,92 @@ def test_cache_rejects_tampering_and_symlink(tmp_path):
     alias = tmp_path / "alias.log"
     alias.symlink_to(log)
     assert not identity.cache_ready(alias, "fixture")
+
+
+def test_private_cache_restricts_new_directory_despite_server_mkdir_mode(tmp_path, monkeypatch):
+    root = tmp_path / 'versions'
+    mkdir = Path.mkdir
+    def server_mode(path, *args, **kwargs):
+        result = mkdir(path, *args, **kwargs)
+        if path == root:
+            path.chmod(0o777)
+        return result
+    monkeypatch.setattr(Path, 'mkdir', server_mode)
+    identity.private_cache(root)
+    assert root.stat().st_mode & 0o777 == 0o700
+    identity.private_cache(root)
+
+
+def test_private_cache_concurrent_creators_observe_only_private_cache(tmp_path, monkeypatch):
+    root = tmp_path / 'versions'
+    mkdir = Path.mkdir
+    def server_mode(path, *args, **kwargs):
+        result = mkdir(path, *args, **kwargs)
+        if path == root:
+            path.chmod(0o777)
+        return result
+    monkeypatch.setattr(Path, 'mkdir', server_mode)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: identity.private_cache(root), range(4)))
+    assert root.stat().st_mode & 0o777 == 0o700
+
+
+def test_private_cache_keeps_rejecting_existing_unsafe_directory(tmp_path):
+    root = tmp_path / 'versions'
+    root.mkdir()
+    root.chmod(0o777)
+    (root / 'untrusted.log').write_text('untrusted')
+    with pytest.raises(ValueError, match='mode 700'):
+        identity.private_cache(root)
+    assert root.stat().st_mode & 0o777 == 0o777
+    assert (root / 'untrusted.log').read_text() == 'untrusted'
+
+
+def test_private_cache_rejects_symlink_and_regular_file(tmp_path):
+    target = tmp_path / 'target'
+    target.mkdir()
+    target.chmod(0o755)
+    alias = tmp_path / 'alias'
+    alias.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match='Symlinked'):
+        identity.private_cache(alias)
+    assert target.stat().st_mode & 0o777 == 0o755
+    regular = tmp_path / 'file'
+    regular.write_text('fixture')
+    with pytest.raises(OSError):
+        identity.private_cache(regular)
+
+
+def test_private_cache_refuses_symlink_substitution_before_descriptor_open(tmp_path, monkeypatch):
+    root = tmp_path / 'versions'
+    target = tmp_path / 'target'
+    target.mkdir()
+    target.chmod(0o755)
+    mkdir = Path.mkdir
+    def replaced(path, *args, **kwargs):
+        result = mkdir(path, *args, **kwargs)
+        if path == root:
+            path.rmdir()
+            path.symlink_to(target, target_is_directory=True)
+        return result
+    monkeypatch.setattr(Path, 'mkdir', replaced)
+    with pytest.raises(OSError):
+        identity.private_cache(root)
+    assert target.stat().st_mode & 0o777 == 0o755
+
+
+def test_private_cache_does_not_certify_ineffective_permission_change(tmp_path, monkeypatch):
+    root = tmp_path / 'versions'
+    mkdir = Path.mkdir
+    def server_mode(path, *args, **kwargs):
+        result = mkdir(path, *args, **kwargs)
+        if path == root:
+            path.chmod(0o777)
+        return result
+    monkeypatch.setattr(Path, 'mkdir', server_mode)
+    monkeypatch.setattr(identity.os, 'fchmod', lambda *args: None)
+    with pytest.raises(ValueError, match='mode 700'):
+        identity.private_cache(root)
 
 
 def test_performance_records_are_optional_and_advisory(tmp_path, monkeypatch):

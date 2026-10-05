@@ -14,6 +14,7 @@ from pathlib import Path
 
 from input_generation_array_state import _stat_identity, atomic_json, digest
 from performance_metrics import measure
+from shared_namespace_lock import namespace_lock
 
 
 def image_identity(path):
@@ -67,10 +68,30 @@ def cache_ready(path, key):
 def private_cache(root):
     if root.is_symlink():
         raise ValueError("Symlinked version cache directory")
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    info = root.stat()
-    if info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError("Version cache must be owned by this user with mode 700")
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with namespace_lock(root.with_name(root.name + '.initialize.lock'), exclusive=True):
+        try:
+            root.mkdir(mode=0o700)
+            created = True
+        except FileExistsError:
+            created = False
+        # NFS servers can override mkdir's requested mode. Restrict only a new,
+        # owned directory through its no-follow descriptor; unsafe existing
+        # caches remain an error. Serialize creation before other workers read it.
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid != os.getuid():
+                raise ValueError("Version cache must be owned by this user with mode 700")
+            if created:
+                os.fchmod(descriptor, 0o700)
+            current = os.fstat(descriptor)
+            path_info = root.lstat()
+            if ((current.st_dev, current.st_ino) != (path_info.st_dev, path_info.st_ino)
+                    or not stat.S_ISDIR(path_info.st_mode) or current.st_mode & 0o077):
+                raise ValueError("Version cache must be owned by this user with mode 700")
+        finally:
+            os.close(descriptor)
 
 
 def main():
