@@ -5677,3 +5677,78 @@ def test_invalid_legacy_gff_cache_is_never_silently_reused(tmp_path, reuse):
         assert result["status"] == "write"
         with gzip.open(cached, "rt") as handle:
             assert "Name=SULTR4%3B1" in handle.read()
+
+
+@pytest.mark.parametrize("transport", ["plain", "gz", "bz2", "tar", "tar-single"])
+@pytest.mark.parametrize("compression", ["seqkit", "python"])
+def test_streamed_genome_matches_record_writer_across_transport_and_edge_cases(tmp_path, monkeypatch, transport, compression):
+    import bz2
+    import re
+    module = load_module()
+    from format_species_annotation.common import extract_header_tag_value, first_token, iter_fasta_records
+    from format_species_annotation.organelle import gff_organelle_seqids
+    from format_species_writers import apply_common_replacements, write_fasta_records_gzip
+    if compression == "python":
+        import format_species_writers
+        monkeypatch.setattr(format_species_writers.shutil, "which", lambda _: None)
+    else:
+        assert shutil.which("seqkit"), "Qualified runtime must contain real seqkit"
+    contents = ("ignored before header\r\n>chr:1 description\r\na c\tgt\u2003nß\r\n\r\n"
+                ">cp chloroplast\nacgt\n>other OriSeqID=cp;\nACGT\n>lcl|cp\nACGT\n"
+                ">empty\n>\nacg\n>duplicate\nACT\n>duplicate\nGTT\n"
+                ">long " + "header " * 150000 + "\n" + "a cgt\t" * 400000 + "\n>last\ntt")
+    raw = contents.encode()
+    path = tmp_path / ("Species_one.genome.fa" + {"plain": "", "gz": ".gz", "bz2": ".bz2", "tar": ".tar.gz", "tar-single": ".tar.gz"}[transport])
+    if transport.startswith("tar"):
+        with tarfile.open(path, "w:gz") as archive:
+            member = tarfile.TarInfo("source.fa" if transport == "tar" else "single.data")
+            member.size = len(raw)
+            archive.addfile(member, io.BytesIO(raw))
+            if transport == "tar":
+                member = tarfile.TarInfo("ignored.txt")
+                member.size = 1
+                archive.addfile(member, io.BytesIO(b"x"))
+                member = tarfile.TarInfo("second.fasta")
+                second = b">second\nacgt\n"
+                member.size = len(second)
+                archive.addfile(member, io.BytesIO(second))
+    else:
+        path.write_bytes(gzip.compress(raw) if transport == "gz" else bz2.compress(raw) if transport == "bz2" else raw)
+    gff = tmp_path / "source.gff"
+    gff.write_text("cp\tsrc\tregion\t1\t4\t.\t+\t.\tID=cp;genome=chloroplast\n")
+    organelles = gff_organelle_seqids(gff)
+    expected_records = []
+    for header, sequence in iter_fasta_records(path):
+        record_id = first_token(apply_common_replacements(header)) or "unnamed"
+        original = extract_header_tag_value(header, "OriSeqID").rstrip(";")
+        if record_id in organelles or record_id.removeprefix("lcl|") in organelles or apply_common_replacements(original) in organelles:
+            continue
+        expected_records.append((record_id, re.sub(r"\s+", "", sequence).upper()))
+    out = tmp_path / "out"
+    out.mkdir()
+    expected = out / "expected.fa.gz"
+    write_fasta_records_gzip(expected, expected_records)
+    result = module.format_genome({"species_prefix": "Species_one", "genome_path": path, "gff_path": gff}, out, True, False)
+    with gzip.open(expected, "rb") as before, gzip.open(result["output_path"], "rb") as after:
+        assert before.read() == after.read()
+    assert result["written"] == len(expected_records)
+
+
+@pytest.mark.parametrize("compression", ["seqkit", "python"])
+def test_streamed_genome_read_failure_preserves_published_output(tmp_path, monkeypatch, compression):
+    module = load_module()
+    if compression == "python":
+        import format_species_writers
+        monkeypatch.setattr(format_species_writers.shutil, "which", lambda _: None)
+    path = tmp_path / "Species_one.genome.fa"
+    path.write_text(">chr1\nATGAAA\n")
+    out = tmp_path / "out"
+    out.mkdir()
+    task = {"species_prefix": "Species_one", "genome_path": path}
+    result = module.format_genome(task, out, True, False)
+    published = result["output_path"].read_bytes()
+    path.write_bytes(b">chr1\n" + b"ACGT\n" * 300000 + b"\xff")
+    with pytest.raises(UnicodeDecodeError):
+        module.format_genome(task, out, True, False)
+    assert result["output_path"].read_bytes() == published
+    assert list(out.iterdir()) == [result["output_path"]]

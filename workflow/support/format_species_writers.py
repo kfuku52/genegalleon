@@ -190,11 +190,16 @@ def write_fasta_record(handle, record_id, sequence, width=80):
 
 
 def write_fasta_records_gzip(output_path, records):
-    seqkit_path = shutil.which("seqkit")
     def writer(handle):
         for record_id, sequence in records:
             write_fasta_record(handle, record_id, sequence)
 
+    write_fasta_stream_gzip(output_path, writer)
+
+
+def write_fasta_stream_gzip(output_path, writer):
+    """Stream FASTA text through the existing atomic compression backend."""
+    seqkit_path = shutil.which("seqkit")
     if seqkit_path is None:
         write_text_output_directly(output_path, writer)
         return

@@ -40,7 +40,6 @@ from format_species_annotations import (
     gff_identity_dbxref_values,
     gff_repair_audit_path,
     gff_repair_mode_for_task,
-    iter_fasta_records,
     iter_genome_records_from_gbff,
     iter_gff_lines_from_gbff,
     iter_task_cds_records,
@@ -74,6 +73,7 @@ from format_species_taxonomy import invalid_species_key_error, normalize_species
 from format_species_writers import (
     apply_common_replacements,
     write_fasta_records_gzip,
+    write_fasta_stream_gzip,
     write_gff_lines_gzip,
 )
 from gff_attribute_syntax import syntax_audit, validate_gff, validated_lines
@@ -975,25 +975,51 @@ def format_genome(task, output_dir, overwrite, dry_run):
 
     written = 0
 
+    def write_genome_stream(handle):
+        nonlocal written
+        from format_species_annotation.reference import genome_text_handles
+        organelles = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
+        for source in genome_text_handles(genome_path):
+            retained, tail, line_start = False, "", True
+            for chunk in iter(lambda source=source: source.readline(1024 * 1024), ""):
+                if line_start and chunk.startswith(">"):
+                    if tail:
+                        handle.write(tail + "\n")
+                        tail = ""
+                    # Headers are normally short; preserve the legacy parser's
+                    # semantics even for a header spanning bounded read chunks.
+                    pieces = [chunk]
+                    while not pieces[-1].endswith("\n") and len(pieces[-1]) == 1024 * 1024:
+                        part = source.readline(1024 * 1024)
+                        if not part:
+                            break
+                        pieces.append(part)
+                    header = "".join(pieces)[1:].rstrip("\n\r")
+                    record_id = first_token(apply_common_replacements(header)) or "unnamed"
+                    original_id = extract_header_tag_value(header, "OriSeqID").rstrip(";")
+                    retained = not (record_id in organelles or record_id.removeprefix("lcl|") in organelles
+                                    or apply_common_replacements(original_id) in organelles)
+                    if retained:
+                        handle.write(">" + record_id + "\n")
+                        written += 1
+                    line_start = pieces[-1].endswith("\n")
+                    continue
+                if retained:
+                    sequence = tail + "".join(chunk.split()).upper()
+                    end = len(sequence) // 80 * 80
+                    if end:
+                        handle.write("\n".join(sequence[pos:pos + 80] for pos in range(0, end, 80)) + "\n")
+                    tail = sequence[end:]
+                line_start = chunk.endswith("\n")
+            if tail:
+                handle.write(tail + "\n")
+
+    if genome_path is not None:
+        write_fasta_stream_gzip(output_path, write_genome_stream)
+        return {"status": "write", "output_path": output_path, "written": written}
+
     def iter_genome_output_records():
         nonlocal written
-        organelle_seqids = gff_organelle_seqids(task["gff_path"]) if task.get("gff_path") is not None else ()
-        if genome_path is not None:
-            for header, sequence in iter_fasta_records(genome_path):
-                record_id = first_token(apply_common_replacements(header))
-                if record_id == "":
-                    record_id = "unnamed"
-                original_id = extract_header_tag_value(header, "OriSeqID").rstrip(";")
-                if (
-                    record_id in organelle_seqids
-                    or record_id.removeprefix("lcl|") in organelle_seqids
-                    or apply_common_replacements(original_id) in organelle_seqids
-                ):
-                    continue
-                seq = re.sub(r"\s+", "", sequence).upper()
-                written += 1
-                yield record_id, seq
-            return
         for record_id, sequence in iter_genome_records_from_gbff(gbff_path):
             written += 1
             yield record_id, sequence
