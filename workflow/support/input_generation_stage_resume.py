@@ -199,6 +199,60 @@ def import_fx2tab(source_root, target_root, species, source_cds, target_cds, sou
     subprocess.run(command, check=True)
 
 
+def import_busco(source_root, target_root, species, source_cds, target_cds, source_settings, target_settings):
+    """Reuse only the identical lineage/mode contract and freshly verified CDS."""
+    if (source_settings.get("run_species_busco") != "1" or target_settings.get("run_species_busco") != "1"
+            or source_settings.get("busco_lineage") != target_settings.get("busco_lineage")):
+        return False
+    manifest = source_root / "artifact_provenance" / f"busco.{species}.json"
+    if not manifest.is_file():
+        return False
+    batch = FreshDigestBatch()
+    batch.read([manifest, source_root / "tmp/busco_lineage.resolved.txt", target_root / "tmp/busco_lineage.resolved.txt"])
+    source_lineage = (source_root / "tmp/busco_lineage.resolved.txt").read_text().strip()
+    target_lineage = (target_root / "tmp/busco_lineage.resolved.txt").read_text().strip()
+    if not source_lineage or source_lineage != target_lineage:
+        return False
+    expected = dict(busco_lineage_request=target_settings["busco_lineage"], busco_lineage_resolved=target_lineage,
+                    busco_mode="transcriptome", evalue="1e-03", limit="20")
+    payload = json.loads(manifest.read_text())
+    if (payload.get("schema_version") != 1 or payload.get("step") != "input_generation_species_busco"
+            or payload.get("family_id") != species or payload.get("parameters") != expected):
+        raise ValueError("Unsupported BUSCO provenance: " + species)
+    inputs, outputs = payload["inputs"], payload["outputs"]
+    if ([item["label"] for item in inputs] != ["species_cds"]
+            or {item["label"] for item in outputs} != {"busco_full", "busco_short"} or len(outputs) != 2):
+        raise ValueError("Unsupported BUSCO artifact roles: " + species)
+    sources = {label: Path(source_settings["species_busco_" + label + "_dir"]) /
+               (species + ".busco." + ("full.tsv" if label == "full" else "short.txt")) for label in ("full", "short")}
+    destinations = {label: Path(target_settings["species_busco_" + label + "_dir"]) / path.name
+                    for label, path in sources.items()}
+    reject_output_overlap(destinations.values(), [*sources.values(), source_cds, target_cds])
+    hashes = batch.read([source_cds, target_cds, *sources.values()])
+    output_hashes = {item["label"]: item["sha256"] for item in outputs}
+    if (hashes[str(source_cds)] != inputs[0]["sha256"] or hashes[str(target_cds)] != inputs[0]["sha256"]
+            or any(hashes[str(path)] != output_hashes["busco_" + label] for label, path in sources.items())):
+        raise ValueError("BUSCO output/input differs from its successful provenance: " + species)
+    batch.check()
+    for label, path in sources.items():
+        copy_atomic(path, destinations[label], expected_sha256=hashes[str(path)])
+    batch.check()
+    if any(digest(destinations[label]) != hashes[str(path)] for label, path in sources.items()):
+        raise ValueError("BUSCO output changed during import: " + species)
+    command = [sys.executable, str(Path(__file__).with_name("artifact_provenance.py")), "record",
+               "--manifest", str(target_root / "artifact_provenance" / manifest.name),
+               "--step", "input_generation_species_busco", "--family-id", species,
+               "--logical-root", str(target_root.parent / ".gg_global_artifacts"),
+               "--workspace-root", str(target_root.parent.parent), "--input", "species_cds=" + str(target_cds)]
+    for label, path in destinations.items():
+        command.extend(["--output", "busco_" + label + "=" + str(path)])
+    for key, value in expected.items():
+        command.extend(["--parameter", key + "=" + value])
+    subprocess.run(command, check=True)
+    batch.check()
+    return True
+
+
 def import_stages(args):
     with measure("stage_import"):
         if getattr(args, "source_only", False):
@@ -384,6 +438,15 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
         validation_files = verified_snapshot(source_plan, old_index, source_root, "validate",
                                              args.format_contract_version, namespace_root=source_namespace,
                                              batch=before_copy)
+    if validation_files is None and "gff" in old_paths and "genome" in old_paths:
+        from format_species_annotation.reference import validate_gff_genome_references
+        try:
+            validate_gff_genome_references(old_paths["gff"], old_paths["genome"])
+        except ValueError:
+            # A completed formatter is not proof that its reference contract
+            # passed. Reformat this failed input under the fixed runtime.
+            skipped.append(species)
+            return
     if validation_files is not None:
         _, _, _, validation_paths = context(args.task_plan, index, args.root, "validate")
         reject_output_overlap([validation_paths[label] for label in ("ownership_qc", "mapping_qc")
@@ -438,7 +501,9 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     after_copy.check()
     import_fx2tab(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
                   source_settings, target_settings)
-    imported.append({"species": species, "validation": validation_files is not None})
+    busco = import_busco(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
+                         source_settings, target_settings)
+    imported.append({"species": species, "validation": validation_files is not None, "busco": busco})
 
 
 def main():

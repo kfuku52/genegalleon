@@ -10,10 +10,13 @@ import re
 import shlex
 from pathlib import Path
 
-GFF_ATTRIBUTE_SYNTAX_VERSION = 2
+GFF_ATTRIBUTE_SYNTAX_VERSION = 3
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
+# Chemical linkage lists in publisher descriptions, e.g. endo-1,3;1,4-beta.
+# Restrict repair to this complete lexical pattern, never arbitrary orphan text.
+LINKAGE_CONTINUATION = re.compile(r"\d+,\d+-[A-Za-z][^;=]*")
 
 
 def file_sha256(path):
@@ -68,6 +71,11 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
             previous_key = field.strip().split("=", 1)[0]
         else:
             pattern = None
+            if (previous_key == "description" and re.search(r"\d+,\d+$", repaired[-1])
+                    and LINKAGE_CONTINUATION.fullmatch(field)):
+                repaired[-1] = repaired[-1].replace(",", "%2C") + "%3B" + field.replace(",", "%2C")
+                previous_key = None
+                continue
             if source.lower() == "funannotate":
                 if feature.lower() == "gene" and previous_key == "Name":
                     pattern = NAME_CONTINUATION
@@ -96,6 +104,7 @@ def normalise_line(line, path, line_number, changes):
     if parts[8] == before:
         return line
     reason = ("canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"
+              else "escaped_description_linkage_semicolon" if re.search(r"description=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
               else "escaped_funannotate_metadata_semicolon")
     changes.append({"source_line": line_number, "before": before, "after": parts[8], "reason": reason})
     return "\t".join(parts) + line[len(line.rstrip("\r\n")):]

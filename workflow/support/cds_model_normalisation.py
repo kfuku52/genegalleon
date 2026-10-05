@@ -83,7 +83,7 @@ def ambiguity_to_n(sequence):
 
 class CdsModelNormaliser:
     def __init__(self, source, directory, side, *, genome_records=None, reference_mapping=None,
-                 gff_lines=None, attribute_parser=None):
+                 gff_lines=None, attribute_parser=None, coding_only=False):
         self.source, self.directory, self.side = source, Path(directory), side
         self.genome_records, self.reference_mapping = genome_records, reference_mapping
         self.corrected = {}
@@ -91,6 +91,7 @@ class CdsModelNormaliser:
         self.exons, self.features = defaultdict(list), []
         self.lookup, self.genome, self.scratch = None, None, None
         self.reference_lengths = None
+        wanted, retained = set(), set()
         with (contextlib.nullcontext(gff_lines()) if gff_lines is not None else open_text(Path(source["gff"]))) as handle:
             for line in handle:
                 if line.strip() == "##FASTA":
@@ -100,6 +101,8 @@ class CdsModelNormaliser:
                 fields = line.rstrip("\n\r").split("\t")
                 if len(fields) != 9:
                     raise ValueError("Invalid GFF row in anchor admission")
+                if coding_only and fields[2] not in {"CDS", "exon"}:
+                    continue
                 attr = (attribute_parser or attributes)(fields[8])
                 row = {"seqid": fields[0], "source": fields[1], "feature": fields[2], "start": int(fields[3]) - 1,
                        "end": int(fields[4]), "strand": fields[6], "phase": fields[7], "attributes": attr,
@@ -107,10 +110,44 @@ class CdsModelNormaliser:
                 self.features.append(row)
                 if attr.get("ID"):
                     self.nodes[attr["ID"]].append(row)
+                wanted.update(filter(None, attr.get("Parent", "").split(",")))
                 if fields[2] in {"CDS", "exon"}:
                     parents = attr.get("Parent", attr.get("transcript_id", attr.get("ID", ""))).split(",")
                     for parent in filter(None, parents):
                         (self.models if fields[2] == "CDS" else self.exons)[parent].append(row)
+        # Formatting uses CDS models and their declared ancestors, not millions
+        # of independent alignment features. Resolve the full ancestor closure
+        # with bounded passes, including unusual feature types and duplicate IDs.
+        # The default retains all features for arbitrary anchor mappings.
+        while coding_only and wanted - retained:
+            pending = wanted - retained
+            discovered = set()
+            with (contextlib.nullcontext(gff_lines()) if gff_lines is not None else open_text(Path(source["gff"]))) as handle:
+                for line in handle:
+                    if line.strip() == "##FASTA":
+                        break
+                    if not line.strip() or line.startswith("#"):
+                        continue
+                    fields = line.rstrip("\n\r").split("\t")
+                    if len(fields) != 9:
+                        raise ValueError("Invalid GFF row in anchor admission")
+                    attr = (attribute_parser or attributes)(fields[8])
+                    identifier = attr.get("ID")
+                    if identifier not in pending:
+                        continue
+                    discovered.add(identifier)
+                    wanted.update(filter(None, attr.get("Parent", "").split(",")))
+                    if fields[2] in {"CDS", "exon"}:
+                        continue  # Already retained during the initial pass.
+                    row = {"seqid": fields[0], "source": fields[1], "feature": fields[2], "start": int(fields[3]) - 1,
+                           "end": int(fields[4]), "strand": fields[6], "phase": fields[7], "attributes": attr,
+                           "source_line": line.rstrip("\r\n")}
+                    self.features.append(row)
+                    self.nodes[identifier].append(row)
+            # Missing parents retain the default resolver's behavior; never spin.
+            retained.update(pending)
+            if not discovered:
+                break
         self.votes = Counter()
         for blocks in self.models.values():
             blocks.sort(key=lambda row: row["start"], reverse=blocks[0]["strand"] == "-")

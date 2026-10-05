@@ -33,11 +33,11 @@ from .organelle import (
     gff_organelle_seqids,
     iter_non_organelle_gff_lines,
 )
-from .reference import gff_reference_mapping, normalize_gff_reference_lines
+from .reference import genome_reference_index, gff_reference_mapping, normalize_gff_reference_lines
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 17
+GFF_REPAIR_VERSION = 18
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -383,8 +383,54 @@ def canonicalize_coge_cds_attributes(parts, features, names):
     return ";".join(rewritten), changed
 
 
+def gene_reference_repairs(gff_path, genome_path):
+    """Repair only out-of-bounds gene references with unanimous exact RNA spans.
+
+    Keep all coordinates and identifiers. An in-bounds disagreement, duplicate
+    gene ID, different strands/spans or missing reference remains unrepaired and
+    must fail the normal reference validator.
+    """
+    if genome_path is None:
+        return {}
+    genes, children = defaultdict(list), defaultdict(list)
+    for line in iter_non_organelle_gff_lines(gff_path):
+        parts = line.rstrip("\r\n").split("\t")
+        if line.startswith("#") or len(parts) != 9 or parts[2].lower() not in {"gene", "mrna", "rna", "transcript"}:
+            continue
+        attrs = parse_gff_attributes(parts[8])
+        if parts[2].lower() == "gene":
+            for identifier in attrs.get("ID", ()):
+                genes[identifier].append(parts)
+        else:
+            for parent in attrs.get("Parent", ()):
+                children[parent].append(parts)
+    index = genome_reference_index(genome_path)
+    repairs = {}
+    for identifier, rows in genes.items():
+        if len(rows) != 1 or not children[identifier]:
+            continue
+        gene = rows[0]
+        start, end = int(gene[3]), int(gene[4])
+        if gene[0] not in index or 1 <= start <= end <= index[gene[0]]:
+            continue
+        rnas = children[identifier]
+        axes = {(rna[0], rna[6]) for rna in rnas}
+        if len(axes) != 1:
+            continue
+        seqid, strand = next(iter(axes))
+        if (strand != gene[6] or strand not in {"+", "-"} or seqid == gene[0]
+                or seqid not in index or not 1 <= start <= end <= index[seqid]
+                or min(int(rna[3]) for rna in rnas) != start
+                or max(int(rna[4]) for rna in rnas) != end
+                or any(not start <= int(rna[3]) <= int(rna[4]) <= end for rna in rnas)):
+            continue
+        repairs[identifier] = {"from_seqid": gene[0], "to_seqid": seqid, "start": start, "end": end,
+                               "reason": "out_of_bounds_gene_reference_with_exact_RNA_span"}
+    return repairs
+
+
 def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False, rescued_genes=None,
-                            cds_updates=None, attribute_changes=None):
+                            cds_updates=None, attribute_changes=None, gene_references=None):
     coge_features, coge_names = {}, {}
     duplicate_features = duplicate_coge_model_ids(gff_path) if coge else set()
     for line in normalise_gff_lines(iter_non_organelle_gff_lines(
@@ -399,6 +445,12 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             yield line
             continue
         feature_type = parts[2].strip().lower()
+        if feature_type == "gene" and gene_references:
+            identifiers = parse_gff_attributes(parts[8]).get("ID", ())
+            repairs = [gene_references[identifier] for identifier in identifiers if identifier in gene_references]
+            if len(repairs) == 1:
+                parts[0] = repairs[0]["to_seqid"]
+                line = "\t".join(parts) + newline
         coge_changes = 0
         rescued_changes = 0
         if rescued_genes:
@@ -458,6 +510,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     overlap_inputs = source_overlap_input_fingerprints(source_task)
     reference_mapping = gff_reference_mapping(gff_path, (source_task or {}).get("genome_path"))
+    gene_references = gene_reference_repairs(gff_path, (source_task or {}).get("genome_path")) if mode != "off" else {}
     normalisation = paired_audit(source_task, cds_path) if source_task else None
     cds_updates = (normalisation or {}).get("gff_updates", {})
     confirmed_overlaps, overlap_audit = audit_source_overlaps(gff_path, source_task or {})
@@ -516,12 +569,14 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             rescued_genes=rescued_genes,
             cds_updates=cds_updates,
             attribute_changes=attribute_changes,
+            gene_references=gene_references,
         ), reference_mapping), output_path),
     )
     status = (
         "repaired"
         if (
             len(attribute_changes) > 0
+            or len(gene_references) > 0
             or len(cds_updates) > 0
             or len(plan["id_mapping"]) > 0
             or counters["changed_values"] > 0
@@ -541,6 +596,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "source_overlap_input_fingerprints": overlap_inputs,
         "source_overlap": overlap_audit,
         "genome_reference_mapping": reference_mapping,
+        "gene_reference_repairs": gene_references,
         "cds_normalisation": {"updated_cds_rows": len(cds_updates), "counts": (normalisation or {}).get("counts", {})},
         "cds_normalisation_fingerprint": file_fingerprint(cds_normalisation_audit_path(cds_path)) if normalisation else None,
         "cds_fingerprint": cds_fingerprint,

@@ -987,7 +987,9 @@ def gff_sequence_identifier(value):
     return value if value else numpy.nan
 
 
-def read_gff_table(gff_path):
+def read_gff_table(gff_path, *, coding_only=False):
+    if coding_only:
+        return read_coding_gff_table(gff_path)
     try:
         return pandas.read_csv(
             gff_path,
@@ -1014,6 +1016,53 @@ def read_gff_table(gff_path):
         return pandas.DataFrame(rows)
 
 
+def read_coding_gff_table(gff_path):
+    """Exclude independent alignment evidence from CDS mapping, keeping ancestors.
+
+    GFF output itself stays intact. Explicit parent/Derives_from links, including
+    links through alignment features, are resolved to closure before tabulation.
+    """
+    import tempfile
+    alignment_types = {"match", "match_part", "protein_match", "nucleotide_match", "translated_nucleotide_match"}
+    opener = gzip.open if str(gff_path).endswith(".gz") else open
+    known, wanted = set(), set()
+    with tempfile.TemporaryDirectory(prefix="gg-coding-gff-") as directory:
+        filtered = os.path.join(directory, "coding.gff")
+        with opener(gff_path, "rt", encoding="utf-8") as source, open(filtered, "w", encoding="utf-8") as target:
+            for line in source:
+                if line.startswith("##FASTA"):
+                    break
+                parts = line.rstrip("\r\n").split("\t")
+                if line.startswith("#") or len(parts) < 9:
+                    target.write(line)
+                    continue
+                if parts[2].lower() in alignment_types:
+                    continue
+                target.write(line)
+                attrs = _parse_gff_attributes(parts[8])
+                known.update(attrs.get("ID", ()))
+                for key in ("Parent", "Derives_from", "derives_from"):
+                    wanted.update(attrs.get(key, ()))
+        inspected = set()
+        while wanted - known - inspected:
+            pending = wanted - known - inspected
+            with opener(gff_path, "rt", encoding="utf-8") as source, open(filtered, "a", encoding="utf-8") as target:
+                for line in source:
+                    if line.startswith("##FASTA"):
+                        break
+                    parts = line.rstrip("\r\n").split("\t")
+                    if line.startswith("#") or len(parts) < 9 or parts[2].lower() not in alignment_types:
+                        continue
+                    attrs = _parse_gff_attributes(parts[8])
+                    if not set(attrs.get("ID", ())) & pending:
+                        continue
+                    target.write(line)
+                    for key in ("Parent", "Derives_from", "derives_from"):
+                        wanted.update(attrs.get(key, ()))
+            inspected.update(pending)
+        return read_gff_table(filtered)
+
+
 def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict"):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
@@ -1024,7 +1073,7 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         csv.field_size_limit(sys.maxsize)
     except OverflowError:
         csv.field_size_limit(2147483647)
-    gff = read_gff_table(gff_path)
+    gff = read_gff_table(gff_path, coding_only=feature == "CDS")
     if gff.shape[1] < len(gff_cols):
         sys.stderr.write("Skipping malformed GFF with fewer than 9 columns: {}\n".format(gff_path))
         return pandas.DataFrame(columns=out_cols)

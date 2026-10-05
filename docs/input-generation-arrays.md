@@ -236,8 +236,12 @@ The importer retains the original records and verifies their content hashes.
 Validation is reused only from a valid checkpoint for the current validation
 contract. A completed legacy worker can supply verified formatting, but its
 completion receipt alone does not certify updated source-gene checks.
-BUSCO results are not imported: the new lineage is assessed normally and
-produces new BUSCO provenance. The donor workspace must be inactive; its phase
+BUSCO results are imported only when the requested and resolved lineages, mode,
+E-value and limit agree and fresh CDS/output hashes match the successful donor
+provenance. The new workspace receives its own native artifact contract. A changed
+lineage runs BUSCO normally. A format checkpoint without successful reference
+validation cannot import an invalid genome/GFF pair; that species is reformatted.
+The donor workspace must be inactive; its phase
 lock prevents copying during workers, prepare or finalize.
 
 Completed older workers can be imported when their native completion receipt
@@ -341,6 +345,16 @@ normal admission, release, crash behavior, and output locking across the target
 nodes before increasing compute concurrency.
 
 See the [implementation review and validation limits](input-generation-array-review.md).
+
+Formatting retains CDS/exon models and their complete declared ancestor closure
+instead of independent alignment evidence in the CDS normalizer. CDS mapping
+likewise excludes independent alignment features from its in-memory table while
+retaining referenced ancestors. The published GFF keeps those source features.
+Safe GFF repair can correct an out-of-bounds gene contig only from a unique gene
+and unanimous child RNA contig/strand with the exact same span on a valid genome
+reference. Ambiguous, duplicate, in-bounds conflicting and unsupported models
+remain subject to the unchanged strict reference validator. Chemical linkage
+semicolons in description metadata are percent-escaped with an audit trail.
 
 Shared worker lock acquisition retries transient reader-registration contention for up to 30 seconds; exclusive phase and duplicate-worker locks remain nonblocking. A timeout leaves existing ownership untouched.
 

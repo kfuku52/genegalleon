@@ -128,7 +128,7 @@ def iter_normalised_cds_records(task, state=None):
     normaliser = CdsModelNormaliser(
         {"species": task["species_prefix"], "gff": str(task["gff_path"]), "genome": str(task["genome_path"]), "genetic_code": code},
         Path(task.get("_normalisation_scratch", tempfile.gettempdir())), "format", genome_records=genome_records,
-        reference_mapping=reference_mapping, attribute_parser=attribute_parser, gff_lines=gff_lines)
+        reference_mapping=reference_mapping, attribute_parser=attribute_parser, gff_lines=gff_lines, coding_only=True)
     index = task.get("_gff_cds_grouping_index")
     if index is None:
         from .grouping import build_gff_cds_grouping_index
