@@ -37,7 +37,7 @@ from .reference import genome_reference_index, gff_reference_mapping, normalize_
 from .source_identity import source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 18
+GFF_REPAIR_VERSION = 19
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -384,15 +384,15 @@ def canonicalize_coge_cds_attributes(parts, features, names):
 
 
 def gene_reference_repairs(gff_path, genome_path):
-    """Repair only out-of-bounds gene references with unanimous exact RNA spans.
+    """Repair parent seqids with unanimous exact RNA and coding-child evidence.
 
-    Keep all coordinates and identifiers. An in-bounds disagreement, duplicate
-    gene ID, different strands/spans or missing reference remains unrepaired and
-    must fail the normal reference validator.
+    Keep all coordinates and identifiers. Duplicate IDs, different strands/spans,
+    missing CDS evidence or conflicting exon/CDS axes remain unrepaired and must
+    fail the normal reference validator. Bounds alone do not identify a locus.
     """
     if genome_path is None:
         return {}
-    genes, children = defaultdict(list), defaultdict(list)
+    genes, children, rna_ids = defaultdict(list), defaultdict(list), defaultdict(list)
     for line in iter_non_organelle_gff_lines(gff_path):
         parts = line.rstrip("\r\n").split("\t")
         if line.startswith("#") or len(parts) != 9 or parts[2].lower() not in {"gene", "mrna", "rna", "transcript"}:
@@ -402,6 +402,8 @@ def gene_reference_repairs(gff_path, genome_path):
             for identifier in attrs.get("ID", ()):
                 genes[identifier].append(parts)
         else:
+            for identifier in attrs.get("ID", ()):
+                rna_ids[identifier].append(parts)
             for parent in attrs.get("Parent", ()):
                 children[parent].append(parts)
     index = genome_reference_index(genome_path)
@@ -411,7 +413,7 @@ def gene_reference_repairs(gff_path, genome_path):
             continue
         gene = rows[0]
         start, end = int(gene[3]), int(gene[4])
-        if gene[0] not in index or 1 <= start <= end <= index[gene[0]]:
+        if gene[0] not in index:
             continue
         rnas = children[identifier]
         axes = {(rna[0], rna[6]) for rna in rnas}
@@ -424,8 +426,32 @@ def gene_reference_repairs(gff_path, genome_path):
                 or max(int(rna[4]) for rna in rnas) != end
                 or any(not start <= int(rna[3]) <= int(rna[4]) <= end for rna in rnas)):
             continue
+        ids = [parse_gff_attributes(rna[8]).get("ID", ()) for rna in rnas]
+        if (any(len(values) != 1 or len(rna_ids[values[0]]) != 1 for values in ids)
+                or any(parse_gff_attributes(rna[8]).get("Parent", ()) != (identifier,) for rna in rnas)):
+            continue
         repairs[identifier] = {"from_seqid": gene[0], "to_seqid": seqid, "start": start, "end": end,
-                               "reason": "out_of_bounds_gene_reference_with_exact_RNA_span"}
+                               "reason": "gene_reference_with_exact_RNA_and_coding_children",
+                               "rna_ids": [values[0] for values in ids]}
+    if not repairs:
+        return repairs
+    candidates = {rna: identifier for identifier, item in repairs.items() for rna in item["rna_ids"]}
+    coding, blocked = set(), set()
+    for line in iter_non_organelle_gff_lines(gff_path):
+        parts = line.rstrip("\r\n").split("\t")
+        if line.startswith("#") or len(parts) != 9 or parts[2].lower() not in {"cds", "exon", "five_prime_utr", "three_prime_utr"}:
+            continue
+        for parent in parse_gff_attributes(parts[8]).get("Parent", ()):
+            if parent not in candidates:
+                continue
+            rna = rna_ids[parent][0]
+            if ((parts[0], parts[6]) != (rna[0], rna[6])
+                    or not int(rna[3]) <= int(parts[3]) <= int(parts[4]) <= int(rna[4])):
+                blocked.add(candidates[parent])
+            if parts[2].lower() == "cds":
+                coding.add(parent)
+    repairs = {identifier: item for identifier, item in repairs.items()
+               if identifier not in blocked and all(rna in coding for rna in item["rna_ids"])}
     return repairs
 
 

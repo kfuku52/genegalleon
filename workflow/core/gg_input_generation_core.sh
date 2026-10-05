@@ -73,6 +73,9 @@ task_plan_output="${task_plan_output:-}"
 resume_from_task_plan="${resume_from_task_plan:-}"
 resume_from_task_plan_sha256="${resume_from_task_plan_sha256:-}"
 resume_from_input_generation_root="${resume_from_input_generation_root:-}"
+resume_fallback_task_plan="${resume_fallback_task_plan:-}"
+resume_fallback_task_plan_sha256="${resume_fallback_task_plan_sha256:-}"
+resume_fallback_input_generation_root="${resume_fallback_input_generation_root:-}"
 trait_plan="${trait_plan:-}"
 trait_database_sources="${trait_database_sources:-}"
 trait_download_dir="${trait_download_dir:-}"
@@ -2098,17 +2101,22 @@ run_array_prepare_mode() {
     echo "Warning: Failed to prepare ETE taxonomy DB before array workers." >&2
   fi
   python "${gg_support_dir}/performance_metrics.py" elapsed --phase taxonomy_dataset_prepare --started "${phase_started}" --status "${taxonomy_dataset_status}"
-  if [[ -n "${resume_from_task_plan}" ]]; then
-    [[ -n "${resume_from_task_plan_sha256}" && -n "${resume_from_input_generation_root}" ]] || {
-      echo "Stage resume requires the donor plan SHA-256 and input-generation output root." >&2
-      exit 1
-    }
-    python "${gg_support_dir}/input_generation_stage_resume.py" check-source \
-      --task-plan "${task_plan_output}" --root "${input_generation_root}" \
-    --format-contract-version "${format_contract_version}" \
-      --source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}" \
-      --source-root "${resume_from_input_generation_root}"
-  fi
+  local resume_prefix donor_plan donor_sha donor_root
+  for resume_prefix in resume_from resume_fallback; do
+    donor_plan=${resume_prefix}_task_plan
+    donor_sha=${resume_prefix}_task_plan_sha256
+    donor_root=${resume_prefix}_input_generation_root
+    if [[ -n "${!donor_plan}${!donor_sha}${!donor_root}" ]]; then
+      [[ -n "${resume_from_task_plan}" && -n "${!donor_plan}" && -n "${!donor_sha}" && -n "${!donor_root}" ]] || {
+        echo "Stage resume requires each donor plan, SHA-256 and output root." >&2
+        exit 1
+      }
+      python "${gg_support_dir}/input_generation_stage_resume.py" check-source \
+        --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+        --format-contract-version "${format_contract_version}" \
+        --source-plan "${!donor_plan}" --source-plan-sha256 "${!donor_sha}" --source-root "${!donor_root}"
+    fi
+  done
   local prepared_cmd=(python "${gg_support_dir}/input_generation_array_state.py" prepared --task-plan "${task_plan_output}")
   if [[ -n "${download_manifest}" ]]; then
     local staged_file
@@ -2178,6 +2186,11 @@ run_array_worker_mode() {
   if [[ -n "${resume_from_task_plan}" && ${overwrite} -ne 1 ]]; then
     describe_cmd+=(--source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}"
       --source-root "${resume_from_input_generation_root}")
+    if [[ -n "${resume_fallback_task_plan}" ]]; then
+      describe_cmd+=(--fallback-source-plan "${resume_fallback_task_plan}"
+        --fallback-source-plan-sha256 "${resume_fallback_task_plan_sha256}"
+        --fallback-source-root "${resume_fallback_input_generation_root}")
+    fi
   fi
   if ! "${describe_cmd[@]}"; then
     stage_format_status="failed"
@@ -2589,11 +2602,16 @@ if [[ "${input_generation_mode}" == array_* ]]; then
   done
   array_settings_cmd+=(--setting "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
   # Do not add empty resume fields to old immutable settings documents.
-  if [[ -n "${resume_from_task_plan}${resume_from_task_plan_sha256}${resume_from_input_generation_root}" ]]; then
-    for array_setting in resume_from_task_plan resume_from_task_plan_sha256 resume_from_input_generation_root; do
-      array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
-    done
-  fi
+  for resume_prefix in resume_from resume_fallback; do
+    donor_plan=${resume_prefix}_task_plan
+    donor_sha=${resume_prefix}_task_plan_sha256
+    donor_root=${resume_prefix}_input_generation_root
+    if [[ -n "${!donor_plan}${!donor_sha}${!donor_root}" ]]; then
+      for array_setting in "${donor_plan}" "${donor_sha}" "${donor_root}"; do
+        array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
+      done
+    fi
+  done
   [[ ${require_cds} -ne 1 ]] || array_settings_cmd+=(--setting "require_cds=1")
   [[ ${require_gff} -ne 1 ]] || array_settings_cmd+=(--setting "require_gff=1")
   [[ ${require_genome} -ne 1 ]] || array_settings_cmd+=(--setting "require_genome=1")

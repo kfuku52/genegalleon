@@ -164,6 +164,10 @@ checks reference IDs, coordinate bounds, and explicit gene/RNA parent reference
 and strand consistency whenever a genome is supplied. A disagreement remains
 an error even when each feature's coordinates fit its own reference sequence.
 Reference normalization preserves gene/transcript identifiers and coordinates.
+Safe gene-seqid repair requires a unique gene and RNA IDs, unanimous RNA
+reference/strand with the exact original gene span, and supporting CDS plus
+consistent exon/UTR coordinates on that reference. Missing or conflicting
+evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
 
@@ -594,6 +598,9 @@ Notes:
 - formatting escapes recoverable unescaped semicolons in funannotate gene `Name`
   and mRNA `product` numeric suffixes (for example `SULTR4;1` becomes
   `SULTR4%3B1`). This runs independently of gene-ID repair and rescue flags.
+  The same audit covers chemical linkage lists, nucleosome assembly protein
+  suffixes and structured UniProt description continuations. Unknown orphan
+  attributes still fail.
   Existing escapes, parent lists, IDs and coordinates are retained. The repair
   audit records each changed source line and attribute, with source/output SHA256.
   Unrecoverable attribute fragments fail with file/line context; rescue planning

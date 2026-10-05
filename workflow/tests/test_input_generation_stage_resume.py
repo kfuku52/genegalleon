@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 import input_generation_stage_resume as resume
-from shared_namespace_lock import namespace_lock
+from shared_namespace_lock import NamespaceLockError, acquire, namespace_lock, release
 
 
 @pytest.fixture
@@ -105,13 +105,67 @@ def test_outputs_alone_do_not_prove_validation(checkpoint):
     assert not resume.valid(plan, 1, root, "validate", "10")
 
 
-def test_import_cannot_copy_from_active_donor(checkpoint, tmp_path):
+def test_import_cannot_copy_from_active_donor(checkpoint, tmp_path, monkeypatch):
     plan, root, _ = checkpoint
     args = argparse.Namespace(source_plan=plan, source_root=root, task_plan=tmp_path / "new_plan.json",
                               root=tmp_path / "new_root", source_plan_sha256=resume.digest(plan))
+    monkeypatch.setattr(resume, "PHASE_READER_TIMEOUT", 0.05)
     with namespace_lock(root / ".array-phase.lock", exclusive=True):
-        with pytest.raises(ValueError, match="active workers"):
+        with pytest.raises(NamespaceLockError, match="Timed out"):
             resume.import_stages(args)
+
+
+@pytest.mark.parametrize("side", ["source", "target"])
+def test_import_retries_shared_registration_gate_without_stealing(checkpoint, tmp_path, monkeypatch, side):
+    import threading
+
+    plan, root, _ = checkpoint
+    args = argparse.Namespace(source_plan=plan, source_root=root, task_plan=tmp_path / "new_plan.json",
+                              root=tmp_path / "new_root", source_plan_sha256="0" * 64)
+    path = (root if side == "source" else args.root) / ".array-phase.lock"
+    owner = acquire(path, exclusive=True)
+    monkeypatch.setattr(resume, "PHASE_READER_TIMEOUT", 2)
+    timer = threading.Timer(0.1, release, args=(path, owner), kwargs={"exclusive": True})
+    timer.start()
+    try:
+        with pytest.raises(ValueError, match="sealed resume SHA-256"):
+            resume.import_stages(args)
+    finally:
+        timer.join()
+    with namespace_lock(path, exclusive=True, nonblocking=True) as available:
+        assert available
+
+
+@pytest.mark.parametrize("primary", ["missing", "verified", "error"])
+def test_worker_tries_sealed_fallback_only_when_primary_has_no_reusable_format(tmp_path, monkeypatch, primary):
+    lock = tmp_path / "plan.json.locks/1.lock"
+    owner = acquire(lock, exclusive=True)
+    args = argparse.Namespace(task_plan=tmp_path / "plan.json", task_index=1, root=tmp_path,
+                              target_lock_token=owner, overwrite=False, format_contract_version="24",
+                              source_plan=tmp_path / "primary.json", source_root=tmp_path / "primary", source_plan_sha256="a" * 64,
+                              fallback_source_plan=tmp_path / "fallback.json", fallback_source_root=tmp_path / "fallback",
+                              fallback_source_plan_sha256="b" * 64)
+    monkeypatch.setattr(resume, "verified_snapshot", lambda *a, **k: None)
+    visited = []
+
+    def importer(donor):
+        visited.append((donor.source_plan, donor.source_plan_sha256))
+        if donor.source_plan == args.source_plan:
+            if primary == "error":
+                raise ValueError("Changed donor")
+            return {"imported": [] if primary == "missing" else [{"species": "S"}]}
+        return {"imported": [{"species": "S"}]}
+
+    monkeypatch.setattr(resume, "import_stages", importer)
+    try:
+        if primary == "error":
+            with pytest.raises(ValueError, match="Changed donor"):
+                resume.start_worker(args)
+        else:
+            resume.start_worker(args)
+    finally:
+        release(lock, owner, exclusive=True)
+    assert visited == [(args.source_plan, "a" * 64)] + ([(args.fallback_source_plan, "b" * 64)] if primary == "missing" else [])
 
 
 def test_import_rejects_changed_donor_plan(checkpoint, tmp_path):

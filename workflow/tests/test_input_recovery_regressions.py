@@ -43,7 +43,7 @@ def test_description_repair_never_consumes_structural_or_ambiguous_fragments(att
         normalise_attributes(attrs, "EVM", "gene")
 
 
-@pytest.mark.parametrize("mismatch", ["", "strand", "span", "mixed", "duplicate", "in_bounds"])
+@pytest.mark.parametrize("mismatch", ["", "strand", "span", "mixed", "duplicate", "in_bounds", "missing_cds", "child_axis", "child_span", "duplicate_rna"])
 def test_out_of_bounds_parent_gene_requires_exact_unanimous_child_span(tmp_path, mismatch):
     (genome, gff) = (tmp_path / "genome.fa", tmp_path / "source.gff")
     genome.write_text(">wrong\n" + "A" * (90 if mismatch == "in_bounds" else 6) + "\n>right\n" + "A" * 90 + "\n")
@@ -58,12 +58,46 @@ def test_out_of_bounds_parent_gene_requires_exact_unanimous_child_span(tmp_path,
         text += rna.replace("right", "wrong").replace("ID=t", "ID=u")
     if mismatch == "duplicate":
         text += gene
+    if mismatch == "duplicate_rna":
+        text += rna
+    if mismatch == "missing_cds":
+        text = gene + rna
+    if mismatch == "child_axis":
+        text = text.replace("right\tEVM\tCDS", "wrong\tEVM\tCDS")
+    if mismatch == "child_span":
+        text = text.replace("CDS\t10\t30", "CDS\t10\t31")
     gff.write_text(text)
     repairs = gene_reference_repairs(gff, genome)
-    assert bool(repairs) == (mismatch == "")
+    assert bool(repairs) == (mismatch in {"", "in_bounds"})
     if repairs:
         assert repairs["g"]["to_seqid"] == "right"
     assert gff.read_text() == text
+
+
+@pytest.mark.parametrize("description", [
+    "PREDICTED: nucleosome assembly protein 1;4 isoform X2 [Nelumbo nucifera]",
+    "RecName: Full=Stamen-specific protein FIL1; Flags: Precursor [Antirrhinum majus]",
+    "RecName: Full=Baicalin-beta-D-glucuronidase; AltName: Full=Baicalinase.; Flags: Precursor [Scutellaria baicalensis]",
+    "RecName: Full=Elongation factor 1-delta; Short=EF-1-delta; AltName: Full=Elongation factor 1B-beta; AltName: Full=eEF-1B beta [Spuriopimpinella brachycarpa]",
+    "RecName: Full=Luminal-binding protein 8; Short=BiP 8; AltName: Full=78 kDa glucose-regulated protein homolog 8; Short=GRP-78-8, partial [Nicotiana tabacum]",
+])
+def test_publisher_description_metadata_is_losslessly_encoded(description):
+    from urllib.parse import unquote
+
+    raw = "ID=g;description=" + description + ";transl_table=1"
+    fixed = normalise_attributes(raw, ".", "gene")
+    assert unquote(fixed) == raw
+    assert normalise_attributes(fixed, ".", "gene") == fixed
+    assert fixed.startswith("ID=g;description=") and fixed.endswith(";transl_table=1")
+    changes = []
+    normalise_line("chr1\t.\tgene\t1\t9\t.\t+\t.\t" + raw + "\n", "source", 1, changes)
+    assert changes[0]["reason"] == "escaped_description_metadata_semicolon"
+
+
+@pytest.mark.parametrize("fragment", ["Parent:t", "AltName: Full=x;Parent:t", " Flags: Arbitrary", "4 isoform X2;extra"])
+def test_description_metadata_never_swallows_unknown_or_structural_fields(fragment):
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        normalise_attributes("ID=g;description=RecName: Full=x;" + fragment, ".", "gene")
 
 
 def annotation(alignment_count=0):
