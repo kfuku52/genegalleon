@@ -36,22 +36,24 @@ Measurements on 2026-10-05 used Docker Linux/arm64, Python 3.12.14,
 pysam 0.23.3 and immutable runtime
 `sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e`.
 Each comparison alternated the implementations in fresh processes, with one
-warmup and three measured trials. Baseline source was committed `9d75716`.
+warmup and three measured trials. Baseline source was committed `0dbb271`
+(version 0.8.135), including the separately developed staging/resume improvements.
 
 | Workload | Before median | After median | Equivalence |
 |---|---:|---:|---|
-| 89,579 references; 1,000 CDS reconstructions with four blocks and both strands | 1.372 s | 0.227 s | Identical reconstructed-CDS SHA256 |
-| Final mapping/selection QC; two native worker fixtures, each with 64 MiB genome | 2.775 s | 0.383 s | Identical aggregate QC and source ownership |
+| 89,579 references; 1,000 CDS reconstructions with four blocks and both strands | 1.437 s | 0.222 s | Identical reconstructed-CDS SHA256 |
+| Final mapping/selection QC; two native worker fixtures, each with 64 MiB genome | 2.789 s | 0.399 s | Identical aggregate QC and source ownership |
 
-Reference indexing increased process peak RSS from about 51.7 to 56.7 MiB
-(roughly 5 MiB). Final-QC trials both peaked at about 72.0 MiB. These are
+Reference indexing increased process peak RSS from about 52.1 to 57.2 MiB
+(roughly 5 MiB). Final-QC trials both peaked at about 71.4 MiB. These are
 bounded synthetic comparisons, not full-finalize or production NAS speedups.
 The reference benchmark includes first FASTA index/open and fetches but excludes
 fixture generation and GFF parsing. Final-QC fixtures use the native workers
 and real validators/GFF reader, with fake BUSCO/seqkit and local taxonomy during
 fixture setup only; setup and imports are excluded from measured validation.
 Implementation identity is recomputed for each validator, as in the core's
-separate validator processes.
+separate validator processes. Native performance instrumentation is enabled
+in the final-QC benchmark.
 
 Final-QC reuse read about 315 MB for fresh SHA256 checks in these raw-FASTA
 fixtures and avoided reference scans. It can increase hashing traffic versus
