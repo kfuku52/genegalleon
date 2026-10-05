@@ -425,6 +425,10 @@ even a requested rebuild cannot enable those producers or adopt missing provenan
 Only inference/selection use the requested `stop` or `rebuild` policy. Set
 `orthofinder_binary` to a qualified complete native executable when using an
 explicit dependency runtime; its default remains `orthofinder` on PATH.
+The requested `run_cds_translation` value remains effective in this mode because
+temporary protein generation is an inference prerequisite for CDS inputs and
+protein mode without protein inputs. An explicit value of `0` still rejects an
+input that requires translation; it does not enable any other analysis stage.
 
 ### `workspace/input/species_trait/species_trait.tsv`
 
