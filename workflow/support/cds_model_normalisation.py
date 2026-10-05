@@ -90,6 +90,7 @@ class CdsModelNormaliser:
         self.rows, self.models, self.nodes = [], defaultdict(list), defaultdict(list)
         self.exons, self.features = defaultdict(list), []
         self.lookup, self.genome, self.scratch = None, None, None
+        self.reference_lengths = None
         with (contextlib.nullcontext(gff_lines()) if gff_lines is not None else open_text(Path(source["gff"]))) as handle:
             for line in handle:
                 if line.strip() == "##FASTA":
@@ -161,8 +162,9 @@ class CdsModelNormaliser:
         parts = []
         for row in rows:
             contig = (self.reference_mapping() if self.reference_mapping is not None else {}).get(row["seqid"], row["seqid"])
-            if (contig not in self.genome.references or row["start"] < 0 or row["end"] <= row["start"]
-                    or row["end"] > self.genome.get_reference_length(contig)):
+            length = self.reference_lengths.get(contig)
+            if (length is None or row["start"] < 0 or row["end"] <= row["start"]
+                    or row["end"] > length):
                 raise ValueError("Annotation coordinates outside anchor genome: " + contig)
             sequence = self.genome.fetch(contig, row["start"], row["end"]).upper()
             parts.append(str(Seq(sequence).reverse_complement()) if row["strand"] == "-" else sequence)
@@ -187,6 +189,7 @@ class CdsModelNormaliser:
         if result.returncode or result.stderr.strip():
             raise ValueError("FASTA index warning or failure: " + result.stderr.strip())
         self.genome = pysam.FastaFile(str(path))
+        self.reference_lengths = dict(zip(self.genome.references, self.genome.lengths, strict=True))
 
     def close(self):
         if self.genome is not None:

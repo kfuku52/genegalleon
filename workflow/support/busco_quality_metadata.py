@@ -13,7 +13,11 @@ COLUMNS = ("species", "busco_complete_pct", "busco_duplicated_pct", "lineage", "
 
 
 def read_short_summary(path):
-    text = path.read_text(encoding="utf-8")
+    return parse_short_summary(path.read_text(encoding="utf-8"), path)
+
+
+def parse_short_summary(text, path):
+    """Parse captured text so callers can bind results to verified bytes."""
     values = re.findall(r"(?:^|[,\s])C:([0-9.]+)%\[S:([0-9.]+)%,D:([0-9.]+)%\]", text)
     if len(values) != 1:
         raise ValueError(f"Expected one BUSCO C/S/D summary in {path}")

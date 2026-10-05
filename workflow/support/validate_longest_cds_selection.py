@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import format_species_inputs as formatter
+from input_validation_reuse import add_arguments as add_reuse_arguments
+from input_validation_reuse import implementation_identity, partition
 from validate_source_gene_selection import SourceGeneSelection
 
 FASTA_EXTENSIONS = (
@@ -68,6 +70,7 @@ def build_arg_parser():
         default="",
         help="Optional JSON path for summary stats.",
     )
+    add_reuse_arguments(parser)
     return parser
 
 
@@ -524,6 +527,9 @@ def main():
         "aggregated_cds_removed_total": 0,
         "nthreads": nthreads,
         "source_gene_validation": {},
+        "species_results": {},
+        "validation_options": {"missing_limit": args.missing_limit},
+        "validation_implementation": implementation_identity() if args.stats_output else "",
     }
 
     tasks = []
@@ -559,7 +565,11 @@ def main():
                 )
             )
 
-    for result in run_validation_tasks(tasks=tasks, missing_limit=args.missing_limit, nthreads=nthreads):
+    reused, pending = partition(tasks, args, parser, "ownership")
+    results = reused + run_validation_tasks(tasks=pending, missing_limit=args.missing_limit, nthreads=nthreads)
+    species_by_index = {task["index"]: task["summary_row"]["species_prefix"] for task in tasks}
+    for result in sorted(results, key=lambda item: item["index"]):
+        stats["species_results"][species_by_index[result["index"]]] = result
         if result.get("stats_ready", False):
             stats["species_checked"] += 1
             stats["genes_total"] += int(result["stats"]["genes_total"])
