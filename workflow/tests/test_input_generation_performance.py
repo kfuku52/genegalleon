@@ -90,6 +90,65 @@ def test_corruption_during_copy_cannot_publish_checkpoint(native_import, monkeyp
     assert not resume.checkpoint_path(native_import.root, "Example_species", "format").exists()
 
 
+@pytest.mark.parametrize("label", ["cds", "gff", "stats", "summary", "ownership_qc", "mapping_qc"])
+def test_late_destination_change_cannot_certify_imported_validation(native_import, monkeypatch, label):
+    original = resume.copy_atomic
+    def corrupt_after_qc(source, destination, **kwargs):
+        original(source, destination, **kwargs)
+        if str(destination).endswith(".mapping.json"):
+            path = resume.context(native_import.task_plan, 1, native_import.root, "validate")[3][label]
+            Path(path).write_text("unvalidated bytes\n")
+    monkeypatch.setattr(resume, "copy_atomic", corrupt_after_qc)
+    with pytest.raises(ValueError, match="differs from its verified source"):
+        resume.import_stages(native_import)
+    assert not resume.checkpoint_path(native_import.root, "Example_species", "validate").exists()
+
+
+def test_donor_output_alias_cannot_be_written_under_a_reader_lock(native_import):
+    settings_path = Path(str(native_import.task_plan) + ".settings.json")
+    settings = json.loads(settings_path.read_text())
+    donor_settings = json.loads(Path(str(native_import.source_plan) + ".settings.json").read_text())
+    alias = native_import.root.parent.parent / "aliased-cds"
+    alias.symlink_to(donor_settings["species_cds_dir"], target_is_directory=True)
+    settings["species_cds_dir"] = str(alias)
+    resume.atomic_json(settings_path, settings)
+    cds = Path(resume.context(native_import.source_plan, 1, native_import.source_root, "format")[3]["cds"])
+    before = cds.stat()
+    with pytest.raises(ValueError, match="overlap"):
+        resume.import_stages(native_import)
+    assert cds.stat().st_ino == before.st_ino
+    assert not resume.checkpoint_path(native_import.root, "Example_species", "format").exists()
+
+
+def test_hard_link_to_raw_input_cannot_be_published(native_import):
+    settings = json.loads(Path(str(native_import.task_plan) + ".settings.json").read_text())
+    source_paths = resume.context(native_import.source_plan, 1, native_import.source_root, "format")[3]
+    target = Path(settings["species_cds_dir"]) / Path(source_paths["cds"]).name
+    target.parent.mkdir(parents=True)
+    os.link(source_paths["cds_path"], target)
+    before = target.stat()
+    with pytest.raises(ValueError, match="overlap"):
+        resume.import_stages(native_import)
+    assert target.stat().st_ino == before.st_ino
+
+
+def test_unwritten_directory_setting_does_not_block_resume(native_import):
+    source_settings = json.loads(Path(str(native_import.source_plan) + ".settings.json").read_text())
+    settings_path = Path(str(native_import.task_plan) + ".settings.json")
+    target_settings = json.loads(settings_path.read_text())
+    shared_unused = str(native_import.root.parent / "unused-fx2tab")
+    for path, settings in ((Path(str(native_import.source_plan) + ".settings.json"), source_settings),
+                           (settings_path, target_settings)):
+        settings["species_cds_fx2tab_dir"] = shared_unused
+        resume.atomic_json(path, settings)
+    prepared_path = Path(str(native_import.source_plan) + ".prepared.json")
+    prepared = json.loads(prepared_path.read_text())
+    prepared["settings_sha256"] = resume.digest(Path(str(native_import.source_plan) + ".settings.json"))
+    resume.atomic_json(prepared_path, prepared)
+    resume.import_stages(native_import)
+    assert resume.valid(native_import.task_plan, 1, native_import.root, "validate", "24")
+
+
 def test_mutable_image_is_fully_hashed_after_same_size_change(tmp_path):
     image = tmp_path / "image.sif"
     image.write_bytes(b"original")

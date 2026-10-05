@@ -78,7 +78,7 @@ def record(plan_path, index, root, stage, format_contract_version, *, expected_h
         raise ValueError("Disabled validation cannot produce a successful validation checkpoint")
     files = snapshot(paths)
     if expected_hashes is not None and any(files[label]["sha256"] != value for label, value in expected_hashes.items()):
-        raise ValueError("Copied format output differs from its verified source: " + task["species_prefix"])
+        raise ValueError("Copied stage output differs from its verified source: " + task["species_prefix"])
     atomic_json(checkpoint_path(root, task["species_prefix"], stage), {
         "schema_version": 1, "stage": stage, "species": task["species_prefix"],
         "parameters": parameters(settings, stage, format_contract_version), "files": files,
@@ -131,6 +131,16 @@ def copy_atomic(source, destination, *, expected_sha256=None):
         temporary.unlink(missing_ok=True)
 
 
+def reject_output_overlap(destinations, protected):
+    protected = [Path(path) for path in protected]
+    for path in destinations:
+        destination = Path(path)
+        if any(destination.resolve() == source.resolve()
+               or (destination.exists() and source.exists() and destination.samefile(source))
+               for source in protected):
+            raise ValueError("Imported output paths overlap donor or raw inputs: " + str(destination))
+
+
 def import_fx2tab(source_root, target_root, species, source_cds, target_cds, source_settings, target_settings):
     if target_settings.get("run_cds_fx2tab") != "1":
         return
@@ -144,6 +154,7 @@ def import_fx2tab(source_root, target_root, species, source_cds, target_cds, sou
         raise ValueError("Unsupported fx2tab provenance: " + species)
     source = Path(source_settings["species_cds_fx2tab_dir"]) / f"{species}_fx2tab_cds.tsv"
     destination = Path(target_settings["species_cds_fx2tab_dir"]) / source.name
+    reject_output_overlap([destination], [source, source_cds, target_cds])
     entries = {item["label"]: item for group in ("inputs", "outputs") for item in payload[group]}
     hashes = digest_paths([str(source_cds), str(source)])
     if (hashes[str(source_cds)] != entries["species_cds"]["sha256"]
@@ -255,7 +266,7 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     if not complete and not format_valid:
         skipped.append(species)
         return
-    _, _, old_meta, old_paths = context(source_plan, old_index, source_root, "format", namespace_root=source_namespace)
+    _, _, _, old_paths = context(source_plan, old_index, source_root, "format", namespace_root=source_namespace)
     receipt = json.loads(Path(str(source_plan) + f".completed/{old_index}.json").read_text()) if complete else {}
     if receipt:
         receipt["files"] = {str(namespace_path(path, source_namespace)): value for path, value in receipt["files"].items()}
@@ -298,6 +309,10 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     raw_hashes = digest_paths(new_raw.values())
     if any(original_files[key]["sha256"] != raw_hashes[new_raw[key]] for key in old_raw):
         raise ValueError("Source/target raw input content differs: " + species)
+    # Separate roots do not imply separate physical outputs: custom directories,
+    # symlinks and hard links must not turn a donor reader into a writer.
+    reject_output_overlap([path for label, path in new_paths.items() if not label.endswith("_path")],
+                          [*old_paths.values(), *new_raw.values()])
     for label in ("cds", "gff", "genome", "stats"):
         if label in old_paths:
             if label not in new_paths:
@@ -323,31 +338,22 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
            expected_hashes={label: item["sha256"] for label, item in original_files.items() if label != "summary"})
     import_fx2tab(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
                   source_settings, target_settings)
-    validation_valid = valid(source_plan, old_index, source_root, "validate", args.format_contract_version, namespace_root=source_namespace)
+    validation_files = verified_snapshot(source_plan, old_index, source_root, "validate",
+                                         args.format_contract_version, namespace_root=source_namespace)
     if (source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1"
-            and validation_valid):
-        ownership = source_root / "tmp/task_stats_shards" / f"{old_index}.longest.json"
-        receipt_files = receipt.get("files", {})
-        if not ownership.is_file() or (not validation_valid and str(ownership) not in receipt_files):
-            imported.append({"species": species, "validation": False})
-            return
-        ownership_sha256 = (json.loads(checkpoint_path(source_root, species, "validate").read_text())
-                            ["files"]["ownership_qc"]["sha256"] if validation_valid else receipt_files[str(ownership)])
-        copy_atomic(ownership, args.root / "tmp/task_stats_shards" / f"{index}.longest.json")
-        if digest(args.root / "tmp/task_stats_shards" / f"{index}.longest.json") != ownership_sha256:
-            raise ValueError("Copied source ownership QC differs from its verified source: " + species)
-        mapping = source_root / "tmp/task_stats_shards" / f"{old_index}.mapping.json"
-        if old_meta.get("gff_output_path"):
-            receipt_files = receipt.get("files", {})
-            if not mapping.is_file() or (not validation_valid and str(mapping) not in receipt_files):
-                imported.append({"species": species, "validation": False})
-                return
-            mapping_sha256 = (json.loads(checkpoint_path(source_root, species, "validate").read_text())
-                              ["files"]["mapping_qc"]["sha256"] if validation_valid else receipt_files[str(mapping)])
-            copy_atomic(mapping, args.root / "tmp/task_stats_shards" / f"{index}.mapping.json")
-            if digest(args.root / "tmp/task_stats_shards" / f"{index}.mapping.json") != mapping_sha256:
-                raise ValueError("Copied validation QC differs from its verified source: " + species)
-        record(args.task_plan, index, args.root, "validate", args.format_contract_version)
+            and validation_files is not None):
+        _, _, _, validation_paths = context(args.task_plan, index, args.root, "validate")
+        for label in ("ownership_qc", "mapping_qc"):
+            if label in validation_files:
+                copy_atomic(validation_files[label]["path"], validation_paths[label],
+                            expected_sha256=validation_files[label]["sha256"])
+        # The source proof certifies these exact bytes, not arbitrary current
+        # destination contents. Keep the intentionally rewritten summary bound
+        # to the destination format proof as well.
+        expected = {label: item["sha256"] for label, item in validation_files.items() if label != "summary"}
+        expected["summary"] = json.loads(checkpoint_path(args.root, species, "format").read_text())["files"]["summary"]["sha256"]
+        record(args.task_plan, index, args.root, "validate", args.format_contract_version,
+               expected_hashes=expected)
         imported.append({"species": species, "validation": True})
     else:
         imported.append({"species": species, "validation": False})

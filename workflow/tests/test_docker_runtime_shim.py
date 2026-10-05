@@ -11,6 +11,7 @@ GG_UTIL_PATH = SUPPORT_DIR / "gg_util.sh"
 SHIM_PATH = SUPPORT_DIR / "gg_wrapper_bin" / "singularity"
 PROGRESS_ENTRYPOINT = WORKFLOW_DIR / "gg_progress_summary_entrypoint.sh"
 REPO_VERSION = REPO_ROOT.joinpath("VERSION").read_text(encoding="utf-8").splitlines()[0].strip()
+FIXTURE_IMAGE_ID = "sha256:" + "a" * 64
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -40,6 +41,10 @@ def _prepare_stub_docker(tmp_path: Path) -> Path:
         f"""#!/usr/bin/env bash
 set -euo pipefail
 base_dir={shlex.quote(str(tmp_path))}
+if [[ "${{1:-}} ${{2:-}} ${{3:-}}" == 'image inspect --format' ]]; then
+  printf '%s\\n' {shlex.quote(FIXTURE_IMAGE_ID)}
+  exit 0
+fi
 counter_file="${{base_dir}}/docker.counter"
 count=0
 if [[ -f "${{counter_file}}" ]]; then
@@ -64,6 +69,10 @@ def _prepare_stub_docker_with_known_images(tmp_path: Path, known_images: list[st
         f"""#!/usr/bin/env bash
 set -euo pipefail
 base_dir={shlex.quote(str(tmp_path))}
+if [[ "${{1:-}} ${{2:-}} ${{3:-}}" == 'image inspect --format' ]]; then
+  printf '%s\\n' {shlex.quote(FIXTURE_IMAGE_ID)}
+  exit 0
+fi
 counter_file="${{base_dir}}/docker.counter"
 count=0
 if [[ -f "${{counter_file}}" ]]; then
@@ -236,7 +245,7 @@ def test_progress_summary_entrypoint_dispatches_to_docker_shim(tmp_path: Path):
     first_args = (tmp_path / "call_1.args").read_text(encoding="utf-8").splitlines()
     second_args = (tmp_path / "call_2.args").read_text(encoding="utf-8").splitlines()
     assert "local/genegalleon:dev" in first_args
-    assert "local/genegalleon:dev" in second_args
+    assert FIXTURE_IMAGE_ID in second_args
     assert f"{workspace_dir}:/workspace" in first_args
     assert f"{WORKFLOW_DIR}:/script" in first_args
     assert (tmp_path / "call_1.stdin").read_text(encoding="utf-8")
@@ -245,8 +254,12 @@ def test_progress_summary_entrypoint_dispatches_to_docker_shim(tmp_path: Path):
     assert "container version: dev" in completed.stdout
     assert "WARNING: genegalleon version" not in completed.stdout
 
-    version_logs = sorted((workspace_dir / "output" / "versions").glob("*.log"))
+    versions_dir = workspace_dir / "output" / "versions"
+    version_logs = sorted(versions_dir.glob("container.*.versions.log"))
     assert len(version_logs) == 1
+    run_logs = list(versions_dir.glob("run.*.log"))
+    assert len(run_logs) == 1
+    assert "context=" in run_logs[0].read_text(encoding="utf-8")
     version_log_text = version_logs[0].read_text(encoding="utf-8")
     assert f"genegalleon version: {REPO_VERSION}" in version_log_text
     assert "container version: dev" in version_log_text
@@ -288,4 +301,5 @@ def test_progress_summary_entrypoint_auto_detects_pulled_public_image_without_ru
         if path.read_text(encoding="utf-8").splitlines()[:1] == ["run"]
     ]
     assert len(run_calls) == 2
-    assert all("ghcr.io/kfuku52/genegalleon:latest" in call for call in run_calls)
+    assert any(FIXTURE_IMAGE_ID in call for call in run_calls)
+    assert any("ghcr.io/kfuku52/genegalleon:latest" in call for call in run_calls)

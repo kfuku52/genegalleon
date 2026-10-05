@@ -154,6 +154,39 @@ gg_require_versions_dump fixture
     assert (tmp_path / "calls").read_text().splitlines() == ["called", "called", "called"]
 
 
+def test_version_inventory_follows_docker_content_when_tag_is_replaced(tmp_path):
+    workspace = tmp_path / "workspace"
+    docker = tmp_path / "bin/docker"
+    docker.parent.mkdir()
+    image_id = tmp_path / "image-id"
+    image_id.write_text("sha256:" + "a" * 64 + "\n")
+    docker.write_text("#!/bin/sh\ncat " + shlex.quote(str(image_id)) + "\n")
+    docker.chmod(0o755)
+    calls = tmp_path / "calls"
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+gg_support_dir={shlex.quote(str(GG_UTIL_PATH.parent))}
+gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}
+gg_workspace_dir={shlex.quote(str(workspace))}
+gg_container_image_path={shlex.quote(str(tmp_path / 'missing.sif'))}
+export GG_CONTAINER_DOCKER_IMAGE=fixture:latest GG_WRAPPER_IMAGE=fixture:latest
+gg_container_shell_command_is_set() {{ return 0; }}
+gg_container_shell_command_runtime_bin() {{ echo {shlex.quote(str(GG_UTIL_PATH.parent / 'gg_wrapper_bin/singularity'))}; }}
+gg_container_bind_destination_exists() {{ return 0; }}
+gg_print_version_summary() {{ :; }}
+gg_run_container_shell_script() {{ echo "$GG_CONTAINER_DOCKER_IMAGE" >> {shlex.quote(str(calls))}; echo "image=$GG_CONTAINER_DOCKER_IMAGE"; }}
+gg_require_versions_dump fixture
+"""
+    env = {**os.environ, "PATH": str(docker.parent) + os.pathsep + os.environ["PATH"]}
+    for value in ("a", "a", "b"):
+        image_id.write_text("sha256:" + value * 64 + "\n")
+        result = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert calls.read_text().splitlines() == ["sha256:" + "a" * 64, "sha256:" + "b" * 64]
+
+
 def _canonical_sha256(payload):
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

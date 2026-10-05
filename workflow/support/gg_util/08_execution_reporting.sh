@@ -13,7 +13,7 @@ gg_trigger_versions_dump() {
   local inspect_snapshot
   local image_file_hash
   local versions_script_hash=""
-  local identity_python identity_helper environment_hash command_context cache_dir cache_file
+  local identity_python identity_helper environment_hash command_context cache_dir cache_file docker_image_id=""
   local log_file
   local tmp_log_file
   local lock_file
@@ -84,7 +84,15 @@ gg_trigger_versions_dump() {
       container_key_seed="${container_key_seed};versions_script_cksum=${versions_script_hash}"
     fi
   fi
-  if [[ -s "${gg_container_image_path}" ]]; then
+  if [[ "${container_runtime_bin}" -ef "$(gg_docker_singularity_shim_source_path)" ]]; then
+    docker_image_id=$(docker image inspect --format '{{.Id}}' "${GG_CONTAINER_DOCKER_IMAGE:-${GG_WRAPPER_IMAGE:-}}") || return 1
+    if [[ ! "${docker_image_id}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+      echo "gg_trigger_versions_dump: invalid Docker image content identity." >&2
+      return 1
+    fi
+    image_file_hash="docker:${docker_image_id}"
+    container_key_seed="${container_key_seed};image_identity=${image_file_hash}"
+  elif [[ -s "${gg_container_image_path}" ]]; then
     image_file_hash=$(GG_PERFORMANCE_DIR="${versions_dir}/performance" "${identity_python}" "${identity_helper}" image --image "${gg_container_image_path}") || return 1
     container_key_seed="${container_key_seed};image_identity=${image_file_hash}"
   fi
@@ -157,7 +165,11 @@ gg_trigger_versions_dump() {
   {
     gg_print_version_summary "genegalleon versions" "${container_runtime_bin}" "${inspect_snapshot}"
     echo "$(date): Triggered gg_versions by ${trigger_name}"
-    gg_run_container_shell_script "${gg_container_image_path}" "${versions_script}" || {
+    # Pin collection to the image whose identity was checked, even if a tag is
+    # replaced while this call waits for the cache lock. Caller settings persist.
+    GG_CONTAINER_DOCKER_IMAGE="${docker_image_id:-${GG_CONTAINER_DOCKER_IMAGE:-}}" \
+      GG_WRAPPER_IMAGE="${docker_image_id:-${GG_WRAPPER_IMAGE:-}}" \
+      gg_run_container_shell_script "${gg_container_image_path}" "${versions_script}" || {
       cmd_rc=$?
       if [[ ${versions_exit_code} -eq 0 ]]; then
         versions_exit_code=${cmd_rc}

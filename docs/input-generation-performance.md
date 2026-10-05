@@ -18,6 +18,10 @@ A current format checkpoint is sufficient without reading unrelated completion
 receipt outputs. Fresh source hashes are reused only inside the import; sources
 are fully rehashed after copying. Copies hash their stream, and destination
 files are independently rehashed and compared before publishing the checkpoint.
+Validation imports compare every destination file with the source validation
+proof, including the rewritten summary's target format proof. Aliased output
+paths (including symlinks and hard links to donor or raw files) are rejected
+before copying; unused directory settings do not block an import.
 Independent source-gene ownership and mapping QC remain required for validation
 reuse. Formatting and validation contracts and BUSCO lineage settings are
 unchanged.
@@ -53,6 +57,8 @@ The default private inventory cache is `downloads/version_inventory`. Set
 by the executing user with mode 700. Different bindings or relevant environments
 collect separately. Only successful inventories are cached, their content hash
 is checked on reuse, and collection failures still fail the entrypoint.
+Docker inventories use the currently resolved immutable image ID and collect
+with that ID, so replacing a tag invalidates its cached inventory.
 
 Ordinary SIFs are fully SHA-256 hashed on every invocation. An already-enabled
 Linux fs-verity image can use its kernel-enforced content identity in constant
