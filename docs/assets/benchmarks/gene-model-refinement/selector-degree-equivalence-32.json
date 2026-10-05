@@ -1,0 +1,121 @@
+{
+  "cache_speed_ratio": null,
+  "conserved_outputs_equivalent": true,
+  "environment": {
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]"
+  },
+  "expected_output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+  "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+  "measurement_date": "2026-10-05",
+  "measurement_note": "Scientific equivalence check after incident-score normalization. Timing overlapped functional checks and is not used as performance evidence.",
+  "measurements": [
+    {
+      "cpu_seconds": 1.5022828689999999,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50438144,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 1.5023100429998522
+    },
+    {
+      "cpu_seconds": 1.526228119,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50446336,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 1.5262245839999196
+    },
+    {
+      "cpu_seconds": 1.4942573700000001,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50561024,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 1.4942619179996655
+    }
+  ],
+  "reference_cached_outputs_equivalent": null,
+  "repeats": 3,
+  "schema": 1,
+  "store_input_preparation": null,
+  "summaries": {
+    "cached": {
+      "cpu_seconds_median": 1.5022828689999999,
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "peak_rss_bytes_max": 50561024,
+      "wall_seconds_max": 1.5262245839999196,
+      "wall_seconds_median": 1.5023100429998522,
+      "wall_seconds_min": 1.4942619179996655
+    }
+  },
+  "warmups": 1,
+  "workload": {
+    "families": 32,
+    "isoforms_per_locus": 4,
+    "protein_length": 300,
+    "species": 9
+  }
+}

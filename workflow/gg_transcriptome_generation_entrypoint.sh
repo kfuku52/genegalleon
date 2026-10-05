@@ -101,6 +101,8 @@ gg_entrypoint_name="gg_transcriptome_generation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement inputs for species_cds quantification.
+
 # Mode
 mode_transcriptome_assembly="${mode_transcriptome_assembly:-auto}" # {"auto", "sraid", "fastq", "metadata"}; input source for transcriptome assembly: sraid reads accession lists in workspace/input/query_sra_id, fastq reads local FASTQ directories in workspace/input/species_rnaseq, metadata reads amalgkit metadata TSVs, and auto selects the single available layout.
 

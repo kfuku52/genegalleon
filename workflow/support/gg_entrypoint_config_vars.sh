@@ -7,6 +7,7 @@ gg_print_entrypoint_config_vars() {
   case "${entrypoint_name}" in
     gg_fractionation_bias_entrypoint.sh)
       cat <<'EOF'
+representative_inputs
 delete_tmp_dir
 kffractbias_pairs_file
 run_kffractbias
@@ -125,6 +126,7 @@ gene_family_zip_compression_level
 gene_family_zip_workers
 gene_family_final_zip_max_bytes
 input_sequence_mode
+representative_inputs
 intron_gain_rate
 iqtree_fast_mode_gt
 jaspar_file
@@ -303,6 +305,7 @@ EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
       cat <<'EOF'
+representative_inputs
 busco_lineage
 scaffold_host_taxid
 contamination_removal_rank
@@ -402,6 +405,7 @@ go_category
 go_enrichment_method
 go_family_alpha
 input_sequence_mode
+representative_inputs
 max_gene_orthogroup_grampa
 max_num_gene
 max_orthofinder_core_species
@@ -521,6 +525,18 @@ EOF
       ;;
     gg_input_generation_entrypoint.sh)
       cat <<'EOF'
+run_gene_model_refinement
+gene_model_refinement_dir
+gene_model_refinement_policy
+gene_model_refinement_mode
+gene_model_refinement_inputs
+gene_model_refinement_edges
+gene_model_refinement_rescue_dir
+gene_model_refinement_rna
+gene_model_refinement_min_margin
+gene_model_refinement_min_support
+gene_model_refinement_candidate_limit
+gene_model_refinement_padding
 run_gene_model_rescue
 gene_model_rescue_tree
 gene_model_rescue_dir
@@ -631,6 +647,7 @@ EOF
       ;;
     gg_transcriptome_generation_entrypoint.sh)
       cat <<'EOF'
+representative_inputs
 amalgkit_contam_filter
 amalgkit_aws_download_max_concurrency
 amalgkit_gcp_download_max_concurrency

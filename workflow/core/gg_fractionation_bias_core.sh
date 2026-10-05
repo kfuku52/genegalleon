@@ -10,10 +10,12 @@ source "${gg_core_bootstrap}"
 unset gg_core_bootstrap
 
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
+gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 
 run_kffractbias="${run_kffractbias:-1}"
 delete_tmp_dir="${delete_tmp_dir:-1}"
 kffractbias_pairs_file="${kffractbias_pairs_file:-}"
+representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
 if [[ -z "${kffractbias_pairs_file}" ]]; then
   kffractbias_pairs_file="${gg_workspace_input_dir}/fractionation_bias_pairs.tsv"
 fi
@@ -208,13 +210,28 @@ minimum_mapping_fraction=${pair_values[17]}
 self_hit_percent=${pair_values[18]}
 diagonal_bound=${pair_values[19]}
 
-target_cds=$(resolve_species_file "${gg_workspace_input_dir}/species_cds" "${target_species}" "target CDS") || exit 1
-target_gff=$(resolve_species_file "${gg_workspace_input_dir}/species_gff" "${target_species}" "target GFF") || exit 1
+dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+dir_sp_gff="${gg_workspace_input_dir}/species_gff"
+representative_map=""
+if [[ -n "${representative_inputs}" ]]; then
+  representative_layout=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+    --inputs "${representative_inputs}" --field layout) || exit 1
+  IFS=$'\t' read -r dir_sp_cds representative_protein_dir dir_sp_gff representative_genome_dir \
+    representative_map representative_genetic_codes representative_extra <<< "${representative_layout}"
+  if [[ -n "${representative_extra}" || -z "${representative_genetic_codes}" ]]; then
+    echo "Invalid representative input layout." >&2
+    exit 1
+  fi
+fi
+target_cds=$(resolve_species_file "${dir_sp_cds}" "${target_species}" "target CDS") || exit 1
+target_gff=$(resolve_species_file "${dir_sp_gff}" "${target_species}" "target GFF") || exit 1
 query_cds=""
 query_gff=""
+target_selected_reader_receipt=""
+query_selected_reader_receipt=""
 if [[ "${analysis_mode}" == "compare" ]]; then
-  query_cds=$(resolve_species_file "${gg_workspace_input_dir}/species_cds" "${query_species}" "query CDS") || exit 1
-  query_gff=$(resolve_species_file "${gg_workspace_input_dir}/species_gff" "${query_species}" "query GFF") || exit 1
+  query_cds=$(resolve_species_file "${dir_sp_cds}" "${query_species}" "query CDS") || exit 1
+  query_gff=$(resolve_species_file "${dir_sp_gff}" "${query_species}" "query GFF") || exit 1
   dir_result="${gg_workspace_output_dir}/kffractbias/${analysis_id}"
   dir_provenance="${gg_workspace_output_dir}/artifact_provenance/kffractbias"
   artifact_stage="fractionation_bias_compare"
@@ -222,6 +239,40 @@ else
   dir_result="${gg_workspace_output_dir}/genome_evolution/self_fractionation_bias/${analysis_id}"
   dir_provenance="${gg_workspace_output_dir}/artifact_provenance/genome_evolution/self_fractionation_bias"
   artifact_stage="genome_evolution_self_fractionation_bias"
+fi
+if [[ -n "${representative_map}" ]]; then
+  selected_reader_args=(--inputs "${representative_inputs}" --species "${target_species}"
+    --cache-root "${gg_workspace_output_dir}/.gg_cache")
+  if [[ "${analysis_mode}" == "compare" ]]; then
+    selected_reader_args+=(--species "${query_species}")
+  fi
+  selected_reader_layout=$(python "${gg_support_dir}/fractionation_selected_inputs.py" "${selected_reader_args[@]}") || exit 1
+  mapfile -t selected_reader_rows <<< "${selected_reader_layout}"
+  selected_reader_count=1
+  if [[ "${analysis_mode}" == "compare" ]]; then
+    selected_reader_count=2
+  fi
+  if [[ ${#selected_reader_rows[@]} -ne ${selected_reader_count} ]]; then
+    echo "Invalid selected fractionation reader species count." >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r target_cds target_gff target_selected_reader_receipt selected_reader_extra <<< "${selected_reader_rows[0]}"
+  if [[ -z "${target_selected_reader_receipt}" || -n "${selected_reader_extra}" ]]; then
+    echo "Invalid selected fractionation reader layout." >&2
+    exit 1
+  fi
+  if [[ "${analysis_mode}" == "compare" ]]; then
+    IFS=$'\t' read -r query_cds query_gff query_selected_reader_receipt selected_reader_extra <<< "${selected_reader_rows[1]}"
+    if [[ -z "${query_selected_reader_receipt}" || -n "${selected_reader_extra}" ]]; then
+      echo "Invalid selected query fractionation reader layout." >&2
+      exit 1
+    fi
+  fi
+  # The adapter publishes one canonical gene per exact selected transcript.
+  target_feature="gene"
+  target_attribute="ID"
+  query_feature="gene"
+  query_attribute="ID"
 fi
 file_genes="${dir_result}/${analysis_id}.genes.tsv"
 file_windows="${dir_result}/${analysis_id}.windows.tsv"
@@ -270,6 +321,14 @@ if [[ "${analysis_mode}" == "compare" ]]; then
     --input "query_cds=${query_cds}"
     --input "query_gff=${query_gff}"
   )
+fi
+if [[ -n "${representative_map}" ]]; then
+  kffractbias_provenance_args+=(--input "representative_map=${representative_map}" \
+    --input "representative_inputs=${representative_inputs}" \
+    --input "target_selected_reader_receipt=${target_selected_reader_receipt}")
+  if [[ "${analysis_mode}" == "compare" ]]; then
+    kffractbias_provenance_args+=(--input "query_selected_reader_receipt=${query_selected_reader_receipt}")
+  fi
 fi
 gg_artifact_prepare_stage needs_update run_kffractbias "${kffractbias_provenance_args[@]}" || exit $?
 

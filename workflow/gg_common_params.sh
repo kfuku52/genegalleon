@@ -7,6 +7,7 @@
 
 : "${GG_COMMON_TMP_ROOT:=/tmp}" # /tmp (node-local scratch) | env (execution-node TMPDIR) | workspace | absolute host directory.
 
+: "${GG_COMMON_REPRESENTATIVE_INPUTS:=}" # Optional verified effective/inputs.tsv from gene-model refinement.
 : "${GG_COMMON_GENETIC_CODE:=1}" # NCBI genetic code table ID used for translation/ORF-related steps.
 : "${GG_COMMON_BUSCO_LINEAGE:=eukaryota_odb12}" # Shared BUSCO lineage dataset default; override per workflow when a narrower lineage or auto inference is needed.
 : "${GG_COMMON_REFERENCE_SPECIES:=auto}" # Reference species, or "auto" to detect a model species from the dataset.

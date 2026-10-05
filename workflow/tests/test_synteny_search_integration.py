@@ -12,6 +12,67 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+def test_synteny_cache_rebuilds_when_actual_reader_bytes_change(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache
+
+    cds, gff = tmp_path / 'Species_a.fa', tmp_path / 'Species_a.gff'
+    cds.write_text('>Species_a_g\nATGAAATAA\n')
+    gff.write_text('chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g\n'
+                   'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t;Parent=g\n'
+                   'chr1\ts\tCDS\t1\t9\t.\t+\t0\tID=c;Parent=t\n')
+    count = tmp_path / 'reader_calls.txt'
+    reader = tmp_path / 'custom_reader.py'
+    reader.write_text('import runpy,sys\nfrom pathlib import Path\n'
+                      f'counter = Path({str(count)!r})\n'
+                      'counter.write_text(str(int(counter.read_text()) + 1) if counter.exists() else "1")\n'
+                      f'sys.path.insert(0, {str(SUPPORT)!r})\n'
+                      f'runpy.run_path({str(SUPPORT / "gff2genestat.py")!r}, run_name="__main__")\n')
+    kwargs = dict(species_name='Species_a', species_cds_path=str(cds), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(reader), threads=1)
+    output = ensure_species_gene_cache(**kwargs)
+    before = Path(output).read_bytes()
+    first = json.loads(Path(output + '.provenance.json').read_text())
+    ensure_species_gene_cache(**kwargs)
+    assert count.read_text() == '1'
+    reader.write_text(reader.read_text() + '# A reader implementation change must invalidate cached traits.\n')
+    ensure_species_gene_cache(**kwargs)
+    changed = json.loads(Path(output + '.provenance.json').read_text())
+    assert count.read_text() == '2'
+    assert changed['inputs']['gff_reader_sha256'] != first['inputs']['gff_reader_sha256']
+    assert Path(output).read_bytes() == before
+
+
+def test_synteny_cache_uses_explicit_transcript_and_invalidates_map_change(tmp_path):
+    from workflow.support.synteny_neighbors import ensure_species_gene_cache
+
+    cds = tmp_path / 'Species_a.fa'
+    cds.write_text('>Species_a_g1\nATGAAATAA\n')
+    gff = tmp_path / 'Species_a.gff'
+    gff.write_text('chr1\ts\tgene\t1\t24\t.\t+\t.\tID=g1\n'
+                   'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=short;Parent=g1\n'
+                   'chr1\ts\tmRNA\t10\t24\t.\t+\t.\tID=long;Parent=g1\n'
+                   'chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=short\n'
+                   'chr1\ts\tCDS\t10\t24\t.\t+\t0\tParent=long\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Species_a\tSpecies_a_g1\tc1\tshort\tselected\t1\t0.2\tconserved\n')
+    kwargs = dict(species_name='Species_a', species_cds_path=str(cds), dir_sp_gff=str(tmp_path),
+                  cache_dir=str(tmp_path / 'cache'), lock_dir=str(tmp_path / 'locks'),
+                  gff2genestat_script=str(SUPPORT / 'gff2genestat.py'), threads=1,
+                  representative_map=selection)
+    path = ensure_species_gene_cache(**kwargs)
+    row = pd.read_csv(path, sep='\t').iloc[0]
+    assert row.gff_transcript_id == 'short' and row.start == 1 and row.end == 9
+    first = json.loads(Path(path + '.provenance.json').read_text())
+    selection.write_text(selection.read_text().replace('\tshort\t', '\tlong\t'))
+    ensure_species_gene_cache(**kwargs)
+    row = pd.read_csv(path, sep='\t').iloc[0]
+    assert row.gff_transcript_id == 'long' and row.start == 10 and row.end == 24
+    changed = json.loads(Path(path + '.provenance.json').read_text())
+    assert changed['inputs']['representative_map_sha256'] != first['inputs']['representative_map_sha256']
+
+
 def test_synteny_cache_retains_coordinates_but_not_conflicting_coding_frame(tmp_path):
     from workflow.support.synteny_neighbors import ensure_species_gene_cache, load_gene_info
 

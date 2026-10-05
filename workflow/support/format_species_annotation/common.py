@@ -2,6 +2,7 @@
 
 import io
 import re
+import shlex
 import tarfile
 from collections import defaultdict
 from pathlib import Path
@@ -230,7 +231,28 @@ def normalize_gff_attribute_value(raw_value):
 
 def parse_gff_attributes(attr_text):
     attrs = defaultdict(list)
-    fields = [raw_field.strip() for raw_field in str(attr_text or "").split(";") if raw_field.strip() != ""]
+    text = str(attr_text or "")
+    if re.match(r"^\s*[^\s=;]+\s+", text):
+        # GTF quoted scalars have no GFF3 list or percent-escape semantics.
+        # Use the same quote-aware lexer as source syntax validation, so a
+        # literal comma/semicolon/percent remains one exact attribute value.
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=";")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = iter(lexer)
+        for key in tokens:
+            if key == ";":
+                continue
+            value = next(tokens, None)
+            if value is None or value == ";":
+                raise ValueError("Missing GTF attribute value: " + key)
+            separator = next(tokens, None)
+            if separator not in (None, ";"):
+                raise ValueError("Expected ';' after GTF attribute: " + key)
+            if value:
+                attrs[key].append(value)
+        return {key: tuple(values) for key, values in attrs.items()}
+    fields = [raw_field.strip() for raw_field in text.split(";") if raw_field.strip() != ""]
     if len(fields) == 1 and "=" not in fields[0] and not re.search(r"\s", fields[0]) and fields[0] != ".":
         # GFACS/TreeGenes GTF exports use a lone identifier in column 9.
         # It is an explicit model boundary, so expose it as both feature and

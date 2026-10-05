@@ -1,8 +1,10 @@
 import argparse
 import csv
+import importlib
 import itertools
 import json
 import random
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -37,6 +39,27 @@ def test_prepare_selects_one_isoform_and_preserves_id_mapping(tmp_path):
     assert all(row["locus_id"] == "g1" for row in rows)
 
 
+@pytest.mark.parametrize("locus_fasta", [False, True])
+def test_prepare_uses_explicit_short_transcript_and_cds_bounds(tmp_path, locus_fasta):
+    source = write_inputs(tmp_path, ">Species_name_g1\nMPEPTIDE\n" if locus_fasta
+                          else ">Species_name_t1\nMPEPTIDE\n>Species_name_t2\nMPEPTIDEAAA\n")
+    gff = tmp_path / 'Species_name.gff3'
+    gff.write_text(gff.read_text() + 'chr1\ttest\tCDS\t4\t27\t.\t+\t0\tParent=t1\n'
+                   'chr1\ttest\tCDS\t1\t33\t.\t+\t0\tParent=t2\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Species_name\tSpecies_name_g1\tc1\tt1\tselected\t1\t0.2\tconserved\n')
+    genes, metadata = synteny.prepare_genome(source, tmp_path, 'target', 1, representative_map=selection)
+    expected_id = 'Species_name_g1' if locus_fasta else 'Species_name_t1'
+    assert [(gene.gene_id, gene.start, gene.end) for gene in genes] == [(expected_id, 3, 27)]
+    assert metadata['isoform_policy'] == 'representative_map'
+    assert metadata['representative_map_sha256'] == synteny.digest(selection)
+    assert (tmp_path / 'target.pep').read_text() == f'>{expected_id}\nMPEPTIDE\n'
+    selection.write_text(selection.read_text().replace('\tt1\t', '\tabsent\t'))
+    with pytest.raises(ValueError, match='Representative transcript absent'):
+        synteny.prepare_genome(source, tmp_path, 'target', 1, representative_map=selection)
+
+
 @pytest.mark.parametrize("fasta,message", [
     (">t1\nMPEPTIDE\n>t1\nMPEPTIDE\n", "Duplicate"),
     (">Species_name_t1\nMPEPTIDE\n>t1\nMPEPTIDE\n", "Ambiguous"),
@@ -56,6 +79,163 @@ def test_cds_translation_uses_selected_genetic_code(tmp_path):
     genes, _ = synteny.prepare_genome(source, tmp_path, "query", 1)
     assert genes[0].gene_id == "Species_name_t1"
     assert (tmp_path / "query.pep").read_text() == ">Species_name_t1\nMQ\n"
+
+
+@pytest.mark.parametrize('dna,phase', [('TATGAAATAA', 1), ('TTATGAAATAAA', 2), ('ATGAAATAAA', 0)])
+def test_raw_representative_cds_translation_respects_partial_phase(tmp_path, dna, phase):
+    source = write_inputs(tmp_path, '>Species_name_t1\n' + dna + '\n')
+    source.update(mode='cds', genetic_code=1)
+    Path(source['gff']).write_text(f'chr1\ts\tgene\t1\t{len(dna)}\t.\t+\t.\tID=g1\n'
+                                  f'chr1\ts\tmRNA\t1\t{len(dna)}\t.\t+\t.\tID=t1;Parent=g1\n'
+                                  f'chr1\ts\tCDS\t1\t{len(dna)}\t.\t+\t{phase}\tParent=t1\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Species_name\tSpecies_name_g1\tc1\tt1\tselected\t1\t0.2\tconserved\n')
+    genes, _metadata = synteny.prepare_genome(source, tmp_path, 'target', 1, representative_map=selection)
+    assert len(genes) == 1
+    assert (tmp_path / 'target.pep').read_text() == '>Species_name_t1\nMK\n'
+    assert Path(source['fasta']).read_text() == '>Species_name_t1\n' + dna + '\n'
+
+
+@pytest.mark.parametrize('dna,phase,code,protein,pseudo,valid', [
+    ('TATGAAATAA', 1, 1, 'MK', False, True),
+    ('TTATGTGATAAT', 2, 4, 'MW', False, True),
+    ('ATGAAATAA', 0, 1, 'QQQ', False, False),
+    ('ATGTGATAA', 0, 1, 'MW', False, False),
+    ('ATGAAATAATAA', 0, 1, 'MK', False, False),
+    ('ATGAAATAA', 0, 1, 'MK', True, True),
+])
+def test_manual_effective_manifest_binds_admitted_protein_to_raw_phase_aware_cds(
+        tmp_path, dna, phase, code, protein, pseudo, valid):
+    """Hash-valid external manifests without analysis_* retain only true matches."""
+    paths = {role: tmp_path / ('Species_name.' + role + '.fa') for role in ['cds', 'protein', 'genome']}
+    paths['gff'], paths['representative_map'] = tmp_path / 'Species_name.gff3', tmp_path / 'map.tsv'
+    paths['cds'].write_text('>Species_name_g1\n' + dna + '\n')
+    paths['protein'].write_text('>Species_name_g1\n' + protein + '\n')
+    paths['genome'].write_text('>chr1\n' + dna + '\n')
+    extra = ';pseudo=true' if pseudo else ''
+    paths['gff'].write_text(f'chr1\ts\tgene\t1\t{len(dna)}\t.\t+\t.\tID=g1{extra}\n'
+                            f'chr1\ts\tmRNA\t1\t{len(dna)}\t.\t+\t.\tID=t1;Parent=g1\n'
+                            f'chr1\ts\tCDS\t1\t{len(dna)}\t.\t+\t{phase}\tParent=t1\n')
+    paths['representative_map'].write_text(
+        'species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+        'Species_name\tSpecies_name_g1\tc1\tt1\tselected\t1\t0.2\tmanual\n')
+    row = {'species': 'Species_name', 'genetic_code': str(code),
+           **{role: str(path) for role, path in paths.items()},
+           **{role + '_sha256': synteny.digest(path) for role, path in paths.items()}}
+    manifest = tmp_path / 'external.tsv'
+    with manifest.open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row), delimiter='\t')
+        writer.writeheader()
+        writer.writerow(row)
+    verified = synteny.load_effective_inputs(manifest)['Species_name']
+    assert 'analysis_cds' not in verified
+    source = dict(species='Species_name', mode='cds', fasta=verified['cds'], gff=verified['gff'],
+                  feature='', attribute='', genetic_code=int(verified['genetic_code']),
+                  representative_map=verified['representative_map'], admitted_protein=verified['protein'])
+    original = paths['cds'].read_bytes()
+    if valid:
+        genes, _ = synteny.prepare_genome(source, tmp_path, 'target', 1)
+        assert len(genes) == 1
+        assert (tmp_path / 'target.pep').read_bytes() == paths['protein'].read_bytes()
+    else:
+        with pytest.raises(ValueError, match='Admitted protein disagrees with phase-aware CDS translation'):
+            synteny.prepare_genome(source, tmp_path, 'target', 1)
+        assert not (tmp_path / 'target.pep').exists()
+    assert paths['cds'].read_bytes() == original
+
+
+@pytest.mark.parametrize('analysis_view', [False, True])
+def test_plan_uses_hash_bound_effective_inputs_as_one_bundle(tmp_path, monkeypatch, analysis_view):
+    fields = ['species', 'cds', 'protein', 'gff', 'genome', 'representative_map', 'genetic_code',
+              'cds_sha256', 'protein_sha256', 'gff_sha256', 'genome_sha256', 'representative_map_sha256']
+    if analysis_view:
+        fields += ['analysis_cds', 'analysis_gff', 'analysis_cds_sha256', 'analysis_gff_sha256']
+    selected = tmp_path / 'selected'
+    selected.mkdir()
+    selection = selected / 'representative_map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         + ''.join(f'{species}\t{species}_g1\t{species}_c1\tt1\tselected\t1\t0.2\tconserved\n'
+                                   for species in ['Target_species', 'Query_species']))
+    rows = []
+    for species in ['Target_species', 'Query_species']:
+        paths = {role: selected / f'{species}.{role}.fa' for role in ['cds', 'protein', 'genome']}
+        paths['gff'] = selected / f'{species}.gff3'
+        paths['representative_map'] = selection
+        paths['cds'].write_text(f'>{species}_g1\nATGAAATAA\n')
+        paths['protein'].write_text(f'>{species}_g1\nMK\n')
+        paths['genome'].write_text('>chr1\nATGAAATAA\n')
+        paths['gff'].write_text('chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g1\n'
+                                'chr1\ts\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\n'
+                                'chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=t1\n')
+        if analysis_view:
+            for role in ('cds', 'gff'):
+                paths['analysis_' + role] = selected / f'{species}.analysis.{role}'
+                paths['analysis_' + role].write_bytes(paths[role].read_bytes())
+        rows.append({'species': species, 'genetic_code': '1', **{role: str(path) for role, path in paths.items()},
+                     **{role + '_sha256': synteny.digest(path) for role, path in paths.items()}})
+    manifest = selected / 'inputs.tsv'
+    with manifest.open('w') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t')
+        writer.writeheader()
+        writer.writerows(rows)
+    pairs = tmp_path / 'pairs.tsv'
+    pairs.write_text('analysis_id\ttarget_species\tquery_species\npair\tTarget_species\tQuery_species\n')
+    monkeypatch.setattr(synteny, 'tool_identity', lambda: {})
+    args = argparse.Namespace(workspace=tmp_path, pairs=pairs, sequence_mode='auto', genetic_code=1,
+                              cscore=0.7, min_anchors=4, distance=20, minimum_mapping_fraction=1,
+                              formats='svg', karyotype_sort='both_length', representative_inputs=manifest)
+    plan = synteny.build_plan(args)
+    source = plan['pairs'][0]['target']
+    assert source['fasta'] == rows[0]['protein'] and source['gff'] == rows[0]['gff']
+    assert source['representative_map'] == str(selection)
+    assert plan['parameters']['isoform_policy'] == 'representative_map'
+    assert plan['representative_inputs'] == str(manifest)
+    assert str(manifest) in plan['input_hashes']
+    assert 'representative_inputs=' + str(manifest) in synteny.contract_args(plan, 'analysis')
+    # A user-authored external manifest has no published receipt authority;
+    # its explicit metadata remains editable while every file stays hash-bound.
+    external = selected / 'external.tsv'
+    with external.open('w') as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t')
+        writer.writeheader()
+        writer.writerows([dict(row, genetic_code='4') for row in rows])
+    assert {row['genetic_code'] for row in synteny.load_effective_inputs(external).values()} == {'4'}
+    args.sequence_mode = 'cds'
+    coding_plan = synteny.build_plan(args)
+    coding_source = coding_plan['pairs'][0]['target']
+    assert coding_source['admitted_protein'] == rows[0]['protein']
+    assert coding_source['fasta'] == rows[0]['analysis_cds' if analysis_view else 'cds']
+    assert coding_source['gff'] == rows[0]['analysis_gff' if analysis_view else 'gff']
+    if analysis_view:
+        ds = importlib.import_module('pairwise_synteny_ds')
+        monkeypatch.setattr(ds, 'ds_tool_identity', lambda: {'source_hashes': {}})
+        args.dotplot_color = 'ds'
+        ds_plan = synteny.build_plan(args)
+        assert ds_plan['pairs'][0]['ds']['target']['fasta'] == rows[0]['analysis_cds']
+        assert rows[0]['analysis_gff'] in ds_plan['input_hashes']
+        assert rows[0]['analysis_cds'] in ds_plan['input_hashes']
+        original = paths['analysis_cds'].read_bytes()
+        paths['analysis_cds'].write_text('>Query_species_g1\nATGCCCTAA\n')
+        with pytest.raises(ValueError, match='Changed effective inputs analysis_cds'):
+            synteny.build_plan(args)
+        paths['analysis_cds'].write_bytes(original)
+    paths['protein'].write_text('>Query_species_g1\nMA\n')
+    with pytest.raises(ValueError, match='Changed effective inputs protein'):
+        synteny.build_plan(args)
+
+
+@pytest.mark.parametrize('partial_columns', [
+    ['analysis_cds'], ['analysis_cds', 'analysis_cds_sha256'],
+    ['analysis_cds', 'analysis_gff', 'analysis_cds_sha256'],
+])
+def test_effective_inputs_reject_partial_analysis_view_contract(tmp_path, partial_columns):
+    path = tmp_path / 'inputs.tsv'
+    columns = ['species', 'genetic_code', 'cds', 'protein', 'gff', 'genome', 'representative_map',
+               'cds_sha256', 'protein_sha256', 'gff_sha256', 'genome_sha256', 'representative_map_sha256']
+    path.write_text('\t'.join(columns + partial_columns) + '\n')
+    with pytest.raises(ValueError, match='analysis view requires'):
+        synteny.load_effective_inputs(path)
 
 
 def test_unknown_display_chromosome_is_rejected(tmp_path):

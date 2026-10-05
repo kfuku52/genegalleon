@@ -7,7 +7,8 @@ It provides scheduler-ready staged pipelines for:
 
 - transcriptome assembly and expression quantification,
 - CDS/genome annotation and contamination filtering,
-- optional [synteny-guided recovery of missing gene models](docs/gene-model-rescue.md),
+- optional [synteny-guided recovery of missing gene models](docs/gene-model-rescue.md) and
+  [existing-model refinement and conserved isoform selection](docs/gene-model-refinement.md),
 - local pairwise fractionation-bias and within-genome self-synteny retention analysis with kfFractBias,
 - orthogroup inference,
 - species-tree inference and dating,

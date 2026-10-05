@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import csv
 import gzip
 import hashlib
 import json
@@ -13,6 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import pandas
+from Bio.Data import CodonTable
 
 try:
     import fcntl
@@ -56,10 +58,12 @@ def build_arg_parser():
     parser.add_argument("--cache_dir", required=True, type=str)
     parser.add_argument("--lock_dir", default="", type=str)
     parser.add_argument("--gff2genestat_script", required=True, type=str)
+    parser.add_argument("--representative-map", default="", type=str)
     parser.add_argument("--input_sequence_mode", default="cds", choices=["cds", "protein"], type=str)
     parser.add_argument("--window", default=5, type=int)
     parser.add_argument("--evalue", default=0.01, type=float)
     parser.add_argument("--genetic_code", default=1, type=int)
+    parser.add_argument('--genetic-codes', default='', type=str)
     parser.add_argument("--threads", default=1, type=int)
     parser.add_argument("--outfile", required=True, type=str)
     return parser
@@ -178,19 +182,28 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def species_gene_cache_contract(species_name, species_cds_path, species_gff_path):
-    return {
+def species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map=None,
+                                gff2genestat_script=None):
+    support = Path(__file__).resolve().parent
+    contract = {
         "schema_version": 1,
         "species": species_name,
         "inputs": {
             "cds_sha256": sha256_file(species_cds_path),
             "gff_sha256": sha256_file(species_gff_path),
+            "gff_reader_sha256": sha256_file(gff2genestat_script or support / 'gff2genestat.py'),
+            "feature_structure_sha256": sha256_file(support / 'gff_feature_structure.py'),
+            "representative_selection_sha256": sha256_file(support / 'representative_selection.py'),
         },
         "parameters": {
             "feature": "CDS", "multiple_hits": "longest", "gff_annotation_schema": 5,
             "phase_policy": "report",
         },
     }
+    if representative_map:
+        contract["inputs"]["representative_map_sha256"] = sha256_file(representative_map)
+        contract["parameters"]["multiple_hits"] = "representative_map"
+    return contract
 
 
 def species_gene_cache_is_current(out_path, manifest_path, contract):
@@ -231,6 +244,7 @@ def ensure_species_gene_cache(
     lock_dir,
     gff2genestat_script,
     threads,
+    representative_map=None,
 ):
     ensure_parent_dir(os.path.join(cache_dir, "dummy"))
     out_path = os.path.join(cache_dir, species_name + ".gff_info.tsv")
@@ -238,7 +252,8 @@ def ensure_species_gene_cache(
     species_gff_path = find_species_file(dir_sp_gff, species_name, GFF_EXTENSIONS)
     if not species_gff_path:
         raise FileNotFoundError("No unique GFF file matched species: {}".format(species_name))
-    contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path)
+    contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
+                                           gff2genestat_script)
     if species_gene_cache_is_current(out_path, manifest_path, contract):
         return out_path
     lock_key = "{}|{}".format(os.path.abspath(cache_dir), species_name)
@@ -249,7 +264,8 @@ def ensure_species_gene_cache(
         if HAS_FCNTL:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
         try:
-            contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path)
+            contract = species_gene_cache_contract(species_name, species_cds_path, species_gff_path, representative_map,
+                                                   gff2genestat_script)
             if species_gene_cache_is_current(out_path, manifest_path, contract):
                 return out_path
             tmp_path = out_path + ".tmp." + str(os.getpid())
@@ -276,6 +292,8 @@ def ensure_species_gene_cache(
                 "--outfile",
                 tmp_path,
             ]
+            if representative_map:
+                cmd.extend(("--representative-map", str(representative_map)))
             run_cmd(cmd)
             if (not os.path.exists(tmp_path)) or os.path.getsize(tmp_path) == 0:
                 raise RuntimeError("gff2genestat did not produce an output: {}".format(tmp_path))
@@ -351,7 +369,28 @@ class UnionFind:
             self.rank[rx] += 1
 
 
-def cluster_neighbors_by_similarity(seq_fasta, input_sequence_mode, evalue_cutoff, genetic_code, threads, tmpdir):
+def load_species_genetic_codes(path):
+    if not path:
+        return {}
+    codes = {}
+    with open(path, newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader((line for line in handle if line.strip() and not line.lstrip().startswith('#')),
+                                delimiter='\t')
+        if not {'species', 'genetic_code'}.issubset(reader.fieldnames or ()):
+            raise ValueError('Genetic-code table requires species and genetic_code columns')
+        for row in reader:
+            species = (row.get('species') or '').strip().replace(' ', '_')
+            if not species or species in codes or None in row:
+                raise ValueError('Empty or duplicate species in genetic-code table')
+            code = int(row['genetic_code'])
+            if code not in CodonTable.generic_by_id:
+                raise ValueError('Unknown NCBI genetic code: ' + str(code))
+            codes[species] = code
+    return codes
+
+
+def cluster_neighbors_by_similarity(seq_fasta, input_sequence_mode, evalue_cutoff, genetic_code, threads, tmpdir,
+                                    *, species_genetic_codes=None):
     genes = read_fasta_ids(seq_fasta)
     genes = sorted(set(genes))
     if len(genes) == 0:
@@ -364,6 +403,21 @@ def cluster_neighbors_by_similarity(seq_fasta, input_sequence_mode, evalue_cutof
     blast_out = os.path.join(tmpdir, "neighbors.blast.tsv")
     if input_sequence_mode == "protein":
         shutil.copyfile(seq_fasta, pep_fasta)
+    elif species_genetic_codes:
+        sequences = parse_fasta_subset(seq_fasta, set(genes))
+        by_code = defaultdict(dict)
+        for gene in genes:
+            code = species_genetic_codes.get(guess_species_name(gene), genetic_code)
+            by_code[code][gene] = sequences[gene]
+        with open(pep_fasta, 'w') as out:
+            for code, records in sorted(by_code.items()):
+                coding = os.path.join(tmpdir, 'neighbors.code' + str(code) + '.fasta')
+                translated = coding + '.pep'
+                write_fasta(records, coding)
+                run_cmd(['seqkit', 'translate', '--allow-unknown-codon', '--transl-table', str(code),
+                         '--threads', str(max(1, int(threads))), coding, '--out-file', translated])
+                with open(translated) as handle:
+                    shutil.copyfileobj(handle, out)
     else:
         run_cmd(
             [
@@ -462,6 +516,7 @@ def write_empty_output(path):
 
 def main():
     args = build_arg_parser().parse_args()
+    species_genetic_codes = load_species_genetic_codes(args.genetic_codes)
     args.window = max(1, int(args.window))
     args.threads = max(1, int(args.threads))
     lock_dir = resolve_lock_dir(args.lock_dir)
@@ -494,6 +549,7 @@ def main():
                 lock_dir=lock_dir,
                 gff2genestat_script=args.gff2genestat_script,
                 threads=args.threads,
+                representative_map=args.representative_map,
             )
         except Exception as exc:
             raise RuntimeError("failed to prepare gene cache for {}: {}".format(species_name, exc)) from exc
@@ -574,6 +630,7 @@ def main():
             genetic_code=args.genetic_code,
             threads=args.threads,
             tmpdir=tmpdir,
+            species_genetic_codes=species_genetic_codes,
         )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -13,6 +13,9 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_gene_evolution_entrypoint.sh.
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
+representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
+representative_map=""
+representative_map_args=()
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 annotation_species="${annotation_species:-${GG_COMMON_REFERENCE_SPECIES:-auto}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
@@ -1708,20 +1711,40 @@ dir_sp_genome="${gg_workspace_input_dir}/species_genome"
 dir_sp_gff="${gg_workspace_input_dir}/species_gff"
 dir_sp_expression="${gg_workspace_input_dir}/species_expression"
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
-if [[ -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
+if [[ -z "${representative_inputs}" && -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
   dir_sp_cds=$(python "${gg_support_dir}/cds_resolution.py" \
     --source-dir "${dir_sp_cds}" \
     --output-dir "${gg_workspace_output_dir}/species_cds_resolved" \
     --view-dir "${gg_workspace_output_dir}/species_cds_resolved_views")
 fi
 dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"
+if [[ -n "${representative_inputs}" ]]; then
+  representative_layout_field=layout
+  [[ "${input_sequence_mode}" != cds ]] || representative_layout_field=coding_layout
+  representative_layout=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs --inputs "${representative_inputs}" --field "${representative_layout_field}") || exit $?
+  IFS=$'\t' read -r dir_sp_cds dir_sp_protein_input dir_sp_gff dir_sp_genome representative_map representative_genetic_codes representative_codon_code <<< "${representative_layout}"
+  [[ -z "${representative_codon_code}" ]] || genetic_code="${representative_codon_code}"
+  representative_map_args=(--representative-map "${representative_map}")
+fi
+
 dir_sp_blastdb="${gg_workspace_output_dir}/species_cds_blastdb"
 dir_fasta_sequence_store="${gg_workspace_output_dir}/.gg_cache/fasta_sequence_store"
+dir_synteny_gene_cache="${gg_workspace_output_dir}/species_gff_info"
+if [[ -n "${representative_inputs}" ]]; then
+  dir_fasta_sequence_store=$(python "${gg_support_dir}/fasta_sequence_store.py" namespace \
+    --root "${dir_fasta_sequence_store}" --representative-inputs "${representative_inputs}" \
+    --view "${input_sequence_mode}") || exit $?
+  dir_synteny_gene_cache="${dir_fasta_sequence_store}/synteny_gene_info"
+  dir_sp_blastdb="${dir_fasta_sequence_store}/species_cds_blastdb"
+fi
 file_species_cds_store_db="${dir_fasta_sequence_store}/species_cds.sqlite3"
 file_species_cds_store_manifest="${dir_fasta_sequence_store}/species_cds.json"
+file_species_analysis_cds_store_db="${dir_fasta_sequence_store}/analysis_cds.sqlite3"
+file_species_analysis_cds_store_manifest="${dir_fasta_sequence_store}/analysis_cds.json"
 file_species_protein_store_db="${dir_fasta_sequence_store}/species_protein.sqlite3"
 file_species_protein_store_manifest="${dir_fasta_sequence_store}/species_protein.json"
 file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"
+[[ -z "${representative_genetic_codes:-}" ]] || file_species_genetic_code="${representative_genetic_codes}"
 file_species_genetic_code_resolved="${dir_output_active}/parameters/${og_id}_species_genetic_code.resolved.tsv"
 annotation_species_resolved=""
 treevis_clade_ortholog_prefix=""
@@ -1989,6 +2012,11 @@ ensure_species_fasta_sequence_store() {
       database="${file_species_cds_store_db}"
       manifest="${file_species_cds_store_manifest}"
       ;;
+    analysis_cds)
+      source_dir="${dir_sp_analysis_cds}"
+      database="${file_species_analysis_cds_store_db}"
+      manifest="${file_species_analysis_cds_store_manifest}"
+      ;;
     protein)
       source_dir="${dir_sp_protein_input}"
       database="${file_species_protein_store_db}"
@@ -2046,9 +2074,18 @@ query_fasta_provenance_args=(
   --parameter "genetic_code=${genetic_code}"
 )
 if [[ "$(head -c 1 "${file_query_gene}")" != ">" ]]; then
-  ensure_species_fasta_sequence_store cds || exit 1
-  query_fasta_provenance_args+=(--input "species_cds_index=${file_species_cds_store_manifest}")
-  query_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=1")
+  query_fasta_sequence_kind=cds
+  if [[ -n "${representative_inputs:-}" ]]; then
+    query_fasta_sequence_kind=protein
+    query_fasta_store_db="${file_species_protein_store_db}"
+    query_fasta_provenance_args+=(--input "species_protein_index=${file_species_protein_store_manifest}")
+  else
+    query_fasta_store_db="${file_species_cds_store_db}"
+    query_fasta_provenance_args+=(--input "species_cds_index=${file_species_cds_store_manifest}")
+  fi
+  ensure_species_fasta_sequence_store "${query_fasta_sequence_kind}" || exit 1
+  query_fasta_provenance_args+=(--parameter "query_sequence_kind=${query_fasta_sequence_kind}")
+  query_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=2")
 fi
 gg_artifact_prepare_stage query_fasta_needs_update run_extract_query_fasta "${query_fasta_provenance_args[@]}" || exit $?
 if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; then
@@ -2070,7 +2107,7 @@ if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; 
       exit 1
     fi
   else
-    echo "Gene IDs were detected. Extracting in-frame CDS sequences from species_cds: ${file_query_gene}"
+    echo "Gene IDs were detected. Extracting ${query_fasta_sequence_kind} sequences: ${file_query_gene}"
     cp_out "${file_query_gene}" "${dir_output_active}/query_gene/$(basename "${file_query_gene}")"
     mapfile -t genes < <(sed -e '/^[[:space:]]*$/d' "${file_query_gene}")
     if [[ -e pattern.txt ]]; then
@@ -2091,21 +2128,25 @@ if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; 
       rm -f -- "${og_id}.query.cds.2.fasta"
     fi
     python "${gg_support_dir}/fasta_sequence_store.py" extract \
-      --database "${file_species_cds_store_db}" \
+      --database "${query_fasta_store_db}" \
       --pattern-file pattern.txt \
       --output "${og_id}.query.cds.fasta" \
       --ignore-case \
       --query-variants \
       --prefix-species
-    gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" < "${og_id}.query.cds.fasta" |
-      sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
-        > "${og_id}.query.cds.2.fasta"
+    if [[ "${query_fasta_sequence_kind}" == "protein" ]]; then
+      cp -- "${og_id}.query.cds.fasta" "${og_id}.query.cds.2.fasta"
+    else
+      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${genetic_code}" < "${og_id}.query.cds.fasta" |
+        sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' \
+          > "${og_id}.query.cds.2.fasta"
+    fi
     num_query=${#genes[@]}
-    num_result=$(grep -c -e "^>" "${og_id}.query.cds.2.fasta")
+    num_result=$(grep -c -e "^>" "${og_id}.query.cds.2.fasta" || true)
     echo "Number of gene names in query: ${num_query}"
     echo "Number of gene names in extracted fasta: ${num_result}"
     if [[ ${num_query} -ne ${num_result} ]]; then
-      echo "Some gene names were not found in species_cds."
+      echo "Some gene names were not found in the ${query_fasta_sequence_kind} inventory."
       for gene_name in "${genes[@]}"; do
         if ! awk -v gene="${gene_name}" '
 	                  /^>/ {
@@ -2119,15 +2160,19 @@ if [[ ${query_fasta_needs_update} -eq 1 && ${run_extract_query_fasta} -eq 1 ]]; 
 	                  }
 	                  END { exit(found ? 0 : 1) }
 	                ' "${og_id}.query.cds.2.fasta"; then
-          echo "Query gene not found in species_cds: ${gene_name}"
+          echo "Query gene not found in the ${query_fasta_sequence_kind} inventory: ${gene_name}"
         fi
       done
       echo "Exiting."
       exit 1
     fi
     if [[ -s "${og_id}.query.cds.2.fasta" ]]; then
-      echo "Translating in-frame CDS sequences to amino acid sequences: ${og_id}.query.cds.2.fasta"
-      seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${og_id}.query.cds.2.fasta" > "${og_id}.query.aa.tmp.fasta"
+      if [[ "${query_fasta_sequence_kind}" == "protein" ]]; then
+        cp -- "${og_id}.query.cds.2.fasta" "${og_id}.query.aa.tmp.fasta"
+      else
+        echo "Translating in-frame CDS sequences to amino acid sequences: ${og_id}.query.cds.2.fasta"
+        seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${GG_TASK_CPUS}" "${og_id}.query.cds.2.fasta" > "${og_id}.query.aa.tmp.fasta"
+      fi
       seqkit seq --threads "${GG_TASK_CPUS}" "${og_id}.query.aa.tmp.fasta" --out-file "${og_id}.query.aa.out.fa.gz"
       mv_out "${og_id}.query.aa.out.fa.gz" "${file_og_query_aa_fasta}"
       rm -f -- "${og_id}.query.aa.tmp.fasta"
@@ -2158,9 +2203,37 @@ query_blast_provenance_args=(
   --parameter "auto_evalue_cutoffs=${query_blast_auto_evalue_maxlen_cutoffs}"
 )
 if [[ "${mode_gene_evolution}" == "query2family" ]]; then
-  ensure_species_fasta_sequence_store cds || exit 1
-  query_blast_provenance_args+=(--input "species_cds_index=${file_species_cds_store_manifest}")
-  query_blast_provenance_args+=(--parameter "fasta_sequence_store_schema=1")
+  query_reference_kind=cds
+  query_reference_dir="${dir_sp_cds}"
+  query_reference_manifest="${file_species_cds_store_manifest}"
+  query_reference_codes=""
+  if [[ -n "${representative_inputs:-}" && "${query_blast_method}" == "diamond" ]]; then
+    query_reference_kind=protein
+    query_reference_dir="${dir_sp_protein_input}"
+    query_reference_manifest="${file_species_protein_store_manifest}"
+  elif [[ -n "${representative_inputs:-}" && "${query_blast_method}" == "tblastn" ]]; then
+    dir_sp_analysis_cds=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+      --inputs "${representative_inputs}" --field analysis_cds) || exit $?
+    query_reference_kind=analysis_cds
+    query_reference_dir="${dir_sp_analysis_cds}"
+    query_reference_manifest="${file_species_analysis_cds_store_manifest}"
+    query_reference_codes="${file_species_genetic_code}"
+    query_blast_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
+  fi
+  ensure_species_fasta_sequence_store "${query_reference_kind}" || exit 1
+  if [[ "${query_reference_kind}" == "analysis_cds" ]]; then
+    query_reference_total_nt=$(python "${gg_support_dir}/fasta_sequence_store.py" total-bytes \
+      --database "${file_species_analysis_cds_store_db}" \
+      --manifest "${file_species_analysis_cds_store_manifest}") || exit 1
+    if [[ ! "${query_reference_total_nt}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Selected TBLASTN reference has no admitted coding bases." >&2
+      exit 1
+    fi
+    query_blast_provenance_args+=(--parameter "tblastn_database_size=${query_reference_total_nt}")
+  fi
+  query_blast_provenance_args+=(--input "species_${query_reference_kind}_index=${query_reference_manifest}")
+  query_blast_provenance_args+=(--parameter "reference_sequence_kind=${query_reference_kind}")
+  query_blast_provenance_args+=(--parameter "fasta_sequence_store_schema=2")
   gg_artifact_prepare_stage query_blast_needs_update run_query_blast "${query_blast_provenance_args[@]}" || exit $?
 fi
 if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_gene_evolution}" == "query2family" ]]; then
@@ -2180,12 +2253,16 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
       echo "diamond was not found but query_blast_method=diamond. Exiting."
       exit 1
     fi
-    echo "DIAMOND mode selected: species CDS will be translated to proteins because diamond makedb/blastp use protein reference databases."
+    if [[ "${query_reference_kind}" == "protein" ]]; then
+      echo "DIAMOND mode selected: using admitted species proteins from the selected bundle."
+    else
+      echo "DIAMOND mode selected: species CDS will be translated to proteins because diamond makedb/blastp use protein reference databases."
+    fi
   fi
 
   export BLASTDB_LMDB_MAP_SIZE=100000000
-  check_species_cds "${gg_workspace_dir}"
-  check_if_species_files_unique "${dir_sp_cds}"
+  check_species_cds_dir "${query_reference_dir}"
+  check_if_species_files_unique "${query_reference_dir}"
 
   if [[ -e "${og_id}".blastQuery.fasta ]]; then
     rm -f -- "${og_id}.blastQuery.fasta"
@@ -2193,9 +2270,10 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
   touch "${og_id}.blastQuery.fasta"
 
   db_files=()
+  db_genetic_codes=()
   ensure_dir "${dir_sp_blastdb}"
   cds_files=()
-  mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
+  mapfile -t cds_files < <(gg_find_fasta_files "${query_reference_dir}" 1)
   cds_spp=()
   for cds_file in "${cds_files[@]}"; do
     cds_spp+=("$(gg_species_name_from_path "${cds_file}")")
@@ -2207,14 +2285,25 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
   db_threads_per_job=$((GG_TASK_CPUS / db_build_jobs))
   [[ ${db_threads_per_job} -lt 1 ]] && db_threads_per_job=1
   species_cds_digest_table="${dir_tmp}/species_cds.sequence_digests.$$.tsv"
-  python - "${file_species_cds_store_manifest}" > "${species_cds_digest_table}" <<'PY'
+  python - "${query_reference_manifest}" "${query_reference_codes}" > "${species_cds_digest_table}" <<'PY'
+import csv
 import json
 import pathlib
 import sys
 
 payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+codes = {}
+if sys.argv[2]:
+    with open(sys.argv[2], newline="") as handle:
+        for row in csv.DictReader(handle, delimiter="\t"):
+            if row["species"] in codes:
+                raise SystemExit("Duplicate selected genetic-code species: " + row["species"])
+            codes[row["species"]] = int(row["genetic_code"])
 for entry in payload.get("sources", []):
-    print(f"{entry['species']}\t{entry['sha256']}")
+    if sys.argv[2] and entry["species"] not in codes:
+        raise SystemExit("Missing selected genetic code: " + entry["species"])
+    code = str(codes[entry["species"]]) if sys.argv[2] else ""
+    print(f"{entry['species']}\t{entry['sha256']}\t{code}")
 PY
   filter_translated_fasta_for_diamond() {
     awk '
@@ -2282,10 +2371,19 @@ PY
     fi
     db_source_signature="source_sha256=${sp_cds_source_digest};method=${query_blast_method}"
     if [[ ${query_blast_method} == "diamond" ]]; then
-      db_source_signature="${db_source_signature};genetic_code=${genetic_code};translation_filter=1"
+      if [[ "${query_reference_kind}" == "protein" ]]; then
+        db_source_signature="${db_source_signature};reference=admitted_protein"
+      else
+        db_source_signature="${db_source_signature};genetic_code=${genetic_code};translation_filter=1"
+      fi
+    elif [[ "${query_reference_kind}" == "analysis_cds" ]]; then
+      db_source_signature="${db_source_signature};reference=admitted_analysis_cds"
     fi
     db_signature_file="${sp_cds_blastdb}.${query_blast_method}.build.signature"
     db_files+=("${sp_cds_blastdb}")
+    if [[ "${query_reference_kind}" == "analysis_cds" ]]; then
+      db_genetic_codes+=("$(awk -F '\t' -v species="${sp}" '$1 == species {print $3; exit}' "${species_cds_digest_table}")")
+    fi
     if [[ ${query_blast_method} == "tblastn" ]]; then
       echo "makeblastdb input CDS file: ${sp_cds}"
       echo "makeblastdb output database file: ${sp_cds_blastdb}"
@@ -2350,11 +2448,8 @@ PY
             fi
             echo "Generating DIAMOND database: ${sp_cds}"
             echo "Generating DIAMOND database: ${sp_cds}" >&2
-            if [[ ${sp_cds} == *.gz ]]; then
-              seqkit seq --remove-gaps --threads 1 "${sp_cds}" |
-                seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${db_threads_per_job}" |
-                filter_translated_fasta_for_diamond \
-                  > "${sp_cds_diamond_fasta}"
+            if [[ "${query_reference_kind}" == "protein" ]]; then
+              seqkit seq --threads "${db_threads_per_job}" "${sp_cds}" > "${sp_cds_diamond_fasta}"
             else
               seqkit seq --remove-gaps --threads 1 "${sp_cds}" |
                 seqkit translate --allow-unknown-codon --transl-table "${genetic_code}" --threads "${db_threads_per_job}" |
@@ -2396,20 +2491,51 @@ PY
 
   outfmt="qacc sacc pident length mismatch gapopen qstart qend sstart send evalue bitscore frames qlen slen"
   if [[ ${query_blast_method} == "tblastn" ]]; then
-    db_files_str=$(printf " %s" "${db_files[@]}")
-    db_files_str="${db_files_str# }"
     echo "Running tblastn."
-    if ! tblastn \
-      -query "${query_aa_local}" \
-      -db "${db_files_str}" \
-      -out blast_out.tsv \
-      -db_gencode "${genetic_code}" \
-      -evalue "${effective_query_blast_evalue}" \
-      -max_target_seqs 50000 \
-      -outfmt "6 ${outfmt}" \
-      -num_threads "${GG_TASK_CPUS}"; then
-      echo "tblastn failed. Exiting."
-      exit 1
+    if [[ "${query_reference_kind}" == "analysis_cds" ]]; then
+      tblastn_search_jobs=${GG_TASK_CPUS}
+      [[ ${tblastn_search_jobs} -le ${#db_files[@]} ]] || tblastn_search_jobs=${#db_files[@]}
+      [[ ${tblastn_search_jobs} -ge 1 ]] || tblastn_search_jobs=1
+      tblastn_threads_per_job=$((GG_TASK_CPUS / tblastn_search_jobs))
+      [[ ${tblastn_threads_per_job} -ge 1 ]] || tblastn_threads_per_job=1
+      for db_index in "${!db_files[@]}"; do
+        db_file="${db_files[${db_index}]}"
+        db_genetic_code="${db_genetic_codes[${db_index}]}"
+        tmp_tblastn_out="$(basename "${db_file}").tblastn.out.tsv"
+        wait_until_jobn_le "${tblastn_search_jobs}"
+        (
+          if ! tblastn \
+            -query "${query_aa_local}" -db "${db_file}" -out "${tmp_tblastn_out}" \
+            -db_gencode "${db_genetic_code}" -dbsize "${query_reference_total_nt}" -evalue "${effective_query_blast_evalue}" \
+            -max_target_seqs 50000 -outfmt "6 ${outfmt}" -num_threads "${tblastn_threads_per_job}"; then
+            echo "tblastn failed for ${db_file} (genetic code ${db_genetic_code})." >&2
+            exit 1
+          fi
+        ) &
+        gg_background_register "$!"
+      done
+      wait_for_background_jobs
+      : > blast_out.tsv
+      for db_file in "${db_files[@]}"; do
+        tmp_tblastn_out="$(basename "${db_file}").tblastn.out.tsv"
+        cat -- "${tmp_tblastn_out}" >> blast_out.tsv
+        rm -f -- "${tmp_tblastn_out}"
+      done
+    else
+      db_files_str=$(printf " %s" "${db_files[@]}")
+      db_files_str="${db_files_str# }"
+      if ! tblastn \
+        -query "${query_aa_local}" \
+        -db "${db_files_str}" \
+        -out blast_out.tsv \
+        -db_gencode "${genetic_code}" \
+        -evalue "${effective_query_blast_evalue}" \
+        -max_target_seqs 50000 \
+        -outfmt "6 ${outfmt}" \
+        -num_threads "${GG_TASK_CPUS}"; then
+        echo "tblastn failed. Exiting."
+        exit 1
+      fi
     fi
   elif [[ ${query_blast_method} == "diamond" ]]; then
     echo "Running diamond blastp."
@@ -2502,7 +2628,7 @@ else
     primary_fasta_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
   fi
 fi
-primary_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=1")
+primary_fasta_provenance_args+=(--parameter "fasta_sequence_store_schema=2")
 gg_artifact_prepare_stage primary_fasta_needs_update run_extract_primary_fasta "${primary_fasta_provenance_args[@]}" || exit $?
 if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -2718,6 +2844,9 @@ gff_info_provenance_args=(
   --workspace-root "${gg_workspace_dir}"
   --input "primary_fasta=${file_og_primary_fasta}"
   --input "species_gff=${dir_sp_gff}"
+  --input "gff_reader_implementation=${gg_support_dir}/gff2genestat.py"
+  --input "representative_selection_implementation=${gg_support_dir}/representative_selection.py"
+  --input "gff_feature_structure_implementation=${gg_support_dir}/gff_feature_structure.py"
   --output "gff_info=${file_og_gff_info}"
   --parameter "feature=CDS"
   --parameter "multiple_hits=longest"
@@ -2730,6 +2859,7 @@ if [[ "${input_sequence_mode}" == "protein" ]]; then
   gff_info_sequence_manifest="${file_species_protein_store_manifest}"
 fi
 gff_info_provenance_args+=(--input "sequence_source_index=${gff_info_sequence_manifest}")
+[[ -z "${representative_inputs}" ]] || gff_info_provenance_args+=(--input "representative_inputs=${representative_inputs}" --input "representative_map=${representative_map}")
 gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
 if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"
@@ -2740,11 +2870,13 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
 
   gff_cds_validation_args=()
   if [[ "${input_sequence_mode}" == "cds" ]]; then
-    gff_cds_validation_args+=(--validate-cds-length --structure-policy report --phase-policy report
-      --cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved")
+    gff_cds_validation_args+=(--validate-cds-length --structure-policy report --phase-policy report)
+    if [[ -z "${representative_inputs}" ]]; then
+      gff_cds_validation_args+=(--cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved")
+    fi
   fi
   python "${gg_support_dir}/gff2genestat.py" \
-    "${gff_cds_validation_args[@]}" \
+    "${gff_cds_validation_args[@]}" "${representative_map_args[@]}" \
     --dir_gff "${dir_sp_gff}" \
     --feature "CDS" \
     --multiple_hits "longest" \
@@ -6384,7 +6516,12 @@ task="Synteny neighborhood grouping"
 if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${treevis_synteny_similarity} -eq 1 ]] && { [[ ${run_summary} -eq 1 ]] || [[ ${run_tree_plot} -eq 1 ]]; }; then
   synteny_source_dir="${dir_sp_cds}"
   synteny_sequence_mode="cds"
-  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+  synteny_lock_dir="${file_og_parameters_dir}/synteny_locks"
+  if [[ -n "${representative_inputs}" ]]; then
+    synteny_source_dir="${dir_sp_protein_input}"
+    synteny_sequence_mode="protein"
+    synteny_lock_dir="${dir_synteny_gene_cache}/.locks"
+  elif [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     synteny_source_dir="${dir_sp_protein_input}"
     synteny_sequence_mode="protein"
   fi
@@ -6397,6 +6534,10 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
     --logical-root "${dir_output_active}"
     --workspace-root "${gg_workspace_dir}"
     --input "primary_fasta=${file_og_primary_fasta}"
+    --input "synteny_implementation=${gg_support_dir}/synteny_neighbors.py"
+    --input "gff_reader_implementation=${gg_support_dir}/gff2genestat.py"
+    --input "representative_implementation=${gg_support_dir}/representative_selection.py"
+    --input "feature_structure_implementation=${gg_support_dir}/gff_feature_structure.py"
     --optional-output "synteny=${file_og_synteny}"
     --parameter "input_sequence_mode=${synteny_sequence_mode}"
     --parameter "window=${synteny_search_window}"
@@ -6411,6 +6552,14 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
   fi
   if [[ -d "${dir_sp_gff}" ]]; then
     synteny_provenance_args+=(--input "species_gff=${dir_sp_gff}")
+  fi
+  synteny_genetic_code_args=()
+  if [[ -s "${file_species_genetic_code}" ]]; then
+    synteny_provenance_args+=(--input "species_genetic_code=${file_species_genetic_code}")
+    synteny_genetic_code_args=(--genetic-codes "${file_species_genetic_code}")
+  fi
+  if [[ -n "${representative_map}" ]]; then
+    synteny_provenance_args+=(--input "representative_map=${representative_map}")
   fi
   gg_artifact_prepare_stage synteny_needs_update run_synteny_generation "${synteny_provenance_args[@]}" || exit $?
   if [[ ${synteny_needs_update} -eq 1 ]]; then
@@ -6440,12 +6589,12 @@ if [[ ${gene_evolution_plot_only} -ne 1 ]] && [[ ${treevis_synteny} -eq 1 || ${t
         echo "synteny auto E-value: cutoffs=${query_blast_auto_evalue_maxlen_cutoffs} effective_synteny_evalue=${synteny_evalue}"
         rm -f -- "${synteny_evalue_query_fasta}"
       fi
-      python "${gg_support_dir}/synteny_neighbors.py" \
+      python "${gg_support_dir}/synteny_neighbors.py" "${representative_map_args[@]}" "${synteny_genetic_code_args[@]}" \
         --focal_cds_fasta "${file_og_primary_fasta}" \
         --dir_sp_cds "${synteny_source_dir}" \
         --dir_sp_gff "${dir_sp_gff}" \
-        --cache_dir "${gg_workspace_output_dir}/species_gff_info" \
-        --lock_dir "${file_og_parameters_dir}/synteny_locks" \
+        --cache_dir "${dir_synteny_gene_cache}" \
+        --lock_dir "${synteny_lock_dir}" \
         --gff2genestat_script "${gg_support_dir}/gff2genestat.py" \
         --input_sequence_mode "${synteny_sequence_mode}" \
         --window "${synteny_search_window}" \

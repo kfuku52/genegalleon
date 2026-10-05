@@ -192,22 +192,26 @@ def resolve_records(records, traits, genomic, code):
     return output, decisions
 
 
-def resolve(cds, gff, genome, output_dir, code=1):
+def resolve(cds, gff, genome, output_dir, code=1, representative_map=None):
     cds, output_dir = Path(cds), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / cds.name
     report_path = output_dir / (cds.name + '.resolution.json')
     traits_path = output_dir / (cds.name + '.traits.tsv')
     meta_path = output_dir / (cds.name + '.resolution.meta.json')
-    if any(destination.resolve() == Path(path).resolve() for path in (cds, gff, genome) if path):
+    if representative_map and not gff:
+        raise ValueError('Representative map requires a GFF for CDS resolution')
+    if any(destination.resolve() == Path(path).resolve() for path in (cds, gff, genome, representative_map) if path):
         raise ValueError('Resolved output must not overwrite a source file')
     sources = {name: {'path': str(Path(path).resolve()), 'sha256': digest(path)}
-               for name, path in [('cds', cds), ('gff', gff), ('genome', genome)] if path}
+               for name, path in [('cds', cds), ('gff', gff), ('genome', genome),
+                                  ('representative_map', representative_map)] if path}
     support = Path(__file__).parent
     contract = {'policy_version': POLICY_VERSION, 'genetic_code': int(code), 'sources': sources,
                 'dependencies': {name: importlib.metadata.version(name) for name in ['cdskit', 'biopython']},
                 'implementation': {name: digest(support / name) for name in
-                                   ['cds_resolution.py', 'gff2genestat.py', 'gff_feature_structure.py']}}
+                                   ['cds_resolution.py', 'gff2genestat.py', 'gff_feature_structure.py',
+                                    'representative_selection.py']}}
     with (output_dir / (cds.name + '.lock')).open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if meta_path.exists():
@@ -221,7 +225,8 @@ def resolve(cds, gff, genome, output_dir, code=1):
         traits = pd.DataFrame(columns=TRAIT_COLUMNS)
         if gff:
             traits = process_single_gff(Path(gff).name, str(Path(gff).parent), [r[0] for r in records],
-                                        'CDS', 'longest', GFF_COLUMNS, TRAIT_COLUMNS, 'report', 'report')
+                                        'CDS', 'longest', GFF_COLUMNS, TRAIT_COLUMNS, 'report', 'report',
+                                        representative_map=representative_map)
             if traits.empty and records:
                 raise ValueError('No GFF IDs match supplied CDS; cannot resolve source identity')
         genomic = extract_genomic_candidates(traits, genome) if genome and not traits.empty else {}
@@ -352,6 +357,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cds')
     parser.add_argument('--gff')
+    parser.add_argument('--representative-map')
     parser.add_argument('--genome')
     parser.add_argument('--output-dir')
     parser.add_argument('--backup-family')
@@ -374,7 +380,8 @@ def main():
     else:
         if not args.cds:
             parser.error('--cds is required')
-        resolve(args.cds, args.gff, args.genome, args.output_dir, args.genetic_code)
+        resolve(args.cds, args.gff, args.genome, args.output_dir, args.genetic_code,
+                representative_map=args.representative_map)
 
 
 if __name__ == '__main__':

@@ -97,6 +97,8 @@ gg_entrypoint_name="gg_genome_annotation_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement effective/inputs.tsv.
+
 # CDS workflow flags
 run_collect_gff_info=0 # Collect per-gene coordinates, exon/intron structure, and gene stats from workspace/input/species_gff.
 run_busco_cds=0 # BUSCO completeness analysis on species CDS inputs.

@@ -61,6 +61,8 @@ def main():
     parser.add_argument("--time", default="3-00:00:00")
     parser.add_argument("--partition", default="", help="Slurm partition (default: scheduler default)")
     parser.add_argument("--retry", action="store_true", help="Skip prepare and submit only workers without verified receipts")
+    parser.add_argument("--refinement", action="store_true", help="After initial finalize, preserve all isoforms, build correspondence, predict and finalize effective representatives")
+    parser.add_argument("--refinement-output", type=Path, help="Refinement directory; default: TASK_PLAN parent/../gene_model_refinement")
     parser.add_argument("--rescue", action="store_true", help="After initial finalize, submit sparse synteny -> species rescue -> rescue finalize arrays")
     parser.add_argument("--rescue-output", type=Path, help="Rescue directory; default: TASK_PLAN parent/../gene_model_rescue")
     parser.add_argument("--rescue-max-running", type=int, help="Concurrent species rescue workers (default: --max-running); independent of synteny/formatting")
@@ -76,6 +78,14 @@ def main():
     env = os.environ.copy()
     env["GG_INPUT_TASK_PLAN_OUTPUT"] = str(plan_path)
     rescue_output = (args.rescue_output or plan_path.parent.parent / "gene_model_rescue").resolve()
+    refinement_output = (args.refinement_output or plan_path.parent.parent / "gene_model_refinement").resolve()
+    if args.refinement:
+        env["GG_INPUT_RUN_GENE_MODEL_REFINEMENT"] = "1"
+        env["GG_INPUT_GENE_MODEL_REFINEMENT_DIR"] = str(refinement_output)
+        if args.retry and args.submit:
+            result = subprocess.run(["squeue", "--noheader", "--me", "--name", "gg_input_rescue_synteny,gg_input_refinement_prepare,gg_input_refinement_catalog,gg_input_refinement_correspondence,gg_input_refinement_predict,gg_input_refinement_finalize", "--format", "%i"], capture_output=True, text=True, check=False)
+            if result.returncode or result.stdout.strip():
+                raise RuntimeError("Cannot retry while refinement workers are active or scheduler status is unavailable")
     if args.rescue:
         env["GG_INPUT_RUN_GENE_MODEL_RESCUE"] = "1"
         env["GG_INPUT_GENE_MODEL_RESCUE_DIR"] = str(rescue_output)
@@ -84,7 +94,7 @@ def main():
 
     def command(mode, extra):
         preparing = mode == "array_prepare"
-        model_worker = mode in {"rescue_models", "rescue_finalize"}
+        model_worker = mode in {"rescue_models", "rescue_finalize", "refinement_predict", "refinement_finalize"}
         cpus = (args.prepare_cpus or args.cpus) if preparing else args.cpus
         memory = (args.prepare_memory or args.memory) if preparing else args.memory
         if model_worker:
@@ -100,8 +110,10 @@ def main():
 
     def dispatch(mode, extra):
         cmd = command(mode, extra)
-        rescue_env = ("GG_INPUT_RUN_GENE_MODEL_RESCUE=1 GG_INPUT_GENE_MODEL_RESCUE_DIR=" + shlex.quote(str(rescue_output)) + " ") if args.rescue else ""
-        print(rescue_env + "GG_INPUT_TASK_PLAN_OUTPUT=" + shlex.quote(str(plan_path)) + " GG_INPUT_INPUT_GENERATION_MODE=" + mode + " " + shlex.join(cmd), flush=True)
+        rescue_env = ("GG_INPUT_RUN_GENE_MODEL_RESCUE=1 GG_INPUT_GENE_MODEL_RESCUE_DIR=" + shlex.quote(env.get("GG_INPUT_GENE_MODEL_RESCUE_DIR", str(rescue_output))) + " ") if args.rescue else ""
+        refinement_env = ("GG_INPUT_RUN_GENE_MODEL_REFINEMENT=1 GG_INPUT_GENE_MODEL_REFINEMENT_DIR=" + shlex.quote(str(refinement_output)) + " ") if args.refinement else ""
+        anchor_env = ("GG_INPUT_GENE_MODEL_RESCUE_DIR=" + shlex.quote(env["GG_INPUT_GENE_MODEL_RESCUE_DIR"]) + " ") if args.refinement and not args.rescue and env.get("GG_INPUT_GENE_MODEL_RESCUE_DIR") else ""
+        print(refinement_env + rescue_env + anchor_env + "GG_INPUT_TASK_PLAN_OUTPUT=" + shlex.quote(str(plan_path)) + " GG_INPUT_INPUT_GENERATION_MODE=" + mode + " " + shlex.join(cmd), flush=True)
         if not args.submit:
             return "WORKER_JOB_ID"
         result = subprocess.run(cmd, env={**env, "GG_INPUT_INPUT_GENERATION_MODE": mode}, capture_output=True, text=True, check=False)
@@ -135,7 +147,7 @@ def main():
         if args.retry and args.submit and pending:
             ensure_no_active_legacy_worker_array()
         worker_id = dispatch("array_worker", ["--array=" + array_expression(pending) + "%" + str(args.max_running)]) if pending else ""
-    dispatch("array_finalize", (["--dependency=afterok:" + worker_id] if worker_id else []) + (["--wait"] if args.rescue else []))
+    dispatch("array_finalize", (["--dependency=afterok:" + worker_id] if worker_id else []) + (["--wait"] if args.rescue or args.refinement else []))
     if args.rescue:
         rescue_plan = rescue_output / "plan.json"
         if not rescue_plan.exists():
@@ -190,7 +202,42 @@ def main():
             pair_id = dispatch("rescue_synteny", ["--array=" + array_expression(pairs) + "%" + str(args.max_running)]) if pairs else ""
             species_id = dispatch("rescue_models", (["--dependency=afterok:" + pair_id] if pair_id else []) +
                                   ["--array=" + array_expression(species) + "%" + str(args.rescue_max_running or args.max_running)]) if species else ""
-        dispatch("rescue_finalize", ["--dependency=afterok:" + species_id] if species_id else [])
+        rescue_final_id = dispatch("rescue_finalize", (["--dependency=afterok:" + species_id] if species_id else []) + (["--wait"] if args.refinement else []))
+        if args.refinement:
+            dispatch("refinement_prepare", ["--dependency=afterok:" + rescue_final_id, "--wait"])
+
+    if args.refinement:
+        frozen_path = refinement_output / "plan.json"
+        if frozen_path.exists():
+            refinement = json.loads(frozen_path.read_text())
+            species_count = len(refinement["species"])
+            anchor_output = refinement["request"].get("rescue_output")
+            pair_count = 0
+            if anchor_output and not refinement["request"].get("edges"):
+                anchor_plan = json.loads((Path(anchor_output) / "plan.json").read_text())
+                pairs = [j["index"] for j in anchor_plan["synteny_jobs"] if j["a"] != j["b"]]
+                pair_count = len(pairs)
+                env["GG_INPUT_GENE_MODEL_RESCUE_DIR"] = anchor_output
+                pair_id = dispatch("rescue_synteny", ["--array=" + array_expression(pairs) + "%" + str(args.max_running)]) if pairs else ""
+            else:
+                pair_id = ""
+            indices = list(range(1, species_count + 1))
+            # Receipts are checked again by each idempotent worker. Retrying all
+            # indices also revisits dependencies repaired by comparison retries.
+            catalog_id = dispatch("refinement_catalog", ["--array=" + array_expression(indices) + "%" + str(args.max_running)])
+            dependencies = ":".join(job for job in (pair_id, catalog_id) if job)
+            print(json.dumps({"refinement_species": species_count, "refinement_pairs": pair_count}))
+        else:
+            if args.submit:
+                parser.error("Refinement plan missing after preparation: " + str(frozen_path))
+            print("After refinement preparation, read " + str(frozen_path) + " for sparse comparisons and species tasks.")
+            pair_id = dispatch("rescue_synteny", ["--array=1-P%" + str(args.max_running)])
+            catalog_id = dispatch("refinement_catalog", ["--array=1-S%" + str(args.max_running)])
+            dependencies = pair_id + ":" + catalog_id
+            indices = None
+        graph_id = dispatch("refinement_correspondence", ["--dependency=afterok:" + dependencies])
+        worker_id = dispatch("refinement_predict", ["--dependency=afterok:" + graph_id, "--array=" + (array_expression(indices) if indices else "1-S") + "%" + str(args.rescue_max_running or args.max_running)])
+        dispatch("refinement_finalize", ["--dependency=afterok:" + worker_id])
 
 
 if __name__ == "__main__":

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import gzip
 import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -268,6 +270,69 @@ def test_fasta_sequence_store_reuses_index_and_extracts_query_variants(tmp_path:
     assert rebuilt_digests["Species_b"] == first_digests["Species_b"]
 
 
+@pytest.mark.parametrize('kind,change', [('cds', 'bundle'), ('protein', 'bundle'), ('cds', 'view')])
+def test_selected_sequence_stores_survive_interleaved_ensure_and_extract(tmp_path: Path, kind, change):
+    """Replay A.ensure -> B.ensure -> A.extract with overlapping gene IDs."""
+    manifest_a = tmp_path / 'A.inputs.tsv'
+    manifest_b = tmp_path / 'B.inputs.tsv'
+    manifest_a.write_text('species\tgenetic_code\nSpecies_a\t1\n')
+    manifest_b.write_text('species\tgenetic_code\nSpecies_a\t4\n')
+    inputs = [manifest_a, manifest_b if change == 'bundle' else manifest_a]
+    views = ['cds', 'protein' if change == 'view' else 'cds']
+    expected = ['ATGAAATAA', 'TATGAAATAA'] if kind == 'cds' else ['MK', 'MP']
+    roots, databases = [], []
+    for index, (manifest, view, sequence) in enumerate(zip(inputs, views, expected, strict=True)):
+        namespace = run_helper('fasta_sequence_store.py', 'namespace', '--root', tmp_path / 'cache',
+                               '--representative-inputs', manifest, '--view', view)
+        assert namespace.returncode == 0, namespace.stderr
+        root = Path(namespace.stdout.strip())
+        roots.append(root)
+        database, store_manifest = root / (kind + '.sqlite3'), root / (kind + '.json')
+        databases.append(database)
+        source = tmp_path / (str(index) + '.fa')
+        source.write_text('>Species_a_g\n' + sequence + '\n')
+        source_list = tmp_path / (str(index) + '.sources.tsv')
+        source_list.write_text(str(source) + '\tSpecies_a\n')
+        ensured = run_helper('fasta_sequence_store.py', 'ensure', '--database', database,
+                             '--manifest', store_manifest, '--source-list', source_list,
+                             '--minimum-free-bytes', 0)
+        assert ensured.returncode == 0, ensured.stderr
+    assert roots[0] != roots[1]
+    pattern = tmp_path / 'patterns.txt'
+    pattern.write_text('Species_a_g\n')
+    for index, (database, sequence) in enumerate(zip(databases, expected, strict=True)):
+        output = tmp_path / (str(index) + '.query.fa')
+        extracted = run_helper('fasta_sequence_store.py', 'extract', '--database', database,
+                               '--pattern-file', pattern, '--output', output, '--require-all')
+        assert extracted.returncode == 0, extracted.stderr
+        assert output.read_text() == '>Species_a_g\n' + sequence + '\n'
+    copied = tmp_path / 'copied.inputs.tsv'
+    copied.write_bytes(manifest_a.read_bytes())
+    reused = run_helper('fasta_sequence_store.py', 'namespace', '--root', tmp_path / 'cache',
+                        '--representative-inputs', copied, '--view', views[0])
+    assert reused.returncode == 0 and reused.stdout.strip() == str(roots[0])
+
+
+def test_selected_namespace_preserves_legacy_paths_and_rejects_mid_hash_changes(tmp_path: Path, monkeypatch):
+    spec = spec_from_file_location('sequence_store_namespace', SUPPORT / 'fasta_sequence_store.py')
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    root = tmp_path / 'cache'
+    assert module.selected_input_namespace(root, None) == root
+    manifest = tmp_path / 'inputs.tsv'
+    manifest.write_text('original\n')
+    original = module.sha256_file_uncached
+
+    def changed(path):
+        digest = original(path)
+        path.write_text('changed\n')
+        return digest
+
+    monkeypatch.setattr(module, 'sha256_file_uncached', changed)
+    with pytest.raises(module.SequenceStoreError, match='manifest changed'):
+        module.selected_input_namespace(root, manifest)
+
+
 def test_fasta_sequence_store_rebuilds_a_valid_but_modified_database(tmp_path: Path):
     source = tmp_path / "Species_a.fa"
     source.write_text(">Species_a_gene1\nACGT\n")
@@ -354,6 +419,198 @@ def test_fasta_sequence_store_compresses_sequences_and_enforces_a_size_cap(tmp_p
     )
     assert capped.returncode == 2
     assert "size limit" in capped.stderr
+
+
+@pytest.fixture
+def sequence_totals_store(tmp_path):
+    module = sequence_store_module()
+    plain = tmp_path / "Species_a.fa"
+    plain.write_text(">Species_a_gene1 description\nACGTαβ\n>Species_a_empty\n\n", encoding="utf-8")
+    compressed = tmp_path / "Species_b.fa.gz"
+    with gzip.open(compressed, "wt", encoding="utf-8") as handle:
+        handle.write(">Species_b_gene2\nTTTt\n")
+    source_list = tmp_path / "sources.tsv"
+    source_list.write_text(f"{plain}\tSpecies_a\n{compressed}\tSpecies_b\n")
+    database, manifest = tmp_path / "store.sqlite3", tmp_path / "store.json"
+    sources = module.read_sources(source_list)
+    module.build_store(database, manifest, sources, 0, 0)
+    args = argparse.Namespace(database=database, manifest=manifest, source_list=source_list,
+                              max_database_bytes=0, minimum_free_bytes=0)
+    return module, args, sources
+
+
+def test_sequence_total_retains_legacy_utf8_bytes_and_does_not_decompress(sequence_totals_store, monkeypatch):
+    module, args, _sources = sequence_totals_store
+    with sqlite3.connect(args.database) as connection:
+        expected = sum(len(zlib.decompress(row[0])) for row in connection.execute("SELECT sequence FROM sequences"))
+    assert expected == 12  # Four ASCII bases + two two-byte letters + four gzip bases.
+    paths = [args.database, args.manifest, module.database_state_path(args.database)]
+    before = [(module.file_signature(path), path.read_bytes()) for path in paths]
+
+    def no_decompression(_value):
+        raise AssertionError("Aggregate reader must not scan/decompress sequence blobs")
+
+    monkeypatch.setattr(module.zlib, "decompress", no_decompression)
+    assert module.total_sequence_bytes(args.database, args.manifest) == expected
+    assert [(module.file_signature(path), path.read_bytes()) for path in paths] == before
+    cli = run_helper("fasta_sequence_store.py", "total-bytes", "--database", args.database,
+                     "--manifest", args.manifest)
+    assert cli.returncode == 0 and cli.stdout == "12\n", cli.stderr
+    assert json.loads(args.manifest.read_text())["schema_version"] == module.SCHEMA_VERSION == 2
+    assert "sequence_totals" not in json.loads(args.manifest.read_text())
+
+
+def test_sequence_total_accepts_a_zero_record_index(tmp_path):
+    module = sequence_store_module()
+    source = tmp_path / "empty.fa"
+    source.write_text("")
+    database, manifest = tmp_path / "empty.sqlite3", tmp_path / "empty.json"
+    module.build_store(database, manifest, [(source, "Empty_species")], 0, 0)
+    assert module.total_sequence_bytes(database, manifest) == 0
+
+
+def test_sequence_total_legacy_migration_is_atomic_and_warm_reuses_index(sequence_totals_store):
+    module, args, sources = sequence_totals_store
+    public_before = args.manifest.read_bytes()
+    # A schema-2 store made by the previous producer has these exact tables and
+    # public manifest, but lacks only the new private metadata entry.
+    with sqlite3.connect(args.database) as connection:
+        connection.execute("DELETE FROM metadata WHERE key='sequence_totals'")
+    module.record_database_state(args.database)
+    old_inode = args.database.stat().st_ino
+    with pytest.raises(module.SequenceStoreError, match="missing or invalid"):
+        module.total_sequence_bytes(args.database, args.manifest)
+    assert not module.manifest_current(args.database, args.manifest, sources)
+    assert not module.refresh_signatures_if_content_current(args.database, args.manifest, sources)
+    assert args.database.stat().st_ino == old_inode
+    # Hold a reader on the old inode throughout migration.  Lazy in-place SQL
+    # updates would either block on this transaction or mutate its shared file.
+    with sqlite3.connect(args.database) as old_reader:
+        old_reader.execute("BEGIN")
+        old_keys = list(old_reader.execute("SELECT key FROM metadata ORDER BY key"))
+        assert module.ensure(args) == 0
+        assert list(old_reader.execute("SELECT key FROM metadata ORDER BY key")) == old_keys
+        assert old_reader.execute("SELECT COUNT(*) FROM sequences").fetchone()[0] == 3
+    assert args.database.stat().st_ino != old_inode
+    assert args.manifest.read_bytes() == public_before
+    assert module.total_sequence_bytes(args.database, args.manifest) == 12
+    paths = [args.database, args.manifest, module.database_state_path(args.database)]
+    warm_before = [(module.file_signature(path), path.read_bytes()) for path in paths]
+    assert module.ensure(args) == 0
+    assert [(module.file_signature(path), path.read_bytes()) for path in paths] == warm_before
+    patterns = args.database.parent / "patterns.txt"
+    patterns.write_text("Species_a_gene1\nSpecies_a_empty\nSpecies_b_gene2\n")
+    output = args.database.parent / "extracted.fa"
+    assert module.extract(argparse.Namespace(database=args.database, pattern_file=patterns, output=output,
+        ignore_case=False, query_variants=False, prefix_species=False, require_all=True)) == 0
+    assert output.read_text(encoding="utf-8") == (
+        ">Species_a_gene1 description\nACGTαβ\n>Species_a_empty\n\n>Species_b_gene2\nTTTt\n")
+
+
+@pytest.mark.parametrize("bad_totals", ["not-json", "null", '{"schema":1,"total_sequence_bytes":-1,"record_count":3}',
+    '{"schema":1,"total_sequence_bytes":true,"record_count":3}',
+    '{"schema":1,"total_sequence_bytes":12,"record_count":2}',
+    '{"schema":2,"total_sequence_bytes":12,"record_count":3}'])
+def test_sequence_total_rejects_invalid_private_metadata_and_ensure_repairs(sequence_totals_store, bad_totals):
+    module, args, sources = sequence_totals_store
+    public_before = args.manifest.read_bytes()
+    with sqlite3.connect(args.database) as connection:
+        connection.execute("UPDATE metadata SET value=? WHERE key='sequence_totals'", (bad_totals,))
+    module.record_database_state(args.database)
+    old_inode = args.database.stat().st_ino
+    with pytest.raises(module.SequenceStoreError):
+        module.total_sequence_bytes(args.database, args.manifest)
+    assert not module.manifest_current(args.database, args.manifest, sources)
+    assert not module.refresh_signatures_if_content_current(args.database, args.manifest, sources)
+    assert module.ensure(args) == 0
+    assert args.database.stat().st_ino != old_inode
+    assert module.total_sequence_bytes(args.database, args.manifest) == 12
+    assert args.manifest.read_bytes() == public_before
+
+
+def test_sequence_total_rejects_changed_source_until_ensure_refreshes_it(sequence_totals_store):
+    module, args, sources = sequence_totals_store
+    old_inode = args.database.stat().st_ino
+    os.utime(sources[0][0], None)
+    with pytest.raises(module.SequenceStoreError, match="FASTA source changed"):
+        module.total_sequence_bytes(args.database, args.manifest)
+    assert module.ensure(args) == 0
+    assert args.database.stat().st_ino == old_inode
+    assert module.total_sequence_bytes(args.database, args.manifest) == 12
+    sources[0][0].write_text(">Species_a_gene1\nAACCGGTT\n", encoding="utf-8")
+    with pytest.raises(module.SequenceStoreError, match="FASTA source changed"):
+        module.total_sequence_bytes(args.database, args.manifest)
+    assert module.ensure(args) == 0
+    assert args.database.stat().st_ino != old_inode
+    assert module.total_sequence_bytes(args.database, args.manifest) == 12
+
+
+@pytest.mark.parametrize("changed", ["database", "manifest", "state", "source"])
+def test_sequence_total_rejects_mutation_during_read(sequence_totals_store, monkeypatch, changed):
+    module, args, sources = sequence_totals_store
+    original = module.source_signature
+    mutated = False
+
+    def mutate_after_signature(path, species):
+        nonlocal mutated
+        signature = original(path, species)
+        if not mutated:
+            mutated = True
+            if changed == "database":
+                replacement = args.database.with_suffix(".replacement")
+                shutil.copy2(args.database, replacement)
+                os.replace(replacement, args.database)
+            elif changed == "source":
+                sources[0][0].write_text(">changed\nTTTT\n", encoding="utf-8")
+            else:
+                target = args.manifest if changed == "manifest" else module.database_state_path(args.database)
+                target.write_bytes(target.read_bytes() + b"\n")
+        return signature
+
+    monkeypatch.setattr(module, "source_signature", mutate_after_signature)
+    with pytest.raises(module.SequenceStoreError, match="changed while they were read"):
+        module.total_sequence_bytes(args.database, args.manifest)
+
+
+def test_sequence_total_rejects_tampered_database_and_public_identity(sequence_totals_store):
+    module, args, _sources = sequence_totals_store
+    public_before = args.manifest.read_bytes()
+    with sqlite3.connect(args.database) as connection:
+        connection.execute("UPDATE sequences SET sequence=? WHERE identifier='Species_a_gene1'",
+                           (sqlite3.Binary(zlib.compress(b"TTTT")),))
+    with pytest.raises(module.SequenceStoreError, match="database identity changed"):
+        module.total_sequence_bytes(args.database, args.manifest)
+    assert module.ensure(args) == 0
+    assert module.total_sequence_bytes(args.database, args.manifest) == 12
+    assert args.manifest.read_bytes() == public_before
+    payload = json.loads(args.manifest.read_text())
+    payload["sources"][0]["sha256"] = "0" * 64
+    args.manifest.write_text(json.dumps(payload))
+    with pytest.raises(module.SequenceStoreError, match="source identity differs"):
+        module.total_sequence_bytes(args.database, args.manifest)
+
+
+def test_sequence_total_on_a_portable_copy_does_not_refresh_private_state(sequence_totals_store):
+    module, args, _sources = sequence_totals_store
+    copied = args.database.parent / "copied.sqlite3"
+    shutil.copy2(args.database, copied)
+    copied_state = module.database_state_path(copied)
+    shutil.copy2(module.database_state_path(args.database), copied_state)
+    before = (module.file_signature(copied_state), copied_state.read_bytes())
+    assert module.total_sequence_bytes(copied, args.manifest) == 12
+    assert (module.file_signature(copied_state), copied_state.read_bytes()) == before
+
+
+def test_selected_tblastn_total_uses_verified_aggregate_without_blob_scan():
+    core = (REPO_ROOT / "workflow/core/gg_gene_evolution_core.sh").read_text()
+    start = core.index('if [[ "${query_reference_kind}" == "analysis_cds" ]]; then')
+    end = core.index('gg_artifact_prepare_stage query_blast_needs_update', start)
+    section = core[start:end]
+    assert 'fasta_sequence_store.py" total-bytes' in section
+    assert '--database "${file_species_analysis_cds_store_db}"' in section
+    assert '--manifest "${file_species_analysis_cds_store_manifest}"' in section
+    assert "zlib.decompress" not in section and "SELECT sequence" not in section
+    assert 'tblastn_database_size=${query_reference_total_nt}' in section
 
 
 @pytest.mark.parametrize("field", range(5))

@@ -1,0 +1,431 @@
+{
+  "benchmark": "representative_input_verification",
+  "benchmark_helper_sha256": "aabb7273090a7589d2c030bf023e6712857d4b10411b2b7ade718ba999fdc529",
+  "comparison": {
+    "cli_wall_speed_ratio": 1.3424731519420077,
+    "environment_method_comparable": true,
+    "previous_report": "docs/assets/benchmarks/gene-model-refinement/representative-inputs-optimization-before.json",
+    "raw_layouts_equal": true,
+    "relative_layout_equivalent": true,
+    "scientific_inputs_equivalent": true,
+    "scientific_outputs_equivalent": true
+  },
+  "current_fixture_sha256": "01f6fed3e40d067a7aedcd624addcc290e360b3a2424fd1b7993b33b0810ab74",
+  "environment": {
+    "implementation_sha256": {
+      "/Users/kf/repos/genegalleon/workflow/support/cds_model_normalisation.py": "f11b6b05a4a4a2690cec655fefe959d7608076eb45fd5114675d5e68866bc4a5",
+      "/Users/kf/repos/genegalleon/workflow/support/fasta_sequence_store.py": "41dfba7bb50836fbd6a0edcb28a4a5b2177859f14fe05145c920b09829f90d5f",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/__init__.py": "367385695971ce638f9d968c4f3adedc8de3076d717dbfa7eec0e440148d2737",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/cds_normalisation.py": "2dff9f8d1ab0057044730e6d0833e5ddc22e0ff54e0646ba81532e04cdb86ca4",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/common.py": "46916ab84133534fe55e5d8a3f7488f3be0df2933398f6f55c7d2fa0fb6ba32c",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/genbank.py": "0177cd4a306952dc6c0ceec8712aec77f56139044386f9e61acb97206e242c69",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/gff_repair.py": "59079480fe66ea7bfa37664f2002a0c1419fa4e7082c50fa56b9cbd6e6945d87",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/grouping.py": "d0b35b0440e92ea2527bcf3492ff7d3f786d092d335b746a181453ed25121b49",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/grouping_identity.py": "b88c98f2627fd473d2e5022e08edc5cecc9c6c155347b0eae85d4212b7d72949",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/organelle.py": "e97066a98b07426be271b46a511f4a88537c64098110e4a78e305bbfe45b7947",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/reference.py": "c59e32fe7d4b5c8f3fd326a04a180866d31a8312d614482e67454e3d5a942819",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/rna.py": "57674068e9b0d626b16de708e2008cde1a780577ead9b61a4dec430396cbca6b",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/source_identity.py": "d1b5656c5447089093ed80ca94ac19d4775b07f7503aaf937d99a2cbfa031ce4",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/source_overlap.py": "f4bf5e0bb382f7e47ca27a32add25507c219d80fe69c00bd1c4c51f333cf27de",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_annotation/tasks.py": "646d983aad6032c8b3202b4abf8e57e49350e0a992763d7417115e76a7075c6b",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_common.py": "a37386efd7248a3b9602ac991b6cae45317c9eb8591357e7cbd7cf0beef06ab1",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_constants.py": "eba9383e1243ebdc004f13c136efe3a96e2e8a6c7620c3b84c78de8969d62c86",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_provider_config.py": "5bf3b381f7eb20a5fbc8dacfc7b0b0e903e2ab1e26268993b283f76b03668e1d",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_taxonomy.py": "822bc8dbb9f6b6147aa551ee2357cb0b457e8b59c023e28a12028eac3467fa81",
+      "/Users/kf/repos/genegalleon/workflow/support/format_species_writers.py": "1ffd9771944e4bb3a9d2d1e2a8b8f9aac7b56bb6567e3598da3871a1111c1a28",
+      "/Users/kf/repos/genegalleon/workflow/support/gene_model_catalog.py": "26a17c50314e5ff27a0b4475740e1ea7b5c44134d164a726a2e43ccf7362b5eb",
+      "/Users/kf/repos/genegalleon/workflow/support/gene_model_refinement.py": "8e14223f8be2fd4d950a2dc33e6977dbdab33b282a6c898035fad315348753eb",
+      "/Users/kf/repos/genegalleon/workflow/support/gene_model_selection.py": "d8ae9853393d5e6eca29750aa2e58c0151512f065d68495fd497a99265811c7b",
+      "/Users/kf/repos/genegalleon/workflow/support/gene_model_store.py": "3d62c9edac1b25eac26e85bc6adb8304fa34b1e996e521c4255c205ba0eb6b27",
+      "/Users/kf/repos/genegalleon/workflow/support/gff_attribute_syntax.py": "beff7fe01baa05991ca92f4476787797320aea3dd821e1cfce241ff74874d986",
+      "/Users/kf/repos/genegalleon/workflow/support/gff_feature_structure.py": "69838bc05bc373cc392120eb114d642d0291d89b5cb99b267a5bcccd3aa69c04",
+      "/Users/kf/repos/genegalleon/workflow/support/input_generation_array_state.py": "db80a6f9c3bcf0b07891ae857c13ebfeee923f275ca4fdba877d76c656bce941",
+      "/Users/kf/repos/genegalleon/workflow/support/pairwise_synteny.py": "fc2b17e00e99b9e2ce72fa960fd1d308bcdbc373be6122dec31406a3559d93a3",
+      "/Users/kf/repos/genegalleon/workflow/support/representative_selection.py": "5b65d6501879abce89976ad505d492f0673b5fa29b3b1f532b08aa59117bbb22",
+      "/Users/kf/repos/genegalleon/workflow/support/rescue_anchor_admission.py": "153ba476c0c0be1029e9d8fa8560f81151dc75c94509a3f48763c05e972e96a2",
+      "/Users/kf/repos/genegalleon/workflow/support/rescue_gene_models.py": "7670d49b28f9b591802b42ee2d91f5ecaf92412427dd71eb2004780bf75d5574",
+      "/Users/kf/repos/genegalleon/workflow/support/species_labeling.py": "8bb89abf46959d0854a3ef4043ed778f5243688731b0f29790e9f83bc775edb0",
+      "/Users/kf/repos/genegalleon/workflow/tests/benchmark_representative_inputs.py": "aabb7273090a7589d2c030bf023e6712857d4b10411b2b7ade718ba999fdc529",
+      "/Users/kf/repos/genegalleon/workflow/tests/test_gene_model_refinement.py": "654697ed3ea35d85c8adbab85734c0e2a7172285066d0bead98a163e8bc3ae91",
+      "/Users/kf/repos/genegalleon/workflow/tests/test_gene_model_refinement_runtime.py": "01f6fed3e40d067a7aedcd624addcc290e360b3a2424fd1b7993b33b0810ab74"
+    },
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]",
+    "runtime": {
+      "image_id": "sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e",
+      "image_label": "local/genegalleon:cds-admission-20261004",
+      "kind": null
+    },
+    "versions": {
+      "biopython": "1.88",
+      "pysam": "0.23.3",
+      "pytest": "9.1.1"
+    }
+  },
+  "layout": "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_cds\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_protein\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_gff\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genome\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/representative_map.tsv\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genetic_code.tsv",
+  "layout_relative_to_effective": [
+    "species_cds",
+    "species_protein",
+    "species_gff",
+    "species_genome",
+    "representative_map.tsv",
+    "species_genetic_code.tsv"
+  ],
+  "main_helper_sha256": "8e14223f8be2fd4d950a2dc33e6977dbdab33b282a6c898035fad315348753eb",
+  "measurements": [
+    {
+      "command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/support/gene_model_refinement.py",
+        "verify-inputs",
+        "--inputs",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--field",
+        "layout"
+      ],
+      "cpu_seconds": 0.393227741,
+      "layout": "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_cds\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_protein\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_gff\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genome\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/representative_map.tsv\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genetic_code.tsv",
+      "peak_rss_bytes": 61087744,
+      "peak_rss_source": "proc_vm_hwm",
+      "repetition": 1,
+      "stderr": "",
+      "subprocess_wall_seconds": 0.48905212499994377,
+      "wall_seconds": 0.43161895799994454,
+      "worker_command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/tests/benchmark_representative_inputs.py",
+        "--worker",
+        "--manifest",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--metrics",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/.verification-samples-n88w43ib/1.json"
+      ]
+    },
+    {
+      "command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/support/gene_model_refinement.py",
+        "verify-inputs",
+        "--inputs",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--field",
+        "layout"
+      ],
+      "cpu_seconds": 0.40853573499999996,
+      "layout": "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_cds\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_protein\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_gff\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genome\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/representative_map.tsv\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genetic_code.tsv",
+      "peak_rss_bytes": 61079552,
+      "peak_rss_source": "proc_vm_hwm",
+      "repetition": 2,
+      "stderr": "",
+      "subprocess_wall_seconds": 0.49926562499967986,
+      "wall_seconds": 0.4431950829998641,
+      "worker_command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/tests/benchmark_representative_inputs.py",
+        "--worker",
+        "--manifest",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--metrics",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/.verification-samples-n88w43ib/2.json"
+      ]
+    },
+    {
+      "command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/support/gene_model_refinement.py",
+        "verify-inputs",
+        "--inputs",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--field",
+        "layout"
+      ],
+      "cpu_seconds": 0.469770505,
+      "layout": "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_cds\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_protein\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_gff\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genome\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/representative_map.tsv\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genetic_code.tsv",
+      "peak_rss_bytes": 61288448,
+      "peak_rss_source": "proc_vm_hwm",
+      "repetition": 3,
+      "stderr": "",
+      "subprocess_wall_seconds": 0.5608085419999043,
+      "wall_seconds": 0.5032439579999846,
+      "worker_command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/tests/benchmark_representative_inputs.py",
+        "--worker",
+        "--manifest",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--metrics",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/.verification-samples-n88w43ib/3.json"
+      ]
+    }
+  ],
+  "methodology": "Benchmark verification of a real published representative-input bundle.\n\nRun in the GeneGalleon runtime. Fixture construction and plan/run publication\nare excluded from verification measurements. The held-out three-species,\nseven-locus fixture gains an unannotated N-only contig to enlarge each genome\nwithout changing original sequence bytes, annotated coordinates or CDS. Reuse --work-dir for an exact\nbefore/after bundle; --expected-report checks source/scientific equivalence.\n\nEach sample uses a fresh Python process running the actual verify-inputs CLI\nthrough runpy. CLI timing includes its imports and content verification; outer\nsubprocess timing additionally includes interpreter/instrumentation startup.\nFilesystem caches are warm after preparation/fingerprinting; they are not\nflushed. Linux RSS comes from this fresh process' own VmHWM, avoiding inherited\nparent high-water marks. No integrity check is bypassed or monkeypatched.\n",
+  "preparation": {
+    "bundle_reused": true,
+    "excluded_from_measurements": true,
+    "wall_seconds": 0.1715147509999042
+  },
+  "published_implementation_sha256": {
+    "cds_model_normalisation.py": "f11b6b05a4a4a2690cec655fefe959d7608076eb45fd5114675d5e68866bc4a5",
+    "fasta_sequence_store.py": "a951d4e64ff7781b36c7aff7805ceace7bff1c76e9c41e19072d3fda85487fb6",
+    "format_species_annotation/__init__.py": "367385695971ce638f9d968c4f3adedc8de3076d717dbfa7eec0e440148d2737",
+    "format_species_annotation/cds_normalisation.py": "2dff9f8d1ab0057044730e6d0833e5ddc22e0ff54e0646ba81532e04cdb86ca4",
+    "format_species_annotation/common.py": "46916ab84133534fe55e5d8a3f7488f3be0df2933398f6f55c7d2fa0fb6ba32c",
+    "format_species_annotation/genbank.py": "0177cd4a306952dc6c0ceec8712aec77f56139044386f9e61acb97206e242c69",
+    "format_species_annotation/gff_repair.py": "59079480fe66ea7bfa37664f2002a0c1419fa4e7082c50fa56b9cbd6e6945d87",
+    "format_species_annotation/grouping.py": "d0b35b0440e92ea2527bcf3492ff7d3f786d092d335b746a181453ed25121b49",
+    "format_species_annotation/grouping_identity.py": "b88c98f2627fd473d2e5022e08edc5cecc9c6c155347b0eae85d4212b7d72949",
+    "format_species_annotation/organelle.py": "e97066a98b07426be271b46a511f4a88537c64098110e4a78e305bbfe45b7947",
+    "format_species_annotation/reference.py": "c59e32fe7d4b5c8f3fd326a04a180866d31a8312d614482e67454e3d5a942819",
+    "format_species_annotation/rna.py": "57674068e9b0d626b16de708e2008cde1a780577ead9b61a4dec430396cbca6b",
+    "format_species_annotation/source_identity.py": "d1b5656c5447089093ed80ca94ac19d4775b07f7503aaf937d99a2cbfa031ce4",
+    "format_species_annotation/source_overlap.py": "f4bf5e0bb382f7e47ca27a32add25507c219d80fe69c00bd1c4c51f333cf27de",
+    "format_species_annotation/tasks.py": "646d983aad6032c8b3202b4abf8e57e49350e0a992763d7417115e76a7075c6b",
+    "format_species_common.py": "a37386efd7248a3b9602ac991b6cae45317c9eb8591357e7cbd7cf0beef06ab1",
+    "format_species_constants.py": "eba9383e1243ebdc004f13c136efe3a96e2e8a6c7620c3b84c78de8969d62c86",
+    "format_species_provider_config.py": "5bf3b381f7eb20a5fbc8dacfc7b0b0e903e2ab1e26268993b283f76b03668e1d",
+    "format_species_taxonomy.py": "822bc8dbb9f6b6147aa551ee2357cb0b457e8b59c023e28a12028eac3467fa81",
+    "format_species_writers.py": "1ffd9771944e4bb3a9d2d1e2a8b8f9aac7b56bb6567e3598da3871a1111c1a28",
+    "gene_model_catalog.py": "26a17c50314e5ff27a0b4475740e1ea7b5c44134d164a726a2e43ccf7362b5eb",
+    "gene_model_refinement.py": "7a8bbb672b61befa01363989116e678cbe6a963cd986278e8d646c4d8da3d08a",
+    "gene_model_selection.py": "475199955d4520a1cfebe7f06eea31d5be7a39a183e85c8b20cce3c50f9c393b",
+    "gene_model_store.py": "3d62c9edac1b25eac26e85bc6adb8304fa34b1e996e521c4255c205ba0eb6b27",
+    "gff_attribute_syntax.py": "beff7fe01baa05991ca92f4476787797320aea3dd821e1cfce241ff74874d986",
+    "gff_feature_structure.py": "69838bc05bc373cc392120eb114d642d0291d89b5cb99b267a5bcccd3aa69c04",
+    "input_generation_array_state.py": "db80a6f9c3bcf0b07891ae857c13ebfeee923f275ca4fdba877d76c656bce941",
+    "pairwise_synteny.py": "fc2b17e00e99b9e2ce72fa960fd1d308bcdbc373be6122dec31406a3559d93a3",
+    "representative_selection.py": "5b65d6501879abce89976ad505d492f0673b5fa29b3b1f532b08aa59117bbb22",
+    "rescue_anchor_admission.py": "153ba476c0c0be1029e9d8fa8560f81151dc75c94509a3f48763c05e972e96a2",
+    "rescue_gene_models.py": "7670d49b28f9b591802b42ee2d91f5ecaf92412427dd71eb2004780bf75d5574",
+    "species_labeling.py": "8bb89abf46959d0854a3ef4043ed778f5243688731b0f29790e9f83bc775edb0"
+  },
+  "published_scientific_bytes_unchanged": true,
+  "repeats": 3,
+  "schema": 1,
+  "scientific_outputs": {
+    "files": {
+      "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+      "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+      "all_candidates/Species_target.fa": "a7937f5a6886e82ed6bd473cfd0f4a05af7532e3ed7751ff9089f6058f713c2b",
+      "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+      "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+      "analysis_cds/Species_target.fa": "3037ca40751d06ab95294bfedf8dea4beb23c51caefa9bb41833ab2fdd52f4cb",
+      "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+      "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+      "analysis_gff/Species_target.gff3": "3946cd087a80919c5d348e06eb8711eb62c461a0070c2774aaec113fbed312dc",
+      "changes.json": "e41d0d4f3ca9bfc56f1a780c5f9d03ac975b399f6868fd6c6c580561d4660e6f",
+      "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "full_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+      "representative_map.tsv": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+      "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+      "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+      "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+      "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+      "species_cds/Species_target.fa": "2003d9850392a4085c93cf2b4977bcd9abb122dafe6941c06d166d8ff2fa085c",
+      "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+      "species_genome/Species_donor1.fa": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+      "species_genome/Species_donor2.fa": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+      "species_genome/Species_target.fa": "8f9e92f95fb3313343c506290565e65bc285dcc936640a7c7d3d2f63c1872670",
+      "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+      "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+      "species_gff/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+      "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+      "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+      "species_protein/Species_target.fa": "9a1967cb02c594c8471cba012f413001c442f2579f6caeeaba9d21359779e677"
+    },
+    "manifest": [
+      {
+        "analysis_cds_sha256": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+        "analysis_gff_sha256": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+        "cds_sha256": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+        "genetic_code": "1",
+        "genome_sha256": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+        "gff_sha256": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+        "protein_sha256": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+        "representative_map_sha256": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+        "species": "Species_donor1"
+      },
+      {
+        "analysis_cds_sha256": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+        "analysis_gff_sha256": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+        "cds_sha256": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+        "genetic_code": "1",
+        "genome_sha256": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+        "gff_sha256": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+        "protein_sha256": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+        "representative_map_sha256": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+        "species": "Species_donor2"
+      },
+      {
+        "analysis_cds_sha256": "3037ca40751d06ab95294bfedf8dea4beb23c51caefa9bb41833ab2fdd52f4cb",
+        "analysis_gff_sha256": "3946cd087a80919c5d348e06eb8711eb62c461a0070c2774aaec113fbed312dc",
+        "cds_sha256": "2003d9850392a4085c93cf2b4977bcd9abb122dafe6941c06d166d8ff2fa085c",
+        "genetic_code": "1",
+        "genome_sha256": "8f9e92f95fb3313343c506290565e65bc285dcc936640a7c7d3d2f63c1872670",
+        "gff_sha256": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+        "protein_sha256": "9a1967cb02c594c8471cba012f413001c442f2579f6caeeaba9d21359779e677",
+        "representative_map_sha256": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+        "species": "Species_target"
+      }
+    ],
+    "manifest_sha256": "c586849fe28bd2bd5a423054fdc2160770fd722331ba5f9487ab19cd8fdb9812",
+    "normalized_manifest_sha256": "590a19ae5da95ac67b8824d118d269d04e55eefc7234b8d0f33eab5cb798c059",
+    "sha256": "5916754ac087fe39d1c7cdd842b221bdc4c14f21e946cb42980ee15940c110d7"
+  },
+  "source_bytes_unchanged": true,
+  "summary": {
+    "cpu_seconds": {
+      "max": 0.469770505,
+      "median": 0.40853573499999996,
+      "min": 0.393227741
+    },
+    "peak_rss_bytes": {
+      "max": 61288448,
+      "median": 61087744,
+      "min": 61079552
+    },
+    "repeats": 3,
+    "subprocess_wall_seconds": {
+      "max": 0.5608085419999043,
+      "median": 0.49926562499967986,
+      "min": 0.48905212499994377
+    },
+    "wall_seconds": {
+      "max": 0.5032439579999846,
+      "median": 0.4431950829998641,
+      "min": 0.43161895799994454
+    }
+  },
+  "warmup_measurements": [
+    {
+      "command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/support/gene_model_refinement.py",
+        "verify-inputs",
+        "--inputs",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--field",
+        "layout"
+      ],
+      "cpu_seconds": 0.429311901,
+      "layout": "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_cds\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_protein\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_gff\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genome\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/representative_map.tsv\t/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/species_genetic_code.tsv",
+      "peak_rss_bytes": 61227008,
+      "peak_rss_source": "proc_vm_hwm",
+      "repetition": 0,
+      "stderr": "",
+      "subprocess_wall_seconds": 0.5195945840000604,
+      "wall_seconds": 0.4597637090000717,
+      "worker_command": [
+        "/opt/conda/bin/python",
+        "/Users/kf/repos/genegalleon/workflow/tests/benchmark_representative_inputs.py",
+        "--worker",
+        "--manifest",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/run/effective/inputs.tsv",
+        "--metrics",
+        "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2/.verification-samples-n88w43ib/0.json"
+      ]
+    }
+  ],
+  "warmups": 1,
+  "work_dir": "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/representative-inputs-v2",
+  "workload": {
+    "edges_sha256": "e71bd0a4fcf14e1bb2bd1e52fdf4b82842355022d2a5b376ed61abe4d2029eaa",
+    "fixture_sha256": "01f6fed3e40d067a7aedcd624addcc290e360b3a2424fd1b7993b33b0810ab74",
+    "genome_bytes_per_species": 67108864,
+    "genome_padding_method": "new_unannotated_contig_uniform_80nt_lines",
+    "input_sha256": "0e5080100cf6c88c48402740ee956ba14fdbb92d772ff2f7b1d06d1599464287",
+    "loci_per_species": 7,
+    "original_genome_prefixes": [
+      {
+        "original_genome_bytes": 22513,
+        "original_genome_sha256": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+        "padding_bases": 66258105,
+        "padding_contig": "benchmark_padding",
+        "padding_fasta_bytes": 67086351,
+        "padding_header": ">benchmark_padding",
+        "padding_line_width": 80,
+        "source_prefix_unchanged": true,
+        "species": "Species_target"
+      },
+      {
+        "original_genome_bytes": 22513,
+        "original_genome_sha256": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+        "padding_bases": 66258105,
+        "padding_contig": "benchmark_padding",
+        "padding_fasta_bytes": 67086351,
+        "padding_header": ">benchmark_padding",
+        "padding_line_width": 80,
+        "source_prefix_unchanged": true,
+        "species": "Species_donor1"
+      },
+      {
+        "original_genome_bytes": 22513,
+        "original_genome_sha256": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+        "padding_bases": 66258105,
+        "padding_contig": "benchmark_padding",
+        "padding_fasta_bytes": 67086351,
+        "padding_header": ">benchmark_padding",
+        "padding_line_width": 80,
+        "source_prefix_unchanged": true,
+        "species": "Species_donor2"
+      }
+    ],
+    "parameters": {
+      "cpus": 1,
+      "mode": "off",
+      "policy": "longest",
+      "rna": false
+    },
+    "schema": 1,
+    "semantic_sources": [
+      {
+        "cds_sha256": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+        "genetic_code": 1,
+        "genome_sha256": "8f9e92f95fb3313343c506290565e65bc285dcc936640a7c7d3d2f63c1872670",
+        "gff_sha256": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+        "species": "Species_target"
+      },
+      {
+        "cds_sha256": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+        "genetic_code": 1,
+        "genome_sha256": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+        "gff_sha256": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+        "species": "Species_donor1"
+      },
+      {
+        "cds_sha256": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+        "genetic_code": 1,
+        "genome_sha256": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+        "gff_sha256": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+        "species": "Species_donor2"
+      }
+    ],
+    "source_cds_gff_sha256": {
+      "sources/Species_donor1.cds.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "sources/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "sources/Species_donor2.cds.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "sources/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "sources/Species_target.cds.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+      "sources/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470"
+    },
+    "source_hashes": {
+      "sources/Species_donor1.cds.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "sources/Species_donor1.genome.fa": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+      "sources/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "sources/Species_donor2.cds.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "sources/Species_donor2.genome.fa": "414948eca46ccdb13b09ea20812c7ad66ad3cbd249b457813b62358b98c12a28",
+      "sources/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "sources/Species_target.cds.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+      "sources/Species_target.genome.fa": "8f9e92f95fb3313343c506290565e65bc285dcc936640a7c7d3d2f63c1872670",
+      "sources/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+      "sources/edges.tsv": "e71bd0a4fcf14e1bb2bd1e52fdf4b82842355022d2a5b376ed61abe4d2029eaa",
+      "sources/inputs.tsv": "10419383137ac13d1cc4aa9c21516e869fa97273ad3bbf543dc8fcd09ae31970"
+    },
+    "species": 3,
+    "total_genome_source_bytes": 201326592
+  }
+}

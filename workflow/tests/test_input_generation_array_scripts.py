@@ -1667,3 +1667,76 @@ def test_array_plan_rejects_escaping_species_and_download_filenames(tmp_path):
                             "--download-dir", str(tmp_path / "downloads"), "--outfile", str(output))
         assert result.returncode != 0 and "filename components" in result.stderr
         assert not output.exists()
+
+
+@pytest.mark.parametrize('combined', [False, True])
+def test_slurm_refinement_chain_routes_sparse_pairs_and_species_with_dependencies(tmp_path, monkeypatch, combined):
+    import os
+    plan = tmp_path / 'tmp' / 'plan.json'
+    plan.parent.mkdir()
+    calls = tmp_path / 'calls.jsonl'
+    fake = tmp_path / 'sbatch'
+    fake.write_text('#!' + sys.executable + '\n' + '''import hashlib, json, os, sys
+from pathlib import Path
+mode = os.environ['GG_INPUT_INPUT_GENERATION_MODE']
+with Path(os.environ['TEST_CALLS']).open('a') as handle:
+    handle.write(json.dumps({'mode': mode, 'argv': sys.argv[1:], 'refinement': os.environ.get('GG_INPUT_RUN_GENE_MODEL_REFINEMENT'), 'anchors': os.environ.get('GG_INPUT_GENE_MODEL_RESCUE_DIR')}) + '\\n')
+plan = Path(os.environ['GG_INPUT_TASK_PLAN_OUTPUT'])
+if mode == 'array_prepare':
+    plan.write_text(json.dumps({'task_count': 2, 'tasks': [{'species_prefix': 'A_b'}, {'species_prefix': 'C_d'}]}))
+    Path(str(plan) + '.settings.json').write_text('{}')
+    Path(str(plan) + '.prepared.json').write_text(json.dumps({'plan_sha256': hashlib.sha256(plan.read_bytes()).hexdigest(), 'settings_sha256': hashlib.sha256(b'{}').hexdigest()}))
+if mode == 'array_finalize':
+    if os.environ.get('GG_INPUT_RUN_GENE_MODEL_RESCUE') == '1':
+        anchors = Path(os.environ['GG_INPUT_GENE_MODEL_RESCUE_DIR'])
+        anchors.mkdir(exist_ok=True)
+        (anchors / 'plan.json').write_text(json.dumps({'species': ['A_b', 'C_d'], 'donors': {'A_b': ['C_d'], 'C_d': ['A_b']}, 'synteny_jobs': [{'a': 'A_b', 'b': 'C_d', 'index': 1, 'id': 'comparison_1'}]}))
+if mode == 'refinement_prepare' or mode == 'array_finalize' and os.environ.get('GG_INPUT_RUN_GENE_MODEL_RESCUE') != '1':
+    root = Path(os.environ['GG_INPUT_GENE_MODEL_REFINEMENT_DIR'])
+    root.mkdir(exist_ok=True)
+    anchors = Path(os.environ['GG_INPUT_GENE_MODEL_RESCUE_DIR']) if os.environ.get('GG_INPUT_RUN_GENE_MODEL_RESCUE') == '1' else root.parent / 'anchors'
+    anchors.mkdir(exist_ok=True)
+    if not (anchors / 'plan.json').exists():
+        (anchors / 'plan.json').write_text(json.dumps({'synteny_jobs': [{'a': 'A_b', 'b': 'C_d', 'index': 1}, {'a': 'A_b', 'b': 'A_b', 'index': 2}]}))
+    (root / 'plan.json').write_text(json.dumps({'species': ['A_b', 'C_d'], 'request': {'rescue_output': str(anchors), 'edges': None}}))
+print({'array_prepare': 101, 'array_worker': 102, 'array_finalize': 103, 'rescue_synteny': 104, 'refinement_catalog': 105, 'refinement_correspondence': 106, 'refinement_predict': 107, 'refinement_finalize': 108, 'rescue_models': 109, 'rescue_finalize': 110, 'refinement_prepare': 111}[mode])
+''')
+    fake.chmod(0o755)
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('TEST_CALLS', str(calls))
+    helper = SUPPORT_DIR.parent / 'gg_input_generation_array.py'
+    result = run_python(helper, '--task-plan', str(plan), '--refinement', '--submit', '--max-running', '5',
+                        '--rescue-max-running', '3', '--rescue-cpus', '8', '--rescue-memory', '64G', *(['--rescue'] if combined else []))
+    assert result.returncode == 0, result.stderr
+    submissions = [json.loads(line) for line in calls.read_text().splitlines()]
+    if combined:
+        assert [row['mode'] for row in submissions[3:7]] == ['rescue_synteny', 'rescue_models', 'rescue_finalize', 'refinement_prepare']
+        assert '--wait' in submissions[5]['argv']
+        assert '--dependency=afterok:110' in submissions[6]['argv'] and '--wait' in submissions[6]['argv']
+        submissions = submissions[:3] + submissions[7:]
+    assert [row['mode'] for row in submissions] == ['array_prepare', 'array_worker', 'array_finalize',
+           'rescue_synteny', 'refinement_catalog', 'refinement_correspondence', 'refinement_predict', 'refinement_finalize']
+    assert all(row['refinement'] == '1' for row in submissions)
+    assert '--wait' in submissions[2]['argv']
+    assert '--array=1%5' in submissions[3]['argv']  # Self comparisons are not isoform correspondence.
+    assert submissions[3]['anchors'].endswith('/gene_model_rescue' if combined else '/anchors')
+    assert '--dependency=afterok:104:105' in submissions[5]['argv']
+    assert '--dependency=afterok:106' in submissions[6]['argv']
+    assert '--array=1-2%3' in submissions[6]['argv']
+    assert '--cpus-per-task=8' in submissions[6]['argv'] and '--mem=64G' in submissions[6]['argv']
+    assert '--dependency=afterok:107' in submissions[7]['argv']
+
+
+def test_slurm_refinement_retry_rejects_active_workers_before_submission(tmp_path, monkeypatch):
+    import os
+    for name, text in [('squeue', '#!/bin/sh\necho 900_1\n'), ('sbatch', '#!/bin/sh\ntouch "$TEST_SUBMISSION"\n')]:
+        path = tmp_path / name
+        path.write_text(text)
+        path.chmod(0o755)
+    marker = tmp_path / 'submitted'
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('TEST_SUBMISSION', str(marker))
+    helper = SUPPORT_DIR.parent / 'gg_input_generation_array.py'
+    result = run_python(helper, '--task-plan', str(tmp_path / 'plan.json'), '--refinement', '--retry', '--submit')
+    assert result.returncode != 0 and 'refinement workers are active' in result.stderr
+    assert not marker.exists()

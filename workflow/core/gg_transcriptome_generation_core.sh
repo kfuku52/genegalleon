@@ -16,6 +16,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 ### Start: Job-supplied configuration ###
 # Configuration variables are provided by gg_transcriptome_generation_entrypoint.sh.
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
+representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
 contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 ### End: Job-supplied configuration ###
@@ -4996,8 +4997,13 @@ task='amalgkit quant'
 disable_if_no_input_file "run_amalgkit_quant" "${file_amalgkit_metadata}"
 file_kallisto_reference_fasta=""
 if [[ ${kallisto_reference} == 'species_cds' ]]; then
+  dir_kallisto_species_cds="${gg_workspace_input_dir}/species_cds"
+  if [[ -n "${representative_inputs}" ]]; then
+    dir_kallisto_species_cds=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+      --inputs "${representative_inputs}" --field cds) || exit 1
+  fi
   kallisto_ref_candidates=()
-  mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${gg_workspace_input_dir}/species_cds" "${sp_ub}")
+  mapfile -t kallisto_ref_candidates < <(gg_find_species_files_by_label "${dir_kallisto_species_cds}" "${sp_ub}")
   if [[ ${#kallisto_ref_candidates[@]} -eq 1 ]]; then
     file_kallisto_reference_fasta="${kallisto_ref_candidates[0]}"
   elif [[ ${run_amalgkit_quant} -eq 1 ]]; then
@@ -5064,6 +5070,9 @@ quant_provenance_args+=(
   --parameter "clean_fastq=no"
   --parameter "build_index=yes"
 )
+if [[ "${kallisto_reference}" == "species_cds" && -n "${representative_inputs}" ]]; then
+  quant_provenance_args+=(--input "representative_inputs=${representative_inputs}")
+fi
 quant_output_validation=""
 if [[ ${run_amalgkit_quant} -eq 1 ]] && ! quant_output_validation=$(python \
   "${gg_support_dir}/validate_transcriptome_quant_outputs.py" \

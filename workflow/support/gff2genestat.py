@@ -12,7 +12,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import numpy
 import pandas
@@ -24,6 +24,7 @@ try:
     from format_species_annotation.organelle import gff_organelle_seqids
     from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
+    from representative_selection import load_representative_map, matching_identifier
     from species_labeling import extract_species_label, strip_species_label
 except ImportError:  # pragma: no cover - package import path used in tests
     from .content_digest_cache import cached_sha256_file
@@ -32,6 +33,7 @@ except ImportError:  # pragma: no cover - package import path used in tests
     from .format_species_annotation.organelle import gff_organelle_seqids
     from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
+    from .representative_selection import load_representative_map, matching_identifier
     from .species_labeling import extract_species_label, strip_species_label
 
 pandas.options.mode.chained_assignment = None
@@ -97,6 +99,8 @@ def build_arg_parser():
     parser.add_argument("--require-matches", action="store_true",
                         help="Fail instead of publishing an empty table when no input IDs map.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
+    parser.add_argument("--representative-map", default="", metavar="PATH",
+                        help="Use the exact CDS transcript declared for each locus; missing choices fail.")
     parser.add_argument(
         "--sequence-store", default="", metavar="PATH",
         help="Read-only FASTA sequence store binding duplicated species GFFs to the exact source CDS/protein.",
@@ -246,16 +250,19 @@ def build_search_term_lookup(seq_names):
     return lookup, min_len, max_len
 
 
-def normalize_attribute_value(raw_value):
+def normalize_attribute_value(raw_value, *, decode=False):
     value = raw_value if isinstance(raw_value, str) else str(raw_value)
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        return value[1:-1]
-    if value[:1] in {'"', "'"}:
-        value = value[1:]
-    if value[-1:] in {'"', "'"}:
-        value = value[:-1]
-    return value
+        value = value[1:-1]
+    else:
+        if value[:1] in {'"', "'"}:
+            value = value[1:]
+        if value[-1:] in {'"', "'"}:
+            value = value[:-1]
+    # GFF3 escapes encode a scalar AFTER its raw list delimiters are split.
+    # GTF quoted scalars have no percent-escape syntax and remain literal.
+    return unquote(value) if decode else value
 
 
 def unique_values(values):
@@ -335,7 +342,8 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
             continue
         equal_pos = field.find("=")
         space_pos = field.find(" ")
-        if equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos):
+        is_gff3 = equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos)
+        if is_gff3:
             key = field[:equal_pos]
             raw_value = field[equal_pos + 1 :]
         elif space_pos > 0:
@@ -348,12 +356,12 @@ def parse_attribute_summary(attr_text, lookup, min_len, max_len, value_cache, sk
             continue
         if key == "Parent":
             for raw_parent in raw_value.split(","):
-                value = normalize_attribute_value(raw_parent)
+                value = normalize_attribute_value(raw_parent, decode=is_gff3)
                 if value != "":
                     parents.append(value)
                     values.append((key, value))
             continue
-        value = normalize_attribute_value(raw_value)
+        value = normalize_attribute_value(raw_value, decode=is_gff3)
         if value == "":
             continue
         if key == "ID" and attr_id == "":
@@ -390,7 +398,8 @@ def parse_attribute_fields(attr_text):
             continue
         equal_pos = field.find("=")
         space_pos = field.find(" ")
-        if equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos):
+        is_gff3 = equal_pos != -1 and (space_pos == -1 or equal_pos < space_pos)
+        if is_gff3:
             key = field[:equal_pos]
             raw_value = field[equal_pos + 1 :]
         elif space_pos > 0:
@@ -403,11 +412,11 @@ def parse_attribute_fields(attr_text):
             continue
         if key == "Parent":
             for raw_parent in raw_value.split(","):
-                value = normalize_attribute_value(raw_parent)
+                value = normalize_attribute_value(raw_parent, decode=is_gff3)
                 if value != "":
                     parents.append(value)
             continue
-        value = normalize_attribute_value(raw_value)
+        value = normalize_attribute_value(raw_value, decode=is_gff3)
         if value == "":
             continue
         if key == "ID" and attr_id == "":
@@ -501,13 +510,21 @@ def resolve_feature_match(feature_id, id_info, resolved_cache, active_stack, loo
     return best
 
 
-def extract_by_ids(gff, seq_names, feature, multiple_hits):
+def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=None, species=""):
     if multiple_hits != "longest":
         raise ValueError("Unsupported multiple_hits policy: {}".format(multiple_hits))
+    representative_map = load_representative_map(representative_map)
+    if representative_map is not None:
+        if feature != "CDS":
+            raise ValueError("Representative map requires CDS feature selection")
+        for identifier in seq_names:
+            representative_map.choice(str(identifier), species)
     print("Extracting gene IDs: {}".format(datetime.datetime.now()), flush=True)
     lookup, min_len, max_len = build_search_term_lookup(seq_names)
     gff_feat = gff.loc[(gff.loc[:, "feature"] == feature), :].copy()
     if gff_feat.shape[0] == 0:
+        if representative_map is not None and len(seq_names):
+            raise ValueError("Representative map supplied but GFF contains no CDS")
         return gff_feat.assign(gene_id="")
 
     value_cache = {}
@@ -585,6 +602,8 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
     gff_feat.loc[:, "gene_id"] = gene_ids
     out = gff_feat.loc[gff_feat.loc[:, "gene_id"] != "", :]
     if out.shape[0] == 0:
+        if representative_map is not None:
+            raise ValueError("Representative map supplied but no GFF locus matches")
         print("No match was found.")
         return out
     if feature == "CDS":
@@ -618,6 +637,12 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits):
                 models.append(parent_ids)
         out = out.copy()
         out["_model_ids"] = models
+        if representative_map is not None:
+            selected = select_representative_transcripts(out, representative_map, species)
+            missing = set(map(str, seq_names)) - set(selected["gene_id"])
+            if missing:
+                raise ValueError("Representative GFF loci missing: " + ",".join(sorted(missing)))
+            return selected
         return select_longest_transcripts(out)
     return out
 
@@ -700,6 +725,28 @@ def select_longest_transcripts(gff):
     if not selected_indices:
         return gff.assign(selected_transcript="")
     return gff.iloc[selected_indices].reset_index(drop=True).assign(selected_transcript=selected_transcripts)
+
+
+def select_representative_transcripts(gff, representative_map, species=""):
+    """Select exact declared models before computing CDS phases or UTR traits."""
+    representative_map = load_representative_map(representative_map)
+    gff = gff.reset_index(drop=True)
+    by_gene = {}
+    model_ids = gff["_model_ids"].tolist() if "_model_ids" in gff else None
+    for index, (gene_id, attributes) in enumerate(zip(gff["gene_id"], gff["attributes"], strict=True)):
+        models = model_ids[index] if model_ids is not None else transcript_ids(attributes, gene_id)
+        for transcript in models:
+            by_gene.setdefault(gene_id, {}).setdefault(transcript, []).append(index)
+    indices, transcripts = [], []
+    for gene_id, models in by_gene.items():
+        choice = representative_map.choice(gene_id, species)
+        selected = matching_identifier(choice["source_transcript_id"], models, choice["species"])
+        if selected is None:
+            raise ValueError(f"Representative transcript absent from GFF for {gene_id}: "
+                             + choice["source_transcript_id"])
+        indices.extend(models[selected])
+        transcripts.extend([selected] * len(models[selected]))
+    return gff.iloc[indices].reset_index(drop=True).assign(selected_transcript=transcripts)
 
 
 
@@ -824,7 +871,7 @@ def _parse_gff_attributes(text):
         if "=" not in field:
             continue
         key, value = field.split("=", 1)
-        fields.setdefault(key, []).append(value)
+        fields.setdefault(key, []).append(unquote(value))
     return fields
 
 
@@ -1063,10 +1110,12 @@ def read_coding_gff_table(gff_path):
         return read_gff_table(filtered)
 
 
-def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict"):
+def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits, gff_cols, out_cols, phase_policy="strict", structure_policy="strict", representative_map=None):
     print("{}: Started processing: {}".format(datetime.datetime.now(), gff_file), flush=True)
     gff_path = os.path.join(dir_gff, gff_file)
     if os.stat(gff_path).st_size == 0:
+        if representative_map:
+            raise ValueError(f"Representative map supplied for empty GFF: {gff_path}")
         sys.stderr.write("Empty file: {}\n".format(gff_path))
         return pandas.DataFrame(columns=out_cols)
     try:
@@ -1075,6 +1124,8 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
         csv.field_size_limit(2147483647)
     gff = read_gff_table(gff_path, coding_only=feature == "CDS")
     if gff.shape[1] < len(gff_cols):
+        if representative_map:
+            raise ValueError(f"Representative map supplied for malformed GFF: {gff_path}")
         sys.stderr.write("Skipping malformed GFF with fewer than 9 columns: {}\n".format(gff_path))
         return pandas.DataFrame(columns=out_cols)
     if gff.shape[1] > len(gff_cols):
@@ -1084,7 +1135,9 @@ def process_single_gff(gff_file, dir_gff, seq_sp_values, feature, multiple_hits,
     if organelle_seqids:
         gff = gff.loc[~gff["sequence"].astype(str).isin(organelle_seqids)].copy()
     seq_sp = pandas.Series(seq_sp_values)
-    gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits)
+    species = extract_species_label(gff_file, strip_extension=True)
+    gff_id = extract_by_ids(gff=gff, seq_names=seq_sp, feature=feature, multiple_hits=multiple_hits,
+                           representative_map=representative_map, species=species)
     if gff_id.shape[0] == 0:
         return pandas.DataFrame(columns=out_cols)
     print("Summarizing gene features: {}".format(datetime.datetime.now()), flush=True)
@@ -1221,7 +1274,11 @@ def apply_cds_resolution(traits, records, directory):
 def main():
     parser = build_arg_parser()
     args = parser.parse_args()
+    if args.representative_map and args.cds_resolution_dir:
+        parser.error("--representative-map cannot be combined with --cds-resolution-dir; "
+                     "selected transcript coordinates must come from the selected GFF")
     args.ncpu = max(1, int(args.ncpu))
+    representative_map = load_representative_map(args.representative_map)
     start_time = time.time()
     print("gff2genestat.py started: {}".format(datetime.datetime.now()))
 
@@ -1273,6 +1330,7 @@ def main():
                 out_cols=out_cols,
                 phase_policy=args.phase_policy,
                 structure_policy=args.structure_policy,
+                representative_map=representative_map,
             )
             if df_tmp.shape[0] > 0:
                 frames.append(df_tmp)
@@ -1291,6 +1349,7 @@ def main():
                     out_cols,
                     args.phase_policy,
                     args.structure_policy,
+                    representative_map,
                 ): (idx, gff_file)
                 for idx, (gff_file, seq_sp_values) in enumerate(tasks)
             }

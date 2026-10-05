@@ -98,6 +98,18 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Workflow flags
+run_gene_model_refinement=0 # Opt-in all-isoform selection, existing-model revision and isoform addition.
+gene_model_refinement_dir="" # Blank uses output/input_generation/gene_model_refinement.
+gene_model_refinement_policy="conserved" # longest|conserved; representative ranking policy.
+gene_model_refinement_mode="conservative" # off|audit|conservative; audit publishes proposals without accepting predictions.
+gene_model_refinement_inputs="" # Optional raw CDS/GFF/genome TSV; requires an explicit frozen correspondence table.
+gene_model_refinement_edges="" # Optional trusted synteny locus correspondence TSV.
+gene_model_refinement_rescue_dir="" # Existing frozen rescue plan; blank uses gene_model_rescue_dir.
+gene_model_refinement_rna="" # Optional complete coding RNA paths TSV, with zero-based half-open CDS blocks.
+gene_model_refinement_min_margin=0.10 # Experimental minimum candidate score margin; not a calibrated probability.
+gene_model_refinement_min_support=2 # Minimum independent donor species for accepting homology predictions.
+gene_model_refinement_candidate_limit=32 # Maximum candidate paths per locus for bounded selection/prediction.
+gene_model_refinement_padding=2000 # Local prediction padding in genomic bases.
 run_gene_model_rescue=0 # Opt-in sparse synteny/model rescue after initial formatting, BUSCO and taxonomy.
 gene_model_rescue_tree="auto" # External initial species tree, or auto for output/species_taxonomy/taxonomy_tree.nwk.
 gene_model_rescue_dir="" # Rescue outputs; blank uses output/input_generation/gene_model_rescue.
@@ -131,7 +143,7 @@ taxonomy_taxid_override="" # One explicit species:TaxID correction for a schedul
 
 # Shared parameters
 provider="all" # all|ensembl|ensemblplants|ensemblmetazoa|ensemblprotists|phycocosm|phytozome|ncbi|ddbj|refseq|genbank|coge|cngb|flybase|wormbase|vectorbase|fernbase|insectbase|local; selects which provider-specific local layout or download-manifest rows are formatted, with all scanning every supported provider directory.
-input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_finalize. Workers use GG_ARRAY_TASK_ID.
+input_generation_mode="single" # single | array_prepare | array_worker | array_finalize | rescue_prepare | rescue_synteny | rescue_models | rescue_finalize | refinement_prepare | refinement_catalog | refinement_correspondence | refinement_predict | refinement_finalize. Workers use GG_ARRAY_TASK_ID.
 species_busco_parallel_jobs="auto" # In single mode, auto runs up to four species BUSCO jobs within GG_TASK_CPUS; array_worker still runs one species per task.
 species_busco_memory_gb_per_job=4 # Minimum tool-memory budget per concurrent BUSCO species job; parallelism is capped by GG_MEM_TOOL_GB / this value.
 trait_profile="none" # none|gift_starter|gbif_distribution; optional preset for generating species_trait.tsv from external trait databases.

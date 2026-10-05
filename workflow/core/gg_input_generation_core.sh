@@ -21,6 +21,18 @@ source "${gg_support_dir}/gg_busco.sh"
 
 config_file="${config_file:-gg_input_generation_entrypoint.sh}"
 input_generation_mode="${input_generation_mode:-single}"
+run_gene_model_refinement="${run_gene_model_refinement:-0}"
+gene_model_refinement_dir="${gene_model_refinement_dir:-}"
+gene_model_refinement_policy="${gene_model_refinement_policy:-conserved}"
+gene_model_refinement_mode="${gene_model_refinement_mode:-conservative}"
+gene_model_refinement_inputs="${gene_model_refinement_inputs:-}"
+gene_model_refinement_edges="${gene_model_refinement_edges:-}"
+gene_model_refinement_rescue_dir="${gene_model_refinement_rescue_dir:-}"
+gene_model_refinement_rna="${gene_model_refinement_rna:-}"
+gene_model_refinement_min_margin="${gene_model_refinement_min_margin:-0.10}"
+gene_model_refinement_min_support="${gene_model_refinement_min_support:-2}"
+gene_model_refinement_candidate_limit="${gene_model_refinement_candidate_limit:-32}"
+gene_model_refinement_padding="${gene_model_refinement_padding:-2000}"
 run_gene_model_rescue="${run_gene_model_rescue:-0}"
 gene_model_rescue_tree="${gene_model_rescue_tree:-auto}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
@@ -136,9 +148,9 @@ if [[ -n "${download_manifest}" ]]; then
 fi
 
 case "${input_generation_mode}" in
-  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize) ;;
+  single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize) ;;
   *)
-    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize)"
+    echo "Invalid input_generation_mode: ${input_generation_mode} (allowed: single|array_prepare|array_worker|array_finalize|rescue_prepare|rescue_synteny|rescue_models|rescue_finalize|refinement_prepare|refinement_catalog|refinement_correspondence|refinement_predict|refinement_finalize)"
     exit 1
     ;;
 esac
@@ -170,6 +182,7 @@ for binary_flag_name in \
   run_validate_inputs \
   run_cds_fx2tab \
   run_species_busco \
+  run_gene_model_refinement \
   run_gene_model_rescue \
   gene_model_rescue_genome_fallback \
   run_multispecies_summary \
@@ -226,6 +239,8 @@ if [[ "${input_generation_mode}" == array_* && ${run_format_inputs} -ne 1 ]]; th
 fi
 
 input_generation_root="${gg_workspace_output_dir}/input_generation"
+gene_model_refinement_dir="${gene_model_refinement_dir:-${input_generation_root}/gene_model_refinement}"
+case "${gene_model_refinement_dir}" in /*) ;; *) gene_model_refinement_dir="${PWD}/${gene_model_refinement_dir}" ;; esac
 gene_model_rescue_dir="${gene_model_rescue_dir:-${input_generation_root}/gene_model_rescue}"
 case "${gene_model_rescue_dir}" in /*) ;; *) gene_model_rescue_dir="${PWD}/${gene_model_rescue_dir}" ;; esac
 case "${gene_model_rescue_tree}" in auto|/*) ;; *) gene_model_rescue_tree="${PWD}/${gene_model_rescue_tree}" ;; esac
@@ -351,7 +366,7 @@ for path in sorted(manifest_dir.iterdir()):
 PY
 }
 
-if [[ -z "${download_manifest}" && "${input_generation_mode}" != array_worker && "${input_generation_mode}" != array_finalize && "${input_generation_mode}" != rescue_* ]]; then
+if [[ -z "${download_manifest}" && "${input_generation_mode}" != array_worker && "${input_generation_mode}" != array_finalize && "${input_generation_mode}" != rescue_* && "${input_generation_mode}" != refinement_* ]]; then
   default_download_manifests=()
   while IFS= read -r discovered_manifest; do
     [[ -n "${discovered_manifest}" ]] || continue
@@ -2504,16 +2519,49 @@ finish_gene_model_rescue() {
   echo "Augmented CDS/GFF inputs: ${gene_model_rescue_dir}/augmented/inputs.tsv"
 }
 
+prepare_gene_model_refinement() {
+  local -a refinement_args=(plan --output "${gene_model_refinement_dir}"
+    --policy "${gene_model_refinement_policy}" --mode "${gene_model_refinement_mode}"
+    --min-margin "${gene_model_refinement_min_margin}" --min-support "${gene_model_refinement_min_support}"
+    --candidate-limit "${gene_model_refinement_candidate_limit}" --padding "${gene_model_refinement_padding}"
+    --minimum-coverage "${gene_model_rescue_minimum_coverage}" --minimum-identity "${gene_model_rescue_minimum_identity}"
+    --max-intron "${gene_model_rescue_max_intron}" --max-interval "${gene_model_rescue_max_interval}")
+  if [[ -n "${gene_model_refinement_inputs}" ]]; then
+    refinement_args+=(--inputs "${gene_model_refinement_inputs}")
+  else
+    local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
+    if [[ ! -s "${anchor_dir}/plan.json" ]]; then
+      [[ -z "${gene_model_refinement_rescue_dir}" ]] || { echo "Frozen rescue plan missing: ${anchor_dir}" >&2; return 1; }
+      prepare_gene_model_rescue
+    fi
+    refinement_args+=(--rescue-output "${anchor_dir}")
+  fi
+  [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
+  [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"
+}
+
+finish_gene_model_refinement() {
+  python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
+  python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
+  echo "Selected CDS/protein/GFF inputs: ${gene_model_refinement_dir}/effective/inputs.tsv"
+}
+
 ensure_dir "${input_generation_root}"
 export GG_PERFORMANCE_DIR="${input_generation_root}/tmp/performance/$$"
 array_lock_mode=exclusive
-if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models ]]; then
+if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models || "${input_generation_mode}" == refinement_catalog || "${input_generation_mode}" == refinement_predict ]]; then
   array_lock_mode=shared
 fi
 input_generation_lock "${input_generation_root}/.array-phase.lock" "${array_lock_mode}"
-if [[ ${run_gene_model_rescue} -eq 1 || "${input_generation_mode}" == rescue_* ]]; then
+if [[ ${run_gene_model_rescue} -eq 1 || ${run_gene_model_refinement} -eq 1 || "${input_generation_mode}" == rescue_* || "${input_generation_mode}" == refinement_* ]]; then
   ensure_dir "${gene_model_rescue_dir}"
   input_generation_lock "${gene_model_rescue_dir}/.array-phase.lock" "${array_lock_mode}"
+fi
+
+if [[ ${run_gene_model_refinement} -eq 1 || "${input_generation_mode}" == refinement_* ]]; then
+  ensure_dir "${gene_model_refinement_dir}"
+  input_generation_lock "${gene_model_refinement_dir}/.array-phase.lock" "${array_lock_mode}"
 fi
 
 # Custom output directories can be shared across workspace paths. Lock their
@@ -2597,6 +2645,26 @@ case "${input_generation_mode}" in
   array_finalize)
     run_array_finalize_mode
     ;;
+  refinement_prepare)
+    prepare_gene_model_refinement
+    ;;
+  refinement_catalog|refinement_predict|refinement_correspondence)
+    write_run_summary_on_exit=0
+    refinement_command="${input_generation_mode#refinement_}"
+    refinement_args=(--output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}")
+    if [[ "${refinement_command}" != correspondence ]]; then
+      [[ "${GG_ARRAY_TASK_ID}" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid refinement worker index" >&2; exit 1; }
+      refinement_args+=(--task-index "${GG_ARRAY_TASK_ID}")
+    fi
+    [[ -z "${gene_model_rescue_comparison_cache}" ]] || refinement_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
+    python "${gg_support_dir}/gene_model_refinement.py" "${refinement_command}" "${refinement_args[@]}"
+    if [[ "${refinement_command}" == correspondence ]]; then
+      python "${gg_support_dir}/gene_model_refinement.py" select --output "${gene_model_refinement_dir}"
+    fi
+    ;;
+  refinement_finalize)
+    finish_gene_model_refinement
+    ;;
   rescue_prepare)
     prepare_gene_model_rescue
     ;;
@@ -2655,6 +2723,20 @@ if [[ ${run_gene_model_rescue} -eq 1 && ( "${input_generation_mode}" == single |
     [[ "${gene_model_rescue_interval_workers:-0}" == 0 ]] || rescue_execution_args+=(--interval-workers "${gene_model_rescue_interval_workers}")
     python "${gg_support_dir}/rescue_gene_models.py" run --output "${gene_model_rescue_dir}" --cpus "${GG_TASK_CPUS}" "${rescue_execution_args[@]}"
     finish_gene_model_rescue
+  fi
+fi
+
+if [[ ${run_gene_model_refinement} -eq 1 && ( "${input_generation_mode}" == single || "${input_generation_mode}" == array_finalize ) && ${dry_run} -ne 1 && ${download_only} -ne 1 ]]; then
+  # A combined array run freezes refinement only after rescue finalization;
+  # the augmented inputs do not exist at the initial formatting finalizer.
+  if [[ "${input_generation_mode}" == single || ${run_gene_model_rescue} -ne 1 ]]; then
+    prepare_gene_model_refinement
+  fi
+  if [[ "${input_generation_mode}" == single ]]; then
+    refinement_execution_args=()
+    [[ -z "${gene_model_rescue_comparison_cache}" ]] || refinement_execution_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
+    python "${gg_support_dir}/gene_model_refinement.py" run --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}" "${refinement_execution_args[@]}"
+    finish_gene_model_refinement
   fi
 fi
 

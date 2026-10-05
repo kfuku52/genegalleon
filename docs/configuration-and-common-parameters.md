@@ -78,6 +78,7 @@ or `bash ./dev config-schema markdown` to render a current reference table.
 - `GG_COMMON_BUSCO_LINEAGE` (default `eukaryota_odb12`; set `auto` to infer a lineage from species names)
 - `GG_COMMON_REFERENCE_SPECIES` (default `auto`)
 - `GG_COMMON_INPUT_SEQUENCE_MODE` (default `cds`)
+- `GG_COMMON_REPRESENTATIVE_INPUTS` (default empty; verified CDS/protein/GFF/genome manifest from [gene-model refinement](gene-model-refinement.md))
 - `GG_COMMON_CSUBST_NONSYN_RECODE` (default `no`)
 - `GG_COMMON_SPECIES_LABEL_PARSER` (default `taxonomic`)
 - `GG_COMMON_SPECIES_LABEL_REGEX` (default empty)

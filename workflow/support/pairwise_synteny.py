@@ -26,12 +26,24 @@ try:
     from pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from pairwise_synteny_karyotype import chromosome_colors
     from pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
+    from representative_selection import (
+        identifier_aliases,
+        load_effective_inputs,
+        load_representative_map,
+        matching_identifier,
+    )
     from species_labeling import extract_species_label
 except ImportError:  # package imports in tests
     from .fasta_sequence_store import fasta_records
     from .pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from .pairwise_synteny_karyotype import chromosome_colors
     from .pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
+    from .representative_selection import (
+        identifier_aliases,
+        load_effective_inputs,
+        load_representative_map,
+        matching_identifier,
+    )
     from .species_labeling import extract_species_label
 
 REQUIRED = ("analysis_id", "target_species", "query_species")
@@ -117,6 +129,21 @@ def build_plan(args):
     if not formats or len(set(formats)) != len(formats) or set(formats) - {"pdf", "svg", "png"}:
         raise ValueError("formats must be a unique comma-separated subset of pdf,svg,png")
     workspace = args.workspace.resolve()
+    effective_manifest = getattr(args, "representative_inputs", "")
+    effective_inputs = {}
+    if effective_manifest:
+        effective_manifest = Path(effective_manifest)
+        effective_manifest = (effective_manifest if effective_manifest.is_absolute()
+                              else workspace / effective_manifest).resolve()
+        effective_inputs = load_effective_inputs(effective_manifest)
+        if any(int(row["genetic_code"]) not in CodonTable.generic_by_id for row in effective_inputs.values()):
+            raise ValueError("Effective inputs manifest has an unknown NCBI genetic code")
+    representative_path = getattr(args, "representative_map", "")
+    if representative_path:
+        representative_path = Path(representative_path)
+        representative_path = (representative_path if representative_path.is_absolute()
+                               else workspace / representative_path).resolve()
+        load_representative_map(representative_path)
     pairs_file = args.pairs if args.pairs.is_absolute() else workspace / args.pairs
     pairs_digest = digest(pairs_file)
     with pairs_file.open(newline="", encoding="utf-8-sig") as handle:
@@ -160,27 +187,41 @@ def build_plan(args):
             raise ValueError("Pairwise synteny requires different species; use the existing self-synteny workflow for self comparisons")
         for side in ("target", "query"):
             species = pair[f"{side}_species"]
+            effective = effective_inputs.get(species)
+            if effective_inputs and effective is None:
+                raise ValueError(f"Effective inputs manifest lacks species: {species}")
+            if effective and any(row.get(f"{side}_{role}") for role in ("fasta", "gff", "cds", "genome")):
+                raise ValueError("Effective inputs manifest cannot be combined with explicit pair source paths")
             mode = args.sequence_mode
             if mode == "auto":
                 if row.get(f"{side}_fasta"):
                     raise ValueError("Explicit FASTA paths require sequence-mode protein or cds")
                 protein_dir = workspace / "input/species_protein"
-                mode = "protein" if protein_dir.is_dir() and any(
+                mode = "protein" if effective or (protein_dir.is_dir() and any(
                     p.is_file() and p.name.removesuffix(".gz").endswith(FASTA_SUFFIXES)
                     and extract_species_label(p.name) == species for p in protein_dir.iterdir()
-                ) else "cds"
+                )) else "cds"
             feature, attribute = row.get(f"{side}_feature", ""), row.get(f"{side}_attribute", "")
             if bool(feature) != bool(attribute):
                 raise ValueError("GFF feature and attribute must be specified together")
             pair[side] = {
                 "species": species, "mode": mode,
-                "fasta": source_file(workspace, row.get(f"{side}_fasta"), f"species_{mode}", species, FASTA_SUFFIXES),
-                "gff": source_file(workspace, row.get(f"{side}_gff"), "species_gff", species, (".gff", ".gff3", ".gtf")),
+                "fasta": (effective.get('analysis_cds', effective['cds']) if mode == 'cds' else effective[mode]) if effective else source_file(workspace, row.get(f"{side}_fasta"), f"species_{mode}", species, FASTA_SUFFIXES),
+                "gff": (effective.get('analysis_gff', effective['gff']) if mode == 'cds' else effective['gff']) if effective else source_file(workspace, row.get(f"{side}_gff"), "species_gff", species, (".gff", ".gff3", ".gtf")),
                 "feature": feature, "attribute": attribute,
-                "genetic_code": codes.get(species, args.genetic_code) if mode == "cds" else None,
+                "genetic_code": (int(effective["genetic_code"]) if effective else codes.get(species, args.genetic_code)) if mode == "cds" else None,
             }
+            if representative_path or effective:
+                if effective and representative_path and str(representative_path) != effective["representative_map"]:
+                    raise ValueError("Explicit representative map differs from effective inputs manifest")
+                pair[side]["representative_map"] = effective["representative_map"] if effective else str(representative_path)
+            if effective and mode == 'cds':
+                # Raw biological CDS can be partial or deliberately excluded
+                # from translation. Use the bundle's admitted coding view.
+                pair[side]['admitted_protein'] = effective['protein']
             pair[f"{side}_seqids"] = row.get(f"{side}_seqids", "")
             genome, sizes = row.get(f"{side}_genome"), row.get(f"{side}_sizes")
+            genome = effective["genome"] if effective else genome
             if genome and sizes:
                 raise ValueError("Specify either genome or sizes for each species, not both")
             kind, length_path = "gff", pair[side]["gff"]
@@ -199,9 +240,10 @@ def build_plan(args):
             pair["ds"] = {}
             for side in ("target", "query"):
                 source = pair[side]
-                path = source_file(workspace, row.get(f"{side}_cds") or (source["fasta"] if source["mode"] == "cds" else ""),
+                effective = effective_inputs.get(source["species"])
+                path = effective.get('analysis_cds', effective['cds']) if effective else source_file(workspace, row.get(f"{side}_cds") or (source["fasta"] if source["mode"] == "cds" else ""),
                                    "species_cds", source["species"], FASTA_SUFFIXES)
-                pair["ds"][side] = {"fasta": path, "genetic_code": codes.get(source["species"], args.genetic_code)}
+                pair["ds"][side] = {"fasta": path, "genetic_code": int(effective["genetic_code"]) if effective else codes.get(source["species"], args.genetic_code)}
             if pair["ds"]["target"]["genetic_code"] != pair["ds"]["query"]["genetic_code"]:
                 raise ValueError("dS estimation requires the same genetic code for both species; use orientation coloring for mixed-code pairs")
         pairs.append(pair)
@@ -215,6 +257,20 @@ def build_plan(args):
         inputs[str(path)] = digest(path)
     reader_source = Path(__file__).with_name("fasta_sequence_store.py").resolve()
     inputs[str(reader_source)] = digest(reader_source)
+    if representative_path or effective_inputs:
+        if representative_path:
+            inputs[str(representative_path)] = digest(representative_path)
+        if effective_manifest:
+            inputs[str(effective_manifest)] = digest(effective_manifest)
+            for sources in effective_inputs.values():
+                for role in ("cds", "protein", "gff", "genome", "representative_map"):
+                    inputs[sources[role]] = sources[role + "_sha256"]
+                for role in ('analysis_cds', 'analysis_gff'):
+                    if role in sources:
+                        inputs[sources[role]] = sources[role + '_sha256']
+        for helper in ("representative_selection.py", "gff2genestat.py", "gff_feature_structure.py"):
+            path = Path(__file__).with_name(helper).resolve()
+            inputs[str(path)] = digest(path)
     if code_digest is not None:
         inputs[str(code_file.resolve())] = code_digest
     for pair in pairs:
@@ -235,11 +291,11 @@ def build_plan(args):
         for pair in pairs:
             for side in ("target", "query"):
                 inputs[pair["ds"][side]["fasta"]] = digest(pair["ds"][side]["fasta"])
-    return {
+    plan = {
         "workspace": str(workspace), "pairs": sorted(pairs, key=lambda p: p["analysis_id"]),
         "parameters": {"cscore": args.cscore, "min_anchors": args.min_anchors, "distance": args.distance,
                        "minimum_mapping_fraction": args.minimum_mapping_fraction, "quota": None,
-                       "isoform_policy": "longest"},
+                       "isoform_policy": "representative_map" if representative_path or effective_inputs else "longest"},
         "formats": formats, "karyotype_sort": args.karyotype_sort, "karyotype_color": karyotype_color,
         "karyotype_scale": karyotype_scale,
         "karyotype_track_order": karyotype_track_order,
@@ -247,6 +303,9 @@ def build_plan(args):
         "dotplot_min_length": minimum_length, "dotplot_sort": dotplot_sort,
         "tools": tool_identity(), "input_hashes": inputs, "schema_version": 1,
     }
+    if effective_manifest:
+        plan["representative_inputs"] = str(effective_manifest)
+    return plan
 
 
 def verify_inputs(plan):
@@ -267,11 +326,23 @@ def contract_args(plan, phase):
               "--output", f"results={phase_root(plan, phase)}", "--input", f"implementation={Path(__file__).resolve()}",
               "--input", f"sequence_reader={Path(__file__).with_name('fasta_sequence_store.py').resolve()}"]
     if phase == "analysis":
+        if plan.get("representative_inputs"):
+            result.extend(("--input", "representative_inputs=" + plan["representative_inputs"]))
         pairs = [{k: v for k, v in pair.items() if not k.endswith("_seqids") and k not in {"ds", "dotplot_lengths"}} for pair in plan["pairs"]]
         for pair in pairs:
             for side in ("target", "query"):
                 for kind in ("fasta", "gff"):
                     result.extend(("--input", f"{pair['analysis_id']}.{side}.{kind}={pair[side][kind]}"))
+                if pair[side].get('admitted_protein'):
+                    result.extend(('--input', f"{pair['analysis_id']}.{side}.admitted_protein="
+                                   + pair[side]['admitted_protein']))
+                if pair[side].get("representative_map"):
+                    result.extend(("--input", f"{pair['analysis_id']}.{side}.representative_map="
+                                   + pair[side]["representative_map"]))
+        if plan["parameters"].get("isoform_policy") == "representative_map":
+            for helper in ("representative_selection.py", "gff2genestat.py", "gff_feature_structure.py"):
+                result.extend(("--input", f"selection_implementation.{helper}="
+                               + str(Path(__file__).with_name(helper).resolve())))
         parameters = {"pairs": pairs, **plan["parameters"], "tools": plan["tools"]}
     elif phase == "ds":
         result.extend(("--input", f"analysis={phase_root(plan, 'analysis')}"))
@@ -308,7 +379,60 @@ def contract_args(plan, phase):
     return result
 
 
-def prepare_genome(source, directory, side, minimum_mapping_fraction, *, protein_transform=None, annotation_mapper=None):
+def select_declared_isoforms(mapping, representative_map, source, *, coding_traits=None):
+    """Bind both candidate FASTAs and locus FASTAs to the same declared CDS."""
+    try:
+        from gff2genestat import process_single_gff
+    except ImportError:  # package imports in tests
+        from .gff2genestat import process_single_gff
+    species = source["species"]
+    loci = {}
+    for gene in mapping.genes:
+        loci.setdefault(mapping.locus_by_id.get(gene.gene_id, gene.gene_id), []).append(gene)
+    selected, choices, requested = [], {}, []
+    for locus, genes in loci.items():
+        row = representative_map.choice(locus, species)
+        if len({gene.seqid for gene in genes}) > 1 or len({gene.strand for gene in genes} - {"."}) > 1:
+            raise ValueError(f"Isoforms of locus {locus} have incompatible coordinates")
+        transcript = matching_identifier(row["source_transcript_id"], {gene.gene_id for gene in genes}, species)
+        if transcript is None:
+            # Effective FASTAs are keyed by locus rather than source transcript.
+            locus_ids = [gene.gene_id for gene in genes
+                         if identifier_aliases(gene.gene_id, species)
+                         & identifier_aliases(row["gene_id"], species)]
+            if len(locus_ids) != 1:
+                raise ValueError(f"Representative transcript absent from FASTA for {locus}: "
+                                 + row["source_transcript_id"])
+            transcript = locus_ids[0]
+        gene = next(gene for gene in genes if gene.gene_id == transcript)
+        selected.append(gene)
+        canonical = species + "_" + row["gene_id"].removeprefix(species + "_")
+        requested.append(canonical)
+        choices[gene.gene_id] = canonical
+    path = Path(source["gff"])
+    columns = ["sequence", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"]
+    out_columns = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome",
+                   "start", "end", "strand", "feature_blocks", "feature_type", 'cds_first_phase',
+                   'phase_status', 'splice_mode']
+    traits = process_single_gff(path.name, str(path.parent), requested, "CDS", "longest", columns,
+                                out_columns, "report", "report", representative_map=representative_map)
+    by_id = {row.gene_id: row for row in traits.itertuples(index=False)}
+    normalized = []
+    for gene in selected:
+        row = by_id[choices[gene.gene_id]]
+        if coding_traits is not None:
+            coding_traits[gene.gene_id] = row
+        if not math.isfinite(float(row.start)) or not math.isfinite(float(row.end)):
+            raise ValueError(f"Representative CDS cannot be placed in a BED interval: {gene.gene_id}")
+        if gene.seqid != row.chromosome or (gene.strand != "." and gene.strand != row.strand):
+            raise ValueError(f"Representative CDS disagrees with locus coordinates: {gene.gene_id}")
+        normalized.append(replace(gene, start=int(row.start) - 1, end=int(row.end), strand=row.strand))
+    return replace(mapping, genes=tuple(normalized), isoform_policy="representative_map",
+                   collapsed_isoform_count=len(mapping.genes) - len(normalized))
+
+
+def prepare_genome(source, directory, side, minimum_mapping_fraction, *, protein_transform=None, annotation_mapper=None,
+                   representative_map=None):
     sequences = {}
     aliases = {}
     species = source["species"]
@@ -336,12 +460,47 @@ def prepare_genome(source, directory, side, minimum_mapping_fraction, *, protein
                       locus_by_id={aliases[key]: value for key, value in mapping.locus_by_id.items()})
     if len(genes) / len(sequences) < minimum_mapping_fraction:
         raise ValueError(f"Only {len(genes)}/{len(sequences)} FASTA identifiers mapped to {source['gff']}")
-    mapping = select_isoforms(mapping, {key: len(value) for key, value in sequences.items()}, "longest")
+    map_path = representative_map or source.get("representative_map")
+    representative_map = load_representative_map(map_path)
+    coding_traits = {}
+    mapping = (select_declared_isoforms(mapping, representative_map, source, coding_traits=coding_traits) if representative_map is not None
+               else select_isoforms(mapping, {key: len(value) for key, value in sequences.items()}, "longest"))
+    admitted = None
+    if source.get('admitted_protein'):
+        admitted = {}
+        for identifier, _header, sequence in fasta_records(Path(source['admitted_protein'])):
+            if identifier in admitted or identifier not in sequences:
+                raise ValueError('Duplicate or absent admitted protein identifier: ' + identifier)
+            sequence = sequence.upper().removesuffix('*')
+            if not sequence or not sequence.isascii() or set(sequence) - set('ACDEFGHIKLMNPQRSTVWYBXZJUO'):
+                raise ValueError('Invalid admitted protein: ' + identifier)
+            admitted[identifier] = sequence
+        if set(admitted) - {gene.gene_id for gene in mapping.genes}:
+            raise ValueError('Admitted protein does not map to a selected CDS')
     proteins = {}
     for gene in mapping.genes:
         sequence = sequences[gene.gene_id]
         if protein_transform is not None:
             sequence = protein_transform(gene, sequence, mapping)
+            if sequence is None:
+                continue
+        elif admitted is not None:
+            if gene.gene_id not in admitted:
+                continue
+            if source['mode'] == 'cds':
+                if representative_map is not None:
+                    translated = translate_selected_cds(gene.gene_id, sequence, source['genetic_code'], coding_traits)
+                    if translated is not None:
+                        translated = translated.removesuffix('*')
+                else:
+                    if len(sequence) % 3:
+                        raise ValueError('Admitted CDS requires an explicit phase-aware representative map: ' + gene.gene_id)
+                    translated = str(Seq(sequence).translate(table=source['genetic_code'])).removesuffix('*')
+                if translated != admitted[gene.gene_id]:
+                    raise ValueError('Admitted protein disagrees with phase-aware CDS translation: ' + gene.gene_id)
+            sequence = admitted[gene.gene_id]
+        elif source['mode'] == 'cds' and representative_map is not None:
+            sequence = translate_selected_cds(gene.gene_id, sequence, source['genetic_code'], coding_traits)
             if sequence is None:
                 continue
         elif source["mode"] == "cds":
@@ -369,7 +528,25 @@ def prepare_genome(source, directory, side, minimum_mapping_fraction, *, protein
                for identifier in sorted(sequences, key=natural_key)))
     metadata = {**mapping.metadata(), "source": source, "fasta_sha256": digest(source["fasta"]),
                 "gff_sha256": digest(source["gff"]), "unmapped_count": len(sequences) - len(genes)}
+    if representative_map is not None:
+        metadata["representative_map_sha256"] = digest(representative_map.path)
+        metadata["representative_selection_sha256"] = digest(Path(__file__).with_name("representative_selection.py"))
+    if source.get('admitted_protein'):
+        metadata['admitted_protein_sha256'] = digest(source['admitted_protein'])
     return normalized, metadata
+
+
+def translate_selected_cds(gene_id, sequence, genetic_code, coding_traits):
+    """Verify and translate the exact selected path without changing raw CDS."""
+    trait = coding_traits[gene_id]
+    if trait.splice_mode == 'pseudogene':
+        return None
+    if trait.phase_status != 'consistent' or not math.isfinite(float(trait.cds_first_phase)):
+        raise ValueError('Representative CDS has missing or conflicting phase: ' + gene_id)
+    if len(sequence) != int(trait.feature_size):
+        raise ValueError('Representative CDS length disagrees with its annotated path: ' + gene_id)
+    coding = sequence[int(trait.cds_first_phase):]
+    return str(Seq(coding[:len(coding) // 3 * 3]).translate(table=genetic_code))
 
 
 def run_command(command, cwd, commands, label):
@@ -616,6 +793,8 @@ def main(argv=None):
     planning.add_argument("--pairs", required=True, type=Path)
     planning.add_argument("--sequence-mode", choices=("auto", "protein", "cds"), default="auto")
     planning.add_argument("--genetic-code", type=int, default=1)
+    planning.add_argument("--representative-map", default="", type=Path)
+    planning.add_argument("--representative-inputs", default="", type=Path)
     planning.add_argument("--cscore", type=float, default=0.7)
     planning.add_argument("--min-anchors", type=int, default=4)
     planning.add_argument("--distance", type=int, default=20)

@@ -101,6 +101,7 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 # Mode
 mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup; query2family starts from query gene IDs or FASTA and retrieves homolog families, while orthogroup analyzes existing OrthoFinder orthogroups directly.
 gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt; hgt switches to orthogroup mode and enables HGT-oriented defaults for UniProt annotation, GeneRax DTL reconciliation, GFF/expression/intron evidence, and tree plotting.
+representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement effective/inputs.tsv; routes CDS/protein/GFF/genome together.
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode is partial and deactivates CDS-only analyses.
 gene_family_output_storage="${gene_family_output_storage:-${GG_COMMON_GENE_FAMILY_OUTPUT_STORAGE:-zip}}" # zip|files|raw; raw aliases files, while zip queues family artifacts for progress-summary collection.
 gene_family_zip_min_batch_files="${gene_family_zip_min_batch_files:-${GG_COMMON_GENE_FAMILY_ZIP_MIN_BATCH_FILES:-100}}" # Deprecated compatibility setting; array tasks queue their own output inventories; collectors control batching.

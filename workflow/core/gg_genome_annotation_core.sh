@@ -14,6 +14,7 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 # Configuration variables are provided by gg_genome_annotation_entrypoint.sh.
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
+representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
 contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 cdskit_localize_model="${cdskit_localize_model:-latest}"
@@ -96,6 +97,26 @@ if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method
 fi
 
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
+dir_sp_gff="${gg_workspace_input_dir}/species_gff"
+dir_sp_genome="${gg_workspace_input_dir}/species_genome"
+representative_map=""
+file_representative_genetic_code=""
+if [[ -n "${representative_inputs}" ]]; then
+  representative_layout=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs \
+    --inputs "${representative_inputs}" --field analysis_layout) || exit 1
+  IFS=$'\t' read -r dir_sp_cds representative_protein_dir dir_sp_gff dir_sp_genome \
+    representative_map file_representative_genetic_code representative_extra <<< "${representative_layout}"
+  if [[ -n "${representative_extra}" || -z "${file_representative_genetic_code}" ]]; then
+    echo "Invalid representative input layout." >&2
+    exit 1
+  fi
+fi
+representative_annotation_cache=""
+if [[ -n "${representative_inputs}" ]]; then
+  representative_annotation_cache=$(python "${gg_support_dir}/fasta_sequence_store.py" namespace \
+    --root "${gg_workspace_output_dir}/.gg_cache/genome_annotation" \
+    --representative-inputs "${representative_inputs}" --view cds) || exit $?
+fi
 dir_sp_dnaseq="${gg_workspace_input_dir}/species_dnaseq"
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 dir_tmp="${gg_workspace_output_dir}/tmp"
@@ -121,6 +142,19 @@ if [[ ${task_index} -lt 0 || ${task_index} -ge ${#infiles[@]} ]]; then
 fi
 file_sp_cds="${infiles[${task_index}]}"
 sp_ub=$(gg_species_name_from_path "${file_sp_cds}")
+if [[ -n "${file_representative_genetic_code}" ]]; then
+  genetic_code=$(python - "${file_representative_genetic_code}" "${sp_ub}" <<'PY'
+import csv
+import sys
+
+with open(sys.argv[1], newline="") as handle:
+    rows = [row for row in csv.DictReader(handle, delimiter="\t") if row["species"] == sys.argv[2]]
+if len(rows) != 1:
+    raise SystemExit("Expected one representative genetic code for " + sys.argv[2])
+print(int(rows[0]["genetic_code"]))
+PY
+) || exit 1
+fi
 dir_sp_tmp=$(gg_task_tmp_path "${dir_tmp}/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
 echo "${#infiles[@]} input fasta files were detected in: ${dir_sp_cds}"
 echo "Processing ${GG_ARRAY_TASK_ID}th file: ${file_sp_cds}"
@@ -129,8 +163,8 @@ echo "Working directory: ${dir_sp_tmp}"
 
 file_orthogroup="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.tsv"
 file_sp_expression="$(resolve_species_file "${gg_workspace_input_dir}/species_expression" "${sp_ub}" "expression")"
-file_sp_gff="$(resolve_species_file "${gg_workspace_input_dir}/species_gff" "${sp_ub}" "gff")"
-file_sp_genome="$(resolve_species_file "${gg_workspace_input_dir}/species_genome" "${sp_ub}" "genome")"
+file_sp_gff="$(resolve_species_file "${dir_sp_gff}" "${sp_ub}" "gff")"
+file_sp_genome="$(resolve_species_file "${dir_sp_genome}" "${sp_ub}" "genome")"
 file_sp_subphaser_cfg="$(resolve_species_file "${gg_workspace_input_dir}/species_genome_subphaser_cfg" "${sp_ub}" "subphaser cfg")"
 if [[ -s "${file_sp_cds}" ]]; then echo "CDS file found: ${file_sp_cds}"; else echo "CDS file not found."; fi
 if [[ -s "${file_sp_expression}" ]]; then echo "Expression file found: ${file_sp_expression}"; else echo "Expression file not found."; fi
@@ -139,6 +173,8 @@ if [[ -s "${file_sp_genome}" ]]; then echo "Genome fasta file found: ${file_sp_g
 if [[ -s "${file_sp_subphaser_cfg}" ]]; then echo "SubPhaser's CFGFILE found: ${file_sp_subphaser_cfg}"; else echo "SubPhaser's CFGFILE not found."; fi
 
 file_sp_gff_info="${gg_workspace_output_dir}/species_gff_info/${sp_ub}_gff_info.tsv"
+[[ -z "${representative_annotation_cache}" ]] || \
+  file_sp_gff_info="${representative_annotation_cache}/species_gff_info/${sp_ub}_gff_info.tsv"
 file_sp_cds_busco_full="${gg_workspace_output_dir}/species_cds_busco_full/${sp_ub}_busco.full.tsv"
 file_sp_cds_busco_short="${gg_workspace_output_dir}/species_cds_busco_short/${sp_ub}_busco.short.txt"
 file_sp_genome_busco_full="${gg_workspace_output_dir}/species_genome_busco_full/${sp_ub}_busco.full.tsv"
@@ -172,6 +208,9 @@ dir_summary_species_genome_fx2tab="${gg_workspace_output_dir}/species_genome_fx2
 file_summary_species_trait="${gg_workspace_input_dir}/species_trait/species_trait.tsv"
 file_summary_orthogroup_gene_count="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.GeneCount.tsv"
 annotation_provenance_dir="${gg_workspace_output_dir}/artifact_provenance/genome_annotation"
+gff_info_provenance_file="${annotation_provenance_dir}/${sp_ub}.gff_info.json"
+[[ -z "${representative_annotation_cache}" ]] || \
+  gff_info_provenance_file="${representative_annotation_cache}/artifact_provenance/${sp_ub}.gff_info.json"
 
 ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
@@ -220,9 +259,12 @@ if [[ "${artifact_stale_policy:-stop}" == "rebuild" ]]; then
 fi
 # Publish a separate, provenance-bound analysis input; retain original inputs.
 cds_resolution_dir="${gg_workspace_output_dir}/species_cds_resolved"
+[[ -z "${representative_annotation_cache}" ]] || \
+  cds_resolution_dir="${representative_annotation_cache}/species_cds_resolved"
 cds_resolution_args=(--cds "${file_sp_cds}" --output-dir "${cds_resolution_dir}" --genetic-code "${genetic_code}")
 if [[ -s "${file_sp_gff}" ]]; then cds_resolution_args+=(--gff "${file_sp_gff}"); fi
 if [[ -s "${file_sp_genome}" ]]; then cds_resolution_args+=(--genome "${file_sp_genome}"); fi
+if [[ -n "${representative_map}" ]]; then cds_resolution_args+=(--representative-map "${representative_map}"); fi
 python "${gg_support_dir}/cds_resolution.py" "${cds_resolution_args[@]}"
 file_sp_cds="${cds_resolution_dir}/$(basename "${file_sp_cds}")"
 file_sp_cds_resolution_report="${file_sp_cds}.resolution.json"
@@ -231,7 +273,7 @@ file_sp_cds_resolution_traits="${file_sp_cds}.traits.tsv"
 task="Gene trait extraction from gff files"
 disable_if_no_input_file "run_collect_gff_info" "${file_sp_gff}"
 gff_info_needs_update=0
-gg_artifact_contract_init gff_info_provenance_args "genome_annotation_gff_info" "${sp_ub}" "${annotation_provenance_dir}/${sp_ub}.gff_info.json"
+gg_artifact_contract_init gff_info_provenance_args "genome_annotation_gff_info" "${sp_ub}" "${gff_info_provenance_file}"
 gff_info_provenance_args+=(
   --input "cds=${file_sp_cds}"
   --input "parser=${gg_support_dir}/gff2genestat.py"
@@ -244,6 +286,10 @@ gff_info_provenance_args+=(
   --parameter "require_matches=1"
 )
 gg_artifact_add_input_if_present gff_info_provenance_args "gff" "${file_sp_gff}"
+if [[ -n "${representative_map}" ]]; then
+  gff_info_provenance_args+=(--input "representative_map=${representative_map}" \
+    --input "representative_inputs=${representative_inputs}" --parameter "selection_policy=representative_map")
+fi
 gg_artifact_prepare_stage gff_info_needs_update run_collect_gff_info "${gff_info_provenance_args[@]}" || exit $?
 if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   gg_step_start "${task}"

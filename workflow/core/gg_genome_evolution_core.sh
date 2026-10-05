@@ -89,6 +89,9 @@ case "${run_species_taxonomy}" in
   *) echo "run_species_taxonomy must be 0 or 1" >&2; exit 1 ;;
 esac
 
+representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
+representative_map=""
+representative_map_args=()
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
@@ -221,7 +224,9 @@ run_pairwise_synteny_stage() (
   ensure_dir "${scratch_root}"
   work_dir=$(mktemp -d "${scratch_root}/run.XXXXXX")
   plan_file="${work_dir}/plan.json"
-  python "${gg_support_dir}/pairwise_synteny.py" plan \
+  local -a representative_synteny_args=()
+  [[ -z "${representative_inputs}" ]] || representative_synteny_args+=(--representative-inputs "${representative_inputs}")
+  python "${gg_support_dir}/pairwise_synteny.py" plan "${representative_synteny_args[@]}" \
     --workspace "${gg_workspace_dir}" --pairs "${synteny_pairs_file}" \
     --sequence-mode "${synteny_sequence_mode}" --genetic-code "${genetic_code}" \
     --cscore "${synteny_cscore}" --min-anchors "${synteny_min_anchors}" \
@@ -442,7 +447,7 @@ prepare_species_genetic_code_table() {
   local default_code=$2
   local outfile=$3
   local input_table
-  input_table=$(species_genetic_code_table_path)
+  input_table=${4:-$(species_genetic_code_table_path)}
   python - "${cds_dir}" "${default_code}" "${outfile}" "${input_table}" <<'PY'
 import csv
 import gzip
@@ -1578,9 +1583,9 @@ prepare_species_protein_tmp() {
     exit 1
   fi
 
-  check_species_cds "${gg_workspace_dir}"
+  check_species_cds_dir "${dir_sp_cds}"
   check_if_species_files_unique "${dir_sp_cds}"
-  prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}"
+  prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"
   mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   for cds_path in "${cds_files[@]}"; do
     cds=$(basename "${cds_path}")
@@ -2564,14 +2569,24 @@ species_tree_rooting_value=""
 
 # Directories
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
-if [[ -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
+if [[ -z "${representative_inputs}" && -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
   dir_sp_cds=$(python "${gg_support_dir}/cds_resolution.py" \
     --source-dir "${dir_sp_cds}" \
     --output-dir "${gg_workspace_output_dir}/species_cds_resolved" \
     --view-dir "${gg_workspace_output_dir}/species_cds_resolved_views")
 fi
 dir_sp_protein_input="$(species_protein_input_dir_path)"
+if [[ -n "${representative_inputs}" ]]; then
+  representative_layout_field=layout
+  [[ "${input_sequence_mode}" != cds ]] || representative_layout_field=coding_layout
+  representative_layout=$(python "${gg_support_dir}/gene_model_refinement.py" verify-inputs --inputs "${representative_inputs}" --field "${representative_layout_field}") || exit $?
+  IFS=$'\t' read -r dir_sp_cds dir_sp_protein_input representative_gff_dir representative_genome_dir representative_map representative_genetic_codes representative_codon_code <<< "${representative_layout}"
+  [[ -z "${representative_codon_code}" ]] || genetic_code="${representative_codon_code}"
+  representative_map_args=(--representative-map "${representative_map}")
+fi
+
 file_species_genetic_code="$(species_genetic_code_table_path)"
+[[ -z "${representative_genetic_codes:-}" ]] || file_species_genetic_code="${representative_genetic_codes}"
 dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
 annotation_species_resolved=""
 annotation_species_candidates=()
@@ -2947,7 +2962,7 @@ elif [[ "${input_sequence_mode}" == "protein" ]]; then
     run_busco_dupaware_grampa_dna=0
   fi
 else
-  check_species_cds "${gg_workspace_dir}"
+  check_species_cds_dir "${dir_sp_cds}"
   check_if_species_files_unique "${dir_sp_cds}"
 fi
 # Imported analysis inputs in selection-only runs are validated and hashed by

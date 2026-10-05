@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -101,6 +102,68 @@ def test_resolution_preserves_sources_and_disables_only_conflicting_utr(tmp_path
     ref.write_text('>chr1\nATGCCCTAA\n')
     with pytest.raises(ValueError, match='Stale CDS resolution'):
         resolution.resolved_view(fasta.parent, output.parent, tmp_path / 'views')
+
+
+def test_resolution_uses_explicit_short_model_and_invalidates_changed_map(tmp_path):
+    fasta, gff, genome = inputs(tmp_path, genome='CCCATGAAATAA', utr=False)
+    gff.write_text('chr1\ts\tgene\t1\t12\t.\t+\t.\tID=gene1\n'
+                   'chr1\ts\tmRNA\t4\t12\t.\t+\t.\tID=short;Parent=gene1\n'
+                   'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=long;Parent=gene1\n'
+                   'chr1\ts\tCDS\t4\t12\t.\t+\t0\tParent=short\n'
+                   'chr1\ts\tCDS\t1\t12\t.\t+\t0\tParent=long\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Plant_species\tPlant_species_gene1\tc1\tshort\tselected\t1\t0.2\tconserved\n')
+    output, traits, report = resolution.resolve(fasta, gff, genome, tmp_path / 'resolved',
+                                                representative_map=selection)
+    row = pd.read_csv(traits, sep='\t').iloc[0]
+    assert row.gff_transcript_id == 'short' and row.feature_size == 9 and row.start == 4
+    assert output.read_text() == fasta.read_text()
+    previous = json.loads(report.read_text())['contract']
+    selection.write_text(selection.read_text().replace('\tshort\t', '\tlong\t'))
+    resolution.resolve(fasta, gff, genome, tmp_path / 'resolved', representative_map=selection)
+    changed = json.loads(report.read_text())['contract']
+    assert changed['sources']['representative_map']['sha256'] != previous['sources']['representative_map']['sha256']
+    assert pd.read_csv(traits, sep='\t').iloc[0].gff_transcript_id == 'long'
+    assert output.read_text() == '>Plant_species_gene1\nCCCATGAAATAA\n'
+
+
+def test_original_resolution_cannot_override_explicit_selected_short_coordinates(tmp_path):
+    from gff2genestat import apply_cds_resolution
+
+    fasta, gff, genome = inputs(tmp_path, genome='CCCATGAAATAA', utr=False)
+    gff.write_text('chr1\ts\tgene\t1\t12\t.\t+\t.\tID=gene1\n'
+                   'chr1\ts\tmRNA\t4\t12\t.\t+\t.\tID=short;Parent=gene1\n'
+                   'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=long;Parent=gene1\n'
+                   'chr1\ts\tCDS\t4\t12\t.\t+\t0\tParent=short\n'
+                   'chr1\ts\tCDS\t1\t12\t.\t+\t0\tParent=long\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Plant_species\tPlant_species_gene1\tc1\tshort\tselected\t1\t0.2\tconserved\n')
+    output, original_traits, _report = resolution.resolve(fasta, gff, genome, tmp_path / 'resolved')
+    assert output.read_text() == '>Plant_species_gene1\nCCCATGAAATAA\n'
+    assert pd.read_csv(original_traits, sep='\t').iloc[0].gff_transcript_id == 'long'
+    traits_path = tmp_path / 'selected.tsv'
+    command = [sys.executable, str(Path(__file__).resolve().parents[1] / 'support/gff2genestat.py'),
+               '--dir_gff', str(gff.parent), '--feature', 'CDS', '--multiple_hits', 'longest',
+               '--seqfile', str(fasta), '--validate-cds-length', '--representative-map', str(selection),
+               '--outfile', str(traits_path)]
+    conflict = subprocess.run([*command, '--cds-resolution-dir', str(output.parent)],
+                              capture_output=True, text=True, timeout=30)
+    assert conflict.returncode != 0
+    assert '--representative-map cannot be combined with --cds-resolution-dir' in conflict.stderr
+    assert not traits_path.exists()
+    selected = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert selected.returncode == 0, selected.stdout + selected.stderr
+    traits = pd.read_csv(traits_path, sep='\t')
+    row = traits.iloc[0]
+    assert (row.gff_transcript_id, row.feature_size, row.start, row.end) == ('short', 9, 4, 12)
+    assert row.phase_status == 'consistent'
+    # Reproduce the original bug: a valid report for the raw longest CDS would
+    # erase the selected transcript's coordinates because its sequence differs.
+    apply_cds_resolution(traits, list(resolution.fasta_records(fasta)), output.parent)
+    assert traits.iloc[0].structure_status == 'sequence_not_coordinate_matched'
+    assert pd.isna(traits.iloc[0].feature_size)
 
 
 def test_valid_disagreeing_cds_kept_without_intron_assignment(tmp_path):

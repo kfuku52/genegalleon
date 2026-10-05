@@ -1,0 +1,1463 @@
+{
+  "environment": {
+    "cpu_count": 12,
+    "cpus_per_prediction": 2,
+    "dependencies": {
+      "biopython": "1.88",
+      "jcvi": "1.6.7",
+      "kfFractBias": "0.2.0.dev2"
+    },
+    "implementation_sha256": {
+      "benchmark_gene_model_refinement.py": "4cbc1326b52fa20bb275eff49f5806cf915b287bceeaac921807bb21b893a267",
+      "gene_model_catalog.py": "26a17c50314e5ff27a0b4475740e1ea7b5c44134d164a726a2e43ccf7362b5eb",
+      "gene_model_refinement.py": "8e14223f8be2fd4d950a2dc33e6977dbdab33b282a6c898035fad315348753eb",
+      "gene_model_selection.py": "d8ae9853393d5e6eca29750aa2e58c0151512f065d68495fd497a99265811c7b",
+      "gene_model_store.py": "3d62c9edac1b25eac26e85bc6adb8304fa34b1e996e521c4255c205ba0eb6b27"
+    },
+    "miniprot": "0.18-r281",
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]"
+  },
+  "measurement": {
+    "cold_definition": "new output directory; OS caches not flushed",
+    "cpu_includes": "CLI and completed predictor descendants",
+    "fixture_preparation_measured": false,
+    "peak_rss_definition": "maximum individual CLI/child process RSS; not simultaneous aggregate",
+    "policy_baseline_outputs_equivalent": false,
+    "repeats": 1,
+    "resume_definition": "same completed output directory in a fresh interpreter",
+    "same_policy_scientific_outputs_equivalent": true,
+    "staged_batched_comparison": "same scientific behavior; CLI startup/verification overhead differs",
+    "wall_includes": "fresh interpreter startup and all CLI commands; container startup excluded"
+  },
+  "measurements": [
+    {
+      "cache": "cold",
+      "cpu_seconds": 1.2031489999999998,
+      "execution": "batched",
+      "output_bytes": 803593,
+      "peak_rss_bytes": 66355200,
+      "policy": "longest_off",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "a7937f5a6886e82ed6bd473cfd0f4a05af7532e3ed7751ff9089f6058f713c2b",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "3037ca40751d06ab95294bfedf8dea4beb23c51caefa9bb41833ab2fdd52f4cb",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "3946cd087a80919c5d348e06eb8711eb62c461a0070c2774aaec113fbed312dc",
+          "changes.json": "e41d0d4f3ca9bfc56f1a780c5f9d03ac975b399f6868fd6c6c580561d4660e6f",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "representative_map.tsv": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "2003d9850392a4085c93cf2b4977bcd9abb122dafe6941c06d166d8ff2fa085c",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "9a1967cb02c594c8471cba012f413001c442f2579f6caeeaba9d21359779e677"
+        },
+        "manifest_sha256": "2f15f55bd28ec35ff67ee516d2ebbf16005752fef40c57646213a0ccf83e8295",
+        "prediction_sha256": "6f75548c66ababd89ddc7036af541895be0cc5c99cdf93b1257633ab9813d54e",
+        "sha256": "1aa3e59de4b9b9906e7f1e97df5ae54a3da5ae8bd6159a62b1e25cf5b4e9ba8e"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.442082535,
+          "cli_peak_rss_bytes": 59543552,
+          "cli_wall_seconds": 0.469480792000013,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "plan",
+            "--inputs",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/inputs.tsv",
+            "--edges",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/edges.tsv",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-batched-0",
+            "--policy",
+            "longest",
+            "--mode",
+            "off",
+            "--padding",
+            "650",
+            "--max-intron",
+            "2000",
+            "--rna",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/rna.tsv"
+          ],
+          "cpu_seconds": 0.515459,
+          "peak_rss_bytes": 59543552,
+          "stage": "plan",
+          "wall_seconds": 0.544136250000065
+        },
+        {
+          "children_peak_rss_bytes": 65167360,
+          "cli_cpu_seconds": 0.621852603,
+          "cli_peak_rss_bytes": 66355200,
+          "cli_wall_seconds": 0.7954209589997845,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "run",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-batched-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.6876899999999999,
+          "peak_rss_bytes": 66355200,
+          "stage": "run",
+          "wall_seconds": 0.8620697090000249
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 0,
+        "accepted_exon_skipped_path_matches_truth": false,
+        "accepted_isoform_additions": 0,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 0,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 0
+      },
+      "wall_seconds": 1.40620595900009
+    },
+    {
+      "cache": "resume",
+      "cpu_seconds": 0.461347,
+      "execution": "batched",
+      "output_bytes": 803593,
+      "peak_rss_bytes": 60354560,
+      "policy": "longest_off",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "a7937f5a6886e82ed6bd473cfd0f4a05af7532e3ed7751ff9089f6058f713c2b",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "3037ca40751d06ab95294bfedf8dea4beb23c51caefa9bb41833ab2fdd52f4cb",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "3946cd087a80919c5d348e06eb8711eb62c461a0070c2774aaec113fbed312dc",
+          "changes.json": "e41d0d4f3ca9bfc56f1a780c5f9d03ac975b399f6868fd6c6c580561d4660e6f",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "representative_map.tsv": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "2003d9850392a4085c93cf2b4977bcd9abb122dafe6941c06d166d8ff2fa085c",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "9a1967cb02c594c8471cba012f413001c442f2579f6caeeaba9d21359779e677"
+        },
+        "manifest_sha256": "2f15f55bd28ec35ff67ee516d2ebbf16005752fef40c57646213a0ccf83e8295",
+        "prediction_sha256": "6f75548c66ababd89ddc7036af541895be0cc5c99cdf93b1257633ab9813d54e",
+        "sha256": "1aa3e59de4b9b9906e7f1e97df5ae54a3da5ae8bd6159a62b1e25cf5b4e9ba8e"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.38445200500000004,
+          "cli_peak_rss_bytes": 60354560,
+          "cli_wall_seconds": 0.45917841699974815,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "run",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-batched-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.461347,
+          "peak_rss_bytes": 60354560,
+          "stage": "run",
+          "wall_seconds": 0.53707254200026
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 0,
+        "accepted_exon_skipped_path_matches_truth": false,
+        "accepted_isoform_additions": 0,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 0,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 0
+      },
+      "wall_seconds": 0.53707254200026
+    },
+    {
+      "cache": "cold",
+      "cpu_seconds": 2.7838,
+      "execution": "staged",
+      "output_bytes": 803329,
+      "peak_rss_bytes": 65478656,
+      "policy": "longest_off",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "a7937f5a6886e82ed6bd473cfd0f4a05af7532e3ed7751ff9089f6058f713c2b",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "3037ca40751d06ab95294bfedf8dea4beb23c51caefa9bb41833ab2fdd52f4cb",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "3946cd087a80919c5d348e06eb8711eb62c461a0070c2774aaec113fbed312dc",
+          "changes.json": "e41d0d4f3ca9bfc56f1a780c5f9d03ac975b399f6868fd6c6c580561d4660e6f",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "representative_map.tsv": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "2003d9850392a4085c93cf2b4977bcd9abb122dafe6941c06d166d8ff2fa085c",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "9a1967cb02c594c8471cba012f413001c442f2579f6caeeaba9d21359779e677"
+        },
+        "manifest_sha256": "2f15f55bd28ec35ff67ee516d2ebbf16005752fef40c57646213a0ccf83e8295",
+        "prediction_sha256": "6f75548c66ababd89ddc7036af541895be0cc5c99cdf93b1257633ab9813d54e",
+        "sha256": "1aa3e59de4b9b9906e7f1e97df5ae54a3da5ae8bd6159a62b1e25cf5b4e9ba8e"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.348886203,
+          "cli_peak_rss_bytes": 59527168,
+          "cli_wall_seconds": 0.40222108400030265,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "plan",
+            "--inputs",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/inputs.tsv",
+            "--edges",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/edges.tsv",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--policy",
+            "longest",
+            "--mode",
+            "off",
+            "--padding",
+            "650",
+            "--max-intron",
+            "2000",
+            "--rna",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/rna.tsv"
+          ],
+          "cpu_seconds": 0.41892399999999996,
+          "peak_rss_bytes": 59527168,
+          "stage": "plan",
+          "wall_seconds": 0.47761770799979786
+        },
+        {
+          "children_peak_rss_bytes": 65228800,
+          "cli_cpu_seconds": 0.49482604700000005,
+          "cli_peak_rss_bytes": 65478656,
+          "cli_wall_seconds": 0.5583392919998005,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "catalog",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.55742,
+          "peak_rss_bytes": 65478656,
+          "stage": "catalog",
+          "wall_seconds": 0.6250283329995909
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.349732752,
+          "cli_peak_rss_bytes": 60313600,
+          "cli_wall_seconds": 0.40220029200008867,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "correspondence",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.41291599999999995,
+          "peak_rss_bytes": 60313600,
+          "stage": "correspondence",
+          "wall_seconds": 0.46621208399983516
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.367813779,
+          "cli_peak_rss_bytes": 60342272,
+          "cli_wall_seconds": 0.41393062499992084,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "select",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.43207199999999996,
+          "peak_rss_bytes": 60342272,
+          "stage": "select",
+          "wall_seconds": 0.479180499999984
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.41195978,
+          "cli_peak_rss_bytes": 60358656,
+          "cli_wall_seconds": 0.49532745900023656,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "predict",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.478747,
+          "peak_rss_bytes": 60358656,
+          "stage": "predict",
+          "wall_seconds": 0.5629774589997396
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.417421596,
+          "cli_peak_rss_bytes": 60362752,
+          "cli_wall_seconds": 0.5041840000003504,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "finalize",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.483721,
+          "peak_rss_bytes": 60362752,
+          "stage": "finalize",
+          "wall_seconds": 0.5713825839998208
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 0,
+        "accepted_exon_skipped_path_matches_truth": false,
+        "accepted_isoform_additions": 0,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 0,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 0
+      },
+      "wall_seconds": 3.1823986679987684
+    },
+    {
+      "cache": "resume",
+      "cpu_seconds": 2.012861,
+      "execution": "staged",
+      "output_bytes": 803329,
+      "peak_rss_bytes": 60370944,
+      "policy": "longest_off",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "a7937f5a6886e82ed6bd473cfd0f4a05af7532e3ed7751ff9089f6058f713c2b",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "3037ca40751d06ab95294bfedf8dea4beb23c51caefa9bb41833ab2fdd52f4cb",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "3946cd087a80919c5d348e06eb8711eb62c461a0070c2774aaec113fbed312dc",
+          "changes.json": "e41d0d4f3ca9bfc56f1a780c5f9d03ac975b399f6868fd6c6c580561d4660e6f",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "representative_map.tsv": "4ed426e26d04092d063da73c768465bde53fe39894a66cc127f89d17ef8290e2",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "2003d9850392a4085c93cf2b4977bcd9abb122dafe6941c06d166d8ff2fa085c",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "9a1967cb02c594c8471cba012f413001c442f2579f6caeeaba9d21359779e677"
+        },
+        "manifest_sha256": "2f15f55bd28ec35ff67ee516d2ebbf16005752fef40c57646213a0ccf83e8295",
+        "prediction_sha256": "6f75548c66ababd89ddc7036af541895be0cc5c99cdf93b1257633ab9813d54e",
+        "sha256": "1aa3e59de4b9b9906e7f1e97df5ae54a3da5ae8bd6159a62b1e25cf5b4e9ba8e"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.315596869,
+          "cli_peak_rss_bytes": 59523072,
+          "cli_wall_seconds": 0.35530425099977947,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "catalog",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.376891,
+          "peak_rss_bytes": 59523072,
+          "stage": "catalog",
+          "wall_seconds": 0.4173285830001987
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.347481057,
+          "cli_peak_rss_bytes": 59527168,
+          "cli_wall_seconds": 0.4047015000001011,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "correspondence",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.409605,
+          "peak_rss_bytes": 59527168,
+          "stage": "correspondence",
+          "wall_seconds": 0.46766283399983877
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.33968238,
+          "cli_peak_rss_bytes": 59551744,
+          "cli_wall_seconds": 0.44815641599961964,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "select",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.401979,
+          "peak_rss_bytes": 59551744,
+          "stage": "select",
+          "wall_seconds": 0.5111675840003045
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.350587085,
+          "cli_peak_rss_bytes": 60362752,
+          "cli_wall_seconds": 0.39997216700021454,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "predict",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.41474,
+          "peak_rss_bytes": 60362752,
+          "stage": "predict",
+          "wall_seconds": 0.46492620900016846
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.346278406,
+          "cli_peak_rss_bytes": 60370944,
+          "cli_wall_seconds": 0.40430783400006476,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "finalize",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/longest_off-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.409646,
+          "peak_rss_bytes": 60370944,
+          "stage": "finalize",
+          "wall_seconds": 0.46856208300005164
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 0,
+        "accepted_exon_skipped_path_matches_truth": false,
+        "accepted_isoform_additions": 0,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 0,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 0
+      },
+      "wall_seconds": 2.329647293000562
+    },
+    {
+      "cache": "cold",
+      "cpu_seconds": 1.495997,
+      "execution": "batched",
+      "output_bytes": 937559,
+      "peak_rss_bytes": 71258112,
+      "policy": "conserved_conservative",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "57d0c44bd66e1e1092312b79c0b1596fdf86978db5a0b7317b7ae624ea42f833",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "66a4afd2e56d130c9e809b10319947f3179199c655a96251291f3789a9f04400",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "fcae09fcb59b72147d51d63bf34c19dff99de344f6ee6c264287e868a33eeb66",
+          "changes.json": "b8c29d764c2a9bdfa96011c759c97e3d8b0eec2261ee79187fb2364066d25568",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "c1f129796d354f85db3b5de63cdc49da3851e99251e0fc1178ec879a14050f51",
+          "representative_map.tsv": "ae2ee5eaaf35c9bbb82d08c118521aa47b9eadd68e40c7291d50224210ff76b0",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "1507481284ef62f84f9175a32f6d490f63fa1b70098a531b7224efec6ad603fd",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "7ce9595b6ab00bf00e2012130d1424a3876ef34e2cee8ee6e25a83fd68669fe2",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "480f4259098c1838c925a6d38fed37ec371a0209396c76cd67014569e7760e88"
+        },
+        "manifest_sha256": "43009c2609a3217c3e1c712269d62606962e5e87183b3763547d49cfdddd5218",
+        "prediction_sha256": "1d55c090e3132d5d49d4398ed68251ccffd285ac6894ec4c646607ba607ff8b6",
+        "sha256": "f57c6921e740b5a335d9e019560176f2227cb49408eaa5c06ac8c5fb3a7bcad3"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.302249828,
+          "cli_peak_rss_bytes": 59621376,
+          "cli_wall_seconds": 0.3166982909997387,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "plan",
+            "--inputs",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/inputs.tsv",
+            "--edges",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/edges.tsv",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-batched-0",
+            "--policy",
+            "conserved",
+            "--mode",
+            "conservative",
+            "--padding",
+            "650",
+            "--max-intron",
+            "2000",
+            "--rna",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/rna.tsv"
+          ],
+          "cpu_seconds": 0.361252,
+          "peak_rss_bytes": 59621376,
+          "stage": "plan",
+          "wall_seconds": 0.376373292000153
+        },
+        {
+          "children_peak_rss_bytes": 71258112,
+          "cli_cpu_seconds": 1.073873204,
+          "cli_peak_rss_bytes": 66727936,
+          "cli_wall_seconds": 1.0490665429997534,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "run",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-batched-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 1.134745,
+          "peak_rss_bytes": 71258112,
+          "stage": "run",
+          "wall_seconds": 1.110694083999988
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 2,
+        "accepted_exon_skipped_path_matches_truth": true,
+        "accepted_isoform_additions": 1,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 2,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 2
+      },
+      "wall_seconds": 1.487067376000141
+    },
+    {
+      "cache": "resume",
+      "cpu_seconds": 0.42989499999999997,
+      "execution": "batched",
+      "output_bytes": 937559,
+      "peak_rss_bytes": 60383232,
+      "policy": "conserved_conservative",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "57d0c44bd66e1e1092312b79c0b1596fdf86978db5a0b7317b7ae624ea42f833",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "66a4afd2e56d130c9e809b10319947f3179199c655a96251291f3789a9f04400",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "fcae09fcb59b72147d51d63bf34c19dff99de344f6ee6c264287e868a33eeb66",
+          "changes.json": "b8c29d764c2a9bdfa96011c759c97e3d8b0eec2261ee79187fb2364066d25568",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "c1f129796d354f85db3b5de63cdc49da3851e99251e0fc1178ec879a14050f51",
+          "representative_map.tsv": "ae2ee5eaaf35c9bbb82d08c118521aa47b9eadd68e40c7291d50224210ff76b0",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "1507481284ef62f84f9175a32f6d490f63fa1b70098a531b7224efec6ad603fd",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "7ce9595b6ab00bf00e2012130d1424a3876ef34e2cee8ee6e25a83fd68669fe2",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "480f4259098c1838c925a6d38fed37ec371a0209396c76cd67014569e7760e88"
+        },
+        "manifest_sha256": "43009c2609a3217c3e1c712269d62606962e5e87183b3763547d49cfdddd5218",
+        "prediction_sha256": "1d55c090e3132d5d49d4398ed68251ccffd285ac6894ec4c646607ba607ff8b6",
+        "sha256": "f57c6921e740b5a335d9e019560176f2227cb49408eaa5c06ac8c5fb3a7bcad3"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.36454806500000003,
+          "cli_peak_rss_bytes": 60383232,
+          "cli_wall_seconds": 0.4239546670000891,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "run",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-batched-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.42989499999999997,
+          "peak_rss_bytes": 60383232,
+          "stage": "run",
+          "wall_seconds": 0.4902045009998801
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 2,
+        "accepted_exon_skipped_path_matches_truth": true,
+        "accepted_isoform_additions": 1,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 2,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 2
+      },
+      "wall_seconds": 0.4902045009998801
+    },
+    {
+      "cache": "cold",
+      "cpu_seconds": 3.5577769999999997,
+      "execution": "staged",
+      "output_bytes": 937331,
+      "peak_rss_bytes": 71356416,
+      "policy": "conserved_conservative",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "57d0c44bd66e1e1092312b79c0b1596fdf86978db5a0b7317b7ae624ea42f833",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "66a4afd2e56d130c9e809b10319947f3179199c655a96251291f3789a9f04400",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "fcae09fcb59b72147d51d63bf34c19dff99de344f6ee6c264287e868a33eeb66",
+          "changes.json": "b8c29d764c2a9bdfa96011c759c97e3d8b0eec2261ee79187fb2364066d25568",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "c1f129796d354f85db3b5de63cdc49da3851e99251e0fc1178ec879a14050f51",
+          "representative_map.tsv": "ae2ee5eaaf35c9bbb82d08c118521aa47b9eadd68e40c7291d50224210ff76b0",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "1507481284ef62f84f9175a32f6d490f63fa1b70098a531b7224efec6ad603fd",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "7ce9595b6ab00bf00e2012130d1424a3876ef34e2cee8ee6e25a83fd68669fe2",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "480f4259098c1838c925a6d38fed37ec371a0209396c76cd67014569e7760e88"
+        },
+        "manifest_sha256": "43009c2609a3217c3e1c712269d62606962e5e87183b3763547d49cfdddd5218",
+        "prediction_sha256": "1d55c090e3132d5d49d4398ed68251ccffd285ac6894ec4c646607ba607ff8b6",
+        "sha256": "f57c6921e740b5a335d9e019560176f2227cb49408eaa5c06ac8c5fb3a7bcad3"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.315191787,
+          "cli_peak_rss_bytes": 59502592,
+          "cli_wall_seconds": 0.32964041600007477,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "plan",
+            "--inputs",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/inputs.tsv",
+            "--edges",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/edges.tsv",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--policy",
+            "conserved",
+            "--mode",
+            "conservative",
+            "--padding",
+            "650",
+            "--max-intron",
+            "2000",
+            "--rna",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/inputs/rna.tsv"
+          ],
+          "cpu_seconds": 0.37750399999999995,
+          "peak_rss_bytes": 59502592,
+          "stage": "plan",
+          "wall_seconds": 0.3928159170000072
+        },
+        {
+          "children_peak_rss_bytes": 65159168,
+          "cli_cpu_seconds": 0.4487684500000001,
+          "cli_peak_rss_bytes": 65503232,
+          "cli_wall_seconds": 0.4940278340000077,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "catalog",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.5115339999999999,
+          "peak_rss_bytes": 65503232,
+          "stage": "catalog",
+          "wall_seconds": 0.5579059169999709
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.35962775300000005,
+          "cli_peak_rss_bytes": 60190720,
+          "cli_wall_seconds": 0.4169297510002252,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "correspondence",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.423989,
+          "peak_rss_bytes": 60190720,
+          "stage": "correspondence",
+          "wall_seconds": 0.4821072079998885
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.443420571,
+          "cli_peak_rss_bytes": 60387328,
+          "cli_wall_seconds": 0.5662925840001662,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "select",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.536007,
+          "peak_rss_bytes": 60387328,
+          "stage": "select",
+          "wall_seconds": 0.6598985840000751
+        },
+        {
+          "children_peak_rss_bytes": 71356416,
+          "cli_cpu_seconds": 0.986202696,
+          "cli_peak_rss_bytes": 66691072,
+          "cli_wall_seconds": 1.1146997920000103,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "predict",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 1.090102,
+          "peak_rss_bytes": 71356416,
+          "stage": "predict",
+          "wall_seconds": 1.2229715829998895
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.553863781,
+          "cli_peak_rss_bytes": 60477440,
+          "cli_wall_seconds": 0.7539802500000405,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "finalize",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.6186409999999999,
+          "peak_rss_bytes": 60477440,
+          "stage": "finalize",
+          "wall_seconds": 0.8197968760000549
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 2,
+        "accepted_exon_skipped_path_matches_truth": true,
+        "accepted_isoform_additions": 1,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 2,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 2
+      },
+      "wall_seconds": 4.135496084999886
+    },
+    {
+      "cache": "resume",
+      "cpu_seconds": 2.316613,
+      "execution": "staged",
+      "output_bytes": 937331,
+      "peak_rss_bytes": 60399616,
+      "policy": "conserved_conservative",
+      "repetition": 0,
+      "scientific_outputs": {
+        "files": {
+          "all_candidates/Species_donor1.fa": "8b2b478f70bf756954e28bead5401f42dda6809fc4acf3de389418feec776314",
+          "all_candidates/Species_donor2.fa": "fd858c28cc89c752fc8212961b65b26adac7062bb4cda91945bfc59e7752bbb2",
+          "all_candidates/Species_target.fa": "57d0c44bd66e1e1092312b79c0b1596fdf86978db5a0b7317b7ae624ea42f833",
+          "analysis_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "analysis_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "analysis_cds/Species_target.fa": "66a4afd2e56d130c9e809b10319947f3179199c655a96251291f3789a9f04400",
+          "analysis_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "analysis_gff/Species_target.gff3": "fcae09fcb59b72147d51d63bf34c19dff99de344f6ee6c264287e868a33eeb66",
+          "changes.json": "b8c29d764c2a9bdfa96011c759c97e3d8b0eec2261ee79187fb2364066d25568",
+          "full_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "full_annotation/Species_target.gff3": "c1f129796d354f85db3b5de63cdc49da3851e99251e0fc1178ec879a14050f51",
+          "representative_map.tsv": "ae2ee5eaaf35c9bbb82d08c118521aa47b9eadd68e40c7291d50224210ff76b0",
+          "source_annotation/Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "source_annotation/Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "source_cds/Species_donor1.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_donor2.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "source_cds/Species_target.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "species_cds/Species_donor1.fa": "c6194d63ee5a15e7147d6bd0996cae50336de362ba1a690c742ecbb571a8c6f6",
+          "species_cds/Species_donor2.fa": "1fd4bb5867e0cd2bf2b5572240e0458ff1d0fba44148ad885c1faa3ce6283fbf",
+          "species_cds/Species_target.fa": "1507481284ef62f84f9175a32f6d490f63fa1b70098a531b7224efec6ad603fd",
+          "species_genetic_code.tsv": "1bfbbab1370ca5d83960044816fbe952618a233a3867f906a97f1373bbe65515",
+          "species_genome/Species_donor1.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_donor2.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "species_genome/Species_target.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "species_gff/Species_donor1.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_donor2.gff3": "e3371680e8a245fbb252b062304b5765eb26385258f0a3b5ae90d31741569027",
+          "species_gff/Species_target.gff3": "7ce9595b6ab00bf00e2012130d1424a3876ef34e2cee8ee6e25a83fd68669fe2",
+          "species_protein/Species_donor1.fa": "badc17b975ef12518476eecdfd73323a21d4cdc9192ba7d546986845d738552e",
+          "species_protein/Species_donor2.fa": "00dfbb823df44d3ab6e2ef891da72e16f8c1ad7c5d1ebadac4e9432d4a3bd5a4",
+          "species_protein/Species_target.fa": "480f4259098c1838c925a6d38fed37ec371a0209396c76cd67014569e7760e88"
+        },
+        "manifest_sha256": "43009c2609a3217c3e1c712269d62606962e5e87183b3763547d49cfdddd5218",
+        "prediction_sha256": "1d55c090e3132d5d49d4398ed68251ccffd285ac6894ec4c646607ba607ff8b6",
+        "sha256": "f57c6921e740b5a335d9e019560176f2227cb49408eaa5c06ac8c5fb3a7bcad3"
+      },
+      "stages": [
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.40255390199999996,
+          "cli_peak_rss_bytes": 59535360,
+          "cli_wall_seconds": 0.47573212499992223,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "catalog",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.546021,
+          "peak_rss_bytes": 59535360,
+          "stage": "catalog",
+          "wall_seconds": 0.6205497910000304
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.33217061400000003,
+          "cli_peak_rss_bytes": 59404288,
+          "cli_wall_seconds": 0.37482587499971487,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "correspondence",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.39725099999999997,
+          "peak_rss_bytes": 59404288,
+          "stage": "correspondence",
+          "wall_seconds": 0.4407044169997789
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.360842632,
+          "cli_peak_rss_bytes": 59547648,
+          "cli_wall_seconds": 0.417842667000059,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "select",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.42887200000000003,
+          "peak_rss_bytes": 59547648,
+          "stage": "select",
+          "wall_seconds": 0.4894874589999745
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.37915767899999997,
+          "cli_peak_rss_bytes": 60387328,
+          "cli_wall_seconds": 0.47312408300012976,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "predict",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.446049,
+          "peak_rss_bytes": 60387328,
+          "stage": "predict",
+          "wall_seconds": 0.5445250420002594
+        },
+        {
+          "children_peak_rss_bytes": 0,
+          "cli_cpu_seconds": 0.427109321,
+          "cli_peak_rss_bytes": 60399616,
+          "cli_wall_seconds": 0.5601039160001164,
+          "command": [
+            "/opt/conda/bin/python",
+            "/Users/kf/repos/genegalleon/workspace/output/gene_model_refinement_performance/baseline-recheck/after-tree/workflow/support/gene_model_refinement.py",
+            "finalize",
+            "--output",
+            "/tmp/gg-refinement-benchmark-zha_tvnm/conserved_conservative-staged-0",
+            "--cpus",
+            "2"
+          ],
+          "cpu_seconds": 0.49842,
+          "peak_rss_bytes": 60399616,
+          "stage": "finalize",
+          "wall_seconds": 0.6323844579997058
+        }
+      ],
+      "truth_counts": {
+        "accepted_exact_model_revisions": 2,
+        "accepted_exon_skipped_path_matches_truth": true,
+        "accepted_isoform_additions": 1,
+        "biological_negative_or_intact_loci": 4,
+        "heldout_exon_loci": 2,
+        "heldout_exon_loci_reconstructed_exactly": 2,
+        "negative_or_intact_loci_changed": 0,
+        "negative_or_intact_predictions_accepted": 0,
+        "selected_exon_skipped_representative": false,
+        "selected_predicted_representatives": 2
+      },
+      "wall_seconds": 2.727651166999749
+    }
+  ],
+  "schema": 1,
+  "scientific_output_sha256": {
+    "conserved_conservative": "f57c6921e740b5a335d9e019560176f2227cb49408eaa5c06ac8c5fb3a7bcad3",
+    "longest_off": "1aa3e59de4b9b9906e7f1e97df5ae54a3da5ae8bd6159a62b1e25cf5b4e9ba8e"
+  },
+  "summaries": {
+    "conserved_conservative": {
+      "batched_cold": {
+        "cpu_seconds_median": 1.495997,
+        "peak_rss_bytes_max": 71258112,
+        "repeats": 1,
+        "wall_seconds_max": 1.487067376000141,
+        "wall_seconds_median": 1.487067376000141,
+        "wall_seconds_min": 1.487067376000141
+      },
+      "batched_resume": {
+        "cpu_seconds_median": 0.42989499999999997,
+        "peak_rss_bytes_max": 60383232,
+        "repeats": 1,
+        "wall_seconds_max": 0.4902045009998801,
+        "wall_seconds_median": 0.4902045009998801,
+        "wall_seconds_min": 0.4902045009998801
+      },
+      "staged_cold": {
+        "cpu_seconds_median": 3.5577769999999997,
+        "peak_rss_bytes_max": 71356416,
+        "repeats": 1,
+        "stages": {
+          "catalog": {
+            "cpu_seconds_median": 0.5115339999999999,
+            "peak_rss_bytes_max": 65503232,
+            "repeats": 1,
+            "wall_seconds_max": 0.5579059169999709,
+            "wall_seconds_median": 0.5579059169999709,
+            "wall_seconds_min": 0.5579059169999709
+          },
+          "correspondence": {
+            "cpu_seconds_median": 0.423989,
+            "peak_rss_bytes_max": 60190720,
+            "repeats": 1,
+            "wall_seconds_max": 0.4821072079998885,
+            "wall_seconds_median": 0.4821072079998885,
+            "wall_seconds_min": 0.4821072079998885
+          },
+          "finalize": {
+            "cpu_seconds_median": 0.6186409999999999,
+            "peak_rss_bytes_max": 60477440,
+            "repeats": 1,
+            "wall_seconds_max": 0.8197968760000549,
+            "wall_seconds_median": 0.8197968760000549,
+            "wall_seconds_min": 0.8197968760000549
+          },
+          "plan": {
+            "cpu_seconds_median": 0.37750399999999995,
+            "peak_rss_bytes_max": 59502592,
+            "repeats": 1,
+            "wall_seconds_max": 0.3928159170000072,
+            "wall_seconds_median": 0.3928159170000072,
+            "wall_seconds_min": 0.3928159170000072
+          },
+          "predict": {
+            "cpu_seconds_median": 1.090102,
+            "peak_rss_bytes_max": 71356416,
+            "repeats": 1,
+            "wall_seconds_max": 1.2229715829998895,
+            "wall_seconds_median": 1.2229715829998895,
+            "wall_seconds_min": 1.2229715829998895
+          },
+          "select": {
+            "cpu_seconds_median": 0.536007,
+            "peak_rss_bytes_max": 60387328,
+            "repeats": 1,
+            "wall_seconds_max": 0.6598985840000751,
+            "wall_seconds_median": 0.6598985840000751,
+            "wall_seconds_min": 0.6598985840000751
+          }
+        },
+        "wall_seconds_max": 4.135496084999886,
+        "wall_seconds_median": 4.135496084999886,
+        "wall_seconds_min": 4.135496084999886
+      },
+      "staged_resume": {
+        "cpu_seconds_median": 2.316613,
+        "peak_rss_bytes_max": 60399616,
+        "repeats": 1,
+        "stages": {
+          "catalog": {
+            "cpu_seconds_median": 0.546021,
+            "peak_rss_bytes_max": 59535360,
+            "repeats": 1,
+            "wall_seconds_max": 0.6205497910000304,
+            "wall_seconds_median": 0.6205497910000304,
+            "wall_seconds_min": 0.6205497910000304
+          },
+          "correspondence": {
+            "cpu_seconds_median": 0.39725099999999997,
+            "peak_rss_bytes_max": 59404288,
+            "repeats": 1,
+            "wall_seconds_max": 0.4407044169997789,
+            "wall_seconds_median": 0.4407044169997789,
+            "wall_seconds_min": 0.4407044169997789
+          },
+          "finalize": {
+            "cpu_seconds_median": 0.49842,
+            "peak_rss_bytes_max": 60399616,
+            "repeats": 1,
+            "wall_seconds_max": 0.6323844579997058,
+            "wall_seconds_median": 0.6323844579997058,
+            "wall_seconds_min": 0.6323844579997058
+          },
+          "predict": {
+            "cpu_seconds_median": 0.446049,
+            "peak_rss_bytes_max": 60387328,
+            "repeats": 1,
+            "wall_seconds_max": 0.5445250420002594,
+            "wall_seconds_median": 0.5445250420002594,
+            "wall_seconds_min": 0.5445250420002594
+          },
+          "select": {
+            "cpu_seconds_median": 0.42887200000000003,
+            "peak_rss_bytes_max": 59547648,
+            "repeats": 1,
+            "wall_seconds_max": 0.4894874589999745,
+            "wall_seconds_median": 0.4894874589999745,
+            "wall_seconds_min": 0.4894874589999745
+          }
+        },
+        "wall_seconds_max": 2.727651166999749,
+        "wall_seconds_median": 2.727651166999749,
+        "wall_seconds_min": 2.727651166999749
+      }
+    },
+    "longest_off": {
+      "batched_cold": {
+        "cpu_seconds_median": 1.2031489999999998,
+        "peak_rss_bytes_max": 66355200,
+        "repeats": 1,
+        "wall_seconds_max": 1.40620595900009,
+        "wall_seconds_median": 1.40620595900009,
+        "wall_seconds_min": 1.40620595900009
+      },
+      "batched_resume": {
+        "cpu_seconds_median": 0.461347,
+        "peak_rss_bytes_max": 60354560,
+        "repeats": 1,
+        "wall_seconds_max": 0.53707254200026,
+        "wall_seconds_median": 0.53707254200026,
+        "wall_seconds_min": 0.53707254200026
+      },
+      "staged_cold": {
+        "cpu_seconds_median": 2.7838,
+        "peak_rss_bytes_max": 65478656,
+        "repeats": 1,
+        "stages": {
+          "catalog": {
+            "cpu_seconds_median": 0.55742,
+            "peak_rss_bytes_max": 65478656,
+            "repeats": 1,
+            "wall_seconds_max": 0.6250283329995909,
+            "wall_seconds_median": 0.6250283329995909,
+            "wall_seconds_min": 0.6250283329995909
+          },
+          "correspondence": {
+            "cpu_seconds_median": 0.41291599999999995,
+            "peak_rss_bytes_max": 60313600,
+            "repeats": 1,
+            "wall_seconds_max": 0.46621208399983516,
+            "wall_seconds_median": 0.46621208399983516,
+            "wall_seconds_min": 0.46621208399983516
+          },
+          "finalize": {
+            "cpu_seconds_median": 0.483721,
+            "peak_rss_bytes_max": 60362752,
+            "repeats": 1,
+            "wall_seconds_max": 0.5713825839998208,
+            "wall_seconds_median": 0.5713825839998208,
+            "wall_seconds_min": 0.5713825839998208
+          },
+          "plan": {
+            "cpu_seconds_median": 0.41892399999999996,
+            "peak_rss_bytes_max": 59527168,
+            "repeats": 1,
+            "wall_seconds_max": 0.47761770799979786,
+            "wall_seconds_median": 0.47761770799979786,
+            "wall_seconds_min": 0.47761770799979786
+          },
+          "predict": {
+            "cpu_seconds_median": 0.478747,
+            "peak_rss_bytes_max": 60358656,
+            "repeats": 1,
+            "wall_seconds_max": 0.5629774589997396,
+            "wall_seconds_median": 0.5629774589997396,
+            "wall_seconds_min": 0.5629774589997396
+          },
+          "select": {
+            "cpu_seconds_median": 0.43207199999999996,
+            "peak_rss_bytes_max": 60342272,
+            "repeats": 1,
+            "wall_seconds_max": 0.479180499999984,
+            "wall_seconds_median": 0.479180499999984,
+            "wall_seconds_min": 0.479180499999984
+          }
+        },
+        "wall_seconds_max": 3.1823986679987684,
+        "wall_seconds_median": 3.1823986679987684,
+        "wall_seconds_min": 3.1823986679987684
+      },
+      "staged_resume": {
+        "cpu_seconds_median": 2.012861,
+        "peak_rss_bytes_max": 60370944,
+        "repeats": 1,
+        "stages": {
+          "catalog": {
+            "cpu_seconds_median": 0.376891,
+            "peak_rss_bytes_max": 59523072,
+            "repeats": 1,
+            "wall_seconds_max": 0.4173285830001987,
+            "wall_seconds_median": 0.4173285830001987,
+            "wall_seconds_min": 0.4173285830001987
+          },
+          "correspondence": {
+            "cpu_seconds_median": 0.409605,
+            "peak_rss_bytes_max": 59527168,
+            "repeats": 1,
+            "wall_seconds_max": 0.46766283399983877,
+            "wall_seconds_median": 0.46766283399983877,
+            "wall_seconds_min": 0.46766283399983877
+          },
+          "finalize": {
+            "cpu_seconds_median": 0.409646,
+            "peak_rss_bytes_max": 60370944,
+            "repeats": 1,
+            "wall_seconds_max": 0.46856208300005164,
+            "wall_seconds_median": 0.46856208300005164,
+            "wall_seconds_min": 0.46856208300005164
+          },
+          "predict": {
+            "cpu_seconds_median": 0.41474,
+            "peak_rss_bytes_max": 60362752,
+            "repeats": 1,
+            "wall_seconds_max": 0.46492620900016846,
+            "wall_seconds_median": 0.46492620900016846,
+            "wall_seconds_min": 0.46492620900016846
+          },
+          "select": {
+            "cpu_seconds_median": 0.401979,
+            "peak_rss_bytes_max": 59551744,
+            "repeats": 1,
+            "wall_seconds_max": 0.5111675840003045,
+            "wall_seconds_median": 0.5111675840003045,
+            "wall_seconds_min": 0.5111675840003045
+          }
+        },
+        "wall_seconds_max": 2.329647293000562,
+        "wall_seconds_median": 2.329647293000562,
+        "wall_seconds_min": 2.329647293000562
+      }
+    }
+  },
+  "truth_counts": {
+    "conserved_conservative": {
+      "accepted_exact_model_revisions": 2,
+      "accepted_exon_skipped_path_matches_truth": true,
+      "accepted_isoform_additions": 1,
+      "biological_negative_or_intact_loci": 4,
+      "heldout_exon_loci": 2,
+      "heldout_exon_loci_reconstructed_exactly": 2,
+      "negative_or_intact_loci_changed": 0,
+      "negative_or_intact_predictions_accepted": 0,
+      "selected_exon_skipped_representative": false,
+      "selected_predicted_representatives": 2
+    },
+    "longest_off": {
+      "accepted_exact_model_revisions": 0,
+      "accepted_exon_skipped_path_matches_truth": false,
+      "accepted_isoform_additions": 0,
+      "biological_negative_or_intact_loci": 4,
+      "heldout_exon_loci": 2,
+      "heldout_exon_loci_reconstructed_exactly": 0,
+      "negative_or_intact_loci_changed": 0,
+      "negative_or_intact_predictions_accepted": 0,
+      "selected_exon_skipped_representative": false,
+      "selected_predicted_representatives": 0
+    }
+  },
+  "workload": {
+    "explicit_frozen_correspondence": true,
+    "fixture_sha256": "01f6fed3e40d067a7aedcd624addcc290e360b3a2424fd1b7993b33b0810ab74",
+    "input_sha256": "217b9461946b15205dd6455307c135b6dfaebd184452430ee7a1b382a30d08c4",
+    "loci_per_species": 7,
+    "protein_length": 280,
+    "rna_whole_path": true,
+    "semantic_inputs": {
+      "edges_sha256": "e71bd0a4fcf14e1bb2bd1e52fdf4b82842355022d2a5b376ed61abe4d2029eaa",
+      "rna_sha256": "71e89cfca32b965d56be3bd2b5e605a6aa3e36ca1b7201bd14f5d209be2ad547",
+      "sources": [
+        {
+          "cds_sha256": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+          "genetic_code": 1,
+          "genome_sha256": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+          "gff_sha256": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+          "species": "Species_target"
+        },
+        {
+          "cds_sha256": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "genetic_code": 1,
+          "genome_sha256": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "gff_sha256": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "species": "Species_donor1"
+        },
+        {
+          "cds_sha256": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+          "genetic_code": 1,
+          "genome_sha256": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+          "gff_sha256": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+          "species": "Species_donor2"
+        }
+      ]
+    },
+    "source_hashes": {
+      "Species_donor1.cds.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "Species_donor1.genome.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+      "Species_donor1.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "Species_donor2.cds.fa": "88dbf3341dbd88eda685f5585d4758be6bf195a53447dd548e1468c16ba43821",
+      "Species_donor2.genome.fa": "02eff0c63b55f7ed6d1de156d87e3d313dd41b30488066c290cbc95e71fbea86",
+      "Species_donor2.gff3": "b8d84e11e34eabaa2275daee7aac44e980ac19e2eb68dbafd31a5d993dd792aa",
+      "Species_target.cds.fa": "81541df5dbe4f13ef25ddb0536becf7102d6e99ed19ef0dd833dfe2e31becf91",
+      "Species_target.genome.fa": "679d14b0f3037adec4d3a7cc87cc11e9760a954f1f6accbaed1438d57b7722bf",
+      "Species_target.gff3": "fe61bb211f57dafdddbab86fe214154f09d3ecdee4ccb43bf30a05597844f470",
+      "edges.tsv": "e71bd0a4fcf14e1bb2bd1e52fdf4b82842355022d2a5b376ed61abe4d2029eaa",
+      "inputs.tsv": "d9019e79942f8e14e06271610755852143aaea20245b53607042ee22df33fe1f",
+      "rna.tsv": "71e89cfca32b965d56be3bd2b5e605a6aa3e36ca1b7201bd14f5d209be2ad547"
+    },
+    "species": 3,
+    "synteny_discovery_measured": false
+  }
+}

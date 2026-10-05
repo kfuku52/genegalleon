@@ -1,0 +1,26 @@
+{
+  "cpu_seconds": 88.479365788,
+  "implementation": "cached",
+  "input_sha256": "70bbd0902339bb72c584af296af40bba7519942d35b29ea102dbe50663bb3362",
+  "measurement_date": "2026-10-05",
+  "metrics": {
+    "ambiguous_loci": 0,
+    "bounded_alignments": 0,
+    "changed_representatives": 3000,
+    "components": 1000,
+    "loci": 9000,
+    "optimized_loci": 9000,
+    "pair_cache_evictions": 99835,
+    "pair_cache_hits": 2106165,
+    "pair_cache_limit": 50000,
+    "pair_cache_peak_entries": 50000,
+    "pair_evaluations": 149835,
+    "pair_requests": 2256000,
+    "trusted_edges": 18000
+  },
+  "output_sha256": "74283b036d17ef4d9dde2558be82f551ddf0b8932ab98badd941d323b4dca09c",
+  "peak_rss_bytes": 226836480,
+  "runtime_image": "local/genegalleon:cds-admission-20261004",
+  "runtime_image_id": "sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e",
+  "wall_seconds": 88.49824253999998
+}

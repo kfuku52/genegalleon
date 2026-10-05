@@ -1,0 +1,225 @@
+{
+  "cache_speed_ratio": 21.33675941390101,
+  "conserved_outputs_equivalent": true,
+  "environment": {
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]"
+  },
+  "expected_output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+  "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+  "measurement_date": "2026-10-05",
+  "measurements": [
+    {
+      "cpu_seconds": 32.70658067,
+      "implementation": "reference",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50388992,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 32.708466306000446
+    },
+    {
+      "cpu_seconds": 31.118961911,
+      "implementation": "reference",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50524160,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 31.124319847999686
+    },
+    {
+      "cpu_seconds": 33.80252424,
+      "implementation": "reference",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50528256,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 33.81468147399937
+    },
+    {
+      "cpu_seconds": 1.510113122,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50548736,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 1.5102208340003926
+    },
+    {
+      "cpu_seconds": 1.532859618,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50585600,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 1.532963168000606
+    },
+    {
+      "cpu_seconds": 1.5897287869999999,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50597888,
+      "peak_rss_source": "proc_vm_hwm",
+      "wall_seconds": 1.5898251260005054
+    }
+  ],
+  "provenance": {
+    "command": "GG_TEST_RUNTIME=docker GG_CONTAINER_DOCKER_IMAGE=local/genegalleon:cds-admission-20261004 bash workflow/tests/run_in_runtime.sh python workflow/tests/benchmark_gene_model_selection.py --families 32 --species 9 --length 300 --repeats 3 --warmups 1 --implementations reference cached --expected-output-sha256 a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+    "raw_stdout_sha256": "e0beb239b009a5302f589ab0971e7ae73d4060499b05a719d5dee63438243e44",
+    "runtime_image_id": "sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e",
+    "source_sha256": {
+      "workflow/support/gene_model_selection.py": "6d81390011f4884395cd043df46aad07efb7475a0ac9d7316d2f7e0d9cde429a",
+      "workflow/support/gene_model_store.py": "d9d0c1f13eb1c6c09e241421e904d947f25230cbf9db400e8d7357670e1e2dbd",
+      "workflow/tests/benchmark_gene_model_selection.py": "12f7bb9aa0cafb957abb977a6c5578608597c74e981928241496e93b8a6a1879"
+    },
+    "source_stable_before_after": true
+  },
+  "reference_cached_outputs_equivalent": true,
+  "repeats": 3,
+  "schema": 1,
+  "store_input_preparation": null,
+  "summaries": {
+    "cached": {
+      "cpu_seconds_median": 1.532859618,
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "peak_rss_bytes_max": 50597888,
+      "wall_seconds_max": 1.5898251260005054,
+      "wall_seconds_median": 1.532963168000606,
+      "wall_seconds_min": 1.5102208340003926
+    },
+    "reference": {
+      "cpu_seconds_median": 32.70658067,
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "peak_rss_bytes_max": 50528256,
+      "wall_seconds_max": 33.81468147399937,
+      "wall_seconds_median": 32.708466306000446,
+      "wall_seconds_min": 31.124319847999686
+    }
+  },
+  "warmups": 1,
+  "workload": {
+    "families": 32,
+    "isoforms_per_locus": 4,
+    "protein_length": 300,
+    "species": 9
+  }
+}

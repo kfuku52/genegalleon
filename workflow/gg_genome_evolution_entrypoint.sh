@@ -181,6 +181,7 @@ taxonomy_taxid_map="" # Optional TSV with species and taxid columns for explicit
 taxonomy_taxid_override="" # One explicit species:TaxID correction for a scheduled run.
 
 # Shared parameters
+representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement effective/inputs.tsv; routes CDS/protein/GFF/genome together.
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.
 strictly_single_copy_only=0 # Restrict marker selection to strictly single-copy orthologs only.
 bootstrap_params="-bb 1000 -bnni" # Extra IQ-TREE bootstrap parameters.

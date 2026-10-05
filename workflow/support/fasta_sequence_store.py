@@ -116,6 +116,24 @@ def sha256_file_uncached(path: Path) -> str:
     return digest.hexdigest()
 
 
+def selected_input_namespace(root: Path, manifest: Path | None, view: str = 'cds') -> Path:
+    """Separate immutable selected bundles and their biological/coding views.
+
+    A workspace-wide mutable index is safe only for the legacy shared inputs.
+    Consumers can release their build locks before reading when each frozen
+    manifest and view has its own index directory.
+    """
+    if manifest is None:
+        return root
+    if view not in {'cds', 'protein'}:
+        raise SequenceStoreError('Unknown selected input view: ' + view)
+    before = file_signature(manifest)
+    identity = sha256_file_uncached(manifest)
+    if file_signature(manifest) != before:
+        raise SequenceStoreError('Selected input manifest changed while choosing its namespace')
+    return root / 'representative' / identity / view
+
+
 def record_database_state(database: Path) -> None:
     signature_before = file_signature(database)
     digest = sha256_file_uncached(database)
@@ -132,7 +150,7 @@ def record_database_state(database: Path) -> None:
     )
 
 
-def database_content_current(database: Path) -> bool:
+def database_content_current(database: Path, *, refresh_state: bool = True) -> bool:
     state_path = database_state_path(database)
     if not database.is_file() or database.is_symlink() or not state_path.is_file() or state_path.is_symlink():
         return False
@@ -149,17 +167,83 @@ def database_content_current(database: Path) -> bool:
             return False
         # Copies and atomic moves legitimately change inode/stat identity. Once
         # content is verified, refresh the private fast-path state atomically.
-        write_json_atomic(
-            state_path,
-            {
-                "schema_version": SCHEMA_VERSION,
-                "database_signature": signature_after,
-                "sha256": digest,
-            },
-        )
+        if refresh_state:
+            write_json_atomic(
+                state_path,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "database_signature": signature_after,
+                    "sha256": digest,
+                },
+            )
         return True
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
+
+
+def validated_sequence_totals(metadata: dict[str, str], identity: object) -> int:
+    """Validate private byte totals without changing the portable manifest."""
+    totals = json.loads(metadata.get("sequence_totals", "null"))
+    if (not isinstance(totals, dict) or type(totals.get("schema")) is not int or totals["schema"] != 1
+            or type(totals.get("total_sequence_bytes")) is not int
+            or type(totals.get("record_count")) is not int
+            or totals["total_sequence_bytes"] < 0 or totals["record_count"] < 0):
+        raise SequenceStoreError("FASTA sequence totals are missing or invalid; run ensure to rebuild the index")
+    if not isinstance(identity, list) or any(
+        not isinstance(row, dict) or type(row.get("record_count")) is not int or row["record_count"] < 0
+        for row in identity
+    ):
+        raise SequenceStoreError("FASTA sequence totals have an invalid source identity")
+    if sum(row["record_count"] for row in identity) != totals["record_count"]:
+        raise SequenceStoreError("FASTA sequence total record count differs from the manifest")
+    if not totals["record_count"] and totals["total_sequence_bytes"]:
+        raise SequenceStoreError("Empty FASTA sequence index has a nonzero byte total")
+    return totals["total_sequence_bytes"]
+
+
+def total_sequence_bytes(database: Path, manifest: Path) -> int:
+    """Read the exact legacy decompressed UTF-8 byte sum from a verified index.
+
+    Sources must still have the signatures captured by ensure.  Missing private
+    metadata requires the existing atomic rebuild path; this reader neither
+    modifies old databases nor falls back to decompressing their full contents.
+    """
+    state_path = database_state_path(database)
+    if (not database.is_file() or database.is_symlink() or not manifest.is_file()
+            or manifest.is_symlink()):
+        raise SequenceStoreError("FASTA sequence total requires a regular database and manifest")
+    try:
+        before = [file_signature(path) for path in (database, manifest, state_path)]
+        if not database_content_current(database, refresh_state=False):
+            raise SequenceStoreError("FASTA sequence database identity changed; run ensure before reading its total")
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        with contextlib.closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True)) as connection:
+            metadata = dict(connection.execute("SELECT key, value FROM metadata"))
+        if payload.get("schema_version") != SCHEMA_VERSION or int(metadata.get("schema_version", "-1")) != SCHEMA_VERSION:
+            raise SequenceStoreError("FASTA sequence total has an unsupported index or manifest schema")
+        identity = json.loads(metadata.get("source_identity", "null"))
+        if identity != payload.get("sources"):
+            raise SequenceStoreError("FASTA sequence database source identity differs from its manifest")
+        total = validated_sequence_totals(metadata, identity)
+        signatures = json.loads(metadata.get("source_signatures", "null"))
+        if not isinstance(signatures, list) or len(signatures) != len(identity):
+            raise SequenceStoreError("FASTA sequence total is missing source signatures")
+        sources = []
+        for signature, row in zip(signatures, identity, strict=True):
+            if (not isinstance(signature, dict) or not isinstance(signature.get("path"), str)
+                    or not isinstance(signature.get("species"), str)
+                    or signature["species"] != row.get("species")):
+                raise SequenceStoreError("FASTA sequence total has invalid source signatures")
+            source = Path(signature["path"])
+            if source.is_symlink() or not source.is_file() or source_signature(source, signature["species"]) != signature:
+                raise SequenceStoreError("FASTA source changed; run ensure before reading its total")
+            sources.append((source, signature["species"]))
+        if ([file_signature(path) for path in (database, manifest, state_path)] != before
+                or [source_signature(path, species) for path, species in sources] != signatures):
+            raise SequenceStoreError("FASTA sequence total inputs changed while they were read")
+        return total
+    except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error) as exc:
+        raise SequenceStoreError(f"Unable to validate FASTA sequence total: {exc}") from exc
 
 
 def manifest_current(database: Path, manifest: Path, sources: list[tuple[Path, str]]) -> bool:
@@ -181,8 +265,12 @@ def manifest_current(database: Path, manifest: Path, sources: list[tuple[Path, s
         expected_signatures = [source_signature(path, species) for path, species in sources]
         if json.loads(metadata.get("source_signatures", "null")) != expected_signatures:
             return False
-        return json.loads(metadata.get("source_identity", "null")) == payload.get("sources")
-    except (OSError, ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+        identity = json.loads(metadata.get("source_identity", "null"))
+        if identity != payload.get("sources"):
+            return False
+        validated_sequence_totals(metadata, identity)
+        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, sqlite3.Error, SequenceStoreError):
         return False
 
 
@@ -224,13 +312,14 @@ def refresh_signatures_if_content_current(
                 return False
             if json.loads(metadata.get("source_identity", "null")) != current_identity:
                 return False
+            validated_sequence_totals(metadata, current_identity)
             connection.execute(
                 "UPDATE metadata SET value=? WHERE key='source_signatures'",
                 (json.dumps(signatures, sort_keys=True),),
             )
         record_database_state(database)
         return True
-    except (OSError, ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, sqlite3.Error, SequenceStoreError):
         return False
 
 
@@ -301,6 +390,7 @@ def build_store(
     temporary = Path(temporary_name)
     temporary.unlink()
     source_rows: list[dict[str, object]] = []
+    sequence_bytes = 0
     try:
         connection = sqlite3.connect(temporary)
         try:
@@ -335,12 +425,14 @@ def build_store(
                     record_count += 1
                     if not identifier:
                         raise SequenceStoreError(f"Empty FASTA identifier: {source}")
+                    encoded_sequence = sequence.encode("utf-8")
+                    sequence_bytes += len(encoded_sequence)
                     batch.append(
                         (
                             identifier,
                             identifier.lower(),
                             header,
-                            sqlite3.Binary(zlib.compress(sequence.encode("utf-8"), level=6)),
+                            sqlite3.Binary(zlib.compress(encoded_sequence, level=6)),
                             species,
                             source_order,
                             record_order,
@@ -394,6 +486,8 @@ def build_store(
                 (
                     ("source_signatures", json.dumps(source_signatures, sort_keys=True)),
                     ("source_identity", json.dumps(source_identity, sort_keys=True)),
+                    ("sequence_totals", json.dumps({"schema": 1, "total_sequence_bytes": sequence_bytes,
+                        "record_count": sum(row["record_count"] for row in source_identity)}, sort_keys=True)),
                 ),
             )
             connection.commit()
@@ -539,6 +633,10 @@ def extract(args: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     subparsers = root.add_subparsers(dest="command", required=True)
+    namespace_parser = subparsers.add_parser('namespace', help='Separate selected input caches by manifest content and view')
+    namespace_parser.add_argument('--root', required=True, type=Path)
+    namespace_parser.add_argument('--representative-inputs', required=True, type=Path)
+    namespace_parser.add_argument('--view', choices=('cds', 'protein'), required=True)
     ensure_parser = subparsers.add_parser("ensure")
     ensure_parser.add_argument("--database", required=True, type=Path)
     ensure_parser.add_argument("--manifest", required=True, type=Path)
@@ -564,18 +662,27 @@ def parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("--query-variants", action="store_true")
     extract_parser.add_argument("--prefix-species", action="store_true")
     extract_parser.add_argument("--require-all", action="store_true")
+    total_parser = subparsers.add_parser("total-bytes", help="Read the verified decompressed UTF-8 byte total")
+    total_parser.add_argument("--database", required=True, type=Path)
+    total_parser.add_argument("--manifest", required=True, type=Path)
     return root
 
 
 def main() -> int:
     args = parser().parse_args()
     try:
+        if args.command == 'namespace':
+            print(selected_input_namespace(args.root, args.representative_inputs, args.view))
+            return 0
         if args.command == "ensure":
             if args.digest_cache:
                 configure_digest_cache(args.digest_cache)
             return ensure(args)
         if args.command == "extract":
             return extract(args)
+        if args.command == "total-bytes":
+            print(total_sequence_bytes(args.database, args.manifest))
+            return 0
     except (OSError, sqlite3.Error, SequenceStoreError, UnicodeError) as exc:
         print(f"FASTA sequence store error: {exc}", file=sys.stderr)
         return 2

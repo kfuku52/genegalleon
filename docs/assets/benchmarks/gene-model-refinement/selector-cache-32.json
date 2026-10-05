@@ -1,0 +1,254 @@
+{
+  "cache_speed_ratio": 21.143319141227977,
+  "environment": {
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]"
+  },
+  "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+  "measurement_date": "2026-10-05",
+  "measurements": [
+    {
+      "cpu_seconds": 31.683197377,
+      "implementation": "reference",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50233344,
+      "wall_seconds": 31.685474097999986
+    },
+    {
+      "cpu_seconds": 31.125916002,
+      "implementation": "reference",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50163712,
+      "wall_seconds": 31.129112514999974
+    },
+    {
+      "cpu_seconds": 31.966069462000004,
+      "implementation": "reference",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50049024,
+      "wall_seconds": 31.968189139000003
+    },
+    {
+      "cpu_seconds": 1.537350327,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50118656,
+      "wall_seconds": 1.5374295839999945
+    },
+    {
+      "cpu_seconds": 1.494520037,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 49950720,
+      "wall_seconds": 1.4945982919999778
+    },
+    {
+      "cpu_seconds": 1.4974881199999999,
+      "implementation": "cached",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "output_sha256": "a7bdcb5e76f1088f4c94eaa352e7450d429c9de3a05d6b2a347ec2b8302fd4ec",
+      "peak_rss_bytes": 50106368,
+      "wall_seconds": 1.4986045420000096
+    },
+    {
+      "cpu_seconds": 0.003801250000000006,
+      "implementation": "longest",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "loci": 288,
+        "pair_evaluations": 0
+      },
+      "output_sha256": "871471b8bb4bfa82f4615bfd7b175ac15d5f514ac026f38d4ca89891a86c9274",
+      "peak_rss_bytes": 50053120,
+      "wall_seconds": 0.00379804200002809
+    },
+    {
+      "cpu_seconds": 0.003999542000000009,
+      "implementation": "longest",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "loci": 288,
+        "pair_evaluations": 0
+      },
+      "output_sha256": "871471b8bb4bfa82f4615bfd7b175ac15d5f514ac026f38d4ca89891a86c9274",
+      "peak_rss_bytes": 50028544,
+      "wall_seconds": 0.003993583999999828
+    },
+    {
+      "cpu_seconds": 0.0036446660000000047,
+      "implementation": "longest",
+      "input_sha256": "4ecf2a4e165e6eb84e46bb7beef171235bb84923e921a7dc81166ef6fadab069",
+      "metrics": {
+        "loci": 288,
+        "pair_evaluations": 0
+      },
+      "output_sha256": "871471b8bb4bfa82f4615bfd7b175ac15d5f514ac026f38d4ca89891a86c9274",
+      "peak_rss_bytes": 50122752,
+      "wall_seconds": 0.0036411670000120466
+    }
+  ],
+  "reference_cached_outputs_equivalent": true,
+  "repeats": 3,
+  "runtime_image": "local/genegalleon:cds-admission-20261004",
+  "runtime_image_id": "sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e",
+  "schema": 1,
+  "summaries": {
+    "cached": {
+      "cpu_seconds_median": 1.4974881199999999,
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 69472,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 2720,
+        "pair_evaluations": 2720,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "peak_rss_bytes_max": 50118656,
+      "wall_seconds_max": 1.5374295839999945,
+      "wall_seconds_median": 1.4986045420000096,
+      "wall_seconds_min": 1.4945982919999778
+    },
+    "longest": {
+      "cpu_seconds_median": 0.003801250000000006,
+      "metrics": {
+        "loci": 288,
+        "pair_evaluations": 0
+      },
+      "peak_rss_bytes_max": 50122752,
+      "wall_seconds_max": 0.003993583999999828,
+      "wall_seconds_median": 0.00379804200002809,
+      "wall_seconds_min": 0.0036411670000120466
+    },
+    "reference": {
+      "cpu_seconds_median": 31.683197377,
+      "metrics": {
+        "ambiguous_loci": 0,
+        "bounded_alignments": 0,
+        "changed_representatives": 96,
+        "components": 32,
+        "loci": 288,
+        "optimized_loci": 288,
+        "pair_cache_evictions": 0,
+        "pair_cache_hits": 0,
+        "pair_cache_limit": 50000,
+        "pair_cache_peak_entries": 0,
+        "pair_evaluations": 72192,
+        "pair_requests": 72192,
+        "trusted_edges": 576
+      },
+      "peak_rss_bytes_max": 50233344,
+      "wall_seconds_max": 31.968189139000003,
+      "wall_seconds_median": 31.685474097999986,
+      "wall_seconds_min": 31.129112514999974
+    }
+  },
+  "warmups": 1,
+  "workload": {
+    "families": 32,
+    "isoforms_per_locus": 4,
+    "protein_length": 300,
+    "species": 9
+  }
+}

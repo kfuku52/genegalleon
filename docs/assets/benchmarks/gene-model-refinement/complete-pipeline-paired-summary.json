@@ -1,0 +1,199 @@
+{
+  "baseline_restoration_verified": true,
+  "execution_order": [
+    "before",
+    "after",
+    "after",
+    "before",
+    "before",
+    "after"
+  ],
+  "helper_sha256": {
+    "after": {
+      "fasta_sequence_store.py": "41dfba7bb50836fbd6a0edcb28a4a5b2177859f14fe05145c920b09829f90d5f",
+      "gene_model_refinement.py": "8e14223f8be2fd4d950a2dc33e6977dbdab33b282a6c898035fad315348753eb",
+      "gene_model_selection.py": "d8ae9853393d5e6eca29750aa2e58c0151512f065d68495fd497a99265811c7b"
+    },
+    "before": {
+      "fasta_sequence_store.py": "a951d4e64ff7781b36c7aff7805ceace7bff1c76e9c41e19072d3fda85487fb6",
+      "gene_model_refinement.py": "7a8bbb672b61befa01363989116e678cbe6a963cd986278e8d646c4d8da3d08a",
+      "gene_model_selection.py": "475199955d4520a1cfebe7f06eea31d5be7a39a183e85c8b20cce3c50f9c393b"
+    }
+  },
+  "methodology": "Three repetitions of the existing complete-pipeline benchmark per version, one repetition per driver call; execution order B A, A B, B A in one fresh Docker container. Baseline helpers restored byte-exact and SHA256-gated against pre-optimization reports; same frozen support/fixture/benchmark copies and runtime for both versions. No cache flush. Each native CLI worker fresh. No precise complete-pipeline speedup claim because ranges overlap and launch/predictor latency varies.",
+  "reports": [
+    "complete-pipeline-paired-before-0.json",
+    "complete-pipeline-paired-after-0.json",
+    "complete-pipeline-paired-after-1.json",
+    "complete-pipeline-paired-before-1.json",
+    "complete-pipeline-paired-before-2.json",
+    "complete-pipeline-paired-after-2.json"
+  ],
+  "runtime_image_id": "sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e",
+  "schema": 1,
+  "scientific_output_sha256": {
+    "conserved_conservative": "f57c6921e740b5a335d9e019560176f2227cb49408eaa5c06ac8c5fb3a7bcad3",
+    "longest_off": "1aa3e59de4b9b9906e7f1e97df5ae54a3da5ae8bd6159a62b1e25cf5b4e9ba8e"
+  },
+  "scientific_outputs_equivalent": true,
+  "summaries": {
+    "conserved_conservative": {
+      "batched_cold": {
+        "after": {
+          "cpu_seconds_median": 1.3980000000000001,
+          "peak_rss_bytes_max": 71356416,
+          "wall_seconds_max": 1.487067376000141,
+          "wall_seconds_median": 1.3688910839996424,
+          "wall_seconds_min": 1.3541763759999412
+        },
+        "before": {
+          "cpu_seconds_median": 1.624367,
+          "peak_rss_bytes_max": 71356416,
+          "wall_seconds_max": 1.9357444179995582,
+          "wall_seconds_median": 1.5914775010000994,
+          "wall_seconds_min": 1.3578020840004683
+        }
+      },
+      "batched_resume": {
+        "after": {
+          "cpu_seconds_median": 0.400339,
+          "peak_rss_bytes_max": 60395520,
+          "wall_seconds_max": 0.4902045009998801,
+          "wall_seconds_median": 0.45472004199973526,
+          "wall_seconds_min": 0.45222775000002
+        },
+        "before": {
+          "cpu_seconds_median": 0.450758,
+          "peak_rss_bytes_max": 60256256,
+          "wall_seconds_max": 0.5864122090001729,
+          "wall_seconds_median": 0.5414402090000294,
+          "wall_seconds_min": 0.48329033300024093
+        }
+      },
+      "staged_cold": {
+        "after": {
+          "cpu_seconds_median": 2.882602,
+          "peak_rss_bytes_max": 71368704,
+          "wall_seconds_max": 4.135496084999886,
+          "wall_seconds_median": 2.9911103770004956,
+          "wall_seconds_min": 2.942614627999774
+        },
+        "before": {
+          "cpu_seconds_median": 3.4290589999999996,
+          "peak_rss_bytes_max": 71368704,
+          "wall_seconds_max": 4.102602793999722,
+          "wall_seconds_median": 3.739626042999589,
+          "wall_seconds_min": 3.0008813759995974
+        }
+      },
+      "staged_resume": {
+        "after": {
+          "cpu_seconds_median": 1.995698,
+          "peak_rss_bytes_max": 60403712,
+          "wall_seconds_max": 2.727651166999749,
+          "wall_seconds_median": 2.2660822520001602,
+          "wall_seconds_min": 2.068393375999676
+        },
+        "before": {
+          "cpu_seconds_median": 2.1498139999999997,
+          "peak_rss_bytes_max": 60329984,
+          "wall_seconds_max": 2.5636115440006506,
+          "wall_seconds_median": 2.5269458769994344,
+          "wall_seconds_min": 2.063665418000255
+        }
+      }
+    },
+    "longest_off": {
+      "batched_cold": {
+        "after": {
+          "cpu_seconds_median": 0.959678,
+          "peak_rss_bytes_max": 66355200,
+          "wall_seconds_max": 1.40620595900009,
+          "wall_seconds_median": 1.0836023749998276,
+          "wall_seconds_min": 1.0365746669995133
+        },
+        "before": {
+          "cpu_seconds_median": 1.058781,
+          "peak_rss_bytes_max": 66273280,
+          "wall_seconds_max": 1.369272250999984,
+          "wall_seconds_median": 1.2459194590001061,
+          "wall_seconds_min": 1.0799282920002042
+        }
+      },
+      "batched_resume": {
+        "after": {
+          "cpu_seconds_median": 0.44540199999999996,
+          "peak_rss_bytes_max": 60370944,
+          "wall_seconds_max": 0.5580066249999618,
+          "wall_seconds_median": 0.53707254200026,
+          "wall_seconds_min": 0.44130754100024205
+        },
+        "before": {
+          "cpu_seconds_median": 0.437783,
+          "peak_rss_bytes_max": 60280832,
+          "wall_seconds_max": 0.5686346249999588,
+          "wall_seconds_median": 0.518569166999896,
+          "wall_seconds_min": 0.44108029200015153
+        }
+      },
+      "staged_cold": {
+        "after": {
+          "cpu_seconds_median": 2.422841,
+          "peak_rss_bytes_max": 65499136,
+          "wall_seconds_max": 3.1823986679987684,
+          "wall_seconds_median": 2.687473418999616,
+          "wall_seconds_min": 2.659592626000176
+        },
+        "before": {
+          "cpu_seconds_median": 2.7434689999999997,
+          "peak_rss_bytes_max": 65409024,
+          "wall_seconds_max": 3.3401717510005255,
+          "wall_seconds_median": 3.2172151679997114,
+          "wall_seconds_min": 2.6969552089999524
+        }
+      },
+      "staged_resume": {
+        "after": {
+          "cpu_seconds_median": 1.8683549999999998,
+          "peak_rss_bytes_max": 60375040,
+          "wall_seconds_max": 2.329647293000562,
+          "wall_seconds_median": 2.0515788359998623,
+          "wall_seconds_min": 2.051426832999823
+        },
+        "before": {
+          "cpu_seconds_median": 2.093003,
+          "peak_rss_bytes_max": 60289024,
+          "wall_seconds_max": 2.5279140850002477,
+          "wall_seconds_median": 2.398703002000275,
+          "wall_seconds_min": 2.0771543360001488
+        }
+      }
+    }
+  },
+  "truth_counts": {
+    "conserved_conservative": {
+      "accepted_exact_model_revisions": 2,
+      "accepted_exon_skipped_path_matches_truth": true,
+      "accepted_isoform_additions": 1,
+      "biological_negative_or_intact_loci": 4,
+      "heldout_exon_loci": 2,
+      "heldout_exon_loci_reconstructed_exactly": 2,
+      "negative_or_intact_loci_changed": 0,
+      "negative_or_intact_predictions_accepted": 0,
+      "selected_exon_skipped_representative": false,
+      "selected_predicted_representatives": 2
+    },
+    "longest_off": {
+      "accepted_exact_model_revisions": 0,
+      "accepted_exon_skipped_path_matches_truth": false,
+      "accepted_isoform_additions": 0,
+      "biological_negative_or_intact_loci": 4,
+      "heldout_exon_loci": 2,
+      "heldout_exon_loci_reconstructed_exactly": 0,
+      "negative_or_intact_loci_changed": 0,
+      "negative_or_intact_predictions_accepted": 0,
+      "selected_exon_skipped_representative": false,
+      "selected_predicted_representatives": 0
+    }
+  }
+}

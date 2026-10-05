@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def test_synteny_records_search_cutoff(tmp_path, monkeypatch):
@@ -40,3 +41,42 @@ def test_synteny_records_search_cutoff(tmp_path, monkeypatch):
     assert set(result.evalue_cutoff) == set(observed)
     mod.write_empty_output(outfile)
     assert list(pd.read_csv(outfile, sep="\t").columns) == list(result.columns)
+
+
+def test_neighbor_translation_uses_each_species_genetic_code(tmp_path, monkeypatch):
+    from workflow.support import synteny_neighbors as mod
+
+    genes = ['Species_a_g', 'Species_b_g']
+    fasta = tmp_path / 'neighbors.fa'
+    fasta.write_text('>Species_a_g\nATGTGAAAATAA\n>Species_b_g\nATGTGGAAATAA\n')
+    table = tmp_path / 'codes.tsv'
+    table.write_text('species\tgenetic_code\nSpecies_a\t4\nSpecies_b\t1\n')
+    commands = []
+    original = mod.run_cmd
+
+    def command(args):
+        commands.append(args)
+        if args[:2] == ['diamond', 'makedb']:
+            return None
+        if args[:2] == ['diamond', 'blastp']:
+            Path(args[args.index('--out') + 1]).write_text('Species_a_g\tSpecies_b_g\t1e-30\n')
+            return None
+        return original(args)
+
+    monkeypatch.setattr(mod, 'run_cmd', command)
+    groups, sizes = mod.cluster_neighbors_by_similarity(str(fasta), 'cds', 1e-5, 1, 1, str(tmp_path),
+                                                        species_genetic_codes=mod.load_species_genetic_codes(table))
+    assert groups[genes[0]] == groups[genes[1]] and sizes[groups[genes[0]]] == 2
+    translated = mod.parse_fasta_subset(str(tmp_path / 'neighbors.pep.fasta'), set(genes))
+    assert translated == {genes[0]: 'MWK*', genes[1]: 'MWK*'}
+    assert {args[args.index('--transl-table') + 1] for args in commands if args[0] == 'seqkit'} == {'1', '4'}
+
+
+@pytest.mark.parametrize('rows', ['Species_a\t999\n', 'Species_a\t4\nSpecies_a\t1\n'])
+def test_neighbor_genetic_code_table_rejects_unknown_codes_and_duplicate_species(tmp_path, rows):
+    from workflow.support.synteny_neighbors import load_species_genetic_codes
+
+    table = tmp_path / 'codes.tsv'
+    table.write_text('species\tgenetic_code\n' + rows)
+    with pytest.raises(ValueError):
+        load_species_genetic_codes(table)

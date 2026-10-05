@@ -1,0 +1,225 @@
+{
+  "aggregate_speed_ratio": null,
+  "database_bytes": 25772032,
+  "database_sha256": "70977cfc5fc067e1620d2a1af3cb3bce0ee84457cefe8a30adefa42251fd4d80",
+  "environment": {
+    "implementation_sha256": {
+      "benchmark_fasta_sequence_totals.py": "7f61e926c157f457169771933d30ee505fb86685dd7ecf481f56f46722d86e80",
+      "fasta_sequence_store.py": "a951d4e64ff7781b36c7aff7805ceace7bff1c76e9c41e19072d3fda85487fb6"
+    },
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.14 (main, Sep  2 2026, 23:29:55) [GCC 15.3.0]",
+    "sqlite": "3.53.4",
+    "zlib": "1.3.2"
+  },
+  "input_preparation_wall_seconds": 0.5574320420000021,
+  "measurements": [
+    {
+      "cpu_seconds": 0.18197766999999998,
+      "implementation": "legacy",
+      "operation": "sum",
+      "peak_rss_bytes": 25653248,
+      "peak_rss_source": "proc_vm_hwm",
+      "process_cpu_seconds": 0.209110589,
+      "process_wall_seconds": 0.21768083300000285,
+      "repetition": 1,
+      "total_sequence_bytes": 54000000,
+      "wall_seconds": 0.182980416999996
+    },
+    {
+      "cpu_seconds": 0.184227335,
+      "implementation": "legacy",
+      "operation": "sum",
+      "peak_rss_bytes": 25661440,
+      "peak_rss_source": "proc_vm_hwm",
+      "process_cpu_seconds": 0.212224124,
+      "process_wall_seconds": 0.22103529099999975,
+      "repetition": 2,
+      "total_sequence_bytes": 54000000,
+      "wall_seconds": 0.1851628329999997
+    },
+    {
+      "cpu_seconds": 0.194102467,
+      "implementation": "legacy",
+      "operation": "sum",
+      "peak_rss_bytes": 25657344,
+      "peak_rss_source": "proc_vm_hwm",
+      "process_cpu_seconds": 0.2231783,
+      "process_wall_seconds": 0.23197312500000322,
+      "repetition": 3,
+      "total_sequence_bytes": 54000000,
+      "wall_seconds": 0.19508008300000057
+    }
+  ],
+  "outputs_equivalent": true,
+  "repeats": 3,
+  "runtime_dispatch_stdout": "[runtime freshness] sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e matches the daily owned upstream snapshot and current container inputs.",
+  "schema": 1,
+  "scientific": {
+    "input_sha256": "9dce0913b17cadb6fd604de50ef447069aca1e461bd575a24a270489d32e09dc",
+    "manifest_bytes_sha256": "02d2cb3226c0134515e9e37746a9832f7b24c5e7061089e9e1716657476eb01b",
+    "manifest_schema_version": 2,
+    "sample_fasta_sha256": "595e522b0ed5f01437816a1c8942479744fa2428061af571f3b13549752f9765",
+    "source_identity": [
+      {
+        "record_count": 2000,
+        "sha256": "5b77a7b48608c1f3824d643a5c5353d3ce8549a270ff956d64caca2a9664b4b4",
+        "species": "Species_000"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "1c10d894c84bd21e3f66f44ee934e609c5fcc33f3768fa98b5a36cb7200c7226",
+        "species": "Species_001"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "71b5575f89fab3c03a05840275817e2ab5d8000d4dbdecfa070a4f2a3b3890d4",
+        "species": "Species_002"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "62351dfb6fee07a6da2c5b54f248643e231f78597397301ef829b8ba3a03f346",
+        "species": "Species_003"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "cec5f0b10d295423839e72f2dc58c7fa26859ecbe89eceb5e38051e2b19615c3",
+        "species": "Species_004"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "deb2375d402b237b4cf3265e3e544ad9faf8e2b0d9bd89e8544a1d2305fe6a69",
+        "species": "Species_005"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "c5fd015c8de5b3f4991e8780413ea7078b8c5931a2bab75dc2773f72b7184812",
+        "species": "Species_006"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "b187cbb34768b5860b742dd1c8dc181fa9e967870f5fc8a0409ddd008fc4bf82",
+        "species": "Species_007"
+      },
+      {
+        "record_count": 2000,
+        "sha256": "dc064fba3f24bdfe511d3d9a4b94b6e2b7c2cd2b03b7a6f3ac608170ab596e1a",
+        "species": "Species_008"
+      }
+    ],
+    "total_sequence_bytes": 54000000
+  },
+  "store_preparation": [
+    {
+      "after_state": {
+        "database_signature": {
+          "ctime_ns": 1791183464741852234,
+          "device": 44,
+          "inode": 253,
+          "mtime_ns": 1791183464740813526,
+          "size": 25772032
+        },
+        "exists": true,
+        "manifest_sha256": "02d2cb3226c0134515e9e37746a9832f7b24c5e7061089e9e1716657476eb01b",
+        "metadata_keys": [
+          "schema_version",
+          "source_identity",
+          "source_signatures"
+        ],
+        "schema_version": "2"
+      },
+      "before_state": {
+        "exists": false
+      },
+      "cpu_seconds": 2.759902571,
+      "implementation": "legacy",
+      "operation": "ensure",
+      "peak_rss_bytes": 30769152,
+      "peak_rss_source": "proc_vm_hwm",
+      "process_cpu_seconds": 2.791658361,
+      "process_wall_seconds": 2.9338940020000024,
+      "state": "cold_build",
+      "total_sequence_bytes": null,
+      "wall_seconds": 2.894154126999993
+    },
+    {
+      "after_state": {
+        "database_signature": {
+          "ctime_ns": 1791183464741852234,
+          "device": 44,
+          "inode": 253,
+          "mtime_ns": 1791183464740813526,
+          "size": 25772032
+        },
+        "exists": true,
+        "manifest_sha256": "02d2cb3226c0134515e9e37746a9832f7b24c5e7061089e9e1716657476eb01b",
+        "metadata_keys": [
+          "schema_version",
+          "source_identity",
+          "source_signatures"
+        ],
+        "schema_version": "2"
+      },
+      "before_state": {
+        "database_signature": {
+          "ctime_ns": 1791183464741852234,
+          "device": 44,
+          "inode": 253,
+          "mtime_ns": 1791183464740813526,
+          "size": 25772032
+        },
+        "exists": true,
+        "manifest_sha256": "02d2cb3226c0134515e9e37746a9832f7b24c5e7061089e9e1716657476eb01b",
+        "metadata_keys": [
+          "schema_version",
+          "source_identity",
+          "source_signatures"
+        ],
+        "schema_version": "2"
+      },
+      "cpu_seconds": 0.0005523770000000032,
+      "implementation": "legacy",
+      "operation": "ensure",
+      "peak_rss_bytes": 24682496,
+      "peak_rss_source": "proc_vm_hwm",
+      "process_cpu_seconds": 0.030989162,
+      "process_wall_seconds": 0.039467750000000024,
+      "state": "unchanged",
+      "total_sequence_bytes": null,
+      "wall_seconds": 0.0011469589999961727
+    }
+  ],
+  "summaries": {
+    "legacy": {
+      "cpu_seconds_median": 0.184227335,
+      "peak_rss_bytes_max": 25661440,
+      "process_wall_seconds_median": 0.22103529099999975,
+      "wall_seconds_max": 0.19508008300000057,
+      "wall_seconds_median": 0.1851628329999997,
+      "wall_seconds_min": 0.182980416999996
+    }
+  },
+  "warmup_count": 1,
+  "warmups": [
+    {
+      "cpu_seconds": 0.18875476000000002,
+      "implementation": "legacy",
+      "operation": "sum",
+      "peak_rss_bytes": 25645056,
+      "peak_rss_source": "proc_vm_hwm",
+      "process_cpu_seconds": 0.219074721,
+      "process_wall_seconds": 0.22797112499999628,
+      "repetition": 0,
+      "total_sequence_bytes": 54000000,
+      "wall_seconds": 0.18996258299999624
+    }
+  ],
+  "workload": {
+    "producer": "shake256-low2bit-v1",
+    "records_per_species": 2000,
+    "seed": 918273,
+    "sequence_length": 3000,
+    "species": 9,
+    "unicode_control": false
+  }
+}

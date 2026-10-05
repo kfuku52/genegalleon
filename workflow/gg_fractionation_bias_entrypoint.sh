@@ -97,6 +97,8 @@ gg_entrypoint_name="gg_fractionation_bias_entrypoint.sh"
 
 ### Start: Modify this block to tailor your analysis ###
 
+representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}" # Verified refinement effective/inputs.tsv.
+
 run_kffractbias="${run_kffractbias:-1}" # Run the pair selected by GG_ARRAY_TASK_ID.
 kffractbias_pairs_file="${kffractbias_pairs_file:-}" # Empty uses workspace/input/fractionation_bias_pairs.tsv.
 delete_tmp_dir="${delete_tmp_dir:-1}" # Delete this task's temporary directory after successful publication.

@@ -9,13 +9,53 @@ from workflow.support.gff2genestat import (
     add_id_column,
     add_intron_info,
     extract_by_ids,
+    parse_attribute_fields,
     process_single_gff,
     summarize_gene_features,
+    transcript_ids,
     trim_species_prefix,
 )
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "gff2genestat.py"
 OUT_COLS = ["gene_id", "feature_size", "num_intron", "intron_positions", "chromosome", "start", "end", "strand", "feature_blocks", "feature_type"]
+
+
+def test_gff3_list_values_decode_once_and_gtf_percent_values_remain_literal():
+    identifier, parents, _values = parse_attribute_fields('ID=c%253B1;Parent=t%2C1,t%252C1;')
+    assert identifier == 'c%3B1'
+    assert parents == ('t,1', 't%2C1')
+    assert transcript_ids('gene_id "g"; transcript_id "t%2C1";', 'g') == ('t%2C1',)
+
+
+def test_explicit_representative_uses_shorter_cds_phase_introns_and_utr(tmp_path):
+    gff = tmp_path / 'Plant_species.gff'
+    gff.write_text(
+        'chr1\ts\tgene\t1\t39\t.\t+\t.\tID=gene1\n'
+        'chr1\ts\tmRNA\t1\t39\t.\t+\t.\tID=long;Parent=gene1\n'
+        'chr1\ts\tmRNA\t4\t30\t.\t+\t.\tID=rna-short;Parent=gene1\n'
+        'chr1\ts\tCDS\t1\t12\t.\t+\t0\tParent=long\n'
+        'chr1\ts\tCDS\t22\t39\t.\t+\t0\tParent=long\n'
+        'chr1\ts\tCDS\t4\t12\t.\t+\t0\tParent=rna-short\n'
+        'chr1\ts\tCDS\t25\t30\t.\t+\t0\tParent=rna-short\n'
+        'chr1\ts\tthree_prime_UTR\t31\t33\t.\t+\t.\tParent=rna-short\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Plant_species\tPlant_species_gene1\tc1\trna-short\tselected\t1\t0.2\tconserved\n')
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    output = OUT_COLS + ['gff_transcript_id', 'cds_first_phase', 'phase_status', 'utr_blocks']
+    rows = process_single_gff(gff.name, str(tmp_path), ['Plant_species_gene1'], 'CDS', 'longest',
+                               columns, output, representative_map=selection)
+    row = rows.iloc[0]
+    assert (row.feature_size, row.start, row.end, row.num_intron) == (15, 4, 30, 1)
+    assert row.feature_blocks == '4-12;25-30'
+    assert row.intron_positions == '9'
+    assert row.gff_transcript_id == 'rna-short'
+    assert row.cds_first_phase == 0 and row.phase_status == 'consistent'
+    assert row.utr_blocks == '31-33'
+    selection.write_text(selection.read_text().replace('rna-short', 'absent'))
+    with pytest.raises(ValueError, match='absent from GFF'):
+        process_single_gff(gff.name, str(tmp_path), ['Plant_species_gene1'], 'CDS', 'longest',
+                           columns, output, representative_map=selection)
 
 
 @pytest.mark.parametrize('ancestor_present', [True, False])

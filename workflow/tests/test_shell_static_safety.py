@@ -1350,7 +1350,10 @@ def test_gene_evolution_core_filters_empty_translated_records_before_diamond_mak
         'printf("Dropped %d translated protein records with empty sequence after stop-codon removal.\\n", dropped) > "/dev/stderr"'
         in text
     )
-    assert text.count("filter_translated_fasta_for_diamond \\") >= 2
+    # Compressed and plain CDS now share one seqkit reader pipeline. Native
+    # admitted proteins bypass translation, while the CDS path must still
+    # filter translated stop-only records before constructing the database.
+    assert re.search(r"seqkit translate[^\n]*\|\s*filter_translated_fasta_for_diamond\s+", text)
 
 
 def test_no_cp_out_or_mv_out_glob_arguments_in_core_scripts():

@@ -834,6 +834,9 @@ def _load_entrypoint_defaults() -> dict[str, str]:
         value = match.group(2).strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
+        common = re.fullmatch(r"\$\{(GG_COMMON_[A-Z0-9_]+):-([^}]*)\}", value)
+        if common:
+            value = os.environ.get(common.group(1), common.group(2))
         defaults[key] = value
     return defaults
 

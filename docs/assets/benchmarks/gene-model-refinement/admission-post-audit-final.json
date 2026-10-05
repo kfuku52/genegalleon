@@ -1,0 +1,4866 @@
+{
+  "aggregate": {
+    "candidates": 2685,
+    "excluded_organelle_loci": 0,
+    "inferred_phase_candidates": 465,
+    "loci": 2160,
+    "masked_terminal_stop_source_records": 814,
+    "same_length_source_masking_only_records": 85,
+    "sequence_mismatch_source_records": 87,
+    "source_baseline_loci": 2160,
+    "source_cds_records": 2160,
+    "source_genomic_length_disagreement_records": 2,
+    "uniquely_mapped_source_cds": 2160,
+    "usable_candidates": 2572,
+    "withheld_candidates": 113
+  },
+  "all_source_bytes_unchanged": true,
+  "created_utc": "2026-10-05T06:04:27.171362+00:00",
+  "implementation_sha256": {
+    "cds_model_normalisation.py": "f11b6b05a4a4a2690cec655fefe959d7608076eb45fd5114675d5e68866bc4a5",
+    "fasta_sequence_store.py": "a951d4e64ff7781b36c7aff7805ceace7bff1c76e9c41e19072d3fda85487fb6",
+    "format_species_annotation/__init__.py": "367385695971ce638f9d968c4f3adedc8de3076d717dbfa7eec0e440148d2737",
+    "format_species_annotation/cds_normalisation.py": "2dff9f8d1ab0057044730e6d0833e5ddc22e0ff54e0646ba81532e04cdb86ca4",
+    "format_species_annotation/common.py": "46916ab84133534fe55e5d8a3f7488f3be0df2933398f6f55c7d2fa0fb6ba32c",
+    "format_species_annotation/genbank.py": "0177cd4a306952dc6c0ceec8712aec77f56139044386f9e61acb97206e242c69",
+    "format_species_annotation/gff_repair.py": "59079480fe66ea7bfa37664f2002a0c1419fa4e7082c50fa56b9cbd6e6945d87",
+    "format_species_annotation/grouping.py": "d0b35b0440e92ea2527bcf3492ff7d3f786d092d335b746a181453ed25121b49",
+    "format_species_annotation/grouping_identity.py": "b88c98f2627fd473d2e5022e08edc5cecc9c6c155347b0eae85d4212b7d72949",
+    "format_species_annotation/organelle.py": "e97066a98b07426be271b46a511f4a88537c64098110e4a78e305bbfe45b7947",
+    "format_species_annotation/reference.py": "c59e32fe7d4b5c8f3fd326a04a180866d31a8312d614482e67454e3d5a942819",
+    "format_species_annotation/rna.py": "57674068e9b0d626b16de708e2008cde1a780577ead9b61a4dec430396cbca6b",
+    "format_species_annotation/source_identity.py": "d1b5656c5447089093ed80ca94ac19d4775b07f7503aaf937d99a2cbfa031ce4",
+    "format_species_annotation/source_overlap.py": "f4bf5e0bb382f7e47ca27a32add25507c219d80fe69c00bd1c4c51f333cf27de",
+    "format_species_annotation/tasks.py": "646d983aad6032c8b3202b4abf8e57e49350e0a992763d7417115e76a7075c6b",
+    "gene_model_catalog.py": "26a17c50314e5ff27a0b4475740e1ea7b5c44134d164a726a2e43ccf7362b5eb",
+    "gff_attribute_syntax.py": "beff7fe01baa05991ca92f4476787797320aea3dd821e1cfce241ff74874d986"
+  },
+  "observed_total_audit_seconds": 3.5729707929999677,
+  "runtime": {
+    "docker_image": "sha256:8a6d69ec10defff91117d59591eeaabdbd76b41218525a7c038de815af54f87e",
+    "packages": {
+      "biopython": "1.88",
+      "pysam": "0.23.3"
+    },
+    "python": "3.12.14"
+  },
+  "schema": 1,
+  "scope": "read-only catalog admission; no predictions, source regeneration, or isolated performance claims",
+  "script_sha256": "ade09736378a59f136605509fce6ff80df0245ce8fce9679de91e7faba26d2dc",
+  "source_files_checked": 21,
+  "source_sha256_after": {
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Amborella_trichopoda_Atrichopoda-291-v1.0.cds-primaryTranscriptOnly.fa": "0a478276158ad2e844fd022af30d8300452ac41ff82a8a9bcd7b9b8da00b3bd4",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Arabidopsis_thaliana_Athaliana_447_Araport11.cds_primaryTranscriptOnly.fa": "a7b34380a2ee15fc77383e1168578be441957d65a1f35c518aae0195f4153fc7",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Cephalotus_follicularis_29002-CDS.fa": "da9db22d5543288207a8922089c7eb26b5bd7a476a87a65a792dc3da9f22c163",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Dionaea_muscipula_Dm-transcripts.fa": "b7949685cfbc56c9c0a834b6bcab22476632e65f667ed9f3a69d17d084351b88",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Nepenthes_gracilis_male-hiC.cds.fa": "c094ff3100d3e686895c3e1b00063f4d6ccf81c0bb0c405e4a8fb7a1626eb978",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Oryza_sativa_Osativa-323-v7.0.cds-primaryTranscriptOnly.fa": "a8a0289b606425a55e754ec18d42eb23949bbd3e04c9a5fa81f33969ab5ecfe2",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Spinacia_oleracea_CDS-v1.fa": "762410238ff6386127ba766105004650839919ea627d186a12cdea7a6134627c",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Amborella_trichopoda_Atrichopoda_291_v1.0.softmasked.fa": "0a37b992bc37c6bcb314c07204417e7fe6b428bece2f2830ac870f08f6ce744d",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Arabidopsis_thaliana_Athaliana_447_TAIR10.fa": "0588f8ead98ca92e9f74ff8208180c4d92cc77217f89c325badd3a9fa386ef6d",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Cephalotus_follicularis_29002.fa": "9dd04f83da34593a8b9d228a23a5150e82f5b462db0b3753c47d33e909093bb3",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Dionaea_muscipula_Dm_genome_assembly.fa": "8eb8ae4c32b5023234f27633a8fb101973c58b79418a150fef97679ce361c02c",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Nepenthes_gracilis_male_HiC.fa": "183df40704bb6454a09e16a471662fc5943591864b72b6b0328c956a1975f765",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Oryza_sativa_Osativa_323_v7.0.softmasked.fa": "0a8ca70cbb4b0cfca3228b125c4082634f2ae0013353c6983771399a24ca1a11",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Spinacia_oleracea_Sp75_genome_v1.masked.fa": "835050490b27cdad4bcf57c022f8159d8a19e3de0f3e6f6d831078355f4481fc",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Amborella_trichopoda_Atrichopoda-291-v1.0.gene-exons.gff3": "2d3a4055329b005c1c10fa5ae54d8057b0e4fc86c71a2058ab4daeeadd175372",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Arabidopsis_thaliana_Athaliana_447_Araport11.gene.gff3": "3a3234c095f48577cd668c77ec7037d3f975c982db69e591276cc266b9b9054c",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Cephalotus_follicularis_annos1-cds1-id-typename-nu1-upa1-add-chr0.gid29002.gff": "44ec7e05ff936c000e57b8bca045b02bad668acddadc0fa6d880facb019e1713",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Dionaea_muscipula.gff": "5a60d0b2f4be0e7d0bc669bfd765f3fa1ff461083e888638c43ac5f837ff0b63",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Nepenthes_gracilis_male-HiC.gff": "48af9f4a333f9df998ce191980f6423d64721e589672d3226b697c53cf832137",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Oryza_sativa_Osativa-323-v7.0.gene-exons.gff3": "69d935a7c8ab48119e3514baae3095888dd9310a3d509c4a0b0bfd9234567a17",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Spinacia_oleracea_Sp75-gene-v1.gff3": "c21b73a8dd973978378176c3393e1c5abb2122f5129593cc9e1e043202e6e6a3"
+  },
+  "source_sha256_before": {
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Amborella_trichopoda_Atrichopoda-291-v1.0.cds-primaryTranscriptOnly.fa": "0a478276158ad2e844fd022af30d8300452ac41ff82a8a9bcd7b9b8da00b3bd4",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Arabidopsis_thaliana_Athaliana_447_Araport11.cds_primaryTranscriptOnly.fa": "a7b34380a2ee15fc77383e1168578be441957d65a1f35c518aae0195f4153fc7",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Cephalotus_follicularis_29002-CDS.fa": "da9db22d5543288207a8922089c7eb26b5bd7a476a87a65a792dc3da9f22c163",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Dionaea_muscipula_Dm-transcripts.fa": "b7949685cfbc56c9c0a834b6bcab22476632e65f667ed9f3a69d17d084351b88",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Nepenthes_gracilis_male-hiC.cds.fa": "c094ff3100d3e686895c3e1b00063f4d6ccf81c0bb0c405e4a8fb7a1626eb978",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Oryza_sativa_Osativa-323-v7.0.cds-primaryTranscriptOnly.fa": "a8a0289b606425a55e754ec18d42eb23949bbd3e04c9a5fa81f33969ab5ecfe2",
+    "/Users/kf/repos/genegalleon/workspace/input/species_cds/Spinacia_oleracea_CDS-v1.fa": "762410238ff6386127ba766105004650839919ea627d186a12cdea7a6134627c",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Amborella_trichopoda_Atrichopoda_291_v1.0.softmasked.fa": "0a37b992bc37c6bcb314c07204417e7fe6b428bece2f2830ac870f08f6ce744d",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Arabidopsis_thaliana_Athaliana_447_TAIR10.fa": "0588f8ead98ca92e9f74ff8208180c4d92cc77217f89c325badd3a9fa386ef6d",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Cephalotus_follicularis_29002.fa": "9dd04f83da34593a8b9d228a23a5150e82f5b462db0b3753c47d33e909093bb3",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Dionaea_muscipula_Dm_genome_assembly.fa": "8eb8ae4c32b5023234f27633a8fb101973c58b79418a150fef97679ce361c02c",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Nepenthes_gracilis_male_HiC.fa": "183df40704bb6454a09e16a471662fc5943591864b72b6b0328c956a1975f765",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Oryza_sativa_Osativa_323_v7.0.softmasked.fa": "0a8ca70cbb4b0cfca3228b125c4082634f2ae0013353c6983771399a24ca1a11",
+    "/Users/kf/repos/genegalleon/workspace/input/species_genome/Spinacia_oleracea_Sp75_genome_v1.masked.fa": "835050490b27cdad4bcf57c022f8159d8a19e3de0f3e6f6d831078355f4481fc",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Amborella_trichopoda_Atrichopoda-291-v1.0.gene-exons.gff3": "2d3a4055329b005c1c10fa5ae54d8057b0e4fc86c71a2058ab4daeeadd175372",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Arabidopsis_thaliana_Athaliana_447_Araport11.gene.gff3": "3a3234c095f48577cd668c77ec7037d3f975c982db69e591276cc266b9b9054c",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Cephalotus_follicularis_annos1-cds1-id-typename-nu1-upa1-add-chr0.gid29002.gff": "44ec7e05ff936c000e57b8bca045b02bad668acddadc0fa6d880facb019e1713",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Dionaea_muscipula.gff": "5a60d0b2f4be0e7d0bc669bfd765f3fa1ff461083e888638c43ac5f837ff0b63",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Nepenthes_gracilis_male-HiC.gff": "48af9f4a333f9df998ce191980f6423d64721e589672d3226b697c53cf832137",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Oryza_sativa_Osativa-323-v7.0.gene-exons.gff3": "69d935a7c8ab48119e3514baae3095888dd9310a3d509c4a0b0bfd9234567a17",
+    "/Users/kf/repos/genegalleon/workspace/input/species_gff/Spinacia_oleracea_Sp75-gene-v1.gff3": "c21b73a8dd973978378176c3393e1c5abb2122f5129593cc9e1e043202e6e6a3"
+  },
+  "species": [
+    {
+      "counts": {
+        "candidates": 213,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 0,
+        "loci": 213,
+        "masked_terminal_stop_source_records": 209,
+        "same_length_source_masking_only_records": 0,
+        "sequence_mismatch_source_records": 0,
+        "source_baseline_loci": 213,
+        "source_cds_records": 213,
+        "source_genomic_length_disagreement_records": 0,
+        "uniquely_mapped_source_cds": 213,
+        "usable_candidates": 213,
+        "withheld_candidates": 0
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 213
+      },
+      "observed_audit_seconds": 0.3306736249996902,
+      "sequence_mismatches": [],
+      "source_convention_counts": {
+        "exact_genomic_cds": 4,
+        "masked_terminal_stop": 209
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Amborella_trichopoda_Atrichopoda-291-v1.0.cds-primaryTranscriptOnly.fa",
+          "sha256": "0a478276158ad2e844fd022af30d8300452ac41ff82a8a9bcd7b9b8da00b3bd4",
+          "size": 281579
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Amborella_trichopoda_Atrichopoda_291_v1.0.softmasked.fa",
+          "sha256": "0a37b992bc37c6bcb314c07204417e7fe6b428bece2f2830ac870f08f6ce744d",
+          "size": 4029702
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Amborella_trichopoda_Atrichopoda-291-v1.0.gene-exons.gff3",
+          "sha256": "2d3a4055329b005c1c10fa5ae54d8057b0e4fc86c71a2058ab4daeeadd175372",
+          "size": 536691
+        }
+      },
+      "species": "Amborella_trichopoda",
+      "withheld_reason_counts_nonexclusive": {}
+    },
+    {
+      "counts": {
+        "candidates": 976,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 0,
+        "loci": 578,
+        "masked_terminal_stop_source_records": 0,
+        "same_length_source_masking_only_records": 0,
+        "sequence_mismatch_source_records": 0,
+        "source_baseline_loci": 578,
+        "source_cds_records": 578,
+        "source_genomic_length_disagreement_records": 0,
+        "uniquely_mapped_source_cds": 578,
+        "usable_candidates": 976,
+        "withheld_candidates": 0
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 578
+      },
+      "observed_audit_seconds": 0.9312704579997444,
+      "sequence_mismatches": [],
+      "source_convention_counts": {
+        "exact_genomic_cds": 578
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Arabidopsis_thaliana_Athaliana_447_Araport11.cds_primaryTranscriptOnly.fa",
+          "sha256": "a7b34380a2ee15fc77383e1168578be441957d65a1f35c518aae0195f4153fc7",
+          "size": 808855
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Arabidopsis_thaliana_Athaliana_447_TAIR10.fa",
+          "sha256": "0588f8ead98ca92e9f74ff8208180c4d92cc77217f89c325badd3a9fa386ef6d",
+          "size": 3207073
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Arabidopsis_thaliana_Athaliana_447_Araport11.gene.gff3",
+          "sha256": "3a3234c095f48577cd668c77ec7037d3f975c982db69e591276cc266b9b9054c",
+          "size": 1452609
+        }
+      },
+      "species": "Arabidopsis_thaliana",
+      "withheld_reason_counts_nonexclusive": {}
+    },
+    {
+      "counts": {
+        "candidates": 131,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 100,
+        "loci": 131,
+        "masked_terminal_stop_source_records": 107,
+        "same_length_source_masking_only_records": 9,
+        "sequence_mismatch_source_records": 9,
+        "source_baseline_loci": 131,
+        "source_cds_records": 131,
+        "source_genomic_length_disagreement_records": 0,
+        "uniquely_mapped_source_cds": 131,
+        "usable_candidates": 100,
+        "withheld_candidates": 31
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 131
+      },
+      "observed_audit_seconds": 0.25922320900008344,
+      "sequence_mismatches": [
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_04530.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              10215,
+              "N",
+              "T"
+            ],
+            [
+              10216,
+              "N",
+              "G"
+            ],
+            [
+              10217,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "68d482e19a2a5d0b8ad0920d5104f2fcaa2332fe6cb428fe4bbe622324ad2656",
+          "genomic_length": 14289,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": true,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "778e98d84d6ea5d313419095b4630bf1c6f1a8482f8c24bce02244eae2c1fee3",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-04530",
+          "source_length": 14289
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_07010.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              450,
+              "N",
+              "T"
+            ],
+            [
+              451,
+              "N",
+              "A"
+            ],
+            [
+              452,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "b52d985a954d4922bf4b6817f7afcbf770e219c256fa961a49d05d2d3179aaaf",
+          "genomic_length": 936,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": true,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "5f24615fb244f4f14c6af2061871c69fc1bdeb8d3d424387cdcf334a90c33bc1",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-07010",
+          "source_length": 936
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_13262.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              2034,
+              "N",
+              "T"
+            ],
+            [
+              2035,
+              "N",
+              "A"
+            ],
+            [
+              2036,
+              "N",
+              "G"
+            ],
+            [
+              7848,
+              "N",
+              "T"
+            ],
+            [
+              7849,
+              "N",
+              "G"
+            ],
+            [
+              7850,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "6053938a7a124d24e90d88c1a6b118839a051acf1bf26972ce24656e30cb64a4",
+          "genomic_length": 7851,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": false,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "f2ea4ce9171eaba7d0a93484696b25a9b3d3d6c9636f35b01813b3a051726128",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-13262",
+          "source_length": 7851
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_15854.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              219,
+              "N",
+              "T"
+            ],
+            [
+              220,
+              "N",
+              "G"
+            ],
+            [
+              221,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "3e2b07c691b2b8d8ec40e5cb86f3a51a3b305732041324ffe902109172726b1e",
+          "genomic_length": 342,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": true,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "e9f1cd5cf0a1e94271c4d56aaba97f6bbbd6cd68fe1db0f76cdb3afbb01a1911",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-15854",
+          "source_length": 342
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_15855.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              1374,
+              "N",
+              "T"
+            ],
+            [
+              1375,
+              "N",
+              "A"
+            ],
+            [
+              1376,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "5b1d513a1554e99cd39dabff73382d0fd032f6c3b6421de0f42d7b759287d2c9",
+          "genomic_length": 1893,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": true,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "04388205f45dd784180588466faeed6ac087dc06cca52ae67c3c72e9f44164e5",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-15855",
+          "source_length": 1893
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_21348.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              1158,
+              "N",
+              "T"
+            ],
+            [
+              1159,
+              "N",
+              "A"
+            ],
+            [
+              1160,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "3ea1b7e8e44ebf855579af256daba30b22a65343de44d1cf98e832e6aa1ce033",
+          "genomic_length": 1284,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": true,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "d263ec52b44b8f76a30d2afcb387be082c216d5fe94efa388d63cdc6966ef68f",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-21348",
+          "source_length": 1284
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_21359.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              477,
+              "N",
+              "T"
+            ],
+            [
+              478,
+              "N",
+              "A"
+            ],
+            [
+              479,
+              "N",
+              "G"
+            ],
+            [
+              1236,
+              "N",
+              "T"
+            ],
+            [
+              1237,
+              "N",
+              "A"
+            ],
+            [
+              1238,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "b36da4987d686950affe2ac0743022c1a270af28ef3eb09e55780403d2744948",
+          "genomic_length": 1239,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": false,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "dde476a3ee486ed05631f52ac03f694a3689c755f349fc64d8fe9447fe586f39",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-21359",
+          "source_length": 1239
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_21361.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              1830,
+              "N",
+              "T"
+            ],
+            [
+              1831,
+              "N",
+              "A"
+            ],
+            [
+              1832,
+              "N",
+              "A"
+            ],
+            [
+              4062,
+              "N",
+              "T"
+            ],
+            [
+              4063,
+              "N",
+              "G"
+            ],
+            [
+              4064,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "b9874a56a305e75563bebe9c2a11a996aaf27b04499e4e1ac353b17764522abd",
+          "genomic_length": 4065,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": false,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "bc79c8f087e74369c1cf23c158a770956b4b37e617d02ca57af762f4fd2411f5",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-21361",
+          "source_length": 4065
+        },
+        {
+          "candidate_id": "Cephalotus_follicularis_Cfol_v3_23439.mRNA1",
+          "first_ungapped_differences_start0": [
+            [
+              738,
+              "N",
+              "T"
+            ],
+            [
+              739,
+              "N",
+              "A"
+            ],
+            [
+              740,
+              "N",
+              "A"
+            ],
+            [
+              2055,
+              "N",
+              "T"
+            ],
+            [
+              2056,
+              "N",
+              "G"
+            ],
+            [
+              2057,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "f1b6974e978538c395b09f075688c7beb030a6c4b8b6d34bb6296327e4718073",
+          "genomic_length": 2058,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": true,
+            "partial": false,
+            "phase_unresolved": true,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "b11601437a348b6d85e76caee3777c5190ae9a786f3dc1f1a385ff3d595994a1",
+          "source_fasta_id": "Cephalotus_follicularis_Cfol-v3-23439",
+          "source_length": 2058
+        }
+      ],
+      "source_convention_counts": {
+        "": 9,
+        "exact_genomic_cds": 15,
+        "masked_terminal_stop": 107
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Cephalotus_follicularis_29002-CDS.fa",
+          "sha256": "da9db22d5543288207a8922089c7eb26b5bd7a476a87a65a792dc3da9f22c163",
+          "size": 210133
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Cephalotus_follicularis_29002.fa",
+          "sha256": "9dd04f83da34593a8b9d228a23a5150e82f5b462db0b3753c47d33e909093bb3",
+          "size": 1798471
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Cephalotus_follicularis_annos1-cds1-id-typename-nu1-upa1-add-chr0.gid29002.gff",
+          "sha256": "44ec7e05ff936c000e57b8bca045b02bad668acddadc0fa6d880facb019e1713",
+          "size": 368037
+        }
+      },
+      "species": "Cephalotus_follicularis",
+      "withheld_reason_counts_nonexclusive": {
+        "internal_stop": 9,
+        "phase_unresolved": 31,
+        "sequence_mismatch": 9
+      }
+    },
+    {
+      "counts": {
+        "candidates": 142,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 0,
+        "loci": 142,
+        "masked_terminal_stop_source_records": 55,
+        "same_length_source_masking_only_records": 76,
+        "sequence_mismatch_source_records": 78,
+        "source_baseline_loci": 142,
+        "source_cds_records": 142,
+        "source_genomic_length_disagreement_records": 2,
+        "uniquely_mapped_source_cds": 142,
+        "usable_candidates": 64,
+        "withheld_candidates": 78
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 142
+      },
+      "observed_audit_seconds": 0.20767441599991798,
+      "sequence_mismatches": [
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000254",
+          "first_ungapped_differences_start0": [
+            [
+              819,
+              "N",
+              "A"
+            ],
+            [
+              820,
+              "N",
+              "A"
+            ],
+            [
+              821,
+              "N",
+              "Y"
+            ],
+            [
+              885,
+              "N",
+              "Y"
+            ],
+            [
+              886,
+              "N",
+              "C"
+            ],
+            [
+              887,
+              "N",
+              "A"
+            ],
+            [
+              1734,
+              "N",
+              "T"
+            ],
+            [
+              1735,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "7af698588cafcf9b603311b9e5ba99eb24bb5041d9613b05aca69c1811c5162a",
+          "genomic_length": 1737,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "97d56692abe3c61adc90a8f816ab26a0ea4c5c39b13c880fa7924f1fc5db3c38",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000254",
+          "source_length": 1737
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000255",
+          "first_ungapped_differences_start0": [
+            [
+              344,
+              "N",
+              "Y"
+            ],
+            [
+              407,
+              "N",
+              "Y"
+            ],
+            [
+              1025,
+              "N",
+              "Y"
+            ],
+            [
+              1244,
+              "N",
+              "R"
+            ],
+            [
+              1364,
+              "N",
+              "D"
+            ],
+            [
+              1542,
+              "N",
+              "G"
+            ],
+            [
+              1543,
+              "N",
+              "A"
+            ],
+            [
+              1544,
+              "N",
+              "Y"
+            ]
+          ],
+          "genomic_cds_sha256": "21b7fd03d05974aa7b69f262319a1ecd34767060c1fe95c80c2206700c60fd77",
+          "genomic_length": 1755,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "2fd9faf4bd730e26d878f3565a5aa5987ac35f8039f54aaab474ddb7b9c98642",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000255",
+          "source_length": 1755
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000256",
+          "first_ungapped_differences_start0": [
+            [
+              551,
+              "N",
+              "W"
+            ],
+            [
+              683,
+              "N",
+              "W"
+            ],
+            [
+              800,
+              "N",
+              "Y"
+            ],
+            [
+              897,
+              "N",
+              "C"
+            ],
+            [
+              898,
+              "N",
+              "R"
+            ],
+            [
+              899,
+              "N",
+              "T"
+            ],
+            [
+              1425,
+              "N",
+              "W"
+            ],
+            [
+              1426,
+              "N",
+              "T"
+            ]
+          ],
+          "genomic_cds_sha256": "d986da11721332fb72e1d30f5ccd536fd0181a29503214802b980d19442c091a",
+          "genomic_length": 1767,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "388e12d14d1f81e478164a9fc86c19a4d37d146ff8001cca4e9b44e95bcb6d59",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000256",
+          "source_length": 1767
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000258",
+          "first_ungapped_differences_start0": [
+            [
+              977,
+              "N",
+              "W"
+            ],
+            [
+              1572,
+              "N",
+              "G"
+            ],
+            [
+              1573,
+              "N",
+              "A"
+            ],
+            [
+              1574,
+              "N",
+              "R"
+            ],
+            [
+              1680,
+              "N",
+              "T"
+            ],
+            [
+              1681,
+              "N",
+              "A"
+            ],
+            [
+              1682,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "38f9d90756d0e85cb2f605c878cf62d52cf528b9c647c0b3b695772a498821f3",
+          "genomic_length": 1683,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "846a76ab2e8d057c7032fa5bb4cf30fe38e21dabff007fb0ee45edc297ab9192",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000258",
+          "source_length": 1683
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000260",
+          "first_ungapped_differences_start0": [
+            [
+              399,
+              "N",
+              "G"
+            ],
+            [
+              400,
+              "N",
+              "S"
+            ],
+            [
+              401,
+              "N",
+              "T"
+            ],
+            [
+              1548,
+              "N",
+              "T"
+            ],
+            [
+              1549,
+              "N",
+              "G"
+            ],
+            [
+              1550,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "aa98a5fcaf02d849c2708d82f988827f1f305349ae592b4204bb7b06fbc75b4c",
+          "genomic_length": 1551,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "1246dea146eb85e9e65476f50b15b7600c604de9c84383ec323e296bae3f183b",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000260",
+          "source_length": 1551
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000261",
+          "first_ungapped_differences_start0": [
+            [
+              531,
+              "N",
+              "T"
+            ],
+            [
+              532,
+              "N",
+              "M"
+            ],
+            [
+              533,
+              "N",
+              "T"
+            ],
+            [
+              807,
+              "N",
+              "G"
+            ],
+            [
+              808,
+              "N",
+              "A"
+            ],
+            [
+              809,
+              "N",
+              "Y"
+            ],
+            [
+              864,
+              "N",
+              "R"
+            ],
+            [
+              865,
+              "N",
+              "C"
+            ]
+          ],
+          "genomic_cds_sha256": "a02e2bcdd3a762e2bdb64e3639717f36913505add0a1d7e7868ae523c6ac9e20",
+          "genomic_length": 2481,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "e3c8293c8b7a9de3a65a5d70d9a80548d26b608628ef91d7bde4e373a546d60e",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000261",
+          "source_length": 2481
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000262",
+          "first_ungapped_differences_start0": [
+            [
+              162,
+              "N",
+              "G"
+            ],
+            [
+              163,
+              "N",
+              "S"
+            ],
+            [
+              164,
+              "N",
+              "T"
+            ],
+            [
+              474,
+              "N",
+              "T"
+            ],
+            [
+              475,
+              "N",
+              "G"
+            ],
+            [
+              476,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "8288cb897f12c8aceb5d3c39faf193177157d5ec446805af2b9df81f6f180316",
+          "genomic_length": 477,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "1da179a7c6d5ad07637f01f048922e406124fb12d982c9be1c31177268abad4b",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000262",
+          "source_length": 477
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000263",
+          "first_ungapped_differences_start0": [
+            [
+              599,
+              "N",
+              "Y"
+            ],
+            [
+              666,
+              "N",
+              "A"
+            ],
+            [
+              667,
+              "N",
+              "Y"
+            ],
+            [
+              668,
+              "N",
+              "G"
+            ],
+            [
+              873,
+              "N",
+              "R"
+            ],
+            [
+              874,
+              "N",
+              "A"
+            ],
+            [
+              875,
+              "N",
+              "T"
+            ],
+            [
+              2661,
+              "N",
+              "C"
+            ]
+          ],
+          "genomic_cds_sha256": "f617be6506a166c80fa715bca9e650c6f37ffcd33928b2da2e32cd8a36f8f180",
+          "genomic_length": 4002,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "6b058a0d778ccbefd24149df32841fccd0dd05494045d5324298d46bd4262e4c",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000263",
+          "source_length": 4002
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000264",
+          "first_ungapped_differences_start0": [
+            [
+              86,
+              "N",
+              "Y"
+            ],
+            [
+              161,
+              "N",
+              "Y"
+            ],
+            [
+              597,
+              "N",
+              "T"
+            ],
+            [
+              598,
+              "N",
+              "G"
+            ],
+            [
+              599,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "2ba533c638359c6fc303085f1ad5f5a58de03f5a1bb3e6f7b8273eb1dc0cdb9d",
+          "genomic_length": 600,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "f939b3ed517963b08e4e768020aa55c27baafc2366a2eaeaf1eaf599c9c905d5",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000264",
+          "source_length": 600
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000266",
+          "first_ungapped_differences_start0": [
+            [
+              495,
+              "N",
+              "Y"
+            ],
+            [
+              496,
+              "N",
+              "G"
+            ],
+            [
+              497,
+              "N",
+              "T"
+            ],
+            [
+              720,
+              "N",
+              "R"
+            ],
+            [
+              721,
+              "N",
+              "T"
+            ],
+            [
+              722,
+              "N",
+              "C"
+            ],
+            [
+              1320,
+              "N",
+              "T"
+            ],
+            [
+              1321,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "cc1b645b0026cbb4f33f12cd84da19bbc39849878120ad1bacf65373928969e7",
+          "genomic_length": 1323,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "a5dce9eb5791b993d428aa4817efdf662baba29e115143bf445a778652495a5d",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000266",
+          "source_length": 1323
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000267",
+          "first_ungapped_differences_start0": [
+            [
+              53,
+              "N",
+              "W"
+            ],
+            [
+              54,
+              "N",
+              "M"
+            ],
+            [
+              55,
+              "N",
+              "G"
+            ],
+            [
+              56,
+              "N",
+              "A"
+            ],
+            [
+              456,
+              "N",
+              "T"
+            ],
+            [
+              457,
+              "N",
+              "A"
+            ],
+            [
+              458,
+              "N",
+              "Y"
+            ],
+            [
+              551,
+              "N",
+              "Y"
+            ]
+          ],
+          "genomic_cds_sha256": "bef4b147ea6c3bddfd41b5243f78a63a25944e2da3bbc8d24076b7b1e96c9f86",
+          "genomic_length": 1974,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "b7d4d43ae071d2f01ebc29d58368c6de0e45cea20521086a68f18971643ee50a",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000267",
+          "source_length": 1974
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000271",
+          "first_ungapped_differences_start0": [
+            [
+              2072,
+              "N",
+              "R"
+            ],
+            [
+              2379,
+              "N",
+              "A"
+            ],
+            [
+              2380,
+              "N",
+              "A"
+            ],
+            [
+              2381,
+              "N",
+              "S"
+            ],
+            [
+              2601,
+              "N",
+              "T"
+            ],
+            [
+              2602,
+              "N",
+              "A"
+            ],
+            [
+              2603,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "a288ee1b951e22bffa072689490cd9a446908192b2133bf346ad7a01894267e8",
+          "genomic_length": 2604,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "9809460d5b0027f5f20e04a87c9813770b7b4783fa260850b603c2e0bed1c6fd",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000271",
+          "source_length": 2604
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000272",
+          "first_ungapped_differences_start0": [
+            [
+              731,
+              "N",
+              "Y"
+            ],
+            [
+              900,
+              "N",
+              "A"
+            ],
+            [
+              901,
+              "N",
+              "A"
+            ],
+            [
+              902,
+              "N",
+              "Y"
+            ],
+            [
+              1695,
+              "N",
+              "T"
+            ],
+            [
+              1696,
+              "N",
+              "A"
+            ],
+            [
+              1697,
+              "N",
+              "Y"
+            ],
+            [
+              1799,
+              "N",
+              "R"
+            ]
+          ],
+          "genomic_cds_sha256": "0140263557b9a54d72de5b8aad99259b945860477a912afe22ef5d47fcc3814c",
+          "genomic_length": 4992,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "35343406383d47443fd87908b80b754a7dfc530aa8c66b1b1867fa3727f5a1e5",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000272",
+          "source_length": 4992
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000273",
+          "first_ungapped_differences_start0": [
+            [
+              464,
+              "N",
+              "R"
+            ],
+            [
+              749,
+              "N",
+              "R"
+            ],
+            [
+              1730,
+              "N",
+              "R"
+            ],
+            [
+              2196,
+              "N",
+              "T"
+            ],
+            [
+              2197,
+              "N",
+              "G"
+            ],
+            [
+              2198,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "d14c3234f237689074a0c63d7c8a5926a3b39c8335247e186334eb817f3ed1cf",
+          "genomic_length": 2199,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "965f84350835a5bc6a322723fefde139aa3894be71745d6d619317c5a927d3fa",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000273",
+          "source_length": 2199
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000274",
+          "first_ungapped_differences_start0": [
+            [
+              594,
+              "N",
+              "C"
+            ],
+            [
+              595,
+              "N",
+              "W"
+            ],
+            [
+              596,
+              "N",
+              "G"
+            ],
+            [
+              2492,
+              "N",
+              "R"
+            ],
+            [
+              2576,
+              "N",
+              "R"
+            ],
+            [
+              2865,
+              "N",
+              "T"
+            ],
+            [
+              2866,
+              "N",
+              "A"
+            ],
+            [
+              2867,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "40684ae38cedee54cecefeb21a052d971c4b3ba485454b9e169c325cc8c312dc",
+          "genomic_length": 2868,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "71a85cad70dd363ec46dc6bfb18cf9c7a16065c5703e1b00e99b6c0e5900cf0d",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000274",
+          "source_length": 2868
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000275",
+          "first_ungapped_differences_start0": [
+            [
+              410,
+              "N",
+              "R"
+            ],
+            [
+              672,
+              "N",
+              "T"
+            ],
+            [
+              673,
+              "N",
+              "A"
+            ],
+            [
+              674,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "616ad536a51e27715edc0b5be13a019cba20b3bd875fdd74757d7116cc68fb00",
+          "genomic_length": 675,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "bddc374e38d11e1fc8fbe6f333bae432870a90f24774b610678532f75efb82fb",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000275",
+          "source_length": 675
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000283",
+          "first_ungapped_differences_start0": [
+            [
+              164,
+              "N",
+              "R"
+            ],
+            [
+              375,
+              "N",
+              "T"
+            ],
+            [
+              376,
+              "N",
+              "G"
+            ],
+            [
+              377,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "c7c30d40dc64b2d1797a74c349c82182e27cc2d64645304a9de7f217b390963e",
+          "genomic_length": 378,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "f01879f13a76fe6cafb065c2340c8ceae3198f6140500f8420f7213a8a23ccf6",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000283",
+          "source_length": 378
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000284",
+          "first_ungapped_differences_start0": [
+            [
+              495,
+              "N",
+              "A"
+            ],
+            [
+              496,
+              "N",
+              "G"
+            ],
+            [
+              497,
+              "N",
+              "R"
+            ],
+            [
+              695,
+              "N",
+              "Y"
+            ],
+            [
+              1089,
+              "N",
+              "T"
+            ],
+            [
+              1090,
+              "N",
+              "A"
+            ],
+            [
+              1091,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "1efab80ee974263f60642be099a773c72ab95a6cc9c83b3aac4867f6b45bd09b",
+          "genomic_length": 1092,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "aee0927a5280b3260164d0a48cc1badff2b8edd9f9a9745b2b3876cbc90fc334",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000284",
+          "source_length": 1092
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000285",
+          "first_ungapped_differences_start0": [
+            [
+              1695,
+              "N",
+              "Y"
+            ],
+            [
+              1696,
+              "N",
+              "T"
+            ],
+            [
+              1697,
+              "N",
+              "G"
+            ],
+            [
+              1791,
+              "N",
+              "T"
+            ],
+            [
+              1792,
+              "N",
+              "G"
+            ],
+            [
+              1793,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "8b5ebb5f22cce8d4693ff05ead444558aaac2bb8f279cd3a9926ba163d306bb3",
+          "genomic_length": 1794,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "4ed497cce15679e21b626eee3eb77697e3f5eb533285b75a47c2b08da77fef7f",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000285",
+          "source_length": 1794
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000286",
+          "first_ungapped_differences_start0": [
+            [
+              54,
+              "N",
+              "M"
+            ],
+            [
+              55,
+              "N",
+              "G"
+            ],
+            [
+              56,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "1857ede376bac0c69952165a66e93ca89ac94da36215f5d5e8cad481fb9d39cb",
+          "genomic_length": 954,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "24968672b82533bbc440bf447458a2e79e37942fea9fae4fc1157ec4c37ff2d5",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000286",
+          "source_length": 954
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000287",
+          "first_ungapped_differences_start0": [
+            [
+              333,
+              "N",
+              "A"
+            ],
+            [
+              334,
+              "N",
+              "T"
+            ],
+            [
+              335,
+              "N",
+              "W"
+            ],
+            [
+              978,
+              "N",
+              "G"
+            ],
+            [
+              979,
+              "N",
+              "S"
+            ],
+            [
+              980,
+              "N",
+              "T"
+            ],
+            [
+              1416,
+              "N",
+              "T"
+            ],
+            [
+              1417,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "b8cfa11815e55ce5372b9265cc62cc52e7f0183a60b56c974d49b61bd917ea85",
+          "genomic_length": 1419,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "36c65f90383ada2f5b539a5cd68113fcd728948339706624568ec1823743fccd",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000287",
+          "source_length": 1419
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000288",
+          "first_ungapped_differences_start0": [
+            [
+              276,
+              "N",
+              "A"
+            ],
+            [
+              277,
+              "N",
+              "Y"
+            ],
+            [
+              278,
+              "N",
+              "C"
+            ],
+            [
+              699,
+              "N",
+              "A"
+            ],
+            [
+              700,
+              "N",
+              "G"
+            ],
+            [
+              701,
+              "N",
+              "Y"
+            ],
+            [
+              780,
+              "N",
+              "T"
+            ],
+            [
+              781,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "823a644bc5404e194e61ed02ce3b413075347c2b12817e88eea32c0508410c74",
+          "genomic_length": 783,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "6b31ce6509e3ca3258a557f9662a1cd440cd62904b2cca142b386d7279458217",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000288",
+          "source_length": 783
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000289",
+          "first_ungapped_differences_start0": [
+            [
+              116,
+              "N",
+              "M"
+            ],
+            [
+              207,
+              "N",
+              "T"
+            ],
+            [
+              208,
+              "N",
+              "A"
+            ],
+            [
+              209,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "594b82e2dba80c8dea36fd59dbf288d5c123b84f4072b537318d623008ea2c8d",
+          "genomic_length": 210,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "ae4476e07b34c2965a016d445ab7e5eabbce61b9b3bd7e42a99fb25b1a093c34",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000289",
+          "source_length": 210
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000290",
+          "first_ungapped_differences_start0": [
+            [
+              264,
+              "N",
+              "A"
+            ],
+            [
+              265,
+              "N",
+              "T"
+            ],
+            [
+              266,
+              "N",
+              "Y"
+            ],
+            [
+              827,
+              "N",
+              "R"
+            ],
+            [
+              1007,
+              "N",
+              "S"
+            ],
+            [
+              1584,
+              "N",
+              "T"
+            ],
+            [
+              1585,
+              "N",
+              "G"
+            ],
+            [
+              1586,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "0beca93af14c3714c5166e5a0ea03661fb465922a7fa07e1691a8f0fe85389ab",
+          "genomic_length": 1587,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "f980f2711d4d49ae243f861aa82e2e6899e81f1e6351a61233ea2d982e354f1e",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000290",
+          "source_length": 1587
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000292",
+          "first_ungapped_differences_start0": [
+            [
+              642,
+              "N",
+              "R"
+            ],
+            [
+              643,
+              "N",
+              "T"
+            ],
+            [
+              644,
+              "N",
+              "T"
+            ],
+            [
+              687,
+              "N",
+              "T"
+            ],
+            [
+              688,
+              "N",
+              "A"
+            ],
+            [
+              689,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "52613f548b9e8483b95d29188df1d7396bc5247f3ac872b629222ac11a410962",
+          "genomic_length": 690,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "5665ed645e9f7908ef43cbadfa113a0bcdd1cc734cfbc66d285c458d6e9df894",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000292",
+          "source_length": 690
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000293",
+          "first_ungapped_differences_start0": [
+            [
+              1203,
+              "N",
+              "R"
+            ],
+            [
+              1204,
+              "N",
+              "A"
+            ],
+            [
+              1205,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "38e7998a29c9d8ae449eef69f5b18c2c0e215754c6f7af5eafdb2477efa024d2",
+          "genomic_length": 1311,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "fcf23f248bd6d702eeb987e113033fde63416a13d49dbe380eb9064b9aec1497",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000293",
+          "source_length": 1311
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000294",
+          "first_ungapped_differences_start0": [
+            [
+              135,
+              "N",
+              "G"
+            ],
+            [
+              136,
+              "N",
+              "A"
+            ],
+            [
+              137,
+              "N",
+              "R"
+            ],
+            [
+              216,
+              "N",
+              "R"
+            ],
+            [
+              217,
+              "N",
+              "T"
+            ],
+            [
+              218,
+              "N",
+              "T"
+            ],
+            [
+              1521,
+              "N",
+              "M"
+            ],
+            [
+              1522,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "c3be25978a2c3f50e297489dbf5cc17a41b91fe6b66e10f92b4bbd8e96bfd3f1",
+          "genomic_length": 1923,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "3880a6a4c5b1cf74e1718f402980e7b29c4a27529ce4b0a8138af46271e5bbc0",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000294",
+          "source_length": 1923
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000725",
+          "first_ungapped_differences_start0": [
+            [
+              234,
+              "N",
+              "A"
+            ],
+            [
+              235,
+              "N",
+              "G"
+            ],
+            [
+              236,
+              "N",
+              "Y"
+            ],
+            [
+              249,
+              "N",
+              "T"
+            ],
+            [
+              250,
+              "N",
+              "G"
+            ],
+            [
+              251,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "7c194a70cd2f9bc7a29d3af13a3f6674de884b8699d13f2f8c705781026ef9a9",
+          "genomic_length": 252,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "99a876b7d0eaf1cd0567fb1d89be1d2768e42e9791aa0a3f29ef7a73950cbb2a",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000725",
+          "source_length": 252
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000726",
+          "first_ungapped_differences_start0": [
+            [
+              609,
+              "N",
+              "T"
+            ],
+            [
+              610,
+              "N",
+              "G"
+            ],
+            [
+              611,
+              "N",
+              "Y"
+            ],
+            [
+              1200,
+              "N",
+              "C"
+            ],
+            [
+              1201,
+              "N",
+              "A"
+            ],
+            [
+              1202,
+              "N",
+              "R"
+            ],
+            [
+              1244,
+              "N",
+              "R"
+            ],
+            [
+              1263,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "c7994461a71206706fd97d1345b5571e2f33bcb119cef84a8097769608f2861e",
+          "genomic_length": 2475,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "bf3bf2840c538386ca330b8650a3579e7141c81f156d3c4b4a00b630a76f2883",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000726",
+          "source_length": 2475
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000727",
+          "first_ungapped_differences_start0": [
+            [
+              186,
+              "N",
+              "K"
+            ],
+            [
+              187,
+              "N",
+              "A"
+            ],
+            [
+              188,
+              "N",
+              "G"
+            ],
+            [
+              2514,
+              "N",
+              "T"
+            ],
+            [
+              2515,
+              "N",
+              "A"
+            ],
+            [
+              2516,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "8d7c42e76ef727d946b8e37835bc2a7fc71e2cb8426f8ce7b41c2b7a9b945bf5",
+          "genomic_length": 2517,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "0bbb694270789ec418d276c1b2d76a1a28e1d5bd59e70f97e3e325dacc1be14e",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000727",
+          "source_length": 2517
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000730",
+          "first_ungapped_differences_start0": [
+            [
+              1352,
+              "N",
+              "W"
+            ],
+            [
+              1526,
+              "N",
+              "M"
+            ],
+            [
+              1923,
+              "N",
+              "A"
+            ],
+            [
+              1924,
+              "N",
+              "A"
+            ],
+            [
+              1925,
+              "N",
+              "R"
+            ],
+            [
+              2394,
+              "N",
+              "T"
+            ],
+            [
+              2395,
+              "N",
+              "G"
+            ],
+            [
+              2396,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "5d526c86967c27d3c670cfa38fc0c9fc574d9e5e8564cee7b9e36b80a3d9e83e",
+          "genomic_length": 2397,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "9786cba5e1e495ca0c623c8b247bca36ec0be19a3e7e89fffe6568e5e8a446c0",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000730",
+          "source_length": 2397
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000731",
+          "first_ungapped_differences_start0": [
+            [
+              797,
+              "N",
+              "R"
+            ],
+            [
+              864,
+              "N",
+              "C"
+            ],
+            [
+              865,
+              "N",
+              "R"
+            ],
+            [
+              866,
+              "N",
+              "T"
+            ],
+            [
+              1395,
+              "N",
+              "T"
+            ],
+            [
+              1396,
+              "N",
+              "A"
+            ],
+            [
+              1397,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "5756c24624731a3d1529279edfb02b68073506537b422984d7fe17fc50b30ce9",
+          "genomic_length": 1398,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "7131061c1dd379cf47a5d40850a2c7805cdb4897c1d1bc3f485afc5398e5a8e2",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000731",
+          "source_length": 1398
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000732",
+          "first_ungapped_differences_start0": [
+            [
+              375,
+              "N",
+              "T"
+            ],
+            [
+              376,
+              "N",
+              "A"
+            ],
+            [
+              377,
+              "N",
+              "Y"
+            ],
+            [
+              798,
+              "N",
+              "T"
+            ],
+            [
+              799,
+              "N",
+              "G"
+            ],
+            [
+              800,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "ac33b41365aeb245b4fabbd0221ea2aafb7e98c30d5ef817fd0a729b7da42bf9",
+          "genomic_length": 801,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "dc17e82336b7eba21691b75da9d7817d59393a44f36c23bae14beb0f32ec4227",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000732",
+          "source_length": 801
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000743",
+          "first_ungapped_differences_start0": [
+            [
+              351,
+              "N",
+              "G"
+            ],
+            [
+              352,
+              "N",
+              "M"
+            ],
+            [
+              353,
+              "N",
+              "G"
+            ],
+            [
+              1425,
+              "N",
+              "T"
+            ],
+            [
+              1426,
+              "N",
+              "A"
+            ],
+            [
+              1427,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "e2844c60c0086ba8b368d6c1309c3dfffb3577ff03becb619a6a790d41c25fec",
+          "genomic_length": 1428,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "02f18d73ea2ccefcd0f046a715fe3daebe41b97bfe77c9a831c3d685ee11bfd8",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000743",
+          "source_length": 1428
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000745",
+          "first_ungapped_differences_start0": [
+            [
+              0,
+              "N",
+              "A"
+            ],
+            [
+              1,
+              "N",
+              "T"
+            ],
+            [
+              2,
+              "N",
+              "G"
+            ],
+            [
+              3,
+              "G",
+              "C"
+            ],
+            [
+              5,
+              "G",
+              "T"
+            ],
+            [
+              6,
+              "A",
+              "G"
+            ],
+            [
+              7,
+              "T",
+              "A"
+            ],
+            [
+              8,
+              "G",
+              "T"
+            ]
+          ],
+          "genomic_cds_sha256": "b8d2474b6b3e473a2c1364aeab024924bcd53d6a4fea61dc162a237799b78ee8",
+          "genomic_length": 2052,
+          "quality": {
+            "ambiguous": false,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": false,
+          "source_cds_sha256": "ab0280b421ae579fdee964ba7a733a0910a4dcf46bd61ab054aa1ab61125f9f5",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000745",
+          "source_length": 2058
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00000753",
+          "first_ungapped_differences_start0": [
+            [
+              93,
+              "N",
+              "A"
+            ],
+            [
+              94,
+              "N",
+              "Y"
+            ],
+            [
+              95,
+              "N",
+              "M"
+            ],
+            [
+              99,
+              "N",
+              "M"
+            ],
+            [
+              100,
+              "N",
+              "C"
+            ],
+            [
+              101,
+              "N",
+              "W"
+            ],
+            [
+              104,
+              "N",
+              "M"
+            ],
+            [
+              116,
+              "N",
+              "M"
+            ]
+          ],
+          "genomic_cds_sha256": "abd6df384be7a52f48266c589b3844d02e93f6e8f8eeb720f81d7eb15961905e",
+          "genomic_length": 861,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "d1fb58f83b28d41b3f71a69c943c1c6ba57f1bfcb9277cfe6a4ba771e8270554",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00000753",
+          "source_length": 861
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00001736",
+          "first_ungapped_differences_start0": [
+            [
+              2202,
+              "N",
+              "R"
+            ],
+            [
+              2203,
+              "N",
+              "A"
+            ],
+            [
+              2204,
+              "N",
+              "A"
+            ],
+            [
+              2565,
+              "N",
+              "T"
+            ],
+            [
+              2566,
+              "N",
+              "K"
+            ],
+            [
+              2567,
+              "N",
+              "C"
+            ],
+            [
+              3918,
+              "N",
+              "C"
+            ],
+            [
+              3919,
+              "N",
+              "R"
+            ]
+          ],
+          "genomic_cds_sha256": "f8f60a0224a6621f60480c01c4fab206d39e9d391b40c77e88b8d0f72edaad93",
+          "genomic_length": 11370,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "0654544e6a1233413ef9f96f7e98782baec0627416a2c40aa873eaee14df4c44",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00001736",
+          "source_length": 11370
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002314",
+          "first_ungapped_differences_start0": [
+            [
+              942,
+              "N",
+              "R"
+            ],
+            [
+              943,
+              "N",
+              "T"
+            ],
+            [
+              944,
+              "N",
+              "A"
+            ],
+            [
+              1059,
+              "N",
+              "T"
+            ],
+            [
+              1060,
+              "N",
+              "A"
+            ],
+            [
+              1061,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "f34bab14e0334d24839531377b074bfd8fad81a2b022ab65a7f7369e7282e176",
+          "genomic_length": 1062,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "1e0e97ddc9113b903ae5f85213bc928dfa5b656118570651c27a633dc9f444f8",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002314",
+          "source_length": 1062
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002317",
+          "first_ungapped_differences_start0": [
+            [
+              329,
+              "N",
+              "Y"
+            ],
+            [
+              474,
+              "N",
+              "G"
+            ],
+            [
+              475,
+              "N",
+              "A"
+            ],
+            [
+              476,
+              "N",
+              "R"
+            ],
+            [
+              1047,
+              "N",
+              "T"
+            ],
+            [
+              1048,
+              "N",
+              "A"
+            ],
+            [
+              1049,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "5b1ffaadc78c8735745b87dff67b20c8c3afdc80fa865bb219a0d528bf83a6bc",
+          "genomic_length": 1050,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "6e6239abac576d4c6948ee60e08792569344d371c31236601ea018711c2ee9ef",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002317",
+          "source_length": 1050
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002320",
+          "first_ungapped_differences_start0": [
+            [
+              222,
+              "N",
+              "A"
+            ],
+            [
+              223,
+              "N",
+              "A"
+            ],
+            [
+              224,
+              "N",
+              "R"
+            ],
+            [
+              413,
+              "N",
+              "Y"
+            ],
+            [
+              435,
+              "N",
+              "S"
+            ],
+            [
+              436,
+              "N",
+              "A"
+            ],
+            [
+              437,
+              "N",
+              "A"
+            ],
+            [
+              540,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "a22e1f556850b852f10f450551313de631c42644f0c58de997fb7a0047bccda1",
+          "genomic_length": 594,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "87d9a358b3828e9bff836fba70808f1151e527b52be3b58db78c517edc4fafec",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002320",
+          "source_length": 594
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002321",
+          "first_ungapped_differences_start0": [
+            [
+              102,
+              "N",
+              "R"
+            ],
+            [
+              103,
+              "N",
+              "T"
+            ],
+            [
+              104,
+              "N",
+              "G"
+            ],
+            [
+              690,
+              "N",
+              "T"
+            ],
+            [
+              691,
+              "N",
+              "A"
+            ],
+            [
+              692,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "434d120e509029a52dd8e3d071a85a0c45455ddefbe8a7412ed30000ee837cc4",
+          "genomic_length": 693,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "c3e90d8c413b2ed504f332ff0dcf6058d288e35431414fdf805e8075ddaf95a8",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002321",
+          "source_length": 693
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002324",
+          "first_ungapped_differences_start0": [
+            [
+              165,
+              "N",
+              "Y"
+            ],
+            [
+              166,
+              "N",
+              "G"
+            ],
+            [
+              167,
+              "N",
+              "C"
+            ],
+            [
+              180,
+              "N",
+              "T"
+            ],
+            [
+              181,
+              "N",
+              "K"
+            ],
+            [
+              182,
+              "N",
+              "C"
+            ],
+            [
+              195,
+              "N",
+              "K"
+            ],
+            [
+              196,
+              "N",
+              "T"
+            ]
+          ],
+          "genomic_cds_sha256": "dd60c86d95603240979cf69ab0eefed57bf7b6f4aef8a8225e3ae3ce881c1194",
+          "genomic_length": 2136,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "2661fdeb07bee4930d0f8659ad4a681690d3327134e27c9bc0478bd51d381659",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002324",
+          "source_length": 2136
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002325",
+          "first_ungapped_differences_start0": [
+            [
+              0,
+              "N",
+              "A"
+            ],
+            [
+              1,
+              "N",
+              "T"
+            ],
+            [
+              2,
+              "N",
+              "G"
+            ],
+            [
+              3,
+              "G",
+              "A"
+            ],
+            [
+              4,
+              "A",
+              "G"
+            ],
+            [
+              5,
+              "T",
+              "A"
+            ],
+            [
+              6,
+              "G",
+              "T"
+            ],
+            [
+              7,
+              "G",
+              "C"
+            ]
+          ],
+          "genomic_cds_sha256": "a49a62834818dd4c42a5e8cc0cbff824daeb4ddb447b004b6a7f98c988955563",
+          "genomic_length": 1128,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": false,
+          "source_cds_sha256": "e81427d55e69f561103a1b31d6b5a2a5d4d64f3ce4dd3c238924c94e6e511bfa",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002325",
+          "source_length": 1158
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002327",
+          "first_ungapped_differences_start0": [
+            [
+              1004,
+              "N",
+              "K"
+            ],
+            [
+              1811,
+              "N",
+              "R"
+            ],
+            [
+              3347,
+              "N",
+              "R"
+            ],
+            [
+              3416,
+              "N",
+              "Y"
+            ],
+            [
+              3671,
+              "N",
+              "S"
+            ],
+            [
+              3810,
+              "N",
+              "T"
+            ],
+            [
+              3811,
+              "N",
+              "A"
+            ],
+            [
+              3812,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "1a3a1624d300832ae8835a6ab409c5ff4c58b84b972bd0c1b0a8e48454951ca3",
+          "genomic_length": 3813,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "0e4e40cb8dd06fc6f6e840d5410865c956d94fe39e8d6c6d709a538874499678",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002327",
+          "source_length": 3813
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002328",
+          "first_ungapped_differences_start0": [
+            [
+              1322,
+              "N",
+              "S"
+            ],
+            [
+              1658,
+              "N",
+              "R"
+            ],
+            [
+              1701,
+              "N",
+              "T"
+            ],
+            [
+              1702,
+              "N",
+              "G"
+            ],
+            [
+              1703,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "9eb1b34ee2fc172d6f6fcc717331bac30e14d720bb9e6fa62648da45b06038bb",
+          "genomic_length": 1704,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "aa4d108b9c3a01706b5919a034812eb1acbdf1678629847674374cdecf57bfeb",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002328",
+          "source_length": 1704
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002329",
+          "first_ungapped_differences_start0": [
+            [
+              219,
+              "N",
+              "A"
+            ],
+            [
+              220,
+              "N",
+              "T"
+            ],
+            [
+              221,
+              "N",
+              "R"
+            ],
+            [
+              642,
+              "N",
+              "T"
+            ],
+            [
+              643,
+              "N",
+              "G"
+            ],
+            [
+              644,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "97457160cd042e22d2c74747285cca26db8664814c247eccac397a392a78270d",
+          "genomic_length": 645,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "b96c9fce44b620d2f8f3a18e83a83ae19d8ff643e6a5b1586e3b6accf37ab036",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002329",
+          "source_length": 645
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002331",
+          "first_ungapped_differences_start0": [
+            [
+              710,
+              "N",
+              "Y"
+            ],
+            [
+              939,
+              "N",
+              "T"
+            ],
+            [
+              940,
+              "N",
+              "G"
+            ],
+            [
+              941,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "40ec71725855e3fe10c5f123958184a36e4b6d58e0fbdf09578a45e4bdd8849a",
+          "genomic_length": 942,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "4c265f65fde3e013a4f9d634e6bbefe519a624ff7b8acbcd4944e144f4690f35",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002331",
+          "source_length": 942
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002332",
+          "first_ungapped_differences_start0": [
+            [
+              1446,
+              "N",
+              "A"
+            ],
+            [
+              1447,
+              "N",
+              "T"
+            ],
+            [
+              1448,
+              "N",
+              "Y"
+            ],
+            [
+              1668,
+              "N",
+              "M"
+            ],
+            [
+              1669,
+              "N",
+              "G"
+            ],
+            [
+              1670,
+              "N",
+              "A"
+            ],
+            [
+              1767,
+              "N",
+              "T"
+            ],
+            [
+              1768,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "9ee7a3a5dbe4664aeeff7d5b0dd0d7541323bb2b79feecb5e4f0fffc93783cb1",
+          "genomic_length": 1770,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "15bb0b95f646e58c68ce452fba197669710abc3b33d58d3a9f57d4007f300adc",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002332",
+          "source_length": 1770
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002333",
+          "first_ungapped_differences_start0": [
+            [
+              615,
+              "N",
+              "A"
+            ],
+            [
+              616,
+              "N",
+              "A"
+            ],
+            [
+              617,
+              "N",
+              "R"
+            ],
+            [
+              1566,
+              "N",
+              "T"
+            ],
+            [
+              1567,
+              "N",
+              "A"
+            ],
+            [
+              1568,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "77783fefaf40cdce468fc837fb5d9ac4c336c6ba7bb0e315a5d1603178aa10d5",
+          "genomic_length": 1569,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "d59073ddf024a7917b99d7d955204712ebffbe528eda2205ec73cdf4e54786db",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002333",
+          "source_length": 1569
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002335",
+          "first_ungapped_differences_start0": [
+            [
+              642,
+              "N",
+              "C"
+            ],
+            [
+              643,
+              "N",
+              "R"
+            ],
+            [
+              644,
+              "N",
+              "A"
+            ],
+            [
+              1028,
+              "N",
+              "Y"
+            ],
+            [
+              1082,
+              "N",
+              "K"
+            ],
+            [
+              1212,
+              "N",
+              "G"
+            ],
+            [
+              1213,
+              "N",
+              "A"
+            ],
+            [
+              1214,
+              "N",
+              "Y"
+            ]
+          ],
+          "genomic_cds_sha256": "442f49cb272048a43711dd1c7af0e3d7802656aa023f46bc471c4120ea09de37",
+          "genomic_length": 2025,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "c06cc576e2b83b1187c2fc52573084844954cf56ff16031849e68d8793c3da96",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002335",
+          "source_length": 2025
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002336",
+          "first_ungapped_differences_start0": [
+            [
+              197,
+              "N",
+              "M"
+            ],
+            [
+              318,
+              "N",
+              "A"
+            ],
+            [
+              319,
+              "N",
+              "G"
+            ],
+            [
+              320,
+              "N",
+              "W"
+            ],
+            [
+              441,
+              "N",
+              "T"
+            ],
+            [
+              442,
+              "N",
+              "G"
+            ],
+            [
+              443,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "305234a8c8b6e5c389668ada8ce56a9ba48aa1cb64e94e0b094c3f11f1593f44",
+          "genomic_length": 444,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "f740ecf62e3d61b85035d9d4eb88e49ac47edf40d227fb3b669e9ead68ae9301",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002336",
+          "source_length": 444
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002337",
+          "first_ungapped_differences_start0": [
+            [
+              1161,
+              "N",
+              "A"
+            ],
+            [
+              1162,
+              "N",
+              "A"
+            ],
+            [
+              1163,
+              "N",
+              "Y"
+            ],
+            [
+              1251,
+              "N",
+              "W"
+            ],
+            [
+              1252,
+              "N",
+              "T"
+            ],
+            [
+              1253,
+              "N",
+              "G"
+            ],
+            [
+              1395,
+              "N",
+              "C"
+            ],
+            [
+              1396,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "f494a1fbf8b0a296fcf6c9cd13cf02f4fd10a31758625af71ebd008327036b97",
+          "genomic_length": 2007,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "56a1d158aa37dbda66f7fffba4e82328f52017d97c9639ba193a5dd4f431a0d6",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002337",
+          "source_length": 2007
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002338",
+          "first_ungapped_differences_start0": [
+            [
+              1469,
+              "N",
+              "W"
+            ],
+            [
+              1485,
+              "N",
+              "T"
+            ],
+            [
+              1486,
+              "N",
+              "A"
+            ],
+            [
+              1487,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "d2cadab7b017dcef2d12306cd11771d0a404bbe164f01ec9ff8c59577d93c12e",
+          "genomic_length": 1488,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "67e5a97fa8c13f4919883e85da6336376871637aeb73498ff4e7eb775daae6ed",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002338",
+          "source_length": 1488
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002340",
+          "first_ungapped_differences_start0": [
+            [
+              783,
+              "N",
+              "T"
+            ],
+            [
+              784,
+              "N",
+              "T"
+            ],
+            [
+              785,
+              "N",
+              "Y"
+            ],
+            [
+              960,
+              "N",
+              "C"
+            ],
+            [
+              961,
+              "N",
+              "S"
+            ],
+            [
+              962,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "2eaa09a76363555da972eb7d7dc2500e84bffc60b534cdea21e9a80d7a949400",
+          "genomic_length": 1446,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "f30e9748ec8088c11614d54cf10da4944ad283d2b8ab767ea3eeabd1b38b813b",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002340",
+          "source_length": 1446
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00002342",
+          "first_ungapped_differences_start0": [
+            [
+              129,
+              "N",
+              "C"
+            ],
+            [
+              130,
+              "N",
+              "R"
+            ],
+            [
+              131,
+              "N",
+              "C"
+            ],
+            [
+              224,
+              "N",
+              "Y"
+            ],
+            [
+              528,
+              "N",
+              "K"
+            ],
+            [
+              529,
+              "N",
+              "T"
+            ],
+            [
+              530,
+              "N",
+              "A"
+            ],
+            [
+              852,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "8aacecc44c18c8d0bc5d6b13dfb7a6a7b3fff8ad8ed70f3d8be5eed45a872271",
+          "genomic_length": 2592,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "9ed4dcc2944e152d87402d8647e5abc5e41209cf3cca30793bfd25a132dbd2ce",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00002342",
+          "source_length": 2592
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004198",
+          "first_ungapped_differences_start0": [
+            [
+              356,
+              "N",
+              "Y"
+            ],
+            [
+              1239,
+              "N",
+              "G"
+            ],
+            [
+              1240,
+              "N",
+              "S"
+            ],
+            [
+              1241,
+              "N",
+              "T"
+            ],
+            [
+              1317,
+              "N",
+              "T"
+            ],
+            [
+              1318,
+              "N",
+              "Y"
+            ],
+            [
+              1319,
+              "N",
+              "C"
+            ],
+            [
+              1506,
+              "N",
+              "C"
+            ]
+          ],
+          "genomic_cds_sha256": "6ec9710ad38f06580faf8899c0ea730021c1544e35fca0177650886d0d4649f6",
+          "genomic_length": 7629,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "7f50d9b4226e43eb24447c40ddf45840514efe8cba2681bed95756c8874ceff5",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004198",
+          "source_length": 7629
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004743",
+          "first_ungapped_differences_start0": [
+            [
+              444,
+              "N",
+              "C"
+            ],
+            [
+              445,
+              "N",
+              "A"
+            ],
+            [
+              446,
+              "N",
+              "R"
+            ],
+            [
+              572,
+              "N",
+              "W"
+            ],
+            [
+              1103,
+              "N",
+              "W"
+            ],
+            [
+              1250,
+              "N",
+              "Y"
+            ]
+          ],
+          "genomic_cds_sha256": "07fd953acc7c6e0bcde68d8422025e328f46ed98293f5ee0579ab4ede349ad01",
+          "genomic_length": 1278,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "42c1300efe3135984f1e58c486ad16ab4b4e78a4aa8e776aa6ea6f7f26959f5b",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004743",
+          "source_length": 1278
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004744",
+          "first_ungapped_differences_start0": [
+            [
+              573,
+              "N",
+              "K"
+            ],
+            [
+              574,
+              "N",
+              "G"
+            ],
+            [
+              575,
+              "N",
+              "C"
+            ],
+            [
+              723,
+              "N",
+              "T"
+            ],
+            [
+              724,
+              "N",
+              "G"
+            ],
+            [
+              725,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "9abae27da8bca5660209400b466baebe74302bcf44e48c25800d3900fb9439e0",
+          "genomic_length": 726,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "542b61836b80d1e93199745320463bb78f9d4527d83567ba8dd036d7deda1917",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004744",
+          "source_length": 726
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004745",
+          "first_ungapped_differences_start0": [
+            [
+              114,
+              "N",
+              "W"
+            ],
+            [
+              115,
+              "N",
+              "T"
+            ],
+            [
+              116,
+              "N",
+              "C"
+            ],
+            [
+              419,
+              "N",
+              "R"
+            ],
+            [
+              524,
+              "N",
+              "R"
+            ],
+            [
+              653,
+              "N",
+              "W"
+            ],
+            [
+              1173,
+              "N",
+              "A"
+            ],
+            [
+              1174,
+              "N",
+              "Y"
+            ]
+          ],
+          "genomic_cds_sha256": "9a40898b4c32711c86dc3684ec1df5468a75637a6108bd0fd6c12fe111e144cd",
+          "genomic_length": 1293,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "7bcc813b0a4078842a56a95e6b47fb4e415072bbbb1a5aea1a169bf419183293",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004745",
+          "source_length": 1293
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004746",
+          "first_ungapped_differences_start0": [
+            [
+              501,
+              "N",
+              "A"
+            ],
+            [
+              502,
+              "N",
+              "T"
+            ],
+            [
+              503,
+              "N",
+              "Y"
+            ],
+            [
+              620,
+              "N",
+              "Y"
+            ],
+            [
+              1362,
+              "N",
+              "G"
+            ],
+            [
+              1363,
+              "N",
+              "A"
+            ],
+            [
+              1364,
+              "N",
+              "Y"
+            ],
+            [
+              1481,
+              "N",
+              "S"
+            ]
+          ],
+          "genomic_cds_sha256": "b0154a84364964e65fa017a083707a82ef59be97af95428564c20b62b21ffe53",
+          "genomic_length": 1653,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "2fdd4e2c40cccdb7ec1caecbf28dd47306763b89a5abca70f2ead2404d661b10",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004746",
+          "source_length": 1653
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004748",
+          "first_ungapped_differences_start0": [
+            [
+              458,
+              "N",
+              "Y"
+            ],
+            [
+              1053,
+              "N",
+              "T"
+            ],
+            [
+              1054,
+              "N",
+              "A"
+            ],
+            [
+              1055,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "59db8a70f35ce964a0540ac911ed23fbd5e9e1c7d207461acdefb5f0af68fd42",
+          "genomic_length": 1056,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "3e472c61f54efa3dd17af873bc022082759f8cf91822efef9210603836bd4ed4",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004748",
+          "source_length": 1056
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004749",
+          "first_ungapped_differences_start0": [
+            [
+              68,
+              "N",
+              "R"
+            ],
+            [
+              713,
+              "N",
+              "Y"
+            ],
+            [
+              1905,
+              "N",
+              "A"
+            ],
+            [
+              1906,
+              "N",
+              "G"
+            ],
+            [
+              1907,
+              "N",
+              "R"
+            ],
+            [
+              2052,
+              "N",
+              "T"
+            ],
+            [
+              2053,
+              "N",
+              "A"
+            ],
+            [
+              2054,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "2d3f02bdf000e73ccfb1752742e91870ac569fdfee6a107e0c29fb3fdc1d352c",
+          "genomic_length": 2055,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "8cf99f522f2f437634420688a3d8811a81e9dc24f3e599da0a562f71b5c3834c",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004749",
+          "source_length": 2055
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004928",
+          "first_ungapped_differences_start0": [
+            [
+              168,
+              "N",
+              "C"
+            ],
+            [
+              169,
+              "N",
+              "A"
+            ],
+            [
+              170,
+              "N",
+              "W"
+            ],
+            [
+              221,
+              "N",
+              "M"
+            ]
+          ],
+          "genomic_cds_sha256": "3c68443d9e74a25c5018594e5beced2832d0a58b4aae5be9b4d2e7ce0e6920aa",
+          "genomic_length": 453,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "658693bf3040450a8b5cfb4abbaed3afabc6c6cc7c93d9bb80dd5e566576de14",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004928",
+          "source_length": 453
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004930",
+          "first_ungapped_differences_start0": [
+            [
+              951,
+              "N",
+              "G"
+            ],
+            [
+              952,
+              "N",
+              "A"
+            ],
+            [
+              953,
+              "N",
+              "Y"
+            ],
+            [
+              1445,
+              "N",
+              "Y"
+            ],
+            [
+              1905,
+              "N",
+              "T"
+            ],
+            [
+              1906,
+              "N",
+              "G"
+            ],
+            [
+              1907,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "788238d241825ce07b32c452adc65456240dc7c4f59e10c2b3c9302461fcd086",
+          "genomic_length": 1908,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "e9e2f8d130ea79b7687fdcc2c781d11768c92d6a4dd3421b5a98375503c96843",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004930",
+          "source_length": 1908
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004931",
+          "first_ungapped_differences_start0": [
+            [
+              117,
+              "N",
+              "A"
+            ],
+            [
+              118,
+              "N",
+              "Y"
+            ],
+            [
+              119,
+              "N",
+              "G"
+            ],
+            [
+              383,
+              "N",
+              "Y"
+            ],
+            [
+              441,
+              "N",
+              "R"
+            ],
+            [
+              442,
+              "N",
+              "C"
+            ],
+            [
+              443,
+              "N",
+              "A"
+            ],
+            [
+              738,
+              "N",
+              "T"
+            ]
+          ],
+          "genomic_cds_sha256": "c63cdcd38786596968b840cb2521809603dc5e3673d180f1ec774bae83bf5faa",
+          "genomic_length": 741,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "739df0b3b3e36d83ee58c84c5803ab6e265311c4549f4409a911924080f4f933",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004931",
+          "source_length": 741
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004933",
+          "first_ungapped_differences_start0": [
+            [
+              258,
+              "N",
+              "Y"
+            ],
+            [
+              259,
+              "N",
+              "T"
+            ],
+            [
+              260,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "4ab3014e7badfb159571bc20d1f93be67121e0024c9ba0dae57a0595a806a16c",
+          "genomic_length": 657,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": true,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "b0ec412ab10329fe16a5283e6810f57eb68f98336943bf211718ac85bef3e410",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004933",
+          "source_length": 657
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004934",
+          "first_ungapped_differences_start0": [
+            [
+              114,
+              "N",
+              "C"
+            ],
+            [
+              115,
+              "N",
+              "Y"
+            ],
+            [
+              116,
+              "N",
+              "T"
+            ],
+            [
+              603,
+              "N",
+              "G"
+            ],
+            [
+              604,
+              "N",
+              "A"
+            ],
+            [
+              605,
+              "N",
+              "Y"
+            ],
+            [
+              669,
+              "N",
+              "R"
+            ],
+            [
+              670,
+              "N",
+              "C"
+            ]
+          ],
+          "genomic_cds_sha256": "2c82ecb18a99d980934a29168c73d2c925a4352737a44e93614f62138fd2306c",
+          "genomic_length": 765,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "11006cbe7e8aa26023f088c018e151fabdcb140edca13850d915c1768c759059",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004934",
+          "source_length": 765
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004936",
+          "first_ungapped_differences_start0": [
+            [
+              377,
+              "N",
+              "M"
+            ],
+            [
+              885,
+              "N",
+              "T"
+            ],
+            [
+              886,
+              "N",
+              "G"
+            ],
+            [
+              887,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "93b79850eedb735b27496727f04364d2284d47096dfae2fefdc0bd79bfdb476f",
+          "genomic_length": 888,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "c3a9b976f5a5ace561bc161b1ae0885cf388018410b7eaadd780b5a2ac031658",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004936",
+          "source_length": 888
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004937",
+          "first_ungapped_differences_start0": [
+            [
+              456,
+              "N",
+              "C"
+            ],
+            [
+              457,
+              "N",
+              "Y"
+            ],
+            [
+              458,
+              "N",
+              "G"
+            ],
+            [
+              612,
+              "N",
+              "T"
+            ],
+            [
+              613,
+              "N",
+              "A"
+            ],
+            [
+              614,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "abd710617d01f52b6936e9c891c90a6eb60528801282f12d0ff83ed725c866fb",
+          "genomic_length": 615,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "4ce31b93a1fed94b9491de519f29ddb6501ef958e5f0cb29016a063a2646d00c",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004937",
+          "source_length": 615
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004938",
+          "first_ungapped_differences_start0": [
+            [
+              86,
+              "N",
+              "S"
+            ],
+            [
+              228,
+              "N",
+              "T"
+            ],
+            [
+              229,
+              "N",
+              "G"
+            ],
+            [
+              230,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "c9cc508a580a4964ea3af941d9a0ccb0b3205220a10fd8fbf6eb7d9c7337e6ca",
+          "genomic_length": 231,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "0e60c2e2658b3f3dbd8b1621f891a52a4092a062fd58fe46a690ac175cacb7e0",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004938",
+          "source_length": 231
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004939",
+          "first_ungapped_differences_start0": [
+            [
+              1049,
+              "N",
+              "R"
+            ],
+            [
+              1073,
+              "N",
+              "R"
+            ],
+            [
+              1772,
+              "N",
+              "R"
+            ],
+            [
+              1878,
+              "N",
+              "A"
+            ],
+            [
+              1879,
+              "N",
+              "A"
+            ],
+            [
+              1880,
+              "N",
+              "Y"
+            ],
+            [
+              2034,
+              "N",
+              "T"
+            ],
+            [
+              2035,
+              "N",
+              "G"
+            ]
+          ],
+          "genomic_cds_sha256": "1c0495283c9acf2a5b718cd972b3601545b13c45655e178a302cac2423b13563",
+          "genomic_length": 2037,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "0d09ad656474012b9c36d745294081b44242a0832e5b98616765a661c812c7ed",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004939",
+          "source_length": 2037
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00004940",
+          "first_ungapped_differences_start0": [
+            [
+              225,
+              "N",
+              "C"
+            ],
+            [
+              226,
+              "N",
+              "A"
+            ],
+            [
+              227,
+              "N",
+              "Y"
+            ],
+            [
+              357,
+              "N",
+              "A"
+            ],
+            [
+              358,
+              "N",
+              "T"
+            ],
+            [
+              359,
+              "N",
+              "Y"
+            ],
+            [
+              599,
+              "N",
+              "Y"
+            ],
+            [
+              906,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "2d12236516512d852d7dd12015a6fe192d2feb7a27ca6db92272eed66e6069e0",
+          "genomic_length": 1716,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "a4673f4daebbf45e87dcfa6516856b6a19b1bbc6751b992e3d4a3806b7ce95d3",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00004940",
+          "source_length": 1716
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00006287",
+          "first_ungapped_differences_start0": [
+            [
+              3576,
+              "N",
+              "C"
+            ],
+            [
+              3577,
+              "N",
+              "A"
+            ],
+            [
+              3578,
+              "N",
+              "Y"
+            ],
+            [
+              6915,
+              "N",
+              "T"
+            ],
+            [
+              6916,
+              "N",
+              "G"
+            ],
+            [
+              6917,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "b45dc72370dbde54601aa57657370e7156cbf6654bb9caf9fe64b68e7c35e977",
+          "genomic_length": 6918,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "937b76113ff9ab20b4a17d70b598cb900633b3083919f7ee2418ad0f483458d7",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00006287",
+          "source_length": 6918
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00013633",
+          "first_ungapped_differences_start0": [
+            [
+              48,
+              "N",
+              "Y"
+            ],
+            [
+              49,
+              "N",
+              "G"
+            ],
+            [
+              50,
+              "N",
+              "T"
+            ],
+            [
+              795,
+              "N",
+              "T"
+            ],
+            [
+              796,
+              "N",
+              "G"
+            ],
+            [
+              797,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "dfc5f8a24151e497445cb01ddf9e01c5c001c1441127b9821bc830350e1d5881",
+          "genomic_length": 798,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "65179a95216fb9ffb9d63cc20b38fd21b8f083c694d854c5c3d1fc87b8cd6266",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00013633",
+          "source_length": 798
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00014052",
+          "first_ungapped_differences_start0": [
+            [
+              3909,
+              "N",
+              "R"
+            ],
+            [
+              3910,
+              "N",
+              "T"
+            ],
+            [
+              3911,
+              "N",
+              "A"
+            ],
+            [
+              7518,
+              "N",
+              "G"
+            ],
+            [
+              7519,
+              "N",
+              "A"
+            ],
+            [
+              7520,
+              "N",
+              "K"
+            ],
+            [
+              10596,
+              "N",
+              "A"
+            ],
+            [
+              10597,
+              "N",
+              "T"
+            ]
+          ],
+          "genomic_cds_sha256": "72f4cb30039a26295f45d835d5d80a27ad215b15939f7ccb42951f10ecfcf193",
+          "genomic_length": 15246,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "7b2afb8a17d4eeaf6db6c956cf715a57c514cb9884126e738c3206c5fcbd24f5",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00014052",
+          "source_length": 15246
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00014995",
+          "first_ungapped_differences_start0": [
+            [
+              1013,
+              "N",
+              "W"
+            ],
+            [
+              1094,
+              "N",
+              "Y"
+            ],
+            [
+              1205,
+              "N",
+              "R"
+            ],
+            [
+              1614,
+              "N",
+              "T"
+            ],
+            [
+              1615,
+              "N",
+              "G"
+            ],
+            [
+              1616,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "3a273568fb56a27f728909be8b410e6207ec28e8edffbe6d07349e50b56291d4",
+          "genomic_length": 1617,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "7d5f110488b9b0432249b91d851eb0e465df4038496d29bef0ccfeb154774a70",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00014995",
+          "source_length": 1617
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00014996",
+          "first_ungapped_differences_start0": [
+            [
+              1470,
+              "N",
+              "A"
+            ],
+            [
+              1471,
+              "N",
+              "A"
+            ],
+            [
+              1472,
+              "N",
+              "R"
+            ],
+            [
+              2238,
+              "N",
+              "T"
+            ],
+            [
+              2239,
+              "N",
+              "A"
+            ],
+            [
+              2240,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "43bc138b37bfbd5c014d6de13e1a1e969cf380932220987572ee1be0b3dbb42a",
+          "genomic_length": 2241,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "dfcc949ae1303f1fba2cf72b53af7a1d8884bd62d0268311e5d760b70374ae04",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00014996",
+          "source_length": 2241
+        },
+        {
+          "candidate_id": "Dionaea_muscipula_Dm-00019371",
+          "first_ungapped_differences_start0": [
+            [
+              1919,
+              "N",
+              "Y"
+            ],
+            [
+              2079,
+              "N",
+              "A"
+            ],
+            [
+              2080,
+              "N",
+              "G"
+            ],
+            [
+              2081,
+              "N",
+              "R"
+            ],
+            [
+              2226,
+              "N",
+              "T"
+            ],
+            [
+              2227,
+              "N",
+              "G"
+            ],
+            [
+              2228,
+              "N",
+              "A"
+            ]
+          ],
+          "genomic_cds_sha256": "d597072d1894e257ce7326ac3671ccf19656e83dfa3dae79dcac3f3674218f8f",
+          "genomic_length": 2229,
+          "quality": {
+            "ambiguous": true,
+            "internal_stop": false,
+            "partial": false,
+            "phase_unresolved": false,
+            "sequence_mismatch": true,
+            "usable": false
+          },
+          "same_length_source_masking_only": true,
+          "source_cds_sha256": "60f54033d38c25293c52caab8ce6142a141de3f6cd1beec45c6399db71054ced",
+          "source_fasta_id": "Dionaea_muscipula_Dm-00019371",
+          "source_length": 2229
+        }
+      ],
+      "source_convention_counts": {
+        "": 78,
+        "exact_genomic_cds": 9,
+        "masked_terminal_stop": 55
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Dionaea_muscipula_Dm-transcripts.fa",
+          "sha256": "b7949685cfbc56c9c0a834b6bcab22476632e65f667ed9f3a69d17d084351b88",
+          "size": 239524
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Dionaea_muscipula_Dm_genome_assembly.fa",
+          "sha256": "8eb8ae4c32b5023234f27633a8fb101973c58b79418a150fef97679ce361c02c",
+          "size": 1711336
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Dionaea_muscipula.gff",
+          "sha256": "5a60d0b2f4be0e7d0bc669bfd765f3fa1ff461083e888638c43ac5f837ff0b63",
+          "size": 239323
+        }
+      },
+      "species": "Dionaea_muscipula",
+      "withheld_reason_counts_nonexclusive": {
+        "ambiguous": 77,
+        "sequence_mismatch": 78
+      }
+    },
+    {
+      "counts": {
+        "candidates": 367,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 365,
+        "loci": 367,
+        "masked_terminal_stop_source_records": 0,
+        "same_length_source_masking_only_records": 0,
+        "sequence_mismatch_source_records": 0,
+        "source_baseline_loci": 367,
+        "source_cds_records": 367,
+        "source_genomic_length_disagreement_records": 0,
+        "uniquely_mapped_source_cds": 367,
+        "usable_candidates": 365,
+        "withheld_candidates": 2
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 367
+      },
+      "observed_audit_seconds": 0.5931566670001303,
+      "sequence_mismatches": [],
+      "source_convention_counts": {
+        "exact_genomic_cds": 367
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Nepenthes_gracilis_male-hiC.cds.fa",
+          "sha256": "c094ff3100d3e686895c3e1b00063f4d6ccf81c0bb0c405e4a8fb7a1626eb978",
+          "size": 481394
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Nepenthes_gracilis_male_HiC.fa",
+          "sha256": "183df40704bb6454a09e16a471662fc5943591864b72b6b0328c956a1975f765",
+          "size": 6858123
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Nepenthes_gracilis_male-HiC.gff",
+          "sha256": "48af9f4a333f9df998ce191980f6423d64721e589672d3226b697c53cf832137",
+          "size": 832491
+        }
+      },
+      "species": "Nepenthes_gracilis",
+      "withheld_reason_counts_nonexclusive": {
+        "ambiguous": 1,
+        "phase_unresolved": 2
+      }
+    },
+    {
+      "counts": {
+        "candidates": 570,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 0,
+        "loci": 443,
+        "masked_terminal_stop_source_records": 443,
+        "same_length_source_masking_only_records": 0,
+        "sequence_mismatch_source_records": 0,
+        "source_baseline_loci": 443,
+        "source_cds_records": 443,
+        "source_genomic_length_disagreement_records": 0,
+        "uniquely_mapped_source_cds": 443,
+        "usable_candidates": 570,
+        "withheld_candidates": 0
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 443
+      },
+      "observed_audit_seconds": 0.7329331669998282,
+      "sequence_mismatches": [],
+      "source_convention_counts": {
+        "masked_terminal_stop": 443
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Oryza_sativa_Osativa-323-v7.0.cds-primaryTranscriptOnly.fa",
+          "sha256": "a8a0289b606425a55e754ec18d42eb23949bbd3e04c9a5fa81f33969ab5ecfe2",
+          "size": 625503
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Oryza_sativa_Osativa_323_v7.0.softmasked.fa",
+          "sha256": "0a8ca70cbb4b0cfca3228b125c4082634f2ae0013353c6983771399a24ca1a11",
+          "size": 3536435
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Oryza_sativa_Osativa-323-v7.0.gene-exons.gff3",
+          "sha256": "69d935a7c8ab48119e3514baae3095888dd9310a3d509c4a0b0bfd9234567a17",
+          "size": 1245084
+        }
+      },
+      "species": "Oryza_sativa",
+      "withheld_reason_counts_nonexclusive": {}
+    },
+    {
+      "counts": {
+        "candidates": 286,
+        "excluded_organelle_loci": 0,
+        "inferred_phase_candidates": 0,
+        "loci": 286,
+        "masked_terminal_stop_source_records": 0,
+        "same_length_source_masking_only_records": 0,
+        "sequence_mismatch_source_records": 0,
+        "source_baseline_loci": 286,
+        "source_cds_records": 286,
+        "source_genomic_length_disagreement_records": 0,
+        "uniquely_mapped_source_cds": 286,
+        "usable_candidates": 284,
+        "withheld_candidates": 2
+      },
+      "genetic_code": 1,
+      "mapping_status_counts": {
+        "mapped": 286
+      },
+      "observed_audit_seconds": 0.3774633329999233,
+      "sequence_mismatches": [],
+      "source_convention_counts": {
+        "exact_genomic_cds": 286
+      },
+      "sources": {
+        "cds": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_cds/Spinacia_oleracea_CDS-v1.fa",
+          "sha256": "762410238ff6386127ba766105004650839919ea627d186a12cdea7a6134627c",
+          "size": 447454
+        },
+        "genome": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_genome/Spinacia_oleracea_Sp75_genome_v1.masked.fa",
+          "sha256": "835050490b27cdad4bcf57c022f8159d8a19e3de0f3e6f6d831078355f4481fc",
+          "size": 5723621
+        },
+        "gff": {
+          "path": "/Users/kf/repos/genegalleon/workspace/input/species_gff/Spinacia_oleracea_Sp75-gene-v1.gff3",
+          "sha256": "c21b73a8dd973978378176c3393e1c5abb2122f5129593cc9e1e043202e6e6a3",
+          "size": 321642
+        }
+      },
+      "species": "Spinacia_oleracea",
+      "withheld_reason_counts_nonexclusive": {
+        "ambiguous": 2
+      }
+    }
+  ]
+}
