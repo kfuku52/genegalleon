@@ -1,5 +1,4 @@
 import argparse
-import fcntl
 import json
 import sys
 from pathlib import Path
@@ -8,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 import input_generation_stage_resume as resume
+from shared_namespace_lock import namespace_lock
 
 
 @pytest.fixture
@@ -109,8 +109,7 @@ def test_import_cannot_copy_from_active_donor(checkpoint, tmp_path):
     plan, root, _ = checkpoint
     args = argparse.Namespace(source_plan=plan, source_root=root, task_plan=tmp_path / "new_plan.json",
                               root=tmp_path / "new_root", source_plan_sha256=resume.digest(plan))
-    with (root / ".array-phase.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_SH)
+    with namespace_lock(root / ".array-phase.lock", exclusive=True):
         with pytest.raises(ValueError, match="active workers"):
             resume.import_stages(args)
 

@@ -417,6 +417,9 @@ checks equivalent logical outputs and separates parent/child peak RSS.
 
 ## Input staging comparisons
 
+See [input-generation performance](input-generation-performance.md) for native
+worker import timing, locking, version inventories, and checkpoint comparisons.
+
 `workflow/benchmarks/benchmark_input_staging.py` generates a deterministic large
 genome, CDS, and gzip GFF, then measures planning, initial staging, resumed staging,
 and worker metadata preflight. It reports SHA-256 calls/bytes, wall time, peak RSS,

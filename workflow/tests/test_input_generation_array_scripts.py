@@ -52,7 +52,7 @@ def test_staging_reads_unique_sources_per_boundary_and_resume_keeps_receipts(bou
     monkeypatch.setattr(staging, 'digest', counted)
     staging.stage_downloads(plan)
     for path in roles.values():
-        assert calls.count(str(path)) == 3  # Preflight, binding, and publication.
+        assert calls.count(str(path)) == 2  # Fresh preflight plus independent publication.
     receipt = Path(str(plan) + '.tasks/1.json')
     frozen = receipt.read_bytes()
     calls.clear()
@@ -323,16 +323,16 @@ def test_staging_rejects_changes_between_boundaries(bound_staging_plan, monkeypa
     else:
         original_binding = staging.bound_local_manifest_task
 
-        def changed_binding(task):
+        def changed_binding(task, **kwargs):
             if boundary == 'binding':
                 mutate()
-            actual = original_binding(task)
+            actual = original_binding(task, **kwargs)
             if boundary == 'publication':
                 mutate()
             return actual
 
         monkeypatch.setattr(staging, 'bound_local_manifest_task', changed_binding)
-        with pytest.raises(ValueError, match='(Bound local source|Local input changed)'):
+        with pytest.raises(ValueError, match='(Bound local source|Local input changed|Input changed during staging reuse)'):
             staging.stage_downloads(plan)
         assert not Path(str(plan) + '.tasks/1.json').exists()
 
@@ -365,7 +365,7 @@ def test_planning_and_binding_hash_aliased_roles_once(bound_staging_plan, monkey
     assert calls.count(str(roles['genome'])) == 1
     calls.clear()
     staging.stage_downloads(aliased_plan)
-    assert calls.count(str(roles['genome'])) == 3
+    assert calls.count(str(roles['genome'])) == 2
 
 
 def test_digest_rejects_path_replacement_while_reading(tmp_path, monkeypatch):

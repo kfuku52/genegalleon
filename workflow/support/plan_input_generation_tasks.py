@@ -193,4 +193,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from performance_metrics import measure
+    with measure("input_planning"):
+        result = main()
+        if result:
+            raise SystemExit(result)
+    sys.exit(result)

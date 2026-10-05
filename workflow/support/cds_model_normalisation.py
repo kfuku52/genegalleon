@@ -19,6 +19,11 @@ from urllib.parse import unquote
 from Bio.Seq import Seq
 
 try:
+    from performance_metrics import measure
+except ImportError:
+    from .performance_metrics import measure
+
+try:
     from fasta_sequence_store import open_text
 except ImportError:
     from .fasta_sequence_store import open_text
@@ -145,24 +150,8 @@ class CdsModelNormaliser:
 
     def fetch(self, rows):
         if self.genome is None:
-            import pysam
-            self.scratch = tempfile.TemporaryDirectory(prefix=".anchor-genome-", dir=self.directory)
-            path = Path(self.scratch.name) / "genome.fa"
-            source = Path(self.source["genome"])
-            if self.genome_records is not None:
-                with path.open("w") as handle:
-                    for identifier, sequence in self.genome_records():
-                        handle.write(f">{identifier}\n{sequence}\n")
-            elif source.name.endswith(".gz"):
-                with gzip.open(source, "rb") as src, path.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-            else:
-                path.symlink_to(source.resolve())
-            result = subprocess.run([sys.executable, "-c", "import pysam,sys; pysam.faidx(sys.argv[1])", str(path)],
-                                    capture_output=True, text=True)
-            if result.returncode or result.stderr.strip():
-                raise ValueError("FASTA index warning or failure: " + result.stderr.strip())
-            self.genome = pysam.FastaFile(str(path))
+            with measure("genome_reconstruction_index"):
+                self._open_genome()
         if len({(row["seqid"], row["strand"]) for row in rows}) != 1 or rows[0]["strand"] not in {"+", "-"}:
             raise ValueError("Inconsistent annotation strand/contig in anchor genome reconstruction")
         rows = sorted(rows, key=lambda row: row["start"], reverse=rows[0]["strand"] == "-")
@@ -178,6 +167,26 @@ class CdsModelNormaliser:
             sequence = self.genome.fetch(contig, row["start"], row["end"]).upper()
             parts.append(str(Seq(sequence).reverse_complement()) if row["strand"] == "-" else sequence)
         return "".join(parts)
+
+    def _open_genome(self):
+        import pysam
+        self.scratch = tempfile.TemporaryDirectory(prefix=".anchor-genome-", dir=self.directory)
+        path = Path(self.scratch.name) / "genome.fa"
+        source = Path(self.source["genome"])
+        if self.genome_records is not None:
+            with path.open("w") as handle:
+                for identifier, sequence in self.genome_records():
+                    handle.write(f">{identifier}\n{sequence}\n")
+        elif source.name.endswith(".gz"):
+            with gzip.open(source, "rb") as src, path.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+        else:
+            path.symlink_to(source.resolve())
+        result = subprocess.run([sys.executable, "-c", "import pysam,sys; pysam.faidx(sys.argv[1])", str(path)],
+                                capture_output=True, text=True)
+        if result.returncode or result.stderr.strip():
+            raise ValueError("FASTA index warning or failure: " + result.stderr.strip())
+        self.genome = pysam.FastaFile(str(path))
 
     def close(self):
         if self.genome is not None:

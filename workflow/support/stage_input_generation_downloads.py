@@ -17,6 +17,7 @@ from format_species_provider_resolvers import provider_raw_dir
 from format_species_providers.catalogs import validate_coge_export_gff_file
 from input_generation_array_state import atomic_json, digest, digest_paths, export_manifest, load_plan
 from input_generation_staging_reuse import FreshReadFence, StagedProofReader
+from performance_metrics import measure
 
 
 def has_required_source(task, keys):
@@ -71,7 +72,7 @@ def explicit_manifest_task(task, row, download_root):
     return actual
 
 
-def bound_local_manifest_task(task, verified_inputs=None):
+def bound_local_manifest_task(task, verified_inputs=None, *, reuse_gzip=False):
     """Explicitly bind frozen file sources without creating another raw copy."""
     row = task["manifest_row"]
     mode = str(row.get("bind_local_sources", "") or "").strip()
@@ -105,7 +106,7 @@ def bound_local_manifest_task(task, verified_inputs=None):
     for path, observed in observed_hashes.items():
         if observed != task["input_sha256"][path]:
             raise ValueError("Bound local source does not match the frozen plan: " + path)
-        error = None if verified_inputs else validate_gzip_with_cache(Path(path))
+        error = None if reuse_gzip else validate_gzip_with_cache(Path(path))
         if error is not None:
             raise ValueError("Invalid bound local source: {} ({})".format(path, error))
     missing = task_missing_annotation_label(actual["cds_path"], actual["gff_path"],
@@ -131,6 +132,7 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     pending = []
     reuse_reader = StagedProofReader()
     reuse_fences = {}
+    bound_fences = {}
     for index, task in enumerate(plan["tasks"], 1):
         original_hashes = task.get("input_sha256", {})
         cached_path = task_root / f"{index}.json"
@@ -140,8 +142,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
             if cached.get("plan_sha256") != plan_hash or cached.get("task_index") != index:
                 raise ValueError("Staged input belongs to another plan/task")
         # A resumed receipt often names the original bound sources again.
-        # Share this full read only within preflight; binding/publication still
-        # perform their independent content checks after intervening work.
+        # Bound inputs share this fresh read with binding under an invocation
+        # fence; publication still independently rehashes after intervening work.
         cached_hashes = cached["task"]["input_sha256"] if cached is not None else {}
         reuse = reuse_reader.resolve(task)
         if reuse != task.get("staged_input_reuse"):
@@ -150,7 +152,11 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
             if original_hashes != reuse["input_sha256"]:
                 raise ValueError("Staging reuse hashes differ from the frozen plan")
             reuse_fences[index] = FreshReadFence([*original_hashes, *cached_hashes])
+        elif cached is None and task["manifest_row"].get("bind_local_sources") == "1":
+            bound_fences[index] = FreshReadFence(original_hashes)
         observed_hashes = digest_paths([*original_hashes, *cached_hashes])
+        if index in bound_fences:
+            bound_fences[index].certify(observed_hashes, original_hashes)
         if reuse:
             if cached_hashes and cached_hashes != original_hashes:
                 raise ValueError("Staging reuse cache hashes differ from the frozen plan")
@@ -182,8 +188,9 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     bound = {}
     pending_tasks = []
     for _index, task in pending:
-        fence = reuse_fences.get(_index)
-        actual = bound_local_manifest_task(task, verified_inputs=fence) if fence else bound_local_manifest_task(task)
+        fence = reuse_fences.get(_index) or bound_fences.get(_index)
+        actual = (bound_local_manifest_task(task, verified_inputs=fence, reuse_gzip=_index in reuse_fences)
+                  if fence else bound_local_manifest_task(task))
         key = (task["provider"], task["species_prefix"])
         if actual is None:
             pending_tasks.append(task)
@@ -293,6 +300,8 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
     reuse_reader.check()
     for fence in reuse_fences.values():
         fence.check()
+    for fence in bound_fences.values():
+        fence.check()
     failures = list(report["errors"]) + discovery_errors + staging_errors
     if failures:
         raise ValueError(
@@ -315,9 +324,10 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
-    stage_downloads(args.task_plan, jobs=args.jobs, timeout=args.download_timeout,
-                    require_gff=args.require_gff, require_genome=args.require_genome,
-                    headers=fsi.parse_http_headers(args.http_header, args.auth_bearer_token_env))
+    with measure("input_staging"):
+        stage_downloads(args.task_plan, jobs=args.jobs, timeout=args.download_timeout,
+                        require_gff=args.require_gff, require_genome=args.require_genome,
+                        headers=fsi.parse_http_headers(args.http_header, args.auth_bearer_token_env))
 
 
 if __name__ == "__main__":

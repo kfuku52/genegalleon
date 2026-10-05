@@ -9,6 +9,8 @@ import stat
 import tempfile
 from pathlib import Path
 
+from performance_metrics import count
+
 
 def _stat_identity(info):
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
@@ -22,10 +24,12 @@ def digest(path):
             raise ValueError("Expected a regular file for hashing: " + str(path))
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             result.update(chunk)
+            count("sha256_bytes", len(chunk))
         after = os.fstat(handle.fileno())
         current = os.stat(path)
         if _stat_identity(before) != _stat_identity(after) or _stat_identity(before) != _stat_identity(current):
             raise OSError("File changed while hashing: " + str(path))
+    count("sha256_reads")
     return result.hexdigest()
 
 

@@ -13,6 +13,7 @@ gg_trigger_versions_dump() {
   local inspect_snapshot
   local image_file_hash
   local versions_script_hash=""
+  local identity_python identity_helper environment_hash command_context cache_dir cache_file
   local log_file
   local tmp_log_file
   local lock_file
@@ -67,6 +68,8 @@ gg_trigger_versions_dump() {
   dir_output=$(workspace_output_root "${gg_workspace_dir}")
   versions_dir="${dir_output}/versions"
   ensure_dir "${versions_dir}"
+  identity_python=$(gg_shared_lock_python) || return 1
+  identity_helper="${gg_support_dir}/version_report_identity.py"
 
   container_key_seed="gg_container_image_path=${gg_container_image_path};runtime=${container_runtime_bin};gg_version=${gg_version}"
   if [[ -s "${versions_script}" ]]; then
@@ -82,17 +85,12 @@ gg_trigger_versions_dump() {
     fi
   fi
   if [[ -s "${gg_container_image_path}" ]]; then
-    if command -v sha256sum >/dev/null 2>&1; then
-      image_file_hash=$(sha256sum "${gg_container_image_path}" | awk '{print $1}')
-      container_key_seed="${container_key_seed};image_sha256=${image_file_hash}"
-    elif command -v shasum >/dev/null 2>&1; then
-      image_file_hash=$(shasum -a 256 "${gg_container_image_path}" | awk '{print $1}')
-      container_key_seed="${container_key_seed};image_sha256=${image_file_hash}"
-    else
-      image_file_hash=$(cksum "${gg_container_image_path}" | awk '{print $1 "-" $2}')
-      container_key_seed="${container_key_seed};image_cksum=${image_file_hash}"
-    fi
+    image_file_hash=$(GG_PERFORMANCE_DIR="${versions_dir}/performance" "${identity_python}" "${identity_helper}" image --image "${gg_container_image_path}") || return 1
+    container_key_seed="${container_key_seed};image_identity=${image_file_hash}"
   fi
+  environment_hash=$("${identity_python}" "${identity_helper}" environment) || return 1
+  command_context=$(gg_container_shell_command_display || true)
+  container_key_seed="${container_key_seed};environment=${environment_hash};command=${command_context}"
   inspect_snapshot=""
   if inspect_snapshot=$("${container_runtime_bin}" inspect "${gg_container_image_path}" 2>/dev/null); then
     if [[ -n "${inspect_snapshot}" ]]; then
@@ -114,7 +112,16 @@ gg_trigger_versions_dump() {
   fi
   log_file="${versions_dir}/container.${container_key_hash}.versions.log"
   tmp_log_file="${log_file}.tmp.$$"
-  lock_file="${log_file}.lock"
+  cache_dir="${GG_VERSIONS_CACHE_DIR:-$(workspace_downloads_root "${gg_workspace_dir}")/version_inventory}"
+  "${identity_python}" "${identity_helper}" private-cache --cache-file "${cache_dir}" || return 1
+  cache_file="${cache_dir}/${container_key_hash}.log"
+  lock_file="${cache_file}.lock"
+  # Preserve per-invocation host/time provenance even on an inventory cache hit.
+  {
+    echo "$(date): ${trigger_name}; image_identity=${image_file_hash:-unavailable}; context=${container_key_hash}"
+    echo "job=${GG_JOB_ID:-${SLURM_JOB_ID:-${JOB_ID:-}}}; task=${GG_ARRAY_TASK_ID:-${SLURM_ARRAY_TASK_ID:-${SGE_TASK_ID:-}}}"
+    uname -a
+  } > "${versions_dir}/run.$$.${container_key_hash}.log"
 
   # Keep version/runtime environment setup in the caller; isolate only lock
   # ownership and its EXIT cleanup from the caller's traps.
@@ -136,8 +143,10 @@ gg_trigger_versions_dump() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  if [[ -s "${log_file}" ]]; then
-    echo "gg_trigger_versions_dump: skipped existing ${log_file}"
+  if "${identity_python}" "${identity_helper}" cache-ready --cache-file "${cache_file}" --key "${container_key_hash}"; then
+    cp -- "${cache_file}" "${tmp_log_file}" || return 1
+    mv_out "${tmp_log_file}" "${log_file}" || return 1
+    echo "gg_trigger_versions_dump: reused verified ${log_file}"
     return 0
   fi
 
@@ -209,6 +218,7 @@ gg_trigger_versions_dump() {
   fi
 
   if [[ -s "${tmp_log_file}" ]]; then
+    "${identity_python}" "${identity_helper}" publish-cache --source "${tmp_log_file}" --cache-file "${cache_file}" --key "${container_key_hash}" || return 1
     mv_out "${tmp_log_file}" "${log_file}"
   fi
   echo "gg_trigger_versions_dump: wrote ${log_file}"

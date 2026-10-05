@@ -1961,6 +1961,8 @@ run_array_prepare_mode() {
   local cmd=()
   local cmd_status=0
   local expected_tasks=0
+  local phase_started
+  local taxonomy_dataset_status=ok
 
   write_run_summary_on_exit=0
   rm -f -- "${task_plan_output}.prepared.json"
@@ -2025,19 +2027,24 @@ run_array_prepare_mode() {
   num_species_genome=""
 
   if [[ ${run_species_busco} -eq 1 ]]; then
+    phase_started=$(python "${gg_support_dir}/performance_metrics.py" start)
     ensure_parent_dir "${file_busco_lineage_resolved}"
     resolve_busco_lineage_from_task_plan "${task_plan_output}"
     ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}" >/dev/null || exit 1
+    python "${gg_support_dir}/performance_metrics.py" elapsed --phase busco_dataset_prepare --started "${phase_started}"
   fi
+  phase_started=$(python "${gg_support_dir}/performance_metrics.py" start)
   if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+    taxonomy_dataset_status=failed
     echo "Warning: Failed to prepare ETE taxonomy DB before array workers." >&2
   fi
+  python "${gg_support_dir}/performance_metrics.py" elapsed --phase taxonomy_dataset_prepare --started "${phase_started}" --status "${taxonomy_dataset_status}"
   if [[ -n "${resume_from_task_plan}" ]]; then
     [[ -n "${resume_from_task_plan_sha256}" && -n "${resume_from_input_generation_root}" ]] || {
       echo "Stage resume requires the donor plan SHA-256 and input-generation output root." >&2
       exit 1
     }
-    python "${gg_support_dir}/input_generation_stage_resume.py" import \
+    python "${gg_support_dir}/input_generation_stage_resume.py" check-source \
       --task-plan "${task_plan_output}" --root "${input_generation_root}" \
     --format-contract-version "${format_contract_version}" \
       --source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}" \
@@ -2063,6 +2070,7 @@ run_array_worker_mode() {
   local cmd=()
   local cmd_status=0
   local describe_cmd=()
+  local array_task_lock_token
   local format_needs_update=0
   local format_force_overwrite=${overwrite}
   local species_prefix=""
@@ -2093,6 +2101,7 @@ run_array_worker_mode() {
   # Namespace ownership prevents duplicate/requeued tasks from sharing outputs.
   ensure_dir "${task_plan_output}.locks"
   input_generation_lock "${task_plan_output}.locks/${GG_ARRAY_TASK_ID}.lock" exclusive
+  array_task_lock_token=${array_lock_tokens[${#array_lock_tokens[@]}-1]}
   python "${gg_support_dir}/input_generation_array_state.py" invalidate --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
   gg_step_start "${task}"
   stage_format_status="running"
@@ -2114,6 +2123,19 @@ run_array_worker_mode() {
     stage_format_status="failed"
     echo "Failed to describe input-generation array task ${GG_ARRAY_TASK_ID}."
     exit 1
+  fi
+  # Import only this worker's species after it owns the target task namespace.
+  # Old prepares that already imported checkpoints remain compatible.
+  if [[ -n "${resume_from_task_plan}" && ${overwrite} -ne 1 ]] && ! python "${gg_support_dir}/input_generation_stage_resume.py" check \
+    --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+    --format-contract-version "${format_contract_version}" --task-index "${GG_ARRAY_TASK_ID}" --stage format
+  then
+    python "${gg_support_dir}/input_generation_stage_resume.py" import \
+      --task-plan "${task_plan_output}" --root "${input_generation_root}" \
+      --format-contract-version "${format_contract_version}" --task-index "${GG_ARRAY_TASK_ID}" \
+      --target-lock-token "${array_task_lock_token}" \
+      --source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}" \
+      --source-root "${resume_from_input_generation_root}"
   fi
   species_prefix=$(read_stats_json_field "${task_meta_file}" "species_prefix")
   cds_input_path=$(read_stats_json_field "${task_meta_file}" "cds_path")
@@ -2468,6 +2490,7 @@ finish_gene_model_rescue() {
 }
 
 ensure_dir "${input_generation_root}"
+export GG_PERFORMANCE_DIR="${input_generation_root}/tmp/performance/$$"
 array_lock_mode=exclusive
 if [[ "${input_generation_mode}" == array_worker || "${input_generation_mode}" == rescue_synteny || "${input_generation_mode}" == rescue_models ]]; then
   array_lock_mode=shared

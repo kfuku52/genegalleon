@@ -1135,7 +1135,8 @@ def test_array_lineage_change_imports_only_current_validation(tmp_path, containe
                             capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
     reuse_validation = validation_proof == "current"
-    assert ('"validation": true' if reuse_validation else '"validation": false') in result.stdout
+    assert '"source_verified": true' in result.stdout
+    assert not (workspace / "output/input_generation/tmp/task_meta_shards/1.json").exists()
     _forbid_format_and_validation(fake_bin)
     if not reuse_validation:
         path = fake_bin / "python"
@@ -1146,6 +1147,7 @@ def test_array_lineage_change_imports_only_current_validation(tmp_path, containe
     result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=worker_env,
                             capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert ('"validation": true' if reuse_validation else '"validation": false') in result.stdout
     assert "Reused verified input formatting" in result.stdout
     assert ("Reused verified CDS/GFF validation" in result.stdout) == reuse_validation
     if not reuse_validation:

@@ -126,7 +126,7 @@ gg_container_shell_command_is_set() {{ return 0; }}
 gg_container_shell_command_runtime_bin() {{ command -v true; }}
 gg_container_bind_destination_exists() {{ return 0; }}
 gg_print_version_summary() {{ :; }}
-gg_run_container_shell_script() {{ echo 'fixture versions'; return "$GG_TEST_VERSION_RC"; }}
+gg_run_container_shell_script() {{ echo called >> "$GG_TEST_CALLS"; echo 'fixture versions'; return "$GG_TEST_VERSION_RC"; }}
 gg_require_versions_dump fixture
 [[ -n "${{SINGULARITYENV_GG_VERSION:-}}" && "${{SINGULARITYENV_GG_VERSION}}" == "${{APPTAINERENV_GG_VERSION}}" ]]
 """
@@ -135,13 +135,23 @@ gg_require_versions_dump fixture
     runtime.write_text("#!/bin/sh\nexit 0\n")
     runtime.chmod(0o755)
     script = script.replace("command -v true;", f"echo {shlex.quote(str(runtime))};")
-    for code, expected in ((37, 37), (0, 0), (37, 0)):
+    for code, expected in ((37, 37), (0, 0), (0, 0)):
         result = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT,
-                                env={**os.environ, "GG_TEST_VERSION_RC": str(code)}, capture_output=True, text=True)
+                                env={**os.environ, "GG_TEST_VERSION_RC": str(code), "GG_TEST_CALLS": str(tmp_path / "calls")}, capture_output=True, text=True)
         assert result.returncode == expected, result.stdout + result.stderr
         assert not list(workspace.rglob("gate/owner.json"))
     assert len(list(workspace.rglob("*.versions.log"))) == 1
     assert len(list(workspace.rglob("*.versions.failed.*.log"))) == 1
+    assert (tmp_path / "calls").read_text().splitlines() == ["called", "called"]
+    # A changed image must collect again, even with restored mtime and size.
+    info = image.stat()
+    image.write_text("changed runtime identity")
+    os.utime(image, ns=(info.st_atime_ns, info.st_mtime_ns))
+    result = subprocess.run(["bash", "-c", script], cwd=REPO_ROOT,
+                            env={**os.environ, "GG_TEST_VERSION_RC": "0", "GG_TEST_CALLS": str(tmp_path / "calls")},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "calls").read_text().splitlines() == ["called", "called", "called"]
 
 
 def _canonical_sha256(payload):
