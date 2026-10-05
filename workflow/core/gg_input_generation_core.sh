@@ -2557,7 +2557,7 @@ prepare_gene_model_refinement() {
 finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
   python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
-  local refinement_review_dir="${gene_model_refinement_dir}.review"
+  local refinement_review_dir="${gene_model_refinement_dir%/}.review"
   python "${gg_support_dir}/plot_gene_model_refinement.py" --output "${gene_model_refinement_dir}" \
     --report "${refinement_review_dir}" --cds-dir "${species_cds_dir}"
   if [[ ${run_species_busco} -eq 1 ]]; then

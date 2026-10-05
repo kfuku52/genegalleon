@@ -95,22 +95,28 @@ def run_one(pair, phase, report, contract, cpus):
     directory = report / "runs" / pair["species"] / phase
     directory.mkdir(parents=True, exist_ok=True)
     summary, receipt = directory / "summary.txt", directory / "receipt.json"
+    full_table = directory / "full_table.tsv"
     with (directory / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if receipt.exists():
             saved = json.loads(receipt.read_text())
-            if saved["key"] != key or digest(summary) != saved["summary_sha256"]:
+            if (saved["key"] != key or digest(summary) != saved["summary_sha256"]
+                    or not full_table.is_file() or digest(full_table) != saved.get("full_table_sha256")):
                 raise ValueError("BUSCO cache changed; use a new report directory")
             return read_result(summary)
         # Identical bytes and an identical complete contract permit reuse, including excluded species.
         previous = report / "runs" / pair["species"] / "before"
         if phase == "after" and (previous / "receipt.json").exists():
             saved = json.loads((previous / "receipt.json").read_text())
-            if saved["key"] == key and digest(previous / "summary.txt") == saved["summary_sha256"]:
+            if (saved["key"] == key and digest(previous / "summary.txt") == saved["summary_sha256"]
+                    and (previous / "full_table.tsv").is_file()
+                    and digest(previous / "full_table.tsv") == saved.get("full_table_sha256")):
                 shutil.copyfile(previous / "summary.txt", summary)
-                atomic_json(receipt, {"key": key, "summary_sha256": digest(summary), "reused_identical_before": True})
+                shutil.copyfile(previous / "full_table.tsv", full_table)
+                atomic_json(receipt, {"key": key, "summary_sha256": digest(summary),
+                                      "full_table_sha256": digest(full_table), "reused_identical_before": True})
                 return read_result(summary)
-        # Scratch contains large temporary predictor files; only the bound summary and log persist.
+        # Preserve small QC tables and logs; discard large temporary predictor files.
         with tempfile.TemporaryDirectory(prefix="gg-refinement-busco-") as scratch:
             scratch = Path(scratch)
             opener = gzip.open if source.suffix == ".gz" else open
@@ -128,10 +134,20 @@ def run_one(pair, phase, report, contract, cpus):
             if len(summaries) != 1:
                 raise ValueError("Expected one BUSCO specific summary")
             shutil.copyfile(summaries[0], summary)
+            tables = list((scratch / "busco").glob("run_*/full_table.tsv")) + list((scratch / "busco").glob("run_*/full_table.tsv.gz"))
+            if len(tables) != 1:
+                raise ValueError("Expected one BUSCO full table")
+            raw_table = tables[0]
+            if raw_table.suffix != ".gz":
+                shutil.copyfile(raw_table, full_table)
+            else:
+                with gzip.open(raw_table, "rb") as src, full_table.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
         if digest(source) != source_hash:
             raise OSError("BUSCO input mutated during evaluation")
         result = read_result(summary)
-        atomic_json(receipt, {"key": key, "summary_sha256": digest(summary), "reused_identical_before": False})
+        atomic_json(receipt, {"key": key, "summary_sha256": digest(summary),
+                              "full_table_sha256": digest(full_table), "reused_identical_before": False})
         return result
 
 
@@ -191,6 +207,42 @@ def plot_comparison(rows, output):
     plt.close(fig)
 
 
+def render_existing(report):
+    """Redraw a historical evaluation without executing its predictor again."""
+    value = json.loads((report / "busco_comparison.json").read_text())
+    frozen = json.loads((report / "contract.json").read_text())
+    pairs = {p["species"]: p for p in frozen["pairs"]}
+    rows = value["species"]
+    if (value["contract"] != frozen["contract"] or len(pairs) != len(frozen["pairs"])
+            or len(rows) != len(pairs) or {r["species"] for r in rows} != set(pairs)):
+        raise ValueError("Comparison contract or species membership changed")
+    verified_tables = 0
+    for row in rows:
+        pair = pairs[row["species"]]
+        for phase in ("before", "after"):
+            directory = report / "runs" / pair["species"] / phase
+            saved = json.loads((directory / "receipt.json").read_text())
+            if (saved["key"]["contract"] != frozen["contract"]
+                    or saved["key"]["source_sha256"] != digest(pair[phase])
+                    or saved["summary_sha256"] != digest(directory / "summary.txt")
+                    or read_result(directory / "summary.txt") != row[phase + "_result"]):
+                raise ValueError("Comparison input or score changed")
+            # Summary-only historical publications remain renderable as such.
+            if "full_table_sha256" in saved:
+                if digest(directory / "full_table.tsv") != saved["full_table_sha256"]:
+                    raise ValueError("Comparison full table changed")
+                verified_tables += 1
+        if paired_result(pair, row["before_result"], row["after_result"]) != row:
+            raise ValueError("Comparison delta changed")
+    plot_comparison(rows, report)
+    atomic_json(report / "rendering_provenance.json", {
+        "comparison_sha256": digest(report / "busco_comparison.json"),
+        "evaluation_contract": frozen["contract"], "renderer_sha256": digest(Path(__file__)),
+        "verified_full_tables": verified_tables, "predictor_executed": False,
+    })
+    return rows
+
+
 def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1):
     if not pairs:
         raise ValueError("Empty BUSCO comparison")
@@ -235,14 +287,22 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--cds-dir", type=Path, help="All dataset species, including unrefined CDS-only species")
-    parser.add_argument("--lineage", required=True, type=Path, help="Frozen local lineage directory")
-    parser.add_argument("--download-path", required=True, type=Path)
+    parser.add_argument("--lineage", type=Path, help="Frozen local lineage directory")
+    parser.add_argument("--download-path", type=Path)
+    parser.add_argument("--plot-only", action="store_true", help="Validate and redraw an existing comparison using its original evaluation contract")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
+    if args.plot_only:
+        if args.output or args.lineage or args.download_path or args.cds_dir:
+            parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
+        render_existing(args.report.resolve())
+        return
+    if not args.output or not args.lineage or not args.download_path:
+        parser.error("--output, --lineage and --download-path are required for evaluation")
     root, report = args.output.resolve(), args.report.resolve()
     if args.cpus < 1 or args.jobs < 1:
         parser.error("CPU and job counts must be positive")

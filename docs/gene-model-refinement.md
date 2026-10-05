@@ -256,6 +256,14 @@ receipts permit verified restarts; changed inputs, implementation or settings
 require a new report directory. Failed or incomparable evaluations do not
 produce a completed comparison. Deltas use integer BUSCO counts, avoiding
 rounding errors in the displayed summary percentages.
+Each phase also retains a hashed `runs/SPECIES/before/full_table.tsv` or
+`runs/SPECIES/after/full_table.tsv`, so lost, gained and duplicated BUSCO groups
+can be investigated without repeating the predictor run. Summary and full-table
+bytes are both checked when reusing cached results.
+To validate and redraw an existing comparison without running BUSCO again, use
+`python workflow/support/gene_model_refinement_busco.py --plot-only --report
+/path/to/paired-busco`. This retains the original evaluation contract and also
+supports earlier summary-only comparisons; changed input/score bytes are rejected.
 
 For an existing verified publication, the same comparison is available directly:
 

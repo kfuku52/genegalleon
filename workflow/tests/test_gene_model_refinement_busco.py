@@ -1,5 +1,6 @@
 """Paired BUSCO scores bind counts, provenance, species coverage and cache bytes."""
 
+import gzip
 import json
 import os
 import subprocess
@@ -91,7 +92,8 @@ def test_bad_counts_or_absent_metadata_are_not_zero_scores(tmp_path):
         busco.read_result(path)
 
 
-def test_same_input_reuses_bound_before_and_detects_tampering(tmp_path, monkeypatch):
+@pytest.mark.parametrize("compressed", [False, True])
+def test_same_input_reuses_bound_before_and_detects_tampering(tmp_path, monkeypatch, compressed):
     source = tmp_path / "Species_a.fa"
     source.write_text(">a\nATGAAATAA\n")
     pair = {"species": "Species_a", "before": str(source), "after": str(source)}
@@ -102,6 +104,14 @@ def test_same_input_reuses_bound_before_and_detects_tampering(tmp_path, monkeypa
         target = Path(kwargs["cwd"]) / "busco"
         target.mkdir()
         (target / "short_summary.specific.embryophyta_odb12.busco.txt").write_text(summary())
+        full = target / "run_lineage/full_table.tsv"
+        full.parent.mkdir()
+        payload = b"# BUSCO id\tStatus\tSequence\nBUSCO_1\tComplete\ta\n"
+        if compressed:
+            with gzip.open(str(full) + ".gz", "wb") as handle:
+                handle.write(payload)
+        else:
+            full.write_bytes(payload)
     monkeypatch.setattr(busco.subprocess, "run", fake_run)
     first = busco.run_one(pair, "before", tmp_path, contract, 2)
     second = busco.run_one(pair, "after", tmp_path, contract, 2)
@@ -109,6 +119,13 @@ def test_same_input_reuses_bound_before_and_detects_tampering(tmp_path, monkeypa
     assert len(calls) == 1
     receipt = tmp_path / "runs/Species_a/after/receipt.json"
     assert json.loads(receipt.read_text())["reused_identical_before"]
+    assert (receipt.parent / "full_table.tsv").read_bytes() == (receipt.parent.parent / "before/full_table.tsv").read_bytes()
+    full_table = receipt.parent / "full_table.tsv"
+    original = full_table.read_bytes()
+    full_table.write_text("tampered\n")
+    with pytest.raises(ValueError, match="cache changed"):
+        busco.run_one(pair, "after", tmp_path, contract, 2)
+    full_table.write_bytes(original)
     source.write_text(">a\nATGCCCTAA\n")
     with pytest.raises(ValueError, match="cache changed"):
         busco.run_one(pair, "after", tmp_path, contract, 2)
@@ -126,8 +143,45 @@ def test_busco_failure_does_not_publish_complete_receipt(tmp_path, monkeypatch):
     assert not (tmp_path / "runs/Species_a/before/receipt.json").exists()
 
 
+def test_plot_only_verifies_historical_scores_and_rejects_tampering(tmp_path, monkeypatch):
+    contract = {"historic_evaluation": "fixture"}
+    pair = {"species": "Species_a", "refinement_status": "analysed", "reason": ""}
+    for phase, count in (("before", 8), ("after", 9)):
+        source = tmp_path / (phase + ".fa")
+        source.write_text(">a\nATG" + ("AAA" if phase == "before" else "CCC") + "TAA\n")
+        pair[phase] = str(source)
+        directory = tmp_path / "runs/Species_a" / phase
+        directory.mkdir(parents=True)
+        (directory / "summary.txt").write_text(summary(count))
+        busco.atomic_json(directory / "receipt.json", {
+            "key": {"contract": contract, "source_sha256": busco.digest(source)},
+            "summary_sha256": busco.digest(directory / "summary.txt"),
+        })
+    row = busco.paired_result(pair, busco.read_result(tmp_path / "runs/Species_a/before/summary.txt"),
+                              busco.read_result(tmp_path / "runs/Species_a/after/summary.txt"))
+    busco.atomic_json(tmp_path / "contract.json", {"contract": contract, "pairs": [pair]})
+    value = {"contract": contract, "species": [row]}
+    busco.atomic_json(tmp_path / "busco_comparison.json", value)
+    def fail(*args, **kwargs):
+        raise AssertionError("Predictor must not execute while redrawing")
+    monkeypatch.setattr(busco, "run_one", fail)
+    assert busco.render_existing(tmp_path)[0]["delta_complete"] == 1
+    provenance = json.loads((tmp_path / "rendering_provenance.json").read_text())
+    assert not provenance["predictor_executed"] and provenance["verified_full_tables"] == 0
+    row["delta_complete"] = 99
+    busco.atomic_json(tmp_path / "busco_comparison.json", value)
+    with pytest.raises(ValueError, match="delta changed"):
+        busco.render_existing(tmp_path)
+    row["delta_complete"] = 1
+    busco.atomic_json(tmp_path / "busco_comparison.json", value)
+    Path(pair["after"]).write_text(">a\nATGTTTTAA\n")
+    with pytest.raises(ValueError, match="input or score changed"):
+        busco.render_existing(tmp_path)
+
+
 @pytest.mark.parametrize("enabled", [0, 1])
-def test_input_generation_finisher_wires_review_and_bounds_busco_resources(tmp_path, enabled):
+@pytest.mark.parametrize("trailing_slash", [False, True])
+def test_input_generation_finisher_wires_review_and_bounds_busco_resources(tmp_path, enabled, trailing_slash):
     core = Path(__file__).resolve().parents[1] / "core/gg_input_generation_core.sh"
     function = core.read_text().split("finish_gene_model_refinement() {", 1)[1].split("\n}\n", 1)[0]
     log = tmp_path / "commands.txt"
@@ -138,7 +192,7 @@ ensure_busco_download_path() { printf '%s\\n' /db; }
 gg_memory_parallel_job_cap() { printf '%s\\n' 2; }
 finish_gene_model_refinement() {""" + function + "\n}\nfinish_gene_model_refinement\n"
     env = dict(os.environ, COMMAND_LOG=str(log), run_species_busco=str(enabled), gg_support_dir="/support",
-               gene_model_refinement_dir="/refinement", species_cds_dir="/all-cds", GG_TASK_CPUS="8",
+               gene_model_refinement_dir="/refinement/" if trailing_slash else "/refinement", species_cds_dir="/all-cds", GG_TASK_CPUS="8",
                species_busco_parallel_jobs="auto", task_plan_output="/plan", gg_workspace_dir="/workspace",
                GG_MEM_TOOL_GB="64", species_busco_memory_gb_per_job="16", busco_lineage_resolved="")
     result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
@@ -146,6 +200,7 @@ finish_gene_model_refinement() {""" + function + "\n}\nfinish_gene_model_refinem
     commands = log.read_text().splitlines()
     assert " finalize " in commands[0] and " qc " in commands[1]
     assert "plot_gene_model_refinement.py" in commands[2] and "--cds-dir /all-cds" in commands[2]
+    assert "--report /refinement.review " in commands[2]
     if enabled:
         assert "gene_model_refinement_busco.py" in commands[3]
         assert "--jobs 2 --cpus 4" in commands[3]
