@@ -712,6 +712,10 @@ def test_compressed_inputs_and_literal_contigs_recover_and_export(hidden_models,
     directory = rescue.rescue(output, plan, names[0], 1)
     models = [m for m in json.loads((directory / "models.json").read_text()) if m["status"] == "accepted"]
     assert len(models) == 1 and models[0]["seqid"] == contig and models[0]["sequence"] == sequences[8]
+    assert (directory / "quality_flags.tsv").is_file()
+    assert models[0]["quality_evidence"]["start_codon"] == sequences[8][:3]
+    assert models[0]["quality_evidence"]["translation_initiation"] == "not_established"
+    assert models[0]["quality_evidence"]["native_terminal_completeness"] == "not_established"
     exported = rescue.finalize(output, plan, [names[0]])
     gff = exported / "species_gff" / (names[0] + ".rescue.gff3")
     assert all(line.split("\t")[0] == contig for line in gff.read_text().splitlines() if not line.startswith("#"))
