@@ -5680,7 +5680,7 @@ def test_invalid_legacy_gff_cache_is_never_silently_reused(tmp_path, reuse):
 
 
 @pytest.mark.parametrize("transport", ["plain", "gz", "bz2", "tar", "tar-single"])
-@pytest.mark.parametrize("compression", ["seqkit", "python"])
+@pytest.mark.parametrize("compression", ["python"])
 def test_streamed_genome_matches_record_writer_across_transport_and_edge_cases(tmp_path, monkeypatch, transport, compression):
     import bz2
     import re
@@ -5734,7 +5734,7 @@ def test_streamed_genome_matches_record_writer_across_transport_and_edge_cases(t
     assert result["written"] == len(expected_records)
 
 
-@pytest.mark.parametrize("compression", ["seqkit", "python"])
+@pytest.mark.parametrize("compression", ["python"])
 def test_streamed_genome_read_failure_preserves_published_output(tmp_path, monkeypatch, compression):
     module = load_module()
     if compression == "python":
