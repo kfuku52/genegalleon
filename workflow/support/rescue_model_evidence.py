@@ -22,13 +22,13 @@ from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
-    from fasta_sequence_store import open_text
+    from fasta_sequence_store import fasta_records, open_text
     from gff_attribute_syntax import validate_attributes
     from input_generation_array_state import atomic_json, digest
     from rescue_gene_models import require_same_key, stage
     from rescue_model_quality import model_quality
 except ImportError:
-    from .fasta_sequence_store import open_text
+    from .fasta_sequence_store import fasta_records, open_text
     from .gff_attribute_syntax import validate_attributes
     from .input_generation_array_state import atomic_json, digest
     from .rescue_gene_models import require_same_key, stage
@@ -241,7 +241,33 @@ def repeat_evidence(model, spec, repeats):
             "classes": sorted({row[2] for row in rows if overlap_bases(model["cds"], [row[:2]])})}
 
 
-def dna_evidence(model, spec, bam, genome):
+def validate_dna_reference(bam, spec, genome):
+    """Allow a filtered genome only with base-verified original BAM reference."""
+    target = dict(zip(genome.references, genome.lengths, strict=True))
+    header = dict(zip(bam.references, bam.lengths, strict=True))
+    if (len(header) != len(bam.references) or not bam.has_index()
+            or any(header.get(name) != length for name, length in target.items())):
+        raise ValueError("DNA BAM reference/index disagrees with genome")
+    reference = spec["dna"].get("reference_genome")
+    if reference is None:
+        if header != target:
+            raise ValueError("Extra BAM contigs require the original reference_genome for sequence verification")
+        return {"identity": "manifest_asserted_with_exact_bam_contig_lengths", "extra_bam_contigs": 0}
+    seen = {}
+    for name, _, sequence in fasta_records(Path(reference)):
+        if name in seen or not sequence:
+            raise ValueError("Duplicate/empty BAM reference sequence")
+        seen[name] = len(sequence)
+        if name in target and sequence.upper() != genome.fetch(name).upper():
+            raise ValueError("Original BAM reference bases differ from frozen genome")
+    if seen != header:
+        raise ValueError("Original BAM reference contigs/lengths disagree with BAM header")
+    return {"identity": "manifest_asserted_bam_reference_with_exact_target_sequence_verification",
+            "target_contigs": len(target), "bam_contigs": len(header),
+            "extra_bam_contigs": len(header) - len(target), "reference_genome_sha256": digest(reference)}
+
+
+def dna_evidence(model, spec, bam, genome, reference_check=None):
     if bam is None:
         return {"status": "not_provided", "hq_depth_min": None, "hq_depth_median": None, "start_base_support": None}
     dna = spec["dna"]
@@ -270,7 +296,7 @@ def dna_evidence(model, spec, bam, genome):
     first_counts = [calls[position] for position in positions]
     return {"status": "available", "hq_depth_min": min(depths), "hq_depth_median": statistics.median(depths),
             "start_base_support": first_counts, "confirms_translation_initiation": False,
-            "reference_identity": "manifest_asserted_with_exact_bam_contig_lengths"}
+            "reference_identity": (reference_check or {}).get("identity", "manifest_asserted_with_exact_bam_contig_lengths")}
 
 
 def check_model(model, genome, genetic_code=1):
@@ -328,12 +354,14 @@ def manifest_spec(path, name, genome_hash):
                 raise ValueError("RNA tracks require an explicit independence_group")
     if spec.get("dna"):
         dna = spec["dna"]
-        if not isinstance(dna, dict) or set(dna) - {"path", "index", "format", "min_mapq", "min_baseq"}:
+        if not isinstance(dna, dict) or set(dna) - {"path", "index", "format", "min_mapq", "min_baseq", "reference_genome"}:
             raise ValueError("Unknown DNA evidence fields")
         if dna.get("format") != "bam" or not all(Path(dna[key]).is_absolute() for key in ("path", "index")):
             raise ValueError("DNA evidence needs BAM and explicit absolute index")
         if any(type(dna.get(key)) is not int or dna[key] < 0 for key in ("min_mapq", "min_baseq")):
             raise ValueError("DNA quality thresholds must be nonnegative integers")
+        if "reference_genome" in dna and not Path(dna["reference_genome"]).is_absolute():
+            raise ValueError("Original BAM reference_genome must be an absolute path")
     return spec
 
 
@@ -366,6 +394,8 @@ def audit(args):
         files.extend(Path(track["path"]) for track in spec.get(kind, []))
     if spec.get("dna"):
         files.extend(Path(spec["dna"][key]) for key in ("path", "index"))
+        if spec["dna"].get("reference_genome"):
+            files.append(Path(spec["dna"]["reference_genome"]))
     if any(destination == p.resolve() or destination in p.resolve().parents for p in files):
         raise ValueError("Audit output must not contain a source file")
     def current_key():
@@ -393,6 +423,7 @@ def audit(args):
             raise ValueError("Genome has no references")
         pysam.faidx(str(genome_path))
         bam = None
+        reference_check = None
         with pysam.FastaFile(str(genome_path)) as genome:
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             if len(lengths) != len(genome.references):
@@ -400,9 +431,11 @@ def audit(args):
             junctions, transcripts, repeats = load_tracks(spec, lengths)
             if spec.get("dna"):
                 bam = pysam.AlignmentFile(spec["dna"]["path"], "rb", index_filename=spec["dna"]["index"])
-                if dict(zip(bam.references, bam.lengths, strict=True)) != lengths or not bam.has_index():
+                try:
+                    reference_check = validate_dna_reference(bam, spec, genome)
+                except Exception:
                     bam.close()
-                    raise ValueError("DNA BAM reference/index disagrees with genome")
+                    raise
             records = []
             seen = set()
             try:
@@ -416,7 +449,7 @@ def audit(args):
                     quality = model_quality(model, source["genetic_code"])
                     rna = rna_evidence(model, spec, junctions, transcripts)
                     repeat = repeat_evidence(model, spec, repeats)
-                    dna = dna_evidence(model, spec, bam, genome)
+                    dna = dna_evidence(model, spec, bam, genome, reference_check)
                     flags = set(quality["flags"])
                     if rna["exon_chain_transcripts"] == []:
                         flags.add("no_stranded_rna_exon_chain_detected")
@@ -435,6 +468,7 @@ def audit(args):
                     bam.close()
         atomic_json(tmp / "evidence.json", records)
         summary = {"species": args.species, "accepted_models": len(records), "sequence_changes": 0,
+                   "dna_reference": reference_check,
                    "flag_counts": dict(sorted(Counter(flag for row in records for flag in row["review_flags"]).items())),
                    "evidence_available": {kind: bool(spec.get(kind)) for kind in ("rna_junctions", "rna_transcripts", "repeats", "dna")},
                    "policy": "Advisory only; missing RNA, TE overlap and alternative starts are not automatic rejection criteria."}

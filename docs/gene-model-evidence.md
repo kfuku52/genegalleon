@@ -85,6 +85,14 @@ minimum/median depth and per-base support for the first spliced codon, including
 minus-strand/split codons. DNA support confirms sequence evidence, not expression,
 translation initiation, secretion or enzyme function.
 
+A BAM mapped before contig filtering may contain extra references. Provide
+`dna.reference_genome` with the original mapping FASTA to use such a BAM. Its
+contig names/lengths must exactly match the BAM header, and every retained target
+contig must match the frozen genome base for base (case-insensitive). Missing,
+resized or changed target contigs fail. The reference FASTA is hashed in the
+receipt; the summary records excluded BAM contigs. Extra references without this
+verification fail. Mapping quality still reflects the original, larger reference.
+
 Outputs are `evidence.json`, `evidence.tsv`, `summary.json` and `receipt.json`.
 They have independent evidence axes and advisory flags, with no calibrated
 confidence probability or automatic change to the representative gene set.
