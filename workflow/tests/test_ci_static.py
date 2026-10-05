@@ -588,9 +588,11 @@ def test_parallel_python_lanes_install_the_same_prebuilt_offline_wheels():
     key = named_step(wheel_job, "Restore test wheels by resolved source and constraints")["with"]
     assert "steps.source.outputs.csubst_sha" in key["key"]
     assert "steps.source.outputs.nwkit_sha" in key["key"]
+    assert "steps.source.outputs.kffractbias_sha" in key["key"]
     assert "requirements.lock.txt" in key["key"]
     assert "restore-keys" not in key
     save = named_step(wheel_job, "Save trusted test wheels")
+    assert save["with"]["key"] == "${{ steps.wheels-cache.outputs.cache-primary-key }}"
     assert "event_name != 'pull_request'" in save["if"]
     assert "github.event.repository.default_branch" in save["if"]
     for lane in ("python-fast", "python-heavy"):
@@ -602,6 +604,11 @@ def test_parallel_python_lanes_install_the_same_prebuilt_offline_wheels():
         assert "--find-links" in install
         assert "install-requirements.txt" in install
         assert "git+" not in install
+    assert "GG_SOURCE_KFFRACTBIAS_REPO_REF" in step_run(wheel_job, "Resolve moving test dependencies once")
+    assert "--kffractbias-sha" in step_run(wheel_job, "Build missing test wheels")
+    sequence_tools = step_run(jobs["python-fast"], "Install required sequence tools")
+    assert "apt-get install -y seqkit" in sequence_tools
+    assert "seqkit version" in sequence_tools
 
 
 @pytest.mark.parametrize("invalid", [None, "mutable_tag", "sha_alias", "missing_hash", "missing_image", "unsafe_image"])

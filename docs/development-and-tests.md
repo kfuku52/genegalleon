@@ -171,13 +171,15 @@ GeneGalleon entrypoints and core bootstraps now do this automatically for wrappe
 The validation wrappers instead set `PYTHONDONTWRITEBYTECODE=1`, so their
 imports do not write bytecode into the mounted checkout.
 
-CI resolves the moving `csubst` branch once for its Python wheel preparation
-job. Fast and integration lanes install the resulting shared artifact with
+CI resolves the moving `cdskit`, `csubst`, `nwkit` and `kfFractBias` branches once
+for its Python wheel preparation job. Fast and integration lanes install the shared artifact with
 `--no-index`; they do not rebuild the same VCS dependency independently. The
 wheel cache includes the resolved source, Python/platform identity, requirements,
 constraints, and preparation script. Only trusted default-branch runs save this
 cache, without fallback cache keys; run artifacts expire after one day. Resolved
 commits remain temporary build metadata, never repository defaults.
+The fast lane also installs Ubuntu's `seqkit` package for the real per-species
+genetic-code translation regression; these tool-dependent assertions remain enabled.
 
 ## Run all Python and R checks
 
