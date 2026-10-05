@@ -41,6 +41,100 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("partial", [False, True])
+def test_annotated_five_prime_envelope_preserves_genomic_cds_and_raw_source(tmp_path, strand, partial):
+    coding = "ATGAAACCC" + ("" if partial else "TAA")
+    transcript = "CC" + coding
+    source = "NNN" + transcript[1:]
+    end = len(transcript)
+    start, stop = (3, end) if strand == "+" else (1, end - 2)
+    annotations = row("gene", 1, end, "g", strand=strand) + row("mRNA", 1, end, "t", parent="g", strand=strand)
+    annotations += row("exon", 1, end, "e", parent="t", strand=strand)
+    annotations += row("CDS", start, stop, "c", parent="t", phase="0", strand=strand)
+    genomic = transcript if strand == "+" else str(Seq(transcript).reverse_complement())
+    paths = fixture(tmp_path, ">g\n" + source + "\n", annotations, genomic)
+    before = [digest(path) for path in paths]
+    catalog = MODULE.build_catalog("Species_one", *paths)
+    candidate = catalog["loci"][0]["candidates"][0]
+    assert candidate["cds"] == coding
+    assert candidate["source_cds"][0]["cds"] == source
+    assert candidate["source_conventions"] == ["annotated_five_prime_envelope"]
+    assert candidate["corrected_cds_length"] == len(coding)
+    assert not candidate["quality"]["sequence_mismatch"]
+    assert candidate["quality"]["usable"]
+    assert candidate["quality"]["partial"] is partial
+    assert candidate["quality"]["valid_orf"] is not partial
+    evidence = candidate["source_convention_evidence"][hashlib.sha256(source.encode()).hexdigest()]
+    assert evidence["supplied_prefix_bases"] == 4
+    assert evidence["annotated_transcript_sha256"] == hashlib.sha256(transcript.encode()).hexdigest()
+    assert [digest(path) for path in paths] == before
+
+
+@pytest.mark.parametrize("damage", ["no_exon", "wrong_prefix", "internal_change", "internal_stop", "unknown_phase"])
+def test_five_prime_envelope_cannot_explain_unbound_or_disrupted_coding_paths(tmp_path, damage):
+    coding = "ATGTAGCCCTAA" if damage == "internal_stop" else "ATGAAACCCTAA"
+    annotations = row("gene", 1, 14, "g") + row("mRNA", 1, 14, "t", parent="g")
+    if damage != "no_exon":
+        annotations += row("exon", 1, 14, "e", parent="t")
+    annotations += row("CDS", 3, 14, "c", parent="t", phase="." if damage == "unknown_phase" else "0")
+    source = "NNNC" + coding
+    if damage == "wrong_prefix":
+        source = "NNNG" + coding
+    if damage == "internal_change":
+        source = source.replace("AAA", "CCC")
+    paths = fixture(tmp_path, ">g\n" + source + "\n", annotations, "CC" + coding)
+    candidate = MODULE.build_catalog("Species_one", *paths)["loci"][0]["candidates"][0]
+    assert candidate["quality"]["sequence_mismatch"]
+    assert not candidate["quality"]["usable"]
+    assert candidate["cds"] == coding
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_five_prime_envelope_uses_spliced_exon_path_on_both_strands(tmp_path, strand):
+    sequence = "CCATGAAA" + "GTCCAG" + "CCCTAA"
+    annotations = row("gene", 1, 20, "g", strand=strand) + row("mRNA", 1, 20, "t", parent="g", strand=strand)
+    for i, (a, b, ca, cb) in enumerate([(1, 8, 3, 8), (15, 20, 15, 20)]):
+        if strand == "-":
+            a, b, ca, cb = 21 - b, 21 - a, 21 - cb, 21 - ca
+        annotations += row("exon", a, b, "e" + str(i), parent="t", strand=strand)
+        annotations += row("CDS", ca, cb, "c" + str(i), parent="t", phase="0", strand=strand)
+    source = "NNNCATGAAACCCTAA"
+    paths = fixture(tmp_path, ">g\n" + source + "\n", annotations,
+                    sequence if strand == "+" else str(Seq(sequence).reverse_complement()))
+    candidate = MODULE.build_catalog("Species_one", *paths)["loci"][0]["candidates"][0]
+    assert candidate["source_conventions"] == ["annotated_five_prime_envelope"]
+    assert candidate["cds"] == "ATGAAACCCTAA" and candidate["protein"] == "MKP"
+    assert candidate["quality"]["valid_orf"]
+
+
+@pytest.mark.parametrize("genomic,supplied", [("ATGGRGTAA", "ATGGNGTAA"), ("ATGGNGTAA", "ATGGRGTAA")])
+def test_uncertainty_masking_binds_dna_without_admitting_ambiguous_protein(tmp_path, genomic, supplied):
+    annotations = row("gene", 1, 9, "g") + row("mRNA", 1, 9, "t", parent="g")
+    annotations += row("CDS", 1, 9, "c", parent="t", phase="0")
+    paths = fixture(tmp_path, ">g\n" + supplied + "\n", annotations, genomic)
+    catalog = MODULE.build_catalog("Species_one", *paths)
+    candidate = catalog["loci"][0]["candidates"][0]
+    assert catalog["fasta_mapping"][0]["source_convention"] == "masked_iupac_ambiguity"
+    assert candidate["quality"]["source_sequence_agreement"]
+    assert not candidate["quality"]["sequence_mismatch"]
+    assert candidate["quality"]["ambiguous"]
+    assert not candidate["quality"]["usable"]
+    assert candidate["cds"] == genomic
+    assert candidate["source_cds"][0]["cds"] == supplied
+
+
+@pytest.mark.parametrize("genomic,supplied", [("ATGGRGTAA", "ATGGAGTAA"), ("ATGGAGTAA", "ATGGNGTAA"),
+                                             ("ATGGRGTAA", "ATGGYGTAA"), ("ATGGNGTAA", "ATGGAGTAA")])
+def test_masking_convention_does_not_accept_resolved_or_disjoint_base_changes(tmp_path, genomic, supplied):
+    annotations = row("gene", 1, 9, "g") + row("mRNA", 1, 9, "t", parent="g")
+    annotations += row("CDS", 1, 9, "c", parent="t", phase="0")
+    paths = fixture(tmp_path, ">g\n" + supplied + "\n", annotations, genomic)
+    candidate = MODULE.build_catalog("Species_one", *paths)["loci"][0]["candidates"][0]
+    assert candidate["quality"]["sequence_mismatch"]
+    assert not candidate["quality"]["usable"]
+
+
 @pytest.mark.parametrize("header", ["g", "Species_one_g"])
 def test_gene_only_header_binds_unique_transcript_before_sequence_mismatch_qc(tmp_path, header):
     annotations = row("gene", 1, 12, "g") + row("mRNA", 1, 12, "t", parent="g")

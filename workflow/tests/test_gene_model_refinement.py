@@ -124,6 +124,41 @@ def test_gene_only_mismatch_is_archived_but_not_exported_as_genomic_representati
     assert refinement.verify_inputs(effective / "inputs.tsv")
 
 
+@pytest.mark.parametrize("kind", ["five_prime_partial", "masked_iupac"])
+def test_explained_formatter_difference_retains_dna_with_separate_translation_admission(tmp_path, kind):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    partial = kind == "five_prime_partial"
+    genomic = "CCATGAAACCC" if partial else "ATGGRGTAA"
+    supplied = "NNNCATGAAACCC" if partial else "ATGGNGTAA"
+    coding = genomic[2:] if partial else genomic
+    n = len(genomic)
+    Path(target["genome"]).write_text(">chr1\n" + genomic + "\n")
+    original = ">g\n" + supplied + "\n"
+    Path(target["cds"]).write_text(original)
+    Path(target["gff"]).write_text("##gff-version 3\n"
+                                 f"chr1\ts\tgene\t1\t{n}\t.\t+\t.\tID=g\n"
+                                 f"chr1\ts\tmRNA\t1\t{n}\t.\t+\t.\tID=t;Parent=g\n"
+                                 f"chr1\ts\texon\t1\t{n}\t.\t+\t.\tID=e;Parent=t\n"
+                                 f"chr1\ts\tCDS\t{3 if partial else 1}\t{n}\t.\t+\t0\tID=c;Parent=t\n")
+    root = tmp_path / "run"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    effective = refinement.finalize(root, value)
+    species = target["species"]
+    assert (effective / "source_cds" / (species + ".fa")).read_text() == original
+    assert (effective / "species_cds" / (species + ".fa")).read_text() == f">{species}_g\n{coding}\n"
+    assert (effective / "source_annotation" / (species + ".gff3")).read_text() == Path(target["gff"]).read_text()
+    assert not [r for r in refinement.read_table(effective / "effective_exclusions.tsv") if r["species"] == species]
+    admitted = next(r for r in refinement.read_table(effective / "translation_admission.tsv") if r["species"] == species)
+    quality = json.loads(admitted["quality"])
+    assert not quality["sequence_mismatch"]
+    assert quality["partial"] is partial
+    assert quality["ambiguous"] is not partial
+    assert admitted["status"] == ("included" if partial else "excluded")
+    assert bool((effective / "species_protein" / (species + ".fa")).read_text()) is partial
+    assert refinement.verify_inputs(effective / "inputs.tsv")
+
+
 @pytest.mark.parametrize('code,dual', [(27, 'TGA'), (28, 'TAA'), (31, 'TAA')])
 def test_whole_rna_cannot_adopt_predicted_dual_coding_translation_context(code, dual):
     catalog, models, edges = classification_fixture()

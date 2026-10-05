@@ -72,6 +72,16 @@ transcript even when its supplied sequence disagrees with the genome. That
 disagreement excludes the reconstructed candidate; it is not hidden by treating
 the source record as unbound. When no transcript explains a gene's supplied CDS,
 the unresolved candidates are withheld and the exact source record is archived.
+Two explained formatter conventions retain genomic DNA without editing the
+supplied record. A leading `NNN` envelope and additional 5-prime sequence are
+recognised only when the remainder and the exact genomic CDS are suffixes of
+the same annotated exon transcript, with consistent CDS phases and no genomic
+internal stop or protected exception. This records exon coordinates, sequence
+hashes and removed prefix length; it does not invent a start or terminal stop.
+Same-length differences consisting only of `N` versus an uncertain IUPAC symbol
+are recorded as uncertainty masking. Resolved-base changes and disjoint symbols
+remain mismatches. Genomic ambiguity remains in the DNA, and its translation is
+withheld. `partial`, `ambiguous` and `valid_orf` remain separate admission flags.
 If several transcript identities share one exactly matching genomic coding path,
 the source coding path remains the selection baseline without claiming a unique
 transcript identity. A longer, unsupplied isoform does not silently replace it.

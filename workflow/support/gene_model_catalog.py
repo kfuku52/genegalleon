@@ -196,7 +196,51 @@ def _source_convention(sequence, candidate):
         coding = coding[:len(coding) // 3 * 3]
         if sequence == coding or any(sequence == coding + "N" * count for count in (1, 2)):
             return "annotated_partial_frame"
+    # Check common exact/terminal conventions first. A formatter may replace
+    # IUPAC uncertainty with N; resolved bases or disjoint symbols are not equal.
+    ambiguity = set("RYSWKMBDHV")
+    if len(sequence) == len(biological) and all(
+            supplied == genomic or (supplied == "N" and genomic in ambiguity)
+            or (genomic == "N" and supplied in ambiguity)
+            for supplied, genomic in zip(sequence, biological, strict=True)):
+        return "masked_iupac_ambiguity"
+    evidence = candidate.get("source_convention_evidence", {}).get(hashlib.sha256(sequence.encode()).hexdigest())
+    if evidence and evidence["genomic_cds_sha256"] == hashlib.sha256(biological.encode()).hexdigest():
+        return evidence["convention"]
     return ""
+
+
+def _record_five_prime_convention(sequence, candidate, normaliser, genome):
+    """Explain a supplied 5-prime envelope with this exact annotated transcript.
+
+    NNN is a formatter envelope, never a replacement for an internal genomic
+    stop. CDS, coordinates, phase and raw source bytes stay unchanged.
+    """
+    biological, quality = candidate["cds"], candidate["quality"]
+    if (not biological or not sequence.startswith("NNN") or len(sequence) < len(biological) + 3
+            or not sequence.endswith(biological) or not quality["has_start"]
+            or quality["translation_offset"] or any(quality.get(key) for key in
+                ("internal_stop", "phase_conflict", "phase_unresolved", "structure_problem", "annotated_exception"))):
+        return
+    exons = normaliser.exons.get(candidate["source_transcript_id"], [])
+    if not exons or any((row["seqid"], row["strand"]) != (candidate["seqid"], candidate["strand"]) for row in exons):
+        return
+    ordered = sorted(exons, key=lambda row: row["start"], reverse=candidate["strand"] == "-")
+    ascending = sorted(ordered, key=lambda row: row["start"])
+    if (any(a["end"] > b["start"] for a, b in zip(ascending, ascending[1:], strict=False))
+            or any(not any(row["start"] <= start and end <= row["end"] for row in ordered)
+                   for start, end, _phase in candidate["blocks"])):
+        return
+    blocks = [[row["start"], row["end"], 0] for row in ordered]
+    transcript = reconstruct_sequence(blocks, candidate["seqid"], candidate["strand"], genome)
+    if not transcript.endswith(biological) or not transcript.endswith(sequence[3:]):
+        return
+    candidate.setdefault("source_convention_evidence", {})[hashlib.sha256(sequence.encode()).hexdigest()] = {
+        "convention": "annotated_five_prime_envelope", "source_transcript_id": candidate["source_transcript_id"],
+        "exon_blocks": blocks, "annotated_transcript_sha256": hashlib.sha256(transcript.encode()).hexdigest(),
+        "genomic_cds_sha256": hashlib.sha256(biological.encode()).hexdigest(),
+        "supplied_prefix_bases": len(sequence) - len(biological), "masked_prefix_bases": 3,
+    }
 
 
 def _infer_missing_phases(candidate, genetic_code, evidence="complete_genomic_cds_and_bound_source"):
@@ -228,12 +272,16 @@ def _infer_missing_phases(candidate, genetic_code, evidence="complete_genomic_cd
 def _corrected_cds_length(sequence, candidate, global_convention):
     """Infer only formatter corrections with the same bound-model evidence.
 
-    Valid supplied translations are unchanged by CdsModelNormaliser. Partial
+    A transcript-proven 5-prime envelope uses the genomic coding length for
+    nomination, rather than counting its UTR/padding as coding sequence.
+    Other valid supplied translations are unchanged by CdsModelNormaliser. Partial
     frame trimming requires its unambiguous GFF3 convention. UTR mismatches or
     uncertain phase conventions intentionally have no inferred corrected length.
     """
     quality = candidate["quality"]
     code = quality["genetic_code"]
+    if _source_convention(sequence, candidate) == "annotated_five_prime_envelope":
+        return len(candidate["cds"])
     valid_bases = not (set(sequence) - set("ACGTRYSWKMBDHVN"))
     if quality.get("annotated_exception") or (valid_bases and protein(sequence, code)):
         return len(sequence)
@@ -444,104 +492,106 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                     for name in ("protein_id", "transcript_id", "orig_protein_id", "orig_transcript_id", "Alias", "Name", "Accession"):
                         for alias in filter(None, row["attributes"].get(name, "").split(",")):
                             transcript_aliases[alias].add(candidate_id)
+            mapping, seen_fasta, bound_by_locus = [], set(), defaultdict(list)
+            coding_surrogates = defaultdict(list)
+            for identifier, header, raw in fasta_records(paths["cds"]):
+                if identifier in seen_fasta:
+                    raise ValueError("Duplicate source FASTA identifier: " + identifier)
+                seen_fasta.add(identifier)
+                sequence = "".join(raw.split()).upper()
+                primary, _gene_aliases = extract_cds_header_alias_tiers(task, header)
+                if (fasta_header_is_organelle(header, grouping["organelle_seqids"], grouping["organelle_aliases"])
+                        or set(primary).intersection(grouping["organelle_aliases"])):
+                    mapping.append({"source_fasta_id": identifier,
+                                    "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
+                                    "mapping_status": "excluded_organelle", "exclusion_reason": "organelle_annotation",
+                                    "candidate_ids": [], "possible_candidate_ids": [], "sequence_agreement": None})
+                    continue
+                explicit = set().union(*(transcript_aliases.get(alias, set()) for alias in primary))
+                match = resolve_cds_header_gff_gene(task, header, grouping_index=grouping)
+                possible = explicit
+                if not possible and match["status"] == "mapped":
+                    locus = loci.get(_formatted_id(species, match["gene_token"]))
+                    possible = {candidate["candidate_id"] for candidate in locus["candidates"]} if locus else set()
+                for candidate_id in possible:
+                    _record_five_prime_convention(sequence, candidates[candidate_id], normaliser, genome)
+                exact = {identifier for identifier in possible if _source_matches(sequence, candidates[identifier])}
+                chosen = explicit if len(explicit) == 1 else exact
+                # A gene-only FASTA header can still identify its sole coding
+                # transcript independently of sequence agreement. Bind that identity
+                # before checking the bytes, so a genuine mismatch is withheld rather
+                # than silently treated as an unbound, usable genomic reconstruction.
+                if not chosen and len(possible) == 1:
+                    chosen = possible
+                status = "mapped" if len(chosen) == 1 else "ambiguous" if chosen or possible else "unmapped"
+                bound = sorted(chosen) if status == "mapped" else []
+                row = {"source_fasta_id": identifier, "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
+                       "mapping_status": status, "candidate_ids": bound, "possible_candidate_ids": sorted(possible),
+                       "sequence_agreement": bool(bound and bound[0] in exact),
+                       "source_convention": _source_convention(sequence, candidates[bound[0]]) if bound else ""}
+                if not bound and len(exact) > 1 and len({candidates[c]["gene_id"] for c in exact}) == 1:
+                    # UTR-only identities can identify the source coding path without
+                    # identifying one transcript. Retain identity ambiguity and an
+                    # agreeing source baseline; equal DNA at distinct paths stays unresolved.
+                    if len({candidates[c]["coding_key"] for c in exact}) == 1:
+                        gene_id = candidates[next(iter(exact))]["gene_id"]
+                        coding_surrogates[gene_id].append(sorted(exact))
+                        row["sequence_agreeing_candidate_ids"] = sorted(exact)
+                        for matching_id in sorted(exact):
+                            candidate = candidates[matching_id]
+                            candidate.setdefault("source_coding_path_evidence", []).append({
+                                "source_fasta_id": identifier, "source_cds_sha256": row["source_cds_sha256"],
+                                "source_convention": _source_convention(sequence, candidate),
+                            })
+                            candidate["quality"]["source_sequence_agreement"] = True
+                            _infer_missing_phases(candidate, genetic_code, "complete_genomic_cds_and_unique_source_coding_path")
+                mapping.append(row)
+                if (not bound and possible and not exact and match["status"] == "mapped"
+                        and {candidates[c]["gene_id"] for c in possible}
+                        == {_formatted_id(species, match["gene_token"])}):
+                    # No annotated isoform explains this uniquely owned source CDS.
+                    # Do not invent a transcript identity or permit an unbound genomic
+                    # isoform to conceal the unexplained sequence disagreement.
+                    locus = loci[_formatted_id(species, match["gene_token"])]
+                    locus.setdefault("unresolved_source_fasta_ids", []).append(identifier)
+                    for possible_id in possible:
+                        candidate = candidates[possible_id]
+                        candidate["quality"]["sequence_mismatch"] = True
+                        candidate["quality"]["source_association_unresolved"] = True
+                        candidate["quality"] = validate_candidate(candidate, genetic_code)
+                if bound:
+                    candidate = candidates[bound[0]]
+                    candidate["source_fasta_ids"].append(identifier)
+                    candidate["source_cds_sha256"].append(row["source_cds_sha256"])
+                    # Keep supplied sequence/header evidence separate from genomic
+                    # reconstruction, including unresolved conflicts and source case.
+                    candidate["source_cds"].append({"source_fasta_id": identifier, "header": header,
+                                                     "cds": "".join(raw.split()),
+                                                     "sha256": hashlib.sha256("".join(raw.split()).encode()).hexdigest(),
+                                                     "normalized_sha256": row["source_cds_sha256"],
+                                                     "sequence_agreement": row["sequence_agreement"],
+                                                     "source_convention": row["source_convention"]})
+                    candidate["quality"]["source_sequence_agreement"] = row["sequence_agreement"]
+                    candidate.setdefault("source_conventions", []).append(row["source_convention"])
+                    corrected_length = _corrected_cds_length(sequence, candidate, normaliser.global_convention)
+                    if corrected_length is not None:
+                        candidate["corrected_cds_length"] = corrected_length
+                    if not row["sequence_agreement"]:
+                        candidate["quality"]["sequence_mismatch"] = True
+                        candidate["quality"] = validate_candidate(candidate, genetic_code)
+                    else:
+                        _infer_missing_phases(candidate, genetic_code)
+                    bound_by_locus[candidate["gene_id"]].append(bound[0])
+            for gene_id, bound in bound_by_locus.items():
+                if len(bound) == 1:
+                    loci[gene_id]["source_baseline_candidate_id"] = bound[0]
+            for gene_id, matches in coding_surrogates.items():
+                if not bound_by_locus[gene_id] and len(matches) == 1:
+                    baseline = min(matches[0], key=lambda key: (not candidates[key]["quality"]["usable"], key))
+                    loci[gene_id]["source_baseline_coding_candidate_id"] = baseline
+                    loci[gene_id]["source_baseline_basis"] = "matching_coding_path_transcript_identity_ambiguous"
     finally:
         normaliser.close()
-    mapping, seen_fasta, bound_by_locus = [], set(), defaultdict(list)
-    coding_surrogates = defaultdict(list)
-    for identifier, header, raw in fasta_records(paths["cds"]):
-        if identifier in seen_fasta:
-            raise ValueError("Duplicate source FASTA identifier: " + identifier)
-        seen_fasta.add(identifier)
-        sequence = "".join(raw.split()).upper()
-        primary, _gene_aliases = extract_cds_header_alias_tiers(task, header)
-        if (fasta_header_is_organelle(header, grouping["organelle_seqids"], grouping["organelle_aliases"])
-                or set(primary).intersection(grouping["organelle_aliases"])):
-            mapping.append({"source_fasta_id": identifier,
-                            "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
-                            "mapping_status": "excluded_organelle", "exclusion_reason": "organelle_annotation",
-                            "candidate_ids": [], "possible_candidate_ids": [], "sequence_agreement": None})
-            continue
-        explicit = set().union(*(transcript_aliases.get(alias, set()) for alias in primary))
-        match = resolve_cds_header_gff_gene(task, header, grouping_index=grouping)
-        possible = explicit
-        if not possible and match["status"] == "mapped":
-            locus = loci.get(_formatted_id(species, match["gene_token"]))
-            possible = {candidate["candidate_id"] for candidate in locus["candidates"]} if locus else set()
-        exact = {identifier for identifier in possible if _source_matches(sequence, candidates[identifier])}
-        chosen = explicit if len(explicit) == 1 else exact
-        # A gene-only FASTA header can still identify its sole coding
-        # transcript independently of sequence agreement. Bind that identity
-        # before checking the bytes, so a genuine mismatch is withheld rather
-        # than silently treated as an unbound, usable genomic reconstruction.
-        if not chosen and len(possible) == 1:
-            chosen = possible
-        status = "mapped" if len(chosen) == 1 else "ambiguous" if chosen or possible else "unmapped"
-        bound = sorted(chosen) if status == "mapped" else []
-        row = {"source_fasta_id": identifier, "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
-               "mapping_status": status, "candidate_ids": bound, "possible_candidate_ids": sorted(possible),
-               "sequence_agreement": bool(bound and bound[0] in exact),
-               "source_convention": _source_convention(sequence, candidates[bound[0]]) if bound else ""}
-        if not bound and len(exact) > 1 and len({candidates[c]["gene_id"] for c in exact}) == 1:
-            # UTR-only identities can identify the source coding path without
-            # identifying one transcript. Retain identity ambiguity and an
-            # agreeing source baseline; equal DNA at distinct paths stays unresolved.
-            if len({candidates[c]["coding_key"] for c in exact}) == 1:
-                gene_id = candidates[next(iter(exact))]["gene_id"]
-                coding_surrogates[gene_id].append(sorted(exact))
-                row["sequence_agreeing_candidate_ids"] = sorted(exact)
-                for matching_id in sorted(exact):
-                    candidate = candidates[matching_id]
-                    candidate.setdefault("source_coding_path_evidence", []).append({
-                        "source_fasta_id": identifier, "source_cds_sha256": row["source_cds_sha256"],
-                        "source_convention": _source_convention(sequence, candidate),
-                    })
-                    candidate["quality"]["source_sequence_agreement"] = True
-                    _infer_missing_phases(candidate, genetic_code, "complete_genomic_cds_and_unique_source_coding_path")
-        mapping.append(row)
-        if (not bound and possible and not exact and match["status"] == "mapped"
-                and {candidates[c]["gene_id"] for c in possible}
-                == {_formatted_id(species, match["gene_token"])}):
-            # No annotated isoform explains this uniquely owned source CDS.
-            # Do not invent a transcript identity or permit an unbound genomic
-            # isoform to conceal the unexplained sequence disagreement.
-            locus = loci[_formatted_id(species, match["gene_token"])]
-            locus.setdefault("unresolved_source_fasta_ids", []).append(identifier)
-            for possible_id in possible:
-                candidate = candidates[possible_id]
-                candidate["quality"]["sequence_mismatch"] = True
-                candidate["quality"]["source_association_unresolved"] = True
-                candidate["quality"] = validate_candidate(candidate, genetic_code)
-        if bound:
-            candidate = candidates[bound[0]]
-            candidate["source_fasta_ids"].append(identifier)
-            candidate["source_cds_sha256"].append(row["source_cds_sha256"])
-            # Keep supplied sequence/header evidence separate from genomic
-            # reconstruction, including unresolved conflicts and source case.
-            candidate["source_cds"].append({"source_fasta_id": identifier, "header": header,
-                                             "cds": "".join(raw.split()),
-                                             "sha256": hashlib.sha256("".join(raw.split()).encode()).hexdigest(),
-                                             "normalized_sha256": row["source_cds_sha256"],
-                                             "sequence_agreement": row["sequence_agreement"],
-                                             "source_convention": row["source_convention"]})
-            candidate["quality"]["source_sequence_agreement"] = row["sequence_agreement"]
-            candidate.setdefault("source_conventions", []).append(row["source_convention"])
-            corrected_length = _corrected_cds_length(sequence, candidate, normaliser.global_convention)
-            if corrected_length is not None:
-                candidate["corrected_cds_length"] = corrected_length
-            if not row["sequence_agreement"]:
-                candidate["quality"]["sequence_mismatch"] = True
-                candidate["quality"] = validate_candidate(candidate, genetic_code)
-            else:
-                _infer_missing_phases(candidate, genetic_code)
-            bound_by_locus[candidate["gene_id"]].append(bound[0])
-    for gene_id, bound in bound_by_locus.items():
-        if len(bound) == 1:
-            loci[gene_id]["source_baseline_candidate_id"] = bound[0]
-    for gene_id, matches in coding_surrogates.items():
-        if not bound_by_locus[gene_id] and len(matches) == 1:
-            baseline = min(matches[0], key=lambda key: (not candidates[key]["quality"]["usable"], key))
-            loci[gene_id]["source_baseline_coding_candidate_id"] = baseline
-            loci[gene_id]["source_baseline_basis"] = "matching_coding_path_transcript_identity_ambiguous"
     if any(_stat_identity(path) != frozen[name] for name, path in paths.items()):
         raise OSError("Sources changed during coding isoform catalog construction")
     summary = {"loci": len(loci), "candidates": len(candidates),
