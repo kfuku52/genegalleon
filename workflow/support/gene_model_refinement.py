@@ -29,6 +29,7 @@ try:
     from format_species_annotation.common import parse_gff_attributes
     from gene_model_catalog import build_catalog, validate_candidate, write_catalog
     from gene_model_selection import pair_score, select_representatives
+    from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from input_generation_array_state import atomic_json, digest, digest_paths
 except ImportError:
@@ -37,6 +38,7 @@ except ImportError:
     from .format_species_annotation.common import parse_gff_attributes
     from .gene_model_catalog import build_catalog, validate_candidate, write_catalog
     from .gene_model_selection import pair_score, select_representatives
+    from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from .input_generation_array_state import atomic_json, digest, digest_paths
 
@@ -395,22 +397,23 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
                     tracks[g['seqid']].append(position)
                 ordered = {seqid: sorted(genes, key=lambda g: g['start']) for seqid, genes in tracks.items()}
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
-            for job in jobs:
-                if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job)):
-                    raise ValueError('Unverified synteny comparison')
-                blocks = json.loads((anchor_root / 'synteny' / job['id'] / 'blocks.json').read_text())
-                for block in blocks:
-                    anchor_pairs = [(aliases[job['a']].get(a), aliases[job['b']].get(b)) for a, b in block]
-                    edges.extend(infer_flanked_loci(db, job['a'], job['b'], anchor_pairs, position_index, request['parameters']))
-                    for i, (a, b) in enumerate(block):
-                        ga, gb = aliases[job['a']].get(a), aliases[job['b']].get(b)
-                        if not ga or not gb:
-                            continue
-                        # Boundary anchors lack two independent flanks and are audit-only.
-                        edges.append(dict(species_a=job['a'], gene_a=ga, species_b=job['b'], gene_b=gb,
-                                          weight=1.0, evidence={'comparison': job['id'], 'anchors': len(block),
-                                                              'left_flank': i > 0, 'right_flank': i + 1 < len(block)},
-                                          ambiguous=i == 0 or i + 1 == len(block)))
+            with store_connection(db) as connection:
+                for job in jobs:
+                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job)):
+                        raise ValueError('Unverified synteny comparison')
+                    blocks = json.loads((anchor_root / 'synteny' / job['id'] / 'blocks.json').read_text())
+                    for block in blocks:
+                        anchor_pairs = [(aliases[job['a']].get(a), aliases[job['b']].get(b)) for a, b in block]
+                        edges.extend(infer_flanked_loci(connection, job['a'], job['b'], anchor_pairs, position_index, request['parameters']))
+                        for i, (a, b) in enumerate(block):
+                            ga, gb = aliases[job['a']].get(a), aliases[job['b']].get(b)
+                            if not ga or not gb:
+                                continue
+                            # Boundary anchors lack two independent flanks and are audit-only.
+                            edges.append(dict(species_a=job['a'], gene_a=ga, species_b=job['b'], gene_b=gb,
+                                              weight=1.0, evidence={'comparison': job['id'], 'anchors': len(block),
+                                                                  'left_flank': i > 0, 'right_flank': i + 1 < len(block)},
+                                              ambiguous=i == 0 or i + 1 == len(block)))
         unique = {}
         for e in edges:
             key = tuple(sorted(((e['species_a'], e['gene_a']), (e['species_b'], e['gene_b']))))
@@ -509,6 +512,18 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     """Require target ownership, intact genomic ORF and independent support."""
     rna_rows = rna_path_index(rna_rows)
     loci = {g['gene_id']: g for g in catalog['loci']}
+    # Freeze the same species/locus predicates once. Scanning a cohort-wide
+    # correspondence graph for every predicted coding path is quadratic.
+    ambiguous_loci, trusted_donors = set(), defaultdict(set)
+    for edge in edges:
+        for side, other in (('a', 'b'), ('b', 'a')):
+            if edge['species_' + side] != catalog['species']:
+                continue
+            gene = edge['gene_' + side]
+            if edge.get('ambiguous'):
+                ambiguous_loci.add(gene)
+            else:
+                trusted_donors[gene].add(edge['species_' + other])
     spans = []
     for g in loci.values():
         blocks = [b for c in g['candidates'] for b in c['blocks']]
@@ -546,7 +561,7 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         problems = list(m['problems'])
         if g.get('ambiguous_coordinates'):
             problems.append('ambiguous_locus_coordinates')
-        if any(edge.get('ambiguous') and (edge['species_a'], edge['gene_a']) == (catalog['species'], m['gene_id']) or edge.get('ambiguous') and (edge['species_b'], edge['gene_b']) == (catalog['species'], m['gene_id']) for edge in edges):
+        if m['gene_id'] in ambiguous_loci:
             problems.append('ambiguous_locus_correspondence')
         if shape in original_shapes:
             problems.append('existing_coding_path')
@@ -568,15 +583,7 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         candidate['quality'] = validate_candidate(candidate, catalog.get('genetic_code', 1))
         if not candidate['quality']['valid_orf']:
             problems.append('invalid_predicted_coding_path')
-        trusted = set()
-        for edge in edges:
-            if edge.get('ambiguous'):
-                continue
-            if (edge['species_a'], edge['gene_a']) == (catalog['species'], m['gene_id']):
-                trusted.add(edge['species_b'])
-            if (edge['species_b'], edge['gene_b']) == (catalog['species'], m['gene_id']):
-                trusted.add(edge['species_a'])
-        if m['donor_species'] not in trusted:
+        if m['donor_species'] not in trusted_donors[m['gene_id']]:
             problems.append('untrusted_donor_correspondence')
         candidate['quality']['rna_supported'] = bool(rna_support(candidate, catalog['species'], rna_rows))
         if not candidate['quality']['rna_supported'] and any(c.get('quality', {}).get('sequence_mismatch') for c in owners):
@@ -649,56 +656,57 @@ def predict_species(root, value, name, cpus=1):
         decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
         proteins, windows, queries = {}, defaultdict(list), {}
         proposals = []
-        for edge in edges:
-            if edge['ambiguous'] or name not in {edge['species_a'], edge['species_b']}:
-                continue
-            target_side = 'a' if edge['species_a'] == name else 'b'
-            donor_side = 'b' if target_side == 'a' else 'a'
-            target_gene = edge['gene_' + target_side]
-            donor = edge['species_' + donor_side]
-            target = loci[name, target_gene]
-            donor_locus = load_locus(db, donor, edge['gene_' + donor_side])
-            if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or decisions[name, target_gene]['status'] == 'ambiguous_correspondence' or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
-                proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
-                continue
-            if not any(c['cds'] and c['blocks'] for c in target['candidates']):
-                proposals.append({'gene_id': target_gene, 'status': 'unreconstructible_original', 'donor': donor})
-                continue
-            if len(target['candidates']) > params['candidate_limit'] or len(donor_locus['candidates']) > params['candidate_limit']:
-                proposals.append({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor})
-                continue
-            baseline = next(c for c in target['candidates'] if c['candidate_id'] == decisions[name, target_gene]['candidate_id'])
-            # Intact concordant single coding paths need no predictor process.
-            for candidate in donor_locus['candidates'][:params['candidate_limit']]:
-                if not candidate['quality'].get('usable') or not candidate['protein']:
+        with store_connection(db) as connection:
+            for edge in edges:
+                if edge['ambiguous'] or name not in {edge['species_a'], edge['species_b']}:
                     continue
-                discrepancy = not baseline['quality'].get('valid_orf') or len(target['candidates']) < len(donor_locus['candidates']) or abs(len(candidate['protein']) - len(baseline['protein'])) > max(3, len(candidate['protein']) * .05)
-                if not discrepancy:
-                    score = pair_score(baseline, candidate)
-                    discrepancy = not score.bounded and score.identity >= params['minimum_identity'] and (min(score.coverage_a, score.coverage_b) < params['minimum_coverage'] or (len(baseline['blocks']) > 1 and len(candidate['blocks']) > 1 and score.junction_similarity < 0.8))
-                if not discrepancy:
+                target_side = 'a' if edge['species_a'] == name else 'b'
+                donor_side = 'b' if target_side == 'a' else 'a'
+                target_gene = edge['gene_' + target_side]
+                donor = edge['species_' + donor_side]
+                target = loci[name, target_gene]
+                donor_locus = load_locus(connection, donor, edge['gene_' + donor_side])
+                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or decisions[name, target_gene]['status'] == 'ambiguous_correspondence' or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
+                    proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
                     continue
-                represented = False
-                for known in target['candidates']:
-                    if not known['quality'].get('valid_orf'):
+                if not any(c['cds'] and c['blocks'] for c in target['candidates']):
+                    proposals.append({'gene_id': target_gene, 'status': 'unreconstructible_original', 'donor': donor})
+                    continue
+                if len(target['candidates']) > params['candidate_limit'] or len(donor_locus['candidates']) > params['candidate_limit']:
+                    proposals.append({'gene_id': target_gene, 'status': 'candidate_limit_exceeded', 'donor': donor})
+                    continue
+                baseline = next(c for c in target['candidates'] if c['candidate_id'] == decisions[name, target_gene]['candidate_id'])
+                # Intact concordant single coding paths need no predictor process.
+                for candidate in donor_locus['candidates'][:params['candidate_limit']]:
+                    if not candidate['quality'].get('usable') or not candidate['protein']:
                         continue
-                    match = pair_score(known, candidate)
-                    if not match.bounded and min(match.coverage_a, match.coverage_b) >= params['minimum_coverage'] and match.identity >= params['minimum_identity'] and match.junction_similarity >= 0.95:
-                        represented = True
-                        break
-                if represented:
-                    continue
-                blocks = [b for c in target['candidates'] for b in c['blocks']]
-                start, end = max(0, min(b[0] for b in blocks) - params['padding']), max(b[1] for b in blocks) + params['padding']
-                if end - start > params['max_interval']:
-                    proposals.append({'gene_id': target_gene, 'status': 'interval_too_large', 'donor': donor})
-                    continue
-                qid = 'q' + hashlib.sha256((target_gene + donor + candidate['candidate_id']).encode()).hexdigest()[:24]
-                region = {'id': qid, 'seqid': target['seqid'], 'start': start, 'end': end, 'query': candidate['candidate_id'],
-                          'donor': donor, 'gene_id': target_gene, 'donor_candidate': candidate['candidate_id']}
-                queries[qid] = region
-                proteins.setdefault(donor, {})[candidate['candidate_id']] = candidate['protein']
-                windows[target['seqid'], start, end].append(region)
+                    discrepancy = not baseline['quality'].get('valid_orf') or len(target['candidates']) < len(donor_locus['candidates']) or abs(len(candidate['protein']) - len(baseline['protein'])) > max(3, len(candidate['protein']) * .05)
+                    if not discrepancy:
+                        score = pair_score(baseline, candidate)
+                        discrepancy = not score.bounded and score.identity >= params['minimum_identity'] and (min(score.coverage_a, score.coverage_b) < params['minimum_coverage'] or (len(baseline['blocks']) > 1 and len(candidate['blocks']) > 1 and score.junction_similarity < 0.8))
+                    if not discrepancy:
+                        continue
+                    represented = False
+                    for known in target['candidates']:
+                        if not known['quality'].get('valid_orf'):
+                            continue
+                        match = pair_score(known, candidate)
+                        if not match.bounded and min(match.coverage_a, match.coverage_b) >= params['minimum_coverage'] and match.identity >= params['minimum_identity'] and match.junction_similarity >= 0.95:
+                            represented = True
+                            break
+                    if represented:
+                        continue
+                    blocks = [b for c in target['candidates'] for b in c['blocks']]
+                    start, end = max(0, min(b[0] for b in blocks) - params['padding']), max(b[1] for b in blocks) + params['padding']
+                    if end - start > params['max_interval']:
+                        proposals.append({'gene_id': target_gene, 'status': 'interval_too_large', 'donor': donor})
+                        continue
+                    qid = 'q' + hashlib.sha256((target_gene + donor + candidate['candidate_id']).encode()).hexdigest()[:24]
+                    region = {'id': qid, 'seqid': target['seqid'], 'start': start, 'end': end, 'query': candidate['candidate_id'],
+                              'donor': donor, 'gene_id': target_gene, 'donor_candidate': candidate['candidate_id']}
+                    queries[qid] = region
+                    proteins.setdefault(donor, {})[candidate['candidate_id']] = candidate['protein']
+                    windows[target['seqid'], start, end].append(region)
         validated = []
         with pysam.FastaFile(str(tmp / 'genome.fa')) as genome:
             bounded = {}

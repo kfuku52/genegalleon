@@ -194,3 +194,45 @@ two-query comparison with v0.8.140 read the FASTA six times before and once
 after, with identical full model/coverage/identity results. That bounded check
 uses real FASTA parsing and Bio alignment with fake Java/model validation;
 no full GeMoMa runtime or memory improvement is claimed.
+
+## Refinement catalog storage and lookups
+
+Refinement catalogs and locus payloads use SQLite rowid tables. Their compact
+unique primary-key indexes allow foreign-key probes to avoid repeatedly reading
+large JSON payloads; both foreign-key constraints remain enabled. Candidate-owner
+lookups keep their compact `WITHOUT ROWID` table. Logical catalog, locus and
+candidate-owner rows retain the existing private schema and content.
+
+Correspondence inference and prediction nomination reuse one verified read-only
+SQLite connection per stage instead of reopening the same database for every
+locus. Connections close before predictor subprocesses start. Source/content
+verification, candidate ordering and scientific gates are unchanged.
+
+Prediction classification indexes ambiguous target loci and trusted donor
+species in one pass through the correspondence graph. It preserves the original
+direction-independent predicates, including ambiguity when a locus has both
+ambiguous and trusted edges. It avoids a cohort-wide graph scan for every model.
+
+Three bounded real-data benchmarks on QNAP NFS used the same fresh amd64 SIF child
+per run, three alternating before/after repetitions and identical logical output
+hashes:
+
+| Measured region | Before median | After median | Wall reduction |
+| --- | ---: | ---: | ---: |
+| Store 256 loci / 302 candidates with full FASTA-association metadata | 0.6765 s | 0.3107 s | 54.1% |
+| Load and serialize 1,024 loci from one immutable catalog | 0.6386 s | 0.1168 s | 81.7% |
+| Classify 32 annotated coding paths against 3,869,602 edges | 19.4136 s | 3.0720 s | 84.2% |
+
+For the store benchmark, logical reads fell from 1,563,434,699 to 9,567,947 bytes
+(99.4%); median child peak RSS was 90.3 versus 90.6 MiB. The lookup benchmark's
+median child peak RSS was 38.4 versus 41.5 MiB. These are region timings and
+parent Python RSS, not whole-refinement speedups or scheduler memory estimates.
+The store fixture retained the full 21,716-locus source-association metadata but
+inserted only 256 actual loci. Full-pipeline wall time also includes hashing,
+catalog reconstruction, alignment, prediction and export.
+The classification fixture constructs model records from 32 actual original
+coding annotations and uses the complete 21,716-locus target catalog, annotation
+ownership spans and frozen correspondence graph. Its returned candidate,
+quality, support and problem records agree exactly. Median child lifetime RSS
+was 5,099.5 versus 5,099.4 MiB, including graph/catalog loading before the timed
+region; this is not a predictor benchmark or a whole-worker memory saving.

@@ -77,6 +77,26 @@ def classify(catalog, models, edges, rna=(), **params):
                                            list(rna), "assembly-sha256")
 
 
+def test_gene_only_mismatch_is_archived_but_not_exported_as_genomic_representative(tmp_path):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    Path(target["gff"]).write_text("##gff-version 3\n"
+                                 "chr1\ts\tgene\t1\t12\t.\t+\t.\tID=g\n"
+                                 "chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g\n"
+                                 "chr1\ts\tCDS\t1\t12\t.\t+\t0\tID=c1;Parent=t1\n")
+    original = ">g\nATGCCCCCCTAA\n"
+    Path(target["cds"]).write_text(original)
+    root = tmp_path / "run"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    effective = refinement.finalize(root, value)
+    assert (effective / "source_cds" / (target["species"] + ".fa")).read_text() == original
+    assert (effective / "species_cds" / (target["species"] + ".fa")).read_text() == ""
+    assert (effective / "species_protein" / (target["species"] + ".fa")).read_text() == ""
+    assert "source_cds_sequence_mismatch" in (effective / "effective_exclusions.tsv").read_text()
+    assert "ID=t1;Parent=g" in (effective / "source_annotation" / (target["species"] + ".gff3")).read_text()
+    assert refinement.verify_inputs(effective / "inputs.tsv")
+
+
 @pytest.mark.parametrize('code,dual', [(27, 'TGA'), (28, 'TAA'), (31, 'TAA')])
 def test_whole_rna_cannot_adopt_predicted_dual_coding_translation_context(code, dual):
     catalog, models, edges = classification_fixture()
@@ -271,6 +291,22 @@ def test_many_isoforms_of_one_donor_are_not_independent_species_support():
     assert rows[0]["status"] == "proposal"
     assert "insufficient_independent_support" in rows[0]["problems"]
     assert not rows[0]["candidate"]["quality"]["representative_eligible"]
+
+
+def test_prediction_correspondence_is_direction_independent_and_locus_specific():
+    catalog, models, edges = classification_fixture()
+    reverse = [{**e, 'species_a': e['species_b'], 'gene_a': e['gene_b'],
+                'species_b': e['species_a'], 'gene_b': e['gene_a']} for e in edges]
+    unrelated = {**edges[0], 'species_a': 'Other_target', 'ambiguous': True}
+    accepted = classify(catalog, models, [unrelated, *reverse])
+    assert accepted == classify(catalog, models, edges)
+    ambiguous = {**reverse[0], 'ambiguous': True}
+    row = classify(catalog, models, [*reverse, ambiguous])[0]
+    assert row['status'] == 'proposal'
+    assert 'ambiguous_locus_correspondence' in row['problems']
+    untrusted = copy.deepcopy(models)
+    untrusted[0]['donor_species'] = 'Unrelated_donor'
+    assert 'untrusted_donor_correspondence' in classify(catalog, untrusted, reverse)[0]['problems']
 
 
 @pytest.mark.parametrize("rna_supported", [False, True])

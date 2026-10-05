@@ -254,7 +254,8 @@ def _node_key(species: Any, gene: Any) -> tuple[str, str]:
 
 
 def _baseline(locus: dict, candidates: list[dict]) -> dict:
-    requested = locus.get("baseline_candidate_id") or locus.get("source_baseline_candidate_id")
+    requested = (locus.get("baseline_candidate_id") or locus.get("source_baseline_candidate_id")
+                 or locus.get("source_baseline_coding_candidate_id"))
     by_id = {_candidate_id(candidate): candidate for candidate in candidates}
     if requested:
         if requested not in by_id:

@@ -41,6 +41,63 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize("header", ["g", "Species_one_g"])
+def test_gene_only_header_binds_unique_transcript_before_sequence_mismatch_qc(tmp_path, header):
+    annotations = row("gene", 1, 12, "g") + row("mRNA", 1, 12, "t", parent="g")
+    annotations += row("CDS", 1, 12, "c", parent="t", phase="0")
+    supplied, genomic = "ATGCCCCCCTAA", "ATGAAACCCTAA"
+    paths = fixture(tmp_path, ">" + header + "\n" + supplied + "\n", annotations, genomic)
+    before = [digest(path) for path in paths]
+    catalog = MODULE.build_catalog("Species_one", *paths)
+    locus = catalog["loci"][0]
+    candidate = locus["candidates"][0]
+    association = catalog["fasta_mapping"][0]
+    assert association["mapping_status"] == "mapped"
+    assert association["candidate_ids"] == ["Species_one_t"]
+    assert not association["sequence_agreement"]
+    assert locus["source_baseline_candidate_id"] == "Species_one_t"
+    assert candidate["source_cds"][0]["cds"] == supplied
+    assert candidate["cds"] == genomic
+    assert candidate["quality"]["sequence_mismatch"]
+    assert not candidate["quality"]["usable"]
+    assert [digest(path) for path in paths] == before
+
+
+def test_gene_only_mismatch_to_all_isoforms_cannot_hide_as_unbound_genomic_paths(tmp_path):
+    annotations = row("gene", 1, 15, "g")
+    for transcript, end in (("t1", 12), ("t2", 15)):
+        annotations += row("mRNA", 1, end, transcript, parent="g")
+        annotations += row("CDS", 1, end, transcript + "-c", parent=transcript, phase="0")
+    paths = fixture(tmp_path, ">g\nATGCCCCCCTAA\n", annotations, "ATGAAACCCTACTAA")
+    catalog = MODULE.build_catalog("Species_one", *paths)
+    locus = catalog["loci"][0]
+    assert catalog["fasta_mapping"][0]["candidate_ids"] == []
+    assert locus["unresolved_source_fasta_ids"] == ["g"]
+    assert all(c["quality"]["sequence_mismatch"] and not c["quality"]["usable"] for c in locus["candidates"])
+    assert all(c["source_cds"] == [] for c in locus["candidates"])
+
+
+def test_identical_coding_path_identities_preserve_source_baseline_over_longer_unsupplied_isoform(tmp_path):
+    annotations = row("gene", 1, 15, "g")
+    for transcript, first_end in (("t1", 6), ("t2", 6), ("t3", 9)):
+        annotations += row("mRNA", 1, 15, transcript, parent="g")
+        annotations += row("CDS", 1, first_end, transcript + "-c1", parent=transcript, phase="0")
+        annotations += row("CDS", 13, 15, transcript + "-c2", parent=transcript, phase="0")
+    paths = fixture(tmp_path, ">g\nATGAAATAA\n", annotations, "ATGAAACCCNNNTAA")
+    catalog = MODULE.build_catalog("Species_one", *paths)
+    locus = catalog["loci"][0]
+    assert locus["source_baseline_candidate_id"] == ""
+    assert locus["source_baseline_coding_candidate_id"] == "Species_one_t1"
+    assert locus["source_baseline_basis"] == "matching_coding_path_transcript_identity_ambiguous"
+    assert catalog["fasta_mapping"][0]["candidate_ids"] == []
+    assert catalog["fasta_mapping"][0]["sequence_agreeing_candidate_ids"] == ["Species_one_t1", "Species_one_t2"]
+    assert max(len(c["cds"]) for c in locus["candidates"]) == 12
+    assert all(c["source_cds"] == [] for c in locus["candidates"])
+    selection = __import__("gene_model_selection").select_representatives([catalog], [])
+    chosen = selection["selections"][0]["candidate_id"]
+    assert next(c["cds"] for c in locus["candidates"] if c["candidate_id"] == chosen) == "ATGAAATAA"
+
+
 @pytest.mark.parametrize("compressed", [False, True])
 def test_duplicate_genome_contig_names_cannot_choose_one_conflicting_assembly_record(tmp_path, compressed):
     annotations = row("gene", 1, 12, "g") + row("mRNA", 1, 12, "t", parent="g")
