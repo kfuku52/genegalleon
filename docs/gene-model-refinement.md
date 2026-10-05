@@ -260,6 +260,10 @@ terminal genomic stop with `NNN` is recognized when the whole preceding sequence
 agrees; internal masking and code-specific non-stop replacements remain
 inconsistent. This does not edit source files. SQLite
 indexes load sequences by component instead of simultaneously for every species.
+Read-only connections hold a consistent SQLite snapshot; borrowed connections
+retain their existing transaction behaviour. Isolated loci are streamed through
+one cursor and still use the same single-locus decisions, avoiding one NFS query
+per gene without changing copy-ambiguity gates or the component memory bound.
 Eligibility is computed once per invocation; optimization states and graph
 weights are confined to the current component. Pairwise scores retain the same
 alignment and floating-point scoring rules.

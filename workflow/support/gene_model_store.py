@@ -141,6 +141,10 @@ def _connection(db):
     owned = not isinstance(db, sqlite3.Connection)
     connection = sqlite3.connect(Path(db).expanduser().resolve().as_uri() + "?mode=ro", uri=True) if owned else db
     try:
+        if owned:
+            # Keep one consistent read snapshot and one read lock for this
+            # scope, rather than renewing NFS locks for every locus query.
+            connection.execute("BEGIN")
         if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
             raise ValueError("Unsupported gene model store schema")
         yield connection
@@ -242,6 +246,8 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                     total_metrics[key] += value
 
         for root, keys in sorted(components.items()):
+            if len(keys) == 1:
+                continue
             if len(keys) > max_component_loci:
                 limited_components += 1
                 for species, gene_id in keys:
@@ -252,6 +258,7 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                     for selection in part["selections"]:
                         selection.update(status="insufficient_evidence", reason="component_limit_exceeded")
                     merge(part)
+                    del locus
                 peak_loaded_loci = max(peak_loaded_loci, 1)
                 continue
             catalogs = defaultdict(list)
@@ -263,6 +270,19 @@ def select_from_store(db, edges, *, max_component_loci=5000, **selectionkwargs):
                                           _copy_ambiguity={node for node in keys if node in prepared["ambiguity"]},
                                           **selectionkwargs)
             merge(part)
+            del catalogs
+        # Most loci have no voting neighbors. Stream their records through one
+        # cursor instead of doing one indexed query and NFS read-lock cycle per
+        # gene. Each locus still uses the unchanged single-locus selection path.
+        for locus in iter_loci(connection):
+            node = str(locus["species"]), str(locus["gene_id"])
+            if len(components[find(node)]) != 1:
+                continue
+            part = select_representatives([{"schema": 1, "species": node[0], "loci": [locus]}], [],
+                                          _copy_ambiguity={node} & prepared["ambiguity"],
+                                          **selectionkwargs)
+            merge(part)
+            peak_loaded_loci = max(peak_loaded_loci, 1)
         if result is None:
             result = select_representatives([], [], **selectionkwargs)
             total_metrics.update(result["metrics"])

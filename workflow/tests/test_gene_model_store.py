@@ -139,6 +139,25 @@ def test_sqlite_overlay_visible_without_reloading_other_species(tmp_path):
     assert select_from_store(database, edges)["selections"][0]["candidate_id"] == "A_conserved"
 
 
+def test_owned_reader_keeps_a_consistent_snapshot_and_releases_it(tmp_path):
+    catalogs, _ = extension_fixture()
+    database = tmp_path / "models.sqlite"
+    build_store(write_catalogs(tmp_path, catalogs), database)
+    original = load_locus(database, "A", "g")
+    changed = copy.deepcopy(original)
+    changed["candidates"][1]["quality"]["full_length_supported"] = True
+    with sqlite3.connect(database) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        with store._connection(database) as reader:
+            assert load_locus(reader, "A", "g") == original
+            writer.execute("UPDATE loci SET json=? WHERE species=? AND gene_id=?", (json.dumps(changed), "A", "g"))
+            writer.commit()
+            assert load_locus(reader, "A", "g") == original
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                reader.execute("DELETE FROM loci")
+    assert load_locus(database, "A", "g") == changed
+
+
 @pytest.mark.parametrize("invalid", ["duplicate_locus", "duplicate_candidate", "wrong_species", "schema", "empty"])
 def test_atomic_import_rejects_invalid_contract_and_preserves_previous_database(tmp_path, invalid):
     catalogs, _ = extension_fixture()
