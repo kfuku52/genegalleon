@@ -218,6 +218,43 @@ def test_real_bam_start_bases_repeat_and_rna_are_advisory(tmp_path, strand):
         evidence.audit(args)
 
 
+@pytest.mark.parametrize("fault", [None, "no_reference", "changed_bases", "changed_length",
+                                  "missing_target", "wrong_original_header", "duplicate_fasta"])
+def test_pre_filter_bam_requires_verified_original_reference(tmp_path, fault):
+    args, genome = fixture(tmp_path)
+    original = tmp_path / "original.fa"
+    original.write_text(">chr\n" + ("CTGAAATAA" if fault == "changed_bases" else "TTGAAATAA")
+                        + "\n>excluded\n" + ("ACGTA" if fault == "wrong_original_header" else "ACGT") + "\n")
+    if fault == "duplicate_fasta":
+        with original.open("a") as handle:
+            handle.write(">excluded\nACGT\n")
+    refs = [{"SN": "chr", "LN": 10 if fault == "changed_length" else 9}, {"SN": "excluded", "LN": 4}]
+    if fault == "missing_target":
+        refs = refs[1:]
+    bam_path = tmp_path / "reads.bam"
+    with pysam.AlignmentFile(str(bam_path), "wb", header={"HD": {"SO": "coordinate"}, "SQ": refs}):
+        pass
+    pysam.index(str(bam_path))
+    dna = {"path": str(bam_path), "index": str(bam_path) + ".bai", "format": "bam", "min_mapq": 20, "min_baseq": 20}
+    if fault != "no_reference":
+        dna["reference_genome"] = str(original)
+    args.evidence_manifest = tmp_path / "manifest.json"
+    args.evidence_manifest.write_text(json.dumps({"schema_version": 1, "species": {args.species: {
+        "reference_genome_sha256": digest(genome), "dna": dna}}}))
+    if fault:
+        with pytest.raises(ValueError):
+            evidence.audit(args)
+    else:
+        summary = evidence.audit(args)
+        assert summary["dna_reference"]["extra_bam_contigs"] == 1
+        assert summary["dna_reference"]["reference_genome_sha256"] == digest(original)
+        assert summary["accepted_models"] == 1 and summary["sequence_changes"] == 0
+        row = json.loads((args.output / "evidence.json").read_text())[0]
+        assert row["dna"]["hq_depth_min"] == 0
+        assert row["decision"] == "unchanged"
+        assert not Path(str(original) + ".fai").exists()
+
+
 def test_runtime_cli_help_has_no_writes(tmp_path):
     from workflow.tests.test_support_script_help_smoke import test_support_script_help_smoke
     test_support_script_help_smoke("rescue_model_evidence.py", tmp_path)
