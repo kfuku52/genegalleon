@@ -8,6 +8,7 @@
   "runtime_python_files": [
     "test_gene_model_refinement.py",
     "test_gene_model_refinement_downstream.py",
+    "test_plot_gene_model_refinement.py",
     "test_presence_absence_runtime.py",
     "test_workflow_cds_validation_runtime.py",
     "test_native_mul_reconcile_runtime.py",

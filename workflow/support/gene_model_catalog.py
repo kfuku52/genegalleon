@@ -447,6 +447,7 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
     finally:
         normaliser.close()
     mapping, seen_fasta, bound_by_locus = [], set(), defaultdict(list)
+    coding_surrogates = defaultdict(list)
     for identifier, header, raw in fasta_records(paths["cds"]):
         if identifier in seen_fasta:
             raise ValueError("Duplicate source FASTA identifier: " + identifier)
@@ -468,13 +469,40 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
             possible = {candidate["candidate_id"] for candidate in locus["candidates"]} if locus else set()
         exact = {identifier for identifier in possible if _source_matches(sequence, candidates[identifier])}
         chosen = explicit if len(explicit) == 1 else exact
+        # A gene-only FASTA header can still identify its sole coding
+        # transcript independently of sequence agreement. Bind that identity
+        # before checking the bytes, so a genuine mismatch is withheld rather
+        # than silently treated as an unbound, usable genomic reconstruction.
+        if not chosen and len(possible) == 1:
+            chosen = possible
         status = "mapped" if len(chosen) == 1 else "ambiguous" if chosen or possible else "unmapped"
         bound = sorted(chosen) if status == "mapped" else []
         row = {"source_fasta_id": identifier, "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
                "mapping_status": status, "candidate_ids": bound, "possible_candidate_ids": sorted(possible),
                "sequence_agreement": bool(bound and bound[0] in exact),
                "source_convention": _source_convention(sequence, candidates[bound[0]]) if bound else ""}
+        if not bound and len(exact) > 1 and len({candidates[c]["gene_id"] for c in exact}) == 1:
+            # UTR-only identities can identify the source coding path without
+            # identifying one transcript. Retain identity ambiguity and an
+            # agreeing source baseline; equal DNA at distinct paths stays unresolved.
+            if len({candidates[c]["coding_key"] for c in exact}) == 1:
+                gene_id = candidates[next(iter(exact))]["gene_id"]
+                coding_surrogates[gene_id].append(sorted(exact))
+                row["sequence_agreeing_candidate_ids"] = sorted(exact)
         mapping.append(row)
+        if (not bound and possible and not exact and match["status"] == "mapped"
+                and {candidates[c]["gene_id"] for c in possible}
+                == {_formatted_id(species, match["gene_token"])}):
+            # No annotated isoform explains this uniquely owned source CDS.
+            # Do not invent a transcript identity or permit an unbound genomic
+            # isoform to conceal the unexplained sequence disagreement.
+            locus = loci[_formatted_id(species, match["gene_token"])]
+            locus.setdefault("unresolved_source_fasta_ids", []).append(identifier)
+            for possible_id in possible:
+                candidate = candidates[possible_id]
+                candidate["quality"]["sequence_mismatch"] = True
+                candidate["quality"]["source_association_unresolved"] = True
+                candidate["quality"] = validate_candidate(candidate, genetic_code)
         if bound:
             candidate = candidates[bound[0]]
             candidate["source_fasta_ids"].append(identifier)
@@ -501,6 +529,11 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
     for gene_id, bound in bound_by_locus.items():
         if len(bound) == 1:
             loci[gene_id]["source_baseline_candidate_id"] = bound[0]
+    for gene_id, matches in coding_surrogates.items():
+        if not bound_by_locus[gene_id] and len(matches) == 1:
+            baseline = min(matches[0], key=lambda key: (not candidates[key]["quality"]["usable"], key))
+            loci[gene_id]["source_baseline_coding_candidate_id"] = baseline
+            loci[gene_id]["source_baseline_basis"] = "matching_coding_path_transcript_identity_ambiguous"
     if any(_stat_identity(path) != frozen[name] for name, path in paths.items()):
         raise OSError("Sources changed during coding isoform catalog construction")
     summary = {"loci": len(loci), "candidates": len(candidates),

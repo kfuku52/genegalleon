@@ -51,12 +51,16 @@ def build_store(catalog_dirs, sqlite_path):
         database.executescript("""
             PRAGMA journal_mode=DELETE;
             PRAGMA foreign_keys=ON;
-            CREATE TABLE catalogs (species TEXT PRIMARY KEY, json TEXT NOT NULL) WITHOUT ROWID;
+            -- Keep bulky JSON outside the primary-key btree. WITHOUT ROWID
+            -- makes foreign-key probes read overflowing record payloads even
+            -- when they only need a species/locus key. Rowid tables retain
+            -- separate compact unique indices and the same checked relations.
+            CREATE TABLE catalogs (species TEXT NOT NULL PRIMARY KEY, json TEXT NOT NULL);
             CREATE TABLE loci (
                 species TEXT NOT NULL, gene_id TEXT NOT NULL, seqid TEXT NOT NULL, strand TEXT NOT NULL,
                 json TEXT NOT NULL, PRIMARY KEY(species, gene_id),
                 FOREIGN KEY(species) REFERENCES catalogs(species)
-            ) WITHOUT ROWID;
+            );
             CREATE TABLE candidate_owners (
                 species TEXT NOT NULL, candidate_id TEXT NOT NULL, gene_id TEXT NOT NULL,
                 PRIMARY KEY(species, candidate_id), FOREIGN KEY(species,gene_id) REFERENCES loci(species,gene_id)

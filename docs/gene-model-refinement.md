@@ -67,6 +67,15 @@ transcripts and the exact genome is available. If the GFF itself has already
 removed alternative transcripts, the catalog cannot recover their identities or
 UTR metadata; supply the full original annotation via the explicit input TSV.
 
+Gene-only FASTA headers are associated with the uniquely possible coding
+transcript even when its supplied sequence disagrees with the genome. That
+disagreement excludes the reconstructed candidate; it is not hidden by treating
+the source record as unbound. When no transcript explains a gene's supplied CDS,
+the unresolved candidates are withheld and the exact source record is archived.
+If several transcript identities share one exactly matching genomic coding path,
+the source coding path remains the selection baseline without claiming a unique
+transcript identity. A longer, unsupplied isoform does not silently replace it.
+
 Two donor isoforms from one species count as one donor. Homology-only additions
 at an already intact locus remain nonrepresentative until target RNA supports
 the whole coding path. A supported repair of an incomplete original can become
@@ -193,6 +202,31 @@ release consumes reviewed paths, rather than inferring them from BAM files.
 Exact matching paths support both existing annotated candidates and new
 predictions. Paths are indexed once for matching; partial paths and separately
 supported junctions do not strengthen a full transcript choice.
+
+## Review figures
+
+After `qc` succeeds, render a separate review directory in the same runtime:
+
+```bash
+python workflow/support/plot_gene_model_refinement.py \
+  --output /path/to/refinement --report /path/to/refinement-review \
+  --max-loci 200 --preferred-species Species_name
+```
+
+The helper verifies the consumed publication hashes, produces `summary.png`
+and `summary.svg`, and embeds the summary and locus diagrams in a self-contained
+`review.html`. The summary counts every species; the detailed gallery is bounded
+by `--max-loci`, prioritizes the requested species and changed/accepted loci, then
+fills remaining slots with prediction proposals. Search the gallery by species,
+gene identifier or selection decision. `review_data.json` retains the report's
+provenance and numerical inputs in the review directory.
+
+Coding paths, affected loci and changed representatives are different counts.
+The diagrams preserve genomic spacing and strand, label source and selected
+paths, and expose phase, donor, RNA and rejection evidence. A source coding-path
+label may refer to identical coding paths with unresolved transcript identity.
+Whole RNA-chain support does not establish translation initiation or protein
+function. Review files are never added to the immutable refinement publication.
 
 ## Outputs and downstream use
 

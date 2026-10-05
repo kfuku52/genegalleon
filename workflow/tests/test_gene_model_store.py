@@ -36,6 +36,23 @@ def scientific_output(result):
     return {key: value for key, value in result.items() if key != "metrics"}
 
 
+def test_bulky_metadata_preserves_catalog_and_foreign_key_integrity(tmp_path):
+    catalogs, _ = extension_fixture()
+    catalogs[0]["fasta_mapping"] = [{"source_cds": "A" * 16384} for _ in range(128)]
+    database = tmp_path / "models.sqlite"
+    build_store(write_catalogs(tmp_path, catalogs), database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        metadata = json.loads(connection.execute("SELECT json FROM catalogs WHERE species='A'").fetchone()[0])
+        assert metadata["fasta_mapping"] == catalogs[0]["fasta_mapping"]
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("INSERT INTO loci VALUES ('absent','g','chr1','+','{}')")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("INSERT INTO candidate_owners VALUES ('A','absent','missing_locus')")
+    assert list(iter_loci(database, "A")) == catalogs[0]["loci"]
+
+
 def test_store_streams_complete_loci_and_species_keys_in_stable_order(tmp_path):
     catalogs, _ = extension_fixture()
     catalogs.append(catalog("Z", ("g1", [candidate("Z1", protein())]),
