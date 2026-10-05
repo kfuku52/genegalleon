@@ -18,6 +18,31 @@ from workflow.support.rescue_anchor_admission import prepare_rescue_genome
 SCRIPT = Path(rescue.__file__)
 
 
+def test_load_refuses_plan_replaced_while_validating_tools(tmp_path, monkeypatch):
+    plan = {"request": {"schema": rescue.SCHEMA, "tools": {}, "parameters": {"minimum_coverage": .95}}}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan))
+    def changing_identities():
+        new = copy.deepcopy(plan)
+        new["request"]["parameters"]["minimum_coverage"] = .5
+        path.write_text(json.dumps(new))
+        return {}
+    monkeypatch.setattr(rescue, "identities", changing_identities)
+    with pytest.raises(ValueError, match="Frozen rescue plan changed"):
+        rescue.load(tmp_path)
+
+
+def test_stale_plan_cannot_be_used_to_stamp_prepared_annotation(hidden_models):
+    output, names, _ = make_plan(hidden_models)
+    plan = rescue.load(output)
+    changed = copy.deepcopy(plan)
+    changed["request"]["sources"][names[0]]["genetic_code"] = 4
+    rescue.atomic_json(output / "plan.json", changed)
+    with pytest.raises(ValueError, match="Frozen rescue plan changed"):
+        rescue.prepared(output, plan, names[0])
+    assert not (output / "prepared" / names[0] / "receipt.json").exists()
+
+
 def anchor_fixture(tmp_path, models, code=1):
     """Real exon coordinates on both strands, with untouched source records."""
     fasta, genome, features = [], [], ["##gff-version 3"]
@@ -612,6 +637,7 @@ def test_rescue_exports_invalid_originals_and_audits_while_adding_intact_model(h
     plan = rescue.load(output)
     plan["donors"][name] = [names[1]]
     plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     monkeypatch.setattr(rescue, "candidates", lambda *_: [{"id": "query", "donor": names[1], "query": names[1] + "_g8",
                        "seqid": "chr1", "start": start, "end": start + len(sequences[8]),
@@ -678,6 +704,7 @@ def test_invalid_genome_annotation_pair_fails_even_without_candidates(hidden_mod
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
     monkeypatch.setattr(rescue, "candidates", lambda *_: [])
     with pytest.raises(ValueError, match="annotation.*genome|FASTA index warning"):
         rescue.rescue(output, plan, names[0], 1)
@@ -704,6 +731,7 @@ def test_compressed_inputs_and_literal_contigs_recover_and_export(hidden_models,
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     region = {"id": "query", "donor": names[1], "query": names[1] + "_g8", "seqid": contig,
               "start": start, "end": start + len(sequences[8]),
@@ -738,6 +766,7 @@ def test_mixed_species_genetic_codes_apply_to_local_and_genome_prediction(hidden
     assert plan["request"]["sources"][names[1]]["genetic_code"] == 1
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
     start = 9 * (len(sequences[0]) + 60)
     region = {"id": "recoded_query", "donor": names[1], "query": names[1] + "_g9", "seqid": "chr1",
               "start": start, "end": start + len(sequences[9]),
@@ -1097,6 +1126,7 @@ def test_padding_does_not_accept_a_model_outside_its_flanking_anchors(hidden_mod
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     region = {"id": "padded_window", "donor": names[1], "query": names[1] + "_g8", "seqid": "chr1",
               "start": start, "end": start + len(sequences[8]) + 60,
@@ -1117,6 +1147,7 @@ def test_only_conflict_free_models_skip_refinement(hidden_models, monkeypatch, q
     plan["synteny_jobs"] = []
     plan["request"]["parameters"]["genome_fallback"] = int(fallback)
     plan["request"]["gemoma_jar"] = "test-refinement.jar"
+    rescue.atomic_json(output / "plan.json", plan)
     start = query * (len(sequences[0]) + 60) + (1 if query >= 11 else 0)
     region = {"id": "query", "donor": names[1], "query": names[1] + f"_g{query}", "seqid": "chr1",
               "start": start, "end": start + len(sequences[query]),
@@ -1146,6 +1177,7 @@ def test_rescue_refuses_dependencies_replaced_during_prediction(hidden_models, m
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     region = {"id": "query", "donor": names[1], "query": names[1] + "_g8", "seqid": "chr1",
               "start": start, "end": start + len(sequences[8]),

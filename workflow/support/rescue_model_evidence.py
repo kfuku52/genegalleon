@@ -12,6 +12,7 @@ import hashlib
 import importlib.metadata
 import json
 import re
+import shlex
 import shutil
 import statistics
 from collections import Counter, defaultdict
@@ -145,19 +146,39 @@ def gff_rows(path, lengths):
             yield f, start, end
 
 
-def attributes(text):
+def raw_attributes(text):
+    validate_attributes(text)
+    if text in {"", "."}:
+        return {}
     if re.match(r"^[^\s=;]+=", text.strip()):
-        return {key: unquote(value) for token in text.rstrip(";").split(";") if "=" in token
-                for key, value in [token.strip().split("=", 1)]}
-    return dict(re.findall(r'(\w+)\s+"([^"\n]*)"', text))
+        pairs = [token.strip().split("=", 1) for token in text.rstrip(";").split(";") if "=" in token]
+    else:
+        # The validator accepts escaped quotes/backslashes and quoted semicolons.
+        # A regex truncates those identifiers and can merge distinct RNA paths.
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=";")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = iter(lexer)
+        pairs = [(key, next(tokens)) for key in tokens if key != ";"]
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate evidence attribute: " + key)
+        result[key] = value
+    return result
+
+
+def attributes(text):
+    values = raw_attributes(text)
+    return {key: unquote(value) for key, value in values.items()} if re.match(r"^[^\s=;]+=", text.strip()) else values
 
 
 def transcript_parents(text):
     if re.match(r"^[^\s=;]+=", text.strip()):
-        raw = dict(token.strip().split("=", 1) for token in text.rstrip(";").split(";") if "=" in token)
+        raw = raw_attributes(text)
         # Split encoded GFF lists before decoding literal commas in identifiers.
         return [unquote(value) for value in raw.get("Parent", "").split(",") if value]
-    identifier = attributes(text).get("transcript_id")
+    identifier = raw_attributes(text).get("transcript_id")
     return [identifier] if identifier else []
 
 
@@ -241,6 +262,28 @@ def repeat_evidence(model, spec, repeats):
             "classes": sorted({row[2] for row in rows if overlap_bases(model["cds"], [row[:2]])})}
 
 
+def validate_reference_layout(path):
+    """Reject records that the permissive FASTA iterator/htslib may omit."""
+    names = set()
+    current = None
+    bases = False
+    with open_text(Path(path)) as handle:
+        for line in handle:
+            if line.startswith(">"):
+                fields = line[1:].split()
+                if not fields or fields[0] in names or (current is not None and not bases):
+                    raise ValueError("Empty or duplicate genome reference")
+                current = fields[0]
+                names.add(current)
+                bases = False
+            elif line.strip():
+                if current is None:
+                    raise ValueError("Genome sequence precedes first header")
+                bases = True
+    if not names or not bases:
+        raise ValueError("Empty genome reference sequence")
+
+
 def validate_dna_reference(bam, spec, genome):
     """Allow a filtered genome only with base-verified original BAM reference."""
     target = dict(zip(genome.references, genome.lengths, strict=True))
@@ -254,6 +297,7 @@ def validate_dna_reference(bam, spec, genome):
             raise ValueError("Extra BAM contigs require the original reference_genome for sequence verification")
         return {"identity": "manifest_asserted_with_exact_bam_contig_lengths", "extra_bam_contigs": 0}
     seen = {}
+    validate_reference_layout(reference)
     for name, _, sequence in fasta_records(Path(reference)):
         if name in seen or not sequence:
             raise ValueError("Duplicate/empty BAM reference sequence")
@@ -273,7 +317,7 @@ def dna_evidence(model, spec, bam, genome, reference_check=None):
     dna = spec["dna"]
     def usable(read):
         return (not (read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_duplicate or read.is_qcfail)
-                and read.mapping_quality >= dna["min_mapq"])
+                and read.mapping_quality != 255 and read.mapping_quality >= dna["min_mapq"])
     depths = []
     # A split initiator may cross an exon boundary. Follow spliced CDS order.
     positions = []
@@ -296,7 +340,7 @@ def dna_evidence(model, spec, bam, genome, reference_check=None):
     first_counts = [calls[position] for position in positions]
     return {"status": "available", "hq_depth_min": min(depths), "hq_depth_median": statistics.median(depths),
             "start_base_support": first_counts, "confirms_translation_initiation": False,
-            "reference_identity": (reference_check or {}).get("identity", "manifest_asserted_with_exact_bam_contig_lengths")}
+            "reference_identity": (reference_check or {}).get("identity", "not_verified")}
 
 
 def check_model(model, genome, genetic_code=1):
@@ -326,10 +370,17 @@ def check_model(model, genome, genetic_code=1):
         raise ValueError("Accepted model lacks an intact code-compatible ORF")
 
 
-def manifest_spec(path, name, genome_hash):
+def read_json_snapshot(path):
+    """Bind parsed metadata to the exact bytes consumed, before any later hash."""
+    raw = Path(path).read_bytes()
+    return json.loads(raw), hashlib.sha256(raw).hexdigest()
+
+
+def manifest_spec(path, name, genome_hash, *, manifest=None):
     if path is None:
         return {}
-    manifest = json.loads(path.read_text())
+    if manifest is None:
+        manifest, _ = read_json_snapshot(path)
     if manifest.get("schema_version") != 1 or name not in manifest.get("species", {}):
         raise ValueError("Evidence manifest needs schema_version=1 and target species")
     spec = manifest["species"][name]
@@ -372,20 +423,26 @@ def audit(args):
     if destination == root or root in destination.parents or destination in root.parents:
         raise ValueError("Audit output must be separate from the frozen rescue directory")
     plan_path = root / "plan.json"
-    plan = json.loads(plan_path.read_text())
+    plan, plan_hash = read_json_snapshot(plan_path)
     source = plan["request"]["sources"][args.species]
     worker = root / "rescued" / args.species
     models_path = worker / "models.json"
     receipt_path = worker / "receipt.json"
-    frozen = json.loads(receipt_path.read_text())
-    if frozen.get("key", {}).get("plan") != digest(plan_path):
+    frozen, receipt_hash = read_json_snapshot(receipt_path)
+    if frozen.get("key", {}).get("plan") != plan_hash:
         raise ValueError("Models receipt belongs to another plan")
     if frozen.get("files", {}).get("models.json") != digest(models_path):
         raise ValueError("Frozen models changed")
     genome_hash = plan["request"]["files"][source["genome"]]
     if digest(source["genome"]) != genome_hash:
         raise ValueError("Frozen genome changed")
-    spec = manifest_spec(args.evidence_manifest, args.species, genome_hash)
+    snapshots = {str(plan_path): plan_hash, str(receipt_path): receipt_hash,
+                 str(models_path): frozen["files"]["models.json"], str(Path(source["genome"]).resolve()): genome_hash}
+    manifest = None
+    if args.evidence_manifest:
+        manifest, manifest_hash = read_json_snapshot(args.evidence_manifest)
+        snapshots[str(args.evidence_manifest.resolve())] = manifest_hash
+    spec = manifest_spec(args.evidence_manifest, args.species, genome_hash, manifest=manifest)
     files = [plan_path, models_path, receipt_path, Path(source["genome"]), Path(__file__),
              *{Path(function.__code__.co_filename) for function in (model_quality, open_text, stage, atomic_json, validate_attributes)}]
     if args.evidence_manifest:
@@ -402,6 +459,8 @@ def audit(args):
         return {"schema": 1, "species": args.species, "inputs": {str(p.resolve()): digest(p) for p in files},
                 "biopython": importlib.metadata.version("biopython"), "pysam": pysam.__version__}
     key = current_key()
+    if any(key["inputs"][path] != expected for path, expected in snapshots.items()):
+        raise ValueError("Input changed while loading frozen evidence metadata")
     def build(tmp):
         # Only the genome needs indexing; preserve inputs and avoid loading every
         # source annotation or rerunning any protein alignment.
@@ -411,16 +470,7 @@ def audit(args):
                 shutil.copyfileobj(incoming, out)
         else:
             shutil.copyfile(source["genome"], genome_path)
-        names = set()
-        with genome_path.open() as handle:
-            for line in handle:
-                if line.startswith(">"):
-                    fields = line[1:].split()
-                    if not fields or fields[0] in names:
-                        raise ValueError("Empty or duplicate genome reference")
-                    names.add(fields[0])
-        if not names:
-            raise ValueError("Genome has no references")
+        validate_reference_layout(genome_path)
         pysam.faidx(str(genome_path))
         bam = None
         reference_check = None
@@ -476,13 +526,15 @@ def audit(args):
         with (tmp / "evidence.tsv").open("w", newline="") as handle:
             writer = csv.writer(handle, delimiter="\t")
             writer.writerow(["model_id", "seqid", "strand", "start_codon", "donor_species_count", "n_aligned", "c_aligned",
-                             "rna_junctions_supported", "rna_junction_count", "rna_chain_groups", "te_fraction", "hq_dna_min", "hq_dna_median", "flags"])
+                             "rna_junctions_supported", "rna_junction_count", "rna_chain_groups", "te_fraction", "hq_dna_min", "hq_dna_median", "flags",
+                             "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"])
             for row in records:
                 q, r, rep, d = (row[k] for k in ("quality", "rna", "repeat", "dna"))
                 writer.writerow([row["model_id"], row["seqid"], row["strand"], q["start_codon"], len(q["donor_species"]),
                                  q["terminal_alignment"]["n_aligned"], q["terminal_alignment"]["c_aligned"], r["junctions_supported"],
                                  r["junction_count"], None if r["exon_chain_independence_groups"] is None else len(r["exon_chain_independence_groups"]),
-                                 rep["te_annotated_fraction"], d["hq_depth_min"], d["hq_depth_median"], ",".join(row["review_flags"])])
+                                 rep["te_annotated_fraction"], d["hq_depth_min"], d["hq_depth_median"], ",".join(row["review_flags"]),
+                                 q["query_alignment"]["aligned_query_fraction"], q["query_alignment"]["internal_unaligned_query_fraction"]])
         genome_path.unlink()
         Path(str(genome_path) + ".fai").unlink()
     stage(destination.parent, Path(destination.name), key, build, lambda: require_same_key(key, current_key()))

@@ -8,6 +8,12 @@ does not establish translation initiation in a particular target gene; see
 [NCBI genetic codes](https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi).
 Alignment to both donor ends likewise does not establish native completeness,
 particularly if the donor annotation itself is partial.
+`query_alignment` reports aligned donor residues separately from the bounding
+query span and the fraction unaligned inside that span. A global alignment of a
+short fragment can pair both donor end residues while leaving a large internal
+deletion. Read N/C flags with these fractions; they do not mean a complete gene.
+The fractions are also appended to both TSV outputs. The additional
+`donor_internal_unaligned_query` flag is advisory; admission thresholds are unchanged.
 
 For existing frozen runs, a separate CLI regenerates the evidence report without
 resuming an old plan under new tool identities or repeating synteny/prediction:
@@ -28,6 +34,14 @@ invalidate this report; altered frozen models/genome fail. All accepted CDSs are
 reconstructed from the genome and checked for phase, sequence and ORF agreement.
 The large `models.json` array is streamed. Original sequence/annotation, accepted
 IDs, admission status and BUSCO results are never changed by this report.
+Parsed plan, receipt and manifest metadata are bound to the bytes actually read;
+an update between parsing, verification and publication fails instead of
+rebinding old parsed values to a newer file hash. Duplicate evidence attribute
+keys, truncated escaped GTF identifiers, and empty FASTA records are refused or
+parsed without losing identity.
+Ordinary rescue likewise compares its in-memory plan with the frozen plan before
+stamping preparation, rescue, export, worker completion or QC receipts. A changed
+plan fails before results can be labelled with the replacement plan's hash.
 
 ## Optional manifest
 
@@ -80,7 +94,9 @@ flag, not a rejection rule. Different loci encoding identical proteins remain
 different models. No protein-sequence deduplication is applied to this report.
 
 DNA coverage excludes unmapped, secondary, supplementary, QC-failed and duplicate
-reads, and applies the declared mapping/base quality thresholds. It records CDS
+reads, excludes MAPQ 255 (mapping quality unavailable, as defined by the
+[SAM specification](https://samtools.github.io/hts-specs/SAMv1.pdf)), and applies
+the declared mapping/base quality thresholds. It records CDS
 minimum/median depth and per-base support for the first spliced codon, including
 minus-strand/split codons. DNA support confirms sequence evidence, not expression,
 translation initiation, secretion or enzyme function.

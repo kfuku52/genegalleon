@@ -262,7 +262,18 @@ def load(root):
     plan = json.loads((root / "plan.json").read_text())
     if plan["request"]["schema"] != SCHEMA or plan["request"]["tools"] != identities():
         raise ValueError("Rescue schema/tools changed; use a new output directory")
+    plan_digest(root, plan)
     return plan
+
+
+def plan_digest(root, plan):
+    """Refuse to stamp a stale in-memory plan with the current file's hash."""
+    path = root / "plan.json"
+    raw = path.read_bytes()
+    result = hashlib.sha256(raw).hexdigest()
+    if json.loads(raw) != plan or digest(path) != result:
+        raise ValueError("Frozen rescue plan changed during execution")
+    return result
 
 
 def verify_sources(plan, names, keys):
@@ -377,14 +388,16 @@ def stage(root, relative, key, builder, guard=None):
 
 def prepared(root, plan, name):
     source = plan["request"]["sources"][name]
+    key = {"plan": plan_digest(root, plan), "species": name}
     def guard():
+        require_same_key(key["plan"], plan_digest(root, plan))
         verify_sources(plan, [name], ["fasta", "gff", "genome"])
     guard()
     def build(tmp):
         genes, meta = prepare_rescue_genome(source, tmp, "genes", 1.0)
         atomic_json(tmp / "mapping.json", meta)
         atomic_json(tmp / "positions.json", [vars(g) for g in genes])
-    return stage(root, Path("prepared") / name, {"plan": digest(root / "plan.json"), "species": name}, build, guard)
+    return stage(root, Path("prepared") / name, key, build, guard)
 
 
 def parse_anchors(path):
@@ -497,6 +510,7 @@ def synteny(root, plan, index, cpus, comparison_cache=None):
         raise ValueError("Comparison cache must be outside the frozen rescue output")
     cache_id = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode()).hexdigest()
     def guard():
+        plan_digest(root, plan)
         require_same_key(key, comparison_key(root, job))
         require_same_key(cache_key, comparison_cache_key(root, plan, job))
     def build(tmp):
@@ -624,7 +638,7 @@ def candidates(root, plan, name):
 def rescue_key(root, plan, name):
     jobs = [j for j in plan["synteny_jobs"] if name in {j["a"], j["b"]}
             and (j["a"] == j["b"] or (j["b"] if name == j["a"] else j["a"]) in plan["donors"][name])]
-    plan_hash = digest(root / "plan.json")
+    plan_hash = plan_digest(root, plan)
     for job in jobs:
         if not verified(root / "synteny" / job["id"], comparison_key(root, job)):
             raise ValueError("Comparison incomplete or corrupted: " + job["id"])
@@ -991,11 +1005,14 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             model["quality_evidence"] = model_quality(model, source["genetic_code"])
         atomic_json(tmp / "models.json", models)
         write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
-                  "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags"),
+                  "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
+                  "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"),
                   [(m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
                     m["quality_evidence"]["terminal_alignment"]["n_aligned"],
                     m["quality_evidence"]["terminal_alignment"]["c_aligned"],
-                    ",".join(m["quality_evidence"]["donor_species"]), ",".join(m["quality_evidence"]["flags"]))
+                    ",".join(m["quality_evidence"]["donor_species"]), ",".join(m["quality_evidence"]["flags"]),
+                    m["quality_evidence"]["query_alignment"]["aligned_query_fraction"],
+                    m["quality_evidence"]["query_alignment"]["internal_unaligned_query_fraction"])
                    for m in models])
         detected = {m["query"] for m in validated}
         audit = [{"candidate": m["query"], "donor_gene": m["evidence"]["query"], "status": m["status"],
@@ -1167,14 +1184,14 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
 
 def finalize(root, plan, names=None, destination=Path("augmented")):
     names = names or plan["species"]
-    key = {"plan": digest(root / "plan.json"), "rescue_receipts": {
+    key = {"plan": plan_digest(root, plan), "rescue_receipts": {
         n: digest(root / "rescued" / n / "receipt.json") for n in names}}
     def guard():
         for name in names:
             if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
                 raise ValueError("Rescue incomplete or corrupted: " + name)
         verify_sources(plan, names, ["fasta", "gff", "genome", "busco"])
-        require_same_key(key, {"plan": digest(root / "plan.json"), "rescue_receipts": {
+        require_same_key(key, {"plan": plan_digest(root, plan), "rescue_receipts": {
             n: digest(root / "rescued" / n / "receipt.json") for n in names}})
     def build(tmp):
         for subdir in ("species_cds", "species_gff", "anchor_admission"):
@@ -1257,7 +1274,7 @@ def finalize(root, plan, names=None, destination=Path("augmented")):
                                            "rescued_models": sum(r[2] for r in rows), "changed_species": [r[0] for r in rows if r[2]],
                                            "common_references": plan["common_references"],
                                            "anchor_admission": admission_summaries,
-                                           "gene_loss_calls": False, "plan_sha256": digest(root / "plan.json")})
+                                           "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
     return stage(root, destination, key, build, guard)
 
 
@@ -1268,14 +1285,14 @@ def qc_work_items(root, plan, indices):
         name = plan["species"][index - 1]
         if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
             raise ValueError("Rescue incomplete or corrupted: " + name)
-        effective_key = {"plan": digest(root / "plan.json"), "rescue_receipts": {
+        effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
             name: digest(root / "rescued" / name / "receipt.json")}}
         if not verified(root / "effective" / name, effective_key):
             raise ValueError("Effective inputs incomplete or corrupted: " + name)
         rows = table(root / "effective" / name / "inputs.tsv")
         if len(rows) != 1 or rows[0]["species"] != name:
             raise ValueError("Effective input table has the wrong species")
-        done = verified(root / "workers" / name, {"plan": digest(root / "plan.json"), "species": name})
+        done = verified(root / "workers" / name, {"plan": plan_digest(root, plan), "species": name})
         result.append((index, name, rows[0]["cds"], rows[0]["rescued_models"], int(done)))
     return result
 
@@ -1381,7 +1398,7 @@ def main():
         name = plan["species"][args.task_index - 1]
         if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
             raise ValueError("Rescue worker has no verified models")
-        effective_key = {"plan": digest(root / "plan.json"), "rescue_receipts": {
+        effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
             name: digest(root / "rescued" / name / "receipt.json")}}
         if not verified(root / "effective" / name, effective_key):
             raise ValueError("Rescue worker has no verified exported inputs")
@@ -1406,13 +1423,13 @@ def main():
         if not verified(root / "rescued" / name, rescue_key(root, plan, name)) or not verified(root / "effective" / name, effective_key):
             raise ValueError("Worker dependencies changed during execution")
         atomic_json(worker_dir / "receipt.json", {
-            "key": {"plan": digest(root / "plan.json"), "species": name},
+            "key": {"plan": plan_digest(root, plan), "species": name},
             "files": frozen_files})
     if args.command == "qc":
         finalize(root, plan)
         files = {n: args.busco_dir / (n + ".busco.short.txt") for n in plan["species"]}
         def current_key():
-            return {"augmented": digest(root / "augmented" / "receipt.json"),
+            return {"plan": plan_digest(root, plan), "augmented": digest(root / "augmented" / "receipt.json"),
                     "inputs": digest(root / "augmented" / "inputs.tsv"), "busco": digest_paths(files.values())}
         key = current_key()
         rows = table(root / "augmented" / "inputs.tsv")
