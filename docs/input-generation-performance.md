@@ -112,3 +112,10 @@ these isolated operations, not an HPC or whole-project speedup. Other staging
 phases were similar within run-to-run variation. No production speedup is
 claimed for inventory caching or fs-verity; the qualified test filesystem did
 not provide enabled fs-verity images.
+
+A subsequent audit compared the hardened importer with v0.8.134 using the same
+runtime and 1,024 MiB method. Output fingerprints matched, with median times of
+5.127 s before and 4.990 s after; this small difference is not a new speedup
+claim. Hash reads increased by only the 124-byte summary shard, from
+8,584,346,448 to 8,584,346,572 bytes. Copy bytes were unchanged and peak RSS
+remained about 67 MiB.
