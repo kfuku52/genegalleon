@@ -216,3 +216,8 @@ def test_real_bam_start_bases_repeat_and_rna_are_advisory(tmp_path, strand):
     args.evidence_manifest.write_text(json.dumps(bad))
     with pytest.raises(ValueError, match="reference differs"):
         evidence.audit(args)
+
+
+def test_runtime_cli_help_has_no_writes(tmp_path):
+    from workflow.tests.test_support_script_help_smoke import test_support_script_help_smoke
+    test_support_script_help_smoke("rescue_model_evidence.py", tmp_path)
