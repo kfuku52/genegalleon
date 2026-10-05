@@ -264,6 +264,8 @@ Read-only connections hold a consistent SQLite snapshot; borrowed connections
 retain their existing transaction behaviour. Isolated loci are streamed through
 one cursor and still use the same single-locus decisions, avoiding one NFS query
 per gene without changing copy-ambiguity gates or the component memory bound.
+GFF relationship filtering computes fixed membership sets once per view,
+retaining the same ancestors, descendants and source feature relationships.
 Eligibility is computed once per invocation; optimization states and graph
 weights are confined to the current component. Pairwise scores retain the same
 alignment and floating-point scoring rules.

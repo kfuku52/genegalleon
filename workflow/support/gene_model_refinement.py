@@ -820,18 +820,21 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
             ancestors.add(parent)
             pending.append(parent)
     coding_owners = {parent for _, fields, _, pids in records if fields is not None and fields[2] == 'CDS' for parent in pids}
+    excluded_coding_owners = coding_owners - transcript_ids
+    selected_ancestors = transcript_ids | ancestors
     descendants = set(transcript_ids)
     changed = True
     while changed:
         changed = False
         for _, fields, attributes, parent_ids in records:
-            if fields is None or attributes.get('ID') in ancestors or attributes.get('ID') in coding_owners - transcript_ids:
+            if fields is None or attributes.get('ID') in ancestors or attributes.get('ID') in excluded_coding_owners:
                 continue
             if descendants.intersection(parent_ids):
                 identifier = attributes.get('ID')
                 if identifier and identifier not in descendants:
                     descendants.add(identifier)
                     changed = True
+    structural_parents = descendants | ancestors
     lines, known_ids = [], {attrs['ID'] for _, f, attrs, _ in records if f is not None and 'ID' in attrs}
     gene_spans = defaultdict(list)
     for tid in sorted(transcript_ids & implicit.keys()):
@@ -843,7 +846,7 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
             lines.append(f'{seqid}\tGeneGalleon\t{kind}\t{start}\t{end}\t.\t{strand}\t.\tID={quote(tid, safe="._-:")};Parent={quote(gid, safe="._-:")};gene_id={quote(gid, safe="._-:")}\n')
     for _, fields, attributes, parent_ids in records:
         if (fields is not None and fields[2].lower().endswith(('rna', 'transcript'))
-                and (retain_all or attributes.get('ID') in transcript_ids | ancestors)):
+                and (retain_all or attributes.get('ID') in selected_ancestors)):
             for gid in parent_ids:
                 gene_spans[(gid, fields[0], fields[6])].append((int(fields[3]), int(fields[4])))
     synthesized_genes = []
@@ -862,7 +865,7 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
         keep = retain_all or structural or identifier in descendants or (identifier not in coding_owners and bool(descendants.intersection(parent_ids)))
         if keep:
             if parent_ids and not retain_all:
-                retained = [parent for parent in parent_ids if parent in (descendants | ancestors if structural else descendants)]
+                retained = [parent for parent in parent_ids if parent in (structural_parents if structural else descendants)]
                 if not retained:
                     continue
                 parts = fields[8].split(';')
