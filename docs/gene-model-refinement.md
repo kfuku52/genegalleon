@@ -75,6 +75,11 @@ the unresolved candidates are withheld and the exact source record is archived.
 If several transcript identities share one exactly matching genomic coding path,
 the source coding path remains the selection baseline without claiming a unique
 transcript identity. A longer, unsupplied isoform does not silently replace it.
+That unique source coding path can also supply missing phase evidence when the
+genomic ORF is complete and all known phases agree. Its transcript identities
+remain ambiguous, its original blocks are retained, and the inference basis is
+recorded separately. Partial ORFs, distinct genomic paths with equal DNA,
+conflicting phases and translation/annotation exceptions remain unresolved.
 
 Two donor isoforms from one species count as one donor. Homology-only additions
 at an already intact locus remain nonrepresentative until target RNA supports
@@ -222,11 +227,16 @@ gene identifier or selection decision. `review_data.json` retains the report's
 provenance and numerical inputs in the review directory.
 
 Coding paths, affected loci and changed representatives are different counts.
+The summary separately counts admitted representatives with resolved source
+phases. These counts include the earlier unique-transcript inference and the
+unique coding-path inference above; they are not predicted isoform additions.
 The diagrams preserve genomic spacing and strand, label source and selected
 paths, and expose phase, donor, RNA and rejection evidence. A source coding-path
 label may refer to identical coding paths with unresolved transcript identity.
 Whole RNA-chain support does not establish translation initiation or protein
 function. Review files are never added to the immutable refinement publication.
+Source coding-path phase resolutions can fill unused gallery slots. Their
+original phase blocks and inference basis are available in the evidence panel.
 
 ## Outputs and downstream use
 

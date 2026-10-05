@@ -199,8 +199,8 @@ def _source_convention(sequence, candidate):
     return ""
 
 
-def _infer_missing_phases(candidate, genetic_code):
-    """Infer continuation phases only from a source-bound complete genomic ORF."""
+def _infer_missing_phases(candidate, genetic_code, evidence="complete_genomic_cds_and_bound_source"):
+    """Infer continuation phases only from a source-supported complete genomic ORF."""
     quality = candidate["quality"]
     if (not quality["phase_unresolved"] or not quality.get("source_sequence_agreement")
             or quality["partial"] or any(quality.get(key) for key in
@@ -220,7 +220,7 @@ def _infer_missing_phases(candidate, genetic_code):
         block[2] = (3 - cumulative % 3) % 3
         cumulative += block[1] - block[0]
     quality["phase_inferred"] = True
-    quality["phase_inference_evidence"] = "complete_genomic_cds_and_bound_source"
+    quality["phase_inference_evidence"] = evidence
     candidate["quality"] = validate_candidate(candidate, genetic_code)
     candidate["junctions"] = _junctions(candidate["blocks"], candidate["strand"])
 
@@ -489,6 +489,14 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                 gene_id = candidates[next(iter(exact))]["gene_id"]
                 coding_surrogates[gene_id].append(sorted(exact))
                 row["sequence_agreeing_candidate_ids"] = sorted(exact)
+                for matching_id in sorted(exact):
+                    candidate = candidates[matching_id]
+                    candidate.setdefault("source_coding_path_evidence", []).append({
+                        "source_fasta_id": identifier, "source_cds_sha256": row["source_cds_sha256"],
+                        "source_convention": _source_convention(sequence, candidate),
+                    })
+                    candidate["quality"]["source_sequence_agreement"] = True
+                    _infer_missing_phases(candidate, genetic_code, "complete_genomic_cds_and_unique_source_coding_path")
         mapping.append(row)
         if (not bound and possible and not exact and match["status"] == "mapped"
                 and {candidates[c]["gene_id"] for c in possible}

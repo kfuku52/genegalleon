@@ -41,6 +41,7 @@ def collect(root, max_loci=200, preferred_species=""):
     selections = {(r["species"], r["gene_id"]): r for r in changes}
     stats, predictions = {}, {}
     detail_keys = set()
+    phase_detail_keys = set()
     for row in rows:
         name = row["species"]
         metadata = verified_json(root / "catalog" / name, "catalog_metadata.json", plan_hash)
@@ -67,11 +68,24 @@ def collect(root, max_loci=200, preferred_species=""):
         stats[r["species"]].setdefault("effective_exclusions", 0)
         stats[r["species"]]["effective_exclusions"] += 1
     for r in table(root / "effective" / "translation_admission.tsv"):
+        quality = json.loads(r["quality"])
+        if r["status"] == "included" and quality.get("phase_inferred"):
+            stats[r["species"]].setdefault("phase_resolved_representatives", 0)
+            stats[r["species"]]["phase_resolved_representatives"] += 1
+            if quality.get("phase_inference_evidence") == "complete_genomic_cds_and_unique_source_coding_path":
+                stats[r["species"]].setdefault("coding_path_phase_resolved_representatives", 0)
+                stats[r["species"]]["coding_path_phase_resolved_representatives"] += 1
+                phase_detail_keys.add((r["species"], r["gene_id"]))
         if r["status"] == "excluded":
             stats[r["species"]].setdefault("translation_withheld", 0)
             stats[r["species"]]["translation_withheld"] += 1
     # Include informative rejected proposals when the changed-locus gallery fits.
     ordered = sorted(detail_keys, key=lambda key: (key[0] != preferred_species, key))
+    for key in sorted(phase_detail_keys, key=lambda key: (key[0] != preferred_species, key)):
+        if len(ordered) >= max_loci:
+            break
+        if key not in ordered:
+            ordered.append(key)
     proposals = sorted(
         {(n, r["gene_id"]) for n, models in predictions.items() for r in models},
         key=lambda key: (key[0] != preferred_species, key),
@@ -79,7 +93,7 @@ def collect(root, max_loci=200, preferred_species=""):
     for key in proposals:
         if len(ordered) >= max_loci:
             break
-        if key not in detail_keys:
+        if key not in ordered:
             ordered.append(key)
     included = set(ordered[:max_loci])
     grouped = defaultdict(list)
@@ -99,7 +113,7 @@ def collect(root, max_loci=200, preferred_species=""):
             locus = load_locus(connection, name, gene_id)
             chosen = selections[key]
             candidates = [
-                {k: c.get(k) for k in ("candidate_id", "source_transcript_id", "origin", "blocks", "quality", "support")}
+                {k: c.get(k) for k in ("candidate_id", "source_transcript_id", "origin", "blocks", "source_blocks", "quality", "support")}
                 | {"cds_length": len(c["cds"]), "protein_length": len(c["protein"])}
                 for c in locus["candidates"]
             ]
@@ -126,6 +140,7 @@ def collect(root, max_loci=200, preferred_species=""):
         "schema": 1, "plan_sha256": plan_hash,
         "effective_receipt_sha256": digest(root / "effective" / "receipt.json"),
         "species": stats, "details": details, "changed_loci_available": len(detail_keys),
+        "coding_path_phase_loci_available": len(phase_detail_keys),
         "gallery_limit": max_loci, "performance": performance,
         "limits": "Counts cover all species and paths. The locus gallery is bounded. Ranking margins are not probabilities. RNA chain support does not establish translation initiation. Accepted paths and selected representatives are distinct decisions.",
     }
@@ -140,7 +155,7 @@ def plot_summary(data, output):
     names = list(data["species"])
     stats = [data["species"][n] for n in names]
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10, "svg.fonttype": "none"})
-    fig, axes = plt.subplots(1, 3, figsize=(15.5, max(6, len(names) * .32)),
+    fig, axes = plt.subplots(1, 4, figsize=(18, max(6, len(names) * .32)),
                              sharey=True, gridspec_kw={"wspace": .15})
     ys = list(range(len(names)))
     repairs = [s["accepted_repair_paths"] for s in stats]
@@ -148,10 +163,11 @@ def plot_summary(data, output):
     axes[0].barh(ys, repairs, color="#187d97", label="Repair coding paths")
     axes[0].barh(ys, isoforms, left=repairs, color="#d38b21", label="Additional isoform paths")
     axes[1].barh(ys, [s["changed_representatives"] for s in stats], color="#5275b5")
-    axes[2].barh(ys, [s.get("effective_exclusions", 0) for s in stats], color="#a14c57", label="Source/structure mismatch")
-    axes[2].barh(ys, [s.get("translation_withheld", 0) - s.get("effective_exclusions", 0) for s in stats],
+    axes[2].barh(ys, [s.get("phase_resolved_representatives", 0) for s in stats], color="#32856b")
+    axes[3].barh(ys, [s.get("effective_exclusions", 0) for s in stats], color="#a14c57", label="Source/structure mismatch")
+    axes[3].barh(ys, [s.get("translation_withheld", 0) - s.get("effective_exclusions", 0) for s in stats],
                  left=[s.get("effective_exclusions", 0) for s in stats], color="#bbb1bc", label="Other translation exclusions")
-    for ax, title in zip(axes, ("Accepted coding paths", "Changed representatives", "Withheld from coding analysis"), strict=True):
+    for ax, title in zip(axes, ("Accepted coding paths", "Changed representatives", "Phase-resolved representatives", "Withheld from coding analysis"), strict=True):
         ax.set_title(title, fontweight="bold")
         ax.set_xlabel("Count")
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
@@ -162,7 +178,7 @@ def plot_summary(data, output):
     axes[0].set_yticks(ys, [n.replace("_", " ") for n in names], fontstyle="italic")
     axes[0].invert_yaxis()
     axes[0].legend(loc="lower center", bbox_to_anchor=(.5, -0.18), frameon=False, fontsize=9)
-    axes[2].legend(loc="lower center", bbox_to_anchor=(.5, -0.18), frameon=False, fontsize=9)
+    axes[3].legend(loc="lower center", bbox_to_anchor=(.5, -0.18), frameon=False, fontsize=9)
     fig.suptitle("Synteny-guided gene-model refinement", x=.32, y=.995, ha="left", fontweight="bold", fontsize=16)
     fig.subplots_adjust(left=.22, right=.99, top=.94, bottom=.15)
     fig.text(.22, .025, "Coding paths and genes are counted separately. Withheld paths remain in the source archive.\n"
@@ -186,6 +202,7 @@ def locus_svg(locus):
     def scale(x):
         return left + width * (x - lo) / max(1, hi - lo)
     chosen = locus["selection"]["candidate_id"]
+    phase_resolved = {c["candidate_id"] for c in locus["candidates"] if c.get("quality", {}).get("phase_inferred")}
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 {75 + 38 * len(paths)}" role="img" aria-label="Coding exon structure">']
     for i, (identifier, bs, origin, length) in enumerate(paths):
         y = 35 + i * 38
@@ -193,6 +210,8 @@ def locus_svg(locus):
         label = identifier.removeprefix(locus["species"] + "_")
         short_label = label if len(label) <= 38 else label[:35] + "…"
         tags = [origin, str(length) + " nt"]
+        if identifier in phase_resolved:
+            tags.append("phase resolved")
         if identifier == chosen:
             tags.append("selected")
         if identifier == locus.get("baseline_id"):
@@ -223,7 +242,7 @@ def write_review(data, output):
                 p["candidate_id"], p["status"], p["change_type"], p["evidence_class"],
                 len(p["donors"]), len(p["rna_paths"]), ", ".join(p["problems"]))) + "</tr>")
         details = json.dumps({"selection": choice, "candidate_quality": [
-            {"candidate_id": c["candidate_id"], "quality": c["quality"], "support": c["support"]}
+            {"candidate_id": c["candidate_id"], "quality": c["quality"], "support": c["support"], "source_blocks": c.get("source_blocks")}
             for c in locus["candidates"]], "prediction_alignments": locus["predictions"]}, indent=2)
         cards.append(
             f'<article data-search="{html.escape((locus["species"]+" "+locus["gene_id"]+" "+choice["status"]).lower(), quote=True)}">'
@@ -247,7 +266,8 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
 </style><h1>Synteny-guided gene-model refinement</h1>"""
     html_text += "<p>" + html.escape(data["limits"]) + "</p>"
     metrics = [("Repair coding paths", "accepted_repair_paths"), ("Additional isoform paths", "accepted_isoform_paths"),
-               ("Changed representatives", "changed_representatives"), ("Accepted loci", "accepted_loci")]
+               ("Changed representatives", "changed_representatives"), ("Phase-resolved representatives", "phase_resolved_representatives"),
+               ("Accepted loci", "accepted_loci")]
     html_text += '<div class="metrics">' + "".join(
         f'<div><strong>{totals[key]:,}</strong><br>{label}</div>' for label, key in metrics) + '</div>'
     html_text += f'<img alt="Species-wide coding path additions, representative changes and exclusions" src="data:image/png;base64,{image}">'
@@ -256,6 +276,7 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
                ("Repair paths", "accepted_repair_paths"), ("Added isoform paths", "accepted_isoform_paths"),
                ("Accepted loci", "accepted_loci"), ("Changed representatives", "changed_representatives"),
                ("Predicted representatives", "predicted_representatives"), ("Proposal paths", "proposed_paths"),
+               ("Phase-resolved representatives", "phase_resolved_representatives"),
                ("Sequence/GFF exclusions", "effective_exclusions"), ("Translations withheld", "translation_withheld")]
     html_text += "".join(f'<th>{label}</th>' for label, _ in columns) + '</tr></thead><tbody>'
     for name, stats in data["species"].items():
@@ -263,7 +284,8 @@ input{padding:12px;width:min(95%,700px);font:inherit}table{border-collapse:colla
                                     for _, key in columns) + '</tr>'
     html_text += '</tbody></table></div></details>'
     html_text += f'<p>Gallery: {len(cards)} loci; all changed/accepted loci available: {data["changed_loci_available"]}. '
-    html_text += "Rejected proposals fill unused gallery slots. Exon plots use genomic spacing and 1-based display coordinates.</p>"
+    html_text += f'Source coding-path phase resolutions available: {data["coding_path_phase_loci_available"]}. '
+    html_text += "Phase resolutions and rejected proposals fill unused gallery slots. Exon plots use genomic spacing and 1-based display coordinates.</p>"
     html_text += '<input id="search" aria-label="Filter gallery" placeholder="Filter by species, gene ID or selection decision"><span id="count"></span>'
     html_text += "".join(cards) + """<script>
 const q=document.getElementById('search'),items=[...document.querySelectorAll('article')];

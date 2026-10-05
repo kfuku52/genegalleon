@@ -77,6 +77,33 @@ def classify(catalog, models, edges, rna=(), **params):
                                            list(rna), "assembly-sha256")
 
 
+def test_source_coding_path_phase_inference_reaches_verified_analysis_gff_and_protein(tmp_path):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    Path(target['gff']).write_text('##gff-version 3\n'
+                                 'chr1\ts\tgene\t1\t12\t.\t+\t.\tID=g\n'
+                                 'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g\n'
+                                 'chr1\ts\tCDS\t1\t12\t.\t+\t.\tID=c1;Parent=t1\n'
+                                 'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t2;Parent=g\n'
+                                 'chr1\ts\tCDS\t1\t12\t.\t+\t.\tID=c2;Parent=t2\n')
+    root = tmp_path / 'refinement'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    refinement.finalize(root, value)
+    refinement.verify_inputs(root / 'effective/inputs.tsv')
+    assert (root / 'effective/species_protein/Species_target.fa').read_text() == '>Species_target_g\nMKP\n'
+    assert '\tCDS\t1\t12\t.\t+\t0\t' in (root / 'effective/analysis_gff/Species_target.gff3').read_text()
+    assert (root / 'effective/source_annotation/Species_target.gff3').read_text() == Path(target['gff']).read_text()
+    locus = json.loads((root / 'catalog/Species_target/loci.jsonl').read_text())
+    assert not locus['source_baseline_candidate_id']
+    assert all(c['source_fasta_ids'] == [] for c in locus['candidates'])
+    assert all(c['quality']['phase_inference_evidence'] == 'complete_genomic_cds_and_unique_source_coding_path' for c in locus['candidates'])
+    review = import_module('plot_gene_model_refinement').collect(root, max_loci=2)
+    assert review['species']['Species_target']['coding_path_phase_resolved_representatives'] == 1
+    assert review['coding_path_phase_loci_available'] == 1
+    assert [(r['species'], r['gene_id']) for r in review['details']] == [('Species_target', 'Species_target_g')]
+    assert all(c['source_blocks'] == [[0, 12, -1]] for c in review['details'][0]['candidates'])
+
+
 def test_gene_only_mismatch_is_archived_but_not_exported_as_genomic_representative(tmp_path):
     inputs, edges, rows = tiny_inputs(tmp_path)
     target = rows[0]

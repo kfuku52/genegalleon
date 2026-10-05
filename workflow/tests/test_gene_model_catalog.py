@@ -473,6 +473,44 @@ def test_unknown_phases_are_inferred_only_for_bound_complete_intact_genomic_orf(
         assert "source_blocks" not in candidate
 
 
+@pytest.mark.parametrize("partial,continuation", [(False, "."), (True, "."), (False, "1")])
+def test_unique_source_coding_path_resolves_phase_without_inventing_transcript_identity(tmp_path, partial, continuation):
+    annotations = row("gene", 1, 15, "g")
+    for tx in ("t1", "t2"):
+        annotations += row("mRNA", 1, 15, tx, parent="g")
+        annotations += row("CDS", 1, 4, tx + "c1", parent=tx, phase=".")
+        annotations += row("CDS", 11, 14 if partial else 15, tx + "c2", parent=tx, phase=continuation)
+    sequence = "ATGAAATA" if partial else "ATGAAATAA"
+    paths = fixture(tmp_path, ">g\n" + sequence + "\n", annotations, "ATGANNNNNNAATAA")
+    before = [digest(p) for p in paths]
+    catalog = MODULE.build_catalog("Species_one", *paths)
+    locus = catalog["loci"][0]
+    assert catalog["fasta_mapping"][0]["mapping_status"] == "ambiguous"
+    assert catalog["fasta_mapping"][0]["candidate_ids"] == []
+    assert not locus.get("source_baseline_candidate_id")
+    assert locus["source_baseline_coding_candidate_id"]
+    inferred = not partial and continuation == "."
+    for c in locus["candidates"]:
+        assert c["source_fasta_ids"] == []
+        assert c["quality"]["phase_inferred"] is inferred
+        assert c["quality"]["usable"] is inferred
+        assert c["source_coding_path_evidence"][0]["source_fasta_id"] == "g"
+        if inferred:
+            assert c["blocks"] == [[0, 4, 0], [10, 15, 2]]
+            assert c["quality"]["phase_inference_evidence"] == "complete_genomic_cds_and_unique_source_coding_path"
+    assert [digest(p) for p in paths] == before
+
+
+def test_equal_source_dna_at_distinct_genomic_paths_does_not_resolve_unknown_phase(tmp_path):
+    annotations = row("gene", 1, 21, "g")
+    for tx, start, end in (("t1", 1, 9), ("t2", 13, 21)):
+        annotations += row("mRNA", start, end, tx, parent="g") + row("CDS", start, end, tx + "c", parent=tx, phase=".")
+    paths = fixture(tmp_path, ">g\nATGAAATAA\n", annotations, "ATGAAATAANNNATGAAATAA")
+    locus = MODULE.build_catalog("Species_one", *paths)["loci"][0]
+    assert not locus.get("source_baseline_coding_candidate_id")
+    assert all(c["quality"]["phase_unresolved"] and not c["quality"]["usable"] for c in locus["candidates"])
+
+
 @pytest.mark.parametrize("sequence,blocks,reason", [
     ("ATGZZZTAA", [[0, 9, 0]], "invalid_base"),
     ("ATGNNNTAA", [[0, 9, 0]], "ambiguous"),
