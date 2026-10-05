@@ -15,6 +15,130 @@ def load_module():
     return module
 
 
+def support_view_source():
+    return pandas.DataFrame({
+        "orthogroup": ["OG1", "OG2", "OG3", "OG4"],
+        "trait": ["aquatic"] * 4,
+        "support_unit_count": [1, 5, 6, 7],
+        "support_lineage_count": [1, 4, 3, 4],
+        "support_fraction": [0.1, 0.5, 0.6, 0.7],
+        "score_rate_enrichment": [4.0, 3.0, 2.0, 1.0],
+        "p_rate_enrichment_asymptotic": [0.001, 0.002, 0.003, 0.004],
+        "q_rate_enrichment_asymptotic_global": [0.01, 0.02, 0.03, 0.04],
+    })
+
+
+@pytest.mark.parametrize("units,lineages,expected", [
+    (6, 4, ["OG4"]), (5, 4, ["OG2", "OG4"]), (6, 0, ["OG3", "OG4"]),
+    (0, 4, ["OG2", "OG4"]), (0, 0, ["OG1", "OG2", "OG3", "OG4"]),
+    (8, 4, []), (0, 5, []),
+])
+def test_summary_support_views_apply_bh_after_both_bounds_and_preserve_source_columns(tmp_path, units, lineages, expected):
+    mod = load_module()
+    source = support_view_source()
+    prefix = tmp_path / "scan"
+    manifest_path = mod.write_support_views(source, prefix, units, lineages)
+    manifest = pandas.read_csv(manifest_path, sep="\t")
+    primary_path = tmp_path / manifest.loc[0, "summary_tsv"]
+    primary = pandas.read_csv(primary_path, sep="\t")
+    assert primary["orthogroup"].tolist() == expected
+    expected_frame = source.loc[source["orthogroup"].isin(expected)].reset_index(drop=True)
+    pandas.testing.assert_frame_equal(primary.loc[:, source.columns], expected_frame, check_dtype=False)
+    assert primary[mod.SUPPORT_Q_COLUMN].tolist() == pytest.approx([0.004] * len(expected))
+    assert manifest.loc[0, "support_bh_test_count"] == len(expected)
+    assert manifest["min_lineage_support"].eq(lineages).all()
+    assert manifest["min_unit_support"].iloc[0] == units
+    if units == 0:
+        assert manifest["min_unit_support"].tolist() == [0]
+    assert manifest["probability_policy"].eq("bh_after_unit_and_lineage_support_filter_v1").all()
+    for row in manifest.itertuples():
+        assert (tmp_path / row.summary_tsv).is_file()
+        assert (tmp_path / row.plot_pdf).is_file()
+
+
+@pytest.mark.parametrize("bad_count", [None, float("inf"), -1, 1.5, "unknown", "missing_column"])
+def test_main_rejects_missing_lineage_counts_before_replacing_outputs(tmp_path, monkeypatch, bad_count):
+    mod = load_module()
+    source = support_view_source()
+    if bad_count == "missing_column":
+        source = source.drop(columns="support_lineage_count")
+    else:
+        source["support_lineage_count"] = source["support_lineage_count"].astype(object)
+        source.loc[0, "support_lineage_count"] = bad_count
+    db = tmp_path / "scan.db"
+    with sqlite3.connect(db) as conn:
+        source.to_sql("aa_change", conn, index=False)
+    prefix = tmp_path / "scan"
+    outputs = [tmp_path / "scan_min_support_2_summary.tsv", tmp_path / "scan_summary.tsv",
+               tmp_path / "scan_all_candidates_summary.tsv", tmp_path / "scan_min_support_manifest.tsv"]
+    for path in outputs:
+        path.write_text("preserve\n")
+    monkeypatch.setattr("sys.argv", [str(SCRIPT_PATH), "--dbpath", str(db), "--out_prefix", str(prefix),
+                                    "--out_tsv", str(outputs[0]), "--min_unit_support", "6",
+                                    "--min_lineage_support", "4"])
+    with pytest.raises(ValueError, match="support_lineage_count"):
+        mod.main()
+    assert all(path.read_text() == "preserve\n" for path in outputs)
+
+
+def test_custom_summary_preserves_all_candidates_and_legacy_views(tmp_path, monkeypatch):
+    mod = load_module()
+    source = support_view_source()
+    db = tmp_path / "scan.db"
+    with sqlite3.connect(db) as conn:
+        source.to_sql("aa_change", conn, index=False)
+    prefix = tmp_path / "scan"
+    legacy = tmp_path / "scan_min_support_2_summary.tsv"
+    monkeypatch.setattr("sys.argv", [str(SCRIPT_PATH), "--dbpath", str(db), "--out_prefix", str(prefix),
+                                    "--out_tsv", str(legacy), "--min_unit_support", "6",
+                                    "--min_lineage_support", "4"])
+    assert mod.main() == 0
+    pandas.testing.assert_frame_equal(pandas.read_csv(legacy, sep="\t"),
+                                     pandas.read_csv(f"{prefix}_all_candidates_summary.tsv", sep="\t"))
+    assert len(pandas.read_csv(legacy, sep="\t")) == len(source)
+    assert len(pandas.read_csv(f"{prefix}_min_support_6_summary.tsv", sep="\t")) == 2
+    filtered = Path(f"{prefix}_min_unit_support_6_min_lineage_support_4_summary.tsv")
+    assert pandas.read_csv(filtered, sep="\t")["orthogroup"].tolist() == ["OG4"]
+    mod.remove_stale_min_support_sensitivity_outputs(prefix, [])
+    assert filtered.is_file()
+
+
+def test_support_view_cleanup_is_limited_to_the_selected_lineage_bound(tmp_path):
+    mod = load_module()
+    source = support_view_source()
+    prefix = tmp_path / "scan"
+    stale = Path(f"{prefix}_min_unit_support_9_min_lineage_support_4_summary.tsv")
+    other_lineage = Path(f"{prefix}_min_unit_support_9_min_lineage_support_3_summary.tsv")
+    unit_only = Path(f"{prefix}_min_support_9_summary.tsv")
+    user_file = Path(f"{prefix}_min_unit_support_9_min_lineage_support_4_notes.txt")
+    for path in (stale, other_lineage, unit_only, user_file):
+        path.write_text("preserve")
+    mod.write_support_views(source, prefix, 6, 4)
+    assert not stale.exists()
+    assert all(path.read_text() == "preserve" for path in (other_lineage, unit_only, user_file))
+
+
+def test_nullable_missing_count_is_rejected_and_disabled_lineage_condition_accepts_legacy_input():
+    mod = load_module()
+    source = support_view_source()
+    source["support_lineage_count"] = pandas.Series([pandas.NA, 4, 3, 4], dtype="Int64")
+    with pytest.raises(ValueError, match="OG1"):
+        mod.support_mask(source, 6, 4, "mixed scan")
+    legacy = source.drop(columns="support_lineage_count")
+    assert mod.support_mask(legacy, 6, 0, "old scan").tolist() == [False, False, True, True]
+
+
+@pytest.mark.parametrize("argument", ["--min_unit_support", "--min_lineage_support"])
+def test_main_rejects_negative_support_bounds_before_outputs(tmp_path, monkeypatch, argument):
+    mod = load_module()
+    output = tmp_path / "output.tsv"
+    monkeypatch.setattr("sys.argv", [str(SCRIPT_PATH), "--dbpath", str(tmp_path / "missing.db"),
+                                    "--out_prefix", str(tmp_path / "scan"), "--out_tsv", str(output), argument, "-1"])
+    with pytest.raises(ValueError, match="integer >= 0"):
+        mod.main()
+    assert not output.exists()
+
+
 def test_read_table_retains_current_csubst_scan_rate_and_empirical_q_columns(tmp_path):
     mod = load_module()
     db_path = tmp_path / "scan.db"
@@ -257,6 +381,7 @@ def test_write_min_support_sensitivity_writes_threshold_series(tmp_path):
     assert manifest["min_support"].tolist() == [3, 4, 5]
     assert manifest["candidate_rows"].tolist() == [3, 2, 1]
     assert manifest["q_rate_enrichment_asymptotic_global_le_0.05"].tolist() == [2, 1, 0]
+    assert manifest[f"{mod.SUPPORT_Q_COLUMN}_le_0.05"].tolist() == [2, 0, 0]
     assert not stale_paths["summary_tsv"].exists()
     assert not stale_paths["plot_pdf"].exists()
     assert not (tmp_path / "min_support_sensitivity").exists()
@@ -265,7 +390,9 @@ def test_write_min_support_sensitivity_writes_threshold_series(tmp_path):
         subset = pandas.read_csv(paths["summary_tsv"], sep="\t")
         assert subset.shape[0] == expected_rows
         expected = frame.loc[frame["support_unit_count"] >= threshold].reset_index(drop=True)
-        pandas.testing.assert_frame_equal(subset, expected, check_dtype=False)
+        pandas.testing.assert_frame_equal(subset.loc[:, frame.columns], expected, check_dtype=False)
+        expected_q = {3: [0.03, 0.045, 0.5], 4: [0.06, 0.5], 5: [0.5]}
+        assert subset[mod.SUPPORT_Q_COLUMN].tolist() == pytest.approx(expected_q[threshold])
         assert {column for column in subset if column.endswith("_global")} == {"q_rate_enrichment_asymptotic_global"}
         assert (subset["support_unit_count"] >= threshold).all()
         assert set(mod.ORTHOGROUP_BESTHIT_COLUMNS).issubset(subset.columns)
@@ -349,6 +476,10 @@ def test_main_writes_pvalue_qvalue_distribution_by_default(tmp_path, monkeypatch
     assert mod.main() == 0
     assert out_tsv.is_file()
     primary = pandas.read_csv(out_tsv, sep="\t")
+    assert len(primary) == 4  # Legacy all-candidate output remains complete.
+    filtered = pandas.read_csv(f"{out_prefix}_min_unit_support_2_min_lineage_support_0_summary.tsv", sep="\t")
+    assert len(filtered) == 3
+    assert filtered["support_unit_count"].ge(2).all()
     assert primary.columns[:6].tolist() == ["orthogroup", *mod.ORTHOGROUP_BESTHIT_COLUMNS]
     assert primary.loc[primary["orthogroup"].eq("OG0002"), "besthit_0.5"].eq(
         "besthit_0.5-og2"
@@ -400,3 +531,86 @@ def test_ranking_uses_stable_score_even_if_calibration_is_unavailable():
     assert (column, kind) == ("score_rate_enrichment", "Score")
     assert ranked.index.tolist() == [1, 0, 2]
     assert ranked["p_rate_enrichment_empirical_maxT"].isna().all()
+
+
+@pytest.mark.parametrize('value', [-0.01, 1.01, float('inf'), 'invalid'])
+def test_summary_invalid_p_preflight_preserves_outputs(tmp_path, monkeypatch, value):
+    mod = load_module()
+    source = support_view_source().astype({'p_rate_enrichment_asymptotic': object})
+    source.loc[0, 'p_rate_enrichment_asymptotic'] = value
+    db = tmp_path / 'scan.db'
+    with sqlite3.connect(db) as conn:
+        source.to_sql('aa_change', conn, index=False)
+    prefix = tmp_path / 'scan'
+    output = tmp_path / 'scan_min_support_2_summary.tsv'
+    output.write_text('preserve\n')
+    monkeypatch.setattr('sys.argv', [str(SCRIPT_PATH), '--dbpath', str(db), '--out_prefix', str(prefix),
+                                   '--out_tsv', str(output), '--min_unit_support', '6', '--min_lineage_support', '4'])
+    with pytest.raises(ValueError, match='invalid probabilities'):
+        mod.main()
+    assert output.read_text() == 'preserve\n'
+
+
+def test_summary_filtered_plots_use_filtered_q(tmp_path):
+    mod = load_module()
+    source = support_view_source()
+    source['q_rate_enrichment_asymptotic_global'] = 1.0
+    selected = mod.support_filtered_bh(source, 5, 4, 'source')
+    assert mod.choose_score_column(selected)[0] == mod.SUPPORT_Q_COLUMN
+    series = mod.probability_series(selected, 'q_column')
+    assert series[0][1] == mod.SUPPORT_Q_COLUMN
+    assert series[0][2].tolist() == [0.004, 0.004]
+    assert '2 finite tests' in mod.bh_caption(selected)
+    assert 'unit >= 5 and lineage >= 4' in mod.bh_caption(selected)
+    selected.attrs.clear()  # A reread TSV still has enough metadata for captions.
+    assert '2 finite tests' in mod.bh_caption(selected)
+
+
+@pytest.mark.parametrize('bad_count', [-1, 1.5, 'invalid', None])
+def test_disabled_unit_bound_validates_counts_before_output_replacement(tmp_path, monkeypatch, bad_count):
+    mod = load_module()
+    source = support_view_source().astype({'support_unit_count': object})
+    source.loc[0, 'support_unit_count'] = bad_count
+    db = tmp_path / 'scan.db'
+    with sqlite3.connect(db) as conn:
+        source.to_sql('aa_change', conn, index=False)
+    prefix = tmp_path / 'scan'
+    output = tmp_path / 'scan_min_support_2_summary.tsv'
+    output.write_text('preserve\n')
+    monkeypatch.setattr('sys.argv', [str(SCRIPT_PATH), '--dbpath', str(db), '--out_prefix', str(prefix),
+                                   '--out_tsv', str(output), '--min_unit_support', '0'])
+    with pytest.raises(ValueError, match='support_unit_count'):
+        mod.main()
+    assert output.read_text() == 'preserve\n'
+
+
+@pytest.mark.parametrize('units,lineages', [(0, 0), (5, 4), (6, 0), (0, 4), (9, 6)])
+def test_filtered_bh_matches_independent_scipy_reference(units, lineages):
+    import numpy as np
+    from scipy.stats import false_discovery_control
+
+    mod = load_module()
+    rng = np.random.default_rng(545)
+    counts = rng.integers(1, 9, 400)
+    source = pandas.DataFrame({
+        'support_unit_count': counts,
+        'support_lineage_count': [rng.integers(1, min(count, 5) + 1) for count in counts],
+        'orthogroup': [f'OG{i}' for i in range(400)],
+        'trait': [f'trait{i % 3}' for i in range(400)],
+        'scan_match': [f'm{i % 2}' for i in range(400)],
+        'p_rate_enrichment_asymptotic': rng.random(400),
+        'q_rate_enrichment_asymptotic_global': 0.2,
+    })
+    source.loc[:19, 'p_rate_enrichment_asymptotic'] = np.nan
+    source.loc[20:29, 'p_rate_enrichment_asymptotic'] = 0.0
+    source.loc[30:39, 'p_rate_enrichment_asymptotic'] = 1.0
+    source.loc[40:49, 'p_rate_enrichment_asymptotic'] = 0.001  # Ties.
+    source.loc[50:99, 'p_rate_enrichment_asymptotic'] = np.geomspace(1e-280, 1e-5, 50)
+    original = source.copy()
+    output = mod.support_filtered_bh(source, units, lineages, 'randomized reference')
+    finite = output['p_rate_enrichment_asymptotic'].notna()
+    expected = false_discovery_control(output.loc[finite, 'p_rate_enrichment_asymptotic'].to_numpy(), method='bh') if finite.any() else []
+    np.testing.assert_allclose(output.loc[finite, mod.SUPPORT_Q_COLUMN], expected, rtol=1e-13, atol=0)
+    assert output.loc[~finite, mod.SUPPORT_Q_COLUMN].isna().all()
+    assert output.attrs['support_bh_metadata']['support_bh_test_count'] == int(finite.sum())
+    pandas.testing.assert_frame_equal(source, original)

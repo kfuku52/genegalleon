@@ -508,8 +508,11 @@ In `gg_gene_summary_entrypoint.sh`, set `run_gene_family_database_build=1` and
 `run_csubst_scan_aa_change_summary=1` to rebuild the database and create the
 `*_csubst_aa_change_min_support_2_summary.tsv` and its support, substitution
 spectrum and P/FDR distribution PDFs. Ranking uses global BH-FDR, breaking ties
-with the rate score. The `min_support_2` filename reflects the default scan
-support; changing discovery support requires rerunning scan.
+with the rate score. The legacy `min_support_2` table retains all imported
+candidates; `*_all_candidates_summary.tsv` also preserves that complete table.
+Post-hoc support bounds can be changed by regenerating summaries from the
+existing database, without rerunning scan. Candidates discarded during scan
+discovery cannot be recovered this way.
 
 When present in CSUBST scan output, `lineage_total`, `support_lineage_count`,
 `support_lineage_fraction` and `support_lineage_ids` are retained in summaries,
@@ -519,8 +522,9 @@ or species assigned to one phenotypic origin can share an ID; the grouped
 count then counts that ID once across disconnected clade units. The total
 includes only IDs with analyzable candidate branches, and the fraction divides
 support by that total. This grouping does not infer phenotypic origins or
-change P/FDR or the unit-based support filters. Older scan tables without these
-columns remain readable. See
+change the original P values or full-candidate global FDR. Older scan tables
+without these columns remain readable when the lineage support condition is
+disabled. See
 [CSUBST's grouped-support definition](https://github.com/kfuku52/csubst/blob/master/docs/SCAN_INFERENCE.md#support-grouped-by-foreground-lineage-id).
 
 The five `besthit_*` annotations are joined by orthogroup from the annotated
@@ -529,35 +533,93 @@ support views. Query2family summaries do not require these annotations.
 
 For each integer support threshold from 3 to the observed maximum, the summary
 also writes `*_min_support_<N>_summary.tsv` and its probability plot, plus
-`*_min_support_manifest.tsv`. **P and global FDR remain unchanged in these
-views**: BH is not recomputed after filtering on support. The manifest records
-this policy and cutoff counts. The views are post-hoc display filters of the
-original correction family, not independent significance analyses.
+`*_min_support_manifest.tsv`. Each view calculates
+`q_rate_enrichment_asymptotic_support_filtered` from the analytical P values
+**after filtering on unit support** (lineage bound 0). The original P and
+`q_rate_enrichment_asymptotic_global` remain unchanged as diagnostic columns.
+
+To require both unit and species/foreground-lineage support in summary views:
+
+```bash
+csubst_scan_summary_min_unit_support=6
+csubst_scan_summary_min_lineage_support=4
+```
+
+The defaults are 2 and 0; 0 disables the corresponding condition. Both bounds
+are inclusive and combined with AND. `support_unit_count` counts the units
+selected by scan's `unit_mode`: gene-tree clades in `clade` mode, already grouped
+foreground IDs in `lineage` mode. The species/lineage bound always uses
+`support_lineage_count`, not a new inference of phenotypic origins. The configured
+bounds add `*_min_unit_support_<G>_min_lineage_support_<S>_summary.tsv` and three
+PDFs; the unit threshold increases from G to the surviving maximum at the fixed
+lineage bound S. A matching `_manifest.tsv` lists these views and both bounds.
+Each (G, S) view calculates `q_rate_enrichment_asymptotic_support_filtered`
+by applying BH to all finite analytical P values surviving **both** bounds,
+pooling orthogroups, traits and match classes. It ranks by this filtered q value.
+The manifest and candidate rows record the bounds, total candidate count, finite
+test count and undefined count. Missing P values remain undefined and do not
+increase the finite-test denominator. The correction family changes with the
+bounds; these q values do not correct for trying multiple bound settings.
+With G=0, one view is written without a unit condition.
+Existing unit-only tables and the complete candidate table remain available.
+An enabled lineage condition requires a valid count in every imported candidate;
+missing columns or counts report the source and affected rows before replacing
+summary outputs. Rebuild the database from scans containing those counts when
+older and newer results have been mixed.
 
 Candidate-site reports are opt-in:
 
 ```bash
 run_csubst_scan_candidate_sites=1
 csubst_scan_candidate_sites_min_support=5
-csubst_scan_candidate_sites_probability_column="q_rate_enrichment_asymptotic_global"
+csubst_scan_candidate_sites_min_lineage_support=0
+csubst_scan_candidate_sites_probability_column="q_rate_enrichment_asymptotic_support_filtered"
 csubst_scan_candidate_sites_probability_threshold="0.05"
 csubst_scan_candidate_sites_max_candidates=0
 csubst_scan_candidate_sites_pdb="none"
 ```
 
-The default selects global analytical BH-FDR <= 0.05. Analytical P or CSUBST's
-within-trait × match analytical q column may be selected explicitly. Empirical
-and bootstrap columns are not accepted by this helper. Missing FDR does not
-fall back to P. Thresholds are visited from observed maximum down to the
+The default recomputes support-filtered analytical BH-FDR for the candidate
+report's own bounds, then selects q <= 0.05. A preexisting filtered q column in
+the source is overwritten using the source P values and these actual bounds.
+Analytical P, full-candidate global q or CSUBST's within-trait × match analytical
+q column may be selected explicitly to retain their original selection behavior.
+Empirical and bootstrap columns are not accepted by this helper. For an explicitly
+selected source q column, missing q never falls back to P.
+Thresholds are visited from observed maximum down to the
 configured minimum; a zero candidate cap retains all qualifying rows.
+Candidate bounds are independent of the summary-view settings and use the same
+inclusive AND rule. Set `csubst_scan_candidate_sites_min_lineage_support=4` to
+require four foreground lineage IDs. Set the existing unit bound to 0 to create
+one ZIP without a unit condition; bounds 0 or 1 require the complete candidate
+table emitted by the updated summary helper. Older unit-only summary series
+remain usable with bounds >= 2 and no lineage requirement; enabling a lineage
+bound requires complete lineage counts in the candidate source tables. All
+source tables are validated before existing archives or manifests are replaced.
+For support-filtered BH, every threshold uses the complete candidate table;
+if it is unavailable, the broadest legacy table covering the requested unit
+bound supplies the family. Stale narrower views cannot remove tests from BH.
+BH precedes the probability cutoff, candidate cap and skips for missing report
+inputs. All surviving finite tests enter the family, including nonsignificant
+rows and rows that cannot be packaged. The candidate cap is applied after
+support and probability selection; it never changes the BH denominator.
 
 Each threshold produces a ZIP such as
-`<source>_csubst_aa_change_candidate_sites_min_support_<N>_q_rate_enrichment_asymptotic_global_le_0.05.zip`.
+`<source>_csubst_aa_change_candidate_sites_min_support_<N>_q_rate_enrichment_asymptotic_support_filtered_le_0.05.zip`.
 It contains manifests, candidate source rows, raw `csubst sites` outputs,
 focused tree/site plots and combined reports. Shared candidate analyses are
 cached once across thresholds; source summaries, selection parameters and
 required input signatures govern archive reuse. Missing report inputs are
-recorded as skipped candidates. `pdb="besthit"` enables optional structure
+recorded as skipped candidates. With a lineage bound enabled, ZIPs and run
+manifests also carry `_min_lineage_support_<S>` in their names. Both bounds are
+recorded in package metadata, candidate TSVs/manifests and PDF annotations;
+archive reuse verifies them even when the surviving candidates are identical.
+Package metadata and run manifests record the BH policy and family counts,
+including empty selections. Filtered-q archive reuse also verifies that policy
+and family, the selected probability column/threshold and candidate q values.
+Older archives remain reusable for explicitly selected source P/q
+columns with the lineage condition disabled; their absent lineage bound is 0.
+`pdb="besthit"` enables optional structure
 searching. The report can be computationally expensive even without scan
 permutations.
 

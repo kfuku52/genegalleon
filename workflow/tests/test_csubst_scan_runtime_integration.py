@@ -31,6 +31,54 @@ BASELINE_SCAN_COLUMNS = {
 }
 
 
+def test_summary_core_forwards_both_support_bounds_and_records_filtered_outputs(tmp_path):
+    """Execute the summary function with its real Python helper and provenance recorder."""
+    source = pd.DataFrame({
+        "orthogroup": ["OG1", "OG2", "OG3"], "trait": ["aquatic"] * 3,
+        "support_unit_count": [5, 6, 7], "support_lineage_count": [4, 3, 4],
+        "support_fraction": [0.5, 0.6, 0.7], "score_rate_enrichment": [1.0, 2.0, 3.0],
+        "p_rate_enrichment_asymptotic": [0.001, 0.002, 0.003],
+        "q_rate_enrichment_asymptotic_global": [0.01, 0.02, 0.03],
+    })
+    db = tmp_path / "scan.db"
+    with sqlite3.connect(db) as conn:
+        source.to_sql("aa_change", conn, index=False)
+    core = (REPO_ROOT / "workflow/core/gg_gene_summary_core.sh").read_text()
+    start = core.index("run_csubst_scan_aa_change_summary_for_source() {")
+    end = core.index("\n}\n", start) + 3
+    validation_start = core.index("for support_parameter in csubst_scan_summary_min_unit_support")
+    validation_end = core.index('case "${csubst_scan_candidate_sites_pdb}"', validation_start)
+    support = REPO_ROOT / "workflow/support"
+    # Force the stage on; use the real artifact recorder to inspect its contract.
+    shell = '''gg_artifact_prepare_stage() { printf -v "$1" '%s' 1; }
+gg_artifact_record() { python "${gg_support_dir}/artifact_provenance.py" record "$@"; }
+''' + core[validation_start:validation_end] + core[start:end] + "\nrun_csubst_scan_aa_change_summary_for_source\n"
+    environment = dict(os.environ, summary_output_dir=str(tmp_path / "summary"), gene_family_source="query2family",
+                       gg_support_dir=str(support), gg_workspace_dir=str(tmp_path),
+                       gg_workspace_output_dir=str(tmp_path / "output"), file_gene_family_db=str(db),
+                       file_orthogroup_genecount_annotated="", run_csubst_scan_aa_change_summary="1",
+                       csubst_scan_summary_min_unit_support="06", csubst_scan_summary_min_lineage_support="04",
+                       csubst_scan_candidate_sites_min_support="5", csubst_scan_candidate_sites_min_lineage_support="0")
+    result = subprocess.run(["bash", "-euo", "pipefail", "-c", shell], cwd=tmp_path,
+                            env=environment, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    prefix = tmp_path / "summary/query2family_csubst_aa_change"
+    selected = pd.read_csv(f"{prefix}_min_unit_support_6_min_lineage_support_4_summary.tsv", sep="\t")
+    assert selected["orthogroup"].tolist() == ["OG3"]
+    assert selected.loc[0, "q_rate_enrichment_asymptotic_support_filtered"] == 0.003
+    assert selected.loc[0, "q_rate_enrichment_asymptotic_global"] == 0.03
+    assert selected.loc[0, "support_bh_test_count"] == 1
+    assert len(pd.read_csv(f"{prefix}_all_candidates_summary.tsv", sep="\t")) == 3
+    contract_path = tmp_path / "summary/artifact_provenance/query2family.csubst_aa_change_summary.json"
+    contract = json.loads(contract_path.read_text())
+    assert contract["parameters"]["min_unit_support"] == "6"
+    assert contract["parameters"]["min_lineage_support"] == "4"
+    assert contract["parameters"]["support_bh_policy"] == "bh_after_unit_and_lineage_support_filter_v1"
+    assert {"all_candidates_tsv", "filtered_summary", "filtered_manifest"}.issubset(
+        item["label"] for item in contract["outputs"]
+    )
+
+
 def shell_csubst_command_options(subcommand):
     lines = CSUBST_CORE_SCRIPT.read_text(encoding="utf-8").splitlines()
     command_start = f"csubst {subcommand} \\"

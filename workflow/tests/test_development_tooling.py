@@ -61,6 +61,13 @@ def test_generated_config_schema_matches_registry_and_effective_defaults():
     assert common["GG_COMMON_BUSCO_LINEAGE"]["default"] == "eukaryota_odb12"
     assert transcriptome["assembly_method"]["default"] == "auto"
     assert transcriptome["assembly_method"]["environment"] == "GG_TRANSCRIPTOME_ASSEMBLY_METHOD"
+    summary = {item["name"]: item for item in schema["entrypoints"]["gg_gene_summary_entrypoint.sh"]["parameters"]}
+    assert summary["csubst_scan_candidate_sites_probability_column"]["default"] == "q_rate_enrichment_asymptotic_support_filtered"
+    for parameter, default in [("csubst_scan_summary_min_unit_support", "2"),
+                               ("csubst_scan_summary_min_lineage_support", "0"),
+                               ("csubst_scan_candidate_sites_min_lineage_support", "0")]:
+        assert summary[parameter]["default"] == default
+        assert summary[parameter]["environment"] == "GG_GENE_SUMMARY_" + parameter.upper()
 
 
 def test_version_helper_previews_and_updates_semver_atomically(tmp_path: Path):

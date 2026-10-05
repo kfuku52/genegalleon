@@ -36,6 +36,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from csubst_scan_support import calculate_bh_fdr
 from gene_family_output_store import LEGACY_SUBDIR_ALIASES, GeneFamilyOutputStore
 from pgls_multiplicity import write_association_table
 from shared_namespace_lock import namespace_lock
@@ -286,22 +287,6 @@ def create_indexes(engine, tables):
                 logger.info(f"Created index '{index_name}' on table '{table}'.")
             except Exception as e:
                 logger.error(f"Failed to create index on table '{table}': {e}")
-
-
-def calculate_bh_fdr(pvalues):
-    """BH over finite analytical tests; undefined tests remain undefined."""
-    values = pd.to_numeric(pd.Series(pvalues), errors="raise").to_numpy(dtype=float)
-    invalid = np.isinf(values) | (np.isfinite(values) & ((values < 0) | (values > 1)))
-    if invalid.any():
-        raise ValueError("Analytical P values must be finite probabilities in [0, 1] or missing.")
-    qvalues = np.full(values.shape, np.nan)
-    positions = np.flatnonzero(np.isfinite(values))
-    if positions.size:
-        order = np.argsort(values[positions], kind="stable")
-        ranked_positions = positions[order]
-        adjusted = values[ranked_positions] * positions.size / np.arange(1, positions.size + 1)
-        qvalues[ranked_positions] = np.minimum(1.0, np.minimum.accumulate(adjusted[::-1])[::-1])
-    return qvalues
 
 
 def add_analytical_aa_change_fdr(engine):
