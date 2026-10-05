@@ -1,15 +1,17 @@
 """Reuse native species QC only after fresh content verification of its proofs."""
 
+import argparse
 import csv
 import hashlib
 import importlib.metadata
 import importlib.util
+import io
 import json
 import sys
 from functools import lru_cache
 from pathlib import Path
 
-from input_generation_array_state import digest_paths, load_plan, receipt_path
+from input_generation_array_state import FreshDigestBatch, digest_paths, load_plan, receipt_path
 from input_generation_stage_resume import checkpoint_path, context, parameters
 
 
@@ -58,7 +60,18 @@ def clean_row(row):
     return {key: str(value or "") for key, value in row.items() if not key.startswith("_")}
 
 
-def reuse_one(task, plan_path, root, contract, stage, index, plan, missing_limit):
+class VerificationSession:
+    """Share fresh native proofs between the two sequential final QC checks."""
+
+    def __init__(self):
+        self.batches = {}
+
+    def check(self):
+        for batch in self.batches.values():
+            batch.check()
+
+
+def reuse_one(task, plan_path, root, contract, stage, index, plan, missing_limit, *, batch=None):
     """Verify all sources/outputs together, without reusing old content digests."""
     documents = {}
 
@@ -116,8 +129,10 @@ def reuse_one(task, plan_path, root, contract, stage, index, plan, missing_limit
             return None
         if genome and canonical(task["genome_file"]) != canonical(genome):
             return None
-    with Path(validation_paths["summary"]).open(newline="") as handle:
-        rows = list(csv.DictReader(handle, delimiter="\t"))
+    summary_path = canonical(validation_paths["summary"])
+    summary = Path(summary_path).read_bytes()
+    documents[summary_path] = hashlib.sha256(summary).hexdigest()
+    rows = list(csv.DictReader(io.StringIO(summary.decode("utf-8"), newline=""), delimiter="\t"))
     if len(rows) != 1 or clean_row(rows[0]) != clean_row(task["summary_row"]):
         return None
     qc_path = validation_paths["mapping_qc" if stage == "mapping" else "ownership_qc"]
@@ -140,13 +155,13 @@ def reuse_one(task, plan_path, root, contract, stage, index, plan, missing_limit
         expect(path, sha)
     # Each large file is read only once in this verification boundary. The
     # batch fences every file and symlink target against changes during reads.
-    observed = digest_paths(expected)
+    observed = (batch.read if batch is not None else digest_paths)(expected)
     if observed != expected:
         return None
     return {**result, "index": task["index"]}
 
 
-def partition(tasks, args, parser, stage):
+def partition(tasks, args, parser, stage, *, session=None):
     supplied = (args.reuse_validation_root, args.reuse_task_plan, args.format_contract_version)
     if not any(supplied):
         return [], tasks
@@ -167,15 +182,58 @@ def partition(tasks, args, parser, stage):
         candidate = {**task, "species_prefix": task.get("species_prefix")
                      or task.get("summary_row", {}).get("species_prefix")}
         result = None
+        batch = (session.batches.get(candidate["species_prefix"], FreshDigestBatch())
+                 if session is not None else None)
         try:
             if candidate["species_prefix"] in indices and "summary_row" in candidate:
                 result = reuse_one(candidate, plan_path, root, args.format_contract_version,
-                                   stage, indices[candidate["species_prefix"]], plan, args.missing_limit)
+                                   stage, indices[candidate["species_prefix"]], plan, args.missing_limit, batch=batch)
         except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
             pass
         if result is None:
             pending.append(task)
         else:
+            if session is not None:
+                session.batches[candidate["species_prefix"]] = batch
             print("Reused verified {} QC: {}".format(stage, candidate["species_prefix"]))
             reused.append(result)
     return reused, pending
+
+
+def main():
+    """Keep the public validators separate, sharing one final-QC invocation."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    for option in ("species-cds-dir", "species-gff-dir", "species-genome-dir", "species-summary",
+                   "mapping-stats-output", "ownership-stats-output"):
+        parser.add_argument("--" + option, required=True)
+    parser.add_argument("--nthreads", default="1")
+    parser.add_argument("--strict", action="store_true")
+    add_arguments(parser)
+    args = parser.parse_args()
+    common = ["--species-cds-dir", args.species_cds_dir, "--species-summary", args.species_summary,
+              "--nthreads", args.nthreads]
+    for key in ("reuse_validation_root", "reuse_task_plan", "format_contract_version"):
+        if getattr(args, key) is not None:
+            common.extend(["--" + key.replace("_", "-"), str(getattr(args, key))])
+    from validate_cds_gff_mapping import main as mapping
+    from validate_longest_cds_selection import main as ownership
+    session = VerificationSession()
+    status = mapping([*common, "--species-gff-dir", args.species_gff_dir,
+                      "--species-genome-dir", args.species_genome_dir,
+                      "--stats-output", args.mapping_stats_output, *( ["--strict"] if args.strict else [])],
+                     verification_session=session)
+    if status:
+        return status
+    status = ownership([*common, "--stats-output", args.ownership_stats_output], verification_session=session)
+    try:
+        session.check()
+    except OSError as error:
+        for path in (args.mapping_stats_output, args.ownership_stats_output):
+            Path(path).unlink(missing_ok=True)
+        sys.stderr.write("Final QC input changed during verification: " + str(error) + "\n")
+        return 1
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

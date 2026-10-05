@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 from input_generation_array_state import (
+    FreshDigestBatch,
     atomic_json,
     claim_workspace,
     digest,
@@ -66,27 +67,29 @@ def context(plan_path, index, root, stage, *, namespace_root=None):
     return task, settings, meta, paths
 
 
-def snapshot(paths):
+def snapshot(paths, *, batch=None):
     if any(not Path(path).is_file() or not Path(path).stat().st_size for path in paths.values()):
         raise ValueError("Stage resume requires all declared nonempty files")
-    hashes = digest_paths(paths.values())
+    hashes = (batch.read if batch is not None else digest_paths)(paths.values())
     return {label: {"path": path, "sha256": hashes[path]} for label, path in paths.items()}
 
 
-def record(plan_path, index, root, stage, format_contract_version, *, expected_hashes=None):
+def record(plan_path, index, root, stage, format_contract_version, *, expected_hashes=None, batch=None):
     task, settings, _, paths = context(plan_path, index, root, stage)
     if stage == "validate" and settings["run_validate_inputs"] != "1":
         raise ValueError("Disabled validation cannot produce a successful validation checkpoint")
-    files = snapshot(paths)
+    files = snapshot(paths, batch=batch)
     if expected_hashes is not None and any(files[label]["sha256"] != value for label, value in expected_hashes.items()):
         raise ValueError("Copied stage output differs from its verified source: " + task["species_prefix"])
+    if batch is not None:
+        batch.check()
     atomic_json(checkpoint_path(root, task["species_prefix"], stage), {
         "schema_version": 1, "stage": stage, "species": task["species_prefix"],
         "parameters": parameters(settings, stage, format_contract_version), "files": files,
     })
 
 
-def verified_snapshot(plan_path, index, root, stage, format_contract_version, *, namespace_root=None):
+def verified_snapshot(plan_path, index, root, stage, format_contract_version, *, namespace_root=None, batch=None):
     try:
         task, settings, _, paths = context(plan_path, index, root, stage, namespace_root=namespace_root)
         saved = json.loads(checkpoint_path(root, task["species_prefix"], stage).read_text())
@@ -95,7 +98,7 @@ def verified_snapshot(plan_path, index, root, stage, format_contract_version, *,
                 and saved.get("parameters") == parameters(settings, stage, format_contract_version))
         if not compatible:
             return None
-        observed = snapshot(paths)
+        observed = snapshot(paths, batch=batch)
         expected = {label: {**item, "path": str(namespace_path(item["path"], namespace_root))}
                     for label, item in saved["files"].items()}
         return observed if expected == observed else None
@@ -221,16 +224,20 @@ def _import_stages(args):
             raise ValueError("Source input-generation workspace has active workers/shared stages")
         if digest(source_plan) != args.source_plan_sha256:
             raise ValueError("Source plan differs from the sealed resume SHA-256")
-        if not prepared(source_plan, namespace_root=source_namespace):
+        source = load_plan(source_plan)
+        target = load_plan(args.task_plan)
+        donor_indices = {task["species_prefix"]: i for i, task in enumerate(source["tasks"], 1)}
+        selected = getattr(args, "task_index", None)
+        donor_index = (donor_indices.get(target["tasks"][selected - 1]["species_prefix"])
+                       if selected is not None and not source_only else None)
+        if not prepared(source_plan, namespace_root=source_namespace, task_index=donor_index):
             raise ValueError("Source prepare/settings evidence is missing or stale")
         claim_workspace(source_plan, source_root, namespace_root=source_namespace)
         claim_workspace(args.task_plan, args.root)
-        source = load_plan(source_plan)
         source_settings = json.loads(Path(str(source_plan) + ".settings.json").read_text())
         source_settings = {key: str(namespace_path(value, source_namespace))
                            if isinstance(value, str) and (value == "/workspace" or value.startswith("/workspace/")) else value
                            for key, value in source_settings.items()}
-        target = load_plan(args.task_plan)
         target_settings = json.loads(Path(str(args.task_plan) + ".settings.json").read_text())
         if parameters(source_settings, "format", args.format_contract_version) != parameters(target_settings, "format", args.format_contract_version):
             raise ValueError("Source/target formatting or required-output parameters differ")
@@ -272,14 +279,46 @@ def _import_stages(args):
                                 target_settings, index, task, donor_task, old_index, imported, skipped)
         if digest(source_plan) != args.source_plan_sha256:
             raise ValueError("Source plan changed during stage import")
-        print(json.dumps({"imported": imported, "without_verified_format": skipped}))
+        report = {"imported": imported, "without_verified_format": skipped}
+        print(json.dumps(report))
+        return report
+
+
+def start_worker(args):
+    """Resolve the worker once, sharing only fresh checks before any writes."""
+    target_lock = Path(str(args.task_plan) + ".locks") / f"{args.task_index}.lock"
+    owner = inspect_lock(target_lock)["exclusive"]
+    if owner is None or owner["token"] != args.target_lock_token:
+        raise ValueError("Target task lock ownership changed")
+    batch = FreshDigestBatch()
+    current = (not args.overwrite and verified_snapshot(args.task_plan, args.task_index, args.root,
+               "format", args.format_contract_version, batch=batch) is not None)
+    if not current and not args.overwrite and args.source_plan is not None:
+        args.source_only = False
+        result = import_stages(args)
+        if result["imported"]:
+            return
+    from run_input_generation_task import build_arg_parser, describe_task
+    settings = json.loads(Path(str(args.task_plan) + ".settings.json").read_text())
+    command = ["--task-plan", str(args.task_plan), "--task-index", str(args.task_index),
+               "--task-meta-output", str(args.root / "tmp/task_meta_shards" / f"{args.task_index}.json"),
+               "--download-timeout", str(args.download_timeout)]
+    for key in ("species_cds_dir", "species_gff_dir", "species_genome_dir"):
+        command.extend(["--" + key.replace("_", "-"), settings[key]])
+    for header in args.http_header:
+        command.extend(["--http-header", header])
+    command.extend(["--auth-bearer-token-env", args.auth_bearer_token_env])
+    # An incompatible checkpoint may have performed partial checks. Discard
+    # them rather than carrying their fences across an attempted import.
+    describe_task(build_arg_parser().parse_args(command), batch=batch if current else FreshDigestBatch())
 
 
 def _import_one(args, source_plan, source_root, source_namespace, source_settings,
                 target_settings, index, task, donor_task, old_index, imported, skipped):
     species = task["species_prefix"]
+    before_copy = FreshDigestBatch()
     original_files = verified_snapshot(source_plan, old_index, source_root, "format", args.format_contract_version,
-                                       namespace_root=source_namespace)
+                                       namespace_root=source_namespace, batch=before_copy)
     format_valid = original_files is not None
     # Completion is a legacy alternative, not a prerequisite for a
     # current format checkpoint (and may contain large BUSCO outputs).
@@ -307,7 +346,7 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
         if any(path not in receipt["files"] for path in old_paths.values()):
             raise ValueError("Legacy completion does not certify every format shard: " + species)
     if original_files is None:
-        original_files = snapshot(old_paths)
+        original_files = snapshot(old_paths, batch=before_copy)
     if format_valid:
         saved_files = json.loads(checkpoint_path(source_root, species, "format").read_text())["files"]
         saved_files = {label: {**item, "path": str(namespace_path(item["path"], source_namespace))}
@@ -321,24 +360,39 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
                        source_root / "tmp/task_stats_shards" / f"{old_index}.longest.json",
                        source_root / "tmp/task_stats_shards" / f"{old_index}.mapping.json"]
     reject_output_overlap([meta_file], protected_paths)
-    command = [sys.executable, str(Path(__file__).with_name("run_input_generation_task.py")),
-               "--task-plan", str(args.task_plan), "--task-index", str(index), "--describe-only",
-               "--task-meta-output", str(meta_file)]
-    for key in ("species_cds_dir", "species_gff_dir", "species_genome_dir"):
-        command.extend(["--" + key.replace("_", "-"), target_settings[key]])
-    subprocess.run(command, check=True)
+    from run_input_generation_task import build_arg_parser, describe_task
+    describe_args = build_arg_parser().parse_args([
+        "--task-plan", str(args.task_plan), "--task-index", str(index), "--describe-only",
+        "--task-meta-output", str(meta_file),
+        *[part for key in ("species_cds_dir", "species_gff_dir", "species_genome_dir")
+          for part in ("--" + key.replace("_", "-"), target_settings[key])]])
+    describe_task(describe_args, batch=before_copy)
     _, _, _, new_paths = context(args.task_plan, index, args.root, "format")
     old_raw = {key: path for key, path in old_paths.items() if key.endswith("_path")}
     new_raw = {key: path for key, path in new_paths.items() if key.endswith("_path")}
     if old_raw.keys() != new_raw.keys():
         raise ValueError("Source/target raw input roles differ: " + species)
-    raw_hashes = digest_paths(new_raw.values())
+    raw_hashes = before_copy.read(new_raw.values())
     if any(original_files[key]["sha256"] != raw_hashes[new_raw[key]] for key in old_raw):
         raise ValueError("Source/target raw input content differs: " + species)
     # Separate roots do not imply separate physical outputs: custom directories,
     # symlinks and hard links must not turn a donor reader into a writer.
     reject_output_overlap([path for label, path in new_paths.items() if not label.endswith("_path")],
                           [*protected_paths, *new_raw.values()])
+    validation_files = None
+    if source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1":
+        validation_files = verified_snapshot(source_plan, old_index, source_root, "validate",
+                                             args.format_contract_version, namespace_root=source_namespace,
+                                             batch=before_copy)
+    if validation_files is not None:
+        _, _, _, validation_paths = context(args.task_plan, index, args.root, "validate")
+        reject_output_overlap([validation_paths[label] for label in ("ownership_qc", "mapping_qc")
+                               if label in validation_files],
+                              [*protected_paths, *new_raw.values(),
+                               *(item["path"] for item in validation_files.values())])
+    before_copy.check()
+    # Writes and parsing start a new boundary. No pre-transfer digest is used
+    # as authority for the post-transfer content verification below.
     for label in ("cds", "gff", "genome", "stats"):
         if label in old_paths:
             if label not in new_paths:
@@ -354,44 +408,42 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
         raise ValueError("Source summary shard does not identify exactly one requested species")
     destination = Path(new_paths["summary"])
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fields, delimiter="\t")
-        writer.writeheader()
-        writer.writerows(rows)
-    if snapshot(old_paths) != original_files:
-        raise ValueError("Source format files changed during import: " + species)
-    record(args.task_plan, index, args.root, "format", args.format_contract_version,
-           expected_hashes={label: item["sha256"] for label, item in original_files.items() if label != "summary"})
-    import_fx2tab(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
-                  source_settings, target_settings)
-    validation_files = verified_snapshot(source_plan, old_index, source_root, "validate",
-                                         args.format_contract_version, namespace_root=source_namespace)
-    if (source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1"
-            and validation_files is not None):
-        _, _, _, validation_paths = context(args.task_plan, index, args.root, "validate")
-        reject_output_overlap([validation_paths[label] for label in ("ownership_qc", "mapping_qc")
-                               if label in validation_files],
-                              [*protected_paths, *new_raw.values(),
-                               *(item["path"] for item in validation_files.values())])
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fields, delimiter="\t")
+    writer.writeheader()
+    writer.writerows(rows)
+    summary_bytes = buffer.getvalue().encode("utf-8")
+    destination.write_bytes(summary_bytes)
+    if validation_files is not None:
         for label in ("ownership_qc", "mapping_qc"):
             if label in validation_files:
                 copy_atomic(validation_files[label]["path"], validation_paths[label],
                             expected_sha256=validation_files[label]["sha256"])
-        # The source proof certifies these exact bytes, not arbitrary current
-        # destination contents. Keep the intentionally rewritten summary bound
-        # to the destination format proof as well.
-        expected = {label: item["sha256"] for label, item in validation_files.items() if label != "summary"}
-        expected["summary"] = json.loads(checkpoint_path(args.root, species, "format").read_text())["files"]["summary"]["sha256"]
+    after_copy = FreshDigestBatch()
+    if snapshot(old_paths, batch=after_copy) != original_files:
+        raise ValueError("Source format files changed during import: " + species)
+    if validation_files is not None:
+        _, _, _, old_validation_paths = context(source_plan, old_index, source_root, "validate",
+                                               namespace_root=source_namespace)
+        if snapshot(old_validation_paths, batch=after_copy) != validation_files:
+            raise ValueError("Source validation files changed during import: " + species)
+    summary_sha = hashlib.sha256(summary_bytes).hexdigest()
+    record(args.task_plan, index, args.root, "format", args.format_contract_version,
+           expected_hashes={**{label: item["sha256"] for label, item in original_files.items()},
+                            "summary": summary_sha}, batch=after_copy)
+    if validation_files is not None:
         record(args.task_plan, index, args.root, "validate", args.format_contract_version,
-               expected_hashes=expected)
-        imported.append({"species": species, "validation": True})
-    else:
-        imported.append({"species": species, "validation": False})
+               expected_hashes={**{label: item["sha256"] for label, item in validation_files.items()},
+                                "summary": summary_sha}, batch=after_copy)
+    after_copy.check()
+    import_fx2tab(source_root, args.root, species, old_paths["cds"], new_paths["cds"],
+                  source_settings, target_settings)
+    imported.append({"species": species, "validation": validation_files is not None})
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check", "record", "import", "check-source"))
+    parser.add_argument("action", choices=("check", "record", "import", "check-source", "start-worker"))
     parser.add_argument("--task-plan", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--task-index", type=int)
@@ -401,8 +453,18 @@ def main():
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-plan-sha256")
     parser.add_argument("--target-lock-token", help="Existing native worker's target task lock ownership token")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--download-timeout", type=float, default=120)
+    parser.add_argument("--http-header", action="append", default=[])
+    parser.add_argument("--auth-bearer-token-env", default="")
     args = parser.parse_args()
-    if args.action in ("import", "check-source"):
+    if args.action == "start-worker":
+        if not args.task_index or not 1 <= args.task_index <= load_plan(args.task_plan)["task_count"]:
+            parser.error("A valid task index is required")
+        if args.source_plan is not None and not all((args.source_root, args.source_plan_sha256)):
+            parser.error("Import requires the source root and sealed SHA-256")
+        start_worker(args)
+    elif args.action in ("import", "check-source"):
         if not all((args.source_plan, args.source_root, args.source_plan_sha256)):
             parser.error("Import requires the source plan, root and sealed SHA-256")
         if args.task_index is not None and not 1 <= args.task_index <= load_plan(args.task_plan)["task_count"]:

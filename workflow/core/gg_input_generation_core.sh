@@ -489,6 +489,36 @@ print(value)
 PY
 }
 
+read_stats_json_fields() {
+  local stats_file="$1"
+  shift
+  local fields_file
+  local field_name
+  local field_value
+  local -a field_names=("$@")
+  fields_file=$(mktemp "${download_tmp_root}/json-fields.XXXXXX") || return $?
+  if ! python - "${stats_file}" "${field_names[@]}" > "${fields_file}" <<'PYFIELDS'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+values = ["" if data.get(field) is None else str(data.get(field, "")).rstrip("\n")
+          for field in (item.split("=", 1)[-1] for item in sys.argv[2:])]
+if any("\0" in value for value in values):
+    raise ValueError("NUL is unsupported in shell metadata fields")
+sys.stdout.buffer.write(b"".join(value.encode("utf-8") + b"\0" for value in values))
+PYFIELDS
+  then
+    rm -f -- "${fields_file}"
+    return 1
+  fi
+  for field_name in "${field_names[@]}"; do
+    IFS= read -r -d '' field_value || { rm -f -- "${fields_file}"; return 1; }
+    printf -v "${field_name%%=*}" '%s' "${field_value}"
+  done < "${fields_file}"
+  rm -f -- "${fields_file}"
+}
+
 input_generation_effective_input_dir_path() {
   if [[ -n "${input_dir}" ]]; then
     printf '%s\n' "${input_dir}"
@@ -1057,12 +1087,7 @@ run_format_stage_single() {
   fi
 
   if [[ -s "${format_stats_file}" ]]; then
-    num_species_cds="$(read_stats_json_field "${format_stats_file}" "num_species_cds_files")"
-    num_species_gff="$(read_stats_json_field "${format_stats_file}" "num_species_gff_files")"
-    num_species_genome="$(read_stats_json_field "${format_stats_file}" "num_species_genome_files")"
-    cds_sequences_before="$(read_stats_json_field "${format_stats_file}" "cds_sequences_before")"
-    cds_sequences_after="$(read_stats_json_field "${format_stats_file}" "cds_sequences_after")"
-    cds_first_sequence_name="$(read_stats_json_field "${format_stats_file}" "cds_first_sequence_name")"
+    read_stats_json_fields "${format_stats_file}" num_species_cds=num_species_cds_files num_species_gff=num_species_gff_files num_species_genome=num_species_genome_files cds_sequences_before cds_sequences_after cds_first_sequence_name || exit $?
     rm -f -- "${format_stats_file}"
   fi
   if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
@@ -1153,43 +1178,58 @@ run_validate_stage() {
       ensure_parent_dir "${mapping_stats_file}"
       rm -f -- "${mapping_stats_file}"
       rm -f -- "${longest_cds_stats_file}"
-      cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
-      cmd+=(--species-cds-dir "${species_cds_dir}")
-      cmd+=(--species-gff-dir "${species_gff_dir}")
-      cmd+=(--species-genome-dir "${species_genome_dir}")
-      cmd+=(--species-summary "${species_summary_output}")
-      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
-      cmd+=(--stats-output "${mapping_stats_file}")
-      cmd+=("${validation_reuse_args[@]}")
-      if [[ ${strict} -eq 1 ]]; then
-        cmd+=(--strict)
-      fi
-      echo "Running: ${cmd[*]}"
-      if "${cmd[@]}"; then
-        :
+      if [[ "${input_generation_mode}" == array_finalize ]]; then
+        cmd=(python "${gg_support_dir}/input_validation_reuse.py")
+        cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
+        cmd+=(--species-genome-dir "${species_genome_dir}" --species-summary "${species_summary_output}")
+        cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
+        cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
+        [[ ${strict} -ne 1 ]] || cmd+=(--strict)
+        echo "Running: ${cmd[*]}"
+        if ! "${cmd[@]}"; then
+          stage_validate_status="failed"
+          echo "Failed: Validate formatted species inputs"
+          exit 1
+        fi
       else
-        stage_validate_status="failed"
-        echo "Failed: Validate CDS-to-GFF mapping compatibility"
-        exit 1
-      fi
-      if [[ ! -s "${species_summary_output}" ]]; then
-        stage_validate_status="failed"
-        echo "Species summary not found for longest CDS validation: ${species_summary_output}"
-        exit 1
-      fi
-      cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
-      cmd+=(--species-cds-dir "${species_cds_dir}")
-      cmd+=(--species-summary "${species_summary_output}")
-      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
-      cmd+=(--stats-output "${longest_cds_stats_file}")
-      cmd+=("${validation_reuse_args[@]}")
-      echo "Running: ${cmd[*]}"
-      if "${cmd[@]}"; then
-        :
-      else
-        stage_validate_status="failed"
-        echo "Failed: Validate longest CDS representative selection"
-        exit 1
+        cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
+        cmd+=(--species-cds-dir "${species_cds_dir}")
+        cmd+=(--species-gff-dir "${species_gff_dir}")
+        cmd+=(--species-genome-dir "${species_genome_dir}")
+        cmd+=(--species-summary "${species_summary_output}")
+        cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+        cmd+=(--stats-output "${mapping_stats_file}")
+        cmd+=("${validation_reuse_args[@]}")
+        if [[ ${strict} -eq 1 ]]; then
+          cmd+=(--strict)
+        fi
+        echo "Running: ${cmd[*]}"
+        if "${cmd[@]}"; then
+          :
+        else
+          stage_validate_status="failed"
+          echo "Failed: Validate CDS-to-GFF mapping compatibility"
+          exit 1
+        fi
+        if [[ ! -s "${species_summary_output}" ]]; then
+          stage_validate_status="failed"
+          echo "Species summary not found for longest CDS validation: ${species_summary_output}"
+          exit 1
+        fi
+        cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+        cmd+=(--species-cds-dir "${species_cds_dir}")
+        cmd+=(--species-summary "${species_summary_output}")
+        cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+        cmd+=(--stats-output "${longest_cds_stats_file}")
+        cmd+=("${validation_reuse_args[@]}")
+        echo "Running: ${cmd[*]}"
+        if "${cmd[@]}"; then
+          :
+        else
+          stage_validate_status="failed"
+          echo "Failed: Validate longest CDS representative selection"
+          exit 1
+        fi
       fi
       rm -f -- "${mapping_stats_file}"
       # Retain source-ownership coverage alongside the selection result.
@@ -1434,8 +1474,7 @@ run_cds_fx2tab_stage_one_worker() {
     stage_cds_fx2tab_status="failed"
     exit 1
   fi
-  species_prefix=$(read_stats_json_field "${task_meta_file}" "species_prefix")
-  cds_output_path=$(read_stats_json_field "${task_meta_file}" "cds_output_path")
+  read_stats_json_fields "${task_meta_file}" species_prefix cds_output_path || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" ]]; then
     echo "Task metadata shard is missing fx2tab fields: ${task_meta_file}"
     stage_cds_fx2tab_status="failed"
@@ -1684,8 +1723,7 @@ run_species_busco_stage_one_worker() {
     stage_species_busco_status="failed"
     exit 1
   fi
-  species_prefix=$(read_stats_json_field "${task_meta_file}" "species_prefix")
-  cds_output_path=$(read_stats_json_field "${task_meta_file}" "cds_output_path")
+  read_stats_json_fields "${task_meta_file}" species_prefix cds_output_path || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" ]]; then
     echo "Task metadata shard is missing BUSCO fields: ${task_meta_file}"
     stage_species_busco_status="failed"
@@ -1952,8 +1990,7 @@ run_trait_stage() {
   fi
 
   if [[ -s "${trait_stats_file}" ]]; then
-    num_species_trait="$(read_stats_json_field "${trait_stats_file}" "num_species_with_any_trait")"
-    num_trait_columns="$(read_stats_json_field "${trait_stats_file}" "num_trait_columns")"
+    read_stats_json_fields "${trait_stats_file}" num_species_trait=num_species_with_any_trait num_trait_columns || exit $?
     rm -f -- "${trait_stats_file}"
   fi
   if [[ ${dry_run} -eq 0 ]]; then
@@ -2116,42 +2153,25 @@ run_array_worker_mode() {
   task_meta_file="${dir_task_meta_shards}/${GG_ARRAY_TASK_ID}.json"
   task_summary_file="${dir_species_summary_shards}/${GG_ARRAY_TASK_ID}.tsv"
 
-  describe_cmd=(python "${gg_support_dir}/run_input_generation_task.py")
-  describe_cmd+=(--task-plan "${task_plan_output}")
-  describe_cmd+=(--task-index "${GG_ARRAY_TASK_ID}")
-  describe_cmd+=(--species-cds-dir "${species_cds_dir}")
-  describe_cmd+=(--species-gff-dir "${species_gff_dir}")
-  describe_cmd+=(--species-genome-dir "${species_genome_dir}")
-  describe_cmd+=(--task-meta-output "${task_meta_file}")
-  describe_cmd+=(--describe-only --download-timeout "${download_timeout}")
+  describe_cmd=(python "${gg_support_dir}/input_generation_stage_resume.py" start-worker)
+  describe_cmd+=(--task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}")
+  describe_cmd+=(--root "${input_generation_root}" --format-contract-version "${format_contract_version}")
+  describe_cmd+=(--target-lock-token "${array_task_lock_token}" --download-timeout "${download_timeout}")
+  [[ ${overwrite} -ne 1 ]] || describe_cmd+=(--overwrite)
   [[ -z "${http_header}" ]] || describe_cmd+=(--http-header "${http_header}")
   [[ -z "${auth_bearer_token_env}" ]] || describe_cmd+=(--auth-bearer-token-env "${auth_bearer_token_env}")
+  if [[ -n "${resume_from_task_plan}" && ${overwrite} -ne 1 ]]; then
+    describe_cmd+=(--source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}"
+      --source-root "${resume_from_input_generation_root}")
+  fi
   if ! "${describe_cmd[@]}"; then
     stage_format_status="failed"
-    echo "Failed to describe input-generation array task ${GG_ARRAY_TASK_ID}."
+    echo "Failed to describe/import input-generation array task ${GG_ARRAY_TASK_ID}."
     exit 1
   fi
-  # Import only this worker's species after it owns the target task namespace.
-  # Old prepares that already imported checkpoints remain compatible.
-  if [[ -n "${resume_from_task_plan}" && ${overwrite} -ne 1 ]] && ! python "${gg_support_dir}/input_generation_stage_resume.py" check \
-    --task-plan "${task_plan_output}" --root "${input_generation_root}" \
-    --format-contract-version "${format_contract_version}" --task-index "${GG_ARRAY_TASK_ID}" --stage format
-  then
-    python "${gg_support_dir}/input_generation_stage_resume.py" import \
-      --task-plan "${task_plan_output}" --root "${input_generation_root}" \
-      --format-contract-version "${format_contract_version}" --task-index "${GG_ARRAY_TASK_ID}" \
-      --target-lock-token "${array_task_lock_token}" \
-      --source-plan "${resume_from_task_plan}" --source-plan-sha256 "${resume_from_task_plan_sha256}" \
-      --source-root "${resume_from_input_generation_root}"
-  fi
-  species_prefix=$(read_stats_json_field "${task_meta_file}" "species_prefix")
-  cds_input_path=$(read_stats_json_field "${task_meta_file}" "cds_path")
-  gff_input_path=$(read_stats_json_field "${task_meta_file}" "gff_path")
-  gbff_input_path=$(read_stats_json_field "${task_meta_file}" "gbff_path")
-  genome_input_path=$(read_stats_json_field "${task_meta_file}" "genome_path")
-  cds_output_path=$(read_stats_json_field "${task_meta_file}" "cds_output_path")
-  gff_output_path=$(read_stats_json_field "${task_meta_file}" "gff_output_path")
-  genome_output_path=$(read_stats_json_field "${task_meta_file}" "genome_output_path")
+  read_stats_json_fields "${task_meta_file}" species_prefix cds_input_path=cds_path \
+    gff_input_path=gff_path gbff_input_path=gbff_path genome_input_path=genome_path \
+    cds_output_path gff_output_path genome_output_path || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" || ( ${require_gff} -eq 1 && -z "${gff_output_path}" ) ]]; then
     stage_format_status="failed"
     echo "Array task description is missing required species or output paths: ${task_meta_file}"
@@ -2261,12 +2281,7 @@ run_array_worker_mode() {
   fi
 
   if [[ -s "${task_stats_file}" ]]; then
-    num_species_cds="$(read_stats_json_field "${task_stats_file}" "num_species_cds_files")"
-    num_species_gff="$(read_stats_json_field "${task_stats_file}" "num_species_gff_files")"
-    num_species_genome="$(read_stats_json_field "${task_stats_file}" "num_species_genome_files")"
-    cds_sequences_before="$(read_stats_json_field "${task_stats_file}" "cds_sequences_before")"
-    cds_sequences_after="$(read_stats_json_field "${task_stats_file}" "cds_sequences_after")"
-    cds_first_sequence_name="$(read_stats_json_field "${task_stats_file}" "cds_first_sequence_name")"
+    read_stats_json_fields "${task_stats_file}" num_species_cds=num_species_cds_files num_species_gff=num_species_gff_files num_species_genome=num_species_genome_files cds_sequences_before cds_sequences_after cds_first_sequence_name || exit $?
   fi
 
   run_validate_stage_one_worker
@@ -2363,14 +2378,7 @@ run_array_finalize_mode() {
     exit "${cmd_status}"
   fi
 
-  num_species_cds="$(read_stats_json_field "${merge_stats_file}" "num_species_cds_files")"
-  num_species_gff="$(read_stats_json_field "${merge_stats_file}" "num_species_gff_files")"
-  num_species_genome="$(read_stats_json_field "${merge_stats_file}" "num_species_genome_files")"
-  cds_sequences_before="$(read_stats_json_field "${merge_stats_file}" "cds_sequences_before")"
-  cds_sequences_after="$(read_stats_json_field "${merge_stats_file}" "cds_sequences_after")"
-  cds_first_sequence_name="$(read_stats_json_field "${merge_stats_file}" "cds_first_sequence_name")"
-  merged_rows="$(read_stats_json_field "${merge_stats_file}" "merged_species_summary_rows")"
-  task_stats_files="$(read_stats_json_field "${merge_stats_file}" "task_stats_files")"
+  read_stats_json_fields "${merge_stats_file}" num_species_cds=num_species_cds_files num_species_gff=num_species_gff_files num_species_genome=num_species_genome_files cds_sequences_before cds_sequences_after cds_first_sequence_name merged_rows=merged_species_summary_rows task_stats_files || exit $?
   if [[ "${task_stats_files}" != "${expected_tasks}" ]]; then
     echo "Merged task stats count does not match expected tasks: ${task_stats_files} != ${expected_tasks}"
     stage_format_status="failed"
@@ -2558,7 +2566,9 @@ if [[ "${input_generation_mode}" == array_* ]]; then
   [[ "${input_generation_mode}" != array_prepare ]] || array_settings_cmd+=(--prepare)
   "${array_settings_cmd[@]}"
   if [[ "${input_generation_mode}" != array_prepare ]]; then
-    python "${gg_support_dir}/input_generation_array_state.py" check-prepared --task-plan "${task_plan_output}" || {
+    prepare_check_cmd=(python "${gg_support_dir}/input_generation_array_state.py" check-prepared --task-plan "${task_plan_output}")
+    [[ "${input_generation_mode}" != array_worker ]] || prepare_check_cmd+=(--task-index "${GG_ARRAY_TASK_ID}")
+    "${prepare_check_cmd[@]}" || {
       echo "Array prepare did not complete for this plan and settings. Run array_prepare first."; exit 1;
     }
     python "${gg_support_dir}/input_generation_array_state.py" claim-workspace --task-plan "${task_plan_output}" --workspace "${input_generation_root}" "${array_output_args[@]}"

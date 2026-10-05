@@ -484,9 +484,9 @@ def run_validation_tasks(tasks, missing_limit, nthreads):
     return [ordered_results[index] for index in sorted(ordered_results)]
 
 
-def main():
+def main(argv=None, *, verification_session=None):
     parser = build_arg_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     nthreads = resolve_nthreads(args)
 
     cds_dir = Path(args.species_cds_dir).expanduser().resolve()
@@ -565,7 +565,7 @@ def main():
                 )
             )
 
-    reused, pending = partition(tasks, args, parser, "ownership")
+    reused, pending = partition(tasks, args, parser, "ownership", session=verification_session)
     results = reused + run_validation_tasks(tasks=pending, missing_limit=args.missing_limit, nthreads=nthreads)
     species_by_index = {task["index"]: task["summary_row"]["species_prefix"] for task in tasks}
     for result in sorted(results, key=lambda item: item["index"]):

@@ -88,10 +88,10 @@ def write_json(path_text, payload):
         json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
 
 
-def verify_task_inputs(task, actual=None, raw_input_error=None):
+def verify_task_inputs(task, actual=None, raw_input_error=None, *, batch=None):
     original = task.get("input_sha256", {})
     resolved = actual.get("input_sha256", {}) if actual is not None else {}
-    observed = digest_paths([*original, *resolved])
+    observed = (batch.read if batch is not None else digest_paths)([*original, *resolved])
     for path, expected in original.items():
         if observed[path] != expected:
             label = "Local manifest input" if "manifest_row" in task else "Raw input"
@@ -105,9 +105,9 @@ def verify_task_inputs(task, actual=None, raw_input_error=None):
             raise ValueError("Raw input changed after planning: " + path)
 
 
-def resolve_manifest_task(task, args, *, raw_input_error=None):
+def resolve_manifest_task(task, args, *, raw_input_error=None, batch=None):
     if "manifest_row" not in task:
-        verify_task_inputs(task, raw_input_error=raw_input_error)
+        verify_task_inputs(task, raw_input_error=raw_input_error, batch=batch)
         return task
     plan_sha256 = digest(args.task_plan)
     root = Path(str(args.task_plan) + ".tasks")
@@ -120,7 +120,7 @@ def resolve_manifest_task(task, args, *, raw_input_error=None):
         actual = deserialize_task(cached["task"])
         if any(actual.get(key) != task.get(key) for key in ("species_prefix", "species_key", "provider")):
             raise ValueError("Resolved download cache species/provider mismatch")
-        verify_task_inputs(task, actual, raw_input_error=raw_input_error)
+        verify_task_inputs(task, actual, raw_input_error=raw_input_error, batch=batch)
         return actual
     verify_task_inputs(task)
     if load_plan(args.task_plan).get("download_mode") == "staged":
@@ -167,24 +167,12 @@ def resolve_manifest_task(task, args, *, raw_input_error=None):
     return actual
 
 
-def main():
-    parser = build_arg_parser()
-    args = parser.parse_args()
-
-    task_plan_path = Path(args.task_plan).expanduser().resolve()
-    if not task_plan_path.exists():
-        parser.error("Task plan not found: {}".format(task_plan_path))
-
-    task_plan = load_task_plan(task_plan_path)
-    tasks = task_plan.get("tasks") or []
-    if args.task_index < 1 or args.task_index > len(tasks):
-        parser.error(
-            "--task-index {} is out of range for {} tasks".format(args.task_index, len(tasks))
-        )
-
-    if args.dry_run and "manifest_row" in tasks[args.task_index - 1]:
-        parser.error("Use the array submission helper for a download-free manifest preview")
-    task = resolve_manifest_task(deserialize_task(tasks[args.task_index - 1]), args, raw_input_error=parser.error)
+def describe_task(args, *, batch=None, raw_input_error=None, write_meta=True):
+    plan = load_task_plan(args.task_plan)
+    if not 1 <= args.task_index <= plan["task_count"]:
+        raise ValueError("Task index is out of range")
+    task = resolve_manifest_task(deserialize_task(plan["tasks"][args.task_index - 1]), args,
+                                 raw_input_error=raw_input_error, batch=batch)
     output_cds_dir = Path(args.species_cds_dir).expanduser().resolve()
     output_gff_dir = Path(args.species_gff_dir).expanduser().resolve()
     output_genome_dir = Path(args.species_genome_dir).expanduser().resolve()
@@ -221,19 +209,39 @@ def main():
         key: str(task.get(key) or "")
         for key in ("cds_path", "gff_path", "gbff_path", "genome_path")
     }
-    if args.describe_only:
-        write_json(
-            args.task_meta_output,
-            {
-                "task_index": args.task_index,
-                "task_count": len(tasks),
-                "species_prefix": task["species_prefix"],
-                "species_key": task["species_key"],
-                "provider": task["provider"],
-                **raw_paths,
-                **expected_paths,
-            },
+    metadata = {"task_index": args.task_index, "task_count": plan["task_count"],
+                "species_prefix": task["species_prefix"], "species_key": task["species_key"],
+                "provider": task["provider"], **raw_paths, **expected_paths}
+    if batch is not None:
+        batch.check()
+    if write_meta:
+        write_json(args.task_meta_output, metadata)
+    return task, metadata
+
+
+def main():
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    task_plan_path = Path(args.task_plan).expanduser().resolve()
+    if not task_plan_path.exists():
+        parser.error("Task plan not found: {}".format(task_plan_path))
+
+    task_plan = load_task_plan(task_plan_path)
+    tasks = task_plan.get("tasks") or []
+    if args.task_index < 1 or args.task_index > len(tasks):
+        parser.error(
+            "--task-index {} is out of range for {} tasks".format(args.task_index, len(tasks))
         )
+
+    if args.dry_run and "manifest_row" in tasks[args.task_index - 1]:
+        parser.error("Use the array submission helper for a download-free manifest preview")
+    task, metadata = describe_task(args, raw_input_error=parser.error, write_meta=args.describe_only)
+    output_cds_dir = Path(args.species_cds_dir).expanduser().resolve()
+    output_gff_dir = Path(args.species_gff_dir).expanduser().resolve()
+    output_genome_dir = Path(args.species_genome_dir).expanduser().resolve()
+    raw_paths = {key: metadata[key] for key in ("cds_path", "gff_path", "gbff_path", "genome_path")}
+    if args.describe_only:
         return 0
     output_cds_dir.mkdir(parents=True, exist_ok=True)
     output_gff_dir.mkdir(parents=True, exist_ok=True)

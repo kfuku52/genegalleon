@@ -1581,3 +1581,47 @@ def test_formatted_funannotate_metadata_reaches_real_anchor_reader(tmp_path):
     source["gff"] = str(formatted)
     genes, _ = prepare_rescue_genome(source, output, "genes", 1.0)
     assert [gene.gene_id for gene in genes] == ["Plant_example_g0", "Plant_example_g1"]
+
+
+def test_gemoma_reads_proteins_once_per_donor_and_keeps_each_query_alignment(tmp_path, monkeypatch):
+    donor = "Donor_species"
+    prepared = tmp_path / "prepared" / donor
+    prepared.mkdir(parents=True)
+    identifiers = [donor + "_g1", donor + "_g2"]
+    rescue.write_tsv(prepared / "genes.id_map.tsv", ("original_id", "jcvi_id", "locus_id", "status"),
+                     [(identifier, identifier, identifier, "selected") for identifier in identifiers])
+    (prepared / "genes.anchor_admission.json").write_text('{"records": []}')
+    (prepared / "genes.pep").write_text(f">{identifiers[0]}\nMK\n>{identifiers[1]}\nMKP\n")
+    gff, jar, java = (tmp_path / name for name in ("donor.gff", "test.jar", "java"))
+    gff.write_text("".join(f"chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID={identifier};Parent={identifier}\n" for identifier in identifiers))
+    jar.write_text("jar")
+    java.write_text("java")
+    plan = {"request": {"gemoma_jar": str(jar), "gemoma_java": str(java),
+                        "files": {str(path): rescue.digest(path) for path in (jar, java)},
+                        "parameters": {"minimum_coverage": 0.9, "minimum_identity": 0.9},
+                        "sources": {donor: {"gff": str(gff), "genome": str(tmp_path / "donor.fa")}}}}
+    regions = [{"donor": donor, "query": query, "id": f"query_{index}", "seqid": "chr1",
+                "expected_strand": "+", "start": 0, "end": 9} for index, query in enumerate(identifiers)]
+    monkeypatch.setattr(rescue, "verify_sources", lambda *_: None)
+    def fake_java(command, directory, query):
+        out = Path(next(value.split("=", 1)[1] for value in command if value.startswith("outdir=")))
+        out.mkdir()
+        (out / "final_annotation.gff").write_text("".join(
+            f"chr1\tsrc\tmRNA\t1\t9\t.\t+\t.\tID=model{index}\n"
+            f"chr1\tsrc\tCDS\t1\t9\t.\t+\t0\tParent=model{index}\n" for index in (1, 2, 3)))
+    monkeypatch.setattr(rescue, "run", fake_java)
+    reads = []
+    original = rescue.fasta_records
+    def counted(path):
+        reads.append(path)
+        return original(path)
+    monkeypatch.setattr(rescue, "fasta_records", counted)
+    def checked(model, *args):
+        return {**model, "sequence": "ATGAAATAA" if model["query"] == "query_0" else "ATGAAACCCTAA", "problems": []}
+    monkeypatch.setattr(rescue, "validate_model", checked)
+    monkeypatch.setattr(rescue, "check_interval", lambda model: model)
+    validated = []
+    rescue.refine_gemoma(tmp_path, tmp_path, plan, {"genetic_code": 1}, regions, None, validated, 1)
+    assert reads == [prepared / "genes.pep"]
+    assert len(validated) == 6
+    assert all(model["coverage"] == model["identity"] == 1.0 and model["problems"] == [] for model in validated)

@@ -1081,6 +1081,7 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
         subset = [r for r in regions if r["donor"] == donor]
         directory = tmp / ("gemoma_" + donor)
         directory.mkdir()
+        proteins = None
         # Separate queries avoid merging duplicate transcript IDs across WGD
         # intervals in GeMoMa's selected-file lookup.
         for r in subset:
@@ -1129,7 +1130,9 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                 checked = validate_model(model, genome, source["genetic_code"],
                                          {**params, "minimum_coverage": 0, "minimum_identity": 0})
                 protein = str(Seq(checked["sequence"][:len(checked["sequence"]) // 3 * 3]).translate(table=source["genetic_code"])).rstrip("*")
-                reference = {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")}[r["query"]]
+                if proteins is None:
+                    proteins = {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")}
+                reference = proteins[r["query"]]
                 from Bio.Align import PairwiseAligner
                 aligner = PairwiseAligner(mode="global", match_score=2, mismatch_score=-1,
                                           open_gap_score=-5, extend_gap_score=-1)

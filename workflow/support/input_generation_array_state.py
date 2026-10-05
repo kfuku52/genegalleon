@@ -33,20 +33,40 @@ def digest(path):
     return result.hexdigest()
 
 
+class FreshDigestBatch:
+    """One fresh verification boundary; never persisted or reused after writes.
+
+    Stat identities fence full content reads, rather than authorizing a saved
+    checksum. Call check before accepting/publishing any result from the batch.
+    """
+
+    def __init__(self):
+        self.paths = {}
+        self.hashes = {}
+
+    def check(self):
+        for path, (identity, target) in self.paths.items():
+            if (_stat_identity(os.stat(path)) != identity
+                    or str(Path(path).resolve(strict=True)) != target):
+                raise OSError("File changed while hashing: " + path)
+
+    def read(self, paths):
+        self.check()
+        paths = list(dict.fromkeys(str(path) for path in paths))
+        for path in paths:
+            if path not in self.paths:
+                self.paths[path] = (_stat_identity(os.stat(path)), str(Path(path).resolve(strict=True)))
+        for path in paths:
+            identity, target = self.paths[path]
+            if identity not in self.hashes:
+                self.hashes[identity] = digest(target)
+        self.check()
+        return {path: self.hashes[self.paths[path][0]] for path in paths}
+
+
 def digest_paths(paths):
-    """Hash each path once within one verification boundary, never across stages."""
-    paths = list(dict.fromkeys(str(path) for path in paths))
-    before = {path: _stat_identity(os.stat(path)) for path in paths}
-    targets = {path: str(Path(path).resolve(strict=True)) for path in paths}
-    hashes = {path: digest(path) for path in dict.fromkeys(targets.values())}
-    # A source read early in the batch must not change while later files are
-    # being hashed. Metadata only fences this fresh full read; it never grants
-    # reuse of a checksum from an earlier phase or invocation.
-    for path in paths:
-        if (_stat_identity(os.stat(path)) != before[path]
-                or str(Path(path).resolve(strict=True)) != targets[path]):
-            raise OSError("File changed while hashing: " + path)
-    return {path: hashes[targets[path]] for path in paths}
+    """Hash each physical file once within one fresh verification boundary."""
+    return FreshDigestBatch().read(paths)
 
 
 def atomic_json(path, value, immutable=False):
@@ -152,12 +172,25 @@ def export_manifest(plan, outfile, tasks=None):
         temp.unlink(missing_ok=True)
 
 
-def prepared(plan, *, namespace_root=None):
+def prepared(plan, *, namespace_root=None, task_index=None):
     try:
         marker = json.loads(Path(str(plan) + ".prepared.json").read_text())
         if marker["plan_sha256"] != digest(plan) or marker["settings_sha256"] != digest(str(plan) + ".settings.json"):
             return False
-        return all(digest(namespace_path(path, namespace_root)) == value for path, value in marker.get("files", {}).items())
+        files = {str(namespace_path(path, namespace_root)): value for path, value in marker.get("files", {}).items()}
+        if task_index is not None:
+            count_tasks = load_plan(plan)["task_count"]
+            if not 1 <= task_index <= count_tasks:
+                return False
+            staging = Path(str(plan) + ".tasks").resolve()
+            # Only known per-task receipts are private to other workers. All
+            # shared and unknown marker entries still require a fresh check.
+            other_receipts = {str(staging / f"{index}{suffix}")
+                              for index in range(1, count_tasks + 1) if index != task_index
+                              for suffix in (".json", ".resolved.tsv")}
+            files = {path: value for path, value in files.items()
+                     if str(Path(path).absolute()) not in other_receipts}
+        return digest_paths(files) == files
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
@@ -232,7 +265,7 @@ def main():
                     "files": {str(Path(p).resolve()): digest(p) for p in args.file}})
         return
     if args.action == "check-prepared":
-        raise SystemExit(0 if prepared(args.task_plan) else 1)
+        raise SystemExit(0 if prepared(args.task_plan, task_index=args.task_index) else 1)
     if args.action == "pending":
         plan_sha256 = digest(args.task_plan)
         print(",".join(str(i) for i in range(1, plan["task_count"] + 1) if not verify_receipt(args.task_plan, i, plan_sha256)))

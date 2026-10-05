@@ -229,3 +229,124 @@ def test_performance_records_are_optional_and_advisory(tmp_path, monkeypatch):
     rows = [json.loads(line) for line in (tmp_path / f"{os.getpid()}.jsonl").read_text().splitlines()]
     assert rows[-1]["phase"] == "fixture" and rows[-1]["counters"]["sha256_bytes"] == 123
     assert rows[-1]["status"] == "ok" and rows[-1]["process_peak_rss_bytes"] > 0
+
+
+def test_fresh_batch_deduplicates_hardlinks_and_rejects_late_change(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+    first, alias, other = (tmp_path / name for name in ("first", "alias", "other"))
+    first.write_bytes(b"content")
+    os.link(first, alias)
+    other.write_bytes(b"other")
+    original = state.digest
+    reads = []
+    def counted(path):
+        reads.append(str(path))
+        return original(path)
+    monkeypatch.setattr(state, "digest", counted)
+    batch = state.FreshDigestBatch()
+    assert batch.read([first, alias])[str(first)] == original(first)
+    batch.read([alias, other])
+    assert len(reads) == 2
+    info = first.stat()
+    first.write_bytes(b"CONTENT")
+    os.utime(first, ns=(info.st_atime_ns, info.st_mtime_ns + 2_000_000_000))
+    with pytest.raises(OSError, match="changed while hashing"):
+        batch.read([other])
+    # A separate boundary reads the modified bytes instead of an old digest.
+    assert state.digest_paths([first])[str(first)] == original(first)
+
+
+@pytest.mark.parametrize("changed", ["own", "other", "shared", "unknown", "plan", "settings"])
+def test_task_prepared_scope_still_checks_shared_and_sealed_files(tmp_path, changed):
+    import input_generation_array_state as state
+    plan = tmp_path / "plan.json"
+    state.atomic_json(plan, {"task_count": 3, "tasks": [{"species_prefix": f"Species_{i}"} for i in range(3)]})
+    settings = Path(str(plan) + ".settings.json")
+    settings.write_text("{}")
+    staging = Path(str(plan) + ".tasks")
+    staging.mkdir()
+    files = [staging / f"{index}{suffix}" for index in (1, 2, 3) for suffix in (".json", ".resolved.tsv")]
+    shared, unknown = tmp_path / "lineage", staging / "shared.json"
+    files.extend([shared, unknown])
+    for path in files:
+        path.write_text("sealed")
+    state.atomic_json(str(plan) + ".prepared.json", {
+        "plan_sha256": state.digest(plan), "settings_sha256": state.digest(settings),
+        "files": {str(path): state.digest(path) for path in files}})
+    assert state.prepared(plan, task_index=1)
+    assert not state.prepared(plan, task_index=4)
+    path = {"own": staging / "1.json", "other": staging / "2.resolved.tsv", "shared": shared,
+            "unknown": unknown, "plan": plan, "settings": settings}[changed]
+    path.write_text("changed")
+    assert state.prepared(plan, task_index=1) == (changed == "other")
+    assert not state.prepared(plan)
+
+
+@pytest.mark.parametrize("bad", ["none", "json", "nul"])
+def test_shell_metadata_batch_preserves_values_and_propagates_errors(tmp_path, bad):
+    import subprocess
+    core = (Path(resume.__file__).parents[1] / "core/gg_input_generation_core.sh").read_text()
+    helper = core.split("read_stats_json_fields() {", 1)[1].split("\ninput_generation_effective_input_dir_path()", 1)[0]
+    payload = {"first": None, "second": "space ' quote \\ tab\tline\nend\n", "third": True,
+               "fourth": "$(touch injected);`false`"}
+    if bad == "nul":
+        payload["second"] = "bad\0value"
+    path = tmp_path / "stats.json"
+    path.write_text("invalid" if bad == "json" else json.dumps(payload))
+    script = "read_stats_json_fields() {" + helper + '\ndownload_tmp_root="$2"\n'
+    script += 'read_stats_json_fields "$1" a=first b=second c=third d=fourth e=missing || exit $?\n'
+    script += 'printf "%s\\0" "$a" "$b" "$c" "$d" "$e"\n'
+    result = subprocess.run(["bash", "-c", script, "metadata-test", str(path), str(tmp_path)], capture_output=True)
+    if bad != "none":
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split(b"\0") == [b"", payload["second"].rstrip("\n").encode(), b"True",
+                                               payload["fourth"].encode(), b"", b""]
+    assert not (tmp_path / "injected").exists()
+    assert not list(tmp_path.glob("json-fields.*"))
+
+
+def test_import_binds_generated_summary_bytes(native_import, monkeypatch):
+    original = Path.write_bytes
+    def change_summary(path, data):
+        result = original(path, data)
+        if path == native_import.root / "tmp/species_summary_shards/1.tsv":
+            original(path, data.replace(b"Example_species", b"Changed_species"))
+        return result
+    monkeypatch.setattr(Path, "write_bytes", change_summary)
+    with pytest.raises(ValueError, match="differs from its verified source"):
+        resume.import_stages(native_import)
+    assert not resume.checkpoint_path(native_import.root, "Example_species", "format").exists()
+
+
+def test_final_qc_session_rejects_change_between_validators(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+    import input_validation_reuse as reuse
+    import validate_cds_gff_mapping as mapping
+    import validate_longest_cds_selection as ownership
+    source = tmp_path / "genome.fa"
+    source.write_text("original")
+    output_paths = [tmp_path / "mapping.json", tmp_path / "ownership.json"]
+    def first(argv, *, verification_session):
+        batch = state.FreshDigestBatch()
+        batch.read([source])
+        verification_session.batches["Species_one"] = batch
+        output_paths[0].write_text('{"species_passed": 1}')
+        return 0
+    def second(argv, *, verification_session):
+        info = source.stat()
+        source.write_text("modified")
+        os.utime(source, ns=(info.st_atime_ns, info.st_mtime_ns + 2_000_000_000))
+        output_paths[1].write_text('{"species_passed": 1}')
+        return 0
+    monkeypatch.setattr(mapping, "main", first)
+    monkeypatch.setattr(ownership, "main", second)
+    argv = ["final-qc"]
+    for key in ("species-cds-dir", "species-gff-dir", "species-genome-dir", "species-summary"):
+        argv.extend(["--" + key, str(tmp_path)])
+    for key, path in zip(("mapping-stats-output", "ownership-stats-output"), output_paths, strict=True):
+        argv.extend(["--" + key, str(path)])
+    monkeypatch.setattr(sys, "argv", argv)
+    assert reuse.main() == 1
+    assert all(not path.exists() for path in output_paths)
