@@ -521,6 +521,8 @@ EOF
 run_gene_model_rescue
 gene_model_rescue_tree
 gene_model_rescue_dir
+gene_model_rescue_comparison_cache
+gene_model_rescue_interval_workers
 gene_model_rescue_common_references
 gene_model_rescue_nearest_references
 gene_model_rescue_minimum_busco
