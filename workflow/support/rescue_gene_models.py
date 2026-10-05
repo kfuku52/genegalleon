@@ -11,6 +11,7 @@ import gzip
 import hashlib
 import importlib.metadata
 import importlib.util
+import inspect
 import io
 import json
 import math
@@ -20,7 +21,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -399,43 +401,89 @@ def align_self(cpus, cscore):
     filter_synteny_hits(["self.self.last.noself", f"--cscore={cscore}", "--tandem_Nmax=0", "--no_strip_names"])
 
 
-def synteny(root, plan, index, cpus):
+def build_comparison(tmp, job, dirs, params, cpus):
+    """Only the BED/protein files, comparison options and toolchain affect this stage."""
+    for name, side in ((job["a"], "target"), (job["b"], "query")) if job["kind"] == "pair" else ((job["a"], "self"),):
+        for ext in ("bed", "pep"):
+            shutil.copyfile(dirs[name] / ("genes." + ext), tmp / (side + "." + ext))
+    if job["kind"] == "pair":
+        run([sys.executable, "-m", "jcvi.compara.catalog", "ortholog", "target", "query",
+             "--dbtype=prot", "--align_soft=diamond_blastp", "--no_strip_names", "--no_dotplot",
+             "--tandem_Nmax=0", "--ignore_zero_anchor",
+             f"--cpus={cpus}", f"--cscore={params['cscore']}", f"--min_size={params['min_anchors']}",
+             f"--dist={params['distance']}"], tmp, "pair")
+        anchors = tmp / "target.query.lifted.anchors"
+        if not anchors.exists():
+            raw = tmp / "target.query.anchors"
+            if not raw.is_file() or raw.read_text().strip():
+                raise ValueError("Pair scan did not produce a complete anchor result")
+            anchors.write_text("")
+    else:
+        run([sys.executable, Path(__file__).resolve(), "self-align", "--cpus", cpus,
+             "--cscore", params["cscore"]], tmp, "self_align")
+        filtered = tmp / "self.self.last.noself.filtered"
+        run([sys.executable, "-m", "kffractbias.selfscan", "scan", filtered, filtered.with_suffix(""),
+             tmp / "self.bed", tmp / "unquota.anchors", f"--diagonal-bound={params['diagonal_bound']}",
+             "--screening=none", "--allow-empty"], tmp, "self_scan")
+        anchors = tmp / "self.self.lifted.anchors"
+    atomic_json(tmp / "blocks.json", parse_anchors(anchors))
+
+
+def comparison_cache_key(root, plan, job):
+    names = sorted({job["a"], job["b"]})
+    tools = plan["request"]["tools"]
+    owners = ("kfFractBias", "jcvi", "biopython", "diamond", "diamond_sha256", "lastal", "lastal_sha256")
+    modules = {k: v for k, v in tools["source_hashes"].items() if k.startswith(("kffractbias.", "jcvi."))}
+    algorithm = "\n".join(inspect.getsource(f) for f in (build_comparison, align_self, parse_anchors, run))
+    return {"schema": 1, "job": {k: job[k] for k in ("a", "b", "kind")},
+            "inputs": {n: {ext: digest(root / "prepared" / n / ("genes." + ext)) for ext in ("bed", "pep")} for n in names},
+            "parameters": {k: plan["request"]["parameters"][k] for k in ("cscore", "min_anchors", "distance", "diagonal_bound")},
+            "tools": {k: tools[k] for k in owners}, "source_hashes": modules,
+            "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
+
+
+def copy_verified_comparison(source, destination, key):
+    """Copy hashed files, never link writable outputs to another plan's cache."""
+    receipt_hash = digest(source / "receipt.json")
+    if not verified(source, key):
+        raise ValueError("Comparison cache incomplete or corrupted")
+    receipt = json.loads((source / "receipt.json").read_text())
+    for relative, expected in receipt["files"].items():
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError("Unsafe comparison cache path")
+        target = destination / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / path, target)
+        if digest(target) != expected:
+            raise ValueError("Comparison cache changed during copying")
+    if digest(source / "receipt.json") != receipt_hash or not verified(source, key):
+        raise ValueError("Comparison cache changed during copying")
+
+
+def synteny(root, plan, index, cpus, comparison_cache=None):
     jobs = plan["synteny_jobs"]
     if not 1 <= index <= len(jobs):
         raise ValueError("Synteny index outside frozen plan")
     job = jobs[index - 1]
     dirs = {n: prepared(root, plan, n) for n in {job["a"], job["b"]}}
     params = plan["request"]["parameters"]
-    def build(tmp):
-        for name, side in ((job["a"], "target"), (job["b"], "query")) if job["kind"] == "pair" else ((job["a"], "self"),):
-            for ext in ("bed", "pep"):
-                shutil.copyfile(dirs[name] / ("genes." + ext), tmp / (side + "." + ext))
-        if job["kind"] == "pair":
-            run([sys.executable, "-m", "jcvi.compara.catalog", "ortholog", "target", "query",
-                 "--dbtype=prot", "--align_soft=diamond_blastp", "--no_strip_names", "--no_dotplot",
-                 "--tandem_Nmax=0", "--ignore_zero_anchor",
-                 f"--cpus={cpus}", f"--cscore={params['cscore']}", f"--min_size={params['min_anchors']}",
-                 f"--dist={params['distance']}"], tmp, "pair")
-            anchors = tmp / "target.query.lifted.anchors"
-            if not anchors.exists():
-                raw = tmp / "target.query.anchors"
-                if not raw.is_file() or raw.read_text().strip():
-                    raise ValueError("Pair scan did not produce a complete anchor result")
-                # JCVI's documented empty-pair mode stops before liftover.
-                anchors.write_text("")
-        else:
-            run([sys.executable, Path(__file__).resolve(), "self-align", "--cpus", cpus,
-                 "--cscore", params["cscore"]], tmp, "self_align")
-            filtered = tmp / "self.self.last.noself.filtered"
-            run([sys.executable, "-m", "kffractbias.selfscan", "scan", filtered, filtered.with_suffix(""),
-                 tmp / "self.bed", tmp / "unquota.anchors", f"--diagonal-bound={params['diagonal_bound']}",
-                 "--screening=none", "--allow-empty"], tmp, "self_scan")
-            anchors = tmp / "self.self.lifted.anchors"
-        atomic_json(tmp / "blocks.json", parse_anchors(anchors))
-        atomic_json(tmp / "job.json", job)
     key = comparison_key(root, job)
-    return stage(root, Path("synteny") / job["id"], key, build,
-                 lambda: require_same_key(key, comparison_key(root, job)))
+    cache_key = comparison_cache_key(root, plan, job)
+    cache_root = (comparison_cache or root.parent / "gene_model_rescue_comparison_cache").resolve()
+    if cache_root == root or root in cache_root.parents:
+        raise ValueError("Comparison cache must be outside the frozen rescue output")
+    cache_id = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode()).hexdigest()
+    def guard():
+        require_same_key(key, comparison_key(root, job))
+        require_same_key(cache_key, comparison_cache_key(root, plan, job))
+    def build(tmp):
+        cached = stage(cache_root, Path("comparisons") / cache_id, cache_key,
+                       lambda output: build_comparison(output, job, dirs, params, cpus), guard)
+        copy_verified_comparison(cached, tmp, cache_key)
+        atomic_json(tmp / "job.json", job)
+        atomic_json(tmp / "cache.json", {"cache_key": cache_key, "cache_receipt_sha256": digest(cached / "receipt.json")})
+    return stage(root, Path("synteny") / job["id"], key, build, guard)
 
 
 def comparison_key(root, job):
@@ -708,7 +756,126 @@ def check_interval(model):
     return model
 
 
-def rescue(root, plan, name, cpus):
+def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None):
+    """Bound pending work and retain input order, with total threads <= cpus.
+
+    Only the submitting thread fetches from pysam's seekable FASTA handle.
+    Alignments remain independent so other WGD intervals cannot compete.
+    """
+    workers = min(cpus, len(windows)) if interval_workers is None else interval_workers
+    if cpus < 1 or (windows and not 1 <= workers <= cpus):
+        raise ValueError("Interval workers must be positive and no greater than cpus")
+    interval_dir = tmp / "intervals"
+    interval_dir.mkdir()
+    if not windows:
+        return []
+    threads = cpus // workers
+    def predict(directory):
+        run(["miniprot", "-u", "-T", code, "-t", threads, "-G", max_intron,
+             "--outs=0.5", "--gff", directory / "region.fa", directory / "queries.fa"],
+            directory, "miniprot", directory / "models.gff")
+        return read_miniprot(directory / "models.gff")
+    pending, predictions = deque(), []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for i, ((seqid, start, end), queries) in enumerate(windows.items(), 1):
+            directory = interval_dir / str(i)
+            directory.mkdir()
+            (directory / "region.fa").write_text(f">interval\n{genome.fetch(seqid, start, end)}\n")
+            with (directory / "queries.fa").open("w") as out:
+                for region in queries:
+                    out.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
+            pending.append(executor.submit(predict, directory))
+            if len(pending) >= workers * 2:
+                predictions.extend(pending.popleft().result())
+        for future in pending:
+            predictions.extend(future.result())
+    return predictions
+
+
+def write_unique_queries(regions, proteins, path):
+    """Exact sequence equality only; map every original candidate to its first representative."""
+    representatives, by_sequence = {}, {}
+    with path.open("w") as out:
+        for region in regions:
+            sequence = proteins[region["donor"]][region["query"]]
+            if region["id"] in representatives:
+                raise ValueError("Duplicate candidate ID in genome search")
+            representative = by_sequence.get(sequence)
+            if representative is None:
+                representative = region["id"]
+                by_sequence[sequence] = representative
+                out.write(f">{representative}\n{sequence}\n")
+            representatives[region["id"]] = representative
+    return representatives
+
+
+def expand_miniprot_queries(source, destination, representatives):
+    """Restore query order, names, PAF and GFF IDs before the existing model reader/QC."""
+    blocks, headers = defaultdict(list), []
+    query, lines = None, []
+    known = set(representatives.values())
+    with source.open() as handle:
+        for line in handle:
+            if line.startswith("##PAF\t"):
+                if query is not None:
+                    blocks[query].append("".join(lines))
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 13 or fields[1] not in known:
+                    raise ValueError("Genome search returned an invalid/unknown representative")
+                query, lines = fields[1], [line]
+            elif query is None:
+                if not line.startswith("#") and line.strip():
+                    raise ValueError("Genome search GFF lacks embedded PAF")
+                headers.append(line)
+            else:
+                lines.append(line)
+    if query is not None:
+        blocks[query].append("".join(lines))
+    if set(blocks) != known:
+        raise ValueError("Genome search did not report every representative with -u")
+    number = 0
+    with destination.open("w") as out:
+        out.writelines(headers)
+        for original, representative in representatives.items():
+            for block in blocks[representative]:
+                identifiers = {}
+                for line in block.splitlines(keepends=True):
+                    if line.startswith("##PAF\t"):
+                        fields = line.rstrip("\n").split("\t")
+                        fields[1] = original
+                        out.write("\t".join(fields) + "\n")
+                    elif not line.startswith("#") and line.strip():
+                        fields = line.rstrip("\n").split("\t")
+                        if len(fields) != 9:
+                            raise ValueError("Invalid representative miniprot GFF row")
+                        values = fields[8].split(";")
+                        if fields[2] == "mRNA":
+                            old = attributes(fields[8])["ID"]
+                            match = re.fullmatch(r"MP(\d+)", old)
+                            if not match:
+                                raise ValueError("Unexpected miniprot model ID")
+                            number += 1
+                            identifiers[old] = "MP" + str(number).zfill(len(match[1]))
+                        rewritten = []
+                        for value in values:
+                            if value.startswith(("ID=", "Parent=")):
+                                key, token = value.split("=", 1)
+                                if token not in identifiers:
+                                    raise ValueError("Unbound representative miniprot feature")
+                                value = key + "=" + identifiers[token]
+                            elif value.startswith("Target="):
+                                target = value[len("Target="):].split(" ", 1)
+                                if target[0] != representative or len(target) != 2:
+                                    raise ValueError("Inconsistent representative miniprot Target")
+                                value = "Target=" + original + " " + target[1]
+                            rewritten.append(value)
+                        fields[8] = ";".join(rewritten)
+                        out.write("\t".join(fields) + "\n")
+                    else:
+                        out.write(line)
+
+
+def rescue(root, plan, name, cpus, interval_workers=None):
     if name not in plan["species"]:
         raise ValueError("Unknown rescue species")
     donors = [name, *plan["donors"][name]]
@@ -757,27 +924,11 @@ def rescue(root, plan, name, cpus):
                     out.write(f">{region['id']}\n{genome.fetch(region['seqid'], region['start'], region['end'])}\n")
                     queries.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
             atomic_json(tmp / "candidates.json", regions)
-            predictions = []
             windows = defaultdict(list)
             for region in regions:
                 windows[(region["seqid"], region["start"], region["end"])].append(region)
-            interval_dir = tmp / "intervals"
-            interval_dir.mkdir()
-            for i, ((seqid, start, end), queries) in enumerate(windows.items(), 1):
-                directory = interval_dir / str(i)
-                directory.mkdir()
-                (directory / "region.fa").write_text(f">interval\n{genome.fetch(seqid, start, end)}\n")
-                with (directory / "queries.fa").open("w") as out:
-                    for region in queries:
-                        out.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
-                # Independent intervals prevent a strongly matching WGD copy
-                # elsewhere from suppressing the alignment at this locus.
-                run(["miniprot", "-u", "-T", source["genetic_code"], "-t", cpus, "-G", params["max_intron"],
-                     "--outs=0.5", "--gff", directory / "region.fa", directory / "queries.fa"],
-                    directory, "miniprot", directory / "models.gff")
-                for model in read_miniprot(directory / "models.gff"):
-                    model["seqid"] = model["query"]
-                    predictions.append(model)
+            predictions = search_intervals(tmp, windows, proteins, genome, source["genetic_code"],
+                                           params["max_intron"], cpus, interval_workers)
             by_id = {r["id"]: r for r in regions}
             validated = []
             for model in predictions:
@@ -796,9 +947,12 @@ def rescue(root, plan, name, cpus):
                 with (tmp / "unresolved.fa").open("w") as out:
                     for r in unresolved:
                         out.write(f">{r['id']}\n{proteins[r['donor']][r['query']]}\n")
+                representatives = write_unique_queries(unresolved, proteins, tmp / "unresolved.unique.fa")
+                write_tsv(tmp / "genome_query_mapping.tsv", ("candidate", "representative"), representatives.items())
                 run(["miniprot", "-T", source["genetic_code"], "-t", cpus, "-d", tmp / "genome.mpi", tmp / "genome.fa"], tmp, "miniprot_index")
                 run(["miniprot", "-u", "-t", cpus, "-G", params["max_intron"], "--gff",
-                     tmp / "genome.mpi", tmp / "unresolved.fa"], tmp, "miniprot_genome", tmp / "genome.gff")
+                     tmp / "genome.mpi", tmp / "unresolved.unique.fa"], tmp, "miniprot_genome", tmp / "genome.unique.gff")
+                expand_miniprot_queries(tmp / "genome.unique.gff", tmp / "genome.gff", representatives)
                 for model in read_miniprot(tmp / "genome.gff"):
                     model["evidence"] = by_id[model["query"]]
                     model["search"] = "genome_fallback"
@@ -1121,6 +1275,10 @@ def parser():
         cmd.add_argument("--output", type=Path, required=True)
         if name in {"synteny", "rescue", "run"}:
             cmd.add_argument("--cpus", type=int, default=1)
+        if name in {"rescue", "run"}:
+            cmd.add_argument("--interval-workers", type=int, help="Concurrent independent intervals (default: cpus); total threads stay within cpus")
+        if name in {"synteny", "run"}:
+            cmd.add_argument("--comparison-cache", type=Path, help="Shared comparison cache (default: OUTPUT parent/gene_model_rescue_comparison_cache)")
         if name in {"synteny", "rescue", "worker-complete", "qc-inputs"}:
             cmd.add_argument("--task-index", type=int, help="One-based frozen job/species index; omit to run all")
         if name == "qc":
@@ -1151,6 +1309,8 @@ def main():
     plan = load(root)
     if getattr(args, "cpus", 1) < 1:
         p.error("cpus must be positive")
+    if getattr(args, "interval_workers", None) is not None and not 1 <= args.interval_workers <= args.cpus:
+        p.error("interval-workers must be positive and no greater than cpus")
     if getattr(args, "task_index", None) is not None:
         count = len(plan["synteny_jobs"]) if args.command == "synteny" else len(plan["species"])
         if not 1 <= args.task_index <= count:
@@ -1232,13 +1392,13 @@ def main():
     if args.command in {"synteny", "run"}:
         indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["synteny_jobs"]) + 1)
         for index in indices:
-            synteny(root, plan, index, args.cpus)
+            synteny(root, plan, index, args.cpus, args.comparison_cache)
     if args.command in {"rescue", "run"}:
         indices = [args.task_index] if getattr(args, "task_index", None) else range(1, len(plan["species"]) + 1)
         for index in indices:
             if not 1 <= index <= len(plan["species"]):
                 p.error("rescue task index outside frozen plan")
-            rescue(root, plan, plan["species"][index - 1], args.cpus)
+            rescue(root, plan, plan["species"][index - 1], args.cpus, args.interval_workers)
             name = plan["species"][index - 1]
             finalize(root, plan, [name], Path("effective") / name)
     if args.command in {"finalize", "run"}:

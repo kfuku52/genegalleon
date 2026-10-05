@@ -2569,8 +2569,15 @@ case "${input_generation_mode}" in
     fi
     rescue_subcommand=synteny
     [[ "${input_generation_mode}" != rescue_models ]] || rescue_subcommand=rescue
+    rescue_execution_args=()
+    if [[ "${rescue_subcommand}" == synteny && -n "${gene_model_rescue_comparison_cache:-}" ]]; then
+      rescue_execution_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
+    fi
+    if [[ "${rescue_subcommand}" == rescue && "${gene_model_rescue_interval_workers:-0}" != 0 ]]; then
+      rescue_execution_args+=(--interval-workers "${gene_model_rescue_interval_workers}")
+    fi
     python "${gg_support_dir}/rescue_gene_models.py" "${rescue_subcommand}" --output "${gene_model_rescue_dir}" \
-      --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}"
+      --task-index "${GG_ARRAY_TASK_ID}" --cpus "${GG_TASK_CPUS}" "${rescue_execution_args[@]}"
     if [[ "${input_generation_mode}" == rescue_models ]]; then
       rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" --task-index "${GG_ARRAY_TASK_ID}") || exit $?
       while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
@@ -2603,7 +2610,10 @@ fi
 if [[ ${run_gene_model_rescue} -eq 1 && ( "${input_generation_mode}" == single || "${input_generation_mode}" == array_finalize ) && ${dry_run} -ne 1 && ${download_only} -ne 1 ]]; then
   prepare_gene_model_rescue
   if [[ "${input_generation_mode}" == single ]]; then
-    python "${gg_support_dir}/rescue_gene_models.py" run --output "${gene_model_rescue_dir}" --cpus "${GG_TASK_CPUS}"
+    rescue_execution_args=()
+    [[ -z "${gene_model_rescue_comparison_cache:-}" ]] || rescue_execution_args+=(--comparison-cache "${gene_model_rescue_comparison_cache}")
+    [[ "${gene_model_rescue_interval_workers:-0}" == 0 ]] || rescue_execution_args+=(--interval-workers "${gene_model_rescue_interval_workers}")
+    python "${gg_support_dir}/rescue_gene_models.py" run --output "${gene_model_rescue_dir}" --cpus "${GG_TASK_CPUS}" "${rescue_execution_args[@]}"
     finish_gene_model_rescue
   fi
 fi

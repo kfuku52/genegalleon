@@ -185,8 +185,20 @@ python workflow/support/rescue_gene_models.py run \
 `run` executes all comparison jobs, all species rescue jobs and finalization.
 Alternatively use `synteny --task-index N`, `rescue --task-index N` and
 `finalize` independently. Indices are one-based and frozen. `status` reports
-pending jobs. `--cpus` is the total threads for one sequential CLI worker;
-parallelism across jobs is supplied by the scheduler.
+pending jobs. `--cpus` is the total CPU budget for one CLI worker. Independent
+intervals run concurrently within that budget (one thread per interval by
+default), with bounded pending work and results collected in input order.
+`--interval-workers N` selects fewer concurrent intervals and divides the CPU
+budget between them. All genome extraction uses the submitting thread's FASTA
+handle. Parallelism across species is supplied by the scheduler.
+
+Whole-genome fallback searches each exactly identical protein sequence once.
+`genome_query_mapping.tsv` maps every original candidate to its representative;
+`unresolved.fa` retains all original queries and `unresolved.unique.fa` records
+the searched queries. Raw unique evidence is in `genome.unique.gff`.
+`genome.gff` restores original query order, names and model IDs before the usual
+reader and QC. Every candidate keeps its own expected interval, donor/flanks
+and acceptance checks, including identical proteins nominated at different loci.
 
 | Output | Meaning |
 |---|---|
@@ -243,6 +255,20 @@ aggregation reuses verified worker QC even if `overwrite=1`. Array retries
 check the full dependency chain, including comparisons repaired successfully
 before the retry, instead of trusting a worker receipt alone.
 
+Completed comparisons additionally use a shared content cache, defaulting to
+`OUTPUT_PARENT/gene_model_rescue_comparison_cache`. Override it with
+`--comparison-cache DIR` or `GG_INPUT_GENE_MODEL_RESCUE_COMPARISON_CACHE`.
+Cache keys bind both BED/protein files, species/direction, pair/self mode,
+comparison settings, comparison implementation and relevant upstream sources
+and binaries. Plan IDs, reference-selection changes and unrelated rescue
+thresholds do not invalidate identical comparisons. GFF metadata edits can reuse
+a comparison only after the new plan prepares and verifies identical BED/protein
+files. The full frozen input and per-plan dependency checks remain in force.
+Locked, verified cache outputs are copied and rehashed into each plan; writable
+files are never hard linked. Corrupted entries are recomputed with the usual
+atomic publication and failure diagnostics. Existing results without cache keys
+remain valid within their original plan and are not relabelled for another plan.
+
 ## Array input generation
 
 ```bash
@@ -250,6 +276,21 @@ python workflow/gg_input_generation_array.py \
   --task-plan /path/workspace/output/input_generation/tmp/task_plan.json \
   --rescue --cpus 4 --memory 32G --max-running 8 --submit
 ```
+
+Species rescue resources can be set independently from formatting and synteny:
+
+```bash
+python workflow/gg_input_generation_array.py \
+  --task-plan /path/workspace/output/input_generation/tmp/task_plan.json \
+  --rescue --cpus 4 --memory 32G --max-running 8 \
+  --rescue-cpus 8 --rescue-memory 64G --rescue-max-running 6 --submit
+```
+
+The example permits up to 48 CPUs and 384 GB for species rescue; select counts
+that fit the site and other jobs. Omitted rescue resource overrides retain the
+existing `--cpus`, `--memory` and `--max-running` behaviour. The independent
+interval-worker override is `GG_INPUT_GENE_MODEL_RESCUE_INTERVAL_WORKERS`;
+zero uses task CPUs automatically. Scientific defaults are unchanged.
 
 This adds `rescue_synteny` comparison arrays, `rescue_models` species arrays and
 `rescue_finalize` after the initial prepare/worker/finalize chain. Initial
@@ -273,6 +314,9 @@ This stage recovers supported models and records unresolved evidence. Orthology,
 copy-specific loss and ancestral-copy reconciliation belong to downstream gene
 trees and synteny analyses. Self synteny alone does not date a WGD or identify a
 missing ancestral copy definitively.
+
+For bounded comparisons of serial/parallel intervals and full/deduplicated
+genome searches, see [Rescue performance](rescue-performance.md).
 
 ## Validation and scale
 

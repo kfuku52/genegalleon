@@ -63,9 +63,14 @@ def main():
     parser.add_argument("--retry", action="store_true", help="Skip prepare and submit only workers without verified receipts")
     parser.add_argument("--rescue", action="store_true", help="After initial finalize, submit sparse synteny -> species rescue -> rescue finalize arrays")
     parser.add_argument("--rescue-output", type=Path, help="Rescue directory; default: TASK_PLAN parent/../gene_model_rescue")
+    parser.add_argument("--rescue-max-running", type=int, help="Concurrent species rescue workers (default: --max-running); independent of synteny/formatting")
+    parser.add_argument("--rescue-cpus", type=int, help="CPUs per species rescue/finalizer (default: --cpus)")
+    parser.add_argument("--rescue-memory", help="Total memory per species rescue/finalizer (default: --memory)")
     parser.add_argument("--submit", action="store_true", help="Submit jobs; default prints a dry-run preview")
     args = parser.parse_args()
-    if min(args.cpus, args.max_running, args.prepare_cpus if args.prepare_cpus is not None else args.cpus) < 1:
+    if min(args.cpus, args.max_running, args.prepare_cpus if args.prepare_cpus is not None else args.cpus,
+           args.rescue_cpus if args.rescue_cpus is not None else args.cpus,
+           args.rescue_max_running if args.rescue_max_running is not None else args.max_running) < 1:
         parser.error("CPU and concurrency counts must be positive")
     plan_path = Path(args.task_plan).expanduser().resolve()
     env = os.environ.copy()
@@ -79,8 +84,12 @@ def main():
 
     def command(mode, extra):
         preparing = mode == "array_prepare"
+        model_worker = mode in {"rescue_models", "rescue_finalize"}
         cpus = (args.prepare_cpus or args.cpus) if preparing else args.cpus
         memory = (args.prepare_memory or args.memory) if preparing else args.memory
+        if model_worker:
+            cpus = args.rescue_cpus or cpus
+            memory = args.rescue_memory or memory
         partition = (args.prepare_partition if args.prepare_partition is not None else args.partition) if preparing else args.partition
         base = ["sbatch", "--parsable", "--cpus-per-task=" + str(cpus), "--mem=" + memory, "--time=" + args.time]
         if partition:
@@ -134,7 +143,7 @@ def main():
                 parser.error("Rescue plan missing after initial finalize: " + str(rescue_plan))
             print("After initial finalize, read " + str(rescue_plan) + " for P comparisons and S species.")
             pair_id = dispatch("rescue_synteny", ["--array=1-P%" + str(args.max_running)])
-            species_id = dispatch("rescue_models", ["--dependency=afterok:" + pair_id, "--array=1-S%" + str(args.max_running)])
+            species_id = dispatch("rescue_models", ["--dependency=afterok:" + pair_id, "--array=1-S%" + str(args.rescue_max_running or args.max_running)])
         else:
             rescue = json.loads(rescue_plan.read_text())
             plan_hash = digest(rescue_plan)
@@ -180,7 +189,7 @@ def main():
                        if pairs or not args.retry or not worker_done(n)]
             pair_id = dispatch("rescue_synteny", ["--array=" + array_expression(pairs) + "%" + str(args.max_running)]) if pairs else ""
             species_id = dispatch("rescue_models", (["--dependency=afterok:" + pair_id] if pair_id else []) +
-                                  ["--array=" + array_expression(species) + "%" + str(args.max_running)]) if species else ""
+                                  ["--array=" + array_expression(species) + "%" + str(args.rescue_max_running or args.max_running)]) if species else ""
         dispatch("rescue_finalize", ["--dependency=afterok:" + species_id] if species_id else [])
 
 

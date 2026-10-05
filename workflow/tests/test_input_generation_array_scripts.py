@@ -1284,7 +1284,8 @@ print({"array_prepare": "101", "array_worker": "102", "array_finalize": "103"}[m
     assert "simulated Slurm rejection" in result.stderr
 
 
-def test_slurm_rescue_chain_uses_frozen_comparison_and_species_arrays(tmp_path, monkeypatch):
+@pytest.mark.parametrize("rescue_resources", [False, True])
+def test_slurm_rescue_chain_uses_frozen_comparison_and_species_arrays(tmp_path, monkeypatch, rescue_resources):
     import os
     plan = tmp_path / "tmp" / "plan.json"
     plan.parent.mkdir()
@@ -1310,7 +1311,8 @@ print({"array_prepare": 101, "array_worker": 102, "array_finalize": 103, "rescue
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("TEST_CALLS", str(calls))
     helper = SUPPORT_DIR.parent / "gg_input_generation_array.py"
-    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--submit", "--max-running", "5")
+    extra = ["--rescue-max-running", "6", "--rescue-cpus", "8", "--rescue-memory", "64G"] if rescue_resources else []
+    result = run_python(helper, "--task-plan", str(plan), "--rescue", "--submit", "--max-running", "5", *extra)
     assert result.returncode == 0, result.stderr
     submissions = [json.loads(line) for line in calls.read_text().splitlines()]
     assert [c["mode"] for c in submissions] == ["array_prepare", "array_worker", "array_finalize", "rescue_synteny", "rescue_models", "rescue_finalize"]
@@ -1318,7 +1320,11 @@ print({"array_prepare": 101, "array_worker": 102, "array_finalize": 103, "rescue
     assert "--wait" in submissions[2]["argv"]
     assert "--array=1-3%5" in submissions[3]["argv"]
     assert "--dependency=afterok:104" in submissions[4]["argv"]
-    assert "--array=1-2%5" in submissions[4]["argv"]
+    assert "--array=1-2%" + ("6" if rescue_resources else "5") in submissions[4]["argv"]
+    for index in [4, 5]:
+        assert "--cpus-per-task=" + ("8" if rescue_resources else "4") in submissions[index]["argv"]
+        assert "--mem=" + ("64G" if rescue_resources else "32G") in submissions[index]["argv"]
+    assert "--mem=32G" in submissions[3]["argv"]
     assert "--dependency=afterok:105" in submissions[5]["argv"]
 
 

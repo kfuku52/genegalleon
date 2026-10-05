@@ -1,4 +1,5 @@
 """Bounded real-tool rescue tests; all biological inputs are synthetic and temporary."""
+import copy
 import gzip
 import hashlib
 import itertools
@@ -296,6 +297,126 @@ def make_plan(fixture):
     return output, species, cds
 
 
+def test_parallel_intervals_preserve_every_real_alignment_and_order(hidden_models):
+    import pysam
+    root, names, sequences = hidden_models
+    genome_path = root / "genome" / (names[0] + ".genome.fa")
+    pysam.faidx(str(genome_path))
+    donor = names[1]
+    proteins = {donor: {donor + f"_g{i}": str(Seq(sequence).translate())[:-1] for i, sequence in enumerate(sequences)}}
+    windows = {}
+    for i in [8, 9, 10, 11, 12, 13]:
+        start = i * (len(sequences[0]) + 60)
+        windows[("chr1", start, start + len(sequences[i]) + 10)] = [
+            {"id": f"query_{i}", "donor": donor, "query": donor + f"_g{i}"}]
+    serial, parallel = root / "serial", root / "parallel"
+    serial.mkdir()
+    parallel.mkdir()
+    with pysam.FastaFile(str(genome_path)) as genome:
+        expected = rescue.search_intervals(serial, windows, proteins, genome, 1, 20000, 4, 1)
+        actual = rescue.search_intervals(parallel, windows, proteins, genome, 1, 20000, 4)
+    assert actual == expected
+    assert actual and len({m["query"] for m in actual}) >= 3
+    for i in range(1, len(windows) + 1):
+        relative = Path("intervals") / str(i)
+        assert (serial / relative / "models.gff").read_bytes() == (parallel / relative / "models.gff").read_bytes()
+        command = json.loads((parallel / relative / "logs/miniprot.command.json").read_text())
+        assert command[command.index("-t") + 1] == "1"
+
+
+def test_genome_query_dedup_restores_exact_real_gff_and_each_candidate(hidden_models):
+    root, names, sequences = hidden_models
+    genome = root / "genome" / (names[0] + ".genome.fa")
+    protein = str(Seq(sequences[8]).translate())[:-1]
+    proteins = {names[1]: {"intact": protein, "unmapped": "W" * 160, "other": str(Seq(sequences[9]).translate())[:-1]},
+                names[2]: {"same": protein}}
+    specs = [("first", names[1], "intact"), ("unmapped", names[1], "unmapped"),
+             ("outside_copy", names[2], "same"), ("other", names[1], "other"), ("again", names[1], "intact")]
+    regions = [{"id": identifier, "donor": donor, "query": query} for identifier, donor, query in specs]
+    full, unique = root / "full.fa", root / "unique.fa"
+    full.write_text("".join(f">{r['id']}\n{proteins[r['donor']][r['query']]}\n" for r in regions))
+    mapping = rescue.write_unique_queries(regions, proteins, unique)
+    assert len(list(rescue.fasta_records(unique))) == 3 and len(mapping) == 5
+    baseline, dedup, expanded = root / "full.gff", root / "unique.gff", root / "expanded.gff"
+    for query, out, label in [(full, baseline, "full"), (unique, dedup, "unique")]:
+        rescue.run(["miniprot", "-u", "-t", 2, "-G", 20000, "--gff", genome, query], root, label, out)
+    rescue.expand_miniprot_queries(dedup, expanded, mapping)
+    assert expanded.read_bytes() == baseline.read_bytes()
+    models = rescue.read_miniprot(expanded)
+    assert models == rescue.read_miniprot(baseline)
+    assert {m["query"] for m in models} >= {"first", "outside_copy", "again", "other"}
+    # Identical proteins retain their different expected intervals and therefore
+    # cannot turn an alignment to a paralog elsewhere into an accepted model.
+    first = next(m for m in models if m["query"] == "first")
+    outside = next(m for m in models if m["query"] == "outside_copy")
+    for model in [first, outside]:
+        model.update(start=min(e[0] for e in model["cds"]), end=max(e[1] for e in model["cds"]), problems=[])
+    first["evidence"] = {"seqid": first["seqid"], "expected_start": first["start"], "expected_end": first["end"]}
+    outside["evidence"] = {"seqid": outside["seqid"], "expected_start": 0, "expected_end": 1}
+    assert rescue.check_interval(first)["problems"] == []
+    assert "outside_expected_synteny_interval" in rescue.check_interval(outside)["problems"]
+
+
+def test_query_expansion_refuses_missing_or_unknown_representatives(tmp_path):
+    source, dest = tmp_path / "raw.gff", tmp_path / "expanded.gff"
+    source.write_text("##gff-version 3\n")
+    with pytest.raises(ValueError, match="every representative"):
+        rescue.expand_miniprot_queries(source, dest, {"original": "known"})
+    source.write_text("##PAF\tunknown\t100\t0\t0\t*\t*\t0\t0\t0\t0\t0\t0\n")
+    with pytest.raises(ValueError, match="unknown representative"):
+        rescue.expand_miniprot_queries(source, dest, {"original": "known"})
+    assert not dest.exists()
+
+
+def test_comparison_cache_reuses_metadata_changes_and_binds_actual_inputs(hidden_models):
+    root, names, _ = hidden_models
+    first, _, _ = make_plan(hidden_models)
+    plan = rescue.load(first)
+    job = next(j for j in plan["synteny_jobs"] if j["a"] == names[0] and j["b"] == names[1])
+    output = rescue.synteny(first, plan, job["index"], 1)
+    original = (output / "blocks.json").read_bytes()
+    cache = root / "gene_model_rescue_comparison_cache"
+    receipts = {f: f.stat().st_mtime_ns for f in cache.glob("comparisons/*/receipt.json")}
+    assert len(receipts) == 1
+    gff = root / "gff" / (names[0] + ".gff3")
+    gff.write_text(gff.read_text().replace("ID=g0\n", "ID=g0;Name=metadata_only\n"))
+    second = root / "second"
+    cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
+        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", second)
+    new_plan = rescue.load(second)
+    new_job = next(j for j in new_plan["synteny_jobs"] if j["a"] == names[0] and j["b"] == names[1])
+    reused = rescue.synteny(second, new_plan, new_job["index"], 2)
+    assert rescue.digest(first / "plan.json") != rescue.digest(second / "plan.json")
+    assert (reused / "blocks.json").read_bytes() == original
+    assert receipts == {f: f.stat().st_mtime_ns for f in cache.glob("comparisons/*/receipt.json")}
+    assert "--cpus=1" in json.loads((reused / "logs/pair.command.json").read_text())
+    entry = next(cache.glob("comparisons/*"))
+    (entry / "blocks.json").write_text("corrupted cache")
+    assert (reused / "blocks.json").read_bytes() == original  # No shared writable inode.
+    third = root / "third"
+    cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
+        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", third)
+    third_plan = rescue.load(third)
+    repaired = rescue.synteny(third, third_plan, new_job["index"], 2)
+    assert (repaired / "blocks.json").read_bytes() == original
+    assert rescue.verified(entry, rescue.comparison_cache_key(third, third_plan, new_job))
+    key = rescue.comparison_cache_key(second, new_plan, new_job)
+    assert key == rescue.comparison_cache_key(second, new_plan, {**new_job, "id": "renumbered", "index": 123})
+    changed = copy.deepcopy(new_plan)
+    changed["request"]["parameters"]["minimum_coverage"] = 0.99
+    assert key == rescue.comparison_cache_key(second, changed, new_job)
+    changed["request"]["parameters"]["cscore"] = 0.8
+    assert key != rescue.comparison_cache_key(second, changed, new_job)
+    changed = copy.deepcopy(new_plan)
+    changed["request"]["tools"]["diamond_sha256"] = "changed_binary"
+    assert key != rescue.comparison_cache_key(second, changed, new_job)
+    protein = second / "prepared" / names[0] / "genes.pep"
+    protein.write_text(protein.read_text() + "\n")
+    assert key != rescue.comparison_cache_key(second, new_plan, new_job)
+    with pytest.raises(ValueError, match="corrupted"):
+        rescue.comparison_key(second, new_job)
+
+
 def test_rescue_exports_invalid_originals_and_audits_while_adding_intact_model(hidden_models, monkeypatch):
     root, names, sequences = hidden_models
     name = names[0]
@@ -550,6 +671,14 @@ def test_real_tools_recover_hidden_model_reject_disruptions_and_resume(hidden_mo
     exported_gff = (output / "augmented" / "species_gff" / (species[0] + ".rescue.gff3")).read_text()
     assert exported_gff.startswith(original_annotation) and exported_gff.endswith(embedded)
     assert not list((hidden_models[0] / "genome").glob("*.fai"))
+    benchmark = SCRIPT.parents[1] / "benchmarks/benchmark_rescue_search.py"
+    for directory, extra in [("bounded_benchmark", []), ("complete_evidence_check", ["--check-existing"])]:
+        result = subprocess.run([sys.executable, str(benchmark), "--evidence", "rescue", "--species", species[0],
+                                 "--output", directory, "--cpus", "2", "--interval-count", "2",
+                                 "--query-count", "2", "--repeats", "1", *extra], cwd=root,
+                                capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads((root / directory / "result.json").read_text())["outputs_identical"] is True
     times = {str(p): p.stat().st_mtime_ns for p in output.rglob("receipt.json")}
     cli("run", "--output", output, "--cpus", 2)
     assert times == {str(p): p.stat().st_mtime_ns for p in output.rglob("receipt.json")}
