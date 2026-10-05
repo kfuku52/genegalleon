@@ -69,7 +69,11 @@ and do not establish an additional controlled speedup ratio.
 
 Use the repository runtime wrapper with completed real rescue evidence. It
 checks sampled files against the producer's hashed receipt and rechecks inputs
-afterward. Every trial compares SHA256 of all restored GFF bytes, including
+afterward, including the fallback query FASTA. The receipt must belong to the
+selected plan/species. Recorded interval numbers must be contiguous and every
+recorded interval must still contain its region, queries and original GFF;
+missing directories cannot silently reduce the coverage of a full check.
+Every trial compares SHA256 of all restored GFF bytes, including
 query names, order, model IDs and unmapped evidence. A mismatch stops the run.
 The default covers 256 evenly spaced real intervals and the first 4,096 fallback
 queries, one warmup plus three measured repetitions for each method.
@@ -97,3 +101,8 @@ fallback query, comparing each interval GFF and the complete expanded genome
 GFF with the original receipt hashes. It skips the legacy run and warmups. Use
 this for a full real-data equivalence check; its single timings are diagnostic,
 not a controlled speedup benchmark.
+
+When the producer did not run an interval or fallback search, that phase is
+listed in `result.json` under `skipped`, with no timings or index build.
+Partially recorded or missing evidence fails the check. Output equivalence and
+input-change checks remain active under Python's `-O` option.

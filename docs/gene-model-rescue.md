@@ -260,7 +260,11 @@ Completed comparisons additionally use a shared content cache, defaulting to
 `--comparison-cache DIR` or `GG_INPUT_GENE_MODEL_RESCUE_COMPARISON_CACHE`.
 Cache keys bind both BED/protein files, species/direction, pair/self mode,
 comparison settings, comparison implementation and relevant upstream sources
-and binaries. Plan IDs, reference-selection changes and unrelated rescue
+and binaries, including both `lastdb` and `lastal`. The complete JCVI and
+kfFractBias Python implementation and compiled extensions are hashed, so an
+editable support-module change invalidates reuse even without a version bump.
+Python and the numerical/sorting dependency versions also form part of the key.
+Plan IDs, reference-selection changes and unrelated rescue
 thresholds do not invalidate identical comparisons. GFF metadata edits can reuse
 a comparison only after the new plan prepares and verifies identical BED/protein
 files. The full frozen input and per-plan dependency checks remain in force.
@@ -268,6 +272,9 @@ Locked, verified cache outputs are copied and rehashed into each plan; writable
 files are never hard linked. Corrupted entries are recomputed with the usual
 atomic publication and failure diagnostics. Existing results without cache keys
 remain valid within their original plan and are not relabelled for another plan.
+Updating the implementation/tool identities requires a new rescue output plan;
+finish an active plan with its frozen source. Older shared cache entries remain
+on disk and cannot match the strengthened keys.
 
 ## Array input generation
 

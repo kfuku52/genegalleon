@@ -91,15 +91,33 @@ def table(path):
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
+def package_source_hashes(name):
+    """Bind support modules and compiled extensions, including editable sources."""
+    spec = importlib.util.find_spec(name)
+    hashes = {}
+    for index, location in enumerate(spec.submodule_search_locations):
+        root = Path(location)
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.suffix in {".py", ".so", ".pyd"}:
+                hashes[f"{name}.files/{index}/{path.relative_to(root)}"] = digest(path)
+    if not hashes:
+        raise ValueError("No comparison package implementation found: " + name)
+    return hashes
+
+
 def identities():
-    versions = {name: importlib.metadata.version(name) for name in ("nwkit", "kfFractBias", "jcvi", "biopython", "pysam")}
-    for tool, arg in (("miniprot", "--version"), ("diamond", "version"), ("lastal", "--version")):
+    versions = {name: importlib.metadata.version(name) for name in
+                ("nwkit", "kfFractBias", "jcvi", "biopython", "pysam", "numpy", "natsort", "more-itertools")}
+    versions["python"] = sys.version
+    for tool, arg in (("miniprot", "--version"), ("diamond", "version"), ("lastal", "--version"), ("lastdb", "--version")):
         versions[tool] = subprocess.check_output([tool, arg], text=True).strip()
         versions[tool + "_sha256"] = digest(shutil.which(tool))
     # Editable upstream sources can change without changing their version.
     modules = ("nwkit.sample", "kffractbias.io", "kffractbias.selfscan", "kffractbias.selfevidence", "jcvi.compara.catalog",
                "jcvi.compara.synteny", "jcvi.compara.blastfilter", "jcvi.apps.align")
     versions["source_hashes"] = {name: digest(importlib.util.find_spec(name).origin) for name in modules}
+    for package in ("kffractbias", "jcvi"):
+        versions["source_hashes"].update(package_source_hashes(package))
     versions["implementation"] = digest(__file__)
     versions["attribute_syntax_implementation"] = digest(sys.modules[validate_gff.__module__].__file__)
     versions["mapping_implementation"] = digest(sys.modules[prepare_genome.__module__].__file__)
@@ -432,7 +450,8 @@ def build_comparison(tmp, job, dirs, params, cpus):
 def comparison_cache_key(root, plan, job):
     names = sorted({job["a"], job["b"]})
     tools = plan["request"]["tools"]
-    owners = ("kfFractBias", "jcvi", "biopython", "diamond", "diamond_sha256", "lastal", "lastal_sha256")
+    owners = ("kfFractBias", "jcvi", "biopython", "numpy", "natsort", "more-itertools", "python",
+              "diamond", "diamond_sha256", "lastal", "lastal_sha256", "lastdb", "lastdb_sha256")
     modules = {k: v for k, v in tools["source_hashes"].items() if k.startswith(("kffractbias.", "jcvi."))}
     algorithm = "\n".join(inspect.getsource(f) for f in (build_comparison, align_self, parse_anchors, run))
     return {"schema": 1, "job": {k: job[k] for k in ("a", "b", "kind")},
