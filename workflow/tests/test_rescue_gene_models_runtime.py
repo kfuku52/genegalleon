@@ -368,6 +368,142 @@ def test_query_expansion_refuses_missing_or_unknown_representatives(tmp_path):
     assert not dest.exists()
 
 
+def benchmark_evidence(fixture, intervals=2, fallback=True):
+    """Generate real miniprot evidence with the producer's frozen file/plan binding."""
+    root, names, sequences = fixture
+    evidence = root / "benchmark_evidence"
+    source = evidence / "rescued" / names[0]
+    source.mkdir(parents=True)
+    genome = root / "genome" / (names[0] + ".genome.fa")
+    plan = {"request": {"sources": {names[0]: {"genome": str(genome), "genetic_code": 1}},
+                        "files": {str(genome): rescue.digest(genome)}, "parameters": {"max_intron": 20000}}}
+    rescue.atomic_json(evidence / "plan.json", plan)
+    dna = next(rescue.fasta_records(genome))[2]
+    class Genome:
+        def fetch(self, _, start, end):
+            return dna[start:end]
+    proteins = {"donor": {f"query{i}": str(Seq(sequences[i]).translate())[:-1] for i in [8, 9]}}
+    windows = {}
+    for i in [8, 9][:intervals]:
+        start = i * (len(sequences[0]) + 60)
+        windows[("chr1", start, start + len(sequences[i]))] = [
+            {"id": f"query{i}", "donor": "donor", "query": f"query{i}"}]
+    rescue.search_intervals(source, windows, proteins, Genome(), 1, 20000, 2)
+    if fallback:
+        queries = source / "unresolved.fa"
+        queries.write_text(">query9\n" + proteins["donor"]["query9"] + "\n")
+        rescue.run(["miniprot", "-u", "-t", 2, "-G", 20000, "--gff", genome, queries],
+                   source, "map", source / "genome.gff")
+    files = {str(p.relative_to(source)): rescue.digest(p) for p in source.rglob("*") if p.is_file()}
+    rescue.atomic_json(source / "receipt.json", {"key": {"plan": rescue.digest(evidence / "plan.json"),
+                                                        "species": names[0]}, "files": files})
+    return evidence, source, names[0]
+
+
+def run_benchmark(evidence, species, output, check_existing=True, optimized_python=False):
+    script = SCRIPT.parents[1] / "benchmarks/benchmark_rescue_search.py"
+    return subprocess.run([sys.executable, *(["-O"] if optimized_python else []), str(script),
+                           "--evidence", str(evidence), "--species", species,
+                           "--output", str(output), "--cpus", "2", "--repeats", "1",
+                           *(["--check-existing"] if check_existing else [])], capture_output=True, text=True, timeout=120)
+
+
+@pytest.mark.parametrize("check_existing", [False, True])
+def test_benchmark_verifies_both_real_search_phases(hidden_models, check_existing):
+    evidence, _, species = benchmark_evidence(hidden_models)
+    output = hidden_models[0] / "bench"
+    result = run_benchmark(evidence, species, output, check_existing)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads((output / "result.json").read_text())
+    assert report["outputs_identical"] and not report["skipped"]
+    assert report["original_intervals"] == report["intervals"] == 2
+    assert report["genome_queries"] == report["unique_queries"] == 1
+    assert report["warmups"] == (0 if check_existing else 1)
+
+
+@pytest.mark.parametrize("intervals", [0, 2])
+@pytest.mark.parametrize("check_existing", [False, True])
+def test_benchmark_accepts_absent_search_phases(hidden_models, intervals, check_existing):
+    evidence, _, species = benchmark_evidence(hidden_models, intervals=intervals, fallback=False)
+    output = hidden_models[0] / "bench"
+    result = run_benchmark(evidence, species, output, check_existing)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads((output / "result.json").read_text())
+    assert report["outputs_identical"] and report["genome_queries"] == report["unique_queries"] == 0
+    assert report["samples"]["genome_unique"] == [] and "genome" in report["skipped"]
+    assert not (output / "genome_fixture").exists()
+    if not intervals:
+        assert report["samples"]["interval_parallel"] == [] and "interval" in report["skipped"]
+
+
+def test_benchmark_refuses_a_missing_original_interval(hidden_models):
+    import shutil
+    evidence, source, species = benchmark_evidence(hidden_models)
+    shutil.rmtree(source / "intervals/2")
+    output = hidden_models[0] / "bench"
+    result = run_benchmark(evidence, species, output)
+    assert result.returncode != 0 and "interval" in result.stderr.lower(), result.stdout + result.stderr
+    assert not (output / "result.json").exists()
+
+
+@pytest.mark.parametrize("missing", ["unresolved.fa", "genome.gff"])
+def test_benchmark_refuses_partial_fallback_evidence(hidden_models, missing):
+    evidence, source, species = benchmark_evidence(hidden_models)
+    receipt = json.loads((source / "receipt.json").read_text())
+    del receipt["files"][missing]
+    rescue.atomic_json(source / "receipt.json", receipt)
+    output = hidden_models[0] / "bench"
+    result = run_benchmark(evidence, species, output)
+    assert result.returncode != 0 and "fallback evidence" in result.stderr.lower(), result.stdout + result.stderr
+    assert not (output / "result.json").exists()
+
+
+def test_benchmark_equivalence_checks_survive_python_optimization(hidden_models):
+    evidence, source, species = benchmark_evidence(hidden_models)
+    (source / "genome.gff").write_text("# Different producer alignment\n")
+    receipt = json.loads((source / "receipt.json").read_text())
+    receipt["files"]["genome.gff"] = rescue.digest(source / "genome.gff")
+    rescue.atomic_json(source / "receipt.json", receipt)
+    output = hidden_models[0] / "bench"
+    result = run_benchmark(evidence, species, output, optimized_python=True)
+    assert result.returncode != 0 and "Full genome evidence differs" in result.stderr, result.stdout + result.stderr
+    assert not (output / "result.json").exists()
+
+
+@pytest.mark.parametrize("field", ["plan", "species"])
+def test_benchmark_refuses_a_foreign_producer_receipt(hidden_models, field):
+    evidence, source, species = benchmark_evidence(hidden_models)
+    receipt = json.loads((source / "receipt.json").read_text())
+    receipt["key"][field] = "foreign"
+    rescue.atomic_json(source / "receipt.json", receipt)
+    output = hidden_models[0] / "bench"
+    result = run_benchmark(evidence, species, output)
+    assert result.returncode != 0 and "receipt" in result.stderr.lower(), result.stdout + result.stderr
+    assert not (output / "result.json").exists()
+
+
+def test_benchmark_rechecks_fallback_source_after_mapping(hidden_models, monkeypatch):
+    import importlib.util
+    evidence, source, species = benchmark_evidence(hidden_models)
+    script = SCRIPT.parents[1] / "benchmarks/benchmark_rescue_search.py"
+    spec = importlib.util.spec_from_file_location("rescue_search_benchmark_audit", script)
+    benchmark = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(benchmark)
+    original = benchmark.rescue.run
+    def mutate_source(command, directory, label, stdout=None):
+        original(command, directory, label, stdout)
+        if label == "map":
+            with (source / "unresolved.fa").open("a") as handle:
+                handle.write(">changed_after_mapping\nMWP\n")
+    monkeypatch.setattr(benchmark.rescue, "run", mutate_source)
+    output = hidden_models[0] / "bench"
+    monkeypatch.setattr(sys, "argv", [str(script), "--evidence", str(evidence), "--species", species,
+                                     "--output", str(output), "--cpus", "2", "--check-existing"])
+    with pytest.raises(ValueError, match="source changed"):
+        benchmark.main()
+    assert not (output / "result.json").exists()
+
+
 def test_comparison_cache_reuses_metadata_changes_and_binds_actual_inputs(hidden_models):
     root, names, _ = hidden_models
     first, _, _ = make_plan(hidden_models)
@@ -407,14 +543,48 @@ def test_comparison_cache_reuses_metadata_changes_and_binds_actual_inputs(hidden
     assert key == rescue.comparison_cache_key(second, changed, new_job)
     changed["request"]["parameters"]["cscore"] = 0.8
     assert key != rescue.comparison_cache_key(second, changed, new_job)
+    for tool in ("diamond_sha256", "lastdb_sha256", "numpy", "python"):
+        changed = copy.deepcopy(new_plan)
+        changed["request"]["tools"][tool] = "changed_tool"
+        assert key != rescue.comparison_cache_key(second, changed, new_job)
     changed = copy.deepcopy(new_plan)
-    changed["request"]["tools"]["diamond_sha256"] = "changed_binary"
+    changed["request"]["tools"]["source_hashes"]["jcvi.files/0/algorithms/lis.py"] = "changed_support"
     assert key != rescue.comparison_cache_key(second, changed, new_job)
     protein = second / "prepared" / names[0] / "genes.pep"
     protein.write_text(protein.read_text() + "\n")
     assert key != rescue.comparison_cache_key(second, new_plan, new_job)
     with pytest.raises(ValueError, match="corrupted"):
         rescue.comparison_key(second, new_job)
+
+
+def test_concurrent_plans_share_one_verified_comparison(hidden_models, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    root, names, _ = hidden_models
+    first, _, _ = make_plan(hidden_models)
+    first_plan = rescue.load(first)
+    first_job = next(j for j in first_plan["synteny_jobs"] if j["a"] == names[0] and j["b"] == names[1])
+    rescue.prepared(first, first_plan, names[0])
+    rescue.prepared(first, first_plan, names[1])
+    second = root / "second"
+    cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
+        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", second, "--minimum-coverage", 0.99)
+    second_plan = rescue.load(second)
+    second_job = next(j for j in second_plan["synteny_jobs"] if j["a"] == names[0] and j["b"] == names[1])
+    rescue.prepared(second, second_plan, names[0])
+    rescue.prepared(second, second_plan, names[1])
+    builds, original = [], rescue.build_comparison
+    def counted(*args):
+        builds.append(args[0])
+        original(*args)
+    monkeypatch.setattr(rescue, "build_comparison", counted)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = [pool.submit(rescue.synteny, directory, plan, job["index"], 1)
+                   for directory, plan, job in [(first, first_plan, first_job), (second, second_plan, second_job)]]
+        outputs = [future.result(timeout=120) for future in pending]
+    assert len(builds) == 1
+    assert (outputs[0] / "blocks.json").read_bytes() == (outputs[1] / "blocks.json").read_bytes()
+    for directory, plan, job, output in zip([first, second], [first_plan, second_plan], [first_job, second_job], outputs, strict=True):
+        assert rescue.verified(output, rescue.comparison_key(directory, job))
 
 
 def test_rescue_exports_invalid_originals_and_audits_while_adding_intact_model(hidden_models, monkeypatch):
@@ -596,20 +766,40 @@ def test_fewer_than_requested_eligible_references_fails(hidden_models):
     assert not (root / "rescue" / "plan.json").exists()
 
 
-def test_changed_binary_with_same_version_invalidates_frozen_plan(hidden_models, monkeypatch):
+@pytest.mark.parametrize("tool", ["miniprot", "lastdb"])
+def test_changed_binary_with_same_version_invalidates_frozen_plan(hidden_models, monkeypatch, tool):
     import os
     import shutil
     output, _, _ = make_plan(hidden_models)
     root = hidden_models[0]
     tools = root / "tools"
     tools.mkdir()
-    executable = shutil.which("miniprot")
-    wrapper = tools / "miniprot"
+    executable = shutil.which(tool)
+    wrapper = tools / tool
     wrapper.write_text(f"#!/bin/sh\nexec '{executable}' \"$@\"\n")
     wrapper.chmod(0o755)
     monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
     with pytest.raises(ValueError, match="schema/tools changed"):
         rescue.load(output)
+
+
+def test_tool_identity_binds_jcvi_support_code(tmp_path, monkeypatch):
+    import importlib.util
+    from types import SimpleNamespace
+    package = tmp_path / "jcvi"
+    (package / "algorithms").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    support = package / "algorithms" / "lis.py"
+    support.write_text("# Comparison support implementation A\n")
+    original = importlib.util.find_spec
+    def find_spec(name):
+        if name == "jcvi":
+            return SimpleNamespace(origin=str(package / "__init__.py"), submodule_search_locations=[str(package)])
+        return original(name)
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+    before = rescue.identities()
+    support.write_text("# Comparison support implementation B\n")
+    assert rescue.identities() != before
 
 
 @pytest.mark.parametrize("revision", ["date", "markers"])
