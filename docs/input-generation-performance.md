@@ -22,6 +22,8 @@ Validation imports compare every destination file with the source validation
 proof, including the rewritten summary's target format proof. Aliased output
 paths (including symlinks and hard links to donor or raw files) are rejected
 before copying; unused directory settings do not block an import.
+Summary rewriting parses a freshly hashed in-memory source, so changing and
+restoring the source during parsing cannot introduce unverified paths.
 Independent source-gene ownership and mapping QC remain required for validation
 reuse. Formatting and validation contracts and BUSCO lineage settings are
 unchanged.

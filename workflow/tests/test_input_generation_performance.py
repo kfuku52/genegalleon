@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import io
 import json
 import os
 import struct
@@ -147,6 +148,33 @@ def test_unwritten_directory_setting_does_not_block_resume(native_import):
     resume.atomic_json(prepared_path, prepared)
     resume.import_stages(native_import)
     assert resume.valid(native_import.task_plan, 1, native_import.root, "validate", "24")
+
+
+def test_task_metadata_alias_cannot_overwrite_donor(native_import):
+    source_dir = native_import.source_root / "tmp/task_meta_shards"
+    (native_import.root / "tmp/task_meta_shards").symlink_to(source_dir, target_is_directory=True)
+    before = (source_dir / "1.json").read_bytes()
+    with pytest.raises(ValueError, match="overlap"):
+        resume.import_stages(native_import)
+    assert (source_dir / "1.json").read_bytes() == before
+
+
+def test_summary_parser_uses_the_verified_bytes_even_if_source_is_restored(native_import, monkeypatch):
+    summary = Path(resume.context(native_import.source_plan, 1, native_import.source_root, "format")[3]["summary"])
+    original_bytes = summary.read_bytes()
+    original_reader = resume.csv.DictReader
+    def change_then_restore(handle, **kwargs):
+        summary.write_text("species_prefix\tcds_output_path\nExample_species\tunverified-path\n")
+        captured = handle.read()
+        summary.write_bytes(original_bytes)
+        return original_reader(io.StringIO(captured), **kwargs)
+    monkeypatch.setattr(resume.csv, "DictReader", change_then_restore)
+    resume.import_stages(native_import)
+    paths = resume.context(native_import.task_plan, 1, native_import.root, "format")[3]
+    with Path(paths["summary"]).open() as handle:
+        row = next(original_reader(handle, delimiter="\t"))
+    assert row["cds_output_path"] == paths["cds"]
+    assert summary.read_bytes() == original_bytes
 
 
 def test_mutable_image_is_fully_hashed_after_same_size_change(tmp_path):

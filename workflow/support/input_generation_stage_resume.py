@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import csv
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -133,12 +134,33 @@ def copy_atomic(source, destination, *, expected_sha256=None):
 
 def reject_output_overlap(destinations, protected):
     protected = [Path(path) for path in protected]
+    locations = {path.resolve() for path in protected}
+    identities = set()
+    for path in protected:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        identities.add((info.st_dev, info.st_ino))
     for path in destinations:
         destination = Path(path)
-        if any(destination.resolve() == source.resolve()
-               or (destination.exists() and source.exists() and destination.samefile(source))
-               for source in protected):
+        try:
+            info = destination.stat()
+        except FileNotFoundError:
+            identity = None
+        else:
+            identity = (info.st_dev, info.st_ino)
+        if destination.resolve() in locations or identity in identities:
             raise ValueError("Imported output paths overlap donor or raw inputs: " + str(destination))
+
+
+def read_verified_summary(path, *, expected_sha256):
+    data = Path(path).read_bytes()
+    count("sha256_bytes", len(data))
+    count("sha256_reads")
+    if hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise ValueError("Summary differs from its verified source: " + str(path))
+    return data
 
 
 def import_fx2tab(source_root, target_root, species, source_cds, target_cds, source_settings, target_settings):
@@ -295,6 +317,10 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     elif any(item["sha256"] != receipt["files"][item["path"]] for item in original_files.values()):
         raise ValueError("Source completed files changed after verification: " + species)
     meta_file = args.root / "tmp/task_meta_shards" / f"{index}.json"
+    protected_paths = [*old_paths.values(), source_root / "tmp/task_meta_shards" / f"{old_index}.json",
+                       source_root / "tmp/task_stats_shards" / f"{old_index}.longest.json",
+                       source_root / "tmp/task_stats_shards" / f"{old_index}.mapping.json"]
+    reject_output_overlap([meta_file], protected_paths)
     command = [sys.executable, str(Path(__file__).with_name("run_input_generation_task.py")),
                "--task-plan", str(args.task_plan), "--task-index", str(index), "--describe-only",
                "--task-meta-output", str(meta_file)]
@@ -312,18 +338,18 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     # Separate roots do not imply separate physical outputs: custom directories,
     # symlinks and hard links must not turn a donor reader into a writer.
     reject_output_overlap([path for label, path in new_paths.items() if not label.endswith("_path")],
-                          [*old_paths.values(), *new_raw.values()])
+                          [*protected_paths, *new_raw.values()])
     for label in ("cds", "gff", "genome", "stats"):
         if label in old_paths:
             if label not in new_paths:
                 raise ValueError("Source/target formatted output roles differ: " + species)
             copy_atomic(old_paths[label], new_paths[label], expected_sha256=original_files[label]["sha256"])
     replacements = {old_paths[label]: new_paths[label] for label in old_paths if label in new_paths}
-    with Path(old_paths["summary"]).open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        fields = reader.fieldnames
-        rows = [{key: replacements.get(str(namespace_path(value, source_namespace)), value)
-                 for key, value in row.items()} for row in reader]
+    summary = read_verified_summary(old_paths["summary"], expected_sha256=original_files["summary"]["sha256"])
+    reader = csv.DictReader(io.StringIO(summary.decode("utf-8"), newline=""), delimiter="\t")
+    fields = reader.fieldnames
+    rows = [{key: replacements.get(str(namespace_path(value, source_namespace)), value)
+             for key, value in row.items()} for row in reader]
     if len(rows) != 1 or rows[0].get("species_prefix") != species:
         raise ValueError("Source summary shard does not identify exactly one requested species")
     destination = Path(new_paths["summary"])
@@ -343,6 +369,10 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     if (source_settings.get("run_validate_inputs") == "1" and target_settings.get("run_validate_inputs") == "1"
             and validation_files is not None):
         _, _, _, validation_paths = context(args.task_plan, index, args.root, "validate")
+        reject_output_overlap([validation_paths[label] for label in ("ownership_qc", "mapping_qc")
+                               if label in validation_files],
+                              [*protected_paths, *new_raw.values(),
+                               *(item["path"] for item in validation_files.values())])
         for label in ("ownership_qc", "mapping_qc"):
             if label in validation_files:
                 copy_atomic(validation_files[label]["path"], validation_paths[label],

@@ -99,6 +99,12 @@ def worker(args):
             reads.append(size)  # The streaming copy also computes a SHA-256.
         return original_copy(source, destination, **kwargs)
     resume.copy_atomic = counted_copy
+    original_summary = getattr(resume, "read_verified_summary", None)
+    if original_summary is not None:
+        def counted_summary(path, **kwargs):
+            reads.append(Path(path).stat().st_size)
+            return original_summary(path, **kwargs)
+        resume.read_verified_summary = counted_summary
     started = time.perf_counter()
     with contextlib.redirect_stdout(io.StringIO()):
         resume.import_stages(argparse.Namespace(task_plan=target[0], root=target[1], source_plan=source[0],
