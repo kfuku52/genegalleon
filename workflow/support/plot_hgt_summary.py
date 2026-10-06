@@ -57,6 +57,7 @@ OVERVIEW_TEXT_COLUMNS: List[Tuple[str, str, int, str]] = [
 
 FLOW_FALLBACK_LABEL = "Unresolved"
 FLOW_OTHER_LABEL = "Other"
+TRAIT_HIGHLIGHT_COLOR = "#b34d00"
 TRANSFER_EDGE_COLUMNS = [
     "donor_node",
     "recipient_node",
@@ -86,6 +87,8 @@ def build_arg_parser():
     parser.add_argument("--flow_rank", metavar="TEXT", default="phylum", type=str)
     parser.add_argument("--flow_max_categories", metavar="INT", default=12, type=int)
     parser.add_argument("--species_trait", default="", help="Optional species_trait TSV; numeric/binary traits appear beside species-tree tips.")
+    parser.add_argument("--transfer_tree_highlight_trait", default="", type=str,
+                        help="Binary trait column: color 1-valued tips, all-positive clades, and incoming HGT links in front.")
     parser.add_argument(
         "--transfer_tree_pdf",
         metavar="PATH",
@@ -169,6 +172,7 @@ def write_overview_readme(out_pdf: str) -> None:
             "",
             "`hgt_transfer_tree.pdf` overlays directed donor/source-to-recipient/target links on the species tree.",
             "Optional species_trait columns show observed numeric/binary tip traits, with all text at 8 pt. The workflow automatically reads input/species_trait/species_trait.tsv; hgt_summary_species_trait accepts a path or none. Binary 1 is orange and 0 gray; numeric colors are scaled independently per column and values are printed. Missing or unmatched values show NA, never zero. Shared schema/metadata contracts apply. No ancestral states are reconstructed.",
+            "With `--transfer_tree_highlight_trait COLUMN`, that binary column also colors positive tip labels and their branches orange. An internal incoming branch is highlighted only when every descendant tip has an observed 1; a mixed or missing descendant prevents highlighting. This is a clade display rule, not ancestral-state reconstruction. Links entering a highlighted recipient branch use the same orange and render above other links; directional counts and distances are unchanged. Bidirectional links retain separate colors for the two recipient ends.",
             "Links attach to the midpoint of the horizontal branch entering each labelled node. These positions are display conventions, not estimated transfer times. Root endpoints use a dashed display-only stem; zero-length branches coincide with their nodes. Color and ranking retain endpoint-node path distance as a lineage-separation proxy, not distance between inferred transfer locations.",
             "Link width is max(0.35, 5 * count / maximum_count) points, using the maximum across all parsed pairs. The visibility floor preserves rare distant events; counts below the floor share a width. It is not a probability score.",
             "Arrowheads point to the recipient/target. `hgt_transfer_edges.tsv` contains every parseable pair, including edges not drawn in the PDF.",
@@ -505,8 +509,10 @@ def plot_overview(branch_df: pandas.DataFrame, out_pdf: str) -> None:
             plt.close(fig)
 
 
-def draw_species_tree(ax, tree, x_by_id: Dict[int, float], y_by_id: Dict[int, float], referenced_labels: Set[str]) -> None:
+def draw_species_tree(ax, tree, x_by_id: Dict[int, float], y_by_id: Dict[int, float],
+                      referenced_labels: Set[str], highlighted_clades: Optional[Set[int]] = None) -> None:
     """Draw a compact rectangular species tree in the left part of an axes."""
+    highlighted_clades = highlighted_clades or set()
     for parent in tree.find_clades(order="preorder"):
         children = list(parent.clades)
         if not children:
@@ -516,7 +522,7 @@ def draw_species_tree(ax, tree, x_by_id: Dict[int, float], y_by_id: Dict[int, fl
         ax.plot(
             [parent_x, parent_x],
             [min(child_y), max(child_y)],
-            color="#777777",
+            color=TRAIT_HIGHLIGHT_COLOR if id(parent) in highlighted_clades else "#777777",
             linewidth=0.65,
             solid_capstyle="round",
             zorder=3,
@@ -527,7 +533,7 @@ def draw_species_tree(ax, tree, x_by_id: Dict[int, float], y_by_id: Dict[int, fl
             ax.plot(
                 [parent_x, child_x],
                 [y_value, y_value],
-                color="#777777",
+                color=TRAIT_HIGHLIGHT_COLOR if id(child) in highlighted_clades else "#777777",
                 linewidth=0.65,
                 solid_capstyle="round",
                 zorder=3,
@@ -547,7 +553,7 @@ def draw_species_tree(ax, tree, x_by_id: Dict[int, float], y_by_id: Dict[int, fl
             ha="left" if terminal else "center",
             va="center" if terminal else "bottom",
             fontsize=8,
-            color="#555555",
+            color=TRAIT_HIGHLIGHT_COLOR if id(clade) in highlighted_clades else "#555555",
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 0.2},
             zorder=7,
         )
@@ -673,6 +679,30 @@ def read_transfer_traits(path):
     return values
 
 
+def trait_highlight_clades(tree, traits, column):
+    """Observed-positive tips and all-positive clades; missing is never zero/one."""
+    if not column:
+        return set()
+    if column not in traits.columns:
+        raise ValueError(f"Highlight trait column was not found: {column}")
+    series = traits[column]
+    if not set(series.dropna().unique()) <= {0, 1}:
+        raise ValueError("Highlight trait must be binary (0, 1, or missing)")
+    if tree is None:
+        return set()
+    highlighted = set()
+    for clade in tree.find_clades(order="postorder"):
+        if clade.is_terminal():
+            key = normalize_tree_label(clade.name).replace(" ", "_")
+            value = series.get(key, numpy.nan)
+            positive = not pandas.isna(value) and value == 1
+        else:
+            positive = all(id(child) in highlighted for child in clade.clades)
+        if positive:
+            highlighted.add(id(clade))
+    return highlighted
+
+
 def draw_transfer_traits(ax, tree, y_by_id, traits):
     """Draw observed tip traits only; no ancestral reconstruction or missing-to-zero conversion."""
     from matplotlib import colormaps
@@ -707,10 +737,12 @@ def plot_transfer_tree(
     edges_tsv: str = "",
     max_edges: int = 200,
     species_trait_path: str = "",
+    highlight_trait: str = "",
 ) -> None:
     """Plot directed GeneRax HGT event counts over a species tree."""
     tree, x_by_id, y_by_id, tree_label_map = load_species_tree_layout(species_tree_path)
     traits = read_transfer_traits(species_trait_path)
+    highlighted_clades = trait_highlight_clades(tree, traits, highlight_trait)
     edge_df = build_transfer_edge_table(branch_df, tree_labels=tree_label_map, max_edges=max_edges)
     if tree is not None and not edge_df.empty:
         edge_df = add_transfer_distances(edge_df, tree, tree_label_map, max_edges)
@@ -769,7 +801,8 @@ def plot_transfer_tree(
     with PdfPages(out_pdf) as pdf:
         fig, ax = plt.subplots(figsize=(14.0, fig_height))
         ax.set_xlim(0.0, max(1.04, 0.92 + 0.11 * len(traits.columns)))
-        ax.set_ylim(-1.2, float(terminal_count) + 2.0)
+        header_extra = 2.0 if highlight_trait else 0.0
+        ax.set_ylim(-1.2, float(terminal_count) + 2.0 + header_extra)
         ax.axis("off")
 
         display_df = display_df.sort_values(
@@ -779,6 +812,7 @@ def plot_transfer_tree(
         )
         max_count = max(1, int(edge_df["hgt_event_count"].max()))
         connections = transfer_connections(display_df)
+        patches = []
         for (a, b), rows in connections:
             a_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(a, tree_label_map)])]
             b_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(b, tree_label_map)])]
@@ -788,19 +822,27 @@ def plot_transfer_tree(
                 row = None if a == b and half_index == 0 else by_target.get(target)
                 # One-way connections keep a thin source half without an arrow.
                 width = max(0.35, 5.0 * int(row.hgt_event_count) / max_count) if row else 0.35
-                ax.add_patch(FancyArrowPatch(
+                recipient = row or (rows[0] if len(rows) == 1 else None)
+                highlighted = bool(recipient is not None and id(clade_by_label[
+                    resolve_tree_endpoint(str(recipient.recipient_node), tree_label_map)]) in highlighted_clades)
+                patch = FancyArrowPatch(
                     path=path, arrowstyle="-|>" if row else "-",
                     mutation_scale=7.0, linewidth=width,
-                    color=cmap(norm(rows[0].phylogenetic_distance)),
-                    capstyle="butt", zorder=2,
-                ))
+                    color=TRAIT_HIGHLIGHT_COLOR if highlighted else cmap(norm(rows[0].phylogenetic_distance)),
+                    capstyle="butt", zorder=4 if highlighted else 2,
+                )
+                patch.set_gid(f"hgt:{a}:{b}:{half_index}")
+                patches.append((highlighted, patch))
+        for _, patch in sorted(patches, key=lambda item: item[0]):
+            ax.add_patch(patch)
 
-        draw_species_tree(ax, tree, x_by_id, y_by_id, referenced_labels)
+        draw_species_tree(ax, tree, x_by_id, y_by_id, referenced_labels, highlighted_clades)
         if len(traits.columns):
             draw_transfer_traits(ax, tree, y_by_id, traits)
         if normalize_tree_label(tree.root.name):
             ax.plot([0, x_by_id[id(tree.root)]], [y_by_id[id(tree.root)]] * 2,
-                    color="#777777", linewidth=0.65, linestyle="--")
+                    color=TRAIT_HIGHLIGHT_COLOR if id(tree.root) in highlighted_clades else "#777777",
+                    linewidth=0.65, linestyle="--")
 
         mapped_events = int(edge_df.loc[edge_df["mapped_to_species_tree"].astype(int).eq(1), "hgt_event_count"].sum())
         displayed_events = int(display_df["hgt_event_count"].sum())
@@ -811,6 +853,9 @@ def plot_transfer_tree(
         for count in sorted({1, max(1, max_count // 10), max_count}):
             handles.append(Line2D([0], [0], color=edge_color,
                                   linewidth=max(0.35, 5.0 * count / max_count), label=f"{count} HGT events"))
+        if highlight_trait:
+            handles.append(Line2D([0], [0], color=TRAIT_HIGHLIGHT_COLOR, linewidth=0.8,
+                                  label=f"{highlight_trait}=1 clades / incoming HGT"))
         color_ax = ax.inset_axes([0.63, 0.12, 0.025, 0.40])
         colorbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=color_ax)
         colorbar.set_label(f"Endpoint-node distance ({edge_df['distance_metric'].iloc[0]})")
@@ -826,7 +871,7 @@ def plot_transfer_tree(
         )
         ax.text(
             0.5,
-            float(terminal_count) + 1.8,
+            float(terminal_count) + 1.8 + header_extra,
             "HGT events mapped on the species tree",
             ha="center",
             va="bottom",
@@ -835,8 +880,8 @@ def plot_transfer_tree(
         )
         ax.text(
             0.5,
-            float(terminal_count) + 0.88,
-            "Arrow-end half width: directional count (0.35 pt floor) | darker: greater distance | shared curve for both directions",
+            float(terminal_count) + (1.3 if highlight_trait else 0.88),
+            "Arrow-end half width: directional count (0.35 pt floor) | darker blue: greater distance | shared curve for both directions",
             ha="center",
             va="bottom",
             fontsize=8,
@@ -1152,6 +1197,7 @@ def main():
             edges_tsv=args.transfer_edges_tsv,
             max_edges=max(0, int(args.transfer_tree_max_edges)),
             species_trait_path=args.species_trait,
+            highlight_trait=args.transfer_tree_highlight_trait,
         )
 
 

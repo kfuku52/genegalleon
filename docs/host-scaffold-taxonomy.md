@@ -154,3 +154,12 @@ For a project-filtered figure, pass its selected rows to
 `plot_hgt_summary.py --transfer_event_tsv PATH` alongside the existing
 branch/gene overview inputs. Each row counts as one event; unique families are
 counted separately. The drawing and direction/count conventions are unchanged.
+
+To highlight an observed binary tip trait, also pass
+`--species_trait PATH --transfer_tree_highlight_trait COLUMN`. Positive tip
+labels and incoming species branches are orange; an internal branch is colored
+only when all descendant tips have an observed `1`. Missing descendants prevent
+highlighting. This is a display rule for homogeneous clades, not inferred
+ancestral states. Links entering a highlighted recipient branch use the same
+orange and render above other links. Reciprocal arrow ends retain separate
+colors; event counts, selection, widths and distance measurements are unchanged.

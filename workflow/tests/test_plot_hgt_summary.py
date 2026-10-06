@@ -376,3 +376,55 @@ def test_transfer_traits_preserve_zero_unknown_and_tip_order(tmp_path):
     path.write_text("species\tgall\nA species\t1\nA_species\t0\n")
     with pytest.raises(ValueError, match="unique"):
         plotter.read_transfer_traits(str(path))
+
+
+def test_trait_highlight_clades_require_every_descendant_to_be_observed_positive(tmp_path):
+    tree_path = tmp_path / "tree.nwk"
+    tree_path.write_text("(((A:1,B:1)0042:1,C:2)mixed:1,(D:1,E:1)unknown:1)root;")
+    tree, *_ = plotter.load_species_tree_layout(str(tree_path))
+    traits = pandas.DataFrame({'gall': [1, 1, 0, 1, float('nan')]}, index=['A', 'B', 'C', 'D', 'E'])
+    highlighted = plotter.trait_highlight_clades(tree, traits, 'gall')
+    assert {c.name for c in tree.find_clades() if id(c) in highlighted} == {'A', 'B', 'D', '0042'}
+    assert plotter.trait_highlight_clades(tree, traits.drop(index='E'), 'gall') == highlighted
+    with pytest.raises(ValueError, match='not found'):
+        plotter.trait_highlight_clades(tree, traits, 'absent')
+    with pytest.raises(ValueError, match='binary'):
+        plotter.trait_highlight_clades(tree, traits.assign(gall=2), 'gall')
+
+
+def test_trait_highlight_colors_tree_and_incoming_arrows_above_other_directions(tmp_path, monkeypatch):
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import FancyArrowPatch
+
+    tree_path = tmp_path / 'tree.nwk'
+    tree_path.write_text('((A:1,B:1)0042:1,C:2)root;')
+    trait_path = tmp_path / 'trait.tsv'
+    trait_path.write_text('species\tgall\nA\t1\nB\t1\nC\t0\n')
+    captured = {}
+
+    def capture(self, fig, **kwargs):
+        ax = fig.axes[0]
+        captured['labels'] = {t.get_text(): t.get_color() for t in ax.texts}
+        captured['patches'] = [p for p in ax.patches if isinstance(p, FancyArrowPatch)]
+        captured['branches'] = [line.get_color() for line in ax.lines]
+
+    monkeypatch.setattr(PdfPages, 'savefig', capture)
+    data = pandas.DataFrame({'generax_transfer': ['Y@C@0042', 'Y@0042@C', 'Y@C@A']})
+    edge_path = tmp_path / 'edges.tsv'
+    plotter.plot_transfer_tree(data, str(tmp_path / 'highlight.pdf'), str(tree_path), str(edge_path),
+                              species_trait_path=str(trait_path), highlight_trait='gall')
+    color = plotter.TRAIT_HIGHLIGHT_COLOR
+    assert captured['labels']['A'] == captured['labels']['B'] == captured['labels']['0042'] == color
+    assert captured['labels']['C'] != color
+    assert color in captured['branches']
+    patches = captured['patches']
+    # Reciprocal ends retain separate colors; a one-way positive link colors both halves.
+    positive = [p for p in patches if p.get_edgecolor() == to_rgba(color)]
+    ordinary = [p for p in patches if p.get_edgecolor() != to_rgba(color)]
+    assert len(positive) == 3 and len(ordinary) == 1
+    assert min(p.get_zorder() for p in positive) > max(p.get_zorder() for p in ordinary)
+    assert patches[-len(positive):] == positive
+    saved = pandas.read_csv(edge_path, sep='\t')
+    assert saved.hgt_event_count.sum() == 3 and len(saved) == 3
+    assert saved.displayed.eq(1).all()
