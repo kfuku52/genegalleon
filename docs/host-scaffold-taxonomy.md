@@ -225,7 +225,7 @@ localization and available similarity panels). Older results use their saved
 tree-plot parameter/input provenance; unavailable optional inputs remain missing.
 `renderer_settings.json` records the settings source and input availability.
 Page 2 shows the exact HGT node/UFBoot and existing GFF neighborhoods in two
-columns: donor descendants in blue, recipients in orange, and nearby annotations
+columns: donor descendants in blue, recipient descendants in orange, and nearby annotations
 in gray. It draws at most three distinct genes per side on one page, with
 shown/total/omitted counts. Eligible event-linked genes with failing or unavailable
 scaffold evidence can appear with explicit status and pale hatched focal blocks;

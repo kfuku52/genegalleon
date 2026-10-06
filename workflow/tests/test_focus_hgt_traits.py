@@ -477,7 +477,7 @@ def test_bounded_context_caps_distinct_genes_and_audits_omitted_and_unknown_evid
     assert len(reader.pages) == 1
     assert tuple(map(float, reader.pages[0].mediabox)) == (0, 0, 1080, 648)
     text = reader.pages[0].extract_text()
-    assert 'DONOR DESCENDANTS' in text and 'RECIPIENTS' in text
+    assert 'DONOR DESCENDANTS' in text and 'RECIPIENT DESCENDANTS' in text
     assert 'Shown 3 of 4 genes | 1 omitted' in text and 'Shown 3 of 5 genes | 2 omitted' in text
     assert 'substitution/site' not in text
     assert {(r['shared_axis_min_kb'], r['shared_axis_max_kb']) for r in audit} == {(-20, 20)}

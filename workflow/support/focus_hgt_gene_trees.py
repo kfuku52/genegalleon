@@ -253,7 +253,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         "Orange recipient tips are the genes that individually pass that background check.\n"
         "Page 1 replays gg_gene_evolution panels and saved settings, including domain, gene structure and alignment.\n"
         "Missing optional measurements are not invented. Renderer settings and input availability are recorded.\n"
-        "Page 2 separates donor descendants (blue, left) and recipients (orange, right).\n"
+        "Page 2 separates donor descendants (blue, left) and recipient descendants (orange, right).\n"
         "It shows at most three distinct genes per side on one page, including eligible genes with unconfirmed or failing scaffold evidence.\n"
         "Shown/total/omitted gene counts and individual scaffold status remain explicit; omitted genes stay in context_gene_audit.tsv.\n"
         "Display priority is passing scaffold support, available GFF, coverage, compatibility, then gene ID.\n"

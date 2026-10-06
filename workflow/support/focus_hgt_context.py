@@ -386,7 +386,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
     fig.text(0.06, 0.89, reference_text, fontsize=8)
     nrows = max(totals[side]['shown'] for side in totals)
     grid = fig.add_gridspec(nrows, 2, left=0.07, right=0.96, top=0.72, bottom=0.20, hspace=1.2, wspace=0.18)
-    for column, (side, color, title) in enumerate([('donor', BLUE, 'DONOR DESCENDANTS'), ('recipient', ORANGE, 'RECIPIENTS')]):
+    for column, (side, color, title) in enumerate([('donor', BLUE, 'DONOR DESCENDANTS'), ('recipient', ORANGE, 'RECIPIENT DESCENDANTS')]):
         left = 0.07 if column == 0 else 0.552
         fig.text(left, 0.835, title, color=color, fontsize=14, weight='bold')
         count = totals[side]
@@ -416,7 +416,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
             ax.set_title(f"{tags} | {link['gene_id']}\nScaffold {scaffold} | {status}\n{measured}",
                          loc='left', fontsize=8, color=color, pad=10)
     fig.text(0.06, 0.055,
-             'Blue: donor focal gene; orange: recipient focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
+             'Blue: donor descendant focal gene; orange: recipient descendant focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
              'Thick blocks: coding exons; thin gray blocks: recorded UTR; lines: introns. Every genomic track uses the same uncompressed kb axis.\n'
              'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
              'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Neighbor labels/IDs, count units and omitted genes are in the context audit.\n'
