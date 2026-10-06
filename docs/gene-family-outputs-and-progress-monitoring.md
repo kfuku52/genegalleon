@@ -792,9 +792,11 @@ not the labelled node. Midpoints are display conventions, not inferred event
 times. Root endpoints use a dashed display-only stem; zero-length branches
 coincide with their nodes. Color and ranking retain endpoint-node path distance
 as a lineage-separation proxy, independent of these drawing positions.
-Reciprocal directions share a single curve, with each arrow-end half's width
-encoding the event count toward that endpoint. One-way links have a thin
-source half without an arrow. All available internal branch names appear directly above
+Each direction has a complete arrow with constant shaft width; reciprocal
+directions use separate curves. Each arrow's width encodes that direction's
+event count from donor to recipient. Arrows use alpha `0.55` by default;
+`hgt_summary_transfer_arrow_alpha` sets opacity from `0` to `1` for summary and
+trait-focused figures. All available internal branch names appear directly above
 their incoming branch midpoints, including branches without displayed HGT.
 Species names appear to the right of terminal branches. Every text element in
 the transfer-tree PDF, including titles, legends and colorbar ticks, uses 8 pt.
