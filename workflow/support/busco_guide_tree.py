@@ -23,16 +23,16 @@ import numpy as np
 from Bio import Phylo
 
 try:
+    from busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from input_generation_stage_resume import copy_atomic, reject_output_overlap
-    from rescue_gene_models import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from species_labeling import extract_species_label
 except ImportError:
+    from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .input_generation_stage_resume import copy_atomic, reject_output_overlap
-    from .rescue_gene_models import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from .species_labeling import extract_species_label
 
 SCHEMA = 1

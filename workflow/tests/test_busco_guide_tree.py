@@ -1,12 +1,27 @@
 """BUSCO protein preservation and input-integrity contracts."""
 import gzip
+import inspect
 import json
+from pathlib import Path
 
 import pytest
 from Bio import Phylo
 
 from workflow.support import busco_guide_tree as guide
+from workflow.support import busco_reference_quality as quality
+from workflow.support import pairwise_synteny, rescue_gene_models
 from workflow.support.rescue_gene_models import patristic_distances
+
+
+def test_existing_quality_and_identifier_imports_keep_the_same_implementations():
+    assert rescue_gene_models.COMPARABLE_QUALITY == guide.COMPARABLE_QUALITY == quality.COMPARABLE_QUALITY
+    for name, consumers in (("busco_quality", (rescue_gene_models, guide)),
+                            ("patristic_distances", (rescue_gene_models, guide)),
+                            ("safe_token", (pairwise_synteny, rescue_gene_models, guide))):
+        for consumer in consumers:
+            function = getattr(consumer, name)
+            assert inspect.getsource(function) == inspect.getsource(getattr(quality, name))
+            assert Path(function.__globals__["__file__"]).resolve() == Path(quality.__file__).resolve()
 
 
 def make_archive(tmp_path, name, sequences, duplicated=()):

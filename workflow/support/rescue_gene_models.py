@@ -30,6 +30,7 @@ from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
+    from busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from gene_model_species_profiles import parameters_for, read_profiles
@@ -41,6 +42,7 @@ try:
     from species_labeling import extract_species_label
     from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
+    from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .gene_model_species_profiles import parameters_for, read_profiles
@@ -53,7 +55,6 @@ except ImportError:
     from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
-COMPARABLE_QUALITY = ("lineage", "version", "mode", "lineage_date", "markers")
 PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscore",
               "min_anchors", "distance", "diagonal_bound", "max_interval", "padding",
               "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback")
@@ -70,25 +71,6 @@ def run(command, directory, label, stdout=None):
                                     env={**os.environ, "MPLBACKEND": "Agg"})
     if result.returncode:
         raise RuntimeError(f"{label} failed ({result.returncode}): {logs / (label + '.log')}")
-
-
-def busco_quality(path):
-    text = Path(path).read_text()
-    complete = re.search(r"C:([\d.]+)%", text)
-    lineage = re.search(r"lineage dataset is:\s*(\S+)", text)
-    version = re.search(r"BUSCO version is:\s*(\S+)", text)
-    mode = re.search(r"BUSCO was run in mode:\s*(\S+)", text)
-    markers = re.search(r"\bn:\s*(\d+)", text)
-    date = re.search(r"Creation date:\s*([^,\s)]+)", text)
-    if not all((complete, lineage, version, mode, markers)):
-        raise ValueError(f"BUSCO summary lacks completeness/lineage/version/mode/marker count: {path}")
-    value = float(complete[1])
-    if not math.isfinite(value) or not 0 <= value <= 100:
-        raise ValueError(f"Invalid BUSCO completeness: {path}")
-    if int(markers[1]) < 1:
-        raise ValueError(f"Invalid BUSCO marker count: {path}")
-    return {"complete_pct": value, "lineage": lineage[1], "version": version[1], "mode": mode[1],
-            "lineage_date": date[1] if date else None, "markers": int(markers[1])}
 
 
 def table(path):
@@ -130,32 +112,12 @@ def identities():
     versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
+    versions["busco_quality_implementation"] = digest(sys.modules[busco_quality.__module__].__file__)
     versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
     versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
     versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))
     versions["output_hashes_implementation"] = digest(sys.modules[hash_outputs.__module__].__file__)
     return versions
-
-
-def patristic_distances(tree):
-    """All tip distances in O(N^2), without repeated whole-tree LCA scans."""
-    graph = defaultdict(list)
-    for parent in tree.find_clades():
-        for child in parent.clades:
-            length = child.branch_length or 0.0
-            graph[parent].append((child, length))
-            graph[child].append((parent, length))
-    leaves = {tip: tip.name for tip in tree.get_terminals()}
-    result = {}
-    for tip, name in leaves.items():
-        row, stack = {}, [(tip, None, 0.0)]
-        while stack:
-            node, previous, distance = stack.pop()
-            if node in leaves:
-                row[leaves[node]] = distance
-            stack.extend((child, node, distance + length) for child, length in graph[node] if child is not previous)
-        result[name] = row
-    return result
 
 
 def guide_evidence(path, tree_path, expected_inputs=None, nearest_references=None):
