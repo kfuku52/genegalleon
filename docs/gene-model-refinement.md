@@ -379,6 +379,11 @@ and the locus evidence alongside completeness.
 
 Inspect `predictions/SPECIES/predictions.json` for accepted/proposed candidates,
 reasons, donor support and `homology_only_predicted` versus `rna_path_supported`.
+Donor alignment failures (`low_identity`, `low_coverage`) are retained per
+alignment with `supports_path=false`. They neither supply independent support
+nor veto a path supported by qualifying donors. Structural, translation,
+ownership, correspondence and protected-annotation gates still veto adoption.
+Repeated isoforms from one donor species count as one independent donor.
 Catalogs include all coding paths, exact associated source CDS records and
 source FASTA association audits. A provider convention that replaces only the
 terminal genomic stop with `NNN` is recognized when the whole preceding sequence
@@ -450,3 +455,52 @@ fixtures test exact exon restoration and preservation of biological negatives;
 these are implementation evidence, not population-level precision estimates.
 Real annotation admission and actual synteny/miniprot/reader behavior are tested
 separately from pure selector performance.
+
+## Explicit species profiles and genome staging
+
+`GG_INPUT_GENE_MODEL_SPECIES_PROFILES` forwards a TSV to rescue and refinement;
+both CLIs accept `--species-profiles FILE`. The first column is `species`.
+Optional columns are `max_intron`, `max_interval`, `padding`,
+`minimum_coverage`, `minimum_identity`, `min_support`, and `candidate_limit`.
+Blank cells retain global defaults. Duplicate/unknown species, unknown columns
+and invalid values fail. `min_support` and `candidate_limit` concern refinement.
+Genetic codes use the existing genetic-code inputs. Profiles apply to target
+prediction/validation, not synteny chaining or conservation selection.
+File hashes and parsed overrides are frozen. A refinement plan using
+`--rescue-output` inherits its profiles unless supplied another profile file.
+There is no automatic plant/animal/fungus threshold switch.
+
+`GG_INPUT_GENE_MODEL_GENOME_INDEX_CACHE` sets an optional execution cache
+(`GG_GENOME_INDEX_CACHE` for direct CLIs). Prefer local scratch sized for the
+genomes processed. Uncompressed sources are linked; compressed genomes are
+expanded once. Source bytes, indexer implementation, pysam/htslib, indexed FASTA
+and index bytes are verified, including after use. Corrupt entries are rebuilt
+under the stage lock. No indices are written beside source files. Without a
+cache, staging uses local temporary storage. Prediction nomination precedes
+indexing. Zero-window refinement skips staging; zero-candidate rescue still
+streams contig lengths to validate annotation bounds. Final effective bundles
+retain their self-contained genome copies.
+
+## Three-stage BUSCO
+
+The standard pipeline using completed rescue inputs also emits
+`busco_three_stage.png/svg`: pre-rescue CDS, after missing-gene rescue, and
+after refinement. Direct evaluation opts in with `--three-stage`. The original
+rescue plan and augmentation receipts bind the pre-rescue input. All stages
+use the same frozen BUSCO lineage, binaries, wrappers and predictor parameters.
+`delta_rescue_complete` measures rescue; `delta_complete` remains the refinement
+effect for backwards compatibility. Excluded CDS-only species are evaluated
+unchanged in every stage and marked not analysed. Historical two-stage reports
+remain renderable.
+
+## Known-annotation holdout evaluation
+
+`workflow/support/benchmark_gene_model_holdout.py` accepts a
+`species,cds,gff,genome,genetic_code` TSV and optional species profiles. It
+verifies exact CDS/genome agreement, selects reproducible single/multiple-exon
+strata and records exact restoration, misses, inexact accepted paths and
+additions in deliberate assembly-gap controls. Input/tool/implementation hashes,
+seed and parameters accompany results. Exact-source proteins make this an
+interval-prediction/admission benchmark; it does not estimate whole-cohort
+discovery precision or test independent interspecies/RNA support. Reference
+annotations supply comparison truth, not independent experimental validation.

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import inspect
 import json
 import math
 import re
@@ -41,7 +42,9 @@ LABELS = ("TE-related support only", "Other protein support only", "TE-related +
           "No informative support", "Not assessed")
 FIELDS = ("query,target,pident,alnlen,evalue,bits,qlen,tlen,qstart,qend,tstart,tend,qaln,taln")
 DEFAULTS = {"evalue": 1e-5, "query_coverage": .5, "target_coverage": .5,
-            "minimum_alignment": 50, "score_fraction": .9, "max_hits": 50, "sensitivity": 7.5}
+            "minimum_alignment": 50, "score_fraction": .9, "max_hits": 50, "sensitivity": 7.5,
+            "search_evalue": 1e-5}
+NO_SUPPORT_REASONS = ("no_returned_hits", "weak_hit", "short_hit", "partial_hit", "annotation_unknown")
 TE_PATTERN = re.compile(r"\b(?:transpos(?:ase|on|able)|retrotranspos\w*|retroposon)\b", re.I)
 UNINFORMATIVE = re.compile(r"\b(?:uncharacteri[sz]ed|hypothetical|putative protein|unknown function)\b", re.I)
 METHOD = ("Swiss-Prot protein homology; qualifying alignments satisfy the recorded E-value, paired query/target "
@@ -197,7 +200,7 @@ def reference_annotations(prefix, metadata, targets):
     return result
 
 
-def read_hits(path, queries, prefix, metadata):
+def read_raw_hits(path, queries):
     rows, targets = [], set()
     with path.open() as handle:
         for line in handle:
@@ -222,10 +225,17 @@ def read_hits(path, queries, prefix, metadata):
                          "query_coverage": paired / qlen, "target_coverage": paired / tlen,
                          "target_aligned_sequence": f[13].replace("-", "")})
             targets.add(f[1])
-    annotations = reference_annotations(prefix, metadata, targets) if targets else {}
     result = {q: [] for q in queries}
-    seen = set()
     for row in rows:
+        result[row["query"]].append(row)
+    return result
+
+
+def annotate_hits(raw, annotations):
+    seen = set()
+    result = {q: [] for q in raw}
+    for original in (h for rows in raw.values() for h in rows):
+        row = dict(original)
         annotation = annotations[accession(row["target"])]
         if (row["target_length"] != annotation["target_length"]
                 or row.pop("target_aligned_sequence") != annotation["sequence"][row["target_start"] - 1:row["target_end"]]
@@ -234,6 +244,69 @@ def read_hits(path, queries, prefix, metadata):
         seen.add((row["query"], row["target"]))
         result[row["query"]].append({**row, **{k: v for k, v in annotation.items() if k != "sequence"}})
     return {q: sorted(hits, key=lambda h: (-h["bits"], h["evalue"], h["accession"])) for q, hits in result.items()}
+
+
+def read_hits(path, queries, prefix, metadata):
+    raw = read_raw_hits(path, queries)
+    targets = {h["target"] for rows in raw.values() for h in rows}
+    annotations = reference_annotations(prefix, metadata, targets) if targets else {}
+    return annotate_hits(raw, annotations)
+
+
+def diagnostics(hits, parameters):
+    """Disjoint failure reasons and an independent, unranked partial-TE flag."""
+    def length(h):
+        return h.get("paired_residues", h["alignment_length"])
+    significant = [h for h in hits if h["evalue"] <= parameters["evalue"]]
+    covered = [h for h in significant if h["query_coverage"] >= parameters["query_coverage"]
+               and h["target_coverage"] >= parameters["target_coverage"]]
+    complete = [h for h in covered if length(h) >= parameters["minimum_alignment"]]
+    category, _ = classify(hits, parameters)
+    reason = ""
+    if category == "no_informative_hit":
+        reason = ("no_returned_hits" if not hits else "weak_hit" if not significant
+                  else "short_hit" if covered and not complete
+                  else "partial_hit" if not covered else "annotation_unknown")
+    partial = sorted({h["accession"] for h in significant if h["annotation_group"] == "te_related"
+                      and length(h) >= parameters["minimum_alignment"]
+                      and h["query_coverage"] >= parameters["query_coverage"]
+                      and h["target_coverage"] < parameters["target_coverage"]})
+    return {"no_support_reason": reason, "partial_te_accessions": partial,
+            "partial_te_homology": bool(partial)}
+
+
+def cached_annotations(prefix, metadata, targets, cache, boundary):
+    signature = {"files": boundary.read([Path(str(prefix) + ".pep"), metadata]),
+                 "implementation": encoded_hash([inspect.getsource(reference_annotations),
+                                                  TE_PATTERN.pattern, UNINFORMATIVE.pattern])}
+    directory = cache / "annotations" / encoded_hash(signature)
+    directory.mkdir(parents=True, exist_ok=True)
+    wanted = {accession(t) for t in targets}
+    result = {}
+    with exclusive_lock(directory / "cache.lock"), sqlite3.connect(directory / "annotations.sqlite3") as connection:
+        connection.execute("CREATE TABLE IF NOT EXISTS annotations (accession TEXT PRIMARY KEY, payload TEXT, sha256 TEXT)")
+        # One read cursor holds the database lock once. Per-accession SELECTs
+        # otherwise cause thousands of network-filesystem lock round trips.
+        connection.execute("PRAGMA temp_store=MEMORY")
+        connection.execute("CREATE TEMP TABLE wanted (accession TEXT PRIMARY KEY)")
+        connection.executemany("INSERT INTO wanted VALUES (?)", ((a,) for a in sorted(wanted)))
+        for identifier, payload, sha in connection.execute(
+                "SELECT a.accession,a.payload,a.sha256 FROM wanted w CROSS JOIN annotations a ON a.accession=w.accession"):
+            if hashlib.sha256(payload.encode()).hexdigest() == sha:
+                value = json.loads(payload)
+                if isinstance(value, dict) and value.get("accession") == identifier:
+                    result[identifier] = value
+        missing = wanted - set(result)
+        if missing:
+            fresh = reference_annotations(prefix, metadata, missing)
+            boundary.check()
+            for identifier, value in fresh.items():
+                payload = json.dumps(value, sort_keys=True)
+                connection.execute("INSERT OR REPLACE INTO annotations VALUES (?,?,?)",
+                                   (identifier, payload, hashlib.sha256(payload.encode()).hexdigest()))
+            result.update(fresh)
+        boundary.check()
+    return result, signature
 
 
 def classify(hits, parameters):
@@ -254,20 +327,24 @@ def search(queries, prefix, metadata, cache, parameters, tool, boundary, cpus, m
     paths = sorted(p for p in db.parent.glob(db.name + "*") if p.is_file() and not p.name.endswith(".ready"))
     if not db.is_file() or not Path(str(db) + ".dbtype").is_file():
         raise ValueError("Swiss-Prot MMseqs2 database is not ready")
-    signature = {"schema": 1, "files": boundary.read([*paths, Path(str(prefix) + ".pep"), metadata]),
-                 "parameters": parameters, "tool": tool,
-                 "implementation": boundary.read([Path(__file__), Path(shutil.which("mmseqs"))])}
+    signature = {"schema": 2, "files": boundary.read([*paths, Path(str(prefix) + ".pep")]),
+                 "parameters": {k: parameters[k] for k in ("search_evalue", "max_hits", "sensitivity")},
+                 "tool": tool, "implementation": encoded_hash(inspect.getsource(read_raw_hits)),
+                 "binary": boundary.read([Path(shutil.which("mmseqs"))])}
     key = encoded_hash(signature)
     directory = cache / key
     directory.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(directory / "cache.lock"):
         with sqlite3.connect(directory / "queries.sqlite3") as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS hits (query TEXT PRIMARY KEY, payload TEXT, sha256 TEXT)")
+            connection.execute("PRAGMA temp_store=MEMORY")
+            connection.execute("CREATE TEMP TABLE wanted (query TEXT PRIMARY KEY)")
+            connection.executemany("INSERT INTO wanted VALUES (?)", ((q,) for q in sorted(queries)))
             result = {}
-            for query in queries:
-                row = connection.execute("SELECT payload,sha256 FROM hits WHERE query=?", (query,)).fetchone()
-                if row and hashlib.sha256(row[0].encode()).hexdigest() == row[1]:
-                    value = json.loads(row[0])
+            for query, payload, sha in connection.execute(
+                    "SELECT h.query,h.payload,h.sha256 FROM wanted w CROSS JOIN hits h ON h.query=w.query"):
+                if hashlib.sha256(payload.encode()).hexdigest() == sha:
+                    value = json.loads(payload)
                     if isinstance(value, list) and all(h.get("query") == query for h in value):
                         result[query] = value
             missing = {q: pep for q, pep in queries.items() if q not in result}
@@ -279,12 +356,12 @@ def search(queries, prefix, metadata, cache, parameters, tool, boundary, cpus, m
                         ["mmseqs", "createdb", str(tmp / "query.fa"), str(tmp / "queryDB")],
                         ["mmseqs", "search", str(tmp / "queryDB"), str(db), str(tmp / "resultDB"), str(tmp / "tmp"),
                          "--threads", str(cpus), "--split-memory-limit", f"{memory_gb}G", "--max-seqs", str(parameters["max_hits"]),
-                         "-e", str(parameters["evalue"]), "-s", str(parameters["sensitivity"]), "-a", "1"],
+                         "-e", str(parameters["search_evalue"]), "-s", str(parameters["sensitivity"]), "-a", "1"],
                         ["mmseqs", "convertalis", str(tmp / "queryDB"), str(db), str(tmp / "resultDB"), str(tmp / "hits.tsv"),
                          "--threads", str(cpus), "--format-output", FIELDS]]
                     for command in commands:
                         subprocess.run(command, check=True)
-                    fresh = read_hits(tmp / "hits.tsv", missing, prefix, metadata)
+                    fresh = read_raw_hits(tmp / "hits.tsv", missing)
                     boundary.check()
                     for query, hits in fresh.items():
                         payload = json.dumps(hits, sort_keys=True)
@@ -292,7 +369,9 @@ def search(queries, prefix, metadata, cache, parameters, tool, boundary, cpus, m
                                            (query, payload, hashlib.sha256(payload.encode()).hexdigest()))
                     result.update(fresh)
             boundary.check()
-    return result, signature, len(missing)
+    targets = {h["target"] for rows in result.values() for h in rows}
+    annotations, annotation_signature = cached_annotations(prefix, metadata, targets, cache, boundary)
+    return annotate_hits(result, annotations), {"alignment": signature, "annotation": annotation_signature}, len(missing)
 
 
 def audit(args):
@@ -309,7 +388,7 @@ def audit(args):
     parameters = dict(DEFAULTS)
     for name in parameters:
         parameters[name] = getattr(args, name, parameters[name])
-    if (not 0 < parameters["evalue"] <= 1 or not all(0 < parameters[n] <= 1 for n in ("query_coverage", "target_coverage", "score_fraction"))
+    if (not 0 < parameters["evalue"] <= parameters["search_evalue"] <= 1 or not all(0 < parameters[n] <= 1 for n in ("query_coverage", "target_coverage", "score_fraction"))
             or parameters["minimum_alignment"] < 1 or parameters["max_hits"] < 2
             or not 1 <= parameters["sensitivity"] <= 7.5 or args.cpus < 1 or args.memory_gb < 1
             or any(not math.isfinite(v) for v in parameters.values())):
@@ -319,7 +398,8 @@ def audit(args):
     hits, signature, searched = search(queries, args.db_prefix.resolve(), args.metadata.resolve(), args.cache.resolve(),
                                         parameters, version, boundary, args.cpus, args.memory_gb, args.scratch)
     key = {"schema": 1, "rescue_plan_sha256": plan_hash, "augmented_receipt_sha256": receipt_hash,
-           "inputs": inputs, "species": bindings, "search": signature, "candidates_sha256": encoded_hash(records)}
+           "inputs": inputs, "species": bindings, "search": signature, "parameters": parameters,
+           "implementation": boundary.read([Path(__file__)]), "candidates_sha256": encoded_hash(records)}
     if any(output == Path(p) or output in Path(p).parents for p in boundary.paths):
         raise ValueError("Audit destination would overwrite an input or database")
     def build(tmp):
@@ -330,23 +410,40 @@ def audit(args):
             per_gene[(record["species"], record["gene_id"])].append(
                 {k: v for k, v in record.items() if k != "protein"}
                 | {"category": category, "support_accessions": accessions, "hits": hits.get(peptide, []),
+                   **(diagnostics(hits[peptide], parameters) if peptide else
+                      {"no_support_reason": "", "partial_te_accessions": [], "partial_te_homology": False}),
                    "reason": "translation_uncertain" if peptide is None else ""})
-        species = {name: {"counts": dict.fromkeys(GROUPS, 0), "loci": {}} for name in bindings}
+        species = {name: {"counts": dict.fromkeys(GROUPS, 0), "loci": {},
+                          "no_support_reasons": dict.fromkeys(NO_SUPPORT_REASONS, 0),
+                          "partial_te_homology_loci": 0} for name in bindings}
         for (name, gene), coding in sorted(per_gene.items()):
             groups = {r["category"] for r in coding}
             te, other = bool(groups & {"te_only", "both"}), bool(groups & {"other_only", "both"})
             category = ("both" if te and other else "te_only" if te else "other_only" if other
                         else "not_assessed" if "not_assessed" in groups else "no_informative_hit")
             species[name]["counts"][category] += 1
-            species[name]["loci"][gene] = {"category": category, "coding_sequences": coding}
+            flags = sorted({a for c in coding for a in c["partial_te_accessions"]})
+            reasons = {c["no_support_reason"] for c in coding} - {""}
+            # The most informative available coding sequence determines a
+            # single reason; no-hit isoforms cannot hide a partial/short hit.
+            reason = next((r for r in reversed(NO_SUPPORT_REASONS) if r in reasons), "") if category == "no_informative_hit" else ""
+            if reason:
+                species[name]["no_support_reasons"][reason] += 1
+            species[name]["partial_te_homology_loci"] += bool(flags)
+            species[name]["loci"][gene] = {"category": category, "coding_sequences": coding,
+                                          "no_support_reason": reason, "partial_te_accessions": flags,
+                                          "partial_te_homology": bool(flags)}
         atomic_json(tmp / "evidence.json", {"schema": 1, "method": METHOD, "parameters": parameters, "species": species})
         with (tmp / "loci.tsv").open("w") as handle:
             writer = csv.writer(handle, delimiter="\t")
-            writer.writerow(["species", "gene_id", "category", "cds_ids", "support_accessions"])
+            writer.writerow(["species", "gene_id", "category", "cds_ids", "support_accessions",
+                             "partial_te_homology", "partial_te_accessions", "no_support_reason"])
             for name, data in sorted(species.items()):
                 for gene, record in sorted(data["loci"].items()):
                     writer.writerow([name, gene, record["category"], ";".join(c["cds_id"] for c in record["coding_sequences"]),
-                                     ";".join(sorted({a for c in record["coding_sequences"] for a in c["support_accessions"]}))])
+                                     ";".join(sorted({a for c in record["coding_sequences"] for a in c["support_accessions"]})),
+                                     record["partial_te_homology"], ";".join(record["partial_te_accessions"]),
+                                     record["no_support_reason"]])
         with (tmp / "hits.tsv").open("w") as handle:
             columns = ["species", "gene_id", "cds_id", "category", "query", "accession", "protein_name", "annotation_group",
                        "evalue", "bits", "identity_pct", "alignment_length", "paired_residues", "query_coverage", "target_coverage",
@@ -384,7 +481,7 @@ def collect(changes, directory):
             or receipt["files"].get("evidence.json") != evidence_hash or evidence.get("schema") != 1
             or set(key["species"]) != set(evidence["species"])):
         raise ValueError("Swiss-Prot audit belongs to different rescue inputs")
-    updates = {}
+    updates, diagnostic_updates = {}, {}
     for name, value in changes["species"].items():
         if value["refinement_status"] == "not_analysed":
             if name in evidence["species"]:
@@ -402,15 +499,40 @@ def collect(changes, directory):
         if set(counts) - set(GROUPS) or expected != data["counts"] or sum(counts.values()) != value["prior_rescued_loci"]:
             raise ValueError("Swiss-Prot categories do not sum to rescued loci")
         updates[name] = expected
+        diagnostic_updates[name] = validate_diagnostics(data, expected)
     if set(evidence["species"]) != {n for n, v in changes["species"].items() if v["refinement_status"] != "not_analysed"}:
         raise ValueError("Swiss-Prot audit species membership differs")
     if digest(directory / "receipt.json") != receipt_hash or digest(directory / "evidence.json") != evidence_hash:
         raise ValueError("Swiss-Prot audit changed while loading")
     for name, counts in updates.items():
         changes["species"][name]["rescue_swissprot_groups"] = counts
+        changes["species"][name].update(diagnostic_updates.get(name, {}))
     changes["swissprot_evidence"] = {"directory": str(directory.resolve()), "receipt_sha256": receipt_hash,
                                      "evidence_sha256": evidence_hash, "method": evidence["method"], "parameters": evidence["parameters"]}
     return changes
+
+
+def validate_diagnostics(data, counts):
+    if "no_support_reasons" not in data:
+        return {}
+    reasons = Counter(r.get("no_support_reason", "") for r in data["loci"].values()
+                      if r["category"] == "no_informative_hit")
+    expected = {r: reasons[r] for r in NO_SUPPORT_REASONS}
+    if (set(reasons) - set(NO_SUPPORT_REASONS) or expected != data["no_support_reasons"]
+            or sum(expected.values()) != counts["no_informative_hit"]
+            or any(type(r.get("partial_te_homology")) is not bool
+                   or not isinstance(r.get("partial_te_accessions"), list)
+                   or r["partial_te_homology"] != bool(r["partial_te_accessions"])
+                   for r in data["loci"].values())
+            or sum(r["partial_te_homology"] for r in data["loci"].values()) != data["partial_te_homology_loci"]):
+        raise ValueError("Swiss-Prot diagnostic counts differ from rescued loci")
+    groups = Counter("primary_te_support" if r["category"] in {"te_only", "both"} else
+                     "not_assessed" if r["category"] == "not_assessed" else
+                     "partial_te_only" if r["partial_te_homology"] else "no_te_support"
+                     for r in data["loci"].values())
+    return {"rescue_partial_te_groups": {g: groups[g] for g in
+                                       ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")},
+            "rescue_no_support_reasons": expected}
 
 
 def main():

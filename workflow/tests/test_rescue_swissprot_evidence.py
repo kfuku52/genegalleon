@@ -79,6 +79,39 @@ def test_support_requires_coverage_and_competitive_scores(hits, category):
     assert swiss.classify(hits, swiss.DEFAULTS)[0] == category
 
 
+@pytest.mark.parametrize(("hits", "reason"), [
+    ([], "no_returned_hits"), ([hit(evalue=.1)], "weak_hit"),
+    ([hit(alignment_length=20)], "short_hit"),
+    ([hit(target_coverage=.1)], "partial_hit"),
+    ([hit("uninformative")], "annotation_unknown"),
+])
+def test_missing_support_reasons_are_disjoint(hits, reason):
+    assert swiss.diagnostics(hits, swiss.DEFAULTS)["no_support_reason"] == reason
+
+
+def test_partial_te_flag_is_independent_of_primary_host_and_competing_scores():
+    hits = [hit("other", 1000), hit(bits=100, target_coverage=.1)]
+    assert swiss.classify(hits, swiss.DEFAULTS)[0] == "other_only"
+    assert swiss.diagnostics(hits, swiss.DEFAULTS)["partial_te_accessions"] == ["te_related"]
+
+
+def test_support_threshold_and_metadata_changes_reuse_raw_search(tmp_path):
+    args, _ = fixture(tmp_path)
+    subprocess.run(["mmseqs", "createdb", str(args.db_prefix) + ".pep", str(args.db_prefix) + ".mmseqs"], check=True)
+    swiss.audit(args)
+    args.minimum_alignment = 150
+    swiss.audit(args)
+    assert json.loads((args.output.parent / "audit.execution.json").read_text())["searched_unique_proteins"] == 0
+    assert all(data["counts"]["no_informative_hit"] == 5
+               for data in json.loads((args.output / "evidence.json").read_text())["species"].values())
+    args.minimum_alignment = 50
+    args.metadata.write_text(args.metadata.read_text().replace("HOST1\tDNA-binding", "HOST1\tTransposable element"))
+    swiss.audit(args)
+    assert json.loads((args.output.parent / "audit.execution.json").read_text())["searched_unique_proteins"] == 0
+    assert all(data["counts"]["te_only"] == 2
+               for data in json.loads((args.output / "evidence.json").read_text())["species"].values())
+
+
 def test_candidates_ignore_original_genes_deduplicate_only_for_search_and_bind_inputs(tmp_path):
     args, peptides = fixture(tmp_path)
     records, bindings, _, _, _ = swiss.candidates(args.rescue_output, FreshDigestBatch())

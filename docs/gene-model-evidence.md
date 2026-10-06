@@ -209,3 +209,29 @@ species, with initial BUSCO lineage/version/date/marker count preserved.
 New rescue plans can reuse comparisons only through the verified comparison
 cache when BED/PEP content, parameters and comparison tool identities agree.
 Never edit an old plan's implementation hash or relabel its receipts.
+
+Swiss-Prot raw alignment and target-annotation caches are independent. Raw
+alignment identity binds the exact query protein, MMseqs binary/database,
+alignment parser, search E-value, sensitivity and maximum hits. Metadata or
+classification changes do not discard raw searches. Target annotations bind
+the FASTA/metadata release and annotation classifier. Checksummed SQLite records
+and batched cursors avoid per-accession network lock operations.
+Coverage, length and competing-score changes therefore only reassess hits.
+`--search-evalue` defaults to `1e-5`, separately from the support E-value;
+support cannot be looser than the search bound. Actual search parameter,
+sequence or database changes correctly require new searches.
+
+Primary TE/other categories remain unchanged. A separate
+`partial_te_homology` flag marks any returned TE-labelled hit passing support
+E-value, paired-residue and query-coverage thresholds but failing target
+coverage, without a competing-score filter. It does not prove TE origin.
+`rescue_swissprot_diagnostics.png/svg` distinguishes whole-protein TE support,
+partial flags alone, no TE support/flag and unassessed translation, and displays
+excluded species. Every locus counts once.
+
+`no_support_reason` partitions only no-informative-support loci: no returned
+hit; all E-values fail; E/coverage pass but paired length fails; coverage fails;
+or qualifying best-score annotation unknown. Across coding sequences, priority
+is annotation unknown, partial, short, weak, no hit. Thresholds and priority
+appear in the diagnostic legend. Short proteins retain the same minimum
+alignment length; separate counts permit calibration without silent relaxation.

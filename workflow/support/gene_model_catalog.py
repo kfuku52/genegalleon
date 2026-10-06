@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import gzip
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -64,20 +65,51 @@ def indexed_genome(path):
     """Index a scratch link/copy, keeping genome FASTA and its directory intact."""
     import pysam
 
+    path = Path(path).resolve()
+    cache = os.environ.get("GG_GENOME_INDEX_CACHE")
+    if cache:
+        from input_generation_array_state import digest
+        from rescue_gene_models import stage, verified
+        signature = source_signature(path)
+        key = {"source": signature, "pysam": pysam.__version__,
+               "indexer": digest(pysam.libcsamtools.__file__), "schema": 1,
+               "implementation": hashlib.sha256(inspect.getsource(create_index).encode()).hexdigest()}
+        directory = Path(cache).expanduser().resolve()
+        if directory == path or directory in path.parents:
+            raise ValueError("Genome index cache must not contain the source")
+        token = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+        def check():
+            if source_signature(path) != signature:
+                raise OSError("Genome source changed during index reuse")
+        def build(tmp):
+            create_index(path, tmp / "indexed.fa")
+        staged = stage(directory, token, key, build, guard=check) / "indexed.fa"
+        if not path.name.lower().endswith(".gz") and staged.resolve() != path:
+            raise ValueError("Cached genome link changed")
+        with contextlib.closing(pysam.FastaFile(str(staged))) as genome:
+            yield genome
+        check()
+        if not verified(staged.parent, key):
+            raise OSError("Indexed genome cache changed during use")
+        return
     with tempfile.TemporaryDirectory(prefix="gg-isoform-genome-") as scratch:
         staged = Path(scratch) / "genome.fa"
-        path = Path(path).resolve()
-        if path.name.lower().endswith(".gz"):
-            with gzip.open(path, "rb") as source, staged.open("wb") as destination:
-                shutil.copyfileobj(source, destination)
-        else:
-            staged.symlink_to(path)
-        indexing = subprocess.run([sys.executable, "-c", "import pysam,sys; pysam.faidx(sys.argv[1])", str(staged)],
-                                  capture_output=True, text=True)
-        if indexing.returncode or indexing.stderr.strip():
-            raise ValueError("FASTA index warning or failure: " + indexing.stderr.strip())
-        with pysam.FastaFile(str(staged)) as genome:
+        create_index(path, staged)
+        with contextlib.closing(pysam.FastaFile(str(staged))) as genome:
             yield genome
+
+
+def create_index(path, staged):
+    """Stage an index locally without writing beside the source FASTA."""
+    if path.name.lower().endswith(".gz"):
+        with gzip.open(path, "rb") as source, staged.open("wb") as destination:
+            shutil.copyfileobj(source, destination)
+    else:
+        staged.symlink_to(path)
+    indexing = subprocess.run([sys.executable, "-c", "import pysam,sys; pysam.faidx(sys.argv[1])", str(staged)],
+                              capture_output=True, text=True)
+    if indexing.returncode or indexing.stderr.strip():
+        raise ValueError("FASTA index warning or failure: " + indexing.stderr.strip())
 
 
 def reconstruct_sequence(blocks, seqid, strand, genome):

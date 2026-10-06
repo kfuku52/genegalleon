@@ -7,7 +7,6 @@ no orthogroup, inferred species tree, or family-loss calls are required.
 import argparse
 import bisect
 import csv
-import gzip
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -33,6 +32,7 @@ from Bio.Seq import Seq
 try:
     from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from gene_model_species_profiles import parameters_for, read_profiles
     from gff_attribute_syntax import validate_gff
     from input_generation_array_state import atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
@@ -42,6 +42,7 @@ try:
 except ImportError:
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from .gene_model_species_profiles import parameters_for, read_profiles
     from .gff_attribute_syntax import validate_gff
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
@@ -128,6 +129,8 @@ def identities():
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
     versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
+    versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
+    versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))
     return versions
 
 
@@ -271,7 +274,12 @@ def build_plan(args):
         if args.genetic_codes:
             files.append(str(args.genetic_codes.resolve()))
         params = {key: getattr(args, key) for key in PARAMETERS}
+        profiles_path = getattr(args, "species_profiles", None)
+        profiles = read_profiles(profiles_path, sources)
+        if profiles_path:
+            files.append(str(profiles_path.resolve()))
         request = {"schema": SCHEMA, "sources": sources, "files": digest_paths(files), "parameters": params,
+                   "species_profiles": profiles,
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
                    "gemoma_java": None}
@@ -706,7 +714,7 @@ def candidate_intervals(target, donor, blocks, target_positions, donor_positions
 
 
 def candidates(root, plan, name):
-    params = plan["request"]["parameters"]
+    params = parameters_for(plan["request"], name)
     position = {}
     def positions(n):
         if n not in position:
@@ -1018,9 +1026,43 @@ def rescue(root, plan, name, cpus, interval_workers=None):
     regions = candidates(root, plan, name)
     verify_sources(plan, [name], ["genome", "fasta", "gff"])
     source = plan["request"]["sources"][name]
-    params = plan["request"]["parameters"]
+    params = parameters_for(plan["request"], name)
     def build(tmp):
-        import pysam
+        from gene_model_catalog import indexed_genome
+        if not regions:
+            # No copy/index/predictor is needed, but invalid source annotations
+            # must still fail. Stream contig lengths without materializing DNA.
+            lengths = {}
+            identifier = None
+            with open_text(Path(source["genome"])) as handle:
+                for line in handle:
+                    if line.startswith(">"):
+                        token = line[1:].split()
+                        if not token or token[0] in lengths:
+                            raise ValueError("FASTA index warning: missing or duplicate contig")
+                        identifier = token[0]
+                        lengths[identifier] = 0
+                    elif line.strip():
+                        if identifier is None:
+                            raise ValueError("FASTA index warning: sequence before header")
+                        lengths[identifier] += len(line.strip())
+            with open_text(Path(source["gff"])) as handle:
+                for line in handle:
+                    if line.strip() == "##FASTA":
+                        break
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    f = line.rstrip().split("\t")
+                    if (len(f) == 9 and f[2] in {"gene", "mRNA", "transcript", "CDS"}
+                            and (f[0] not in lengths or not 0 <= int(f[3]) - 1 < int(f[4]) <= lengths[f[0]])):
+                        raise ValueError("Original annotation outside or absent from genome")
+            atomic_json(tmp / "models.json", [])
+            atomic_json(tmp / "candidates.json", [])
+            write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"), [])
+            write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
+                      "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
+                      "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"), [])
+            return
         existing = []
         with open_text(Path(source["gff"])) as handle:
             for line in handle:
@@ -1031,20 +1073,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 fields = line.rstrip().split("\t")
                 if len(fields) == 9 and fields[2] in {"gene", "mRNA", "transcript", "CDS"}:
                     existing.append({"seqid": fields[0], "start": int(fields[3]) - 1, "end": int(fields[4])})
-        if source["genome"].endswith(".gz"):
-            with gzip.open(source["genome"], "rb") as handle, (tmp / "genome.fa").open("wb") as out:
-                shutil.copyfileobj(handle, out)
-        else:
-            (tmp / "genome.fa").symlink_to(source["genome"])
-        # htslib can ignore duplicate contig names without failing. Its native
-        # stderr is not exposed by pysam's get_messages(), so isolate indexing
-        # in a child process and retain/refuse warnings before any prediction.
-        run([sys.executable, "-c", "import pysam, sys; pysam.faidx(sys.argv[1])", tmp / "genome.fa"], tmp, "genome_index")
-        warning = (tmp / "logs" / "genome_index.log").read_text().strip()
-        if warning:
-            raise ValueError("FASTA index warning: " + warning)
         proteins = {donor: {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")} for donor in donors}
-        with pysam.FastaFile(str(tmp / "genome.fa")) as genome:
+        with indexed_genome(source["genome"]) as genome:
+            (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             positions = json.loads((root / "prepared" / name / "positions.json").read_text())
             for feature in [*existing, *positions]:
@@ -1185,7 +1216,7 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
     java = plan["request"]["gemoma_java"]
     if digest(java) != plan["request"]["files"][java]:
         raise ValueError("GeMoMa Java executable changed")
-    params = plan["request"]["parameters"]
+    params = parameters_for(plan["request"], source.get("species", ""))
     for donor in sorted({r["donor"] for r in regions}):
         ref = plan["request"]["sources"][donor]
         verify_sources(plan, [donor], ["genome", "gff"])
@@ -1409,6 +1440,7 @@ def parser():
     plan.add_argument("--minimum-busco", type=float, default=90)
     plan.add_argument("--genetic-code", type=int, default=1)
     plan.add_argument("--genetic-codes", type=Path)
+    plan.add_argument("--species-profiles", type=Path, help="Explicit target-species prediction parameter overrides (TSV)")
     plan.add_argument("--feature", default="")
     plan.add_argument("--attribute", default="")
     plan.add_argument("--cscore", type=float, default=0.7)

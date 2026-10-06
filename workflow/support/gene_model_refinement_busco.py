@@ -218,7 +218,7 @@ def classify_accepted_path_support(models, species, selection, allowed_species):
         if (candidate["source_transcript_id"] != identifier or identifier in evidence
                 or model["change_type"] not in {"model_revision", "isoform_addition"}
                 or donors != set(candidate["support"]["donors"])
-                or donors != {a["donor_species"] for a in model["alignments"]}):
+                or donors != {a["donor_species"] for a in model["alignments"] if a.get("supports_path", True)}):
             raise ValueError("Accepted coding-path identity/support records disagree: " + identifier)
         near, common = bool(donors & nearest), bool(donors & balanced)
         category = ("both" if near and common else "nearest_only" if near else "balanced_only" if common
@@ -312,7 +312,7 @@ def classify_rescue_support(models, species, rescued, plan):
     return counts, evidence
 
 
-def input_pairs(root, cds_dir=None):
+def input_pairs(root, cds_dir=None, *, three_stage=False, rescue_output=None):
     """Native sources are frozen; extra CDS-only species are explicit passthroughs."""
     plan = json.loads((root / "plan.json").read_text())
     effective = {r["species"]: r for r in verify_inputs(root / "effective" / "inputs.tsv")}
@@ -340,7 +340,35 @@ def input_pairs(root, cds_dir=None):
                 pairs[name] = {"species": name, "before": str(path.resolve()), "after": str(path.resolve()),
                                "refinement_status": "not_analysed",
                                "reason": "No matching genome/GFF in the refinement plan; CDS retained unchanged"}
+    if three_stage:
+        changes = collect_model_changes(root, list(pairs.values()), rescue_output)
+        add_pre_rescue_pairs(list(pairs.values()), changes)
     return [pairs[n] for n in sorted(pairs)]
+
+
+def add_pre_rescue_pairs(pairs, changes):
+    selection = changes.get("rescue_reference_selection")
+    if not selection:
+        raise ValueError("Three-stage BUSCO needs the completed missing-gene rescue publication")
+    anchor = Path(selection["rescue_output"]).resolve()
+    if (digest(anchor / "plan.json") != selection["plan_sha256"]
+            or digest(anchor / "augmented/receipt.json") != selection["augmented_receipt_sha256"]):
+        raise ValueError("Frozen rescue metadata changed")
+    rescue_plan = json.loads((anchor / "plan.json").read_text())
+    for pair in pairs:
+        name = pair["species"]
+        if pair["refinement_status"] == "not_analysed":
+            pair["pre_rescue"] = pair["before"]
+            continue
+        source = rescue_plan["request"]["sources"][name]["fasta"]
+        if digest(source) != rescue_plan["request"]["files"][source]:
+            raise ValueError("Pre-rescue CDS differs from the frozen rescue plan: " + name)
+        pair["pre_rescue"] = source
+    return pairs
+
+
+def phases(pair):
+    return ("pre_rescue", "before", "after") if "pre_rescue" in pair else ("before", "after")
 
 
 def read_result(path):
@@ -378,6 +406,17 @@ def paired_result(pair, before, after):
                 delta_duplicated=after["duplicated"] - before["duplicated"])
 
 
+def staged_result(pair, before, after, pre_rescue=None):
+    row = paired_result(pair, before, after)
+    if pre_rescue is not None:
+        rescue = paired_result(pair, pre_rescue, before)
+        row.update(pre_rescue_result=pre_rescue,
+                   delta_rescue_complete=rescue["delta_complete"],
+                   delta_rescue_complete_pp=rescue["delta_complete_pp"],
+                   delta_total_complete=after["complete"] - pre_rescue["complete"])
+    return row
+
+
 def run_one(pair, phase, report, contract, cpus):
     source = Path(pair[phase])
     source_hash = digest(source)
@@ -394,9 +433,9 @@ def run_one(pair, phase, report, contract, cpus):
                     or not full_table.is_file() or digest(full_table) != saved.get("full_table_sha256")):
                 raise ValueError("BUSCO cache changed; use a new report directory")
             return read_result(summary)
-        # Identical bytes and an identical complete contract permit reuse, including excluded species.
-        previous = report / "runs" / pair["species"] / "before"
-        if phase == "after" and (previous / "receipt.json").exists():
+        # Reuse only exact bytes under the same complete BUSCO contract.
+        previous = report / "runs" / pair["species"] / ("pre_rescue" if phase == "before" and "pre_rescue" in pair else "before")
+        if phase != phases(pair)[0] and (previous / "receipt.json").exists():
             saved = json.loads((previous / "receipt.json").read_text())
             if (saved["key"] == key and digest(previous / "summary.txt") == saved["summary_sha256"]
                     and (previous / "full_table.tsv").is_file()
@@ -820,6 +859,122 @@ def plot_comparison(rows, output, model_changes=None):
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
+    if any("pre_rescue_result" in row for row in rows):
+        plot_three_stage(rows, output)
+    if model_changes is not None and any(v.get("rescue_no_support_reasons") is not None
+                                         for v in model_changes["species"].values()):
+        plot_swissprot_diagnostics(rows, output, model_changes)
+
+
+def plot_three_stage(rows, output):
+    """Keep rescue gains separate from representative/refinement effects."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    palette = dict(zip(STATUS, STATUS_COLOURS, strict=True))
+    if not all("pre_rescue_result" in row for row in rows):
+        raise ValueError("Three-stage BUSCO requires all three phases for every species")
+    for row in rows:
+        staged_result({k: v for k, v in row.items() if not k.endswith("_result")},
+                      row["before_result"], row["after_result"], row["pre_rescue_result"])
+    height = max(7, .36 * len(rows) + 3)
+    fig, axes = plt.subplots(1, 4, figsize=(18, height), sharey=True,
+                             gridspec_kw={"width_ratios": [1, 1, 1, .85]})
+    y = list(range(len(rows)))
+    for axis, phase, title in zip(axes[:3], ("pre_rescue", "before", "after"),
+                                  ("Before rescue", "After missing-gene rescue", "After refinement"), strict=True):
+        left = [0.] * len(rows)
+        for key in ("single", "duplicated", "fragmented", "missing"):
+            values = [100 * r[phase + "_result"][key] / r[phase + "_result"]["total"] for r in rows]
+            axis.barh(y, values, left=left, height=.68, color=palette[key])
+            left = [a + b for a, b in zip(left, values, strict=True)]
+        for i, row in enumerate(rows):
+            result = row[phase + "_result"]
+            axis.text(101, i, f'{100 * result["complete"] / result["total"]:.1f}%', va="center", fontsize=8)
+        axis.set_xlim(0, 118)
+        axis.set_xticks([0, 50, 100])
+        axis.set_title(title, fontsize=11)
+        axis.set_xlabel("BUSCO (%)")
+    axes[0].set_yticks(y, [r["species"].replace("_", " ") +
+                         (" (not analysed)" if r["refinement_status"] == "not_analysed" else "") for r in rows], fontsize=9)
+    axes[0].invert_yaxis()
+    for offset, key, label, colour in ((-.17, "delta_rescue_complete", "Rescue", "#37956f"),
+                                       (.17, "delta_complete", "Refinement", "#5275b5")):
+        axes[3].barh([i + offset for i in y], [r[key] for r in rows], height=.28, label=label, color=colour)
+    axes[3].axvline(0, color="#777777", linewidth=.7)
+    axes[3].set_title("Change in complete groups", fontsize=11)
+    axes[3].set_xlabel("BUSCO group count")
+    axes[3].legend(loc="lower right", fontsize=8)
+    for axis in axes:
+        axis.spines[["top", "right"]].set_visible(False)
+        for i, row in enumerate(rows):
+            if row["refinement_status"] == "not_analysed":
+                axis.axhspan(i - .42, i + .42, color="#eeeeee", zorder=-1)
+    fig.suptitle("BUSCO across gene-model improvement stages", fontsize=16, y=.975)
+    identity = rows[0]["before_result"]
+    fig.text(.03, .93, f'BUSCO {identity["busco_version"]}; {identity["lineage"]}; '
+             f'{identity["total"]} groups. Every phase uses the same frozen lineage, tools and predictor parameters.', fontsize=9)
+    fig.legend([Patch(color=c) for c in STATUS_COLOURS], STATUS_LABELS,
+               loc="lower center", bbox_to_anchor=(.6, .035), ncol=4, frameon=False, fontsize=9)
+    fig.text(.03, .015, "Grey rows: structure improvement not analysed; CDS retained unchanged and included in BUSCO.", fontsize=9)
+    fig.subplots_adjust(left=.26, right=.97, bottom=.12, top=.87, wspace=.28)
+    for suffix in ("png", "svg"):
+        fig.savefig(output / ("busco_three_stage." + suffix), dpi=180, facecolor="white")
+    plt.close(fig)
+
+
+def plot_swissprot_diagnostics(rows, output, changes):
+    """Plot partial TE flags and mutually exclusive no-support explanations."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    from rescue_swissprot_evidence import NO_SUPPORT_REASONS
+    groups = ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")
+    labels = ("Whole-protein TE support", "Partial TE flag only", "No TE support / flag", "Translation not assessed")
+    colours = ("#b45158", "#d99843", "#477b80", "#d6dbe1")
+    reason_labels = ("No returned hit", "Weak hit", "Short hit (coverage passed)", "Partial hit (coverage failed)", "Annotation unknown")
+    reason_colours = ("#c7cdd4", "#9a6ab2", "#d99843", "#5275b5", "#477b80")
+    height = max(9, .38 * len(rows) + 4)
+    fig, axes = plt.subplots(1, 2, figsize=(17, height), sharey=True)
+    for axis, keys, palette, field, title in (
+            (axes[0], groups, colours, "rescue_partial_te_groups", "TE homology: primary support and partial flags"),
+            (axes[1], NO_SUPPORT_REASONS, reason_colours, "rescue_no_support_reasons", "No informative support: failure reasons")):
+        left = [0] * len(rows)
+        for key, colour in zip(keys, palette, strict=True):
+            values = [changes["species"][r["species"]].get(field, {}).get(key, 0)
+                      if r["refinement_status"] != "not_analysed" else 0 for r in rows]
+            axis.barh(range(len(rows)), values, left=left, height=.68, color=colour)
+            left = [a + b for a, b in zip(left, values, strict=True)]
+        for i, row in enumerate(rows):
+            if row["refinement_status"] == "not_analysed":
+                axis.axhspan(i - .42, i + .42, color="#eeeeee")
+                axis.text(.01, i, "Not analysed", transform=axis.get_yaxis_transform(), va="center", fontsize=9)
+            else:
+                axis.text(left[i], i, f"  {left[i]}", va="center", fontsize=8)
+        axis.set_title(title, fontsize=11)
+        axis.set_xlabel("Rescued gene loci")
+        axis.spines[["top", "right"]].set_visible(False)
+        axis.margins(x=.12)
+    axes[0].set_yticks(range(len(rows)), [r["species"].replace("_", " ") for r in rows], fontsize=9)
+    axes[0].invert_yaxis()
+    fig.suptitle("Swiss-Prot evidence diagnostics for missing-gene rescue", fontsize=16, y=.985)
+    for x, keys, palette in ((.36, labels, colours), (.78, reason_labels, reason_colours)):
+        fig.legend([Patch(color=c) for c in palette], keys, loc="upper center",
+                   bbox_to_anchor=(x, .92), ncol=1, fontsize=8, frameon=False)
+    p = changes["swissprot_evidence"]["parameters"]
+    note = (f'Primary TE support: E <= {p["evalue"]:g}; paired residues >= {p["minimum_alignment"]:g} aa; '
+            f'query/target coverage >= {100*p["query_coverage"]:g}%/{100*p["target_coverage"]:g}%; '
+            f'bit score >= {100*p["score_fraction"]:g}% of best qualifying hit.\n'
+            f'Partial TE flag: same E, paired-length and query-coverage thresholds; target coverage < {100*p["target_coverage"]:g}%; '
+            'any returned rank, without a competing-score filter.\n'
+            'TE labels: explicit TE protein name, exact Transposable element keyword, or transposase activity GO; flags do not prove TE origin.\n'
+            'Reasons apply only to no informative support: no hit; all E fail; E+coverage pass but length fails; coverage fails; or qualifying annotation unknown.\n'
+            'Per locus, the most informative coding-sequence reason takes priority (annotation unknown > partial > short > weak > no hit).\n'
+            f'MMseqs2: search E <= {p.get("search_evalue", p["evalue"]):g}; sensitivity {p["sensitivity"]:g}; '
+            f'max hits {p["max_hits"]:g}. No identity cutoff; short-protein thresholds are unchanged. Grey rows were not analysed.')
+    fig.text(.03, .025, note, fontsize=9, linespacing=1.5)
+    fig.subplots_adjust(left=.24, right=.97, bottom=.2, top=.77, wspace=.24)
+    for suffix in ("png", "svg"):
+        fig.savefig(output / ("rescue_swissprot_diagnostics." + suffix), dpi=180, facecolor="white")
+    plt.close(fig)
 
 
 def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=None, rescue_swissprot_dir=None):
@@ -834,7 +989,7 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
     verified_tables = 0
     for row in rows:
         pair = pairs[row["species"]]
-        for phase in ("before", "after"):
+        for phase in phases(pair):
             directory = report / "runs" / pair["species"] / phase
             saved = json.loads((directory / "receipt.json").read_text())
             if (saved["key"]["contract"] != frozen["contract"]
@@ -847,7 +1002,7 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
                 if digest(directory / "full_table.tsv") != saved["full_table_sha256"]:
                     raise ValueError("Comparison full table changed")
                 verified_tables += 1
-        if paired_result(pair, row["before_result"], row["after_result"]) != row:
+        if staged_result(pair, row["before_result"], row["after_result"], row.get("pre_rescue_result")) != row:
             raise ValueError("Comparison delta changed")
     changes = collect_model_changes(root, rows, rescue_output) if root is not None else None
     if changes is not None:
@@ -873,7 +1028,7 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_change
         raise ValueError("A complete local BUSCO lineage is required")
     batch = FreshDigestBatch()
     hashes = batch.read(files)
-    batch.read([pair[phase] for pair in pairs for phase in ("before", "after")])
+    batch.read([pair[phase] for pair in pairs for phase in phases(pair)])
     lineage_hash = hashlib.sha256(json.dumps({str(p.relative_to(lineage)): hashes[str(p)] for p in files}, sort_keys=True).encode()).hexdigest()
     version = subprocess.check_output(["busco", "--version"], text=True).strip()
     support = Path(__file__).resolve().parent
@@ -886,9 +1041,10 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_change
                 "hmmsearch_wrapper_sha256": digest(support / "gg_wrapper_bin/hmmsearch")}
     atomic_json(report / "contract.json", {"contract": contract, "pairs": pairs}, immutable=True)
     def one(pair):
+        pre_rescue = run_one(pair, "pre_rescue", report, contract, cpus) if "pre_rescue" in pair else None
         before = run_one(pair, "before", report, contract, cpus)
         after = run_one(pair, "after", report, contract, cpus)
-        row = paired_result(pair, before, after)
+        row = staged_result(pair, before, after, pre_rescue)
         print(json.dumps({"species": pair["species"], "delta_complete": row["delta_complete"]}), flush=True)
         return row
     with ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -922,6 +1078,7 @@ def main():
     parser.add_argument("--lineage", type=Path, help="Frozen local lineage directory")
     parser.add_argument("--download-path", type=Path)
     parser.add_argument("--plot-only", action="store_true", help="Validate and redraw an existing comparison using its original evaluation contract")
+    parser.add_argument("--three-stage", action="store_true", help="Compare pre-rescue, rescued CDS and refined representatives under one BUSCO contract")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
@@ -942,6 +1099,8 @@ def main():
         parser.error("Report must be separate from the immutable refinement tree")
     pairs = input_pairs(root, args.cds_dir)
     changes = collect_model_changes(root, pairs, args.rescue_output)
+    if args.three_stage:
+        add_pre_rescue_pairs(pairs, changes)
     collect_rescue_repeat_evidence(changes, args.rescue_evidence_dir)
     collect_rescue_swissprot_evidence(changes, args.rescue_swissprot_dir)
     evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs, model_changes=changes)

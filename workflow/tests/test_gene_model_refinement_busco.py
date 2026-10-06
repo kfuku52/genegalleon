@@ -34,6 +34,46 @@ Dependencies and versions:
 """
 
 
+def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette(tmp_path):
+    summaries = []
+    for i, complete in enumerate((7, 9, 8)):
+        path = tmp_path / f"s{i}.txt"
+        path.write_text(summary(complete))
+        summaries.append(busco.read_result(path))
+    pair = {"species": "Drosophyllum_lusitanicum", "pre_rescue": "pre.fa",
+            "before": "rescued.fa", "after": "refined.fa",
+            "refinement_status": "not_analysed", "reason": "No genome"}
+    row = busco.staged_result(pair, summaries[1], summaries[2], summaries[0])
+    assert (row["delta_rescue_complete"], row["delta_complete"], row["delta_total_complete"]) == (2, -1, 1)
+    busco.plot_three_stage([row], tmp_path)
+    svg = (tmp_path / "busco_three_stage.svg").read_text()
+    assert "Drosophyllum lusitanicum (not analysed)" in svg
+    assert all(c.lower() in svg.lower() for c in busco.STATUS_COLOURS)
+    summaries[0]["lineage"] = "insecta_odb12"
+    with pytest.raises(ValueError, match="Noncomparable"):
+        busco.staged_result(pair, summaries[1], summaries[2], summaries[0])
+
+
+def test_swissprot_diagnostic_plot_records_thresholds_and_excluded_species(tmp_path):
+    path = tmp_path / "summary.txt"
+    path.write_text(summary())
+    result = busco.read_result(path)
+    rows = [busco.paired_result({"species": "Species_a", "refinement_status": "analysed", "reason": ""}, result, result),
+            busco.paired_result({"species": "Drosophyllum_lusitanicum", "refinement_status": "not_analysed", "reason": ""}, result, result)]
+    from rescue_swissprot_evidence import DEFAULTS, NO_SUPPORT_REASONS
+    changes = {"swissprot_evidence": {"parameters": DEFAULTS}, "species": {
+        "Species_a": {"rescue_partial_te_groups": dict(zip(("primary_te_support", "partial_te_only", "no_te_support", "not_assessed"),
+                                                         (1, 2, 3, 0), strict=True)),
+                      "rescue_no_support_reasons": dict.fromkeys(NO_SUPPORT_REASONS, 1)},
+        "Drosophyllum_lusitanicum": {}}}
+    busco.plot_swissprot_diagnostics(rows, tmp_path, changes)
+    svg = (tmp_path / "rescue_swissprot_diagnostics.svg").read_text()
+    assert "Partial TE flag only" in svg
+    assert "without a competing-score filter" in svg
+    assert "short-protein thresholds are unchanged" in svg
+    assert "Not analysed" in svg
+
+
 def test_all_species_coverage_marks_cds_only_species_unassessed(tmp_path):
     root = completed(tmp_path)
     cds_dir = tmp_path / "all_species"

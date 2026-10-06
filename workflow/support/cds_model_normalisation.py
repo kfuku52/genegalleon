@@ -5,10 +5,8 @@ withheld; genomic reconstructions are used only with same-model evidence.
 """
 import contextlib
 import csv
-import gzip
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -90,6 +88,7 @@ class CdsModelNormaliser:
         self.rows, self.models, self.nodes = [], defaultdict(list), defaultdict(list)
         self.exons, self.features = defaultdict(list), []
         self.lookup, self.genome, self.scratch = None, None, None
+        self._genome_context = None
         self.reference_lengths = None
         wanted, retained = set(), set()
         with (contextlib.nullcontext(gff_lines()) if gff_lines is not None else open_text(Path(source["gff"]))) as handle:
@@ -209,18 +208,17 @@ class CdsModelNormaliser:
 
     def _open_genome(self):
         import pysam
+        if self.genome_records is None:
+            from gene_model_catalog import indexed_genome
+            self._genome_context = indexed_genome(Path(self.source["genome"]))
+            self.genome = self._genome_context.__enter__()
+            self.reference_lengths = dict(zip(self.genome.references, self.genome.lengths, strict=True))
+            return
         self.scratch = tempfile.TemporaryDirectory(prefix=".anchor-genome-", dir=self.directory)
         path = Path(self.scratch.name) / "genome.fa"
-        source = Path(self.source["genome"])
-        if self.genome_records is not None:
-            with path.open("w") as handle:
-                for identifier, sequence in self.genome_records():
-                    handle.write(f">{identifier}\n{sequence}\n")
-        elif source.name.endswith(".gz"):
-            with gzip.open(source, "rb") as src, path.open("wb") as dst:
-                shutil.copyfileobj(src, dst)
-        else:
-            path.symlink_to(source.resolve())
+        with path.open("w") as handle:
+            for identifier, sequence in self.genome_records():
+                handle.write(f">{identifier}\n{sequence}\n")
         result = subprocess.run([sys.executable, "-c", "import pysam,sys; pysam.faidx(sys.argv[1])", str(path)],
                                 capture_output=True, text=True)
         if result.returncode or result.stderr.strip():
@@ -229,7 +227,10 @@ class CdsModelNormaliser:
         self.reference_lengths = dict(zip(self.genome.references, self.genome.lengths, strict=True))
 
     def close(self):
-        if self.genome is not None:
+        if self._genome_context is not None:
+            self._genome_context.__exit__(None, None, None)
+            self._genome_context = None
+        elif self.genome is not None:
             self.genome.close()
         if self.scratch is not None:
             self.scratch.cleanup()

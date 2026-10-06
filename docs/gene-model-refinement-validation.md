@@ -448,7 +448,60 @@ download suite, and real Slurm submission remain unverified in this delivery.
 Performance reports retain their measured source hashes and historical
 revisions; they were not regenerated after the upstream integration.
 
-## Limits
+## Native real-input measurements (0.8.169, 2026-10-06)
+
+These additional measurements use the fresh SIF runtime on audrey1 with QNAP
+inputs. They are separate from the historical Docker measurements above.
+The baseline modules were saved from 0.8.168 before editing. Input, module,
+binary and output hashes accompany the native measurement records.
+
+For the 1,187,329,241-base, 131-contig Ancistrocladus assembly, three runs of
+the previous QNAP copy/index path took 34.01, 22.82 and 22.47 seconds.
+Verified local staging took 17.40 seconds cold; three warm uses took 3.63,
+3.62 and 3.62 seconds. Warm medians differ by about 6.3-fold. Every run produced
+the same decompressed FASTA SHA-256. The optimized timings include complete
+source and cached FASTA/index verification. This measures genome staging,
+not whole-workflow speed. A local cache needs storage for decompressed genomes;
+final self-contained publication copies are still required.
+
+The prior rescue publication contains 4,960 loci and 3,661 distinct proteins.
+Swiss-Prot baseline search/publication took 76.28 seconds cold and 25.38 seconds
+warm. An initial split-cache implementation regressed to about 74–77 seconds
+warm: 27,882 small SQLite calls incurred shared-disk locking overhead.
+Batched accession/protein lookups removed that overhead. Three warm runs took
+22.44, 18.81 and 23.43 seconds; primary support classifications agreed exactly
+with the baseline. Changing the minimum aligned length from 50 to 55 took
+27.05 seconds and searched zero proteins, reusing all 3,661 raw alignments.
+This demonstrates threshold-independent search reuse. It does not establish
+hundreds-of-species end-to-end speed or a cold-cache speed improvement.
+
+Known-annotation holdouts used official NCBI reference genome/CDS/GFF bundles
+for C. elegans WBcel235 (GCF_000002985.6) and S. cerevisiae R64
+(GCF_000146045.2). Download MD5s and frozen input SHA-256s were verified.
+Twenty deterministic single/multiple-exon-stratified loci per organism were
+chosen from exact intact CDS/genome matches with 100–600-residue proteins.
+The default identity 0.5 and coverage 0.95 gates restored 18/20 worm and 14/20
+yeast coding paths exactly. One additional worm path was admitted inexactly:
+miniprot retained a short annotated intron as coding sequence. Both organisms
+had zero additions in 20 deliberate assembly-gap controls each.
+
+An explicit benchmark profile with identity 0.98 rejected that inexact worm
+path while retaining the same 18 and 14 exact restorations and zero gap-control
+additions. This exact-source calibration is not a recommended threshold for
+divergent interspecies donors and does not change global defaults. The misses
+include very short initial coding exons; invalid start/stop paths remain
+withheld. These tests evaluate local prediction/admission against annotation,
+not independent whole-cohort discovery precision, functional-gene validity,
+or independent interspecies/RNA evidence. Short-protein Swiss-Prot support
+thresholds also remain unchanged and their failed length/coverage reasons
+are reported separately.
+
+Reproduce the holdout component with
+`workflow/support/benchmark_gene_model_holdout.py --inputs FILE --output DIR`;
+optional `--species-profiles FILE` freezes explicitly chosen target thresholds.
+Run through `workflow/tests/run_in_runtime.sh` with the intended runtime.
+
+## General limits
 
 These workloads do not establish whole-genome or hundreds-of-species runtime,
 annotation accuracy, or SIF compatibility. Local windows and prediction CPU

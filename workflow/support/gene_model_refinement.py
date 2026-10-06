@@ -6,6 +6,7 @@ adoption are separate decisions; every effective sequence has an exact GFF path.
 """
 import argparse
 import bisect
+import contextlib
 import copy
 import functools
 import gzip
@@ -27,8 +28,9 @@ try:
     import rescue_gene_models as rescue
     from fasta_sequence_store import exclusive_lock, open_text
     from format_species_annotation.common import parse_gff_attributes
-    from gene_model_catalog import build_catalog, validate_candidate, write_catalog
+    from gene_model_catalog import build_catalog, indexed_genome, validate_candidate, write_catalog
     from gene_model_selection import pair_score, select_representatives
+    from gene_model_species_profiles import parameters_for, read_profiles
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from input_generation_array_state import atomic_json, digest, digest_paths
@@ -36,8 +38,9 @@ except ImportError:
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
     from .format_species_annotation.common import parse_gff_attributes
-    from .gene_model_catalog import build_catalog, validate_candidate, write_catalog
+    from .gene_model_catalog import build_catalog, indexed_genome, validate_candidate, write_catalog
     from .gene_model_selection import pair_score, select_representatives
+    from .gene_model_species_profiles import parameters_for, read_profiles
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from .input_generation_array_state import atomic_json, digest, digest_paths
@@ -76,7 +79,7 @@ def implementation():
     support = Path(__file__).parent
     dependencies = ('cds_model_normalisation.py', 'gff_feature_structure.py', 'gff_attribute_syntax.py',
                     'fasta_sequence_store.py', 'species_labeling.py', 'pairwise_synteny.py',
-                    'representative_selection.py', 'rescue_anchor_admission.py',
+                    'representative_selection.py', 'rescue_anchor_admission.py', 'gene_model_species_profiles.py',
                     'format_species_writers.py', 'format_species_common.py', 'format_species_constants.py',
                     'format_species_provider_config.py', 'format_species_taxonomy.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
@@ -94,7 +97,7 @@ def read_table(path):
     return rescue.table(path)
 
 
-def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, **parameters):
+def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / '.plan.lock'):
@@ -155,14 +158,16 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, **parame
         if any(int(params[k]) < 1 for k in ('min_support', 'max_intron', 'max_interval', 'candidate_limit')) or params['padding'] < 0:
             raise ValueError('Invalid resource/evidence bound')
         files += [s[k] for s in sources.values() for k in ('fasta', 'gff', 'genome')]
-        for optional in (edges, rna):
+        profiles = (read_profiles(species_profiles, sources) if species_profiles else
+                    copy.deepcopy(anchors['request'].get('species_profiles', {})) if anchor_root else {})
+        for optional in (edges, rna, species_profiles):
             if optional:
                 files.append(str(Path(optional).resolve()))
         tool = shutil.which('miniprot') if params['mode'] != 'off' else None
         request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
-                   'rna': str(Path(rna).resolve()) if rna else None,
+                   'rna': str(Path(rna).resolve()) if rna else None, 'species_profiles': profiles,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
         if not edges and not anchor_root:
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
@@ -558,7 +563,10 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
                      'gene_token': g.get('gene_token', g['candidates'][0].get('gene_token', g['gene_id'])), 'junctions': []}
         shape = (candidate['seqid'], candidate['strand'], tuple(tuple(b) for b in candidate['blocks']))
         original_shapes = {(c.get('seqid', g['seqid']), c.get('strand', g['strand']), tuple(tuple(b) for b in c['blocks'])) for c in g['candidates']}
-        problems = list(m['problems'])
+        # Alignment quality belongs to this donor, not the shared coding path.
+        # Failed alignments cannot veto a supported path or count as support.
+        alignment_problems = sorted(set(m['problems']) & {'low_coverage', 'low_identity'})
+        problems = sorted(set(m['problems']) - set(alignment_problems))
         if g.get('ambiguous_coordinates'):
             problems.append('ambiguous_locus_coordinates')
         if m['gene_id'] in ambiguous_loci:
@@ -593,13 +601,18 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
             grouped[key] = {'gene_id': m['gene_id'], 'candidate': candidate, 'problems': problems,
                             'donors': [], 'alignments': [], 'rna_paths': rna_support(candidate, catalog['species'], rna_rows)}
         row = grouped[key]
-        row['donors'].append(m['donor_species'])
+        supported = not alignment_problems and 'untrusted_donor_correspondence' not in problems
+        if supported:
+            row['donors'].append(m['donor_species'])
         row['alignments'].append({'donor_species': m['donor_species'], 'donor_candidate': m['donor_candidate'],
-                                  'identity': m['identity'], 'coverage': m['coverage']})
+                                  'identity': m['identity'], 'coverage': m['coverage'],
+                                  'supports_path': supported, 'problems': alignment_problems})
         row['problems'] = sorted(set(row['problems'] + problems))
     result = []
     for row in grouped.values():
         row['donors'] = sorted(set(row['donors']))
+        if not row['donors']:
+            row['problems'].append('no_qualifying_donor_alignment')
         if len(row['donors']) < params['min_support'] and not row['rna_paths']:
             row['problems'].append('insufficient_independent_support')
         row['status'] = 'accepted' if not row['problems'] and params['mode'] == 'conservative' else 'proposal'
@@ -637,7 +650,7 @@ def predict_species(root, value, name, cpus=1):
     catalog['loci'] = list(iter_loci(db, name))
     corr = correspondence(root, value)
     edges = json.loads((corr / 'edges.json').read_text())
-    params, source = value['request']['parameters'], value['request']['sources'][name]
+    params, source = parameters_for(value['request'], name), value['request']['sources'][name]
     dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'correspondence': digest(corr / 'receipt.json'),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
@@ -645,12 +658,6 @@ def predict_species(root, value, name, cpus=1):
         if params['mode'] == 'off':
             atomic_json(tmp / 'predictions.json', [])
             return
-        import pysam
-        with open_text(Path(source['genome'])) as handle, (tmp / 'genome.fa').open('w') as out:
-            shutil.copyfileobj(handle, out)
-        rescue.run([sys.executable, '-c', 'import pysam,sys; pysam.faidx(sys.argv[1])', tmp / 'genome.fa'], tmp, 'genome_index')
-        if (tmp / 'logs' / 'genome_index.log').read_text().strip():
-            raise ValueError('Genome indexing emitted warnings')
         catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         loci = {(name, g['gene_id']): g for g in catalog['loci']}
         decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
@@ -708,14 +715,15 @@ def predict_species(root, value, name, cpus=1):
                     proteins.setdefault(donor, {})[candidate['candidate_id']] = candidate['protein']
                     windows[target['seqid'], start, end].append(region)
         validated = []
-        with pysam.FastaFile(str(tmp / 'genome.fa')) as genome:
+        # Nominate first: a species with no search windows needs no genome I/O.
+        with indexed_genome(source['genome']) if windows else contextlib.nullcontext() as genome:
             bounded = {}
             for (seqid, start, end), regions in windows.items():
                 end = min(end, genome.get_reference_length(seqid))
                 for region in regions:
                     region['end'] = end
                 bounded[seqid, start, end] = regions
-            models = rescue.search_intervals(tmp, bounded, proteins, genome, source['genetic_code'], params['max_intron'], cpus)
+            models = rescue.search_intervals(tmp, bounded, proteins, genome, source['genetic_code'], params['max_intron'], cpus) if windows else []
             for model in models:
                 region = queries[model['query']]
                 model['seqid'] = region['seqid']
@@ -732,8 +740,6 @@ def predict_species(root, value, name, cpus=1):
         atomic_json(tmp / 'summary.json', {'queries': len(queries), 'windows': len(windows), 'alignments': len(validated),
                                          'accepted': sum(r['status'] == 'accepted' for r in predictions),
                                          'proposals': sum(r['status'] != 'accepted' for r in predictions) + len(proposals)})
-        (tmp / 'genome.fa').unlink()
-        (tmp / 'genome.fa.fai').unlink(missing_ok=True)
     donor_names = {name}
     for edge in edges:
         if not edge['ambiguous'] and name in {edge['species_a'], edge['species_b']}:
@@ -1326,6 +1332,7 @@ def parser():
     prep.add_argument('--rescue-output', type=Path)
     prep.add_argument('--edges', type=Path)
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
+    prep.add_argument('--species-profiles', type=Path, help='Explicit target-species prediction parameter overrides (TSV)')
     for key, default in DEFAULTS.items():
         prep.add_argument('--' + key.replace('_', '-'), type=type(default), default=default)
     for command in ('catalog', 'correspondence', 'select', 'predict', 'finalize', 'run', 'status', 'qc'):
@@ -1349,7 +1356,8 @@ def main():
         print(result if isinstance(result, str) else json.dumps(result, sort_keys=True))
         return
     if args.command == 'plan':
-        plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna, **{k: getattr(args, k) for k in DEFAULTS})
+        plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna,
+             species_profiles=args.species_profiles, **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:
         raise ValueError('--cpus must be positive')

@@ -52,6 +52,9 @@ gene_model_rescue_minimum_coverage="${gene_model_rescue_minimum_coverage:-0.95}"
 gene_model_rescue_minimum_identity="${gene_model_rescue_minimum_identity:-0.5}"
 gene_model_rescue_max_interval="${gene_model_rescue_max_interval:-200000}"
 gene_model_rescue_max_intron="${gene_model_rescue_max_intron:-20000}"
+gene_model_species_profiles="${gene_model_species_profiles:-}"
+gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
+[[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
 gene_model_rescue_gemoma_java="${gene_model_rescue_gemoma_java:-java}"
@@ -2519,6 +2522,7 @@ prepare_gene_model_rescue() {
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
   [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
     rescue_args+=(--genetic-codes "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv")
+  [[ -z "${gene_model_species_profiles}" ]] || rescue_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/rescue_gene_models.py" "${rescue_args[@]}"
 }
 
@@ -2597,6 +2601,7 @@ prepare_gene_model_refinement() {
   fi
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  [[ -z "${gene_model_species_profiles}" ]] || refinement_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"
 }
 
@@ -2606,6 +2611,10 @@ finish_gene_model_refinement() {
   local refinement_review_dir="${gene_model_refinement_dir%/}.review"
   local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
   local -a swissprot_plot_args=()
+  local -a busco_phase_args=()
+  if [[ -z "${gene_model_refinement_inputs}" && -s "${anchor_dir}/augmented/receipt.json" ]]; then
+    busco_phase_args+=(--three-stage)
+  fi
   if [[ ${run_gene_model_rescue_swissprot} -eq 1 && -z "${gene_model_refinement_inputs}" && -s "${anchor_dir}/augmented/receipt.json" ]]; then
     annotate_gene_model_rescue_swissprot "${anchor_dir}"
     swissprot_plot_args+=(--rescue-swissprot-dir "${gene_model_rescue_swissprot_dir:-${anchor_dir%/}.swissprot}")
@@ -2631,6 +2640,7 @@ finish_gene_model_refinement() {
     python "${gg_support_dir}/gene_model_refinement_busco.py" --output "${gene_model_refinement_dir}" \
       --report "${refinement_review_dir}/busco" --cds-dir "${species_cds_dir}" \
       "${swissprot_plot_args[@]}" \
+      "${busco_phase_args[@]}" \
       --lineage "${refinement_busco_db}/lineages/${busco_lineage_resolved}" --download-path "${refinement_busco_db}" \
       --jobs "${refinement_busco_jobs}" --cpus "$((GG_TASK_CPUS / refinement_busco_jobs))"
   fi

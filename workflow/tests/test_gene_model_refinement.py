@@ -77,6 +77,37 @@ def classify(catalog, models, edges, rna=(), **params):
                                            list(rna), "assembly-sha256")
 
 
+@pytest.mark.parametrize("problem", ["low_identity", "low_coverage"])
+def test_weak_extra_donor_cannot_veto_two_qualifying_donors(problem):
+    catalog, models, edges = classification_fixture()
+    weak = {**copy.deepcopy(models[0]), "donor_species": "Species_weak",
+            "donor_candidate": "Species_weak_t", "problems": [problem]}
+    edges.append({**edges[0], "species_b": "Species_weak"})
+    result = classify(catalog, models + [weak], edges)[0]
+    assert result["status"] == "accepted"
+    assert result["donors"] == ["Species_donor1", "Species_donor2"]
+    assert result["alignments"][-1]["supports_path"] is False
+    assert result["alignments"][-1]["problems"] == [problem]
+
+
+def test_weak_donor_cannot_supply_independent_support():
+    catalog, models, edges = classification_fixture()
+    models[1]["problems"] = ["low_identity"]
+    result = classify(catalog, models, edges)[0]
+    assert result["status"] == "proposal"
+    assert result["donors"] == ["Species_donor1"]
+    assert result["problems"] == ["insufficient_independent_support"]
+
+
+@pytest.mark.parametrize("problem", ["frameshift", "noncanonical_splice", "assembly_gap", "outside_search_window"])
+def test_structural_defect_still_vetoes_shared_path(problem):
+    catalog, models, edges = classification_fixture()
+    models[1]["problems"] = [problem]
+    result = classify(catalog, models, edges)[0]
+    assert result["status"] == "proposal"
+    assert problem in result["problems"]
+
+
 def test_source_coding_path_phase_inference_reaches_verified_analysis_gff_and_protein(tmp_path):
     inputs, edges, rows = tiny_inputs(tmp_path)
     target = rows[0]
