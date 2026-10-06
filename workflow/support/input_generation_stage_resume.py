@@ -221,13 +221,18 @@ def import_busco(source_root, target_root, species, source_cds, target_cds, sour
             or payload.get("family_id") != species or payload.get("parameters") != expected):
         raise ValueError("Unsupported BUSCO provenance: " + species)
     inputs, outputs = payload["inputs"], payload["outputs"]
+    output_roles = {item["label"] for item in outputs}
     if ([item["label"] for item in inputs] != ["species_cds"]
-            or {item["label"] for item in outputs} != {"busco_full", "busco_short"} or len(outputs) != 2):
+            or output_roles not in ({"busco_full", "busco_short"}, {"busco_full", "busco_short", "busco_single_copy"})
+            or len(outputs) != len(output_roles)):
         raise ValueError("Unsupported BUSCO artifact roles: " + species)
     sources = {label: Path(source_settings["species_busco_" + label + "_dir"]) /
                (species + ".busco." + ("full.tsv" if label == "full" else "short.txt")) for label in ("full", "short")}
     destinations = {label: Path(target_settings["species_busco_" + label + "_dir"]) / path.name
                     for label, path in sources.items()}
+    if "busco_single_copy" in output_roles:
+        sources["single_copy"] = Path(source_settings["species_busco_full_dir"]) / "single_copy" / (species + ".json.gz")
+        destinations["single_copy"] = Path(target_settings["species_busco_full_dir"]) / "single_copy" / (species + ".json.gz")
     reject_output_overlap(destinations.values(), [*sources.values(), source_cds, target_cds])
     hashes = batch.read([source_cds, target_cds, *sources.values()])
     output_hashes = {item["label"]: item["sha256"] for item in outputs}

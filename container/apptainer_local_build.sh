@@ -55,6 +55,12 @@ RKFTOOLS_REPO_SHA=${RKFTOOLS_REPO_SHA:-}
 FASTK_REPO_URL=${FASTK_REPO_URL:-https://github.com/thegenemyers/FASTK.git}
 FASTK_REPO_REF=${FASTK_REPO_REF:-${GG_SOURCE_FASTK_REPO_REF}}
 FASTK_REPO_SHA=${FASTK_REPO_SHA:-}
+RAPIDNJ_REPO_URL=${RAPIDNJ_REPO_URL:-https://github.com/somme89/rapidNJ.git}
+RAPIDNJ_REPO_REF=${RAPIDNJ_REPO_REF:-${GG_SOURCE_RAPIDNJ_REPO_REF}}
+RAPIDNJ_REPO_SHA=${RAPIDNJ_REPO_SHA:-}
+RAPIDNJ_ARM_REPO_URL=${RAPIDNJ_ARM_REPO_URL:-https://github.com/johnlees/rapidNJ-M1.git}
+RAPIDNJ_ARM_REPO_REF=${RAPIDNJ_ARM_REPO_REF:-${GG_SOURCE_RAPIDNJ_ARM_REPO_REF}}
+RAPIDNJ_ARM_REPO_SHA=${RAPIDNJ_ARM_REPO_SHA:-}
 SMUDGEPLOT_REPO_URL=${SMUDGEPLOT_REPO_URL:-https://github.com/KamilSJaron/smudgeplot.git}
 SMUDGEPLOT_REPO_REF=${SMUDGEPLOT_REPO_REF:-${GG_SOURCE_SMUDGEPLOT_REPO_REF}}
 SMUDGEPLOT_REPO_SHA=${SMUDGEPLOT_REPO_SHA:-}
@@ -154,6 +160,12 @@ render_definition() {
     -e "s|@@FASTK_REPO_URL@@|$(escape_sed_replacement "${FASTK_REPO_URL}")|g" \
     -e "s|@@FASTK_REPO_REF@@|$(escape_sed_replacement "${FASTK_REPO_REF}")|g" \
     -e "s|@@FASTK_REPO_SHA@@|$(escape_sed_replacement "${FASTK_REPO_SHA}")|g" \
+    -e "s|@@RAPIDNJ_REPO_URL@@|$(escape_sed_replacement "${RAPIDNJ_REPO_URL}")|g" \
+    -e "s|@@RAPIDNJ_REPO_REF@@|$(escape_sed_replacement "${RAPIDNJ_REPO_REF}")|g" \
+    -e "s|@@RAPIDNJ_REPO_SHA@@|$(escape_sed_replacement "${RAPIDNJ_REPO_SHA}")|g" \
+    -e "s|@@RAPIDNJ_ARM_REPO_URL@@|$(escape_sed_replacement "${RAPIDNJ_ARM_REPO_URL}")|g" \
+    -e "s|@@RAPIDNJ_ARM_REPO_REF@@|$(escape_sed_replacement "${RAPIDNJ_ARM_REPO_REF}")|g" \
+    -e "s|@@RAPIDNJ_ARM_REPO_SHA@@|$(escape_sed_replacement "${RAPIDNJ_ARM_REPO_SHA}")|g" \
     -e "s|@@SMUDGEPLOT_REPO_URL@@|$(escape_sed_replacement "${SMUDGEPLOT_REPO_URL}")|g" \
     -e "s|@@SMUDGEPLOT_REPO_REF@@|$(escape_sed_replacement "${SMUDGEPLOT_REPO_REF}")|g" \
     -e "s|@@SMUDGEPLOT_REPO_SHA@@|$(escape_sed_replacement "${SMUDGEPLOT_REPO_SHA}")|g" \

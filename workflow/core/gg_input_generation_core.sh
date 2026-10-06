@@ -35,6 +35,13 @@ gene_model_refinement_candidate_limit="${gene_model_refinement_candidate_limit:-
 gene_model_refinement_padding="${gene_model_refinement_padding:-2000}"
 run_gene_model_rescue="${run_gene_model_rescue:-0}"
 gene_model_rescue_tree="${gene_model_rescue_tree:-auto}"
+gene_model_rescue_guide_markers="${gene_model_rescue_guide_markers:-200}"
+gene_model_rescue_guide_k="${gene_model_rescue_guide_k:-5}"
+gene_model_rescue_guide_sketch_size="${gene_model_rescue_guide_sketch_size:-256}"
+gene_model_rescue_guide_occupancy="${gene_model_rescue_guide_occupancy:-0.8}"
+gene_model_rescue_guide_minimum_shared="${gene_model_rescue_guide_minimum_shared:-50}"
+gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-}"
+gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
@@ -246,6 +253,10 @@ gene_model_refinement_dir="${gene_model_refinement_dir:-${input_generation_root}
 case "${gene_model_refinement_dir}" in /*) ;; *) gene_model_refinement_dir="${PWD}/${gene_model_refinement_dir}" ;; esac
 gene_model_rescue_dir="${gene_model_rescue_dir:-${input_generation_root}/gene_model_rescue}"
 case "${gene_model_rescue_dir}" in /*) ;; *) gene_model_rescue_dir="${PWD}/${gene_model_rescue_dir}" ;; esac
+gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-${gene_model_rescue_dir}/guide_tree}"
+gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-$(dirname "${gene_model_rescue_dir}")/busco_guide_sketch_cache}"
+case "${gene_model_rescue_guide_dir}" in /*) ;; *) gene_model_rescue_guide_dir="${PWD}/${gene_model_rescue_guide_dir}" ;; esac
+case "${gene_model_rescue_guide_cache}" in /*) ;; *) gene_model_rescue_guide_cache="${PWD}/${gene_model_rescue_guide_cache}" ;; esac
 case "${gene_model_rescue_tree}" in auto|/*) ;; *) gene_model_rescue_tree="${PWD}/${gene_model_rescue_tree}" ;; esac
 case "${gene_model_rescue_gemoma_jar}" in ""|/*) ;; *) gene_model_rescue_gemoma_jar="${PWD}/${gene_model_rescue_gemoma_jar}" ;; esac
 input_generation_tmp_root="${input_generation_root}/tmp"
@@ -1514,6 +1525,7 @@ run_species_busco_for_one_file() {
   local seq_file=""
   local file_sp_busco_full=""
   local file_sp_busco_short=""
+  local file_sp_busco_proteins=""
   local dir_busco_db=""
   local dir_busco_lineage=""
   local busco_work_root=""
@@ -1525,6 +1537,7 @@ run_species_busco_for_one_file() {
   seq_file=$(basename "${seq_full}")
   file_sp_busco_full="${species_busco_full_dir}/${species_name}.busco.full.tsv"
   file_sp_busco_short="${species_busco_short_dir}/${species_name}.busco.short.txt"
+  file_sp_busco_proteins="${species_busco_full_dir}/single_copy/${species_name}.json.gz"
 
   if [[ -z "${busco_lineage_resolved}" ]]; then
     if [[ "${input_generation_mode}" == "array_worker" ]]; then
@@ -1540,6 +1553,7 @@ run_species_busco_for_one_file() {
     --input "species_cds=${seq_full}"
     --output "busco_full=${file_sp_busco_full}"
     --output "busco_short=${file_sp_busco_short}"
+    --output "busco_single_copy=${file_sp_busco_proteins}"
     --parameter "busco_lineage_request=${busco_lineage}"
     --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
     --parameter "busco_mode=transcriptome"
@@ -1594,6 +1608,10 @@ run_species_busco_for_one_file() {
   )
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
+    python "${gg_support_dir}/busco_guide_tree.py" preserve \
+      --run-dir "${busco_output_dir}/run_${busco_lineage_resolved}" \
+      --full "${file_sp_busco_full}" --short "${file_sp_busco_short}" \
+      --input "${seq_full}" --species "${species_name}" --output "${file_sp_busco_proteins}" || return $?
     rm -rf -- "${busco_work_root}"
     gg_artifact_record "${busco_provenance_args[@]}"
   else
@@ -2348,7 +2366,8 @@ run_array_worker_mode() {
     receipt_cmd+=(--file "${species_cds_fx2tab_dir}/${species_prefix}_fx2tab_cds.tsv")
   fi
   if [[ ${run_species_busco} -eq 1 ]]; then
-    receipt_cmd+=(--file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
+    receipt_cmd+=(--file "${species_busco_full_dir}/single_copy/${species_prefix}.json.gz"
+      --file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
       --file "${species_busco_short_dir}/${species_prefix}.busco.short.txt")
   fi
   "${receipt_cmd[@]}"
@@ -2471,12 +2490,22 @@ run_array_finalize_mode() {
 prepare_gene_model_rescue() {
   local rescue_tree="${gene_model_rescue_tree}"
   local -a rescue_args=()
-  [[ "${rescue_tree}" != auto ]] || rescue_tree="${gg_workspace_output_dir}/species_taxonomy/taxonomy_tree.nwk"
+  if [[ "${rescue_tree}" == auto ]]; then
+    python "${gg_support_dir}/busco_guide_tree.py" build \
+      --cds-dir "${species_cds_dir}" --full-dir "${species_busco_full_dir}" --short-dir "${species_busco_short_dir}" \
+      --output "${gene_model_rescue_guide_dir}" --cache "${gene_model_rescue_guide_cache}" \
+      --markers "${gene_model_rescue_guide_markers}" --k "${gene_model_rescue_guide_k}" \
+      --sketch-size "${gene_model_rescue_guide_sketch_size}" --occupancy "${gene_model_rescue_guide_occupancy}" \
+      --minimum-shared "${gene_model_rescue_guide_minimum_shared}" --nearest "${gene_model_rescue_nearest_references}" \
+      --cpus "${GG_TASK_CPUS}" || return $?
+    rescue_tree="${gene_model_rescue_guide_dir}/guide_tree.nwk"
+    rescue_args+=(--guide-tree-receipt "${gene_model_rescue_guide_dir}/receipt.json")
+  fi
   [[ -s "${rescue_tree}" ]] || {
-    echo "Gene-model rescue requires an initial tree: set gene_model_rescue_tree or run species taxonomy." >&2
+    echo "Gene-model rescue requires an initial species tree: ${rescue_tree}" >&2
     return 1
   }
-  rescue_args=(plan --cds-dir "${species_cds_dir}" --gff-dir "${species_gff_dir}"
+  rescue_args=(plan "${rescue_args[@]}" --cds-dir "${species_cds_dir}" --gff-dir "${species_gff_dir}"
     --genome-dir "${species_genome_dir}" --busco-dir "${species_busco_short_dir}"
     --tree "${rescue_tree}" --output "${gene_model_rescue_dir}"
     --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"

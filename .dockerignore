@@ -6,6 +6,7 @@ workflow/*
 workflow/support/*
 !workflow/support/treevis/
 !workflow/support/treevis/**
+!workflow/support/busco_kmer_distance.cpp
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache

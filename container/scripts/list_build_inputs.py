@@ -68,6 +68,8 @@ def stage_native_context(root: Path, destination: Path) -> None:
             continue
         if path.is_relative_to("container"):
             target = destination / path.relative_to("container")
+        elif relative == "workflow/support/busco_kmer_distance.cpp":
+            target = destination / "busco_kmer_distance.cpp"
         elif path.is_relative_to("workflow/support/treevis"):
             target = destination / "treevis" / path.relative_to("workflow/support/treevis")
         else:

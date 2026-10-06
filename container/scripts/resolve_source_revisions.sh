@@ -56,6 +56,10 @@ esac
 BUSCO_REPO_URL=${BUSCO_REPO_URL:-https://gitlab.com/ezlab/busco.git}
 PAML_REPO_URL=${PAML_REPO_URL:-https://github.com/iqtree/paml.git}
 IQTREE_REPO_URL=${IQTREE_REPO_URL:-https://github.com/iqtree/iqtree3.git}
+RAPIDNJ_REPO_URL=${RAPIDNJ_REPO_URL:-https://github.com/somme89/rapidNJ.git}
+RAPIDNJ_REPO_REF=${RAPIDNJ_REPO_REF:-${GG_SOURCE_RAPIDNJ_REPO_REF}}
+RAPIDNJ_ARM_REPO_URL=${RAPIDNJ_ARM_REPO_URL:-https://github.com/johnlees/rapidNJ-M1.git}
+RAPIDNJ_ARM_REPO_REF=${RAPIDNJ_ARM_REPO_REF:-${GG_SOURCE_RAPIDNJ_ARM_REPO_REF}}
 ASTER_REPO_URL=${ASTER_REPO_URL:-https://github.com/chaoszhang/ASTER.git}
 KFFRACTBIAS_REPO_URL=${KFFRACTBIAS_REPO_URL:-https://github.com/kfuku52/kfFractBias.git}
 KFTOOLS_REPO_URL=${KFTOOLS_REPO_URL:-https://github.com/kfuku52/kftools.git}
@@ -91,6 +95,8 @@ records=(
   "kftools|KFTOOLS_REPO_SHA|${KFTOOLS_REPO_URL}|${KFTOOLS_REPO_REF}|owned"
   "rkftools|RKFTOOLS_REPO_SHA|${RKFTOOLS_REPO_URL}|${RKFTOOLS_REPO_REF}|owned"
   "fastk|FASTK_REPO_SHA|${FASTK_REPO_URL}|${FASTK_REPO_REF}|third-party"
+  "rapidnj|RAPIDNJ_REPO_SHA|${RAPIDNJ_REPO_URL}|${RAPIDNJ_REPO_REF}|third-party"
+  "rapidnjArm|RAPIDNJ_ARM_REPO_SHA|${RAPIDNJ_ARM_REPO_URL}|${RAPIDNJ_ARM_REPO_REF}|third-party"
   "smudgeplot|SMUDGEPLOT_REPO_SHA|${SMUDGEPLOT_REPO_URL}|${SMUDGEPLOT_REPO_REF}|third-party"
 )
 

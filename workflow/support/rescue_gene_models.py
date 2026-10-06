@@ -131,6 +131,60 @@ def identities():
     return versions
 
 
+def patristic_distances(tree):
+    """All tip distances in O(N^2), without repeated whole-tree LCA scans."""
+    graph = defaultdict(list)
+    for parent in tree.find_clades():
+        for child in parent.clades:
+            length = child.branch_length or 0.0
+            graph[parent].append((child, length))
+            graph[child].append((parent, length))
+    leaves = {tip: tip.name for tip in tree.get_terminals()}
+    result = {}
+    for tip, name in leaves.items():
+        row, stack = {}, [(tip, None, 0.0)]
+        while stack:
+            node, previous, distance = stack.pop()
+            if node in leaves:
+                row[leaves[node]] = distance
+            stack.extend((child, node, distance + length) for child, length in graph[node] if child is not previous)
+        result[name] = row
+    return result
+
+
+def guide_evidence(path, tree_path, expected_inputs=None):
+    """Read and freeze the guide's exact inputs, outputs and panel diagnostics."""
+    raw = path.read_bytes()
+    payload = json.loads(raw)
+    files = payload.get("files", {})
+    if (not isinstance(files, dict) or not {"guide_tree.nwk", "stability.json", "markers.json"} <= set(files)
+            or any(Path(p).name != p for p in files) or (path.parent / "guide_tree.nwk").resolve() != tree_path.resolve()):
+        raise ValueError("Invalid BUSCO guide receipt/tree path")
+    sources = payload.get("request", {}).get("files", {})
+    expected = {str(path.parent / p): h for p, h in files.items()}
+    expected.update(sources)
+    if digest_paths(expected) != expected or digest(path) != hashlib.sha256(raw).hexdigest():
+        raise ValueError("Frozen BUSCO guide inputs/outputs changed")
+    if expected_inputs is not None:
+        guide_sources = payload["request"].get("sources", {})
+        for name, hashes in expected_inputs.items():
+            source = guide_sources.get(name, {})
+            if tuple(sources.get(source.get(key)) for key in ("cds", "short")) != hashes:
+                raise ValueError("BUSCO guide does not use the rescue CDS/BUSCO inputs: " + name)
+    stability = json.loads((path.parent / "stability.json").read_text())
+    names = set(payload["request"].get("sources", {}))
+    if not isinstance(stability, dict) or set(stability) != names:
+        raise ValueError("Invalid BUSCO guide stability species")
+    for name, evidence in stability.items():
+        panels = [evidence.get(key) for key in ("nearest", "panel_0", "panel_1")]
+        if (any(not isinstance(panel, list) or len(panel) != len(set(panel))
+                or not set(panel) <= names - {name} for panel in panels)
+                or evidence.get("stable") is not (set(panels[0]) == set(panels[1]) == set(panels[2]))):
+            raise ValueError("Invalid BUSCO guide stability evidence: " + name)
+    expected[str(path.resolve())] = hashlib.sha256(raw).hexdigest()
+    return expected, stability
+
+
 def build_plan(args):
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -209,6 +263,17 @@ def build_plan(args):
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
                    "gemoma_java": None}
+        guide_stability = None
+        if getattr(args, "guide_tree_receipt", None):
+            if topology_only:
+                raise ValueError("A BUSCO k-mer guide must have informative branch lengths")
+            guide_files, guide_stability = guide_evidence(
+                args.guide_tree_receipt.resolve(), args.tree,
+                {n: (request["files"][sources[n]["fasta"]], request["files"][sources[n]["busco"]]) for n in species})
+            if not set(species) <= set(guide_stability):
+                raise ValueError("BUSCO guide diagnostics lack rescue species")
+            request["files"].update(guide_files)
+            request["guide_tree_receipt"] = str(args.guide_tree_receipt.resolve())
         if request["files"][str(args.tree.resolve())] != hashlib.sha256(tree_bytes).hexdigest():
             raise ValueError("Initial tree changed during planning")
         if args.genetic_codes and request["files"][str(args.genetic_codes.resolve())] != code_hash:
@@ -242,9 +307,20 @@ def build_plan(args):
             refs = [row["leaf_name"] for row in table(tmp / "references.tsv")]
             if len(refs) != args.common_references or len(set(refs)) != len(refs) or not set(refs) <= eligible:
                 raise ValueError("NWKIT did not select the requested eligible reference set")
+            distances = patristic_distances(tree)
             neighbors = {n: sorted((m for m in species if m != n),
-                                   key=lambda m: (tree.distance(n, m), -sources[m]["quality"]["complete_pct"], m))[:args.nearest_references]
+                                   key=lambda m: (distances[n][m], -sources[m]["quality"]["complete_pct"], m))[:args.nearest_references]
                          for n in species}
+            if guide_stability:
+                # Retain alternative supported neighbourhoods within a bounded
+                # extra budget; marker-panel agreement is not a bootstrap value.
+                for name in species:
+                    evidence = guide_stability[name]
+                    if not evidence["stable"]:
+                        alternatives = (set(evidence["panel_0"]) | set(evidence["panel_1"])) & set(species) - {name}
+                        ordered = sorted(alternatives - set(neighbors[name]),
+                                         key=lambda m: (distances[name][m], -sources[m]["quality"]["complete_pct"], m))
+                        neighbors[name] += ordered[:args.nearest_references]
             donors = {n: sorted((set(refs) | set(neighbors[n])) - {n}) for n in species}
             pairs = sorted({tuple(sorted((n, m))) for n in species for m in donors[n]})
             jobs = [{"a": a, "b": b, "kind": "pair"} for a, b in pairs]
@@ -252,6 +328,10 @@ def build_plan(args):
             plan = {"request": request, "common_references": refs, "nearest_references": neighbors,
                     "donors": donors, "species": species,
                     "synteny_jobs": [{**job, "index": i, "id": f"comparison_{i:06d}"} for i, job in enumerate(jobs, 1)]}
+            if guide_stability:
+                plan["guide_tree_stability"] = {n: guide_stability[n] for n in species}
+            if guide_stability and digest_paths(request["files"]) != request["files"]:
+                raise ValueError("Guide evidence changed during reference selection")
             for file in ("selection.nwk", "quality.tsv", "references.nwk", "references.tsv"):
                 shutil.copyfile(tmp / file, root / file)
             atomic_json(path, plan, immutable=True)
@@ -263,6 +343,10 @@ def load(root):
     if plan["request"]["schema"] != SCHEMA or plan["request"]["tools"] != identities():
         raise ValueError("Rescue schema/tools changed; use a new output directory")
     plan_digest(root, plan)
+    if plan["request"].get("guide_tree_receipt"):
+        path = Path(plan["request"]["guide_tree_receipt"])
+        if digest(path) != plan["request"]["files"][str(path)]:
+            raise ValueError("Frozen BUSCO guide receipt changed")
     return plan
 
 
@@ -1307,6 +1391,7 @@ def parser():
     for name in ("cds-dir", "gff-dir", "genome-dir", "busco-dir", "tree", "output"):
         plan.add_argument("--" + name, type=Path, required=True)
     plan.add_argument("--common-references", type=int, default=5)
+    plan.add_argument("--guide-tree-receipt", type=Path, help="Optional frozen pre-rescue BUSCO k-mer guide receipt")
     plan.add_argument("--nearest-references", type=int, default=3)
     plan.add_argument("--minimum-busco", type=float, default=90)
     plan.add_argument("--genetic-code", type=int, default=1)

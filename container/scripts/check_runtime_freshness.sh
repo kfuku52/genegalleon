@@ -198,6 +198,8 @@ sha_variables=(
   KFTOOLS_REPO_SHA
   RKFTOOLS_REPO_SHA
   FASTK_REPO_SHA
+  RAPIDNJ_REPO_SHA
+  RAPIDNJ_ARM_REPO_SHA
   SMUDGEPLOT_REPO_SHA
 )
 resolution_variables=(
@@ -222,12 +224,16 @@ resolution_variables=(
   RKFTOOLS_REPO_REF
   FASTK_REPO_URL
   FASTK_REPO_REF
+  RAPIDNJ_REPO_URL
+  RAPIDNJ_REPO_REF
+  RAPIDNJ_ARM_REPO_URL
+  RAPIDNJ_ARM_REPO_REF
   SMUDGEPLOT_REPO_URL
   SMUDGEPLOT_REPO_REF
 )
 override_fingerprint="$(
   for variable in "${resolution_variables[@]}"; do
-    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == ASTER_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* ) ]]; then
+    if [[ "${scope}" == "owned" && ( "${variable}" == BUSCO_REPO_* || "${variable}" == PAML_REPO_* || "${variable}" == IQTREE_REPO_* || "${variable}" == ASTER_REPO_* || "${variable}" == FASTK_REPO_* || "${variable}" == SMUDGEPLOT_REPO_* || "${variable}" == RAPIDNJ_REPO_* || "${variable}" == RAPIDNJ_ARM_REPO_* ) ]]; then
       continue
     fi
     printf '%s=%s\n' "${variable}" "${!variable:-}"
@@ -303,6 +309,8 @@ if [[ "${missing_manifest_revisions}" == "1" ]]; then
       kftools) variable=KFTOOLS_REPO_SHA ;;
       rkftools) variable=RKFTOOLS_REPO_SHA ;;
       fastk) variable=FASTK_REPO_SHA ;;
+      rapidnj) variable=RAPIDNJ_REPO_SHA ;;
+      rapidnjArm) variable=RAPIDNJ_ARM_REPO_SHA ;;
       smudgeplot) variable=SMUDGEPLOT_REPO_SHA ;;
       *)
         echo "Unknown source in runtime manifest: ${source_name}" >&2
