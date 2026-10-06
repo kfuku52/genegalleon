@@ -6,6 +6,21 @@ suppressPackageStartupMessages(library(genegalleon.treevis))
 # Plotting helpers may open the default device during this test. Keep it off disk.
 pdf(NULL)
 
+# Focused transfer marks use exact internal nodes, with no family-wide marking.
+focus_marker <- getFromNamespace('add_focused_hgt_node_marks', 'genegalleon.treevis')
+focus_plot <- ggplot(data.frame(x=c(1,2,3), y=c(1,2,3), isTip=c(TRUE,FALSE,FALSE),
+                              hgtfocus_event_count=c(0,1,0), hgtfocus_node_label=c('', 'HGT1 UF=90', '')))
+marked <- focus_marker(focus_plot, list(font_size=6, font_size_factor=0.352777778))
+marked_layers <- ggplot_build(marked)$data
+if (nrow(marked_layers[[1]]) != 1 || marked_layers[[1]]$x != 2) stop('Focused HGT marker mapped to wrong node.')
+if (marked_layers[[1]]$colour != '#b34d00' || marked_layers[[1]]$shape != 23) stop('Focused HGT marker style is incorrect.')
+if (marked_layers[[2]]$label != 'HGT1 UF=90') stop('Focused HGT label lost exact branch support.')
+unmarked <- focus_plot
+unmarked$data$hgtfocus_event_count <- 0
+if (length(focus_marker(unmarked, list())$layers) != 0) stop('Empty focused cohort should not add marks.')
+focus_plot$data$isTip[[2]] <- TRUE
+if (!inherits(try(focus_marker(focus_plot, list()), silent=TRUE), 'try-error')) stop('Terminal focused HGT node was accepted.')
+
 # 1) tidy_df_tip: group order and tip order are stable and numeric conversion works.
 df_tip <- data.frame(
   label = c("g2", "g1"),

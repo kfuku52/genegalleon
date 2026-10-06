@@ -627,6 +627,12 @@ add_tree_column = function(g, args, b, dist_col, nodelabel_col, branch_color, or
     }
     g[[gname]] = append_branch_tiplab_colors(g[[gname]], branch_color, path_species_color_table)
     g[[gname]] = propagate_tiplab_colors_to_internal_branches(g[[gname]], tree_display)
+    if ('hgtfocus_recipient_flag' %in% colnames(g[[gname]][['data']])) {
+        focused_tips = !is.na(g[[gname]][['data']][['hgtfocus_recipient_flag']]) &
+            g[[gname]][['data']][['hgtfocus_recipient_flag']] == 1 & g[[gname]][['data']][['isTip']]
+        g[[gname]][['data']][['tiplab_color']][focused_tips] = '#b34d00'
+        g[[gname]][['data']][['branch_color']][focused_tips] = '#b34d00'
+    }
     if (orientation=='R') {
         # reverse x-axis
         x = g[[gname]][['data']][['x']]
@@ -662,6 +668,28 @@ add_tree_column = function(g, args, b, dist_col, nodelabel_col, branch_color, or
         geom_text(aes(x=branch, y=y, label=paste0('nl', branch_id)), size=1, color='gray70', vjust=1.25)
     }
     g[[gname]] = add_long_branch_compression_marks(g[[gname]], args, compression_info)
+    g[[gname]] = add_focused_hgt_node_marks(g[[gname]], args)
+    return(g)
+}
+
+add_focused_hgt_node_marks = function(g, args) {
+    if (!('hgtfocus_event_count' %in% colnames(g[['data']]))) return(g)
+    count = suppressWarnings(as.numeric(g[['data']][['hgtfocus_event_count']]))
+    selected = !is.na(count) & is.finite(count) & count > 0
+    if (!any(selected)) return(g)
+    if (any(g[['data']][['isTip']][selected])) stop('Focused HGT marks require internal gene-tree branches.')
+    g[['data']][['hgtfocus_selected']] = selected
+    g[['data']][['hgtfocus_legend']] = 'Focused HGT node'
+    g = g + geom_point2(
+        aes(x=x, y=y, subset=hgtfocus_selected, shape=hgtfocus_legend),
+        color='#b34d00', fill='#b34d00', size=2.2, show.legend=TRUE
+    ) + scale_shape_manual(values=c('Focused HGT node'=23), name=NULL)
+    if ('hgtfocus_node_label' %in% colnames(g[['data']])) {
+        g = g + geom_text2(
+            aes(x=x, y=y, subset=hgtfocus_selected, label=hgtfocus_node_label),
+            color='#b34d00', size=treevis_text_size(args, 0.9), hjust=-0.08, vjust=1.6
+        )
+    }
     return(g)
 }
 

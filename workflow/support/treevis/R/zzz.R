@@ -2,7 +2,8 @@
 # here lets R CMD check distinguish those columns from unresolved R objects.
 utils::globalVariables(c(
     'alpha_value', 'branch', 'branch_id', 'cluster_membership', 'count', 'end',
-    'fill', 'group', 'group_id', 'hjust', 'isTip', 'key', 'label', 'left_end',
+    'fill', 'group', 'group_id', 'hgtfocus_legend', 'hgtfocus_node_label',
+    'hgtfocus_selected', 'hjust', 'isTip', 'key', 'label', 'left_end',
     'mid_end', 'mid_start', 'motif_altid', 'name', 'nearests', 'node_category',
     'panel_x', 'plot_value', 'polygon_id', 'position', 'probability', 'right_start', 'sacc',
     'show_circle', 'species', 'start', 'value', 'x', 'x_dummy', 'x_end',

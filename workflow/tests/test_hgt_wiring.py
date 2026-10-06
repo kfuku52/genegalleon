@@ -23,6 +23,9 @@ def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
     assert '--event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}"' in hgt
     assert '--output "result_bundle=${dir_hgt_trait_focus}"' in hgt
     assert '--parameter "plots=${run_hgt_plot}"' in hgt
+    assert '--gene_family_root "${dir_orthogroup}"' in hgt
+    assert '--input-gene-family-subdir "gene_tree_stats=${dir_orthogroup}::stat_branch"' in hgt
+    assert '--input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"' in hgt
 
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():

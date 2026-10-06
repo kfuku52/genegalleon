@@ -545,6 +545,14 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --parameter "plots=${run_hgt_plot}"
       --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
     )
+    if [[ ${run_hgt_plot} -eq 1 ]]; then
+      hgt_focus_provenance_args+=(
+        --input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"
+        --input "gene_tree_plotter=${gg_support_dir}/stat_branch2tree_plot.r"
+        --input "gene_tree_renderer=${gg_support_dir}/treevis"
+        --input-gene-family-subdir "gene_tree_stats=${dir_orthogroup}::stat_branch"
+      )
+    fi
     gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_schema_input" "${hgt_species_trait_path}.schema.json"
     gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_metadata" "${hgt_species_trait_path}.metadata.json"
     gg_artifact_prepare_stage hgt_focus_needs_update run_hgt_focus "${hgt_focus_provenance_args[@]}" || exit $?
@@ -553,6 +561,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}" \
         --species_tree "${hgt_species_tree_path}" --species_trait "${hgt_species_trait_path}" \
         --output_dir "${dir_hgt_trait_focus}" --plots "${run_hgt_plot}" \
+        --gene_family_root "${dir_orthogroup}" \
         --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
       gg_artifact_record "${hgt_focus_provenance_args[@]}"
     fi

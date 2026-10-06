@@ -201,5 +201,20 @@ With `run_hgt_summary_plots=1`, each trait's aggregate bundle includes a native
 transfer-tree PDF with all selected arrows and category-1 branches highlighted.
 Per-recipient tips and internal branches retain their tables without separate
 PDFs. All bundles retain their directed edge TSVs.
+
+Each trait aggregate also has a `tree_plot/` folder with one native gene-tree PDF
+per qualifying orthogroup. Orange diamonds mark the exact transfer nodes;
+labels give the matched `support_generax_ufboot`, including internal nodes.
+This presentation subset requires UFBoot >=90 and at least one retained
+event-linked gene on **each** side with candidate-free class scaffold background:
+>=10 classified units, >=50% classification coverage and >=90% host compatibility.
+Those recipient genes have orange tip labels. The parent focused tables are
+unchanged. `tree_plot/event_node_audit.tsv` retains every requested event with
+selection/withholding reasons; terminal nodes, missing support and unresolved
+branch/token matches do not qualify. Background context is not conserved gene
+order or proof of physical integration. Standalone `focus_hgt_traits.py` calls
+enable this folder by supplying `--gene_family_root` with existing raw/ZIP-backed
+family outputs; the workflow supplies this path automatically when plots run.
+
 `manifest.json` binds inputs and every output to SHA-256 hashes. Focus bundles
 are replaced as a managed unit; invalid inputs do not publish a partial bundle.

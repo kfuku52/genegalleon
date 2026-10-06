@@ -7,8 +7,111 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT))
 
+from focus_hgt_gene_trees import annotate, background_supported  # noqa: E402
 from focus_hgt_traits import generate, read_tsv, write_tsv  # noqa: E402
 from species_trait_schema import schema_path, schema_payload  # noqa: E402
+
+
+def supported_link(event_id, side, gene):
+    return dict(event_id=event_id, orthogroup="OG1", side=side, gene_id=gene,
+                eligible_for_context="True", host_scaffold_status="measured", host_scaffold_id="scaffold1",
+                host_scaffold_background_class_total_count="20", host_scaffold_background_class_compatible_count="9",
+                host_scaffold_background_class_incompatible_count="1", host_scaffold_background_class_unresolved_count="10",
+                host_scaffold_background_class_classified_fraction="0.5",
+                host_scaffold_background_class_compatible_fraction="0.9")
+
+
+def focused_node_source():
+    event = dict(event_id="OG1:3:1", orthogroup="OG1", gene_tree_branch_id="3", gene_tree_node="n3",
+                 event_index="1", generax_transfer="Y@D@A", support_used="90")
+    stat = [dict(branch_id="0", node_name="A_gene", child1="-999", child2="-999", generax_transfer="N",
+                 support_generax_ufboot=""),
+            dict(branch_id="3", node_name="n3", child1="0", child2="1", generax_transfer="Y@D@A;Y@D@B",
+                 support_generax_ufboot="90"),
+            dict(branch_id="1", node_name="D_gene", child1="-999", child2="-999", generax_transfer="N",
+                 support_generax_ufboot="")]
+    links = [supported_link(event["event_id"], side, gene) for side, gene in
+             (("donor", "D_gene"), ("recipient", "A_gene"))]
+    return stat, [event], links
+
+
+def test_focused_gene_nodes_use_exact_event_branch_and_inclusive_bilateral_profile():
+    stat, events, links = focused_node_source()
+    output, audit = annotate(stat, events, links)
+    assert audit[0]["status"] == "selected" and audit[0]["support_generax_ufboot"] == 90
+    assert output[0]["hgtfocus_recipient_flag"] == 1
+    assert output[1]["hgtfocus_event_ids"] == "OG1:3:1"
+    assert output[1]["hgtfocus_node_label"] == "HGT1 UF=90"
+    assert stat[1].get("hgtfocus_event_ids") is None  # Original table is preserved.
+    # Two events sharing a gene-tree node are evaluated separately.
+    other = dict(events[0], event_id="OG1:3:2", event_index="2", generax_transfer="Y@D@B")
+    extra = supported_link(other["event_id"], "recipient", "B_gene")
+    output, audit = annotate(stat, events + [other], links + [extra])
+    assert [row["status"] for row in audit] == ["selected", "withheld"]
+    assert output[1]["hgtfocus_event_count"] == 1  # Missing donor evidence cannot borrow from another event.
+
+
+@pytest.mark.parametrize("alteration,reason", [
+    ("node", "gene_tree_branch_node_unmapped"),
+    ("terminal", "terminal_gene_tree_branch"),
+    ("token", "transfer_token_or_event_index_unmapped"),
+    ("index", "transfer_token_or_event_index_unmapped"),
+    ("missing_support", "generax_ufboot_unavailable"),
+    ("low_support", "generax_ufboot_below_threshold"),
+    ("recipient_background", "bilateral_class_background_not_supported_or_unavailable"),
+    ("context_gene", "supported_context_gene_unmapped_to_family_tip"),
+])
+def test_focused_gene_nodes_withhold_missing_or_unmapped_evidence(alteration, reason):
+    stat, events, links = focused_node_source()
+    if alteration == "node":
+        events[0]["gene_tree_node"] = "wrong"
+    elif alteration == "terminal":
+        stat[1]["child1"] = "-999"
+    elif alteration == "token":
+        events[0]["generax_transfer"] = "Y@X@A"
+    elif alteration == "index":
+        events[0]["event_index"] = "2"
+    elif alteration.endswith("support"):
+        stat[1]["support_generax_ufboot"] = "" if alteration == "missing_support" else "89.9"
+    elif alteration == "context_gene":
+        links[0]['gene_id'] = 'other_family_gene'
+    else:
+        links[1]["host_scaffold_background_class_total_count"] = ""
+    output, audit = annotate(stat, events, links)
+    assert audit[0]["reason"] == reason
+    assert all(row["hgtfocus_event_count"] == 0 for row in output)
+
+
+def test_focused_gene_nodes_reject_conflicting_support_and_background_fractions():
+    stat, events, links = focused_node_source()
+    events[0]["support_used"] = "100"
+    with pytest.raises(ValueError, match="support disagrees"):
+        annotate(stat, events, links)
+    links[0]["host_scaffold_background_class_compatible_fraction"] = "1"
+    with pytest.raises(ValueError, match="background fraction"):
+        background_supported(links[0])
+
+
+def test_focused_gene_tree_folder_audits_missing_families_and_preserves_inputs(tmp_path):
+    from focus_hgt_gene_trees import export_gene_trees
+
+    stat, events, links = focused_node_source()
+    root = tmp_path / "families"
+    table = root / "stat_branch/OG1_stat.branch.tsv"
+    write_tsv(table, list(stat[0]), stat)
+    original = table.read_bytes()
+    def renderer(annotated, pdf):
+        assert read_tsv(annotated)[1][1]["hgtfocus_event_count"] == "1"
+        pdf.write_bytes(b"%PDF-native-renderer-fixture")
+    output = tmp_path / "tree_plot"
+    report = export_gene_trees(output, events, links, root, renderer=renderer)
+    assert report["rendered_family_count"] == report["selected_event_count"] == 1
+    assert table.read_bytes() == original
+    assert (output / "OG1_focused_hgt_tree_plot.pdf").is_file()
+    missing = dict(events[0], orthogroup="OG2")
+    report = export_gene_trees(tmp_path / "missing", [missing], [], root, renderer=renderer)
+    assert report["selected_event_count"] == 0
+    assert read_tsv(tmp_path / "missing/event_node_audit.tsv")[1][0]["reason"] == "stat_branch_unavailable"
 
 
 @pytest.fixture
@@ -58,6 +161,30 @@ def test_category_and_binary_focus_preserve_cohort_fields_and_event_identity(sou
     _, recipient = read_tsv(root / "traits/binary/tips/A/recipient_genes.tsv")
     assert len(recipient) == 1 and recipient[0]["gene_species"] == "A"
     assert recipient[0]["product_name"] == "Protein A" and recipient[0]["synteny_support_score"] == "NA"
+
+
+def test_category1_gene_tree_export_receives_only_aggregate_events(source, monkeypatch):
+    import focus_hgt_gene_trees
+    import focus_hgt_traits
+
+    calls = []
+    real_export = focus_hgt_traits.export_bundle
+    def export_without_species_pdf(*args, **kwargs):
+        # Keep this wiring test independent of the species-tree renderer.
+        positional = list(args)
+        positional[8] = False
+        return real_export(*positional, **kwargs)
+    def capture(directory, events, links, root):
+        calls.append((directory, {e['event_id'] for e in events}, root))
+        return dict(rendered_family_count=1, selected_event_count=len(events))
+    monkeypatch.setattr(focus_hgt_traits, 'export_bundle', export_without_species_pdf)
+    monkeypatch.setattr(focus_hgt_gene_trees, 'export_gene_trees', capture)
+    report = generate(*source, plots=True, gene_family_root='existing-families')
+    assert len(calls) == 2  # One aggregate per binary/categorical trait, no per-tip rendering.
+    assert all(path.name == 'tree_plot' and root == 'existing-families' for path, _, root in calls)
+    assert calls[0][1] == {'OG1:3:1', 'OG1:3:2', 'OG1:3:4'}
+    assert calls[1][1] == {'OG1:3:1', 'OG1:3:5'}
+    assert report['gene_tree_plots']['binary']['selected_event_count'] == 3
 
 
 def test_empty_category1_targets_are_reported(source):

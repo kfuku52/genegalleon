@@ -211,7 +211,7 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
 
 
 def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
-                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA):
+                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root=""):
     csv.field_size_limit(100_000_000)
     fields, events = read_tsv(event_path, EVENT_REQUIRED)
     link_fields, links = read_tsv(link_path, LINK_REQUIRED)
@@ -241,7 +241,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     traits, reports, audit = focused_traits(trait_path)
     trait_dirs = safe_names(traits)
     write_tsv(stage / "trait_selection.tsv", ["trait", "value_type", "status", "reason"], reports)
-    index = []
+    index, gene_trees = [], {}
     for trait, values in traits.items():
         positive = {species for species, value in values.items() if value == 1}
         if positive - terminals:
@@ -281,6 +281,10 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         write_tsv(root / "events_not_focused.tsv", ["event_id", "reason"], withheld)
         aggregate = export_bundle(root / "all_category1", selected, fields, links, link_fields,
                                   trait, indicator, tree_path, plots, arrow_alpha=arrow_alpha)
+        if plots and gene_family_root:
+            from focus_hgt_gene_trees import export_gene_trees
+
+            gene_trees[trait] = export_gene_trees(root / "all_category1/tree_plot", selected, links, gene_family_root)
         index.append(dict(trait=trait, target="ALL_CATEGORY1", target_type="aggregate",
                           relative_path=str((root / "all_category1").relative_to(stage)), **aggregate))
         target_dirs = safe_names(selected_nodes)
@@ -311,14 +315,17 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "An empty table means no selected result in this input cohort, not biological absence of HGT.\n"
         "Figures use GeneGalleon's native transfer-tree plotter only for each trait's aggregate cohort, with category-1 branches highlighted.\n"
         "Per-recipient tips and internal branches retain tables and directed edge TSVs but have no separate tree PDF.\n"
+        "When gene-family inputs are supplied, each trait aggregate's tree_plot/ contains native per-orthogroup gene-tree PDFs.\n"
+        "Only exact transfer branches with UFBoot >=90 and individually passing scaffold background genes on both sides are marked.\n"
+        "See tree_plot/event_node_audit.tsv for every selected/withheld event and tree_plot/README.txt for the evidence profile.\n"
         "Scaffold background and shared-neighbor synteny are distinct evidence. Neither proves physical integration.\n")
     return dict(schema_version=VERSION, source_event_count=len(events), trait_contract=audit,
                 trait_selection=reports, result_index=index, plots=plots, transfer_arrow_alpha=arrow_alpha,
-                plot_scope="trait_aggregate_only")
+                plot_scope="trait_aggregate_only", gene_tree_plots=gene_trees)
 
 
 def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
-             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA):
+             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root=""):
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
     for suffix in (".schema.json", ".metadata.json"):
@@ -328,6 +335,9 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     helper_root = Path(__file__).resolve().parent
     code = [helper_root / name for name in ("focus_hgt_traits.py", "plot_hgt_summary.py", "hgt_species_tree.py",
                                             "species_trait_contract.py", "species_trait_schema.py")]
+    if gene_family_root and plots:
+        code += [helper_root / "focus_hgt_gene_trees.py", helper_root / "stat_branch2tree_plot.r"]
+        code += sorted((helper_root / "treevis/R").glob("*.R"))
     output = Path(output).absolute()
     if output.is_symlink() or any(path == output.resolve() or output.resolve() in path.parents for path in inputs):
         raise ValueError("Output must not replace or contain an input")
@@ -341,7 +351,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     stage = Path(tempfile.mkdtemp(prefix=".hgt-trait-focus-", dir=output.parent))
     backup = None
     try:
-        manifest = build_focus(stage, *inputs[:4], plots=plots, arrow_alpha=arrow_alpha)
+        manifest = build_focus(stage, *inputs[:4], plots=plots, arrow_alpha=arrow_alpha,
+                               gene_family_root=gene_family_root)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
         if any(digest(path) != code_before[path.name] for path in code):
@@ -378,11 +389,14 @@ def main():
     parser.add_argument("--species_trait", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--plots", choices=("0", "1"), default="1")
+    parser.add_argument("--gene_family_root", default="",
+                        help="Existing raw/ZIP-backed family outputs for scaffold-supported category-1 gene-tree PDFs")
     parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
                         default=DEFAULT_TRANSFER_ARROW_ALPHA)
     args = parser.parse_args()
     manifest = generate(args.event_tsv, args.event_gene_tsv, args.species_tree, args.species_trait,
-                        args.output_dir, plots=args.plots == "1", arrow_alpha=args.transfer_arrow_alpha)
+                        args.output_dir, plots=args.plots == "1", arrow_alpha=args.transfer_arrow_alpha,
+                        gene_family_root=args.gene_family_root)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],
                           result_sets=len(manifest["result_index"])), indent=2))
 

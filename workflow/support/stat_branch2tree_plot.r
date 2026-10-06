@@ -253,6 +253,10 @@ cat('long_branch_display settings:',
 # %%
 cat(as.character(Sys.time()), 'Loading infiles.\n')
 b = read.table(args[['stat_branch']], header = TRUE, sep = '\t', quote = '', stringsAsFactors = FALSE, fill = TRUE, check.name = FALSE)
+if ('hgtfocus_event_count' %in% colnames(b) && any(b[['hgtfocus_event_count']] > 0, na.rm=TRUE) &&
+    !exists('add_focused_hgt_node_marks', envir=asNamespace('genegalleon.treevis'), inherits=FALSE)) {
+    stop('Focused HGT node marks require the updated genegalleon.treevis package. Rebuild the GeneGalleon runtime.')
+}
 b = ensure_plot_topology_columns(b)
 b = enhance_branch_table(b, args, event_method = args[['event_method']])
 
