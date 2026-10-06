@@ -280,6 +280,8 @@ inputs and exact context/event references; the input TSV hash is in the manifest
 `hgt_summary_focus_context_annotations_tsv` to both the context pages and
 orthogroup distribution summary. The stage records this input and the annotation
 helper in its provenance, so annotation changes invalidate cached plots.
+Distribution product labels use eligible retained recipient descendants;
+descendants transferred out of the modeled recipient lineage do not supply them.
 The renderer checks supplemental focal and neighbor hits against each gene's
 own existing family leaf when available, recording the checked family hashes
 and `annotation_validation_status`. Missing family sources remain explicit.

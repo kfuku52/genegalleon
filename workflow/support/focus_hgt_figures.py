@@ -111,7 +111,8 @@ def product_labels(families, links):
     labels = {}
     for family in families:
         candidates = sorted(
-            [r for r in links if r["orthogroup"] == family and r["side"] == "recipient"], key=lambda r: r["gene_id"]
+            [r for r in links if r["orthogroup"] == family and r["side"] == "recipient"
+             and str(r.get('eligible_for_context', 'True')).lower() in {'true', '1'}], key=lambda r: r["gene_id"]
         )
         known = [r for r in candidates if best_hit_product(r)]
         row = known[0] if known else {}

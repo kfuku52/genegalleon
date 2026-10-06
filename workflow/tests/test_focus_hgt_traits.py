@@ -656,6 +656,13 @@ def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(t
     unverified = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
                                  best_available_product_label='Unspecified annotation')])['OG1']
     assert unverified['protein_product'] == 'Annotation unavailable'
+    retained = product_labels(['OG1'], [
+        dict(orthogroup='OG1', side='recipient', gene_id='A_transferred_out',
+             eligible_for_context='False', swissprot_best_hit_protein_name='Excluded descendant hit'),
+        dict(orthogroup='OG1', side='recipient', gene_id='Z_retained',
+             eligible_for_context='True', swissprot_best_hit_protein_name='Retained descendant hit')])['OG1']
+    assert retained['annotation_gene_id'] == 'Z_retained'
+    assert retained['all_recipient_product_labels'] == 'Retained descendant hit'
 
 
 def test_context_annotations_reject_malformed_rows_and_fractional_taxids(tmp_path):
