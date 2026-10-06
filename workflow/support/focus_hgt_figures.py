@@ -71,28 +71,32 @@ def available_label(value):
     )
 
 
+def best_hit_product(row):
+    name = available_label(row.get('swissprot_best_hit_protein_name', ''))
+    if name:
+        return name
+    basis = row.get('best_available_product_label_basis', '').lower().replace('-', '').replace('_', '').replace(' ', '')
+    if 'besthit' in basis and 'gff' not in basis:
+        return available_label(row.get('best_available_product_label', ''))
+    return ''
+
+
 def product_labels(families, links):
-    def label(row):
-        return available_label(row.get("protein_product_name", "")) or available_label(
-            row.get("best_available_product_label", "")
-        )
 
     labels = {}
     for family in families:
         candidates = sorted(
             [r for r in links if r["orthogroup"] == family and r["side"] == "recipient"], key=lambda r: r["gene_id"]
         )
-        known = [r for r in candidates if available_label(r.get("protein_product_name", ""))]
-        if not known:
-            known = [r for r in candidates if available_label(r.get("best_available_product_label", ""))]
+        known = [r for r in candidates if best_hit_product(r)]
         row = known[0] if known else {}
         labels[family] = dict(
-            protein_product=label(row) or "Annotation unavailable",
+            protein_product=best_hit_product(row) or "Annotation unavailable",
             annotation_gene_id=row.get("gene_id", ""),
-            annotation_basis=available_label(row.get("protein_product_source", ""))
-            if available_label(row.get("protein_product_name", ""))
+            annotation_basis='SwissProt_best_hit_prediction'
+            if available_label(row.get('swissprot_best_hit_protein_name', ''))
             else available_label(row.get("best_available_product_label_basis", "")),
-            all_recipient_product_labels="; ".join(sorted({label(r) for r in candidates if label(r)})),
+            all_recipient_product_labels="; ".join(sorted({best_hit_product(r) for r in candidates if best_hit_product(r)})),
         )
     return labels
 
@@ -167,15 +171,11 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
                 for link in annotation_links:
                     if (
                         link["orthogroup"] == family
-                        and not available_label(link.get("protein_product_name"))
-                        and not available_label(link.get("best_available_product_label"))
+                        and not best_hit_product(link)
                     ):
                         recommended = tip_annotations.get(link["gene_id"], {}).get("sprot_recname", "")
                         if available_label(recommended):
-                            link["best_available_product_label"] = recommended
-                            link["best_available_product_label_basis"] = (
-                                "existing stat_branch:sprot_recname (best-hit annotation)"
-                            )
+                            link['swissprot_best_hit_protein_name'] = recommended
                 for row in rows:
                     if row.get("child1") == row.get("child2") == "-999":
                         matches = [s for s in species if row["node_name"].startswith(s + "_")]
@@ -238,7 +238,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     names.set_ylim(n - 0.5, -0.5)
     names.axis("off")
     names.text(0.01, -1.1, "Orthogroup", fontsize=10, weight="bold")
-    names.text(0.19, -1.1, "Protein product / existing annotation", fontsize=10, weight="bold")
+    names.text(0.19, -1.1, "Protein product / best-hit prediction", fontsize=10, weight="bold")
     for i, f in enumerate(families):
         names.text(0.01, i, f, fontsize=8, va="center", color=BLUE)
         names.text(0.19, i, textwrap.fill(labels[f]["protein_product"], width=53), fontsize=8, va="center")
@@ -269,7 +269,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
         "Where the focused orthogroups occur in analyzed trees",
         f"{len(families)} orthogroups × {len(species)} species in species-tree tip order. Orange outlines: individually supported category-1 recipient genes.",
         "Colors count existing gene-tree tips, including duplicate copies; zero does not establish biological absence. Missing families remain NA.\n"
-        "Product labels use one retained recipient annotation per family; source gene, evidence basis and all available labels are in the TSV. Predicted labels do not establish function.",
+        "Product labels always use one retained recipient best-hit prediction per family; source gene, evidence basis and all available labels are in the TSV. Predicted labels do not establish function.",
     )
     nodes = {node.name: [t.name for t in node.get_terminals()] for node in tree.find_clades() if node.name}
 

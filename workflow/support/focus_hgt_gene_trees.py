@@ -267,7 +267,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         "All genomic tracks share a linear kb axis centered on their focal-gene midpoint, without intron compression.\n"
         "CDS blocks are coding exons; UTR blocks are shown when recorded; unavailable structures stay unconfirmed.\n"
         "Each displayed focal/neighbor gene has its own product, best-hit organism/accession and kingdom-to-genus ranks.\n"
-        "GFF products and best-hit product predictions are distinguished; missing annotations/ranks stay unavailable.\n"
+        "Protein products always use Swiss-Prot best-hit predictions; missing names/ranks stay unavailable. GFF products are not displayed.\n"
         "Best-hit taxonomy does not identify the modeled donor or establish host background for a neighbor.\n"
         "context_annotation_audit.tsv retains the per-gene input fields, sources and exact event/context mapping.\n"
         "This is whole-scaffold context, not conserved gene order or proof of physical integration.\n"

@@ -523,7 +523,10 @@ def test_context_annotations_require_exact_gene_family_and_same_best_hit(tmp_pat
     annotations = ContextAnnotations(path)
     exact = annotations.get('A_gene', 'OG1')
     cells = annotation_cells(exact, 'A', 'Focal')
-    assert 'Own product' in cells[1] and 'Different hit product' not in cells[1]
+    assert 'Different hit product' in cells[1] and 'Own product' not in cells[1]
+    assert 'best-hit prediction' in cells[1] and 'GFF' not in cells[1]
+    assert annotation_cells(dict(exact, swissprot_best_hit_protein_name=''), 'A', 'Focal')[1] == 'Unavailable'
+    assert annotation_cells(dict(exact, besthit_accession=''), 'A', 'Focal')[1] == 'Unavailable'
     assert 'Kingdom: unavailable' in cells[3]  # No name-based taxonomy inference.
     missing = annotations.get('A_neighbor')
     assert missing['besthit_accession'] == '' and missing['protein_product_name'] == ''
@@ -542,6 +545,9 @@ def test_context_annotations_require_exact_gene_family_and_same_best_hit(tmp_pat
     write_tsv(path, list(row), [dict(row, besthit_accession='')])
     with pytest.raises(ValueError, match='same hit accession'):
         ContextAnnotations(path)
+    slim = {k: v for k, v in row.items() if not k.startswith('protein_product_')}
+    write_tsv(path, list(slim), [slim])
+    assert ContextAnnotations(path).get('A_gene', 'OG1')['swissprot_best_hit_protein_name'] == 'Different hit product'
 
 
 def test_context_annotation_page_six_tracks_with_neighbors_and_long_rank_names(tmp_path):
@@ -596,7 +602,8 @@ def test_context_annotation_page_six_tracks_with_neighbors_and_long_rank_names(t
     assert len(reader.pages) == 1
     text = ' '.join(reader.pages[0].extract_text().split())
     assert text.count('Best-hit taxonomic ranks') == 6
-    assert 'best-hit prediction' in text and 'GFF product unavailable' in text
+    assert 'best-hit prediction' in text and 'GFF product' not in text
+    assert 'Transcriptional regulator (NtrC/NifA family)' not in text
     assert 'Schizosaccharomycetaceae' in text and 'Genus: Schizosaccharomyces' in text
     assert len(annotations.display_audit) == 42
     assert {(r['context_focal_gene_id'], r['gene_id']) for r in annotations.display_audit} == expected
@@ -620,8 +627,8 @@ def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(t
     with pytest.raises(ValueError,match='not a subset'):
         filtering_counts(events,events[:1],path)
     names = product_labels(['OG1'],[dict(orthogroup='OG1',side='recipient',gene_id='g1',protein_product_name='Test protein',protein_product_source='existing GFF')])
-    assert names['OG1']['protein_product'] == 'Test protein'
-    assert names['OG1']['annotation_gene_id'] == 'g1'
+    assert names['OG1']['protein_product'] == 'Annotation unavailable'
+    assert names['OG1']['annotation_gene_id'] == ''
     fallback = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
                               protein_product_name='NA', protein_product_source='NA',
                               best_available_product_label='Existing best-hit name',
@@ -632,6 +639,11 @@ def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(t
     mixed = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
                            protein_product_name='Recorded product'),
                            dict(orthogroup='OG1', side='recipient', gene_id='g2', protein_product_name='NA',
-                           best_available_product_label='Existing best-hit name')])['OG1']
-    assert mixed['protein_product'] == 'Recorded product'
-    assert mixed['all_recipient_product_labels'] == 'Existing best-hit name; Recorded product'
+                           swissprot_best_hit_protein_name='Existing best-hit name')])['OG1']
+    assert mixed['protein_product'] == 'Existing best-hit name'
+    assert mixed['annotation_gene_id'] == 'g2'
+    assert mixed['annotation_basis'] == 'SwissProt_best_hit_prediction'
+    assert mixed['all_recipient_product_labels'] == 'Existing best-hit name'
+    unverified = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
+                                 best_available_product_label='Unspecified annotation')])['OG1']
+    assert unverified['protein_product'] == 'Annotation unavailable'

@@ -33,15 +33,16 @@ class ContextAnnotations:
             raw = path.read_bytes()
             self.sources[str(path)] = hashlib.sha256(raw).hexdigest()
             reader = csv.DictReader(io.StringIO(raw.decode()), delimiter='\t')
-            required = {'gene_id', 'orthogroup', 'protein_product_name', 'protein_product_status',
-                        'besthit_accession', 'besthit_organism', *[f'besthit_{r}' for r in RANKS]}
+            required = {'gene_id', 'orthogroup', 'besthit_accession', 'besthit_organism',
+                        *[f'besthit_{r}' for r in RANKS]}
             if not required.issubset(reader.fieldnames or []):
                 raise ValueError('Context annotations lack required per-gene columns')
             for row in reader:
                 gene = available(row['gene_id'])
                 if not gene or gene in self.rows:
                     raise ValueError('Duplicate or empty context annotation gene ID')
-                if (available(row['besthit_organism']) or any(available(row[f'besthit_{r}']) for r in RANKS)) \
+                if (available(row['besthit_organism']) or available(row.get('swissprot_best_hit_protein_name'))
+                        or any(available(row[f'besthit_{r}']) for r in RANKS)) \
                         and not available(row['besthit_accession']):
                     raise ValueError('Best-hit organism/taxonomy requires the same hit accession')
                 self.rows[gene] = row
@@ -113,14 +114,9 @@ def wrap_cell(text, width):
 
 def annotation_cells(row, species, label):
     gene = row['gene_id'].removeprefix(species + '_')
-    product = available(row.get('protein_product_name'))
-    if product:
-        product += '\n[GFF product]'
-    elif available(row.get('swissprot_best_hit_protein_name')):
-        product = row['swissprot_best_hit_protein_name'] + '\n[best-hit prediction; GFF product unavailable]'
-    else:
-        product = 'Unavailable'
     accession, organism = available(row.get('besthit_accession')), available(row.get('besthit_organism'))
+    product = available(row.get('swissprot_best_hit_protein_name'))
+    product = product + '\n[best-hit prediction]' if product and accession else 'Unavailable'
     hit = (organism or 'Organism unavailable') + '\n[' + accession + ']' if accession else 'Unavailable'
     taxonomy = []
     for i in range(0, len(RANKS), 2):
@@ -160,7 +156,7 @@ def draw_annotation_table(ax, records, color):
     ax.set_ylim(0, height)
     ax.axis('off')
     edges = TABLE_EDGES
-    headings = ['Track label / gene ID', 'Protein product', 'Best-hit organism / accession', 'Best-hit taxonomic ranks']
+    headings = ['Track label / gene ID', 'Protein product (best-hit)', 'Best-hit organism / accession', 'Best-hit taxonomic ranks']
     ax.add_patch(Rectangle((0, height-25), 1, 25, color='#eef1f4', zorder=0))
     for x, text in zip(edges[:-1], headings, strict=True):
         ax.text(x+.006, height-8, text, fontsize=8, weight='bold', va='top')

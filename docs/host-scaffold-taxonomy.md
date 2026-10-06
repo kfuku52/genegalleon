@@ -244,21 +244,24 @@ IDs, structures, exact event branches and shared axis limits. The workflow suppl
 existing `species_gff_info`; standalone calls use `--gff_info_root`.
 
 Under each genomic track, page 2 lists the focal gene and every displayed
-neighbor with its own protein product, Swiss-Prot best-hit organism/accession,
+neighbor with its Swiss-Prot best-hit protein product prediction, organism/accession,
 and kingdom, phylum, class, order, family and genus. The table uses the same
 left-to-right neighbor numbers as the track; focal rows are colored by side.
-GFF products and best-hit protein-name predictions have explicit labels.
+Products always use the same best hit's protein name, labeled `best-hit prediction`;
+GFF products are not displayed or used as a fallback.
 Missing hits, products and ranks remain unavailable; a neighbor never inherits
 the focal gene's annotation. These hit ranks describe the annotation hit and
 do not identify the modeled GeneRax donor or establish host scaffold support.
+The focused orthogroup distribution figure uses the same best-hit-only product
+policy; existing GFF product names do not replace missing predictions.
 
 Standalone calls accept `--context_annotations_tsv`, an existing normalized
-per-gene TSV with unique full `gene_id`, `orthogroup`, `protein_product_name`
-(own GFF product), `protein_product_status`, `besthit_accession`,
+per-gene TSV with unique full `gene_id`, `orthogroup`, `besthit_accession`,
 `besthit_organism`, and `besthit_{kingdom,phylum,class,order,family,genus}` columns.
-Optional fields include `swissprot_best_hit_protein_name`, hit taxid, GFF/hit/taxonomy
-source paths and SHA-256 hashes, product feature IDs and selected-transcript/locus
-scope. Join each neighbor to its **own** family and exact leaf hit, then resolve
+Supply `swissprot_best_hit_protein_name` for product predictions; optional provenance
+fields include hit taxid and hit/taxonomy source paths and SHA-256 hashes.
+Legacy GFF annotation columns remain readable but do not determine the product label.
+Join each neighbor to its **own** family and exact leaf hit, then resolve
 that same hit's taxid using the existing taxonomy database. This input adds
 annotation only and does not request a sequence search or taxonomy update.
 Without it, exact focal-family leaf hit annotations are used when available;

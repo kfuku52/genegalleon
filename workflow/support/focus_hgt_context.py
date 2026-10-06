@@ -440,7 +440,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
              'Thick blocks: coding exons; thin gray blocks: recorded UTR; lines: introns. Every genomic track uses the same uncompressed kb axis.\n'
              'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
              'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Best-hit taxonomy is annotation, not the modeled transfer donor.\n'
-             'GFF product and best-hit prediction are distinguished. Unavailable ranks stay missing. Full annotation sources and gene/event mappings are in the annotation audit.\n'
+             'Protein products always use best-hit predictions; unavailable names and ranks stay missing. Full annotation sources and gene/event mappings are in the annotation audit.\n'
              'Neighbors are not asserted to be host-classified or conserved in order; CDS-only records do not establish complete exon/UTR structure. * = feature extends beyond window.',
              fontsize=8, color='#666666')
     fig.savefig(path, format='pdf')
