@@ -276,7 +276,7 @@ their source hashes. BUSCO stacks use the existing GeneGalleon palette: black
 single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
 When the original completed rescue publication is available, rescued genes are
 stacked by supporting donor group: nearest relatives only, phylogenetically
-balanced references only, or both. Classification uses all consolidated
+balanced references only, both, or self-species only. Classification uses all consolidated
 `support` records of each accepted model, deduplicates donor species, and counts
 each gene locus once. A donor in both frozen reference lists supports both
 groups; the both category does not require two distinct donor species. The
@@ -287,8 +287,25 @@ per-gene supporting species are saved in `model_change_summary.json`.
 Rescue model IDs can name gene or transcript features; explicit GFF `Parent`
 links map transcript identities to gene loci without guessing suffixes.
 Self-species-only support must belong to a frozen self-synteny comparison;
-these loci are excluded from the interspecies stack and shown in each bar's
-`interspecies-supported / self-species-only` count label.
+these loci form the fourth stack segment. A locus with both self-species and
+interspecies support is assigned to its interspecies reference group, so each
+gene appears once. Each bar's label shows the total across all four segments.
+When donor groups are available, the accepted-coding-path panel shows two bars
+per species: the upper bar partitions paths into repairs and additional
+isoforms, and the lower bar partitions the same paths by supporting donor group.
+The lower bar uses the rescue colours and frozen nearest/balanced lists. It
+also includes an `Other interspecies only` segment for paths supported solely
+by interspecies donors outside those lists, which can occur through reverse
+correspondence edges. Paths with a selected-group donor are classified by
+membership in those groups; any additional other donors remain in the saved
+per-path evidence. Self-species-only means homology support from the target
+species, not target RNA evidence. Counts use the recorded accepted prediction
+`donors`, cross-check candidate support and alignments, and count each candidate
+path once. Each lower bar must sum to the upper bar's repair plus isoform total.
+`accepted_path_support_counts` and `accepted_paths_support` retain the category
+counts and per-path donors in `model_change_summary.json`. Excluded species
+remain unavailable in both panels. Historical summaries lacking donor groups
+retain their original unpartitioned coding-path display.
 The rescue directory is inferred from the refinement plan. For imported explicit
 inputs, supply `--rescue-output /path/to/original-completed-rescue`; its augmented
 GFF hash must match the frozen source annotation. Historical inputs without

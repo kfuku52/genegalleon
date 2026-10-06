@@ -25,6 +25,78 @@ from species_labeling import extract_species_label
 RESCUE_SUPPORT = ("nearest_only", "balanced_only", "both")
 RESCUE_SUPPORT_COLOURS = ("#5275b5", "#9a6ab2", "#37956f")
 RESCUE_SUPPORT_LABELS = ("Nearest relatives only", "Phylogenetically balanced only", "Both reference groups")
+RESCUE_SELF_COLOUR = "#b59b5b"
+RESCUE_SELF_LABEL = "Self-species only"
+PATH_SUPPORT = (*RESCUE_SUPPORT, "self_only", "other_interspecies")
+PATH_SUPPORT_COLOURS = (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR, "#8a929b")
+PATH_SUPPORT_LABELS = (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL, "Other interspecies only")
+
+
+def classify_accepted_path_support(models, species, selection, allowed_species):
+    """Partition accepted paths by recorded homology donors, keeping RNA separate."""
+    nearest = set(selection["nearest_references"][species]) - {species}
+    balanced = set(selection["common_references"]) - {species}
+    counts, evidence = dict.fromkeys(PATH_SUPPORT, 0), {}
+    for model in models:
+        if model.get("status") != "accepted":
+            continue
+        candidate = model["candidate"]
+        identifier = candidate["candidate_id"]
+        donors = model.get("donors")
+        if (not isinstance(donors, list) or not donors
+                or any(not isinstance(d, str) or d not in allowed_species for d in donors)):
+            raise ValueError("Accepted coding path lacks valid supporting donors: " + identifier)
+        donors = set(donors)
+        # Target species is bound by the prediction receipt, not a candidate field.
+        if (candidate["source_transcript_id"] != identifier or identifier in evidence
+                or model["change_type"] not in {"model_revision", "isoform_addition"}
+                or donors != set(candidate["support"]["donors"])
+                or donors != {a["donor_species"] for a in model["alignments"]}):
+            raise ValueError("Accepted coding-path identity/support records disagree: " + identifier)
+        near, common = bool(donors & nearest), bool(donors & balanced)
+        category = ("both" if near and common else "nearest_only" if near else "balanced_only" if common
+                    else "self_only" if donors == {species} else "other_interspecies")
+        counts[category] += 1
+        evidence[identifier] = {"gene_id": model["gene_id"], "change_type": model["change_type"],
+                                "supporting_donors": sorted(donors), "category": category,
+                                "other_supporting_donors": sorted(donors - nearest - balanced - {species})}
+    return counts, evidence
+
+
+def collect_accepted_path_support(root, changes):
+    """Extend a saved model summary from verified predictions without rereading rescue models."""
+    from plot_gene_model_refinement import verified_json
+
+    plan_hash = digest(root / "plan.json")
+    request = json.loads((root / "plan.json").read_text())["request"]
+    if (changes["plan_sha256"] != plan_hash
+            or changes["effective_receipt_sha256"] != digest(root / "effective/receipt.json")
+            or {s for s, c in changes["species"].items() if c["refinement_status"] == "analysed"}
+            != set(request["sources"])):
+        raise ValueError("Saved model counts belong to another refinement publication")
+    selection = changes["rescue_reference_selection"]
+    updates = {}
+    for species, value in changes["species"].items():
+        if value["refinement_status"] == "not_analysed":
+            continue
+        directory = root / "predictions" / species
+        receipt_hash = digest(directory / "receipt.json")
+        if receipt_hash != changes["evidence"][species]["prediction_receipt_sha256"]:
+            raise ValueError("Saved prediction receipt changed: " + species)
+        models = verified_json(directory, "predictions.json", plan_hash)
+        counts, evidence = classify_accepted_path_support(models, species, selection, set(request["sources"]))
+        for key, kind in (("accepted_repair_paths", "model_revision"), ("accepted_isoform_paths", "isoform_addition")):
+            if value[key] != sum(e["change_type"] == kind for e in evidence.values()):
+                raise ValueError("Saved accepted coding-path counts changed: " + species)
+        if digest(directory / "receipt.json") != receipt_hash:
+            raise ValueError("Prediction receipt changed while reading support: " + species)
+        updates[species] = (counts, evidence)
+    if digest(root / "plan.json") != plan_hash:
+        raise ValueError("Refinement plan changed while collecting path support")
+    for species, (counts, evidence) in updates.items():
+        changes["species"][species]["accepted_path_support_counts"] = counts
+        changes["evidence"][species]["accepted_paths_support"] = evidence
+    return changes
 
 
 def classify_rescue_support(models, species, rescued, plan):
@@ -282,6 +354,9 @@ def collect_model_changes(root, pairs, rescue_output=None):
                           "catalog_receipt_sha256": digest(root / "catalog" / name / "receipt.json"),
                           "prediction_receipt_sha256": digest(root / "predictions" / name / "receipt.json")}
         if rescue_root is not None:
+            path_counts, path_support = classify_accepted_path_support(models, name, rescue_plan, set(request["sources"]))
+            stats[name]["accepted_path_support_counts"] = path_counts
+            evidence[name]["accepted_paths_support"] = path_support
             from rescue_model_evidence import json_array, read_json_snapshot
             worker = rescue_root / "rescued" / name
             receipt, receipt_hash = read_json_snapshot(worker / "receipt.json")
@@ -323,10 +398,11 @@ def plot_comparison(rows, output, model_changes=None):
     from matplotlib.patches import Patch
     from matplotlib.ticker import MaxNLocator
 
-    stacked_rescue = False
+    stacked_rescue = stacked_paths = False
     if model_changes is not None:
         stats = model_changes["species"]
         stacked_rescue = any(v.get("rescue_support_counts") is not None for v in stats.values())
+        stacked_paths = any(v.get("accepted_path_support_counts") is not None for v in stats.values())
         if len(rows) != len(stats) or set(stats) != {r["species"] for r in rows}:
             raise ValueError("Model-count and BUSCO species membership differ")
         for row in rows:
@@ -351,10 +427,20 @@ def plot_comparison(rows, output, model_changes=None):
                         or type(self_only) is not int or self_only < 0
                         or sum(support.values()) + self_only != value["prior_rescued_loci"]):
                     raise ValueError("Rescue support categories plus self-only loci must sum to the rescued gene count")
+            path_support = value.get("accepted_path_support_counts")
+            if row["refinement_status"] == "not_analysed":
+                if path_support is not None:
+                    raise ValueError("Unanalysed coding-path support counts must be unavailable")
+            elif stacked_paths:
+                if (not isinstance(path_support, dict) or set(path_support) != set(PATH_SUPPORT)
+                        or any(type(c) is not int or c < 0 for c in path_support.values())
+                        or sum(path_support.values()) != value["accepted_repair_paths"] + value["accepted_isoform_paths"]):
+                    raise ValueError("Coding-path support categories must sum to the accepted path count")
     extra = model_changes is not None
+    support_legend = stacked_rescue or stacked_paths
     margin_left = .20 if extra else .24
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
-    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, max(6, .43 * len(rows) + 2)),
+    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, max(6, (.52 if stacked_paths else .43) * len(rows) + 2)),
                              gridspec_kw={"width_ratios": [1, 1, .65, .75, .9] if extra else [1, 1, .65],
                                           "wspace": .16 if extra else .12}, sharey=True)
     colors = STATUS_COLOURS
@@ -387,16 +473,26 @@ def plot_comparison(rows, output, model_changes=None):
                         count = value["rescue_support_counts"][category]
                         axes[3].barh(i, count, left=offset, color=color, height=.7)
                         offset += count
+                    axes[3].barh(i, value.get("rescue_self_only_loci", 0), left=offset,
+                                 color=RESCUE_SELF_COLOUR, height=.7)
                 else:
                     axes[3].barh(i, rescued, color="#5275b5", height=.7)
-                self_only = value.get("rescue_self_only_loci", 0)
-                label = f"{rescued - self_only} / {self_only}" if stacked_rescue else str(rescued)
-                axes[3].annotate(label, (rescued - self_only if stacked_rescue else rescued, i),
+                axes[3].annotate(str(rescued), (rescued, i),
                                  xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
-                axes[4].barh(i, repair, color="#187d97", height=.7)
-                axes[4].barh(i, isoform, left=repair, color="#d38b21", height=.7)
-                axes[4].annotate(f"{repair} / {isoform}", (repair + isoform, i), xytext=(4, 0),
+                type_y = i - .20 if stacked_paths else i
+                height = .32 if stacked_paths else .7
+                axes[4].barh(type_y, repair, color="#187d97", height=height)
+                axes[4].barh(type_y, isoform, left=repair, color="#d38b21", height=height)
+                axes[4].annotate(f"{repair} / {isoform}", (repair + isoform, type_y), xytext=(4, 0),
                                  textcoords="offset points", va="center", fontsize=9)
+                if stacked_paths:
+                    offset = 0
+                    for category, color in zip(PATH_SUPPORT, PATH_SUPPORT_COLOURS, strict=True):
+                        count = value["accepted_path_support_counts"][category]
+                        axes[4].barh(i + .20, count, left=offset, color=color, height=.32)
+                        offset += count
+                    axes[4].annotate(str(offset), (offset, i + .20), xytext=(4, 0),
+                                     textcoords="offset points", va="center", fontsize=9)
     labels = [r["species"].replace("_", " ") + ("  [not analysed]" if r["refinement_status"] == "not_analysed" else "") for r in rows]
     axes[0].set_yticks(range(len(rows)), labels)
     axes[0].invert_yaxis()
@@ -424,23 +520,25 @@ def plot_comparison(rows, output, model_changes=None):
         axes[4].set_xlim(0, max(1, paths_max) * 1.65)
         for ax in axes[3:]:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axes[3].set_xlabel("Loci with interspecies support" if stacked_rescue else "Previously added gene loci")
-        axes[4].set_xlabel("Accepted paths; labels: repair / isoform")
-    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=.23 if stacked_rescue else .18 if extra else .14)
+        axes[3].set_xlabel("Previously rescued gene loci" if stacked_rescue else "Previously added gene loci")
+        axes[4].set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
+    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=.25 if support_legend else .18 if extra else .14)
     fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
                  "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
     fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
     fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
-               loc="lower left", bbox_to_anchor=(margin_left, .14 if stacked_rescue else .09 if extra else .065), ncol=4, frameon=False)
-    if stacked_rescue:
-        fig.legend([Patch(facecolor=c) for c in RESCUE_SUPPORT_COLOURS], RESCUE_SUPPORT_LABELS,
-                   loc="lower left", bbox_to_anchor=(margin_left, .105), ncol=3, frameon=False,
-                   title="Previously rescued gene loci: supporting donor groups")
+               loc="lower left", bbox_to_anchor=(margin_left, .175 if support_legend else .09 if extra else .065), ncol=4, frameon=False)
+    if support_legend:
+        group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
+        group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
+        fig.legend([Patch(facecolor=c) for c in group_colors], group_labels,
+                   loc="lower left", bbox_to_anchor=(margin_left, .125), ncol=3, frameon=False,
+                   title="Supporting donor groups (rescue loci and lower coding-path bars)")
         fig.legend([Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
                    ["Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(.70, .14), ncol=2, frameon=False)
+                   loc="lower left", bbox_to_anchor=(.70, .175), ncol=2, frameon=False)
     elif extra:
         fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
                    ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
@@ -449,9 +547,13 @@ def plot_comparison(rows, output, model_changes=None):
     note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
     if extra:
         note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
-    if stacked_rescue:
+    if support_legend:
         note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
-        note += "\nRescue labels = interspecies-supported / self-species-only loci; self-only loci are outside the three groups."
+        note += "\nSelf-species only = no interspecies support; mixed self/interspecies support uses the interspecies group."
+    if stacked_paths:
+        note += "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate."
+    elif stacked_rescue:
+        note += " Labels: total loci."
     fig.text(margin_left, .025, note, fontsize=10)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")

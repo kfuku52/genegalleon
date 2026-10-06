@@ -205,7 +205,56 @@ def test_imported_rescue_support_verifies_receipts_models_and_gff(tmp_path):
         busco.collect_model_changes(root, pairs, rescue)
 
 
-def test_rescue_stacks_render_all_three_groups_and_reject_missing_or_wrong_totals(tmp_path):
+def test_accepted_path_support_uses_verified_donors_not_target_rna():
+    selection = {"nearest_references": {"Target": ["Near", "Overlap"]}, "common_references": ["Balanced", "Overlap"]}
+    allowed = {"Target", "Near", "Balanced", "Overlap", "Other"}
+    def model(identifier, donors):
+        return {"status": "accepted", "change_type": "isoform_addition", "gene_id": "same_gene", "donors": donors,
+                "candidate": {"candidate_id": identifier, "source_transcript_id": identifier, "support": {"donors": donors, "rna_paths": ["target_RNA"]}},
+                "alignments": [{"donor_species": d} for d in donors]}
+    models = [model("n", ["Near", "Near", "Other"]), model("b", ["Balanced"]),
+              model("both", ["Near", "Balanced"]), model("overlap", ["Overlap"]),
+              model("s", ["Target"]), model("mixed", ["Target", "Near"]), model("other", ["Target", "Other"])]
+    counts, evidence = busco.classify_accepted_path_support(models, "Target", selection, allowed)
+    assert counts == {"nearest_only": 2, "balanced_only": 1, "both": 2, "self_only": 1, "other_interspecies": 1}
+    assert len(evidence) == 7 and evidence["n"]["other_supporting_donors"] == ["Other"]
+    assert evidence["b"]["category"] == "balanced_only"  # Target RNA does not count as self homology.
+    for broken in [model("empty", []), model("unknown", ["Unknown"])]:
+        with pytest.raises(ValueError, match="valid supporting donors"):
+            busco.classify_accepted_path_support([broken], "Target", selection, allowed)
+    with pytest.raises(ValueError, match="records disagree"):
+        busco.classify_accepted_path_support([models[0], models[0]], "Target", selection, allowed)
+    broken = model("bad", ["Near"])
+    broken["alignments"] = [{"donor_species": "Balanced"}]
+    with pytest.raises(ValueError, match="records disagree"):
+        busco.classify_accepted_path_support([broken], "Target", selection, allowed)
+
+
+def test_saved_model_summary_adds_path_support_and_rejects_changed_receipt(tmp_path):
+    inputs, edges, sources = tiny_inputs(tmp_path)
+    root = tmp_path / "refinement"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    refinement.finalize(root, value)
+    changes = busco.collect_model_changes(root, busco.input_pairs(root))
+    names = list(changes["species"])
+    changes["rescue_reference_selection"] = {"nearest_references": {n: [] for n in names}, "common_references": names}
+    busco.collect_accepted_path_support(root, changes)
+    assert all(s["accepted_path_support_counts"] == dict.fromkeys(busco.PATH_SUPPORT, 0) for s in changes["species"].values())
+    assert all(e["accepted_paths_support"] == {} for e in changes["evidence"].values())
+    receipt = root / "predictions" / names[0] / "receipt.json"
+    receipt.write_text(receipt.read_text() + "\n")
+    with pytest.raises(ValueError, match="Saved prediction receipt changed"):
+        busco.collect_accepted_path_support(root, changes)
+
+
+def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch):
+    from matplotlib.axes import Axes
+    original_barh = Axes.barh
+    bars = []
+    def barh(ax, y, width, *args, **kwargs):
+        bars.append((ax, width, kwargs.get("left", 0), kwargs.get("color"), y))
+        return original_barh(ax, y, width, *args, **kwargs)
+    monkeypatch.setattr(Axes, "barh", barh)
     path = tmp_path / "summary.txt"
     path.write_text(summary())
     result = busco.read_result(path)
@@ -214,21 +263,42 @@ def test_rescue_stacks_render_all_three_groups_and_reject_missing_or_wrong_total
     changes = {"species": {
         "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 11, "accepted_repair_paths": 2,
                       "accepted_isoform_paths": 3, "rescue_self_only_loci": 1,
-                      "rescue_support_counts": {"nearest_only": 3, "balanced_only": 2, "both": 5}},
+                      "rescue_support_counts": {"nearest_only": 3, "balanced_only": 2, "both": 5},
+                      "accepted_path_support_counts": dict.fromkeys(busco.PATH_SUPPORT, 1)},
         "Drosophyllum_lusitanicum": {"refinement_status": "not_analysed", "prior_rescued_loci": None,
                                    "accepted_repair_paths": None, "accepted_isoform_paths": None},
     }}
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
-    for color in busco.RESCUE_SUPPORT_COLOURS:
+    for color in (*busco.RESCUE_SUPPORT_COLOURS, busco.RESCUE_SELF_COLOUR):
         assert color in svg
-    for label in busco.RESCUE_SUPPORT_LABELS:
+    for label in (*busco.RESCUE_SUPPORT_LABELS, busco.RESCUE_SELF_LABEL):
         assert label in svg
     assert "donor belonging to both lists" in svg
-    assert ">10 / 1<" in svg and "self-only loci are outside the three groups" in svg
+    assert ">11<" in svg and "mixed self/interspecies support uses the interspecies group" in svg
+    self_bar = next(b for b in bars if b[3] == busco.RESCUE_SELF_COLOUR)
+    assert self_bar[1:3] == (1, 10)
+    rescue_bars = [b for b in bars if b[0] is self_bar[0]]
+    assert len(rescue_bars) == 4 and sum(b[1] for b in rescue_bars) == 11
+    coding_ax = next(b[0] for b in bars if b[3] == "#187d97")
+    upper = [b for b in bars if b[0] is coding_ax and b[4] == -.20]
+    lower = [b for b in bars if b[0] is coding_ax and b[4] == .20]
+    assert len(upper) == 2 and sum(b[1] for b in upper) == 5
+    assert len(lower) == 5 and sum(b[1] for b in lower) == 5
+    assert [b[2] for b in lower] == [0, 1, 2, 3, 4]
+    assert [b[3] for b in lower] == list(busco.PATH_SUPPORT_COLOURS)
+    assert "Upper: repair / isoform; lower: support" in svg and "Other interspecies only" in svg
     assert svg.count(">Not analysed<") == 2
     changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 6
     with pytest.raises(ValueError, match="sum to the rescued"):
+        busco.plot_comparison(rows, tmp_path, changes)
+    changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 5
+    changes["species"]["Species_a"]["accepted_path_support_counts"]["self_only"] = 2
+    with pytest.raises(ValueError, match="sum to the accepted"):
+        busco.plot_comparison(rows, tmp_path, changes)
+    changes["species"]["Drosophyllum_lusitanicum"]["accepted_path_support_counts"] = dict.fromkeys(busco.PATH_SUPPORT, 0)
+    changes["species"]["Species_a"]["accepted_path_support_counts"]["self_only"] = 1
+    with pytest.raises(ValueError, match="coding-path support counts must be unavailable"):
         busco.plot_comparison(rows, tmp_path, changes)
 
 
