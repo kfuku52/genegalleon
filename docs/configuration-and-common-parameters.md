@@ -122,6 +122,11 @@ For BUSCO, the conservative default is `GG_COMMON_BUSCO_LINEAGE=eukaryota_odb12`
 Setting `GG_COMMON_BUSCO_LINEAGE=auto` explicitly resolves a dataset from species names.
 For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.
 For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
+Placement mappings are resolved from BUSCO's standard `file_versions.tsv`,
+using the latest integer ODB version available for all three domains. Dated
+archives are checked against the manifest before the existing mapping-ready
+stamp is published. A directory URL is not used as a listing, and acquisition
+errors remain visible when no local mapping can be reused.
 In `gg_genome_evolution`, the multi-species BUSCO run and BUSCO summary are shared between the
 species-tree branch and the BUSCO-based genome-evolution branch. Those shared stages are controlled
 by `run_species_busco` and `run_build_species_busco_summary`; the genome-evolution BUSCO steps reuse
