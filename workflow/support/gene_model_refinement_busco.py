@@ -928,7 +928,7 @@ def plot_swissprot_diagnostics(rows, output, changes):
     from matplotlib.patches import Patch
     from rescue_swissprot_evidence import NO_SUPPORT_REASONS
     groups = ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")
-    labels = ("Whole-protein TE support", "Partial TE flag only", "No TE support / flag", "Translation not assessed")
+    labels = ("Primary TE support", "Partial TE flag only", "No TE support / flag", "Translation not assessed")
     colours = ("#b45158", "#d99843", "#477b80", "#d6dbe1")
     reason_labels = ("No returned hit", "Weak hit", "Short hit (coverage passed)", "Partial hit (coverage failed)", "Annotation unknown")
     reason_colours = ("#c7cdd4", "#9a6ab2", "#d99843", "#5275b5", "#477b80")

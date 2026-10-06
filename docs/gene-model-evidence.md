@@ -227,7 +227,7 @@ Primary TE/other categories remain unchanged. A separate
 `partial_te_homology` flag marks any returned TE-labelled hit passing support
 E-value, paired-residue and query-coverage thresholds but failing target
 coverage, without a competing-score filter. It does not prove TE origin.
-`rescue_swissprot_diagnostics.png/svg` distinguishes whole-protein TE support,
+`rescue_swissprot_diagnostics.png/svg` distinguishes primary TE support,
 partial flags alone, no TE support/flag and unassessed translation, and displays
 excluded species. Every locus counts once.
 
