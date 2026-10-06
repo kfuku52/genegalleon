@@ -242,6 +242,14 @@ available from protein-only inputs.
 DNA-tree and dating steps that still require CDS-only assumptions are disabled
 automatically in protein mode.
 
+MCMCtree's derived standalone NHX/Newick sidecars follow NWKit's default
+`--rooting-token no` and `--rooting-nhx no` output policy. This omits declaration
+tokens without changing the root, topology, branch lengths, names or support.
+The original FigTree/NEXUS declarations and dated tree remain unchanged during
+sidecar recovery. Explicit NWKit `--rooting-token yes` emits the rooting token;
+the ON/OFF outputs must have the same interpreted tree semantics.
+Conversions that cannot retain the interpreted rooting state remain rejected.
+
 ## How `GG_COMMON_*` is applied
 
 Shared defaults are loaded in two places:
