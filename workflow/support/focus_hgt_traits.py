@@ -211,7 +211,8 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
 
 
 def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
-                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit=''):
+                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
+                context_annotations=''):
     csv.field_size_limit(100_000_000)
     fields, events = read_tsv(event_path, EVENT_REQUIRED)
     link_fields, links = read_tsv(link_path, LINK_REQUIRED)
@@ -285,7 +286,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             from focus_hgt_gene_trees import export_gene_trees
 
             gene_trees[trait] = export_gene_trees(root / "all_category1/tree_plot", selected, links, gene_family_root,
-                                                 gff_root=gff_root)
+                                                 gff_root=gff_root, context_annotations=context_annotations)
             from focus_hgt_figures import export_figures
             checks = read_tsv(root / 'all_category1/tree_plot/event_node_audit.tsv')[1]
             ids = {r['event_id'] for r in checks if r['status'] == 'selected'}
@@ -334,11 +335,14 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
 
 
 def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
-             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit=''):
+             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
+             context_annotations=''):
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
     if filter_audit and plots:
         inputs.append(Path(filter_audit).resolve())
+    if context_annotations and plots and gene_family_root:
+        inputs.append(Path(context_annotations).resolve())
     for suffix in (".schema.json", ".metadata.json"):
         sidecar = Path(str(trait_path) + suffix)
         if sidecar.exists():
@@ -348,7 +352,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                             "species_trait_contract.py", "species_trait_schema.py")]
     if gene_family_root and plots:
         code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r',
-                                                'focus_hgt_context.py', 'focus_hgt_figures.py', 'gene_tree_plot_config.py')]
+                                                'focus_hgt_context.py', 'focus_hgt_context_annotations.py',
+                                                'focus_hgt_figures.py', 'gene_tree_plot_config.py')]
         code += sorted((helper_root / "treevis/R").glob("*.R"))
     output = Path(output).absolute()
     if output.is_symlink() or any(path == output.resolve() or output.resolve() in path.parents for path in inputs):
@@ -364,7 +369,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     backup = None
     try:
         manifest = build_focus(stage, *inputs[:4], plots=plots, arrow_alpha=arrow_alpha,
-                               gene_family_root=gene_family_root, gff_root=gff_root, filter_audit=filter_audit)
+                               gene_family_root=gene_family_root, gff_root=gff_root, filter_audit=filter_audit,
+                               context_annotations=context_annotations)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
         if any(digest(path) != code_before[path.name] for path in code):
@@ -404,13 +410,16 @@ def main():
     parser.add_argument("--gene_family_root", default="",
                         help="Existing raw/ZIP-backed family outputs for scaffold-supported category-1 gene-tree PDFs")
     parser.add_argument('--gff_info_root', default='', help='Existing per-species gff_info TSVs for context-page structures')
+    parser.add_argument('--context_annotations_tsv', default='',
+                        help='Existing per-gene product and best-hit taxonomy annotations for context pages')
     parser.add_argument('--filter_audit_tsv', default='', help='Optional project event-level direction/support filtering audit (TSV or TSV.gz)')
     parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
                         default=DEFAULT_TRANSFER_ARROW_ALPHA)
     args = parser.parse_args()
     manifest = generate(args.event_tsv, args.event_gene_tsv, args.species_tree, args.species_trait,
                         args.output_dir, plots=args.plots == "1", arrow_alpha=args.transfer_arrow_alpha,
-                        gene_family_root=args.gene_family_root, gff_root=args.gff_info_root, filter_audit=args.filter_audit_tsv)
+                        gene_family_root=args.gene_family_root, gff_root=args.gff_info_root, filter_audit=args.filter_audit_tsv,
+                        context_annotations=args.context_annotations_tsv)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],
                           result_sets=len(manifest["result_index"])), indent=2))
 

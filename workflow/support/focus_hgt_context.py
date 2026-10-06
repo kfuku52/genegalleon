@@ -335,7 +335,7 @@ def draw_context_neighborhood(ax, entry, extent, color):
                 ax.annotate('', xy=(endpoint, 0), xytext=(endpoint - direction * min(0.4, max(0.05, b - a)), 0),
                             arrowprops=dict(arrowstyle='->', color=edge, lw=0.7))
             if focal_flag:
-                label = row['gene_id'].removeprefix(link.get('gene_species', '') + '_').replace('GeneID', 'GID')
+                label = 'Focal'
             else:
                 neighbor_number += 1
                 label = str(neighbor_number)
@@ -351,11 +351,13 @@ def draw_context_neighborhood(ax, entry, extent, color):
     ax.set_xlabel('Genomic position relative to focal-gene midpoint (kb)', fontsize=8)
 
 
-def render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE):
+def render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE,
+                           annotations=None):
     import matplotlib
 
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    from focus_hgt_context_annotations import ContextAnnotations, context_annotation_rows, draw_annotation_table
     from focus_hgt_gene_trees import number
 
     selected, audit, totals = choose_context_genes(events, links, coordinates, max_genes_per_side)
@@ -376,24 +378,37 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
             for x in [int(entry['focal']['start']), int(entry['focal']['end'])]
             + [x for pair in blocks(entry['focal'].get('utr_blocks', '')) for x in pair]) / 1000 + 20
         for entry in selected if entry['focal']]) / 5) * 5
-    fig = plt.figure(figsize=(15, 9))
-    fig.suptitle('A traceable candidate with donor and recipient context', fontsize=16, x=0.06, ha='left', y=0.975)
-    fig.text(0.06, 0.925, f"{ordered_events[0]['orthogroup']} | {len(events)} modeled transfer event(s) | "
-             f"at most {max_genes_per_side} distinct genes per side; existing GFF coordinates", fontsize=10)
+    annotations = annotations if annotations is not None else ContextAnnotations()
+    family = ordered_events[0]['orthogroup']
+    leaves = {r['node_name']: r for r in rows if r['child1'] == r['child2'] == '-999'}
+    entries = {side: [e for e in selected if e['side'] == side] for side in totals}
+    tables = {id(e): context_annotation_rows(e, annotations, family, leaves) for e in selected}
+    for entry in selected:
+        annotations.display_audit.extend({k: v for k, v in r.items() if k not in {'cells', 'height_pt'}}
+                                          for r in tables[id(entry)])
+    nrows = max(totals[side]['shown'] for side in totals)
+    row_heights = [145 + max(25 + sum(r['height_pt'] for r in tables[id(entries[side][i])])
+                            for side in entries if i < len(entries[side])) + 30 for i in range(nrows)]
+    page_height = 165 + sum(row_heights) + 95
+    fig = plt.figure(figsize=(22, page_height / 72))
+    def y(point):
+        return 1 - point / page_height
+    fig.suptitle('A traceable candidate with donor and recipient context', fontsize=17, x=0.05, ha='left', y=y(23))
+    fig.text(0.05, y(55), f"{family} | {len(events)} modeled transfer event(s) | "
+             f"at most {max_genes_per_side} distinct genes per side; existing GFF coordinates and annotations", fontsize=10)
     reference_text = '; '.join(references[:4])
     if len(references) > 4:
         reference_text += f'; +{len(references) - 4} events (see context audit)'
-    fig.text(0.06, 0.89, reference_text, fontsize=8)
-    nrows = max(totals[side]['shown'] for side in totals)
-    grid = fig.add_gridspec(nrows, 2, left=0.07, right=0.96, top=0.72, bottom=0.20, hspace=1.2, wspace=0.18)
+    fig.text(0.05, y(78), reference_text, fontsize=9)
     for column, (side, color, title) in enumerate([('donor', BLUE, 'DONOR DESCENDANTS'), ('recipient', ORANGE, 'RECIPIENT DESCENDANTS')]):
-        left = 0.07 if column == 0 else 0.552
-        fig.text(left, 0.835, title, color=color, fontsize=14, weight='bold')
+        left = 0.05 if column == 0 else 0.535
+        fig.text(left, y(115), title, color=color, fontsize=15, weight='bold')
         count = totals[side]
-        fig.text(left, 0.8, f"Shown {count['shown']} of {count['total']} genes | {count['omitted']} omitted | "
+        fig.text(left, y(139), f"Shown {count['shown']} of {count['total']} genes | {count['omitted']} omitted | "
                  f"{count['supported']} scaffold-supported in total", fontsize=9, color=color)
-        for index, entry in enumerate(e for e in selected if e['side'] == side):
-            ax = fig.add_subplot(grid[index, column])
+        top = 165
+        for index, entry in enumerate(entries[side]):
+            ax = fig.add_axes([left, y(top+115), .415, 62 / page_height])
             draw_context_neighborhood(ax, entry, extent, color)
             link = entry['link']
             prefix = 'host_scaffold_background_class_'
@@ -414,16 +429,23 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
             status = entry['status'].replace('_', ' ')
             scaffold = entry['focal']['chromosome'] if entry['focal'] else link.get('host_scaffold_id') or 'unavailable'
             ax.set_title(f"{tags} | {link['gene_id']}\nScaffold {scaffold} | {status}\n{measured}",
-                         loc='left', fontsize=8, color=color, pad=10)
-    fig.text(0.06, 0.055,
+                         loc='left', fontsize=9, color=color, pad=10)
+            table_rows = tables[id(entry)]
+            table_height = 25 + sum(r['height_pt'] for r in table_rows)
+            table_ax = fig.add_axes([left, y(top+145+table_height), .435, table_height / page_height])
+            draw_annotation_table(table_ax, table_rows, color)
+            top += row_heights[index]
+    fig.text(0.05, y(page_height-23),
              'Blue: donor descendant focal gene; orange: recipient descendant focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
              'Thick blocks: coding exons; thin gray blocks: recorded UTR; lines: introns. Every genomic track uses the same uncompressed kb axis.\n'
              'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
-             'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Neighbor labels/IDs, count units and omitted genes are in the context audit.\n'
+             'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Best-hit taxonomy is annotation, not the modeled transfer donor.\n'
+             'GFF product and best-hit prediction are distinguished. Unavailable ranks stay missing. Full annotation sources and gene/event mappings are in the annotation audit.\n'
              'Neighbors are not asserted to be host-classified or conserved in order; CDS-only records do not establish complete exon/UTR structure. * = feature extends beyond window.',
-             fontsize=7.5, color='#666666')
+             fontsize=8, color='#666666')
     fig.savefig(path, format='pdf')
     plt.close(fig)
+    annotations.verify()
     by_id = {e['event_id']: e for e in events}
     for row in audit:
         event = by_id[row['event_id']]
@@ -435,11 +457,12 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
     return audit
 
 
-def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=True, max_genes_per_side=None):
+def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=True, max_genes_per_side=None,
+                   annotations=None):
     if max_genes_per_side is not None:
         if gene_tree_panel:
             raise ValueError("Bounded context pages require gene_tree_panel=False")
-        return render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side)
+        return render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side, annotations)
     import matplotlib
 
     matplotlib.use("Agg")

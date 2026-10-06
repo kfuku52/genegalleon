@@ -175,7 +175,8 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
         positional = list(args)
         positional[8] = False
         return real_export(*positional, **kwargs)
-    def capture(directory, events, links, root, gff_root=''):
+    def capture(directory, events, links, root, gff_root='', context_annotations=''):
+        assert context_annotations == str(annotation_path)
         calls.append((directory, {e['event_id'] for e in events}, root))
         write_tsv(directory/'event_node_audit.tsv', ['event_id','status'],
                   [dict(event_id=e['event_id'],status='selected') for e in events])
@@ -183,13 +184,16 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
     monkeypatch.setattr(focus_hgt_traits, 'export_bundle', export_without_species_pdf)
     monkeypatch.setattr(focus_hgt_gene_trees, 'export_gene_trees', capture)
     monkeypatch.setattr(focus_hgt_figures, 'export_figures', lambda *args, **kwargs:dict(pdf_count=3))
-    report = generate(*source, plots=True, gene_family_root='existing-families')
+    annotation_path = source[0].parent/'existing_annotations.tsv'
+    annotation_path.write_text('Existing normalized annotation input\n')
+    report = generate(*source, plots=True, gene_family_root='existing-families', context_annotations=str(annotation_path))
     assert len(calls) == 2  # One aggregate per binary/categorical trait, no per-tip rendering.
     assert all(path.name == 'tree_plot' and root == 'existing-families' for path, _, root in calls)
     assert calls[0][1] == {'OG1:3:1', 'OG1:3:2', 'OG1:3:4'}
     assert calls[1][1] == {'OG1:3:1', 'OG1:3:5'}
     assert report['gene_tree_plots']['binary']['selected_event_count'] == 3
     assert report['summary_figures']['binary']['pdf_count'] == 3
+    assert str(annotation_path.resolve()) in report['inputs_sha256']
     assert not list(source[-1].rglob('transfer_tree.pdf'))
 
 
@@ -475,7 +479,7 @@ def test_bounded_context_caps_distinct_genes_and_audits_omitted_and_unknown_evid
     audit = render_context(pdf, stat, events, links, coordinates, gene_tree_panel=False, max_genes_per_side=3)
     reader = PdfReader(pdf)
     assert len(reader.pages) == 1
-    assert tuple(map(float, reader.pages[0].mediabox)) == (0, 0, 1080, 648)
+    assert float(reader.pages[0].mediabox.width) == 22 * 72
     text = reader.pages[0].extract_text()
     assert 'DONOR DESCENDANTS' in text and 'RECIPIENT DESCENDANTS' in text
     assert 'Shown 3 of 4 genes | 1 omitted' in text and 'Shown 3 of 5 genes | 2 omitted' in text
@@ -505,6 +509,104 @@ def test_bounded_context_caps_distinct_genes_and_audits_omitted_and_unknown_evid
             choose_context_genes(events, links, coordinates, limit)
     with pytest.raises(ValueError, match='passing event-linked gene'):
         choose_context_genes(events, [r for r in links if r['side'] == 'donor'], coordinates)
+
+
+def test_context_annotations_require_exact_gene_family_and_same_best_hit(tmp_path):
+    from focus_hgt_context_annotations import RANKS, ContextAnnotations, annotation_cells
+
+    row = dict(gene_id='A_gene', orthogroup='OG1', protein_product_name='Own product',
+               protein_product_status='exact_transcript_product', besthit_accession='P12345',
+               besthit_organism='Hit species', swissprot_best_hit_protein_name='Different hit product',
+               **{f'besthit_{rank}': '' for rank in RANKS})
+    path = tmp_path/'annotations.tsv'
+    write_tsv(path, list(row), [row])
+    annotations = ContextAnnotations(path)
+    exact = annotations.get('A_gene', 'OG1')
+    cells = annotation_cells(exact, 'A', 'Focal')
+    assert 'Own product' in cells[1] and 'Different hit product' not in cells[1]
+    assert 'Kingdom: unavailable' in cells[3]  # No name-based taxonomy inference.
+    missing = annotations.get('A_neighbor')
+    assert missing['besthit_accession'] == '' and missing['protein_product_name'] == ''
+    with pytest.raises(ValueError, match='family/gene mapping'):
+        annotations.get('A_gene', 'wrong_family')
+    with pytest.raises(ValueError, match='best hit disagrees'):
+        annotations.get('A_gene', 'OG1', dict(node_name='A_gene', sprot_best='DifferentHit'))
+    with pytest.raises(ValueError, match='organism disagrees'):
+        annotations.get('A_gene', 'OG1', dict(node_name='A_gene', sprot_best='P12345', organism='Wrong organism'))
+    write_tsv(path, list(row), [dict(row, protein_product_name='Changed')])
+    with pytest.raises(ValueError, match='changed during rendering'):
+        annotations.verify()
+    write_tsv(path, list(row), [row, row])
+    with pytest.raises(ValueError, match='Duplicate or empty'):
+        ContextAnnotations(path)
+    write_tsv(path, list(row), [dict(row, besthit_accession='')])
+    with pytest.raises(ValueError, match='same hit accession'):
+        ContextAnnotations(path)
+
+
+def test_context_annotation_page_six_tracks_with_neighbors_and_long_rank_names(tmp_path):
+    from focus_hgt_context import GenomeCoordinates, render_context
+    from focus_hgt_context_annotations import (
+        RANKS,
+        TABLE_EDGES,
+        TABLE_WIDTH_PT,
+        ContextAnnotations,
+        annotation_cells,
+        text_width,
+    )
+    from pypdf import PdfReader
+
+    stat, events, _ = focused_node_source()
+    gff = tmp_path/'gff'
+    gff.mkdir()
+    links, records, expected = [], [], set()
+    for side, species in [('donor', 'D'), ('recipient', 'A')]:
+        gff_rows = []
+        for i in range(3):
+            gene = species + ('_gene' if i == 0 else f'_copy{i}')
+            scaffold = f'scaffold{i}'
+            links.append(dict(supported_link(events[0]['event_id'], side, gene), gene_species=species,
+                              host_scaffold_id=scaffold))
+            if gene not in {r['node_name'] for r in stat}:
+                stat.append(dict(stat[0], branch_id=str(len(stat)+10), node_name=gene))
+            ids = [f'{gene}_neighbor{j}' for j in range(3)] + [gene] + [f'{gene}_neighbor{j}' for j in range(3, 6)]
+            for j, ident in enumerate(ids):
+                start = 1000 + j*3000
+                gff_rows.append(dict(gene_id=ident, chromosome=scaffold, start=str(start), end=str(start+900),
+                                     strand='+', feature_type='CDS', feature_blocks=f'{start}-{start+300};{start+700}-{start+900}',
+                                     utr_blocks='', num_intron='1'))
+                row = dict(gene_id=ident, orthogroup='OG1' if ident == gene else 'OtherOG',
+                           protein_product_name='Transcriptional regulator (NtrC/NifA family)' if species == 'D' else '',
+                           protein_product_status='locus_level_product' if species == 'D' else 'unavailable',
+                           swissprot_best_hit_protein_name='U3 small nucleolar RNA-associated protein 6',
+                           besthit_accession='P12345', besthit_organism='Schizosaccharomyces pombe (strain 972 / ATCC 24843) (Fission yeast)',
+                           **{f'besthit_{rank}': value for rank, value in zip(RANKS,
+                               ['Fungi', 'Ascomycota', 'Schizosaccharomycetes', 'Schizosaccharomycetales',
+                                'Schizosaccharomycetaceae', 'Schizosaccharomyces'], strict=True)})
+                records.append(row)
+                expected.add((gene, ident))
+        write_tsv(gff/f'{species}.gff_info.tsv', list(gff_rows[0]), gff_rows)
+    path = tmp_path/'annotations.tsv'
+    write_tsv(path, list(records[0]), records)
+    annotations = ContextAnnotations(path)
+    pdf = tmp_path/'contexts.pdf'
+    render_context(pdf, stat, events, links, GenomeCoordinates(gff), gene_tree_panel=False,
+                   max_genes_per_side=3, annotations=annotations)
+    reader = PdfReader(pdf)
+    assert len(reader.pages) == 1
+    text = ' '.join(reader.pages[0].extract_text().split())
+    assert text.count('Best-hit taxonomic ranks') == 6
+    assert 'best-hit prediction' in text and 'GFF product unavailable' in text
+    assert 'Schizosaccharomycetaceae' in text and 'Genus: Schizosaccharomyces' in text
+    assert len(annotations.display_audit) == 42
+    assert {(r['context_focal_gene_id'], r['gene_id']) for r in annotations.display_audit} == expected
+    assert all(r['event_ids'] == events[0]['event_id'] for r in annotations.display_audit)
+    assert all(r['orthogroup'] == 'OtherOG' for r in annotations.display_audit if r['context_role'] == 'neighbor')
+    for record in records:
+        cells = annotation_cells(record, record['gene_id'][0], 'Focal')
+        for i, cell in enumerate(cells):
+            assert all(text_width(line) <= (TABLE_EDGES[i+1]-TABLE_EDGES[i])*TABLE_WIDTH_PT-10
+                       for line in cell.split('\n'))
 
 
 def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(tmp_path):

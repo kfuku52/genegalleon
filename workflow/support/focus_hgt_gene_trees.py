@@ -148,7 +148,7 @@ def write(path, fields, rows):
         writer.writerows(rows)
 
 
-def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root=''):
+def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations=''):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
     csv.field_size_limit(100_000_000)
     directory.mkdir(parents=True)
@@ -160,9 +160,11 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
             raise ValueError("Unsafe orthogroup identifier")
         families[family].append(event)
     from focus_hgt_context import CONTEXT_MAX_GENES_PER_SIDE, GenomeCoordinates, render_context
+    from focus_hgt_context_annotations import ContextAnnotations
     from gene_tree_plot_config import replay
 
     coordinates = GenomeCoordinates(gff_root)
+    annotations = ContextAnnotations(context_annotations)
     index, audit, sources, context_audit, configurations = [], [], {}, [], {}
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)
@@ -219,7 +221,8 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
                             selected_ids = {r['event_id'] for r in passed}
                             context_audit += render_context(context, rows, [e for e in group if e['event_id'] in selected_ids],
                                                             links, coordinates, gene_tree_panel=False,
-                                                            max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE)
+                                                            max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE,
+                                                            annotations=annotations)
                             from pypdf import PdfReader, PdfWriter
                             if len(PdfReader(source).pages) != 1 or len(PdfReader(context).pages) != 1:
                                 raise ValueError('Focused gene-tree PDF must have exactly one tree and one context page')
@@ -242,8 +245,11 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
     write(directory / "event_node_audit.tsv", EVENT_FIELDS, audit)
     if context_audit:
         write(directory / 'context_gene_audit.tsv', list(context_audit[0]), context_audit)
+    if annotations.display_audit:
+        write(directory / 'context_annotation_audit.tsv', list(annotations.display_audit[0]), annotations.display_audit)
     (directory / 'renderer_settings.json').write_text(json.dumps(configurations, indent=2) + '\n')
     coordinates.verify()
+    annotations.verify()
     (directory / "README.txt").write_text(
         "Native GeneGalleon gene trees for observed category-1 recipients\n\n"
         "Orange diamonds and HGT labels mark exact gene-tree transfer nodes, including internal nodes.\n"
@@ -260,9 +266,14 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         "Repeated links for one side/gene are drawn once and preserve every event in the audit. No extra gene-tree inset is drawn.\n"
         "All genomic tracks share a linear kb axis centered on their focal-gene midpoint, without intron compression.\n"
         "CDS blocks are coding exons; UTR blocks are shown when recorded; unavailable structures stay unconfirmed.\n"
+        "Each displayed focal/neighbor gene has its own product, best-hit organism/accession and kingdom-to-genus ranks.\n"
+        "GFF products and best-hit product predictions are distinguished; missing annotations/ranks stay unavailable.\n"
+        "Best-hit taxonomy does not identify the modeled donor or establish host background for a neighbor.\n"
+        "context_annotation_audit.tsv retains the per-gene input fields, sources and exact event/context mapping.\n"
         "This is whole-scaffold context, not conserved gene order or proof of physical integration.\n"
         "All event IDs, branch/node IDs and selection/withholding reasons are in event_node_audit.tsv.\n"
         "No sequence or phylogenetic analysis is run. The parent focused event tables are unchanged.\n")
     return dict(profile=PROFILE, family_source_sha256=sources, gff_source_sha256=coordinates.sources,
+                context_annotation_source_sha256=annotations.sources,
                 rendered_family_count=sum(row["status"] == "rendered" for row in index),
                 selected_event_count=sum(row["status"] == "selected" for row in audit))

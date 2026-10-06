@@ -243,6 +243,31 @@ genes, selection rank/reason, measured evidence and count units, complete gene
 IDs, structures, exact event branches and shared axis limits. The workflow supplies
 existing `species_gff_info`; standalone calls use `--gff_info_root`.
 
+Under each genomic track, page 2 lists the focal gene and every displayed
+neighbor with its own protein product, Swiss-Prot best-hit organism/accession,
+and kingdom, phylum, class, order, family and genus. The table uses the same
+left-to-right neighbor numbers as the track; focal rows are colored by side.
+GFF products and best-hit protein-name predictions have explicit labels.
+Missing hits, products and ranks remain unavailable; a neighbor never inherits
+the focal gene's annotation. These hit ranks describe the annotation hit and
+do not identify the modeled GeneRax donor or establish host scaffold support.
+
+Standalone calls accept `--context_annotations_tsv`, an existing normalized
+per-gene TSV with unique full `gene_id`, `orthogroup`, `protein_product_name`
+(own GFF product), `protein_product_status`, `besthit_accession`,
+`besthit_organism`, and `besthit_{kingdom,phylum,class,order,family,genus}` columns.
+Optional fields include `swissprot_best_hit_protein_name`, hit taxid, GFF/hit/taxonomy
+source paths and SHA-256 hashes, product feature IDs and selected-transcript/locus
+scope. Join each neighbor to its **own** family and exact leaf hit, then resolve
+that same hit's taxid using the existing taxonomy database. This input adds
+annotation only and does not request a sequence search or taxonomy update.
+Without it, exact focal-family leaf hit annotations are used when available;
+unavailable neighbor annotations and taxonomic ranks stay missing.
+`context_annotation_audit.tsv` records every displayed gene, its annotation
+inputs and exact context/event references; the input TSV hash is in the manifest.
+The one-page canvas expands to fit complete annotations while retaining the
+three-gene-per-side display limit and the same linear genomic scale per track.
+
 `hgt_summary_focus_filter_audit_tsv` (standalone `--filter_audit_tsv`) accepts an
 optional existing project event-level direction/UFBoot audit, including gzip TSV.
 When supplied, the filtering-flow PDF also shows the upstream modeled,
