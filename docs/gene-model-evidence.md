@@ -217,8 +217,10 @@ classification changes do not discard raw searches. Target annotations bind
 the FASTA/metadata release and annotation classifier. Checksummed SQLite records
 and batched cursors avoid per-accession network lock operations.
 Coverage, length and competing-score changes therefore only reassess hits.
-`--search-evalue` defaults to `1e-5`, separately from the support E-value;
-support cannot be looser than the search bound. Actual search parameter,
+When omitted, `--search-evalue` uses the larger of `1e-5` and the support
+E-value, preserving older calls that only set a looser support cutoff.
+An explicitly set search bound must include the support E-value. A tighter
+support cutoff alone keeps the default search bound and cache. Actual search parameter,
 sequence or database changes correctly require new searches.
 
 Primary TE/other categories remain unchanged. A separate

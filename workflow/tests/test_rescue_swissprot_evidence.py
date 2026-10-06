@@ -95,6 +95,23 @@ def test_partial_te_flag_is_independent_of_primary_host_and_competing_scores():
     assert swiss.diagnostics(hits, swiss.DEFAULTS)["partial_te_accessions"] == ["te_related"]
 
 
+@pytest.mark.parametrize("implicit", ["absent", "none"])
+def test_legacy_loose_support_cutoff_expands_implicit_search_bound(tmp_path, implicit):
+    args, _ = fixture(tmp_path)
+    subprocess.run(["mmseqs", "createdb", str(args.db_prefix) + ".pep", str(args.db_prefix) + ".mmseqs"], check=True)
+    args.evalue, args.search_evalue = 1e-3, None
+    if implicit == "absent":
+        del args.search_evalue
+    swiss.audit(args)
+    evidence = json.loads((args.output / "evidence.json").read_text())
+    assert evidence["parameters"]["evalue"] == evidence["parameters"]["search_evalue"] == 1e-3
+    # An explicitly chosen insufficient raw bound must still fail, rather than
+    # silently making support claims from a truncated search.
+    args.search_evalue = 1e-5
+    with pytest.raises(ValueError, match="search/support parameters"):
+        swiss.audit(args)
+
+
 def test_support_threshold_and_metadata_changes_reuse_raw_search(tmp_path):
     args, _ = fixture(tmp_path)
     subprocess.run(["mmseqs", "createdb", str(args.db_prefix) + ".pep", str(args.db_prefix) + ".mmseqs"], check=True)

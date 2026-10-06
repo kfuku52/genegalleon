@@ -388,6 +388,11 @@ def audit(args):
     parameters = dict(DEFAULTS)
     for name in parameters:
         parameters[name] = getattr(args, name, parameters[name])
+    if getattr(args, "search_evalue", None) is None:
+        # Preserve callers that only configured the support cutoff before the
+        # raw search bound became a separate option. A tighter support cutoff
+        # keeps the default raw search cache; a looser one needs broader hits.
+        parameters["search_evalue"] = max(DEFAULTS["search_evalue"], parameters["evalue"])
     if (not 0 < parameters["evalue"] <= parameters["search_evalue"] <= 1 or not all(0 < parameters[n] <= 1 for n in ("query_coverage", "target_coverage", "score_fraction"))
             or parameters["minimum_alignment"] < 1 or parameters["max_hits"] < 2
             or not 1 <= parameters["sensitivity"] <= 7.5 or args.cpus < 1 or args.memory_gb < 1
@@ -543,7 +548,8 @@ def main():
     parser.add_argument("--memory-gb", type=int, default=8)
     parser.add_argument("--scratch", type=Path, help="Local temporary storage; final evidence remains in --output")
     for name, value in DEFAULTS.items():
-        parser.add_argument("--" + name.replace("_", "-"), type=type(value), default=value)
+        parser.add_argument("--" + name.replace("_", "-"), type=type(value),
+                            default=None if name == "search_evalue" else value)
     audit(parser.parse_args())
 
 
