@@ -1384,7 +1384,7 @@ def test_external_qc_refuses_inputs_changed_during_report(hidden_models, monkeyp
     augmented.mkdir()
     (augmented / "receipt.json").write_text("{}\n")
     rescue.write_tsv(augmented / "inputs.tsv", ("species", "rescued_models"), [(n, 0) for n in names])
-    monkeypatch.setattr(rescue, "finalize", lambda *_: augmented)
+    monkeypatch.setattr(rescue, "finalize", lambda *_, **__: augmented)
     post = root / "post_busco"
     post.mkdir()
     for source in (root / "busco").iterdir():

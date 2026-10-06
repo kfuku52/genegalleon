@@ -470,6 +470,16 @@ File hashes and parsed overrides are frozen. A refinement plan using
 `--rescue-output` inherits its profiles unless supplied another profile file.
 There is no automatic plant/animal/fungus threshold switch.
 
+Rescue publications use a single directory traversal and bounded parallel
+SHA-256 verification, with at most the requested `--cpus` hash workers. Every
+regular output retains its full content hash and before/after stat guards;
+receipt schemas, diagnostic files, source checks and publication recovery are
+unchanged. Finalization, QC and worker completion use the same CPU budget.
+On 256 stratified real rescue intervals (1,280 output files), interleaved warm
+verification runs under pipeline load gave median 2.58 s for legacy traversal
+and 1.08 s for single-pass traversal with eight hash workers; every file hash
+matched. This measures output verification, not whole-pipeline speed.
+
 `GG_INPUT_GENE_MODEL_GENOME_INDEX_CACHE` sets an optional execution cache
 (`GG_GENOME_INDEX_CACHE` for direct CLIs). Prefer local scratch sized for the
 genomes processed. Uncompressed sources are linked; compressed genomes are

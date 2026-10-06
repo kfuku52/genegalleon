@@ -39,6 +39,7 @@ try:
     from rescue_anchor_admission import prepare_rescue_genome
     from rescue_model_quality import model_quality
     from species_labeling import extract_species_label
+    from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
@@ -49,6 +50,7 @@ except ImportError:
     from .rescue_anchor_admission import prepare_rescue_genome
     from .rescue_model_quality import model_quality
     from .species_labeling import extract_species_label
+    from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
 COMPARABLE_QUALITY = ("lineage", "version", "mode", "lineage_date", "markers")
@@ -131,6 +133,7 @@ def identities():
     versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
     versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
     versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))
+    versions["output_hashes_implementation"] = digest(sys.modules[hash_outputs.__module__].__file__)
     return versions
 
 
@@ -388,12 +391,18 @@ def verify_sources(plan, names, keys):
         raise ValueError("Frozen rescue input changed")
 
 
-def verified(directory, key):
+def verified(directory, key, hash_workers=1):
     try:
         receipt = json.loads((directory / "receipt.json").read_text())
-        return isinstance(receipt, dict) and receipt.get("key") == key and isinstance(receipt.get("files"), dict) and bool(receipt["files"]) and all(
-            isinstance(p, str) and isinstance(value, str) and
-            (directory / p).is_file() and digest(directory / p) == value for p, value in receipt["files"].items())
+        if not (isinstance(receipt, dict) and receipt.get("key") == key
+                and isinstance(receipt.get("files"), dict) and bool(receipt["files"])
+                and all(isinstance(p, str) and isinstance(value, str)
+                        for p, value in receipt["files"].items())):
+            return False
+        paths = [directory / p for p in receipt["files"]]
+        # digest itself refuses nonregular files and fences content reads with
+        # before/after stat identities. Every listed file is still read in full.
+        return hash_paths(directory, paths, workers=hash_workers, hash_function=digest) == receipt["files"]
     except (OSError, ValueError):
         return False
 
@@ -439,7 +448,7 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None):
+def stage(root, relative, key, builder, guard=None, hash_workers=1):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -451,7 +460,7 @@ def stage(root, relative, key, builder, guard=None):
         recover_publication(dest, journal, token)
         if guard:
             guard()
-        if verified(dest, key):
+        if verified(dest, key, hash_workers=hash_workers):
             print(f"Reused {relative}", flush=True)
             return dest
         tmp = Path(tempfile.mkdtemp(prefix=".working-" + token + "-", dir=dest.parent))
@@ -459,8 +468,7 @@ def stage(root, relative, key, builder, guard=None):
             builder(tmp)
             if guard:
                 guard()
-            files = {str(p.relative_to(tmp)): digest(p) for p in tmp.rglob("*")
-                     if p.is_file() and p.name not in {"genome.fa", "genome.mpi"} and not p.is_symlink()}
+            files = hash_outputs(tmp, workers=hash_workers, hash_function=digest)
             if not files:
                 raise ValueError("Empty stage outputs")
             atomic_json(tmp / "receipt.json", {"key": key, "files": files})
@@ -1154,7 +1162,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         (tmp / "genome.mpi").unlink(missing_ok=True)
         (tmp / "genome.fa").unlink()
     return stage(root, Path("rescued") / name, key, build,
-                 lambda: require_same_key(key, rescue_key(root, plan, name)))
+                 lambda: require_same_key(key, rescue_key(root, plan, name)), hash_workers=cpus)
 
 
 def consolidate(validated, existing, species):
@@ -1310,13 +1318,13 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                 validated.append(check_interval(checked))
 
 
-def finalize(root, plan, names=None, destination=Path("augmented")):
+def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1):
     names = names or plan["species"]
     key = {"plan": plan_digest(root, plan), "rescue_receipts": {
         n: digest(root / "rescued" / n / "receipt.json") for n in names}}
     def guard():
         for name in names:
-            if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
+            if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=hash_workers):
                 raise ValueError("Rescue incomplete or corrupted: " + name)
         verify_sources(plan, names, ["fasta", "gff", "genome", "busco"])
         require_same_key(key, {"plan": plan_digest(root, plan), "rescue_receipts": {
@@ -1403,24 +1411,24 @@ def finalize(root, plan, names=None, destination=Path("augmented")):
                                            "common_references": plan["common_references"],
                                            "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
-    return stage(root, destination, key, build, guard)
+    return stage(root, destination, key, build, guard, hash_workers=hash_workers)
 
 
-def qc_work_items(root, plan, indices):
+def qc_work_items(root, plan, indices, hash_workers=1):
     """Verify the exact effective inputs before dispatching or reusing BUSCO."""
     result = []
     for index in indices:
         name = plan["species"][index - 1]
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
+        if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=hash_workers):
             raise ValueError("Rescue incomplete or corrupted: " + name)
         effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
             name: digest(root / "rescued" / name / "receipt.json")}}
-        if not verified(root / "effective" / name, effective_key):
+        if not verified(root / "effective" / name, effective_key, hash_workers=hash_workers):
             raise ValueError("Effective inputs incomplete or corrupted: " + name)
         rows = table(root / "effective" / name / "inputs.tsv")
         if len(rows) != 1 or rows[0]["species"] != name:
             raise ValueError("Effective input table has the wrong species")
-        done = verified(root / "workers" / name, {"plan": plan_digest(root, plan), "species": name})
+        done = verified(root / "workers" / name, {"plan": plan_digest(root, plan), "species": name}, hash_workers=hash_workers)
         result.append((index, name, rows[0]["cds"], rows[0]["rescued_models"], int(done)))
     return result
 
@@ -1458,8 +1466,7 @@ def parser():
     for name in ("synteny", "rescue", "finalize", "run", "status", "qc", "worker-complete", "qc-inputs"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--output", type=Path, required=True)
-        if name in {"synteny", "rescue", "run"}:
-            cmd.add_argument("--cpus", type=int, default=1)
+        cmd.add_argument("--cpus", type=int, default=1, help="Predictor and full-checksum CPU budget")
         if name in {"rescue", "run"}:
             cmd.add_argument("--interval-workers", type=int, help="Concurrent independent intervals (default: cpus); total threads stay within cpus")
         if name in {"synteny", "run"}:
@@ -1502,13 +1509,13 @@ def main():
             p.error("task index outside frozen plan")
     if args.command == "qc-inputs":
         indices = [args.task_index] if args.task_index is not None else range(1, len(plan["species"]) + 1)
-        for row in qc_work_items(root, plan, indices):
+        for row in qc_work_items(root, plan, indices, hash_workers=args.cpus):
             print(*row, sep="\t")
     if args.command == "status":
         pending_pairs = []
         for job in plan["synteny_jobs"]:
             try:
-                complete = verified(root / "synteny" / job["id"], comparison_key(root, job))
+                complete = verified(root / "synteny" / job["id"], comparison_key(root, job), hash_workers=args.cpus)
             except (OSError, ValueError):
                 complete = False
             if not complete:
@@ -1516,7 +1523,7 @@ def main():
         pending_species = []
         for i, n in enumerate(plan["species"], 1):
             try:
-                complete = verified(root / "rescued" / n, rescue_key(root, plan, n))
+                complete = verified(root / "rescued" / n, rescue_key(root, plan, n), hash_workers=args.cpus)
             except (OSError, ValueError):
                 complete = False
             if not complete or pending_pairs:
@@ -1526,11 +1533,11 @@ def main():
         if not args.task_index or not 1 <= args.task_index <= len(plan["species"]):
             p.error("Worker index outside frozen plan")
         name = plan["species"][args.task_index - 1]
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
+        if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=args.cpus):
             raise ValueError("Rescue worker has no verified models")
         effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
             name: digest(root / "rescued" / name / "receipt.json")}}
-        if not verified(root / "effective" / name, effective_key):
+        if not verified(root / "effective" / name, effective_key, hash_workers=args.cpus):
             raise ValueError("Rescue worker has no verified exported inputs")
         files = [root / "rescued" / name / "receipt.json", root / "effective" / name / "receipt.json",
                  root / "qc/species_cds_busco_full" / (name + ".busco.full.tsv"),
@@ -1540,7 +1547,8 @@ def main():
             files += [directory / p for p in json.loads((directory / "receipt.json").read_text())["files"]]
         worker_dir = root / "workers" / name
         def current_files():
-            return {os.path.relpath(p, worker_dir): digest(p) for p in files}
+            hashes = hash_paths(root, files, workers=args.cpus, hash_function=digest)
+            return {os.path.relpath(root / p, worker_dir): value for p, value in hashes.items()}
         frozen_files = current_files()
         quality = busco_quality(summary)
         initial = plan["request"]["sources"][name]["quality"]
@@ -1550,13 +1558,14 @@ def main():
         if int(effective["rescued_models"]) == 0 and quality != initial:
             raise ValueError("Unchanged species BUSCO differs from the initial run")
         require_same_key(frozen_files, current_files())
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name)) or not verified(root / "effective" / name, effective_key):
+        if (not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=args.cpus)
+                or not verified(root / "effective" / name, effective_key, hash_workers=args.cpus)):
             raise ValueError("Worker dependencies changed during execution")
         atomic_json(worker_dir / "receipt.json", {
             "key": {"plan": plan_digest(root, plan), "species": name},
             "files": frozen_files})
     if args.command == "qc":
-        finalize(root, plan)
+        finalize(root, plan, hash_workers=args.cpus)
         files = {n: args.busco_dir / (n + ".busco.short.txt") for n in plan["species"]}
         def current_key():
             return {"plan": plan_digest(root, plan), "augmented": digest(root / "augmented" / "receipt.json"),
@@ -1585,9 +1594,9 @@ def main():
                 p.error("rescue task index outside frozen plan")
             rescue(root, plan, plan["species"][index - 1], args.cpus, args.interval_workers)
             name = plan["species"][index - 1]
-            finalize(root, plan, [name], Path("effective") / name)
+            finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus)
     if args.command in {"finalize", "run"}:
-        finalize(root, plan)
+        finalize(root, plan, hash_workers=args.cpus)
 
 
 if __name__ == "__main__":

@@ -2568,16 +2568,16 @@ annotate_gene_model_rescue_swissprot() {
 }
 
 finish_gene_model_rescue() {
-  python "${gg_support_dir}/rescue_gene_models.py" finalize --output "${gene_model_rescue_dir}"
+  python "${gg_support_dir}/rescue_gene_models.py" finalize --output "${gene_model_rescue_dir}" --cpus "${GG_TASK_CPUS}"
   local rescue_index rescue_species rescue_cds changed qc_complete rescue_qc_rows
-  rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}") || return $?
+  rescue_qc_rows=$(python "${gg_support_dir}/rescue_gene_models.py" qc-inputs --output "${gene_model_rescue_dir}" --cpus "${GG_TASK_CPUS}") || return $?
   while IFS=$'\t' read -r rescue_index rescue_species rescue_cds changed qc_complete; do
     if [[ "${qc_complete}" != 1 ]]; then
       gene_model_rescue_busco_species "${rescue_species}" "${rescue_cds}" "${changed}"
-      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" --task-index "${rescue_index}"
+      python "${gg_support_dir}/rescue_gene_models.py" worker-complete --output "${gene_model_rescue_dir}" --task-index "${rescue_index}" --cpus "${GG_TASK_CPUS}"
     fi
   done <<< "${rescue_qc_rows}"
-  python "${gg_support_dir}/rescue_gene_models.py" qc --output "${gene_model_rescue_dir}" --busco-dir "${gene_model_rescue_dir}/qc/species_cds_busco_short"
+  python "${gg_support_dir}/rescue_gene_models.py" qc --output "${gene_model_rescue_dir}" --busco-dir "${gene_model_rescue_dir}/qc/species_cds_busco_short" --cpus "${GG_TASK_CPUS}"
   annotate_gene_model_rescue_swissprot "${gene_model_rescue_dir}"
   echo "Augmented CDS/GFF inputs: ${gene_model_rescue_dir}/augmented/inputs.tsv"
 }
