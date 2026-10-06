@@ -58,6 +58,7 @@ OVERVIEW_TEXT_COLUMNS: List[Tuple[str, str, int, str]] = [
 FLOW_FALLBACK_LABEL = "Unresolved"
 FLOW_OTHER_LABEL = "Other"
 TRAIT_HIGHLIGHT_COLOR = "#b34d00"
+TRANSFER_EDGE_COLOR = "#2b6ca3"
 DEFAULT_TRANSFER_ARROW_ALPHA = 0.55
 TRANSFER_EDGE_COLUMNS = [
     "donor_node",
@@ -183,13 +184,13 @@ def write_overview_readme(out_pdf: str) -> None:
             "",
             "`hgt_transfer_tree.pdf` overlays directed donor/source-to-recipient/target links on the species tree.",
             "Optional species_trait columns show observed numeric/binary tip traits, with all text at 8 pt. The workflow automatically reads input/species_trait/species_trait.tsv; hgt_summary_species_trait accepts a path or none. Binary 1 is orange and 0 gray; numeric colors are scaled independently per column and values are printed. Missing or unmatched values show NA, never zero. Shared schema/metadata contracts apply. No ancestral states are reconstructed.",
-            "With `--transfer_tree_highlight_trait COLUMN`, that binary column also colors positive tip labels and their branches orange. An internal incoming branch is highlighted only when every descendant tip has an observed 1; a mixed or missing descendant prevents highlighting. This is a clade display rule, not ancestral-state reconstruction. Links entering a highlighted recipient branch use the same orange and render above other links; directional counts and distances are unchanged. Bidirectional links retain separate colors for the two recipient ends.",
-            "Links attach to the midpoint of the horizontal branch entering each labelled node. These positions are display conventions, not estimated transfer times. Root endpoints use a dashed display-only stem; zero-length branches coincide with their nodes. Color and ranking retain endpoint-node path distance as a lineage-separation proxy, not distance between inferred transfer locations.",
+            "With `--transfer_tree_highlight_trait COLUMN`, that binary column also colors positive tip labels and their branches orange. An internal incoming branch is highlighted only when every descendant tip has an observed 1; a mixed or missing descendant prevents highlighting. This is a clade display rule, not ancestral-state reconstruction. Links entering a highlighted recipient branch use the same orange and render above other links; directional counts and distances are unchanged. Each direction uses its recipient's highlight state.",
+            "Links attach to the midpoint of the horizontal branch entering each labelled node. These positions are display conventions, not estimated transfer times. Root endpoints use a dashed display-only stem; zero-length branches coincide with their nodes. Ranking retains endpoint-node path distance as a lineage-separation proxy, not distance between inferred transfer locations. Ordinary transfer arrows use one blue color; incoming arrows to highlighted recipient branches use the trait color. Endpoint distance does not determine arrow color and has no colorbar.",
             "Link width is max(0.35, 5 * count / maximum_count) points, using the maximum across all parsed pairs. The visibility floor preserves rare distant events; counts below the floor share a width. It is not a probability score.",
             "Arrowheads point to the recipient/target. `hgt_transfer_edges.tsv` contains every parseable pair, including edges not drawn in the PDF.",
-            "Each directed pair has one arrow with a constant shaft width from donor to recipient. Reciprocal directions use separate curves and their own directional counts. Arrows are translucent by default (`--transfer_arrow_alpha 0.55`; range 0 to 1). Existing reverse directions are added after initial selection (`selection_reason=reciprocal`), so displayed direction counts can exceed the limit without adding more connections. TSV rows remain directional. All internal branch names are drawn above their incoming branch midpoints, regardless of HGT participation. Species names are to the right of terminal branches. All transfer-tree text is 8 pt, including title, legend and colorbar.",
-            "The PDF selects up to 200 mapped pairs by alternating event-count and distance rankings (0 selects all). Darker blue means greater tree distance; width scales with event count with the visibility floor above. Distant links are drawn last.",
-            "`phylogenetic_distance` is the path length between labelled endpoint nodes, not transfer time. `distance_metric` is branch_length when every non-root branch has a finite nonnegative length and at least one is positive; otherwise the entire tree uses topology_edges. `selection_reason` records count, distance, all, or reciprocal; unselected pairs are not_displayed. Unmapped distances are missing. Rankings break ties by count, distance, and endpoint labels deterministically. The color scale uses all mapped pairs, including hidden pairs.",
+            "Each directed pair has one arrow with a constant shaft width from donor to recipient. Reciprocal directions use separate curves and their own directional counts. Arrows are translucent by default (`--transfer_arrow_alpha 0.55`; range 0 to 1). Existing reverse directions are added after initial selection (`selection_reason=reciprocal`), so displayed direction counts can exceed the limit without adding more connections. TSV rows remain directional. All internal branch names are drawn above their incoming branch midpoints, regardless of HGT participation. Species names are to the right of terminal branches. All transfer-tree text is 8 pt, including title and legend.",
+            "The PDF selects up to 200 mapped pairs by alternating event-count and distance rankings (0 selects all). Width scales with event count with the visibility floor above. Distant links are drawn last, and trait-highlighted links render above ordinary links.",
+            "`phylogenetic_distance` is the path length between labelled endpoint nodes, not transfer time. `distance_metric` is branch_length when every non-root branch has a finite nonnegative length and at least one is positive; otherwise the entire tree uses topology_edges. `selection_reason` records count, distance, all, or reciprocal; unselected pairs are not_displayed. Unmapped distances are missing. Rankings break ties by count, distance, and endpoint labels deterministically.",
         ]
     )
     with open(readme_path, "w", encoding="utf-8") as handle:
@@ -803,18 +804,12 @@ def plot_transfer_tree(
         return
 
     plt, PdfPages, _, _, _ = get_pyplot()
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.colors import LinearSegmentedColormap, Normalize
     from matplotlib.lines import Line2D
     from matplotlib.patches import FancyArrowPatch
 
     terminal_count = len(tree.get_terminals())
     branch_anchors = species_branch_anchors(tree, x_by_id, y_by_id)
     fig_height = max(8.0, min(28.0, 0.16 * terminal_count + 2.8))
-    edge_color = "#2b6ca3"
-    cmap = LinearSegmentedColormap.from_list("hgt_distance", ["#c6dbef", "#08306b"])
-    max_distance = float(edge_df["phylogenetic_distance"].max())
-    norm = Normalize(0, max_distance if max_distance > 0 else 1)
     referenced_labels = set()
     for row in display_df.itertuples(index=False):
         donor_label = resolve_tree_endpoint(str(row.donor_node), tree_label_map)
@@ -855,7 +850,7 @@ def plot_transfer_tree(
                 patch = FancyArrowPatch(
                     path=path, arrowstyle="-|>",
                     mutation_scale=7.0, linewidth=width,
-                    color=TRAIT_HIGHLIGHT_COLOR if highlighted else cmap(norm(row.phylogenetic_distance)),
+                    color=TRAIT_HIGHLIGHT_COLOR if highlighted else TRANSFER_EDGE_COLOR,
                     alpha=arrow_alpha,
                     capstyle="butt", zorder=4 if highlighted else 2,
                 )
@@ -879,15 +874,12 @@ def plot_transfer_tree(
             Line2D([0], [0], color="#777777", linewidth=0.65, label="Species-tree branch"),
         ]
         for count in sorted({1, max(1, max_count // 10), max_count}):
-            handles.append(Line2D([0], [0], color=edge_color,
+            handles.append(Line2D([0], [0], color=TRANSFER_EDGE_COLOR,
                                   linewidth=max(0.35, 5.0 * count / max_count), alpha=arrow_alpha,
                                   label=f"{count} HGT events"))
         if highlight_trait:
             handles.append(Line2D([0], [0], color=TRAIT_HIGHLIGHT_COLOR, linewidth=0.8,
                                   label=f"{highlight_trait}=1 clades / incoming HGT"))
-        color_ax = ax.inset_axes([0.63, 0.12, 0.025, 0.40])
-        colorbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), cax=color_ax)
-        colorbar.set_label(f"Endpoint-node distance ({edge_df['distance_metric'].iloc[0]})")
         ax.legend(
             handles=handles,
             loc="upper left",
@@ -910,7 +902,8 @@ def plot_transfer_tree(
         ax.text(
             0.5,
             float(terminal_count) + (1.3 if highlight_trait else 0.88),
-            f"Constant arrow width: directional count (0.35 pt floor) | alpha: {arrow_alpha:g} | darker blue: greater distance",
+            f"Constant arrow width: directional count (0.35 pt floor) | alpha: {arrow_alpha:g} | "
+            + (f"{highlight_trait}=1 recipient highlight" if highlight_trait else "uniform arrow color"),
             ha="center",
             va="bottom",
             fontsize=8,

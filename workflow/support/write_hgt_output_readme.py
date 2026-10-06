@@ -503,7 +503,7 @@ def build_readme(paths: Dict[str, str]) -> str:
         "- 既存gene/branch表の`donor_*`分類はbest-hit proxyで、GeneRax transfer元の確定情報ではありません。方向と両側の背景確認には新しいイベント表の`generax_donor_node` / `generax_recipient_node`を使います。",
         "- イベント表はXMLのdonor継続側とtransferBack側を個別に追跡し、後続transferを経たgeneを背景集約から除外します。内部種枝のscaffold確認は現存子孫による代理確認です。自動閾値・自動除外は適用しません。",
         "- branch表の`representative_*`列は枝内の全gene注釈を置き換えるものではありません。best-hit注釈の最頻組み合わせから1件を抜き出した代表値なので、全遺伝子の詳細はgene表で確認してください。",
-        "- plot出力の`hgt_transfer_edges.tsv`は`generax_transfer`の`Y@src@dest`を方向別イベント数へ集約した表です。`hgt_transfer_tree.pdf`は方向ごとに1本の矢印を描き、始点から終点まで一定の線幅でその方向のイベント数を表します（最小0.35 pt）。双方向は別々の曲線です。矢印は既定でalpha=0.55の半透明表示です（`hgt_summary_transfer_arrow_alpha`で変更可能）。遠距離ほど濃い青です。表示は件数順位と距離順位を交互に採用し、既存の逆方向を追加します。`phylogenetic_distance`は端点ノード間の経路長、`distance_metric`はbranch_lengthまたはtopology_edges、`selection_reason`はcount/distance/all/reciprocal/not_displayedです。未対応ペアの距離は欠損です。詳しくはplots/README.mdを参照してください。",
+        "- plot出力の`hgt_transfer_edges.tsv`は`generax_transfer`の`Y@src@dest`を方向別イベント数へ集約した表です。`hgt_transfer_tree.pdf`は方向ごとに1本の矢印を描き、始点から終点まで一定の線幅でその方向のイベント数を表します（最小0.35 pt）。双方向は別々の曲線です。矢印は既定でalpha=0.55の半透明表示です（`hgt_summary_transfer_arrow_alpha`で変更可能）。通常の矢印は単一の青色で、trait=1への矢印はtraitと同じ色です。端点間距離による色分けとcolorbarはありません。表示は件数順位と距離順位を交互に採用し、既存の逆方向を追加します。`phylogenetic_distance`は端点ノード間の経路長、`distance_metric`はbranch_lengthまたはtopology_edges、`selection_reason`はcount/distance/all/reciprocal/not_displayedです。未対応ペアの距離は欠損です。詳しくはplots/README.mdを参照してください。",
         "",
         "## 表同士の対応",
         "",

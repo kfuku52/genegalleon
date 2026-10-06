@@ -166,6 +166,8 @@ reciprocal directions use separate curves and recipient-specific colors.
 Arrow opacity defaults to `0.55` and can be changed with
 `--transfer_arrow_alpha` (range `0` to `1`). Event counts, selection and distance
 measurements are unchanged.
+Ordinary arrows use one blue color; highlighted arrows use the trait color.
+Endpoint-node distance does not control arrow color and has no colorbar.
 
 ## Category-1 focused results
 

@@ -450,9 +450,10 @@ def test_trait_highlight_colors_tree_and_incoming_arrows_above_other_directions(
         captured['labels'] = {t.get_text(): t.get_color() for t in ax.texts}
         captured['patches'] = [p for p in ax.patches if isinstance(p, FancyArrowPatch)]
         captured['branches'] = [line.get_color() for line in ax.lines]
+        captured['colorbar_axes'] = len(ax.child_axes)
 
     monkeypatch.setattr(PdfPages, 'savefig', capture)
-    data = pandas.DataFrame({'generax_transfer': ['Y@C@0042', 'Y@0042@C', 'Y@C@A']})
+    data = pandas.DataFrame({'generax_transfer': ['Y@C@0042', 'Y@0042@C', 'Y@C@A', 'Y@A@C']})
     edge_path = tmp_path / 'edges.tsv'
     plotter.plot_transfer_tree(data, str(tmp_path / 'highlight.pdf'), str(tree_path), str(edge_path),
                               species_trait_path=str(trait_path), highlight_trait='gall')
@@ -464,10 +465,42 @@ def test_trait_highlight_colors_tree_and_incoming_arrows_above_other_directions(
     # Each full directional arrow inherits its recipient's color.
     positive = [p for p in patches if p.get_edgecolor() == to_rgba(color, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)]
     ordinary = [p for p in patches if p.get_edgecolor() != to_rgba(color, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)]
-    assert len(positive) == 2 and len(ordinary) == 1
+    assert len(positive) == 2 and len(ordinary) == 2
+    assert all(p.get_edgecolor() == to_rgba(plotter.TRANSFER_EDGE_COLOR, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)
+               for p in ordinary)
+    assert captured['colorbar_axes'] == 0
     assert all(p.get_alpha() == plotter.DEFAULT_TRANSFER_ARROW_ALPHA for p in patches)
     assert min(p.get_zorder() for p in positive) > max(p.get_zorder() for p in ordinary)
     assert patches[-len(positive):] == positive
     saved = pandas.read_csv(edge_path, sep='\t')
-    assert saved.hgt_event_count.sum() == 3 and len(saved) == 3
+    assert saved.hgt_event_count.sum() == 4 and len(saved) == 4
+    assert saved.loc[saved.recipient_node.eq('C'), 'phylogenetic_distance'].nunique() == 2
     assert saved.displayed.eq(1).all()
+
+
+def test_unhighlighted_arrows_use_one_color_at_different_distances(tmp_path, monkeypatch):
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import FancyArrowPatch
+    from matplotlib.text import Text
+
+    tree_path = tmp_path / "tree.nwk"
+    tree_path.write_text("((A:1,B:2)n1:3,C:10)root;")
+    captured = {}
+
+    def capture(self, fig, **kwargs):
+        ax = fig.axes[0]
+        captured["colors"] = {p.get_edgecolor() for p in ax.patches if isinstance(p, FancyArrowPatch)}
+        captured["child_axes"] = ax.child_axes
+        captured["text"] = [text.get_text() for text in fig.findobj(match=Text)]
+
+    monkeypatch.setattr(PdfPages, "savefig", capture)
+    edges = tmp_path / "edges.tsv"
+    plotter.plot_transfer_tree(pandas.DataFrame({"generax_transfer": ["Y@A@B", "Y@A@C"]}),
+                              str(tmp_path / "plot.pdf"), str(tree_path), str(edges))
+    assert captured["colors"] == {to_rgba(plotter.TRANSFER_EDGE_COLOR, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)}
+    assert not captured["child_axes"]
+    assert not any("Endpoint-node distance" in text or "darker blue" in text for text in captured["text"])
+    saved = pandas.read_csv(edges, sep="\t")
+    assert saved.phylogenetic_distance.nunique() == 2
+    assert saved.hgt_event_count.sum() == 2 and saved.displayed.eq(1).all()

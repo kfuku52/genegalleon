@@ -784,13 +784,14 @@ into directed donor/source-to-recipient/target edges, and draws arrowheads
 toward the recipient. Link width scales with the number of branch-level
 HGT events in that pair; it is an event count, not a confidence score. The TSV
 retains every parseable pair and marks whether it matched the selected species
-tree and whether it was included in the PDF. Darker blue indicates greater
-node-to-node tree distance, using a common scale across all mapped pairs.
+tree and whether it was included in the PDF. Ordinary arrows use one blue color;
+arrows entering trait-highlighted recipients use the trait color. Endpoint-node
+distance does not determine arrow color, and no distance colorbar is shown.
 Shallow curves connect endpoints directly; distant links are drawn last.
 Connections attach to the midpoint of the incoming horizontal species branch,
 not the labelled node. Midpoints are display conventions, not inferred event
 times. Root endpoints use a dashed display-only stem; zero-length branches
-coincide with their nodes. Color and ranking retain endpoint-node path distance
+coincide with their nodes. Ranking retains endpoint-node path distance
 as a lineage-separation proxy, independent of these drawing positions.
 Each direction has a complete arrow with constant shaft width; reciprocal
 directions use separate curves. Each arrow's width encodes that direction's
@@ -799,7 +800,7 @@ event count from donor to recipient. Arrows use alpha `0.55` by default;
 trait-focused figures. All available internal branch names appear directly above
 their incoming branch midpoints, including branches without displayed HGT.
 Species names appear to the right of terminal branches. Every text element in
-the transfer-tree PDF, including titles, legends and colorbar ticks, uses 8 pt.
+the transfer-tree PDF, including titles and legends, uses 8 pt.
 When `input/species_trait/species_trait.tsv` exists, numeric/binary traits are
 shown as aligned tip-only columns. Binary values use orange (1) and gray (0);
 numeric columns use a separate within-column color range and print their values.
