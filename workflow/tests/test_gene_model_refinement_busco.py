@@ -123,6 +123,67 @@ def test_combined_figure_preserves_palette_count_units_and_unavailable_species(t
         busco.plot_comparison(rows, tmp_path, changes)
 
 
+@pytest.mark.parametrize(('record', 'category'), [
+    ({'status': 'available', 'masked_fraction': .8, 'te_annotated_fraction': .1, 'classes': ['LTR/Gypsy', 'Simple_repeat']}, 'te_hit'),
+    ({'status': 'available', 'masked_fraction': .2, 'te_annotated_fraction': 0, 'classes': ['Unknown']}, 'other_repeat_hit'),
+    ({'status': 'available', 'masked_fraction': 0, 'te_annotated_fraction': 0, 'classes': []}, 'no_repeat_hit'),
+    ({'status': 'not_provided', 'masked_fraction': None, 'te_annotated_fraction': None, 'classes': None}, 'not_assessed'),
+])
+def test_repeat_categories_keep_unassessed_separate_from_negative(record, category):
+    assert busco.repeat_group(record) == category
+    with pytest.raises(ValueError, match='repeat'):
+        busco.repeat_group(dict(record, masked_fraction=-.1))
+
+
+def test_repeat_audit_join_binds_models_counts_and_snapshot(tmp_path, monkeypatch):
+    name = 'Species_a'
+    directory = tmp_path / name
+    source = {'rescue_models_sha256': 'models_hash', 'rescue_receipt_sha256': 'receipt_hash',
+              'rescued_loci_support': {'gene': {'source_model_id': 'tx'}}}
+    changes = {'rescue_reference_selection': {'plan_sha256': 'plan_hash'}, 'evidence': {name: source},
+               'species': {name: {'refinement_status': 'analysed', 'prior_rescued_loci': 1},
+                           'Drosophyllum_lusitanicum': {'refinement_status': 'not_analysed', 'prior_rescued_loci': None}}}
+    busco.collect_rescue_repeat_evidence(changes)
+    assert changes['species'][name]['rescue_repeat_groups']['not_assessed'] == 1
+    assert changes['species']['Drosophyllum_lusitanicum']['rescue_repeat_groups'] is None
+    records = [{'model_id': 'tx', 'rescue_status': 'accepted', 'repeat': {
+        'status': 'available', 'masked_fraction': .7, 'te_annotated_fraction': .6, 'classes': ['LTR/Gypsy']}}]
+    busco.atomic_json(directory / 'evidence.json', records)
+    receipt = {'key': {'schema': 1, 'species': name, 'inputs': {
+        '/rescue/plan.json': 'plan_hash', '/rescue/rescued/Species_a/models.json': 'models_hash',
+        '/rescue/rescued/Species_a/receipt.json': 'receipt_hash'}},
+        'files': {'evidence.json': busco.digest(directory / 'evidence.json')}}
+    busco.atomic_json(directory / 'receipt.json', receipt)
+    busco.collect_rescue_repeat_evidence(changes, tmp_path)
+    assert changes['species'][name]['rescue_repeat_groups']['te_hit'] == 1
+    assert changes['evidence'][name]['rescued_loci_repeat']['loci']['gene']['te_annotated_fraction'] == .6
+    receipt['key']['inputs']['/rescue/rescued/Species_a/models.json'] = 'other_models'
+    busco.atomic_json(directory / 'receipt.json', receipt)
+    with pytest.raises(ValueError, match='different rescue models'):
+        busco.collect_rescue_repeat_evidence(changes, tmp_path)
+    receipt['key']['inputs']['/rescue/rescued/Species_a/models.json'] = 'models_hash'
+    records[0]['model_id'] = 'other_tx'
+    busco.atomic_json(directory / 'evidence.json', records)
+    receipt['files']['evidence.json'] = busco.digest(directory / 'evidence.json')
+    busco.atomic_json(directory / 'receipt.json', receipt)
+    with pytest.raises(ValueError, match='membership differs'):
+        busco.collect_rescue_repeat_evidence(changes, tmp_path)
+    records[0]['model_id'] = 'tx'
+    busco.atomic_json(directory / 'evidence.json', records)
+    receipt['files']['evidence.json'] = busco.digest(directory / 'evidence.json')
+    busco.atomic_json(directory / 'receipt.json', receipt)
+    import rescue_model_evidence
+    read = rescue_model_evidence.read_json_snapshot
+    def changed(path):
+        result = read(path)
+        if path.name == 'evidence.json':
+            path.write_text('[]')
+        return result
+    monkeypatch.setattr(rescue_model_evidence, 'read_json_snapshot', changed)
+    with pytest.raises(ValueError, match='changed while loading'):
+        busco.collect_rescue_repeat_evidence(changes, tmp_path)
+
+
 def test_rescue_support_classification_uses_all_support_and_frozen_overlap():
     name = "Species_target"
     plan = {"nearest_references": {name: ["Near", "Overlap"]},
@@ -301,12 +362,25 @@ def test_srp_regrouping_preserves_legacy_counts_and_requires_complete_evidence()
 @pytest.mark.parametrize("grouped", [False, True])
 def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped):
     from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
     original_barh = Axes.barh
+    original_save = Figure.savefig
     bars = []
     def barh(ax, y, width, *args, **kwargs):
         bars.append((ax, width, kwargs.get("left", 0), kwargs.get("color"), y))
         return original_barh(ax, y, width, *args, **kwargs)
     monkeypatch.setattr(Axes, "barh", barh)
+    def save(fig, *args, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legends = [legend.get_window_extent(renderer) for legend in fig.legends]
+        labels = [ax.xaxis.label.get_window_extent(renderer) for ax in fig.axes]
+        note = fig.texts[-1].get_window_extent(renderer)
+        assert all(not a.overlaps(b) for a in legends for b in labels)
+        assert all(not a.overlaps(note) for a in legends)
+        assert all(not a.overlaps(b) for i, a in enumerate(legends) for b in legends[i + 1:])
+        return original_save(fig, *args, **kwargs)
+    monkeypatch.setattr(Figure, "savefig", save)
     path = tmp_path / "summary.txt"
     path.write_text(summary())
     result = busco.read_result(path)
@@ -315,6 +389,7 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     changes = {"species": {
         "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 11, "accepted_repair_paths": 2,
                       "accepted_isoform_paths": 3, "rescue_self_only_loci": 1,
+                      "rescue_repeat_groups": dict(zip(busco.REPEAT_GROUPS, [2, 3, 4, 2], strict=True)),
                       "rescue_support_counts": {"nearest_only": 3, "balanced_only": 2, "both": 5},
                       "accepted_path_support_counts": dict.fromkeys(busco.PATH_SUPPORT, 1)},
         "Drosophyllum_lusitanicum": {"refinement_status": "not_analysed", "prior_rescued_loci": None,
@@ -337,7 +412,15 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     self_bar = next(b for b in bars if b[3] == busco.RESCUE_SELF_COLOUR)
     assert self_bar[1:3] == (1, 0 if grouped else 10)
     rescue_bars = [b for b in bars if b[0] is self_bar[0]]
-    assert len(rescue_bars) == 4 and sum(b[1] for b in rescue_bars) == 11
+    rescue_upper = [b for b in rescue_bars if b[4] == -.20]
+    rescue_lower = [b for b in rescue_bars if b[4] == .20]
+    assert len(rescue_upper) == 4 and sum(b[1] for b in rescue_upper) == 11
+    assert len(rescue_lower) == 4 and sum(b[1] for b in rescue_lower) == 11
+    assert [b[1] for b in rescue_lower] == [2, 3, 4, 2]
+    assert [b[2] for b in rescue_lower] == [0, 2, 5, 9]
+    for label in busco.REPEAT_GROUP_LABELS:
+        assert label in svg
+    assert "Upper: support; lower: repeats" in svg and "no hit does not establish a true gene" in svg
     coding_ax = next(b[0] for b in bars if b[3] == "#187d97")
     upper = [b for b in bars if b[0] is coding_ax and b[4] == -.20]
     lower = [b for b in bars if b[0] is coding_ax and b[4] == .20]
@@ -347,6 +430,10 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     assert [b[3] for b in lower] == list(busco.PATH_SUPPORT_GROUP_COLOURS if grouped else busco.PATH_SUPPORT_COLOURS)
     assert "Upper: repair / isoform; lower: support" in svg and "Other interspecies only" in svg
     assert svg.count(">Not analysed<") == 2
+    changes["species"]["Species_a"]["rescue_repeat_groups"]["not_assessed"] = 3
+    with pytest.raises(ValueError, match="Repeat groups must sum"):
+        busco.plot_comparison(rows, tmp_path, changes)
+    changes["species"]["Species_a"]["rescue_repeat_groups"]["not_assessed"] = 2
     changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 6
     with pytest.raises(ValueError, match="sum to the rescued"):
         busco.plot_comparison(rows, tmp_path, changes)

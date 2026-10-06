@@ -93,6 +93,26 @@ classes are reported separately from other repeats. High TE overlap is a review
 flag, not a rejection rule. Different loci encoding identical proteins remain
 different models. No protein-sequence deduplication is applied to this report.
 
+For repeat annotation, reuse an existing RepeatMasker `.out` only when it belongs
+to the exact frozen genome. For unannotated plant genomes, a species-specific
+library from [EDTA](https://github.com/oushujun/EDTA) followed by
+[RepeatMasker](https://github.com/Dfam-consortium/RepeatMasker) is a practical
+route. EDTA accepts trusted coding sequences to remove gene contamination from
+the repeat library. Retain simple/low-complexity repeats as well as TE classes
+when the report needs both axes. GeneGalleon currently consumes RepeatMasker
+output; it does not launch EDTA or RepeatMasker, or treat softmasking alone as
+a classified TE annotation.
+
+To assess whether an overlapping coding model itself encodes a TE protein,
+inspect TE protein domains separately, for example with
+[TEsorter/REXdb](https://github.com/zhangrengang/TEsorter), along with domain
+coverage, RNA structure, synteny and conserved non-TE gene homology. An isolated
+domain or repeat overlap is advisory; a domain-negative result cannot exclude
+non-autonomous or divergent TEs. The repeat bar in the
+[BUSCO/model-change comparison](gene-model-refinement.md) counts any CDS overlap,
+with TE hits taking priority over other/unclassified repeats. The existing
+`te_overlap_ge_50pct` flag remains a separate high-overlap review flag.
+
 DNA coverage excludes unmapped, secondary, supplementary, QC-failed and duplicate
 reads, excludes MAPQ 255 (mapping quality unavailable, as defined by the
 [SAM specification](https://samtools.github.io/hts-specs/SAMv1.pdf)), and applies

@@ -38,6 +38,99 @@ SUPPORT_GROUP_LABELS = ("S only (self)", "R only (relatives)", "P only (phylogen
 PATH_SUPPORT_GROUPS = (*SUPPORT_GROUPS, "other_interspecies")
 PATH_SUPPORT_GROUP_COLOURS = (*SUPPORT_GROUP_COLOURS, "#8a929b")
 PATH_SUPPORT_GROUP_LABELS = (*SUPPORT_GROUP_LABELS, "Other interspecies only")
+REPEAT_GROUPS = ("te_hit", "other_repeat_hit", "no_repeat_hit", "not_assessed")
+REPEAT_GROUP_COLOURS = ("#b45158", "#d99843", "#477b80", "#d6dbe1")
+REPEAT_GROUP_LABELS = ("TE overlap", "Other / unclassified repeat overlap", "Assessed: no repeat overlap", "Not assessed")
+
+
+def repeat_group(record):
+    """Classify CDS overlap without inferring whether a locus is a functional gene."""
+    if record.get("status") == "not_provided":
+        if any(record.get(key) is not None for key in ("masked_fraction", "te_annotated_fraction", "classes")):
+            raise ValueError("Unavailable repeat evidence must have null measurements")
+        return "not_assessed"
+    masked, te = record.get("masked_fraction"), record.get("te_annotated_fraction")
+    if (record.get("status") != "available" or type(masked) not in (int, float) or type(te) not in (int, float)
+            or not 0 <= te <= masked <= 1 or not isinstance(record.get("classes"), list)
+            or any(not isinstance(c, str) or not c for c in record["classes"])
+            or bool(masked) != bool(record["classes"])):
+        raise ValueError("Invalid repeat overlap measurements")
+    return "te_hit" if te > 0 else "other_repeat_hit" if masked > 0 else "no_repeat_hit"
+
+
+def collect_rescue_repeat_evidence(changes, evidence_dir=None):
+    """Join immutable evidence audits to the exact rescued loci in Before."""
+    from rescue_model_evidence import read_json_snapshot
+
+    if evidence_dir is not None and not Path(evidence_dir).is_dir():
+        raise ValueError("Rescue evidence directory does not exist")
+    updates = {}
+    snapshots = {}
+    for name, value in changes["species"].items():
+        if value["refinement_status"] == "not_analysed":
+            updates[name] = (None, None)
+            continue
+        total = value["prior_rescued_loci"]
+        counts = dict.fromkeys(REPEAT_GROUPS, 0)
+        counts["not_assessed"] = total
+        directory = Path(evidence_dir) / name if evidence_dir is not None else None
+        if directory is None or not directory.exists():
+            updates[name] = (counts, None)
+            continue
+        source = changes.get("evidence", {}).get(name, {})
+        loci = source.get("rescued_loci_support")
+        if not isinstance(loci, dict) or len(loci) != total:
+            raise ValueError("Repeat audit needs complete rescued-locus identities: " + name)
+        receipt, receipt_hash = read_json_snapshot(directory / "receipt.json")
+        records, records_hash = read_json_snapshot(directory / "evidence.json")
+        key = receipt.get("key", {})
+        inputs = key.get("inputs", {})
+        selection = changes.get("rescue_reference_selection", {})
+        expected = {f"/rescued/{name}/models.json": source.get("rescue_models_sha256"),
+                    f"/rescued/{name}/receipt.json": source.get("rescue_receipt_sha256")}
+        if (key.get("schema") != 1 or key.get("species") != name or not isinstance(inputs, dict)
+                or receipt.get("files", {}).get("evidence.json") != records_hash
+                or any(wanted is None or [h for p, h in inputs.items() if p.endswith(suffix)] != [wanted]
+                       for suffix, wanted in expected.items())
+                or selection.get("plan_sha256") not in [h for p, h in inputs.items() if p.endswith("/plan.json")]):
+            raise ValueError("Repeat audit belongs to different rescue models: " + name)
+        snapshots[str(directory / "receipt.json")] = receipt_hash
+        snapshots[str(directory / "evidence.json")] = records_hash
+        by_id = {}
+        if not isinstance(records, list):
+            raise ValueError("Repeat audit records must be a list")
+        for record in records:
+            identifier = record["model_id"]
+            if identifier in by_id or record.get("rescue_status") != "accepted":
+                raise ValueError("Duplicate or unaccepted repeat audit model: " + identifier)
+            by_id[identifier] = record
+        if set(by_id) != {r["source_model_id"] for r in loci.values()}:
+            raise ValueError("Repeat audit model membership differs from rescued loci: " + name)
+        counts = dict.fromkeys(REPEAT_GROUPS, 0)
+        per_locus = {}
+        for gene, model in loci.items():
+            record = by_id[model["source_model_id"]]["repeat"]
+            category = repeat_group(record)
+            counts[category] += 1
+            per_locus[gene] = {"source_model_id": model["source_model_id"], "category": category, **record}
+        updates[name] = (counts, {"audit_receipt_sha256": receipt_hash, "audit_records_sha256": records_hash,
+                                 "audit_directory": str(directory.resolve()), "loci": per_locus})
+    boundary = FreshDigestBatch()
+    if boundary.read(snapshots) != snapshots:
+        raise ValueError("Repeat audit changed while loading")
+    boundary.check()
+    for name, (counts, evidence) in updates.items():
+        changes["species"][name]["rescue_repeat_groups"] = counts
+        if evidence is not None:
+            changes.setdefault("evidence", {}).setdefault(name, {})["rescued_loci_repeat"] = evidence
+        else:
+            changes.get("evidence", {}).get(name, {}).pop("rescued_loci_repeat", None)
+    changes["repeat_group_classification"] = (
+        "CDS overlap with the supplied repeat annotation: any TE-labelled overlap takes priority; otherwise any "
+        "other/unclassified repeat overlap; assessed no overlap; or not assessed. Each rescued locus counts once. "
+        "Overlap does not establish TE origin or lack of gene function; no overlap does not establish a true gene."
+    )
+    return changes
 
 
 def group_support_evidence(evidence, species, selection, *, allow_other=False):
@@ -489,6 +582,15 @@ def plot_comparison(rows, output, model_changes=None):
                 elif type(count) is not int or count < 0:
                     raise ValueError("Model counts must be nonnegative integers")
             support = value.get("rescue_support_counts")
+            repeats = value.get("rescue_repeat_groups")
+            if row["refinement_status"] == "not_analysed":
+                if repeats is not None:
+                    raise ValueError("Unanalysed repeat counts must be unavailable")
+            elif repeats is not None:
+                if (not isinstance(repeats, dict) or set(repeats) != set(REPEAT_GROUPS)
+                        or any(type(c) is not int or c < 0 for c in repeats.values())
+                        or sum(repeats.values()) != value["prior_rescued_loci"]):
+                    raise ValueError("Repeat groups must sum to the rescued gene count")
             if row["refinement_status"] == "not_analysed":
                 if support is not None or value.get("rescue_self_only_loci") is not None:
                     raise ValueError("Unanalysed rescue support counts must be unavailable")
@@ -525,7 +627,8 @@ def plot_comparison(rows, output, model_changes=None):
     support_legend = stacked_rescue or stacked_paths
     margin_left = .20 if extra else .24
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
-    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, max(6, (.52 if stacked_paths else .43) * len(rows) + 2)),
+    figure_height = max(8, .52 * len(rows) + 5) if extra else max(6, .43 * len(rows) + 2)
+    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, figure_height),
                              gridspec_kw={"width_ratios": [1, 1, .65, .75, .9] if extra else [1, 1, .65],
                                           "wspace": .16 if extra else .12}, sharey=True)
     colors = STATUS_COLOURS
@@ -552,6 +655,7 @@ def plot_comparison(rows, output, model_changes=None):
             else:
                 rescued = value["prior_rescued_loci"]
                 repair, isoform = value["accepted_repair_paths"], value["accepted_isoform_paths"]
+                rescue_y = i - .20
                 if stacked_rescue:
                     offset = 0
                     support = value["rescue_support_groups"] if grouped_support else {
@@ -560,12 +664,20 @@ def plot_comparison(rows, output, model_changes=None):
                     group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
                     for category, color in zip(categories, group_colors, strict=True):
                         count = support[category]
-                        axes[3].barh(i, count, left=offset, color=color, height=.7)
+                        axes[3].barh(rescue_y, count, left=offset, color=color, height=.32)
                         offset += count
                 else:
-                    axes[3].barh(i, rescued, color="#5275b5", height=.7)
-                axes[3].annotate(str(rescued), (rescued, i),
+                    axes[3].barh(rescue_y, rescued, color="#5275b5", height=.32)
+                axes[3].annotate(str(rescued), (rescued, rescue_y),
                                  xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
+                repeats = value.get("rescue_repeat_groups") or {**dict.fromkeys(REPEAT_GROUPS, 0), "not_assessed": rescued}
+                offset = 0
+                for category, color in zip(REPEAT_GROUPS, REPEAT_GROUP_COLOURS, strict=True):
+                    axes[3].barh(i + .20, repeats[category], left=offset, color=color, height=.32,
+                                 hatch="///" if category == "not_assessed" else None)
+                    offset += repeats[category]
+                axes[3].annotate(str(rescued), (rescued, i + .20), xytext=(4, 0),
+                                 textcoords="offset points", va="center", fontsize=9)
                 type_y = i - .20 if stacked_paths else i
                 height = .32 if stacked_paths else .7
                 axes[4].barh(type_y, repair, color="#187d97", height=height)
@@ -610,16 +722,18 @@ def plot_comparison(rows, output, model_changes=None):
         axes[4].set_xlim(0, max(1, paths_max) * 1.65)
         for ax in axes[3:]:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axes[3].set_xlabel("Previously rescued gene loci" if stacked_rescue else "Previously added gene loci")
+        axes[3].set_xlabel("Upper: support; lower: repeats\nPreviously rescued gene loci")
         axes[4].set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
-    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=.25 if support_legend else .18 if extra else .14)
+    # Reserve footer space in inches so legends/notes stay separated for both
+    # small cohorts and whole-dataset figures.
+    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=4.6 / figure_height if extra else .14)
     fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
                  "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
     fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
     fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
-               loc="lower left", bbox_to_anchor=(margin_left, .175 if support_legend else .09 if extra else .065), ncol=4, frameon=False)
+               loc="lower left", bbox_to_anchor=(margin_left, 3.25 / figure_height if extra else .065), ncol=4, frameon=False)
     if support_legend:
         if grouped_support:
             group_colors = PATH_SUPPORT_GROUP_COLOURS if stacked_paths else SUPPORT_GROUP_COLOURS
@@ -628,15 +742,20 @@ def plot_comparison(rows, output, model_changes=None):
             group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
             group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
         fig.legend([Patch(facecolor=c) for c in group_colors], group_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, .125), ncol=3, frameon=False,
-                   title="Supporting donor groups (rescue loci and lower coding-path bars)")
+                   loc="lower left", bbox_to_anchor=(margin_left, 2.4 / figure_height), ncol=3, frameon=False,
+                   title="Supporting donor groups (upper rescue and lower coding-path bars)")
         fig.legend([Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
                    ["Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(.70, .175), ncol=2, frameon=False)
+                   loc="lower left", bbox_to_anchor=(.70, 3.25 / figure_height), ncol=2, frameon=False)
     elif extra:
         fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
                    ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(.59, .09), ncol=3, frameon=False)
+                   loc="lower left", bbox_to_anchor=(margin_left, 2.4 / figure_height), ncol=3, frameon=False)
+    if extra:
+        fig.legend([Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
+                    for k, c in zip(REPEAT_GROUPS, REPEAT_GROUP_COLOURS, strict=True)], REPEAT_GROUP_LABELS,
+                   loc="lower left", bbox_to_anchor=(margin_left, 1.65 / figure_height), ncol=2, frameon=False,
+                   title="Repeat annotation (lower rescue bars; any CDS overlap)")
     note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
     note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
     if extra:
@@ -654,13 +773,15 @@ def plot_comparison(rows, output, model_changes=None):
                  "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate.")
     elif stacked_rescue:
         note += " Labels: total loci."
-    fig.text(margin_left, .025, note, fontsize=10)
+    if extra:
+        note += "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed."
+    fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
 
 
-def render_existing(report, root=None, rescue_output=None):
+def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=None):
     """Redraw a historical evaluation without executing its predictor again."""
     value = json.loads((report / "busco_comparison.json").read_text())
     frozen = json.loads((report / "contract.json").read_text())
@@ -689,6 +810,7 @@ def render_existing(report, root=None, rescue_output=None):
             raise ValueError("Comparison delta changed")
     changes = collect_model_changes(root, rows, rescue_output) if root is not None else None
     if changes is not None:
+        collect_rescue_repeat_evidence(changes, rescue_evidence_dir)
         atomic_json(report / "model_change_summary.json", changes)
     plot_comparison(rows, report, changes)
     atomic_json(report / "rendering_provenance.json", {
@@ -751,18 +873,20 @@ def main():
     parser.add_argument("--cds-dir", type=Path, help="All dataset species, including unrefined CDS-only species")
     parser.add_argument("--rescue-output", type=Path,
                         help="Original completed rescue publication for imported inputs; otherwise inferred from the refinement plan")
+    parser.add_argument("--rescue-evidence-dir", type=Path,
+                        help="Separate evidence audits at DIR/SPECIES/{receipt,evidence}.json; absent species are not assessed")
     parser.add_argument("--lineage", type=Path, help="Frozen local lineage directory")
     parser.add_argument("--download-path", type=Path)
     parser.add_argument("--plot-only", action="store_true", help="Validate and redraw an existing comparison using its original evaluation contract")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
-    if args.rescue_output and not args.output:
-        parser.error("--rescue-output requires --output to bind support to the source annotation")
+    if (args.rescue_output or args.rescue_evidence_dir) and not args.output:
+        parser.error("Rescue support/evidence requires --output to bind it to the source annotation")
     if args.plot_only:
         if args.lineage or args.download_path or args.cds_dir:
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
-        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output)
+        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output, args.rescue_evidence_dir)
         return
     if not args.output or not args.lineage or not args.download_path:
         parser.error("--output, --lineage and --download-path are required for evaluation")
@@ -772,8 +896,9 @@ def main():
     if root == report or root in report.parents or report in root.parents:
         parser.error("Report must be separate from the immutable refinement tree")
     pairs = input_pairs(root, args.cds_dir)
-    evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs,
-             model_changes=collect_model_changes(root, pairs, args.rescue_output))
+    changes = collect_model_changes(root, pairs, args.rescue_output)
+    collect_rescue_repeat_evidence(changes, args.rescue_evidence_dir)
+    evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs, model_changes=changes)
 
 
 if __name__ == "__main__":

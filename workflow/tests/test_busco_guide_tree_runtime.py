@@ -1,11 +1,13 @@
 """Real compiled k-mer and RapidNJ tests on bounded synthetic inputs."""
 import csv
+import gzip
 import json
 import math
 import random
 import shutil
 import struct
 import subprocess
+from pathlib import Path
 
 import pytest
 from Bio import Phylo
@@ -164,6 +166,24 @@ def test_changed_archive_is_detected_during_execution(tmp_path, monkeypatch):
     assert not (tmp_path / "guide/receipt.json").exists()
 
 
+def test_cache_changed_after_verification_cannot_publish_a_guide(tmp_path, monkeypatch):
+    fixture(tmp_path)
+    original = guide.execute
+    def replace_before_compare(command, root, label):
+        if label == "compare":
+            paths = [Path(p) for p in Path(command[2]).read_text().splitlines()]
+            paths[0].write_bytes(paths[1].read_bytes())
+        return original(command, root, label)
+    monkeypatch.setattr(guide, "execute", replace_before_compare)
+    with pytest.raises(OSError, match="File changed"):
+        guide.build(build_args(tmp_path))
+    assert not (tmp_path / "guide/receipt.json").exists()
+    assert not list((tmp_path / "cache").glob("*.matrix.json"))
+    monkeypatch.setattr(guide, "execute", original)
+    receipt = guide.build(build_args(tmp_path, "retry"))
+    assert not receipt["performance"]["distances_reused"]
+
+
 def test_zero_information_tree_fails_without_taxonomy_fallback(tmp_path):
     for i in range(3):
         make_archive(tmp_path, f"Plant_species{i:03d}", {f"BUSCO{g:04d}": "MDEKAAA" for g in range(40)})
@@ -195,6 +215,129 @@ def test_all_saturated_markers_fail_instead_of_arbitrary_neighbors(tmp_path):
     with pytest.raises(ValueError, match="All usable BUSCO marker pairs are k-mer saturated"):
         guide.build(args)
     assert not (args.output / "receipt.json").exists()
+
+
+def test_one_species_saturated_against_every_other_species_fails(tmp_path):
+    fixture(tmp_path)
+    name = "Plant_uninformative"
+    make_archive(tmp_path, name, {f"BUSCO{g:04d}": "A"*250 for g in range(40)})
+    with pytest.raises(ValueError, match="saturated.*Plant_uninformative"):
+        guide.build(build_args(tmp_path))
+    assert not (tmp_path / "guide/receipt.json").exists()
+
+
+def test_different_marker_universes_with_same_lineage_and_count_fail(tmp_path):
+    names = fixture(tmp_path)
+    name = names[0]
+    full = tmp_path / "full" / (name + ".busco.full.tsv")
+    archive = tmp_path / "full/single_copy" / (name + ".json.gz")
+    with gzip.open(archive, "rt") as handle:
+        data = json.load(handle)
+    full.write_text(full.read_text().replace("BUSCO0000", "OTHER0000"))
+    data["records"]["OTHER0000"] = data["records"].pop("BUSCO0000")
+    data["marker_ids"] = ["OTHER0000" if x == "BUSCO0000" else x for x in data["marker_ids"]]
+    data["source_hashes"][str(full)] = guide.digest(full)
+    with gzip.open(archive, "wt") as handle:
+        json.dump(data, handle)
+    with pytest.raises(ValueError, match="marker universe"):
+        guide.build(build_args(tmp_path))
+
+
+def test_publication_cannot_overwrite_a_symlinked_input(tmp_path):
+    names = fixture(tmp_path)
+    args = build_args(tmp_path)
+    args.output.mkdir()
+    cds = tmp_path / "cds" / (names[0] + ".fa")
+    original = cds.read_bytes()
+    (args.output / "markers.json").symlink_to(cds)
+    with pytest.raises(ValueError, match="overlap"):
+        guide.build(args)
+    assert cds.read_bytes() == original
+
+
+def test_cache_publication_cannot_replace_an_input_reached_through_a_symlink(tmp_path):
+    names = fixture(tmp_path)
+    args = build_args(tmp_path)
+    guide.build(args)
+    meta = next(p for p in args.cache.glob("*.json") if not p.name.endswith(".matrix.json"))
+    full = tmp_path / "full" / (names[0] + ".busco.full.tsv")
+    original = full.read_bytes()
+    meta.write_bytes(original)
+    full.unlink()
+    full.symlink_to(meta)
+    with pytest.raises(ValueError, match="overlap"):
+        guide.build(build_args(tmp_path, "overlapping-cache"))
+    assert full.read_bytes() == original
+
+
+def test_guide_receipt_cannot_use_diagnostics_for_another_nearest_count(tmp_path):
+    from workflow.support import rescue_gene_models as rescue
+    fixture(tmp_path)
+    args = build_args(tmp_path)
+    guide.build(args)
+    with pytest.raises(ValueError, match="nearest.*count"):
+        rescue.guide_evidence(args.output / "receipt.json", args.output / "guide_tree.nwk", nearest_references=3)
+
+
+def test_guide_cannot_use_diagnostics_for_another_species_cohort(tmp_path):
+    from workflow.support import rescue_gene_models as rescue
+    names = fixture(tmp_path)
+    args = build_args(tmp_path)
+    receipt = guide.build(args)
+    source = receipt["request"]["sources"][names[0]]
+    hashes = receipt["request"]["files"]
+    with pytest.raises(ValueError, match="species cohort differs"):
+        rescue.guide_evidence(args.output / "receipt.json", args.output / "guide_tree.nwk",
+                              {names[0]: (hashes[source["cds"]], hashes[source["short"]])})
+
+
+def test_publication_checks_the_actual_published_files(tmp_path, monkeypatch):
+    fixture(tmp_path)
+    original = guide.copy_atomic
+    def corrupt_after_copy(source, destination, **kwargs):
+        original(source, destination, **kwargs)
+        if destination.name == "guide_tree.nwk":
+            destination.write_text("corrupt published tree\n")
+    monkeypatch.setattr(guide, "copy_atomic", corrupt_after_copy)
+    with pytest.raises(ValueError, match="outputs changed during publication"):
+        guide.build(build_args(tmp_path))
+    assert not (tmp_path / "guide/receipt.json").exists()
+
+
+@pytest.mark.parametrize("layout", ["metaeuk", "prokaryotic"])
+def test_preservation_matches_installed_busco_writer(tmp_path, layout):
+    from Bio.Seq import Seq
+    from Bio.SeqRecord import SeqRecord
+    from busco.busco_tools.hmmer import HMMERRunner
+    args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK"})
+    gene = "Plant_example_gene|haplotype:24-100" if layout == "metaeuk" else "Plant_example_gene:24-100"
+    target = "BUSCO1_ancestral|" + gene + "|+" if layout == "metaeuk" else gene + "|+"
+    record = SeqRecord(Seq("MDEK"), id=target, description="")
+    if layout == "prokaryotic":
+        from busco.analysis.TranscriptomeAnalysis import TranscriptomeAnalysisProkaryotes
+        record = TranscriptomeAnalysisProkaryotes.six_frame_translation(
+            SeqRecord(Seq("ATGGATGAAAAA"), id=gene))["orig_seq_frame_1"]
+        record.id = target
+    # Exercise the runtime's actual table/FASTA producers, including pipes
+    # inside a contig ID, without running a predictor or downloading a dataset.
+    runner = object.__new__(HMMERRunner)
+    runner.mode = "transcriptome"
+    runner.gene_details = {target: {"aa_seq": record}}
+    runner.single_copy_buscos = {"BUSCO1": {runner.get_gene_id(target):
+                                [{"ref gene ID": target, "bitscore": 100, "length": 4}]}}
+    runner.multi_copy_buscos = runner.fragmented_buscos = {}
+    sequence_dir = args.run_dir / "busco_sequences"
+    runner.single_copy_sequences_folder = str(sequence_dir / "single_copy_busco_sequences")
+    runner.multi_copy_sequences_folder = str(sequence_dir / "multi_copy_busco_sequences")
+    runner.fragmented_sequences_folder = str(sequence_dir / "fragmented_busco_sequences")
+    runner.load_links_info = lambda: {}
+    args.full.write_text("".join(runner._format_output_lines(runner.single_copy_buscos, "Complete")))
+    runner.write_buscos_to_file()
+    guide.preserve(args)
+    records, _ = guide.read_archive(args.output, args.species, args.full, args.short, args.input)
+    assert records["BUSCO1"]["busco_sequence_id"] == gene
+    assert records["BUSCO1"]["protein_id"] == target
+    assert records["BUSCO1"]["sequence"] == "MDEK"
 
 
 def test_guide_connects_real_reference_planning_and_bounded_alternatives(tmp_path):

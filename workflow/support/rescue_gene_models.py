@@ -152,10 +152,13 @@ def patristic_distances(tree):
     return result
 
 
-def guide_evidence(path, tree_path, expected_inputs=None):
+def guide_evidence(path, tree_path, expected_inputs=None, nearest_references=None):
     """Read and freeze the guide's exact inputs, outputs and panel diagnostics."""
     raw = path.read_bytes()
     payload = json.loads(raw)
+    request = payload.get("request", {})
+    if request.get("schema") != SCHEMA:
+        raise ValueError("Invalid BUSCO guide receipt schema")
     files = payload.get("files", {})
     if (not isinstance(files, dict) or not {"guide_tree.nwk", "stability.json", "markers.json"} <= set(files)
             or any(Path(p).name != p for p in files) or (path.parent / "guide_tree.nwk").resolve() != tree_path.resolve()):
@@ -167,17 +170,26 @@ def guide_evidence(path, tree_path, expected_inputs=None):
         raise ValueError("Frozen BUSCO guide inputs/outputs changed")
     if expected_inputs is not None:
         guide_sources = payload["request"].get("sources", {})
+        if set(guide_sources) != set(expected_inputs):
+            raise ValueError("BUSCO guide species cohort differs from rescue; rebuild the guide for these species")
         for name, hashes in expected_inputs.items():
             source = guide_sources.get(name, {})
             if tuple(sources.get(source.get(key)) for key in ("cds", "short")) != hashes:
                 raise ValueError("BUSCO guide does not use the rescue CDS/BUSCO inputs: " + name)
     stability = json.loads((path.parent / "stability.json").read_text())
     names = set(payload["request"].get("sources", {}))
+    count = request.get("parameters", {}).get("nearest")
+    if type(count) is not int or count < 0 or (nearest_references is not None and count != nearest_references):
+        raise ValueError("BUSCO guide nearest-reference count differs from rescue; rebuild the guide with this count")
+    count = min(count, len(names)-1)
     if not isinstance(stability, dict) or set(stability) != names:
         raise ValueError("Invalid BUSCO guide stability species")
     for name, evidence in stability.items():
+        if not isinstance(evidence, dict):
+            raise ValueError("Invalid BUSCO guide stability evidence: " + name)
         panels = [evidence.get(key) for key in ("nearest", "panel_0", "panel_1")]
-        if (any(not isinstance(panel, list) or len(panel) != len(set(panel))
+        if (any(not isinstance(panel, list) or len(panel) != count
+                or any(not isinstance(value, str) for value in panel) or len(panel) != len(set(panel))
                 or not set(panel) <= names - {name} for panel in panels)
                 or evidence.get("stable") is not (set(panels[0]) == set(panels[1]) == set(panels[2]))):
             raise ValueError("Invalid BUSCO guide stability evidence: " + name)
@@ -269,7 +281,8 @@ def build_plan(args):
                 raise ValueError("A BUSCO k-mer guide must have informative branch lengths")
             guide_files, guide_stability = guide_evidence(
                 args.guide_tree_receipt.resolve(), args.tree,
-                {n: (request["files"][sources[n]["fasta"]], request["files"][sources[n]["busco"]]) for n in species})
+                {n: (request["files"][sources[n]["fasta"]], request["files"][sources[n]["busco"]]) for n in species},
+                nearest_references=args.nearest_references)
             if not set(species) <= set(guide_stability):
                 raise ValueError("BUSCO guide diagnostics lack rescue species")
             request["files"].update(guide_files)

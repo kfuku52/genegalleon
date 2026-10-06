@@ -107,6 +107,10 @@ for both nearest donors and phylogenetically balanced common references.
 BUSCO's exact predicted AA sequences are saved before temporary output removal
 as `species_busco_full/single_copy/<species>.json.gz`, with table/CDS hashes and
 raw predicted IDs. This avoids guessing MetaEuk coordinates from sequence IDs.
+Protein IDs must correspond to the full-table match, including MetaEuk's wrapped
+reference/contig/strand IDs. Preservation checks that both the tables/CDS and
+the raw protein files stay unchanged while reading them. All species must use
+the same complete BUSCO marker universe, including missing markers.
 Older full/short-table-only runs need BUSCO regeneration to supply these proteins;
 no taxonomy substitute is selected silently.
 
@@ -118,8 +122,9 @@ intersection fraction within the bottom-k sample of the sketch union. Missing
 proteins are excluded from the denominator; present proteins with no shared
 k-mers count as saturated distance 1. Ambiguous residues break k-mer windows.
 Pairs require at least 50 usable shared markers and 25 per diagnostic panel with
-defaults. Runs with no informative branch lengths or wholly saturated marker
-pairs fail instead of selecting arbitrary neighbours. These distances guide
+defaults. Runs with no informative branch lengths, wholly saturated marker
+pairs, or a species saturated against every other species fail instead of
+selecting arbitrary neighbours. The error names the affected species. These distances guide
 reference choice; they are not calibrated substitution lengths or divergence dates.
 
 RapidNJ uses `-n` to adjust negative lengths. Two interleaved marker panels also
@@ -129,7 +134,12 @@ alternatives from their union (at most six nearest donors with defaults).
 Full and panel trees, pairwise distances, selected markers, diagnostics, commands,
 timings and SHA-256 receipts are saved under `<rescue output>/guide_tree/`.
 Per-species sketches and pairwise distances are verified and reused from a shared
-cache; a changed request requires a new guide output directory. Post-rescue
+cache. Changes to a verified cache during calculation abort publication;
+output files are copied atomically and checked before the completion receipt.
+Caches from the earlier unfenced implementation are retained and rebuilt once
+under the new cache contract, so a failed computation cannot poison a retry.
+Output paths cannot overlap input files. A changed request, including changes
+to support-module implementations, requires a new guide output directory. Post-rescue
 BUSCO never reselects donors.
 
 | Environment variable | Default |
@@ -152,7 +162,9 @@ synthetic scaling benchmark, which excludes BUSCO execution.
 
 Set `GG_INPUT_GENE_MODEL_RESCUE_TREE` to an external tree to bypass guide creation.
 The independent rescue CLI still requires explicit `--tree`; add
-`--guide-tree-receipt` to consume the generated diagnostics. A manually supplied
+`--guide-tree-receipt` to consume the generated diagnostics. Its receipt must
+use the same species cohort and nearest-reference count as the rescue plan;
+rebuild the guide when either changes. A manually supplied
 tree without positive branch lengths uses unit edges and records that choice.
 If any non-root edge has a positive length, every non-root edge must have an
 explicit length. Root stem lengths do not affect this decision.

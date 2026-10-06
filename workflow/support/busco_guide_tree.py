@@ -25,15 +25,20 @@ from Bio import Phylo
 try:
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
+    from input_generation_stage_resume import copy_atomic, reject_output_overlap
     from rescue_gene_models import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from species_labeling import extract_species_label
 except ImportError:
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
+    from .input_generation_stage_resume import copy_atomic, reject_output_overlap
     from .rescue_gene_models import COMPARABLE_QUALITY, busco_quality, patristic_distances, safe_token
     from .species_labeling import extract_species_label
 
 SCHEMA = 1
+# Earlier cache producers did not fence concurrent cache/tool changes before
+# storing results. Keep those files, but never reuse them under this contract.
+CACHE_SCHEMA = 2
 
 
 def token(value):
@@ -59,6 +64,14 @@ def cache_matches(path, metadata):
         return False
 
 
+def reject_cache_overlap(destinations, protected):
+    # Atomic replacement protects other hard links; resolving names also
+    # protects an input symlink whose target would otherwise be replaced.
+    for path in destinations:
+        if str(path.resolve()) in protected:
+            raise ValueError("BUSCO cache output paths overlap input/tool files: " + str(path))
+
+
 def single_copy_rows(path):
     groups = defaultdict(list)
     with open_text(Path(path)) as handle:
@@ -80,51 +93,75 @@ def single_copy_rows(path):
     return result, set(groups)
 
 
+def validate_protein_id(identifier, source_id, mode):
+    # BUSCO HMMER reports the inner gene ID of MetaEuk's
+    # reference|contig:start-end|strand target, or the base ID of a
+    # contig:start-end|strand target in the prokaryotic transcriptome pipeline.
+    # Preserve both IDs exactly;
+    # checking this relation does not infer coordinates or translate CDS.
+    parts = identifier.split("|")
+    gene_id = "|".join(parts[1:-1]) if len(parts) > 2 else parts[0]
+    if (mode in {"transcriptome", "proteins"} and identifier != source_id
+            and not (mode == "transcriptome" and len(parts) > 1 and gene_id == source_id)):
+        raise ValueError("BUSCO protein ID does not match its full-table sequence ID: " + source_id)
+
+
 def preserve(args):
     """Save exact BUSCO AA, including MetaEuk's predicted sequence IDs."""
     paths = [args.full, args.short, args.input]
-    before = digest_paths(paths)
+    boundary = FreshDigestBatch()
+    before = boundary.read(paths)
+    safe_token(args.species, "species")
+    reject_output_overlap([args.output], paths)
     rows, universe = single_copy_rows(args.full)
     quality = busco_quality(args.short)
     if len(universe) != quality["markers"]:
         raise ValueError("BUSCO full/short marker counts differ")
     run_dir = args.run_dir if args.run_dir.is_dir() else args.run_dir.parent
     sequence_dir = run_dir / "busco_sequences/single_copy_busco_sequences"
-    records = {}
-    for marker, source_id in sorted(rows.items()):
+    protein_paths = {}
+    for marker in sorted(rows):
         paths = [sequence_dir / (marker + suffix) for suffix in (".faa", ".faa.gz")]
         matches = [p for p in paths if p.is_file()]
         if len(matches) != 1:
             raise ValueError(f"Expected one single-copy protein for {marker}: {sequence_dir}")
-        proteins = list(fasta_records(matches[0]))
+        protein_paths[marker] = matches[0]
+    reject_output_overlap([args.output], list(protein_paths.values()))
+    boundary.read(protein_paths.values())
+    records = {}
+    for marker, source_id in sorted(rows.items()):
+        proteins = list(fasta_records(protein_paths[marker]))
         if len(proteins) != 1:
             raise ValueError("Single-copy protein file must contain one record: " + marker)
         identifier, header, sequence = proteins[0]
         sequence = sequence.upper().removesuffix("*")
         if not sequence or "*" in sequence or not sequence.isascii() or not sequence.isalpha():
             raise ValueError("Invalid BUSCO protein: " + marker)
+        validate_protein_id(identifier, source_id, quality["mode"])
         records[marker] = {"sequence": sequence, "busco_sequence_id": source_id,
                            "protein_id": identifier, "protein_header": header}
     payload = {"schema": SCHEMA, "species": args.species, "quality": quality,
                "source_hashes": before, "records": records, "marker_ids": sorted(universe)}
-    if digest_paths(before) != before:
-        raise ValueError("BUSCO inputs changed during protein preservation")
+    boundary.check()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".single-copy-", dir=args.output.parent)
     os.close(fd)
     try:
         with open(name, "wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as handle:
             handle.write(json.dumps(payload, sort_keys=True).encode())
+        boundary.check()
         os.replace(name, args.output)
     finally:
         Path(name).unlink(missing_ok=True)
 
 
-def read_archive(path, species, full, short, cds, source_hashes=None):
+def read_archive(path, species, full, short, cds, source_hashes=None, expected_marker_ids=None):
     with gzip.open(path, "rt") as handle:
         data = json.load(handle)
     rows, universe = single_copy_rows(full)
     quality = busco_quality(short)
+    if expected_marker_ids is not None and universe != expected_marker_ids:
+        raise ValueError("Guide BUSCO marker universe differs: " + species)
     if (data.get("schema") != SCHEMA or data.get("species") != species or data.get("quality") != quality
             or set(data.get("records", {})) != set(rows) or set(data.get("marker_ids", [])) != universe
             or len(universe) != quality["markers"]):
@@ -140,6 +177,12 @@ def read_archive(path, species, full, short, cds, source_hashes=None):
         if (record.get("busco_sequence_id") != rows[marker] or not sequence or "*" in sequence
                 or not sequence.isascii() or not sequence.isalpha() or sequence != sequence.upper()):
             raise ValueError("Invalid archived BUSCO protein: " + species + "/" + marker)
+        identifier = record.get("protein_id")
+        header = record.get("protein_header")
+        if (not isinstance(identifier, str) or not identifier or not isinstance(header, str)
+                or not header.split() or header.split()[0] != identifier):
+            raise ValueError("Invalid archived BUSCO protein ID/header: " + species + "/" + marker)
+        validate_protein_id(identifier, rows[marker], quality["mode"])
     return records, quality
 
 
@@ -213,10 +256,18 @@ def build(args):
         raise ValueError("Missing pre-rescue BUSCO proteins/tables; regenerate BUSCO to preserve its exact AA: " + missing[0])
     boundary = FreshDigestBatch()
     hashes = boundary.read(files)
+    support = {name: function.__globals__["__file__"] for name, function in
+               (("reader", fasta_records), ("state", digest), ("selection", patristic_distances),
+                ("publication", copy_atomic), ("species_labels", extract_species_label))}
+    tools_boundary = FreshDigestBatch()
+    tool_hashes = tools_boundary.read([kernel, rapidnj, __file__, *support.values()])
+    protected = {str(Path(p).resolve()) for p in [*hashes, *tool_hashes]}
     request = {"schema": SCHEMA, "sources": sources, "files": hashes,
                "parameters": {k: getattr(args, k) for k in
                               ("markers", "k", "sketch_size", "occupancy", "minimum_shared", "nearest")},
-               "tools": {"kernel": digest(kernel), "rapidnj": digest(rapidnj), "implementation": digest(__file__)}}
+               "tools": {"kernel": tool_hashes[kernel], "rapidnj": tool_hashes[rapidnj],
+                         "implementation": tool_hashes[__file__],
+                         "support": {name: tool_hashes[path] for name, path in support.items()}}}
     args.output.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(args.output / ".guide.lock"):
         receipt = args.output / "receipt.json"
@@ -224,17 +275,24 @@ def build(args):
             old = json.loads(receipt.read_text())
             if old.get("request") != request:
                 raise ValueError("Frozen BUSCO guide differs; use a new guide output directory")
-            if not all((args.output / p).is_file() and digest(args.output / p) == h for p, h in old["files"].items()):
+            saved_files = old.get("files")
+            if (not isinstance(saved_files, dict)
+                    or not {"guide_tree.nwk", "stability.json", "markers.json"} <= set(saved_files)
+                    or any(not p or Path(p).name != p or p in {".", ".."} for p in saved_files)
+                    or not all((args.output / p).is_file() and digest(args.output / p) == h for p, h in saved_files.items())):
                 raise ValueError("Frozen BUSCO guide outputs changed")
             boundary.check()
+            tools_boundary.check()
             return old
         with attempt_directory(args.output) as root:
             start = time.perf_counter()
             data, qualities, counts = {}, {}, defaultdict(int)
+            _, marker_universe = single_copy_rows(sources[names[0]]["full"])
             for name in names:
                 source = sources[name]
                 data[name], qualities[name] = read_archive(source["archive"], name, source["full"], source["short"], source["cds"],
-                                                         {source[k]: hashes[source[k]] for k in ("full", "short", "cds")})
+                                                         {source[k]: hashes[source[k]] for k in ("full", "short", "cds")},
+                                                         expected_marker_ids=marker_universe)
                 data[name] = {marker: record["sequence"] for marker, record in data[name].items()}
                 for marker in data[name]:
                     counts[marker] += 1
@@ -249,14 +307,16 @@ def build(args):
             data = {n: {g: seq for g, seq in records.items() if g in markers} for n, records in data.items()}
             atomic_json(root / "markers.json", {"selected": markers, "occupancy": {g: counts[g] for g in markers}})
             args.cache.mkdir(parents=True, exist_ok=True)
-            sketch_paths, reused = [], 0
+            cache_boundary = FreshDigestBatch()
+            sketch_paths, sketch_hashes, reused = [], [], 0
             sketch_seconds = 0.0
             for name in names:
                 sequences = [data[name].get(g, "") for g in markers]
                 key = token({"markers": markers, "sequences": sequences, "k": args.k,
-                             "size": args.sketch_size, "kernel": request["tools"]["kernel"]})
+                             "size": args.sketch_size, "kernel": request["tools"]["kernel"], "cache_schema": CACHE_SCHEMA})
                 destination = args.cache / (key + ".bin")
                 meta = args.cache / (key + ".json")
+                reject_cache_overlap([destination, meta], protected)
                 with exclusive_lock(args.cache / (key + ".lock")):
                     if cache_matches(destination, meta):
                         reused += 1
@@ -264,25 +324,39 @@ def build(args):
                         input_path, output_path = root / "sketch.input", root / "sketch.bin"
                         input_path.write_text(str(len(markers)) + "\n" + "\n".join(sequences) + "\n")
                         sketch_seconds += execute([kernel, "sketch", input_path, output_path, args.k, args.sketch_size], root, "sketch-" + name)
-                        shutil.copyfile(output_path, destination.with_suffix(".tmp"))
-                        os.replace(destination.with_suffix(".tmp"), destination)
+                        tools_boundary.check()
+                        copy_atomic(output_path, destination, expected_sha256=digest(output_path))
                         atomic_json(meta, {"key": key, "sha256": digest(destination)})
+                    observed = digest(destination)
+                    if observed != json.loads(meta.read_text())["sha256"]:
+                        raise ValueError("Guide sketch changed after cache verification")
+                    sketch_hashes.append(observed)
                 sketch_paths.append(str(destination.resolve()))
+            observed_sketches = cache_boundary.read(sketch_paths)
+            if any(observed_sketches[path] != expected for path, expected in zip(sketch_paths, sketch_hashes, strict=True)):
+                raise ValueError("Guide sketch changed after cache verification")
             (root / "sketches.txt").write_text("\n".join(sketch_paths) + "\n")
-            matrix_key = token({"sketches": [digest(p) for p in sketch_paths], "kernel": request["tools"]["kernel"]})
+            matrix_key = token({"sketches": sketch_hashes, "kernel": request["tools"]["kernel"], "cache_schema": CACHE_SCHEMA})
             cached_matrix, matrix_meta = args.cache / (matrix_key + ".tsv"), args.cache / (matrix_key + ".matrix.json")
+            reject_cache_overlap([cached_matrix, matrix_meta], protected)
             compare_seconds, compare_reused = 0.0, False
             with exclusive_lock(args.cache / (matrix_key + ".matrix.lock")):
                 if cache_matches(cached_matrix, matrix_meta):
-                    shutil.copyfile(cached_matrix, root / "pairwise.tsv")
+                    observed = cache_boundary.read([cached_matrix])[str(cached_matrix)]
+                    if observed != json.loads(matrix_meta.read_text())["sha256"]:
+                        raise ValueError("Guide distances changed after cache verification")
+                    copy_atomic(cached_matrix, root / "pairwise.tsv", expected_sha256=observed)
                     compare_reused = True
                 else:
                     compare_seconds = execute([kernel, "compare", root / "sketches.txt", root / "pairwise.tsv", args.cpus], root, "compare")
-                    shutil.copyfile(root / "pairwise.tsv", cached_matrix.with_suffix(".tmp"))
-                    os.replace(cached_matrix.with_suffix(".tmp"), cached_matrix)
+                    cache_boundary.check()
+                    tools_boundary.check()
+                    copy_atomic(root / "pairwise.tsv", cached_matrix, expected_sha256=digest(root / "pairwise.tsv"))
                     atomic_json(matrix_meta, {"key": matrix_key, "sha256": digest(cached_matrix)})
+            cache_boundary.check()
             matrices = [np.zeros((len(names), len(names)), dtype=float) for _ in range(3)]
             saturated, shared_total, minimum_shared = 0, 0, len(markers)
+            saturated_partners = [0] * len(names)
             with (root / "pairwise.tsv").open() as handle:
                 rows = list(csv.DictReader(handle, delimiter="\t"))
             if len(rows) != len(names)*(len(names)-1)//2:
@@ -299,6 +373,9 @@ def build(args):
                 minimum_shared = min(minimum_shared, shared)
                 saturated += int(row["saturated"])
                 shared_total += shared
+                if int(row["saturated"]) == shared:
+                    saturated_partners[i] += 1
+                    saturated_partners[j] += 1
                 for matrix, key in zip(matrices, ("distance", "panel_0", "panel_1"), strict=True):
                     value = float(row[key])
                     if not math.isfinite(value) or not 0 <= value <= 1:
@@ -306,6 +383,10 @@ def build(args):
                     matrix[i,j] = matrix[j,i] = value
             if saturated == shared_total:
                 raise ValueError("All usable BUSCO marker pairs are k-mer saturated; provide an external tree")
+            isolated = [name for name, count in zip(names, saturated_partners, strict=True) if count == len(names)-1]
+            if isolated:
+                raise ValueError("All comparisons are k-mer saturated for species " + ", ".join(isolated)
+                                 + "; provide an external tree")
             trees, nj_seconds = [], 0.0
             for matrix, label in zip(matrices, ("guide_tree", "panel_0", "panel_1"), strict=True):
                 tree, seconds = nj(matrix, names, root, label, rapidnj)
@@ -325,13 +406,18 @@ def build(args):
                            "cpus": args.cpus, "rooting": "unrooted", "negative_lengths": "RapidNJ -n adjustment"}
             atomic_json(root / "performance.json", performance)
             boundary.check()
-            if digest(kernel) != request["tools"]["kernel"] or digest(rapidnj) != request["tools"]["rapidnj"]:
-                raise ValueError("Guide inputs/tools changed during execution")
+            tools_boundary.check()
+            cache_boundary.check()
             products = [p for p in root.iterdir() if p.is_file() and p.name not in {"sketch.input", "sketch.bin", "sketches.txt"}]
             result = {"request": request, "files": {p.name: digest(p) for p in products}, "performance": performance}
+            reject_output_overlap([args.output / p.name for p in products] + [receipt], files)
             for path in products:
-                shutil.copyfile(path, args.output / path.name)
+                copy_atomic(path, args.output / path.name, expected_sha256=result["files"][path.name])
+            if any(digest(args.output / p) != h for p, h in result["files"].items()):
+                raise ValueError("Guide outputs changed during publication")
             boundary.check()
+            tools_boundary.check()
+            cache_boundary.check()
             atomic_json(receipt, result)
             return result
 

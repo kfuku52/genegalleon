@@ -153,3 +153,51 @@ def test_archive_record_tampering_is_rejected(tmp_path):
         json.dump(data, handle)
     with pytest.raises(ValueError, match="Invalid archived"):
         guide.read_archive(args.output, args.species, args.full, args.short, args.input)
+
+
+def test_preserve_rejects_protein_from_another_busco_match(tmp_path):
+    args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK"})
+    protein = args.run_dir / "busco_sequences/single_copy_busco_sequences/BUSCO1.faa"
+    protein.write_text(">Plant_other_gene:24-100\nMDEK\n")
+    with pytest.raises(ValueError, match="protein ID"):
+        guide.preserve(args)
+
+
+def test_preserve_accepts_busco_metaeuk_wrapped_target_id(tmp_path):
+    args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK"})
+    protein = args.run_dir / "busco_sequences/single_copy_busco_sequences/BUSCO1.faa"
+    protein.write_text(">BUSCO1_ancestral|Plant_example_gene:24-100|+\nMDEK\n")
+    guide.preserve(args)
+    records, _ = guide.read_archive(args.output, args.species, args.full, args.short, args.input)
+    assert records["BUSCO1"]["protein_id"] == "BUSCO1_ancestral|Plant_example_gene:24-100|+"
+
+
+def test_preserve_accepts_busco_transcriptome_strand_target_id(tmp_path):
+    args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK"})
+    protein = args.run_dir / "busco_sequences/single_copy_busco_sequences/BUSCO1.faa"
+    protein.write_text(">Plant_example_gene:24-100|+ orig_seq_frame_1\nMDEK\n")
+    guide.preserve(args)
+    records, _ = guide.read_archive(args.output, args.species, args.full, args.short, args.input)
+    assert records["BUSCO1"]["protein_id"] == "Plant_example_gene:24-100|+"
+
+
+def test_preserve_cannot_replace_its_cds_input(tmp_path):
+    args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK"})
+    original = args.input.read_bytes()
+    args.output = args.input
+    with pytest.raises(ValueError, match="overlap"):
+        guide.preserve(args)
+    assert args.input.read_bytes() == original
+
+
+def test_preserve_detects_protein_change_during_read(tmp_path, monkeypatch):
+    args = make_archive(tmp_path, "Plant_example", {"BUSCO1": "MDEK"})
+    before = args.output.read_bytes()
+    original = guide.fasta_records
+    def changed_after_read(path):
+        yield from original(path)
+        path.write_text(path.read_text().replace("MDEK", "MDDD"))
+    monkeypatch.setattr(guide, "fasta_records", changed_after_read)
+    with pytest.raises(OSError, match="File changed"):
+        guide.preserve(args)
+    assert args.output.read_bytes() == before

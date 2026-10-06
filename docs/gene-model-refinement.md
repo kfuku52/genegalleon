@@ -325,6 +325,27 @@ supports earlier summary-only comparisons; changed input/score bytes are rejecte
 Add `--output /path/to/refinement` to this plot-only command to include rescue
 and coding-path counts from that verified publication without rerunning BUSCO.
 
+The missing-gene panel also has two bars per species: upper, the same S/R/P
+support counts; lower, repeat overlap for the same rescued loci. The lower bar
+partitions loci into any TE-labelled CDS overlap, other/unclassified repeat
+overlap without a TE hit, assessed with no repeat overlap, or not assessed.
+Each bar sums to the rescued-locus total; excluded species remain unavailable.
+Missing annotation is hatched and never treated as a negative hit. These are
+annotation-overlap categories, not confirmed TE origins or functional-gene calls.
+Intronic-only repeats do not count as CDS hits. The existing BUSCO palette is
+unchanged.
+
+Supply `--rescue-evidence-dir /path/to/model_evidence` to either evaluation or
+`--plot-only --output /path/to/refinement`. This reads the separate
+`SPECIES/evidence.json` and `SPECIES/receipt.json` publications produced by
+[the rescue evidence audit](gene-model-evidence.md). Saved audit records must
+match the exact rescue model/worker/plan hashes, and accepted model IDs must
+match every rescued source locus. Changed or partial audits fail; species with
+no audit directory remain not assessed. Per-locus fractions, repeat classes,
+audit hashes and `rescue_repeat_groups` are saved in `model_change_summary.json`.
+Historical summaries without repeat evidence still show the second bar as
+not assessed. This redraw executes neither BUSCO nor repeat annotation.
+
 For an existing verified publication, the same comparison is available directly:
 
 ```bash

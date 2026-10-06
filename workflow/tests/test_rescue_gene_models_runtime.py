@@ -946,7 +946,12 @@ def arg(flag):
 lineage = Path(arg("--lineage_dataset")).name
 out = Path(arg("--out")) / ("run_" + lineage)
 out.mkdir(parents=True, exist_ok=True)
-(out / "full_table.tsv").write_text("# BUSCO version is: 6.0.0\\nBUSCO1\\tComplete\\tfixture\\n")
+(out / "full_table.tsv").write_text("# BUSCO version is: 6.0.0\\n" + "".join(
+    f"BUSCO{i}\\tComplete\\tfixture{i}\\n" for i in range(1, 101)))
+proteins = out / "busco_sequences/single_copy_busco_sequences"
+proteins.mkdir(parents=True)
+for i in range(1, 101):
+    (proteins / f"BUSCO{i}.faa").write_text(f">fixture{i}\\nMKAAA\\n")
 (out / "short_summary.txt").write_text("# BUSCO version is: 6.0.0\\n# The lineage dataset is: " + lineage + "\\n# BUSCO was run in mode: transcriptome\\nC:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:100\\n")
 with Path(CALLS).open("a") as log:
     log.write("run\\n")
@@ -956,7 +961,8 @@ with Path(CALLS).open("a") as log:
     full = root / "full_busco"
     full.mkdir()
     for n in species:
-        (full / (n + ".busco.full.tsv")).write_text("# initial fixture\nBUSCO1\tComplete\tfixture\n")
+        (full / (n + ".busco.full.tsv")).write_text("# initial fixture\n" + "".join(
+            f"BUSCO{i}\tComplete\tfixture{i}\n" if i <= 95 else f"BUSCO{i}\tMissing\n" for i in range(1, 101)))
     _write_runtime_busco_dataset(workspace, "embryophyta_odb12")
     env = _core_env(workspace, None, fake, "rescue_models", task_id=1)
     env.update(gene_model_rescue_dir=str(output), species_busco_full_dir=str(full),
