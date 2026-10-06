@@ -27,6 +27,30 @@ def write(path, rows, fields=None):
 
 
 def filtering_counts(source_events, selected, audit_path=""):
+    def unique(rows):
+        result = {row['event_id']: row for row in rows}
+        if len(result) != len(rows) or '' in result:
+            raise ValueError('Duplicate or empty modeled event ID in filtering cohort')
+        return result
+
+    def subset(rows, parent):
+        for row in rows:
+            original = parent.get(row['event_id'])
+            if original is None:
+                raise ValueError('Focused input cohort is not a subset of its source events')
+            for field in ('orthogroup', 'gene_tree_branch_id', 'branch_id', 'gene_tree_node', 'node_name',
+                          'generax_donor_node', 'generax_recipient_node', 'event_index'):
+                if field in row and field in original and row[field] != original[field]:
+                    raise ValueError('Filtering event identity disagrees: ' + field)
+            for aliases in [('gene_tree_branch_id', 'branch_id'), ('gene_tree_node', 'node_name')]:
+                identities = [{str(record[k]) for k in aliases if record.get(k) not in (None, '')}
+                              for record in (row, original)]
+                if any(len(values) > 1 for values in identities) or all(identities) and identities[0] != identities[1]:
+                    raise ValueError('Filtering event identity disagrees: ' + '/'.join(aliases))
+
+    source_by_id = unique(source_events)
+    unique(selected)
+    subset(selected, source_by_id)
     stages = []
     if audit_path:
         audited = read(audit_path)
@@ -51,6 +75,7 @@ def filtering_counts(source_events, selected, audit_path=""):
         accepted_ids = {row["event_id"] for row in accepted}
         if not {row["event_id"] for row in source_events} <= accepted_ids:
             raise ValueError("Focused input cohort is not a subset of accepted filtering-audit events")
+        subset(source_events, {r['event_id']: r for r in accepted})
         if not accepted_ids <= {row["event_id"] for row in directional}:
             raise ValueError("Accepted filtering-audit event has unsupported transfer direction")
         stages += [
@@ -101,7 +126,8 @@ def product_labels(families, links):
     return labels
 
 
-def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit=""):
+def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit="",
+                   context_annotations=''):
     import hashlib
     import textwrap
 
@@ -154,6 +180,8 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     sources = {}
     missing = set()
     annotation_links = [dict(r) for r in links]
+    from focus_hgt_context_annotations import ContextAnnotations, available
+    annotations = ContextAnnotations(context_annotations)
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)
         with store.read_snapshot():
@@ -167,15 +195,24 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
                     continue
                 sources["stat_branch/" + name] = hashlib.sha256(raw).hexdigest()
                 rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
-                tip_annotations = {row["node_name"]: row for row in rows}
+                tip_annotations = {row["node_name"]: row for row in rows if row.get('child1') == row.get('child2') == '-999'}
+                if len(tip_annotations) != sum(row.get('child1') == row.get('child2') == '-999' for row in rows):
+                    raise ValueError('Duplicate gene-tree tip in distribution annotations')
                 for link in annotation_links:
-                    if (
-                        link["orthogroup"] == family
-                        and not best_hit_product(link)
-                    ):
-                        recommended = tip_annotations.get(link["gene_id"], {}).get("sprot_recname", "")
-                        if available_label(recommended):
-                            link['swissprot_best_hit_protein_name'] = recommended
+                    if link['orthogroup'] != family:
+                        continue
+                    leaf = tip_annotations.get(link['gene_id'])
+                    if leaf is None:
+                        raise ValueError('Distribution annotation gene is absent from its family tree')
+                    annotation = annotations.get(link['gene_id'], family, leaf)
+                    if available(link.get('besthit_accession')) and available(leaf.get('sprot_best')) \
+                            and available(link['besthit_accession']) != available(leaf['sprot_best']):
+                        raise ValueError('Distribution annotation best hit disagrees with the exact family leaf')
+                    predicted = annotation['swissprot_best_hit_protein_name']
+                    if predicted and best_hit_product(link) and predicted != best_hit_product(link):
+                        raise ValueError('Distribution hit protein name disagrees with the exact family leaf')
+                    if predicted:
+                        link['swissprot_best_hit_protein_name'] = predicted
                 for row in rows:
                     if row.get("child1") == row.get("child2") == "-999":
                         matches = [s for s in species if row["node_name"].startswith(s + "_")]
@@ -186,6 +223,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
                 with store.open_binary(*logical.split("/", 1)) as h:
                     if hashlib.sha256(h.read()).hexdigest() != expected:
                         raise ValueError("Family input changed during distribution plotting")
+    annotations.verify()
     from focus_hgt_gene_trees import background_supported
 
     selected_ids = {r["event_id"] for r in selected}
@@ -351,4 +389,5 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
         "Each ancestral recipient event is counted once; descendant species and post-transfer copies do not multiply event counts.\n"
         "Internal branch IDs and complete descendant tip labels are retained in donor_recipient_events.tsv. No ancestral trait state is inferred.",
     )
-    return dict(pdf_count=3, filtering_counts=counts, family_source_sha256=sources)
+    return dict(pdf_count=3, filtering_counts=counts, family_source_sha256=sources,
+                context_annotation_source_sha256=annotations.sources)

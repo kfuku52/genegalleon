@@ -204,7 +204,7 @@ def replay(store, family, rows, destination, sources):
     arguments = [arg for arg in arguments if not arg.startswith("--stat_branch=")]
     panels = [arg for arg in arguments if re.match(r"--panel\d+=", arg)]
     last = max([int(arg.split("=")[0][7:]) for arg in panels], default=0)
-    arguments.append(f"--panel{last + 1}=categorical,hgtfocus_tip_status,Scaffold-supported recipient,-")
+    arguments.append(f"--panel{last + 1}=categorical,hgtfocus_tip_status,Scaffold-supported descendants,-")
     return dict(
         arguments=arguments,
         species_label_parser=parser,

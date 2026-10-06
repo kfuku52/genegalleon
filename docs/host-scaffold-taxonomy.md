@@ -211,7 +211,10 @@ labels give the matched `support_generax_ufboot`, including internal nodes.
 This presentation subset requires UFBoot >=90 and at least one retained
 event-linked gene on **each** side with candidate-free class scaffold background:
 >=10 classified units, >=50% classification coverage and >=90% host compatibility.
-Those recipient genes have orange tip labels. The parent focused tables are
+Those recipient genes have orange tip labels; supported donor tips are blue.
+The shared `Scaffold-supported descendants` column records both roles, with
+pale cells for eligible descendants whose scaffold support is unconfirmed.
+The parent focused tables are
 unchanged. `tree_plot/event_node_audit.tsv` retains every requested event with
 selection/withholding reasons; terminal nodes, missing support and unresolved
 branch/token matches do not qualify. Background context is not conserved gene
@@ -236,12 +239,16 @@ retaining each exact event reference in the audit. All genomic tracks share
 one linear kb axis centered on the focal feature midpoint. The shared window
 includes each focal feature plus at least 20 kb flanks; asterisks mark neighboring
 features extending beyond the window. CDS and available UTR
-blocks retain genomic intron lengths; missing structure and trans-splicing are
+blocks retain genomic intron lengths. Exon-only annotations are gray dotted blocks with
+unknown CDS/UTR identity, never relabeled as UTRs; missing structure and trans-splicing are
 explicitly unavailable. Neighbor annotations do not establish their taxonomy or
 conserved gene order. `context_gene_audit.tsv` records displayed and omitted
 genes, selection rank/reason, measured evidence and count units, complete gene
 IDs, structures, exact event branches and shared axis limits. The workflow supplies
 existing `species_gff_info`; standalone calls use `--gff_info_root`.
+Axis zero is the midpoint of the saved focal-feature `start/end` span. For
+CDS records this span excludes flanking UTRs; UTRs keep their own recorded
+coordinates and remain visible beyond the CDS span.
 
 Under each genomic track, page 2 lists the focal gene and every displayed
 neighbor with its Swiss-Prot best-hit protein product prediction, organism/accession,
@@ -268,6 +275,15 @@ Without it, exact focal-family leaf hit annotations are used when available;
 unavailable neighbor annotations and taxonomic ranks stay missing.
 `context_annotation_audit.tsv` records every displayed gene, its annotation
 inputs and exact context/event references; the input TSV hash is in the manifest.
+`gg_gene_summary` forwards the same input through
+`hgt_summary_focus_context_annotations_tsv` to both the context pages and
+orthogroup distribution summary. The stage records this input and the annotation
+helper in its provenance, so annotation changes invalidate cached plots.
+The renderer checks supplemental focal and neighbor hits against each gene's
+own existing family leaf when available, recording the checked family hashes
+and `annotation_validation_status`. Missing family sources remain explicit.
+Malformed rows, fractional taxids and conflicting gene/family/hit mappings fail
+instead of producing a plausible annotation.
 The one-page canvas expands to fit complete annotations while retaining the
 three-gene-per-side display limit and the same linear genomic scale per track.
 

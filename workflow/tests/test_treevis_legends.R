@@ -141,3 +141,20 @@ for (regimes in list(rep('root', 5), c('root', 'shift_2', 'shift_2', 'shift_2', 
     stopifnot(file.info(file.path(output,'stat_branch2tree_plot.pdf'))$size > 1000)
 }
 cat('NWKIT named-regime tree rendering passed.\n')
+
+# Focused donor/recipient categories retain their role colors for any subset.
+for (values in list(c('Scaffold-supported donor descendant',
+                      'Scaffold-supported recipient descendant',
+                      'Scaffold-unconfirmed recipient descendant', '-', '-'),
+                    rep('Scaffold-supported recipient descendant', 5))) {
+    input <- base
+    input$tree$data$hgtfocus_tip_status <- ''
+    input$tree$data$hgtfocus_tip_status[input$tree$data$isTip] <- values
+    key <- 'categorical,hgtfocus_tip_status,Scaffold-supported descendants'
+    panel <- add_categorical_column(input,args,key,'hgtfocus_tip_status','Scaffold-supported descendants')[[key]]
+    scale <- ggplot_build(panel)$plot$scales$get_scales('fill')
+    expected <- c('Scaffold-supported donor descendant'='#2b6ca3',
+                  'Scaffold-supported recipient descendant'='#b34d00',
+                  'Scaffold-unconfirmed recipient descendant'='#ead1be', '-'='#e6e6e6')
+    stopifnot(identical(unname(scale$map(values)), unname(expected[values])))
+}

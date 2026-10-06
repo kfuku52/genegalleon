@@ -3,6 +3,8 @@
 import csv
 import hashlib
 import io
+import re
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 
@@ -14,62 +16,135 @@ FIELDS = ('gene_id', 'orthogroup', 'protein_product_name', 'protein_product_stat
           'protein_product_mapping_scope', 'gene_description', 'swissprot_best_hit_protein_name',
           'swissprot_name_source', 'swissprot_name_source_sha256',
           'besthit_accession', 'besthit_organism', 'besthit_taxid', 'besthit_source',
-          'besthit_source_sha256', 'besthit_status', 'besthit_coverage_percent', 'besthit_identity_percent',
+          'besthit_source_sha256', 'besthit_status', 'annotation_validation_status', 'besthit_coverage_percent', 'besthit_identity_percent',
           'besthit_evalue', 'taxonomy_source', 'taxonomy_source_sha256',
           *(f'besthit_{rank}' for rank in RANKS))
 
 
 def available(value):
-    return str(value).strip() if value is not None and str(value).strip().lower() not in {'', 'na', 'nan', 'none'} else ''
+    return str(value).strip() if value is not None and str(value).strip().lower() not in {
+        '', '.', 'na', 'nan', 'none', 'null', 'unavailable', 'annotation unavailable'} else ''
+
+
+def taxid(value):
+    """Saved numeric TSVs may have '.0'; fractional/invalid IDs are never rounded."""
+    value = available(value)
+    if not value:
+        return None
+    try:
+        number = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError('Invalid best-hit taxid: ' + value) from exc
+    if not number.is_finite() or number <= 0 or number != number.to_integral_value():
+        raise ValueError('Invalid best-hit taxid: ' + value)
+    return int(number)
 
 
 class ContextAnnotations:
     """Exact gene IDs only; neighbor genes never inherit focal annotations."""
 
-    def __init__(self, path=''):
+    def __init__(self, path='', store=None):
         self.rows, self.sources, self.display_audit = {}, {}, []
+        self.store, self.leaf_cache, self.family_sources = store, {}, {}
         if path:
             path = Path(path).resolve()
             raw = path.read_bytes()
             self.sources[str(path)] = hashlib.sha256(raw).hexdigest()
-            reader = csv.DictReader(io.StringIO(raw.decode()), delimiter='\t')
+            reader = csv.DictReader(io.StringIO(raw.decode('utf-8-sig')), delimiter='\t')
+            if reader.fieldnames and len(set(reader.fieldnames)) != len(reader.fieldnames):
+                raise ValueError('Duplicate context annotation columns')
             required = {'gene_id', 'orthogroup', 'besthit_accession', 'besthit_organism',
                         *[f'besthit_{r}' for r in RANKS]}
             if not required.issubset(reader.fieldnames or []):
                 raise ValueError('Context annotations lack required per-gene columns')
             for row in reader:
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError('Malformed context annotation TSV row')
                 gene = available(row['gene_id'])
                 if not gene or gene in self.rows:
                     raise ValueError('Duplicate or empty context annotation gene ID')
+                family = available(row['orthogroup'])
+                if not re.fullmatch(r'[A-Za-z0-9_.-]+', family) or family in {'.', '..'}:
+                    raise ValueError('Empty or unsafe context annotation orthogroup')
+                taxid(row.get('besthit_taxid'))
                 if (available(row['besthit_organism']) or available(row.get('swissprot_best_hit_protein_name'))
+                        or available(row.get('besthit_taxid'))
                         or any(available(row[f'besthit_{r}']) for r in RANKS)) \
                         and not available(row['besthit_accession']):
                     raise ValueError('Best-hit organism/taxonomy requires the same hit accession')
                 self.rows[gene] = row
 
+    def family_leaves(self, family):
+        """Read a neighbor's own existing family, including archived store members."""
+        if family not in self.leaf_cache:
+            name = family + '_stat.branch.tsv'
+            try:
+                with self.store.open_binary('stat_branch', name) as handle:
+                    raw = handle.read()
+            except FileNotFoundError:
+                self.leaf_cache[family] = None
+            else:
+                self.family_sources['stat_branch/' + name] = hashlib.sha256(raw).hexdigest()
+                reader = csv.DictReader(io.StringIO(raw.decode('utf-8-sig')), delimiter='\t')
+                fields = reader.fieldnames or []
+                if len(set(fields)) != len(fields) or not {'node_name', 'child1', 'child2'} <= set(fields):
+                    raise ValueError('Missing or duplicate neighbor family columns')
+                rows = list(reader)
+                if any(None in r or any(v is None for v in r.values()) for r in rows):
+                    raise ValueError('Malformed neighbor family row')
+                leaves = {r['node_name']: r for r in rows if r['child1'] == r['child2'] == '-999'}
+                if len(leaves) != sum(r['child1'] == r['child2'] == '-999' for r in rows):
+                    raise ValueError('Duplicate family leaf in context annotations')
+                self.leaf_cache[family] = leaves
+        return self.leaf_cache[family]
+
     def get(self, gene, family='', leaf=None):
         row = self.rows.get(gene)
+        validation = 'supplemental_only' if row is not None else 'annotation_unavailable'
+        if row is not None and self.store is not None and leaf is None:
+            family = family or available(row['orthogroup'])
+            leaves = self.family_leaves(family)
+            if leaves is None:
+                validation = 'family_source_unavailable'
+            elif gene not in leaves:
+                raise ValueError('Context annotation gene is absent from its own family: ' + gene)
+            else:
+                leaf = leaves[gene]
+        if leaf is not None:
+            if leaf.get('node_name') != gene or leaf.get('child1') != leaf.get('child2') or leaf.get('child1') != '-999':
+                raise ValueError('Context annotation requires the exact family leaf: ' + gene)
+            validation = 'exact_family_leaf_verified'
         if row is not None:
             if family and available(row['orthogroup']) != family:
                 raise ValueError('Context annotation family/gene mapping disagrees: ' + gene)
-            if leaf and available(leaf.get('sprot_best')) and available(row['besthit_accession']) != available(leaf['sprot_best']):
+            if leaf and 'sprot_best' in leaf and available(row['besthit_accession']) != available(leaf['sprot_best']):
                 raise ValueError('Context annotation best hit disagrees with the exact family leaf: ' + gene)
             if leaf and available(leaf.get('organism')) and available(row['besthit_organism']) \
                     and available(row['besthit_organism']) != available(leaf['organism']):
                 raise ValueError('Context annotation hit organism disagrees with the exact family leaf: ' + gene)
             if leaf and available(leaf.get('taxid_y')) and available(row.get('besthit_taxid')) \
-                    and int(float(row['besthit_taxid'])) != int(float(leaf['taxid_y'])):
+                    and taxid(row['besthit_taxid']) != taxid(leaf['taxid_y']):
                 raise ValueError('Context annotation hit taxid disagrees with the exact family leaf: ' + gene)
-            return {k: available(row.get(k)) for k in FIELDS}
+            if leaf and available(leaf.get('sprot_recname')) and available(row.get('swissprot_best_hit_protein_name')) \
+                    and available(row['swissprot_best_hit_protein_name']) != available(leaf['sprot_recname']):
+                raise ValueError('Context annotation hit protein name disagrees with the exact family leaf: ' + gene)
+            result = {k: available(row.get(k)) for k in FIELDS}
+            if leaf and result['besthit_accession']:
+                for field, native in [('besthit_organism', 'organism'), ('besthit_taxid', 'taxid_y'),
+                                      ('swissprot_best_hit_protein_name', 'sprot_recname')]:
+                    result[field] = result[field] or available(leaf.get(native))
+            result['annotation_validation_status'] = validation
+            return result
         result = dict.fromkeys(FIELDS, '')
         result.update(gene_id=gene, orthogroup=family, protein_product_status='annotation_unavailable',
-                      besthit_status='annotation_unavailable')
+                      besthit_status='annotation_unavailable', annotation_validation_status=validation)
         # The family's exact saved leaf row is useful even without a supplemental table.
         if leaf and leaf.get('node_name') == gene and leaf.get('child1') == leaf.get('child2') == '-999':
             result.update(besthit_accession=available(leaf.get('sprot_best')),
                           besthit_organism=available(leaf.get('organism')),
                           besthit_taxid=available(leaf.get('taxid_y')),
-                          swissprot_best_hit_protein_name=available(leaf.get('sprot_recname')),
+                          swissprot_best_hit_protein_name=available(leaf.get('sprot_recname'))
+                          if available(leaf.get('sprot_best')) else '',
                           besthit_source='existing exact family stat.branch.tsv leaf',
                           besthit_status='existing_family_leaf_hit' if available(leaf.get('sprot_best')) else 'no_existing_hit')
         return result
@@ -78,6 +153,10 @@ class ContextAnnotations:
         for path, expected in self.sources.items():
             if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected:
                 raise ValueError('Context annotation input changed during rendering')
+        for logical, expected in self.family_sources.items():
+            with self.store.open_binary(*logical.split('/', 1)) as handle:
+                if hashlib.sha256(handle.read()).hexdigest() != expected:
+                    raise ValueError('Neighbor family input changed during rendering')
 
 
 @lru_cache(maxsize=4096)
@@ -139,7 +218,8 @@ def context_annotation_rows(entry, annotations, family, leaves):
         if not focal:
             number += 1
         label = 'Focal' if focal else str(number)
-        annotation = annotations.get(gene['gene_id'], family if focal else '', leaves.get(gene['gene_id']))
+        leaf = leaves.get(gene['gene_id'])
+        annotation = annotations.get(gene['gene_id'], family if focal or leaf is not None else '', leaf)
         cells = annotation_cells(annotation, species, label)
         result.append(dict(annotation, context_focal_gene_id=focal_id, side=entry['side'],
                            context_role='focal' if focal else 'neighbor', neighbor_label=label,

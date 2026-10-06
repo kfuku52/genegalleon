@@ -922,6 +922,7 @@ run_hgt_summary_for_source() {
   hgt_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}" \
   hgt_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" \
   hgt_focus_filter_audit_tsv="${hgt_summary_focus_filter_audit_tsv:-}" \
+  hgt_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}" \
   hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" \
   hgt_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" \
   hgt_tree_width_mm="${hgt_summary_tree_width_mm:-60}" \

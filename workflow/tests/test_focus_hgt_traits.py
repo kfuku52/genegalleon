@@ -131,9 +131,11 @@ def source(tmp_path):
     write_tsv(event, list(events[0]), events)
     links = []
     for row in events:
-        for species, side in (("D", "donor"), ("A", "recipient"), ("B", "recipient")):
+        allowed = {'A': {'A'}, 'B': {'B'}, 'C': {'C'}, '0042': {'A', 'B'}, 'mixed': {'C', 'D'}}
+        for species, side in (("D", "donor"), ("A", "recipient"), ("B", "recipient"), ("C", "recipient")):
             links.append(dict(event_id=row["event_id"], orthogroup="OG1", gene_id=species + "_gene", gene_species=species,
-                              side=side, eligible_for_context="True", product_name="Protein " + species, synteny_support_score="NA"))
+                              side=side, eligible_for_context=str(side == 'donor' or species in allowed[row['generax_recipient_node']]),
+                              product_name="Protein " + species, synteny_support_score="NA"))
     link = tmp_path / "links.tsv"
     write_tsv(link, list(links[0]), links)
     return event, link, tree, trait, tmp_path / "output"
@@ -199,6 +201,11 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
 
 def test_empty_category1_targets_are_reported(source):
     source[0].write_text(source[0].read_text().replace("Y@D@A", "Y@D@D").replace("\tD\tA\t", "\tD\tD\t"))
+    fields, links = read_tsv(source[1])
+    for link in links:
+        if link['event_id'] == 'OG1:3:1' and link['side'] == 'recipient':
+            link['eligible_for_context'] = 'False'
+    write_tsv(source[1], fields, links)
     generate(*source, plots=False)
     summary = json.loads((source[-1] / "traits/category/tips/A/summary.json").read_text())
     assert summary["event_count"] == 0
@@ -533,9 +540,9 @@ def test_context_annotations_require_exact_gene_family_and_same_best_hit(tmp_pat
     with pytest.raises(ValueError, match='family/gene mapping'):
         annotations.get('A_gene', 'wrong_family')
     with pytest.raises(ValueError, match='best hit disagrees'):
-        annotations.get('A_gene', 'OG1', dict(node_name='A_gene', sprot_best='DifferentHit'))
+        annotations.get('A_gene', 'OG1', dict(node_name='A_gene', child1='-999', child2='-999', sprot_best='DifferentHit'))
     with pytest.raises(ValueError, match='organism disagrees'):
-        annotations.get('A_gene', 'OG1', dict(node_name='A_gene', sprot_best='P12345', organism='Wrong organism'))
+        annotations.get('A_gene', 'OG1', dict(node_name='A_gene', child1='-999', child2='-999', sprot_best='P12345', organism='Wrong organism'))
     write_tsv(path, list(row), [dict(row, protein_product_name='Changed')])
     with pytest.raises(ValueError, match='changed during rendering'):
         annotations.verify()
@@ -647,3 +654,161 @@ def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(t
     unverified = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
                                  best_available_product_label='Unspecified annotation')])['OG1']
     assert unverified['protein_product'] == 'Annotation unavailable'
+
+
+def test_context_annotations_reject_malformed_rows_and_fractional_taxids(tmp_path):
+    from focus_hgt_context_annotations import FIELDS, ContextAnnotations, taxid
+
+    path = tmp_path/'annotations.tsv'
+    row = dict.fromkeys(FIELDS, '')
+    row.update(gene_id='A_gene', orthogroup='OG1', besthit_accession='P1', besthit_taxid='9606.0')
+    write_tsv(path, FIELDS, [row])
+    assert ContextAnnotations(path).get('A_gene')['besthit_taxid'] == '9606.0'
+    assert taxid('9606.0') == 9606 and taxid('.') is None
+    for invalid in ('9606.1', 'Infinity', 'abc', '0', '-1'):
+        with pytest.raises(ValueError, match='Invalid best-hit taxid'):
+            taxid(invalid)
+    for mutation, reason in [(dict(row, orthogroup=''), 'orthogroup'),
+                             (dict(row, besthit_taxid='9606.1'), 'taxid')]:
+        write_tsv(path, FIELDS, [mutation])
+        with pytest.raises(ValueError, match=reason):
+            ContextAnnotations(path)
+    write_tsv(path, FIELDS, [row])
+    valid = path.read_text()
+    for malformed in [valid.replace('\n', '\textra\n', 1), valid.rstrip('\n')+'\textra\n',
+                      valid.rsplit('\t', 1)[0]+'\n', valid.replace('gene_id\t', 'gene_id\tgene_id\t', 1)]:
+        path.write_text(malformed)
+        with pytest.raises(ValueError, match='Malformed|Duplicate|columns'):
+            ContextAnnotations(path)
+
+
+def test_context_annotations_verify_neighbor_own_family_and_leaf_identity(tmp_path):
+    from focus_hgt_context_annotations import FIELDS, ContextAnnotations, context_annotation_rows
+    from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+
+    root = tmp_path/'families'
+    root.joinpath('stat_branch').mkdir(parents=True)
+    leaf = dict(node_name='A_neighbor', child1='-999', child2='-999', sprot_best='P1',
+                sprot_recname='Correct name', organism='Hit organism', taxid_y='9606.0')
+    write_tsv(root/'stat_branch/OG2_stat.branch.tsv', list(leaf), [leaf])
+    row = dict.fromkeys(FIELDS, '')
+    row.update(gene_id='A_neighbor', orthogroup='OG2', besthit_accession='P1', besthit_taxid='9606',
+               swissprot_best_hit_protein_name='Correct name')
+    path = tmp_path/'annotations.tsv'
+    write_tsv(path, FIELDS, [row])
+    with read_only_observation():
+        annotations = ContextAnnotations(path, store=GeneFamilyOutputStore(root))
+        exact = annotations.get('A_neighbor')
+        assert exact['besthit_organism'] == 'Hit organism'
+        assert exact['annotation_validation_status'] == 'exact_family_leaf_verified'
+        assert 'stat_branch/OG2_stat.branch.tsv' in annotations.family_sources
+        annotations.verify()
+        with pytest.raises(ValueError, match='exact family leaf'):
+            annotations.get('A_neighbor', 'OG2', dict(leaf, node_name='A_different'))
+        with pytest.raises(ValueError, match='protein name disagrees'):
+            annotations.get('A_neighbor', 'OG2', dict(leaf, sprot_recname='Wrong name'))
+        with pytest.raises(ValueError, match='best hit disagrees'):
+            annotations.get('A_neighbor', 'OG2', dict(leaf, sprot_best=''))
+        # A neighbor in the displayed tree cannot claim a different OG.
+        entry = dict(link=dict(gene_id='A_focal', gene_species='A'), side='recipient',
+                     neighbors=[dict(gene_id='A_neighbor', start='1')], event_ids={'e1'})
+        with pytest.raises(ValueError, match='family/gene mapping'):
+            context_annotation_rows(entry, annotations, 'OG1', {'A_neighbor': leaf})
+    write_tsv(root/'stat_branch/OG2_stat.branch.tsv', list(leaf), [dict(leaf, node_name='A_other')])
+    with read_only_observation():
+        with pytest.raises(ValueError, match='absent from its own family'):
+            ContextAnnotations(path, store=GeneFamilyOutputStore(root)).get('A_neighbor')
+
+
+def test_exon_only_structure_is_not_labeled_or_drawn_as_utr():
+    from focus_hgt_context import structure
+
+    row = dict(feature_type='exon', feature_blocks='100-150;300-350', utr_blocks='', start='100', end='350')
+    result = structure(row)
+    assert result['status'] == 'annotated_exons_CDS_UTR_unavailable'
+    assert result['coding'] == result['utr'] == []
+    assert result['exon'] == [(100, 150), (300, 350)]
+    assert result['introns'] == [(151, 299)]
+    cds = structure(dict(row, feature_type='CDS', utr_blocks='50-99;351-400'))
+    assert cds['utr'] == [(50, 99), (351, 400)]  # Saved CDS spans exclude flanking UTRs.
+
+
+def test_filtering_cohorts_cannot_borrow_event_identity_or_duplicate_counts():
+    from focus_hgt_figures import filtering_counts
+
+    row = dict(event_id='e1', orthogroup='OG1', gene_tree_branch_id='3')
+    with pytest.raises(ValueError, match='Duplicate'):
+        filtering_counts([row, row], [row])
+    with pytest.raises(ValueError, match='not a subset'):
+        filtering_counts([row], [dict(row, event_id='e2')])
+    for field in ('orthogroup', 'gene_tree_branch_id'):
+        with pytest.raises(ValueError, match='identity disagrees'):
+            filtering_counts([row], [dict(row, **{field: 'wrong'})])
+    with pytest.raises(ValueError, match='identity disagrees'):
+        filtering_counts([row], [dict(event_id='e1', orthogroup='OG1', branch_id='wrong')])
+
+
+def test_eligible_transfer_gene_cannot_borrow_another_species_branch(source):
+    fields, links = read_tsv(source[1])
+    links[2]['eligible_for_context'] = 'True'  # B_gene is outside the first event's A recipient.
+    write_tsv(source[1], fields, links)
+    with pytest.raises(ValueError, match='outside its species branch'):
+        generate(*source, plots=False)
+
+
+def test_native_gene_tree_column_shows_both_roles_and_unconfirmed_recipient():
+    stat, events, links = focused_node_source()
+    stat.append(dict(stat[0], node_name='A_copy', branch_id='4'))
+    links.append(dict(supported_link(events[0]['event_id'], 'recipient', 'A_copy'), host_scaffold_status='unavailable'))
+    annotated, _ = annotate(stat, events, links)
+    by_name = {r['node_name']: r for r in annotated}
+    assert by_name['D_gene']['hgtfocus_donor_flag'] == 1
+    assert by_name['D_gene']['hgtfocus_tip_status'] == 'Scaffold-supported donor descendant'
+    assert by_name['A_gene']['hgtfocus_tip_status'] == 'Scaffold-supported recipient descendant'
+    assert by_name['A_copy']['hgtfocus_recipient_flag'] == 0
+    assert by_name['A_copy']['hgtfocus_tip_status'] == 'Scaffold-unconfirmed recipient descendant'
+
+
+def test_distribution_figure_uses_the_same_supplemental_hit_prediction(tmp_path):
+    from io import StringIO
+
+    from Bio import Phylo
+    from focus_hgt_context_annotations import FIELDS
+    from focus_hgt_figures import export_figures
+    from pypdf import PdfReader
+
+    stat, events, links = focused_node_source()
+    for row in stat:
+        row.update(sprot_best='P1' if row['node_name'] == 'A_gene' else '', sprot_recname='', organism='')
+    root = tmp_path/'families'
+    write_tsv(root/'stat_branch/OG1_stat.branch.tsv', list(stat[0]), stat)
+    for link, species in zip(links, ['D', 'A'], strict=True):
+        link['gene_species'] = species
+    row = dict.fromkeys(FIELDS, '')
+    row.update(gene_id='A_gene', orthogroup='OG1', besthit_accession='P1', swissprot_best_hit_protein_name='Exact predicted product')
+    path = tmp_path/'annotations.tsv'
+    write_tsv(path, FIELDS, [row])
+    tree = Phylo.read(StringIO('(A:1,D:1)root;'), 'newick')
+    for event in events:
+        event.update(generax_donor_node='D', generax_recipient_node='A')
+    output = tmp_path/'plots'
+    report = export_figures(output, events, events, links, tree, {'A': 1, 'D': 0}, root, 'gall', context_annotations=path)
+    assert report['pdf_count'] == 3 and str(path.resolve()) in report['context_annotation_source_sha256']
+    distribution = read_tsv(output/'orthogroup_species_distribution.tsv')[1]
+    assert all(r['protein_product'] == 'Exact predicted product' for r in distribution)
+    assert len(list(output.glob('*.pdf'))) == 3
+    assert all(len(PdfReader(pdf).pages) == 1 for pdf in output.glob('*.pdf'))
+
+
+def test_missing_gff_coordinates_remain_unavailable_and_invalid_spans_fail(tmp_path):
+    from focus_hgt_context import GenomeCoordinates
+
+    root = tmp_path/'gff'
+    row = dict(gene_id='A_gene', chromosome='s1', start='NA', end='100', feature_type='CDS', feature_blocks='')
+    write_tsv(root/'A.gff_info.tsv', list(row), [row])
+    focal, neighbors, status = GenomeCoordinates(root).neighborhood(dict(gene_id='A_gene', gene_species='A'))
+    assert focal is None and neighbors == [] and status == 'gff_coordinates_unavailable'
+    for span in [('0', '100'), ('101', '100')]:
+        write_tsv(root/'A.gff_info.tsv', list(row), [dict(row, start=span[0], end=span[1])])
+        with pytest.raises(ValueError, match='Invalid GFF coordinate span'):
+            GenomeCoordinates(root).load('A')

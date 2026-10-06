@@ -627,6 +627,12 @@ add_tree_column = function(g, args, b, dist_col, nodelabel_col, branch_color, or
     }
     g[[gname]] = append_branch_tiplab_colors(g[[gname]], branch_color, path_species_color_table)
     g[[gname]] = propagate_tiplab_colors_to_internal_branches(g[[gname]], tree_display)
+    if ('hgtfocus_donor_flag' %in% colnames(g[[gname]][['data']])) {
+        focused_donors = !is.na(g[[gname]][['data']][['hgtfocus_donor_flag']]) &
+            g[[gname]][['data']][['hgtfocus_donor_flag']] == 1 & g[[gname]][['data']][['isTip']]
+        g[[gname]][['data']][['tiplab_color']][focused_donors] = '#2b6ca3'
+        g[[gname]][['data']][['branch_color']][focused_donors] = '#2b6ca3'
+    }
     if ('hgtfocus_recipient_flag' %in% colnames(g[[gname]][['data']])) {
         focused_tips = !is.na(g[[gname]][['data']][['hgtfocus_recipient_flag']]) &
             g[[gname]][['data']][['hgtfocus_recipient_flag']] == 1 & g[[gname]][['data']][['isTip']]

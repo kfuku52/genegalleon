@@ -29,6 +29,7 @@ hgt_species_trait="${hgt_species_trait:-auto}"
 hgt_focus_event_tsv="${hgt_focus_event_tsv:-auto}"
 hgt_focus_event_gene_tsv="${hgt_focus_event_gene_tsv:-auto}"
 hgt_focus_filter_audit_tsv="${hgt_focus_filter_audit_tsv:-}"
+hgt_focus_context_annotations_tsv="${hgt_focus_context_annotations_tsv:-}"
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
 hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
@@ -550,6 +551,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       hgt_focus_provenance_args+=(
         --input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"
         --input "gene_tree_config=${gg_support_dir}/gene_tree_plot_config.py"
+        --input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"
         --input "gene_context=${gg_support_dir}/focus_hgt_context.py"
         --input "focused_figures=${gg_support_dir}/focus_hgt_figures.py"
         --input "gene_tree_plotter=${gg_support_dir}/stat_branch2tree_plot.r"
@@ -560,6 +562,9 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         hgt_focus_provenance_args+=(--input-gene-family-subdir "focus_${hgt_focus_subdir}=${dir_orthogroup}::${hgt_focus_subdir}")
       done
       gg_artifact_add_input_if_present hgt_focus_provenance_args "gff_coordinates" "${gg_workspace_output_dir}/species_gff_info"
+      if [[ -n "${hgt_focus_context_annotations_tsv}" ]]; then
+        hgt_focus_provenance_args+=(--input "context_annotations=${hgt_focus_context_annotations_tsv}")
+      fi
       gg_artifact_add_input_if_present hgt_focus_provenance_args "filtering_audit" "${hgt_focus_filter_audit_tsv}"
     fi
     gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_schema_input" "${hgt_species_trait_path}.schema.json"
@@ -573,6 +578,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --gene_family_root "${dir_orthogroup}" \
         --gff_info_root "${gg_workspace_output_dir}/species_gff_info" \
         --filter_audit_tsv "${hgt_focus_filter_audit_tsv}" \
+        --context_annotations_tsv "${hgt_focus_context_annotations_tsv}" \
         --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
       gg_artifact_record "${hgt_focus_provenance_args[@]}"
     fi

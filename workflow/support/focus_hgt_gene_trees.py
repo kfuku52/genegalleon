@@ -82,6 +82,7 @@ def annotate(stat_rows, events, links):
     for row in links:
         linked[(row["event_id"], row["side"])].append(row)
     audits, selected, genes = [], defaultdict(list), set()
+    donor_genes, roles = set(), defaultdict(set)
     for event in sorted(events, key=lambda row: row["event_id"]):
         branch_id = identity(event, "gene_tree_branch_id", "branch_id")
         node = identity(event, "gene_tree_node", "node_name")
@@ -123,6 +124,11 @@ def annotate(stat_rows, events, links):
             label = f"HGT{sum(len(group) for group in selected.values()) + 1}"
             selected[branch_id].append((event, label, support))
             genes.update(link["gene_id"] for link in sides["recipient"])
+            donor_genes.update(link['gene_id'] for link in sides['donor'])
+            for side in ('donor', 'recipient'):
+                roles[side].update(link['gene_id'] for link in linked[event['event_id'], side]
+                                   if str(link.get('eligible_for_context', '')).lower() in {'true', '1'}
+                                   and link['gene_id'] in tips and link['orthogroup'] == event['orthogroup'])
         audits.append(dict(event_id=event["event_id"], orthogroup=event["orthogroup"],
                            gene_tree_branch_id=branch_id, gene_tree_node=node,
                            generax_transfer=event["generax_transfer"], status="selected" if not reason else "withheld",
@@ -132,11 +138,17 @@ def annotate(stat_rows, events, links):
     output = []
     for row in stat_rows:
         matched = selected.get(row["branch_id"], [])
+        name = row['node_name']
+        status = []
+        for side, passing in [('donor', donor_genes), ('recipient', genes)]:
+            if name in roles[side]:
+                status.append(('Scaffold-supported ' if name in passing else 'Scaffold-unconfirmed ') + side + ' descendant')
         output.append(dict(row, hgtfocus_event_count=len(matched),
                            hgtfocus_event_ids="; ".join(e["event_id"] for e, _, _ in matched),
                            hgtfocus_node_label="; ".join(f"{label} UF={support:g}" for _, label, support in matched),
                            hgtfocus_recipient_flag=int(row["node_name"] in genes),
-                           hgtfocus_tip_status="Supported recipient" if row["node_name"] in genes else ""))
+                           hgtfocus_donor_flag=int(name in donor_genes),
+                           hgtfocus_tip_status='; '.join(status)))
     return output, audits
 
 
@@ -168,6 +180,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
     index, audit, sources, context_audit, configurations = [], [], {}, [], {}
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)
+        annotations.store = store
         with store.read_snapshot():
             for family, group in sorted(families.items()):
                 try:
@@ -241,6 +254,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
                 with store.open_binary(subdir, name) as handle:
                     if hashlib.sha256(handle.read()).hexdigest() != expected:
                         raise ValueError("Gene-tree input changed during focused rendering")
+            annotations.verify()
     write(directory / "index.tsv", INDEX_FIELDS, index)
     write(directory / "event_node_audit.tsv", EVENT_FIELDS, audit)
     if context_audit:
@@ -249,14 +263,14 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         write(directory / 'context_annotation_audit.tsv', list(annotations.display_audit[0]), annotations.display_audit)
     (directory / 'renderer_settings.json').write_text(json.dumps(configurations, indent=2) + '\n')
     coordinates.verify()
-    annotations.verify()
     (directory / "README.txt").write_text(
         "Native GeneGalleon gene trees for observed category-1 recipients\n\n"
         "Orange diamonds and HGT labels mark exact gene-tree transfer nodes, including internal nodes.\n"
         "UF labels are the matched branch's support_generax_ufboot (>=90 inclusive).\n"
         "At least one retained event-linked gene on each side must have candidate-free class background\n"
         "with >=10 classified units, >=50% classification coverage and >=90% host compatibility.\n"
-        "Orange recipient tips are the genes that individually pass that background check.\n"
+        "Orange recipient and blue donor tips individually pass that background check.\n"
+        "The shared descendants column also records eligible genes with unconfirmed scaffold support.\n"
         "Page 1 replays gg_gene_evolution panels and saved settings, including domain, gene structure and alignment.\n"
         "Missing optional measurements are not invented. Renderer settings and input availability are recorded.\n"
         "Page 2 separates donor descendants (blue, left) and recipient descendants (orange, right).\n"
@@ -265,7 +279,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         "Display priority is passing scaffold support, available GFF, coverage, compatibility, then gene ID.\n"
         "Repeated links for one side/gene are drawn once and preserve every event in the audit. No extra gene-tree inset is drawn.\n"
         "All genomic tracks share a linear kb axis centered on their focal-gene midpoint, without intron compression.\n"
-        "CDS blocks are coding exons; UTR blocks are shown when recorded; unavailable structures stay unconfirmed.\n"
+        "CDS and UTR blocks are distinct; exon-only blocks have unknown CDS/UTR identity; missing structures stay unconfirmed.\n"
         "Each displayed focal/neighbor gene has its own product, best-hit organism/accession and kingdom-to-genus ranks.\n"
         "Protein products always use Swiss-Prot best-hit predictions; missing names/ranks stay unavailable. GFF products are not displayed.\n"
         "Best-hit taxonomy does not identify the modeled donor or establish host background for a neighbor.\n"
@@ -275,5 +289,6 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         "No sequence or phylogenetic analysis is run. The parent focused event tables are unchanged.\n")
     return dict(profile=PROFILE, family_source_sha256=sources, gff_source_sha256=coordinates.sources,
                 context_annotation_source_sha256=annotations.sources,
+                context_neighbor_family_source_sha256=annotations.family_sources,
                 rendered_family_count=sum(row["status"] == "rendered" for row in index),
                 selected_event_count=sum(row["status"] == "selected" for row in audit))

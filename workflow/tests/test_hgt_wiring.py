@@ -28,6 +28,12 @@ def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
     assert '--input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"' in hgt
     assert '--gff_info_root "${gg_workspace_output_dir}/species_gff_info"' in hgt
     assert '--filter_audit_tsv "${hgt_focus_filter_audit_tsv}"' in hgt
+    assert 'hgt_summary_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}"' in entry
+    assert 'hgt_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}"' in core
+    assert '--context_annotations_tsv "${hgt_focus_context_annotations_tsv}"' in hgt
+    assert '--input "context_annotations=${hgt_focus_context_annotations_tsv}"' in hgt
+    assert '--input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"' in hgt
+    assert 'hgt_summary_focus_context_annotations_tsv' in (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
 
 
 def test_gene_evolution_records_the_same_arguments_it_renders_for_focused_replay():

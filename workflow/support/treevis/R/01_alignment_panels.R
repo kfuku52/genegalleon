@@ -518,6 +518,18 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
         palette['Best hit'] = 'black'
         if (identical(xlab, 'Query')) xlab = 'Query\nbest\nhit'
     }
+    if (identical(col, 'hgtfocus_tip_status')) {
+        for (level in setdiff(levels, missing_label)) {
+            donor = grepl('donor descendant', level, fixed=TRUE)
+            recipient = grepl('recipient descendant', level, fixed=TRUE)
+            unconfirmed = grepl('unconfirmed', level, fixed=TRUE)
+            palette[level] = if (donor && recipient) '#725580' else if (donor) {
+                if (unconfirmed) '#c4d9ea' else '#2b6ca3'
+            } else if (recipient) {
+                if (unconfirmed) '#ead1be' else '#b34d00'
+            } else '#a6adb2'
+        }
+    }
     df_tip[['plot_value']] = factor(values, levels = levels)
     df_tip[['panel_x']] = 1
     g[[gname]] = ggplot(df_tip, aes(x = panel_x, y = label, fill = plot_value)) +

@@ -235,6 +235,15 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     nodes = {key(node.name): tuple(sorted(key(tip.name) for tip in node.get_terminals()))
              for node in tree.find_clades() if node.name is not None}
     terminals = {key(tip.name) for tip in tree.get_terminals()}
+    for row in links:
+        if str(row.get('eligible_for_context', '')).lower() in {'true', '1'}:
+            event = events_by_id[row['event_id']]
+            branch = key(event[f"generax_{row['side']}_node"])
+            species = key(row.get('gene_species', ''))
+            if branch in nodes and species not in nodes[branch]:
+                raise ValueError('Eligible context gene is outside its species branch: ' + row['gene_id'])
+            if row.get('lineage_status', 'retained') != 'retained':
+                raise ValueError('Eligible context gene does not have a retained transfer lineage')
     add_clade_labels(events, fields, nodes)
     if set(FOCUS_FIELDS) & set(fields):
         raise ValueError("Reserved focus columns already exist in event input")
@@ -293,7 +302,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             figure_events = [r for r in selected if r['event_id'] in ids]
             figures[trait] = export_figures(root / 'all_category1/plots', events, figure_events,
                                             [r for r in links if r['event_id'] in ids], tree, values,
-                                            gene_family_root, trait, filter_audit=filter_audit)
+                                            gene_family_root, trait, filter_audit=filter_audit,
+                                            context_annotations=context_annotations)
         index.append(dict(trait=trait, target="ALL_CATEGORY1", target_type="aggregate",
                           relative_path=str((root / "all_category1").relative_to(stage)), **aggregate))
         target_dirs = safe_names(selected_nodes)

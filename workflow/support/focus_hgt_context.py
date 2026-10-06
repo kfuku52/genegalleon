@@ -32,10 +32,12 @@ def structure(row):
     coding = blocks(row.get("feature_blocks", ""))
     utr = blocks(row.get("utr_blocks", ""))
     if row.get("splice_mode", "cis") != "cis":
-        return dict(status="trans_splicing_not_drawn_on_single_scaffold", coding=[], utr=[], introns=[])
+        return dict(status="trans_splicing_not_drawn_on_single_scaffold", coding=[], utr=[], exon=[], introns=[])
     if row.get("feature_type") not in {"CDS", "exon"} or not coding:
-        return dict(status="exon_coordinates_unavailable", coding=[], utr=[], introns=[])
+        return dict(status="exon_coordinates_unavailable", coding=[], utr=[], exon=[], introns=[])
     start, end = int(row["start"]), int(row["end"])
+    # gff_info start/end span the recorded CDS/exon features. UTR coordinates
+    # legitimately extend beyond a CDS span and must retain their own bounds.
     if any(a < start or b > end for a, b in coding):
         raise ValueError("GFF feature block outside focal feature span")
     merged = []
@@ -48,9 +50,11 @@ def structure(row):
         (left[1] + 1, right[0] - 1) for left, right in zip(merged, merged[1:], strict=False) if right[0] > left[1] + 1
     ]
     return dict(
-        status="coding_exons_with_utr" if utr else "coding_exons_utr_unavailable",
+        status=("annotated_exons_CDS_UTR_unavailable" if row['feature_type'] == 'exon'
+                else "coding_exons_with_utr" if utr else "coding_exons_utr_unavailable"),
         coding=coding if row["feature_type"] == "CDS" else [],
-        utr=utr if row["feature_type"] == "CDS" else coding,
+        utr=utr if row["feature_type"] == "CDS" else [],
+        exon=coding if row['feature_type'] == 'exon' else [],
         introns=introns,
     )
 
@@ -73,13 +77,22 @@ class GenomeCoordinates:
             self.sources[str(path.resolve())] = hashlib.sha256(raw).hexdigest()
             import io
 
-            rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
+            reader = csv.DictReader(io.StringIO(raw.decode('utf-8-sig')), delimiter="\t")
+            fields = reader.fieldnames or []
+            if len(set(fields)) != len(fields) or not {'gene_id', 'chromosome', 'start', 'end'} <= set(fields):
+                raise ValueError('Missing or duplicate GFF coordinate columns: ' + species)
+            rows = list(reader)
+            if any(None in row or any(v is None for v in row.values()) for row in rows):
+                raise ValueError('Malformed GFF coordinate row: ' + species)
         by_gene = {r["gene_id"]: r for r in rows}
-        if len(by_gene) != len(rows):
+        if len(by_gene) != len(rows) or '' in by_gene:
             raise ValueError("Duplicate GFF gene identity: " + species)
         by_scaffold = defaultdict(list)
+        from focus_hgt_context_annotations import available
         for row in rows:
-            if row.get("chromosome") and row.get("start") and row.get("end"):
+            if all(available(row.get(k)) for k in ('chromosome', 'start', 'end')):
+                if int(row['start']) < 1 or int(row['end']) < int(row['start']):
+                    raise ValueError('Invalid GFF coordinate span: ' + row['gene_id'])
                 by_scaffold[row["chromosome"]].append(row)
         self.cache[species] = by_gene, by_scaffold
         return self.cache[species]
@@ -89,6 +102,9 @@ class GenomeCoordinates:
         row = by_gene.get(link["gene_id"])
         if row is None:
             return None, [], "gff_gene_unavailable"
+        from focus_hgt_context_annotations import available
+        if not all(available(row.get(k)) for k in ('chromosome', 'start', 'end')):
+            return None, [], 'gff_coordinates_unavailable'
         if link.get("host_scaffold_id") and row["chromosome"] != link["host_scaffold_id"]:
             raise ValueError("Event-gene scaffold and GFF scaffold disagree: " + link["gene_id"])
         center = (int(row["start"]) + int(row["end"])) / 2
@@ -322,12 +338,12 @@ def draw_context_neighborhood(ax, entry, extent, color):
             info = structure(row)
             for x, y in info['introns']:
                 ax.plot([(x - center) / 1000, (y - center) / 1000], [0, 0], color='#444444', lw=0.7)
-            for kind, height in [('coding', 0.20), ('utr', 0.10)]:
+            for kind, height in [('coding', 0.20), ('exon', 0.20), ('utr', 0.10)]:
                 for x, y in info[kind]:
                     ax.add_patch(Rectangle(((x - center) / 1000, -height / 2), (y - x + 1) / 1000,
-                                           height, facecolor=face if kind == 'coding' else '#a6adb2',
-                                           edgecolor=edge, lw=0.6, hatch=hatch))
-            if not info['coding'] and not info['utr']:
+                                           height, facecolor=face if kind == 'coding' else '#f0f0f0' if kind == 'exon' else '#a6adb2',
+                                           edgecolor=edge, lw=0.6, hatch=('..' + (hatch or '')) if kind == 'exon' else hatch))
+            if not any(info[kind] for kind in ('coding', 'utr', 'exon')):
                 ax.add_patch(Rectangle((a, -0.1), b - a, 0.2, fill=False, ec=edge, ls=':', lw=0.8))
             direction = 1 if row.get('strand') == '+' else -1 if row.get('strand') == '-' else 0
             if direction:
@@ -348,7 +364,7 @@ def draw_context_neighborhood(ax, entry, extent, color):
                 fontsize=7, color='#777777', va='top')
     ax.spines[['top', 'right', 'left']].set_visible(False)
     ax.tick_params(labelsize=7)
-    ax.set_xlabel('Genomic position relative to focal-gene midpoint (kb)', fontsize=8)
+    ax.set_xlabel('Genomic position relative to recorded focal-feature midpoint (kb)', fontsize=8)
 
 
 def render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE,
@@ -437,7 +453,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
             top += row_heights[index]
     fig.text(0.05, y(page_height-23),
              'Blue: donor descendant focal gene; orange: recipient descendant focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
-             'Thick blocks: coding exons; thin gray blocks: recorded UTR; lines: introns. Every genomic track uses the same uncompressed kb axis.\n'
+             'Thick blocks: CDS; thin gray blocks: recorded UTR; gray dotted blocks: exons with unknown CDS/UTR identity; lines: introns. Shared uncompressed kb axis.\n'
              'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
              'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Best-hit taxonomy is annotation, not the modeled transfer donor.\n'
              'Protein products always use best-hit predictions; unavailable names and ranks stay missing. Full annotation sources and gene/event mappings are in the annotation audit.\n'
@@ -540,19 +556,20 @@ def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=Tr
                     focal_flag = row["gene_id"] == link["gene_id"]
                     color = ORANGE if focal_flag else BLUE
                     info = structure(row)
-                    if info["coding"] or info["utr"]:
+                    if any(info[kind] for kind in ('coding', 'utr', 'exon')):
                         for x, y in info["introns"]:
                             ax.plot([(x - center) / 1000, (y - center) / 1000], [0, 0], color="#444444", lw=0.7)
-                        for kind, height in [("coding", 0.20), ("utr", 0.10)]:
+                        for kind, height in [("coding", 0.20), ("exon", 0.20), ("utr", 0.10)]:
                             for x, y in info[kind]:
                                 ax.add_patch(
                                     Rectangle(
                                         ((x - center) / 1000, -height / 2),
                                         (y - x + 1) / 1000,
                                         height,
-                                        facecolor=color if kind == "coding" else "#a6adb2",
+                                        facecolor=color if kind == "coding" else "#f0f0f0" if kind == 'exon' else "#a6adb2",
                                         edgecolor=color,
                                         lw=0.6,
+                                        hatch='..' if kind == 'exon' else None,
                                     )
                                 )
                     else:
@@ -596,7 +613,7 @@ def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=Tr
             ax.set_title(title, loc="left", fontsize=8, pad=17)
             ax.spines[["top", "right", "left"]].set_visible(False)
             ax.tick_params(labelsize=8)
-            ax.set_xlabel("Genomic position relative to focal-gene midpoint (kb)", fontsize=8)
+            ax.set_xlabel("Genomic position relative to recorded focal-feature midpoint (kb)", fontsize=8)
     fig.text(
         0.07,
         0.055,

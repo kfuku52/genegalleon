@@ -161,6 +161,7 @@ hgt_summary_species_trait="${hgt_summary_species_trait:-auto}" # auto uses input
 hgt_summary_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}" # auto uses native event rows; a project-filtered event TSV preserves that cohort for trait focus.
 hgt_summary_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" # auto uses native event-gene links; an enriched TSV retains project annotations and quality flags.
 hgt_summary_focus_filter_audit_tsv="${hgt_summary_focus_filter_audit_tsv:-}" # Optional event-level direction/support audit (TSV or TSV.gz) for upstream filtering-flow counts.
+hgt_summary_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}" # Optional exact per-gene best-hit names, organisms and kingdom-to-genus ranks.
 hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" # Maximum mapped donor-recipient edges drawn in the transfer plot; 0 draws all.
 hgt_summary_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" # Transfer-arrow opacity (0 transparent; 1 opaque).
 hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}" # Minimum tree data-panel width in mm; PDF width is automatic.
