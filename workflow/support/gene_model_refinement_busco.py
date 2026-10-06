@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from busco_quality_metadata import parse_short_summary
+from dated_tree_presentation import STATUS, STATUS_COLOURS, STATUS_LABELS
 from gene_model_refinement import verify_inputs
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 from species_labeling import extract_species_label
@@ -151,23 +152,100 @@ def run_one(pair, phase, report, contract, cpus):
         return result
 
 
-def plot_comparison(rows, output):
+def collect_model_changes(root, pairs):
+    """Bind gene rescue and accepted coding-path counts to the same publication."""
+    from format_species_annotation.common import parse_gff_attributes
+    from plot_gene_model_refinement import verified_json
+
+    plan_hash = digest(root / "plan.json")
+    request = json.loads((root / "plan.json").read_text())["request"]
+    analysed = {r["species"] for r in pairs if r["refinement_status"] == "analysed"}
+    if analysed != set(request["sources"]):
+        raise ValueError("Model-count species differ from the refinement plan")
+    stats, evidence = {}, {}
+    batch = FreshDigestBatch()
+    for pair in pairs:
+        name = pair["species"]
+        if pair["refinement_status"] == "not_analysed":
+            stats[name] = {"refinement_status": "not_analysed", "prior_rescued_loci": None,
+                           "accepted_repair_paths": None, "accepted_isoform_paths": None}
+            continue
+        source = request["sources"][name]
+        if (Path(pair["before"]).resolve() != Path(source["fasta"]).resolve()
+                or Path(pair["after"]).resolve() != (root / "effective/species_cds" / (name + ".fa")).resolve()):
+            raise ValueError("Model counts belong to different BUSCO inputs: " + name)
+        metadata = verified_json(root / "catalog" / name, "catalog_metadata.json", plan_hash)
+        models = verified_json(root / "predictions" / name, "predictions.json", plan_hash)
+        gff = Path(source["gff"])
+        source_hash = batch.read([gff])[str(gff)]
+        if source_hash != metadata["sources"]["gff"]["sha256"] or source_hash != request["files"][str(gff)]:
+            raise ValueError("Rescue source annotation changed: " + name)
+        rescued = set()
+        opener = gzip.open if gff.suffix == ".gz" else open
+        with opener(gff, "rt") as handle:
+            for line in handle:
+                if line.startswith("#"):
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) == 9 and fields[1:3] == ["genegalleon_rescue", "gene"]:
+                    identifiers = parse_gff_attributes(fields[8]).get("ID", [])
+                    if len(identifiers) != 1:
+                        raise ValueError("Rescued gene lacks a unique ID: " + name)
+                    rescued.add(identifiers[0])
+        accepted = [m for m in models if m["status"] == "accepted"]
+        stats[name] = {
+            "refinement_status": "analysed", "prior_rescued_loci": len(rescued),
+            "accepted_repair_paths": sum(m["change_type"] == "model_revision" for m in accepted),
+            "accepted_isoform_paths": sum(m["change_type"] == "isoform_addition" for m in accepted),
+        }
+        evidence[name] = {"source_gff_sha256": source_hash,
+                          "catalog_receipt_sha256": digest(root / "catalog" / name / "receipt.json"),
+                          "prediction_receipt_sha256": digest(root / "predictions" / name / "receipt.json")}
+    batch.check()
+    if digest(root / "plan.json") != plan_hash:
+        raise ValueError("Refinement plan changed while collecting model counts")
+    return {"schema": 1, "plan_sha256": plan_hash,
+            "effective_receipt_sha256": digest(root / "effective/receipt.json"),
+            "species": stats, "evidence": evidence,
+            "units": "Prior missing-gene rescue counts unique source gene loci already present before refinement; repairs and additional isoforms count accepted coding paths, not unique loci."}
+
+
+def plot_comparison(rows, output, model_changes=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
+    from matplotlib.ticker import MaxNLocator
 
-    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10, "svg.fonttype": "none"})
-    fig, axes = plt.subplots(1, 3, figsize=(19, max(6, .43 * len(rows) + 2)),
-                             gridspec_kw={"width_ratios": [1, 1, .65], "wspace": .12}, sharey=True)
-    colors = ["#2a8d75", "#8bc9ab", "#e6b757", "#d6dbe2"]
+    if model_changes is not None:
+        stats = model_changes["species"]
+        if len(rows) != len(stats) or set(stats) != {r["species"] for r in rows}:
+            raise ValueError("Model-count and BUSCO species membership differ")
+        for row in rows:
+            value = stats[row["species"]]
+            if value["refinement_status"] != row["refinement_status"]:
+                raise ValueError("Model-count analysis status differs from BUSCO")
+            for key in ("prior_rescued_loci", "accepted_repair_paths", "accepted_isoform_paths"):
+                count = value[key]
+                if row["refinement_status"] == "not_analysed":
+                    if count is not None:
+                        raise ValueError("Unanalysed model counts must be unavailable, not zero")
+                elif type(count) is not int or count < 0:
+                    raise ValueError("Model counts must be nonnegative integers")
+    extra = model_changes is not None
+    margin_left = .20 if extra else .24
+    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
+    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, max(6, .43 * len(rows) + 2)),
+                             gridspec_kw={"width_ratios": [1, 1, .65, .75, .9] if extra else [1, 1, .65],
+                                          "wspace": .16 if extra else .12}, sharey=True)
+    colors = STATUS_COLOURS
     for i, row in enumerate(rows):
         if row["refinement_status"] == "not_analysed":
             for ax in axes:
                 ax.axhspan(i - .48, i + .48, color="#eef0f3", zorder=0)
         for j, phase in enumerate(("before", "after")):
             result, left = row[phase + "_result"], 0
-            for category, color in zip(("single", "duplicated", "fragmented", "missing"), colors, strict=True):
+            for category, color in zip(STATUS, colors, strict=True):
                 value = 100 * result[category] / result["total"]
                 axes[j].barh(i, value, left=left, color=color, height=.7)
                 left += value
@@ -176,11 +254,28 @@ def plot_comparison(rows, output):
         axes[2].barh(i, delta, color="#2a8d75" if delta >= 0 else "#b85250", height=.65)
         axes[2].text(.98, i, f'{row["delta_complete"]:+d} ({delta:+.2f} pp)',
                      transform=axes[2].get_yaxis_transform(), ha="right", va="center", fontsize=9)
+        if extra:
+            value = stats[row["species"]]
+            if row["refinement_status"] == "not_analysed":
+                for ax in axes[3:]:
+                    ax.text(.03, i, "Not analysed", transform=ax.get_yaxis_transform(), va="center", color="#657585", fontsize=9)
+            else:
+                rescued = value["prior_rescued_loci"]
+                repair, isoform = value["accepted_repair_paths"], value["accepted_isoform_paths"]
+                axes[3].barh(i, rescued, color="#5275b5", height=.7)
+                axes[3].annotate(str(rescued), (rescued, i), xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
+                axes[4].barh(i, repair, color="#187d97", height=.7)
+                axes[4].barh(i, isoform, left=repair, color="#d38b21", height=.7)
+                axes[4].annotate(f"{repair} / {isoform}", (repair + isoform, i), xytext=(4, 0),
+                                 textcoords="offset points", va="center", fontsize=9)
     labels = [r["species"].replace("_", " ") + ("  [not analysed]" if r["refinement_status"] == "not_analysed" else "") for r in rows]
     axes[0].set_yticks(range(len(rows)), labels)
     axes[0].invert_yaxis()
-    for ax, title in zip(axes, ("Before refinement", "After refinement", "Change in complete BUSCOs"), strict=True):
-        ax.set_title(title, fontweight="bold", pad=16)
+    titles = ["Before refinement", "After refinement", "Change in complete BUSCOs"]
+    if extra:
+        titles += ["Missing-gene rescue", "Accepted coding paths"]
+    for ax, title in zip(axes, titles, strict=True):
+        ax.set_title(title, fontweight="bold", pad=16, fontsize=11 if extra else 12)
         ax.spines[["top", "right", "left"]].set_visible(False)
         ax.grid(axis="x", alpha=.15)
         ax.set_axisbelow(True)
@@ -193,21 +288,38 @@ def plot_comparison(rows, output):
     axes[2].set_xlim(-limit, limit * 2.5)
     axes[2].axvline(0, color="#647383", linewidth=.7)
     axes[2].set_xlabel("Percentage points (pp)")
-    fig.subplots_adjust(left=.24, right=.98, top=.90, bottom=.14)
-    fig.suptitle("Representative CDS completeness before and after refinement", x=.24, ha="left", y=.98, fontsize=17, fontweight="bold")
+    if extra:
+        rescued_max = max((v["prior_rescued_loci"] or 0) for v in stats.values())
+        paths_max = max((v["accepted_repair_paths"] or 0) + (v["accepted_isoform_paths"] or 0) for v in stats.values())
+        axes[3].set_xlim(0, max(1, rescued_max) * 1.25)
+        axes[4].set_xlim(0, max(1, paths_max) * 1.65)
+        for ax in axes[3:]:
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
+        axes[3].set_xlabel("Previously added gene loci")
+        axes[4].set_xlabel("Accepted paths; labels: repair / isoform")
+    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=.18 if extra else .14)
+    fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
+                 "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
-    fig.text(.24, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
+    fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
-    fig.legend([Patch(facecolor=c) for c in colors], ["Single-copy", "Duplicated", "Fragmented", "Missing"],
-               loc="lower left", bbox_to_anchor=(.24, .065), ncol=4, frameon=False)
-    fig.text(.24, .025, "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
-             "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms.", fontsize=10)
+    fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
+               loc="lower left", bbox_to_anchor=(margin_left, .09 if extra else .065), ncol=4, frameon=False)
+    if extra:
+        fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
+                   ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
+                   loc="lower left", bbox_to_anchor=(.59, .09), ncol=3, frameon=False)
+    note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
+    note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
+    if extra:
+        note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
+    fig.text(margin_left, .025, note, fontsize=10)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
 
 
-def render_existing(report):
+def render_existing(report, root=None):
     """Redraw a historical evaluation without executing its predictor again."""
     value = json.loads((report / "busco_comparison.json").read_text())
     frozen = json.loads((report / "contract.json").read_text())
@@ -234,16 +346,20 @@ def render_existing(report):
                 verified_tables += 1
         if paired_result(pair, row["before_result"], row["after_result"]) != row:
             raise ValueError("Comparison delta changed")
-    plot_comparison(rows, report)
+    changes = collect_model_changes(root, rows) if root is not None else None
+    if changes is not None:
+        atomic_json(report / "model_change_summary.json", changes)
+    plot_comparison(rows, report, changes)
     atomic_json(report / "rendering_provenance.json", {
         "comparison_sha256": digest(report / "busco_comparison.json"),
         "evaluation_contract": frozen["contract"], "renderer_sha256": digest(Path(__file__)),
         "verified_full_tables": verified_tables, "predictor_executed": False,
+        "model_change_summary_sha256": digest(report / "model_change_summary.json") if changes is not None else None,
     })
     return rows
 
 
-def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1):
+def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_changes=None):
     if not pairs:
         raise ValueError("Empty BUSCO comparison")
     report.mkdir(parents=True, exist_ok=True)
@@ -281,13 +397,15 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1):
         for row in rows:
             writer.writerow({k: row[k] for k in columns if k not in ("before_complete", "after_complete")}
                             | {"before_complete": row["before_result"]["complete"], "after_complete": row["after_result"]["complete"]})
-    plot_comparison(rows, report)
+    if model_changes is not None:
+        atomic_json(report / "model_change_summary.json", model_changes)
+    plot_comparison(rows, report, model_changes)
     return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("--output", type=Path, help="Refinement publication; optional with --plot-only to include model-change counts")
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--cds-dir", type=Path, help="All dataset species, including unrefined CDS-only species")
     parser.add_argument("--lineage", type=Path, help="Frozen local lineage directory")
@@ -297,9 +415,9 @@ def main():
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
     if args.plot_only:
-        if args.output or args.lineage or args.download_path or args.cds_dir:
+        if args.lineage or args.download_path or args.cds_dir:
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
-        render_existing(args.report.resolve())
+        render_existing(args.report.resolve(), args.output.resolve() if args.output else None)
         return
     if not args.output or not args.lineage or not args.download_path:
         parser.error("--output, --lineage and --download-path are required for evaluation")
@@ -308,7 +426,9 @@ def main():
         parser.error("CPU and job counts must be positive")
     if root == report or root in report.parents or report in root.parents:
         parser.error("Report must be separate from the immutable refinement tree")
-    evaluate(input_pairs(root, args.cds_dir), report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs)
+    pairs = input_pairs(root, args.cds_dir)
+    evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs,
+             model_changes=collect_model_changes(root, pairs))
 
 
 if __name__ == "__main__":

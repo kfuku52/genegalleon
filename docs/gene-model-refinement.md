@@ -266,6 +266,14 @@ receipts permit verified restarts; changed inputs, implementation or settings
 require a new report directory. Failed or incomparable evaluations do not
 produce a completed comparison. Deltas use integer BUSCO counts, avoiding
 rounding errors in the displayed summary percentages.
+The comparison also shows per-species missing-gene rescue counts and accepted
+repair/additional-isoform coding paths. Rescue counts are unique gene features
+with source `genegalleon_rescue` in the frozen annotation and are already included
+in the before set. Coding paths are counted separately from gene loci; repair
+and isoform paths can belong to the same locus. Unanalysed species show unavailable
+counts rather than zeros. `model_change_summary.json` records these counts and
+their source hashes. BUSCO stacks use the existing GeneGalleon palette: black
+single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
 Each phase also retains a hashed `runs/SPECIES/before/full_table.tsv` or
 `runs/SPECIES/after/full_table.tsv`, so lost, gained and duplicated BUSCO groups
 can be investigated without repeating the predictor run. Summary and full-table
@@ -274,6 +282,8 @@ To validate and redraw an existing comparison without running BUSCO again, use
 `python workflow/support/gene_model_refinement_busco.py --plot-only --report
 /path/to/paired-busco`. This retains the original evaluation contract and also
 supports earlier summary-only comparisons; changed input/score bytes are rejected.
+Add `--output /path/to/refinement` to this plot-only command to include rescue
+and coding-path counts from that verified publication without rerunning BUSCO.
 
 For an existing verified publication, the same comparison is available directly:
 

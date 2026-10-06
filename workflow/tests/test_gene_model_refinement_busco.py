@@ -10,6 +10,7 @@ from xml.etree import ElementTree
 
 import pytest
 
+from workflow.tests.test_gene_model_refinement import refinement, tiny_inputs
 from workflow.tests.test_plot_gene_model_refinement import completed
 
 busco = import_module("gene_model_refinement_busco")
@@ -68,6 +69,58 @@ def test_exact_counts_drive_deltas_and_plot_includes_excluded_species(tmp_path):
     busco.plot_comparison([row], tmp_path)
     ElementTree.parse(tmp_path / "busco_comparison.svg")
     assert "Drosophyllum lusitanicum  [not analysed]" in (tmp_path / "busco_comparison.svg").read_text()
+
+
+def test_rescue_counts_use_gene_features_not_transcripts_and_verify_sources(tmp_path):
+    inputs, edges, sources = tiny_inputs(tmp_path)
+    gff = Path(sources[0]["gff"])
+    # One rescued gene with two transcripts and three CDS features is one locus.
+    gff.write_text(gff.read_text().replace("\ts\t", "\tgenegalleon_rescue\t"))
+    root = tmp_path / "refinement"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    refinement.finalize(root, value)
+    pairs = busco.input_pairs(root)
+    changes = busco.collect_model_changes(root, pairs)
+    assert changes["species"]["Species_target"]["prior_rescued_loci"] == 1
+    assert changes["species"]["Species_donor1"]["prior_rescued_loci"] == 0
+    assert sum(s["accepted_repair_paths"] for s in changes["species"].values()) == 0
+    assert changes["plan_sha256"] == busco.digest(root / "plan.json")
+    mismatched = [dict(p) for p in pairs]
+    mismatched[0]["after"] = str(tmp_path / "another.fa")
+    with pytest.raises(ValueError, match="different BUSCO inputs"):
+        busco.collect_model_changes(root, mismatched)
+    gff.write_text(gff.read_text() + "# changed\n")
+    with pytest.raises(ValueError, match="source annotation changed"):
+        busco.collect_model_changes(root, pairs)
+
+
+def test_combined_figure_preserves_palette_count_units_and_unavailable_species(tmp_path):
+    path = tmp_path / "summary.txt"
+    path.write_text(summary())
+    result = busco.read_result(path)
+    rows = [busco.paired_result({"species": name, "refinement_status": status}, result, result)
+            for name, status in [("Species_a", "analysed"), ("Drosophyllum_lusitanicum", "not_analysed")]]
+    changes = {"species": {
+        "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 924,
+                      "accepted_repair_paths": 9, "accepted_isoform_paths": 28},
+        "Drosophyllum_lusitanicum": {"refinement_status": "not_analysed", "prior_rescued_loci": None,
+                                   "accepted_repair_paths": None, "accepted_isoform_paths": None},
+    }}
+    busco.plot_comparison(rows, tmp_path, changes)
+    svg = (tmp_path / "busco_comparison.svg").read_text()
+    ElementTree.fromstring(svg)
+    for color in ("#000000", "#b22222", "#666666", "#cccccc"):
+        assert color in svg.lower()
+    assert "Missing-gene rescue" in svg and "Accepted coding paths" in svg
+    assert ">924<" in svg and ">9 / 28<" in svg
+    assert svg.count(">Not analysed<") == 2
+    assert "may share a locus" in svg
+    changes["species"]["Drosophyllum_lusitanicum"]["prior_rescued_loci"] = 0
+    with pytest.raises(ValueError, match="unavailable, not zero"):
+        busco.plot_comparison(rows, tmp_path, changes)
+    changes["species"].pop("Drosophyllum_lusitanicum")
+    with pytest.raises(ValueError, match="membership differ"):
+        busco.plot_comparison(rows, tmp_path, changes)
 
 
 @pytest.mark.parametrize("field,value", [("busco_version", "6.0"), ("mode", "proteins"),
