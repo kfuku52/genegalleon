@@ -217,7 +217,7 @@ def selected_gene_clade(ax, rows, event, donor, recipient):
     ax.tick_params(labelsize=7)
 
 
-def render_context(path, rows, events, links, coordinates):
+def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=True):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -241,27 +241,34 @@ def render_context(path, rows, events, links, coordinates):
         ]
     )
     extent = math.ceil(extent / 5) * 5
-    fig = plt.figure(figsize=(15, max(10, 5 * len(events) + 3)))
+    tracks_per_event = 3 if gene_tree_panel else 2
+    fig = plt.figure(figsize=(15, max(7, (5 if gene_tree_panel else 4) * len(events) + 3)))
     fig.suptitle("A traceable candidate with donor and recipient context", fontsize=16, x=0.07, ha="left", y=0.98)
     fig.text(
-        0.07, 0.947, "One passing gene per side per event; existing gene-tree paths and GFF coordinates.", fontsize=10
+        0.07,
+        0.947 if gene_tree_panel else 0.93,
+        "One passing gene per side per event; "
+        + ("existing gene-tree paths and GFF coordinates." if gene_tree_panel else "existing GFF coordinates."),
+        fontsize=10,
+        va="baseline" if gene_tree_panel else "top",
     )
     grid = fig.add_gridspec(
-        len(events) * 3,
+        len(events) * tracks_per_event,
         1,
         left=0.09,
         right=0.96,
-        top=0.89,
-        bottom=0.15,
-        hspace=1.12,
-        height_ratios=[1.5, 1, 1] * len(events),
+        top=0.89 if gene_tree_panel else 0.78,
+        bottom=0.15 if gene_tree_panel else 0.22,
+        hspace=1.12 if gene_tree_panel else 1.0,
+        height_ratios=([1.5, 1, 1] if gene_tree_panel else [1, 1]) * len(events),
     )
     for i, event in enumerate(events):
         entries = selected[i * 2 : i * 2 + 2]
-        ax = fig.add_subplot(grid[i * 3])
-        selected_gene_clade(ax, rows, event, entries[0][2]["gene_id"], entries[1][2]["gene_id"])
-        for offset, (_, side, link, focal, neighbors) in enumerate(entries, 1):
-            ax = fig.add_subplot(grid[i * 3 + offset])
+        if gene_tree_panel:
+            ax = fig.add_subplot(grid[i * tracks_per_event])
+            selected_gene_clade(ax, rows, event, entries[0][2]["gene_id"], entries[1][2]["gene_id"])
+        for offset, (_, side, link, focal, neighbors) in enumerate(entries, int(gene_tree_panel)):
+            ax = fig.add_subplot(grid[i * tracks_per_event + offset])
             ax.set_xlim(-extent, extent)
             ax.set_ylim(-0.65, 0.85)
             ax.set_yticks([])
@@ -272,6 +279,11 @@ def render_context(path, rows, events, links, coordinates):
                 f"{event['event_id']} | {side}: {link.get('gene_species', '')} | {link['host_scaffold_id']}"
                 f" | background coverage {coverage:.1f}%, compatible {compatible:.1f}%"
             )
+            if not gene_tree_panel and side == "donor":
+                branch = next(
+                    r for r in rows if r["branch_id"] == event.get("gene_tree_branch_id", event.get("branch_id"))
+                )
+                title = f"HGT node {branch['node_name']} | UFBoot {branch['support_generax_ufboot']}\n" + title
             neighbor_key = []
             if focal is None:
                 ax.text(0, 0, "GFF coordinates unavailable", ha="center", color="#777777")
@@ -344,8 +356,9 @@ def render_context(path, rows, events, links, coordinates):
         0.07,
         0.055,
         "Orange: focal gene; blue: nearby annotations; thick blocks: coding exons; thin gray blocks: UTR; lines: introns.\n"
-        "All genomic tracks share one uncompressed kb axis; gene-tree paths use their own substitution/site axis.\n"
-        "The shared window includes each focal feature plus 20 kb flanks; * = neighboring feature extends beyond the display window.\n"
+        "All genomic tracks share one uncompressed kb axis."
+        + (" Gene-tree paths use their own substitution/site axis.\n" if gene_tree_panel else "\n")
+        + "The shared window includes each focal feature plus 20 kb flanks; * = neighboring feature extends beyond the display window.\n"
         "Neighbors are not asserted to be host-classified or conserved in order. CDS-only records do not establish complete exon/UTR structure.\n"
         "Representative selection and all event/gene identities are exported in the context audit; no sequence analysis was run.",
         fontsize=8,

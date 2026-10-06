@@ -424,6 +424,14 @@ def test_context_page_has_shared_scale_and_preserves_missing_coordinates(tmp_pat
     assert audit[0]['structure_status'] == 'coding_exons_utr_unavailable'
     assert audit[1]['structure_status'] == 'gff_gene_unavailable'
     assert audit[1]['intron_count'] == ''  # Unknown is not zero introns.
+    context_only = tmp_path/'context_only.pdf'
+    simplified = render_context(context_only, stat, events, links, GenomeCoordinates(gff), gene_tree_panel=False)
+    text = PdfReader(context_only).pages[0].extract_text()
+    assert 'Existing gene-tree branch length' not in text
+    assert 'substitution/site' not in text
+    assert 'HGT node n3 | UFBoot 90' in text
+    assert [r['gene_id'] for r in simplified] == [r['gene_id'] for r in audit]
+    assert [(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in simplified] == [(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in audit]
 
 
 def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(tmp_path):

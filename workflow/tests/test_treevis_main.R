@@ -22,6 +22,41 @@ if (length(focus_marker(unmarked, list())$layers) != 0) stop('Empty focused coho
 focus_plot$data$isTip[[2]] <- TRUE
 if (!inherits(try(focus_marker(focus_plot, list()), silent=TRUE), 'try-error')) stop('Terminal focused HGT node was accepted.')
 
+# The focused diamond must not recolor the existing branching-event legend keys.
+legend_fixture <- data.frame(x=1:3, y=1:3, isTip=FALSE,
+                            node_category=c('D', 'H', 'S'),
+                            hgtfocus_event_count=c(0, 1, 0))
+event_plot <- ggplot(legend_fixture, aes(x=x, y=y)) +
+  geom_point(aes(colour=node_category), show.legend=TRUE) +
+  scale_colour_manual(values=c(D='red', H='darkturquoise', S='blue'),
+                      labels=c(D='Duplication', H='Transfer', S='Speciation'),
+                      name='Branching event')
+grob_descendants <- function(g) {
+  nested <- c(g$grobs, as.list(g$children))
+  c(list(g), unlist(lapply(nested, grob_descendants), recursive=FALSE))
+}
+legend_point_colors <- function(plot, title) {
+  descendants <- grob_descendants(ggplotGrob(plot))
+  guides <- Filter(function(g) {
+    inherits(g, 'gtable') && any(grepl('^key-', g$layout$name)) &&
+      any(vapply(grob_descendants(g),
+                 function(child) inherits(child, 'text') && identical(child$label, title), logical(1)))
+  }, descendants)
+  if (length(guides) != 1) stop('Could not identify the requested legend guide.')
+  points <- Filter(function(g) inherits(g, 'points'), grob_descendants(guides[[1]]))
+  unname(vapply(points, function(g) g$gp$col, character(1)))
+}
+baseline_keys <- legend_point_colors(event_plot, 'Branching event')
+focused_legend_plot <- focus_marker(event_plot, list())
+focused_keys <- legend_point_colors(focused_legend_plot, 'Branching event')
+if (length(baseline_keys) != 3 || !identical(focused_keys, baseline_keys)) {
+  stop('Focused HGT overlay changed the branching-event legend keys.')
+}
+focus_keys <- legend_point_colors(focused_legend_plot, 'Focused HGT node')
+if (!any(vapply(focus_keys, function(colour) identical(col2rgb(colour), col2rgb('#b34d00')), logical(1)))) {
+  stop('Focused HGT diamond lost its own orange legend key.')
+}
+
 # 1) tidy_df_tip: group order and tip order are stable and numeric conversion works.
 df_tip <- data.frame(
   label = c("g2", "g1"),
