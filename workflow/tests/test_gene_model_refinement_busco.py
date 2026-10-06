@@ -360,7 +360,8 @@ def test_srp_regrouping_preserves_legacy_counts_and_requires_complete_evidence()
 
 
 @pytest.mark.parametrize("grouped", [False, True])
-def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped):
+@pytest.mark.parametrize("swissprot", [False, True])
+def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped, swissprot):
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
     original_barh = Axes.barh
@@ -400,6 +401,8 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
             rescue_support_groups={"self_only": 1, "relative_only": 2, "phylogenetic_only": 1, "multiple": 7},
             accepted_path_support_groups=dict.fromkeys(busco.PATH_SUPPORT_GROUPS, 1),
         )
+    if swissprot:
+        changes["species"]["Species_a"]["rescue_swissprot_groups"] = dict(zip(busco.SWISSPROT_GROUPS, [2, 3, 1, 4, 1], strict=True))
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
     for color in (*busco.RESCUE_SUPPORT_COLOURS, busco.RESCUE_SELF_COLOUR):
@@ -415,12 +418,13 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     rescue_upper = [b for b in rescue_bars if b[4] == -.20]
     rescue_lower = [b for b in rescue_bars if b[4] == .20]
     assert len(rescue_upper) == 4 and sum(b[1] for b in rescue_upper) == 11
-    assert len(rescue_lower) == 4 and sum(b[1] for b in rescue_lower) == 11
-    assert [b[1] for b in rescue_lower] == [2, 3, 4, 2]
-    assert [b[2] for b in rescue_lower] == [0, 2, 5, 9]
-    for label in busco.REPEAT_GROUP_LABELS:
+    assert len(rescue_lower) == (5 if swissprot else 4) and sum(b[1] for b in rescue_lower) == 11
+    assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [2, 3, 4, 2])
+    assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 2, 5, 9])
+    for label in busco.SWISSPROT_LABELS if swissprot else busco.REPEAT_GROUP_LABELS:
         assert label in svg
-    assert "Upper: support; lower: repeats" in svg and "no hit does not establish a true gene" in svg
+    assert ("Upper: donors; lower: Swiss-Prot" if swissprot else "Upper: support; lower: repeats") in svg
+    assert ("no support does not exclude TE origin" if swissprot else "no hit does not establish a true gene") in svg
     coding_ax = next(b[0] for b in bars if b[3] == "#187d97")
     upper = [b for b in bars if b[0] is coding_ax and b[4] == -.20]
     lower = [b for b in bars if b[0] is coding_ax and b[4] == .20]
@@ -578,6 +582,8 @@ ensure_busco_download_path() { printf '%s\\n' /db; }
 gg_memory_parallel_job_cap() { printf '%s\\n' 2; }
 finish_gene_model_refinement() {""" + function + "\n}\nfinish_gene_model_refinement\n"
     env = dict(os.environ, COMMAND_LOG=str(log), run_species_busco=str(enabled), gg_support_dir="/support",
+               run_gene_model_rescue_swissprot="0", gene_model_rescue_dir="/rescue", gene_model_refinement_rescue_dir="",
+               gene_model_refinement_inputs="",
                gene_model_refinement_dir="/refinement/" if trailing_slash else "/refinement", species_cds_dir="/all-cds", GG_TASK_CPUS="8",
                species_busco_parallel_jobs="auto", task_plan_output="/plan", gg_workspace_dir="/workspace",
                GG_MEM_TOOL_GB="64", species_busco_memory_gb_per_job="16", busco_lineage_resolved="")

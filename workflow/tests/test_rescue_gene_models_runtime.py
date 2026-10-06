@@ -966,6 +966,7 @@ with Path(CALLS).open("a") as log:
     _write_runtime_busco_dataset(workspace, "embryophyta_odb12")
     env = _core_env(workspace, None, fake, "rescue_models", task_id=1)
     env.update(gene_model_rescue_dir=str(output), species_busco_full_dir=str(full),
+               run_gene_model_rescue_swissprot="0",  # This fixture verifies selective BUSCO scheduling, not annotation downloads.
                species_busco_short_dir=str(root / "busco"), species_cds_dir=str(root / "cds"),
                species_gff_dir=str(root / "gff"), species_genome_dir=str(root / "genome"), overwrite="0")
     core = SCRIPT.parent.parent / "core" / "gg_input_generation_core.sh"

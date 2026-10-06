@@ -1,5 +1,64 @@
 # Advisory evidence for rescued models
 
+## Candidate-only Swiss-Prot support
+
+Input generation searches finalized missing-gene rescue CDSs against its existing
+Swiss-Prot MMseqs2 database when `run_gene_model_rescue_swissprot=1` (default).
+The scoped override is `GG_INPUT_RUN_GENE_MODEL_RESCUE_SWISSPROT`. This runs only
+with a completed rescue publication, including one reused by refinement. Set it
+to `0` to omit this advisory search. No additional TE database is downloaded.
+The normal shared Swiss-Prot FASTA/index/metadata preparation runs on first use.
+
+The audit is separate from the frozen rescue tree, by default its sibling
+`gene_model_rescue.swissprot`; `gene_model_rescue_swissprot_dir` overrides it.
+Its CLI can annotate an old frozen run without repeating synteny, prediction or BUSCO:
+
+```bash
+python workflow/support/rescue_swissprot_evidence.py \
+  --rescue-output /data/gene_model_rescue --output /data/gene_model_rescue.swissprot \
+  --db-prefix /data/workspace/downloads/uniprot_sprot/uniprot_sprot \
+  --metadata /data/workspace/downloads/uniprot_sprot/uniprot_sprot.meta.tsv.gz \
+  --cache /data/workspace/downloads/rescue_swissprot_cache --cpus 4 --memory-gb 8
+```
+
+Only published rescued coding sequences are translated, using the frozen
+species genetic code and ordinary initiator residues. Context-dependent genetic
+codes are marked unassessed. Identical proteins share a search across species;
+distinct loci and coding-sequence identities remain in the report. The verified
+sequence cache queries only new proteins for the same DB, parameters, MMseqs2
+binary and annotator. DB preparation and the cache use shared locks.
+
+Search retains up to 50 hits, sensitivity 7.5 and E-value <= 1e-5. Support
+requires at least 50 paired residues and 50% paired-residue coverage of both
+query and target, and a bit score within 90% of the best qualifying hit. Gap
+spans cannot inflate coverage. These are conservative, configurable screening
+heuristics, not calibrated probabilities; coverage-sensitive partial matches
+remain inspectable. Explicit transposon/transposase/retrotransposon names,
+the exact `Transposable element` keyword or `transposase activity` GO term supply
+TE-related support. TE silencing/regulation GO terms and the `Transposition`
+process keyword alone do not establish TE origin; host methyltransferases,
+helicases and other TE-silencing factors remain other proteins. Other informative Swiss-Prot entries supply other-protein
+support. Uncharacterized entries without function annotations do not supply
+informative support. A generic polymerase/RNase H match is not itself a TE call.
+
+Outputs are `evidence.json`, `loci.tsv`, `hits.tsv`, `summary.json` and a verified
+`receipt.json`. The hit table retains accession, annotation, score, coverage and
+positions, including hits that did not meet the support rules. An execution
+JSON beside the audit records elapsed time and cached/searched query counts.
+Each locus counts once as TE-only, other-only, both, no informative support or
+not assessed, taking the union of support across its published coding sequences.
+Other-protein support does not prove host function. No support does not exclude
+a divergent or unrepresented TE. TE-related homology also occurs in domesticated
+host genes. The audit never excludes or changes gene models automatically.
+
+The BUSCO comparison accepts `--rescue-swissprot-dir /data/gene_model_rescue.swissprot`.
+This changes the lower rescue bar to **Swiss-Prot protein support**, keeping its
+S/R/P donor bar and the original BUSCO palette. Existing DNA repeat-overlap
+measurements remain a separate evidence axis; protein homology is not labelled
+as genomic repeat overlap. Excluded species remain explicitly not analysed.
+
+## Genomic, RNA and repeat evidence
+
 Ordinary rescue automatically writes `quality_evidence` in `models.json` and
 `quality_flags.tsv`. These report the genomic start triplet, donor N/C terminal
 alignment, donor species and strand conflicts. They do not alter ORF/conflict

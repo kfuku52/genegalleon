@@ -51,6 +51,7 @@
     "test_tree_plot_batch.py",
     "test_rescue_gene_models_runtime.py",
     "test_rescue_model_evidence.py",
+    "test_rescue_swissprot_evidence.py",
     "test_genome_format_streaming_runtime.py",
     "test_gene_model_refinement_runtime.py",
     "test_busco_guide_tree_runtime.py"

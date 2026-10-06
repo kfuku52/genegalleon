@@ -20,6 +20,10 @@ from busco_quality_metadata import parse_short_summary
 from dated_tree_presentation import STATUS, STATUS_COLOURS, STATUS_LABELS
 from gene_model_refinement import verify_inputs
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
+from rescue_swissprot_evidence import COLOURS as SWISSPROT_COLOURS
+from rescue_swissprot_evidence import GROUPS as SWISSPROT_GROUPS
+from rescue_swissprot_evidence import LABELS as SWISSPROT_LABELS
+from rescue_swissprot_evidence import collect as collect_rescue_swissprot_evidence
 from species_labeling import extract_species_label
 
 RESCUE_SUPPORT = ("nearest_only", "balanced_only", "both")
@@ -562,8 +566,10 @@ def plot_comparison(rows, output, model_changes=None):
     from matplotlib.ticker import MaxNLocator
 
     stacked_rescue = stacked_paths = grouped_support = False
+    swissprot_view = False
     if model_changes is not None:
         stats = model_changes["species"]
+        swissprot_view = any(v.get("rescue_swissprot_groups") is not None for v in stats.values())
         stacked_rescue = any(v.get("rescue_support_counts") is not None for v in stats.values())
         stacked_paths = any(v.get("accepted_path_support_counts") is not None for v in stats.values())
         grouped_support = any(v.get("rescue_support_groups") is not None or v.get("accepted_path_support_groups") is not None
@@ -582,6 +588,15 @@ def plot_comparison(rows, output, model_changes=None):
                 elif type(count) is not int or count < 0:
                     raise ValueError("Model counts must be nonnegative integers")
             support = value.get("rescue_support_counts")
+            proteins = value.get("rescue_swissprot_groups")
+            if row["refinement_status"] == "not_analysed":
+                if proteins is not None:
+                    raise ValueError("Unanalysed Swiss-Prot counts must be unavailable")
+            elif proteins is not None:
+                if (not isinstance(proteins, dict) or set(proteins) != set(SWISSPROT_GROUPS)
+                        or any(type(c) is not int or c < 0 for c in proteins.values())
+                        or sum(proteins.values()) != value["prior_rescued_loci"]):
+                    raise ValueError("Swiss-Prot groups must sum to the rescued gene count")
             repeats = value.get("rescue_repeat_groups")
             if row["refinement_status"] == "not_analysed":
                 if repeats is not None:
@@ -670,9 +685,12 @@ def plot_comparison(rows, output, model_changes=None):
                     axes[3].barh(rescue_y, rescued, color="#5275b5", height=.32)
                 axes[3].annotate(str(rescued), (rescued, rescue_y),
                                  xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
-                repeats = value.get("rescue_repeat_groups") or {**dict.fromkeys(REPEAT_GROUPS, 0), "not_assessed": rescued}
+                lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
+                lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
+                repeats = value.get("rescue_swissprot_groups" if swissprot_view else "rescue_repeat_groups") or {
+                    **dict.fromkeys(lower_groups, 0), "not_assessed": rescued}
                 offset = 0
-                for category, color in zip(REPEAT_GROUPS, REPEAT_GROUP_COLOURS, strict=True):
+                for category, color in zip(lower_groups, lower_colours, strict=True):
                     axes[3].barh(i + .20, repeats[category], left=offset, color=color, height=.32,
                                  hatch="///" if category == "not_assessed" else None)
                     offset += repeats[category]
@@ -722,7 +740,8 @@ def plot_comparison(rows, output, model_changes=None):
         axes[4].set_xlim(0, max(1, paths_max) * 1.65)
         for ax in axes[3:]:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axes[3].set_xlabel("Upper: support; lower: repeats\nPreviously rescued gene loci")
+        axes[3].set_xlabel(("Upper: donors; lower: Swiss-Prot" if swissprot_view else "Upper: support; lower: repeats")
+                          + "\nPreviously rescued gene loci")
         axes[4].set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
     # Reserve footer space in inches so legends/notes stay separated for both
     # small cohorts and whole-dataset figures.
@@ -752,10 +771,14 @@ def plot_comparison(rows, output, model_changes=None):
                    ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
                    loc="lower left", bbox_to_anchor=(margin_left, 2.4 / figure_height), ncol=3, frameon=False)
     if extra:
+        lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
+        lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
+        lower_labels = SWISSPROT_LABELS if swissprot_view else REPEAT_GROUP_LABELS
         fig.legend([Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
-                    for k, c in zip(REPEAT_GROUPS, REPEAT_GROUP_COLOURS, strict=True)], REPEAT_GROUP_LABELS,
-                   loc="lower left", bbox_to_anchor=(margin_left, 1.65 / figure_height), ncol=2, frameon=False,
-                   title="Repeat annotation (lower rescue bars; any CDS overlap)")
+                    for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
+                   loc="lower left", bbox_to_anchor=(margin_left, 1.65 / figure_height), ncol=3 if swissprot_view else 2, frameon=False,
+                   title="Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
+                         "Repeat annotation (lower rescue bars; any CDS overlap)")
     note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
     note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
     if extra:
@@ -774,14 +797,16 @@ def plot_comparison(rows, output, model_changes=None):
     elif stacked_rescue:
         note += " Labels: total loci."
     if extra:
-        note += "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed."
+        note += ("\nSwiss-Prot support is advisory; other support does not establish host function; no support does not exclude TE origin."
+                 if swissprot_view else
+                 "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed.")
     fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
 
 
-def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=None):
+def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=None, rescue_swissprot_dir=None):
     """Redraw a historical evaluation without executing its predictor again."""
     value = json.loads((report / "busco_comparison.json").read_text())
     frozen = json.loads((report / "contract.json").read_text())
@@ -811,6 +836,7 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
     changes = collect_model_changes(root, rows, rescue_output) if root is not None else None
     if changes is not None:
         collect_rescue_repeat_evidence(changes, rescue_evidence_dir)
+        collect_rescue_swissprot_evidence(changes, rescue_swissprot_dir)
         atomic_json(report / "model_change_summary.json", changes)
     plot_comparison(rows, report, changes)
     atomic_json(report / "rendering_provenance.json", {
@@ -875,18 +901,21 @@ def main():
                         help="Original completed rescue publication for imported inputs; otherwise inferred from the refinement plan")
     parser.add_argument("--rescue-evidence-dir", type=Path,
                         help="Separate evidence audits at DIR/SPECIES/{receipt,evidence}.json; absent species are not assessed")
+    parser.add_argument("--rescue-swissprot-dir", type=Path,
+                        help="Verified candidate-only Swiss-Prot audit; uses protein support for lower rescue bars and retains repeat data")
     parser.add_argument("--lineage", type=Path, help="Frozen local lineage directory")
     parser.add_argument("--download-path", type=Path)
     parser.add_argument("--plot-only", action="store_true", help="Validate and redraw an existing comparison using its original evaluation contract")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
-    if (args.rescue_output or args.rescue_evidence_dir) and not args.output:
+    if (args.rescue_output or args.rescue_evidence_dir or args.rescue_swissprot_dir) and not args.output:
         parser.error("Rescue support/evidence requires --output to bind it to the source annotation")
     if args.plot_only:
         if args.lineage or args.download_path or args.cds_dir:
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
-        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output, args.rescue_evidence_dir)
+        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output,
+                        args.rescue_evidence_dir, args.rescue_swissprot_dir)
         return
     if not args.output or not args.lineage or not args.download_path:
         parser.error("--output, --lineage and --download-path are required for evaluation")
@@ -898,6 +927,7 @@ def main():
     pairs = input_pairs(root, args.cds_dir)
     changes = collect_model_changes(root, pairs, args.rescue_output)
     collect_rescue_repeat_evidence(changes, args.rescue_evidence_dir)
+    collect_rescue_swissprot_evidence(changes, args.rescue_swissprot_dir)
     evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs, model_changes=changes)
 
 

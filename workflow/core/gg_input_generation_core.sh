@@ -34,6 +34,8 @@ gene_model_refinement_min_support="${gene_model_refinement_min_support:-2}"
 gene_model_refinement_candidate_limit="${gene_model_refinement_candidate_limit:-32}"
 gene_model_refinement_padding="${gene_model_refinement_padding:-2000}"
 run_gene_model_rescue="${run_gene_model_rescue:-0}"
+run_gene_model_rescue_swissprot="${run_gene_model_rescue_swissprot:-1}"
+gene_model_rescue_swissprot_dir="${gene_model_rescue_swissprot_dir:-}"
 gene_model_rescue_tree="${gene_model_rescue_tree:-auto}"
 gene_model_rescue_guide_markers="${gene_model_rescue_guide_markers:-200}"
 gene_model_rescue_guide_k="${gene_model_rescue_guide_k:-5}"
@@ -194,6 +196,7 @@ for binary_flag_name in \
   run_species_busco \
   run_gene_model_refinement \
   run_gene_model_rescue \
+  run_gene_model_rescue_swissprot \
   gene_model_rescue_genome_fallback \
   run_multispecies_summary \
   run_generate_species_trait \
@@ -253,6 +256,7 @@ gene_model_refinement_dir="${gene_model_refinement_dir:-${input_generation_root}
 case "${gene_model_refinement_dir}" in /*) ;; *) gene_model_refinement_dir="${PWD}/${gene_model_refinement_dir}" ;; esac
 gene_model_rescue_dir="${gene_model_rescue_dir:-${input_generation_root}/gene_model_rescue}"
 case "${gene_model_rescue_dir}" in /*) ;; *) gene_model_rescue_dir="${PWD}/${gene_model_rescue_dir}" ;; esac
+case "${gene_model_rescue_swissprot_dir}" in ""|/*) ;; *) gene_model_rescue_swissprot_dir="${PWD}/${gene_model_rescue_swissprot_dir}" ;; esac
 gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-${gene_model_rescue_dir}/guide_tree}"
 gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-$(dirname "${gene_model_rescue_dir}")/busco_guide_sketch_cache}"
 case "${gene_model_rescue_guide_dir}" in /*) ;; *) gene_model_rescue_guide_dir="${PWD}/${gene_model_rescue_guide_dir}" ;; esac
@@ -2547,6 +2551,18 @@ PY
   fi
 }
 
+annotate_gene_model_rescue_swissprot() {
+  [[ ${run_gene_model_rescue_swissprot} -eq 1 ]] || return 0
+  local rescue_root=$1 uniprot_prefix uniprot_meta
+  local evidence_dir="${gene_model_rescue_swissprot_dir:-${rescue_root%/}.swissprot}"
+  uniprot_prefix=$(ensure_uniprot_sprot_mmseqs_db "${gg_workspace_dir}") || return $?
+  uniprot_meta=$(ensure_uniprot_sprot_metadata_tsv "${gg_workspace_dir}" "${uniprot_prefix}") || return $?
+  python "${gg_support_dir}/rescue_swissprot_evidence.py" --rescue-output "${rescue_root}" \
+    --output "${evidence_dir}" --db-prefix "${uniprot_prefix}" --metadata "${uniprot_meta}" \
+    --cache "${gg_workspace_dir}/downloads/rescue_swissprot_cache" --cpus "${GG_TASK_CPUS}" \
+    --memory-gb "$(gg_memory_fraction_gb "${GG_MEM_TOOL_GB}" 3 4)"
+}
+
 finish_gene_model_rescue() {
   python "${gg_support_dir}/rescue_gene_models.py" finalize --output "${gene_model_rescue_dir}"
   local rescue_index rescue_species rescue_cds changed qc_complete rescue_qc_rows
@@ -2558,6 +2574,7 @@ finish_gene_model_rescue() {
     fi
   done <<< "${rescue_qc_rows}"
   python "${gg_support_dir}/rescue_gene_models.py" qc --output "${gene_model_rescue_dir}" --busco-dir "${gene_model_rescue_dir}/qc/species_cds_busco_short"
+  annotate_gene_model_rescue_swissprot "${gene_model_rescue_dir}"
   echo "Augmented CDS/GFF inputs: ${gene_model_rescue_dir}/augmented/inputs.tsv"
 }
 
@@ -2587,6 +2604,12 @@ finish_gene_model_refinement() {
   python "${gg_support_dir}/gene_model_refinement.py" finalize --output "${gene_model_refinement_dir}" --cpus "${GG_TASK_CPUS}"
   python "${gg_support_dir}/gene_model_refinement.py" qc --output "${gene_model_refinement_dir}"
   local refinement_review_dir="${gene_model_refinement_dir%/}.review"
+  local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
+  local -a swissprot_plot_args=()
+  if [[ ${run_gene_model_rescue_swissprot} -eq 1 && -z "${gene_model_refinement_inputs}" && -s "${anchor_dir}/augmented/receipt.json" ]]; then
+    annotate_gene_model_rescue_swissprot "${anchor_dir}"
+    swissprot_plot_args+=(--rescue-swissprot-dir "${gene_model_rescue_swissprot_dir:-${anchor_dir%/}.swissprot}")
+  fi
   python "${gg_support_dir}/plot_gene_model_refinement.py" --output "${gene_model_refinement_dir}" \
     --report "${refinement_review_dir}" --cds-dir "${species_cds_dir}"
   if [[ ${run_species_busco} -eq 1 ]]; then
@@ -2607,6 +2630,7 @@ finish_gene_model_refinement() {
     [[ ${refinement_busco_jobs} -le ${refinement_busco_memory_cap} ]] || refinement_busco_jobs=${refinement_busco_memory_cap}
     python "${gg_support_dir}/gene_model_refinement_busco.py" --output "${gene_model_refinement_dir}" \
       --report "${refinement_review_dir}/busco" --cds-dir "${species_cds_dir}" \
+      "${swissprot_plot_args[@]}" \
       --lineage "${refinement_busco_db}/lineages/${busco_lineage_resolved}" --download-path "${refinement_busco_db}" \
       --jobs "${refinement_busco_jobs}" --cpus "$((GG_TASK_CPUS / refinement_busco_jobs))"
   fi
