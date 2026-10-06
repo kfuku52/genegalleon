@@ -11,6 +11,20 @@ GENOME_ANNOTATION_CORE = REPO_ROOT / "workflow" / "core" / "gg_genome_annotation
 HGT_CORE = REPO_ROOT / "workflow" / "core" / "gg_hgt_core.sh"
 
 
+def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
+    entry = GENE_SUMMARY_ENTRYPOINT.read_text()
+    core = read_text(GENE_SUMMARY_CORE)
+    hgt = read_text(HGT_CORE)
+    assert 'run_hgt_trait_focus="${run_hgt_trait_focus:-1}"' in entry
+    assert 'run_hgt_focus="${run_hgt_trait_focus}"' in core
+    assert 'hgt_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}"' in core
+    assert 'hgt_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}"' in core
+    assert 'python "${gg_support_dir}/focus_hgt_traits.py"' in hgt
+    assert '--event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}"' in hgt
+    assert '--output "result_bundle=${dir_hgt_trait_focus}"' in hgt
+    assert '--parameter "plots=${run_hgt_plot}"' in hgt
+
+
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
     text = read_text(GENE_EVOLUTION_CORE)
     assert '--uniprot_meta_tsv "${uniprot_meta_tsv}"' in text

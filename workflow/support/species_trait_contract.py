@@ -169,10 +169,11 @@ def select_species_traits(path: Path | str, selection: str = "all", auxiliary: t
 
 
 
-def select_analysis_traits(path, selection="all"):
+def select_analysis_traits(path, selection="all", allow_empty=False):
     """Apply observation eligibility before numeric response type selection."""
-    frame, audit = select_species_traits(path, selection)
-    report = select_traits(path, "all" if audit["selection"] == "automatic" else selection, eligible=audit["selected"])
+    frame, audit = select_species_traits(path, selection, allow_empty=allow_empty)
+    report = select_traits(path, "all" if audit["selection"] == "automatic" else selection,
+                           eligible=audit["selected"], allow_empty=allow_empty)
     selected = [row["trait"] for row in report if row["status"] == "selected"]
     audit["selected"] = selected
     audit["type_selection"] = report

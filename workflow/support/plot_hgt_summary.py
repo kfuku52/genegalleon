@@ -667,7 +667,7 @@ def read_transfer_traits(path):
         return pandas.DataFrame()
     from species_trait_contract import select_analysis_traits
 
-    frame, _ = select_analysis_traits(path)
+    frame, _ = select_analysis_traits(path, allow_empty=True)
     identifiers = frame.iloc[:, 0].map(lambda s: normalize_tree_label(s).replace(" ", "_"))
     if identifiers.eq("").any() or identifiers.duplicated().any():
         raise ValueError("Species traits require unique nonempty species IDs (including space/underscore aliases)")

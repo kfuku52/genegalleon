@@ -23,6 +23,7 @@ run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"
 run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}"
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
+run_hgt_trait_focus="${run_hgt_trait_focus:-1}"
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
 csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_summary_min_unit_support="${csubst_scan_summary_min_unit_support:-2}"
@@ -116,6 +117,7 @@ validate_binary_flag "run_csubst_scan_aa_change_summary" "${run_csubst_scan_aa_c
 validate_binary_flag "run_csubst_scan_candidate_sites" "${run_csubst_scan_candidate_sites}"
 validate_binary_flag "run_hgt_candidate_summary" "${run_hgt_candidate_summary}"
 validate_binary_flag "run_hgt_summary_plots" "${run_hgt_summary_plots}"
+validate_binary_flag "run_hgt_trait_focus" "${run_hgt_trait_focus}"
 validate_binary_flag "run_csubst_site_convergence_summary" "${run_csubst_site_convergence_summary}"
 validate_binary_flag "presence_absence_include_incomplete" "${presence_absence_include_incomplete}"
 
@@ -910,12 +912,15 @@ run_hgt_summary_for_source() {
   hgt_output_dir="${hgt_summary_output_dir}" \
   run_hgt_eval="${run_hgt_candidate_summary}" \
   run_hgt_plot="${run_hgt_summary_plots}" \
+  run_hgt_focus="${run_hgt_trait_focus}" \
   hgt_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" \
   hgt_contamination_dir="${hgt_summary_contamination_dir:-}" \
   hgt_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" \
   hgt_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" \
   hgt_species_tree="${hgt_summary_species_tree:-auto}" \
   hgt_species_trait="${hgt_summary_species_trait:-auto}" \
+  hgt_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}" \
+  hgt_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" \
   hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" \
   hgt_tree_width_mm="${hgt_summary_tree_width_mm:-60}" \
   hgt_promoter_bp="${hgt_summary_promoter_bp:-2000}" \

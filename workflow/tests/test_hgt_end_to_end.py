@@ -1,4 +1,5 @@
 import gzip
+import json
 import os
 import shutil
 import sqlite3
@@ -494,6 +495,13 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert events.loc[0, "mapping_reason"] == "missing_generax_xml"
     assert pandas.isna(events.loc[0, "donor_scaffold_count"])
     assert pandas.read_csv(event_gene_tsv, sep="\t").empty
+    # Focus is enabled by default but unresolved reconciliation is not certified.
+    focus_root = hgt_root / "trait_focus"
+    focus_index = pandas.read_csv(focus_root / "index.tsv", sep="\t")
+    assert set(focus_index["target"]) == {"ALL_CATEGORY1", "Arabidopsis_thaliana"}
+    assert focus_index["event_count"].sum() == 0
+    assert json.loads((focus_root / "manifest.json").read_text())["source_event_count"] == 1
+    assert (focus_root / "traits/test_trait/tips/Arabidopsis_thaliana/transfer_tree.pdf").is_file()
 
     assert branch_df.shape[0] == 1
     assert branch_df.loc[0, "orthogroup"] == "OG0001"

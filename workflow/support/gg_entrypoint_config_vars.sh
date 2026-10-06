@@ -49,6 +49,8 @@ hgt_summary_output_dir
 hgt_summary_promoter_bp
 hgt_summary_species_tree
 hgt_summary_species_trait
+hgt_summary_focus_event_tsv
+hgt_summary_focus_event_gene_tsv
 hgt_summary_taxonomy_flow_max_categories
 hgt_summary_taxonomy_flow_rank
 hgt_summary_transfer_tree_max_edges
@@ -82,6 +84,7 @@ run_family_completion_summary
 run_gene_family_database_build
 run_hgt_candidate_summary
 run_hgt_summary_plots
+run_hgt_trait_focus
 run_presence_absence_summary
 EOF
       ;;

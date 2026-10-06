@@ -39,7 +39,8 @@ def read_table(table):
     return payload, header, rows[1:]
 
 
-def select_traits(table, requested="all", eligible=None):
+def trait_value_types(table):
+    """Validate a hash-bound schema without selecting a numeric analysis."""
     payload, header, rows = read_table(table)
     available = header[1:]
     kinds = dict.fromkeys(available, "unspecified")
@@ -55,6 +56,13 @@ def select_traits(table, requested="all", eligible=None):
                 or any(not isinstance(kind, str) or kind not in TYPES for kind in declared.values())):
             raise ValueError("Trait schema must declare exactly every trait column with a supported type.")
         kinds = declared
+    return kinds
+
+
+def select_traits(table, requested="all", eligible=None, allow_empty=False):
+    _, header, rows = read_table(table)
+    available = header[1:]
+    kinds = trait_value_types(table)
     automatic = requested.lower() == "all"
     chosen = available if automatic else re.findall(r"[^,\s]+", requested)
     if not chosen or len(set(chosen)) != len(chosen) or not set(chosen) <= set(available):
@@ -83,7 +91,7 @@ def select_traits(table, requested="all", eligible=None):
                 if not math.isfinite(numeric):
                     raise ValueError(f"Trait {trait} contains a non-finite value.")
         report.append({"trait": trait, "value_type": kind, "status": "selected" if selected else "excluded", "reason": reason})
-    if not any(row["status"] == "selected" for row in report):
+    if not allow_empty and not any(row["status"] == "selected" for row in report):
         raise ValueError("No numeric/binary traits selected for analysis.")
     return report
 

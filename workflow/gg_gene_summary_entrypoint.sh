@@ -103,6 +103,7 @@ run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}" # Ge
 run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}" # Package scan candidates and focused csubst sites reports by min_support.
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}" # Summarize GeneRax-first HGT candidate evidence from gg_orthogroup.db.
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}" # Generate HGT overview, taxonomy-flow, transfer-tree, and per-family HGT tree plots.
+run_hgt_trait_focus="${run_hgt_trait_focus:-1}" # With HGT summaries enabled, return category-1 results per trait, tip and homogeneous internal recipient branch.
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}" # Run site-level convergence screening for the selected source.
 
 # Taxonomic annotation parameters
@@ -157,6 +158,8 @@ hgt_summary_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" # Tax
 hgt_summary_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" # Maximum recipient and best-hit categories retained before collapsing to Other.
 hgt_summary_species_tree="${hgt_summary_species_tree:-auto}" # Species-tree Newick path for the directed HGT transfer plot; auto searches standard workspace outputs.
 hgt_summary_species_trait="${hgt_summary_species_trait:-auto}" # auto uses input/species_trait/species_trait.tsv; none disables tip traits.
+hgt_summary_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}" # auto uses native event rows; a project-filtered event TSV preserves that cohort for trait focus.
+hgt_summary_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" # auto uses native event-gene links; an enriched TSV retains project annotations and quality flags.
 hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" # Maximum mapped donor-recipient edges drawn in the transfer plot; 0 draws all.
 hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}" # Minimum tree data-panel width in mm; PDF width is automatic.
 hgt_summary_promoter_bp="${hgt_summary_promoter_bp:-2000}" # Promoter length used when re-rendering FIMO panels in HGT tree plots.

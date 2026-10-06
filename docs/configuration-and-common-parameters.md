@@ -40,6 +40,13 @@ This has two practical consequences:
 - adding a new config variable to an entrypoint usually requires adding it to the registry,
 - variables that are not in the registry remain host-local unless they are forwarded separately on purpose.
 
+HGT summaries automatically return category-1 trait results with
+`run_hgt_trait_focus=1`. `hgt_summary_focus_event_tsv=auto` and
+`hgt_summary_focus_event_gene_tsv=auto` select native event/context tables;
+explicit paths preserve a previously filtered project cohort and enriched gene
+annotations. See [focused HGT outputs](host-scaffold-taxonomy.md#category-1-focused-results)
+for trait eligibility, internal-branch context and event-counting rules.
+
 ## Configuration precedence
 
 The effective value seen by a core script usually follows this precedence,

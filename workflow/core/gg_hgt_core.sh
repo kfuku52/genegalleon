@@ -19,12 +19,15 @@ hgt_gene_family_mode="${hgt_gene_family_mode:-orthogroup}"
 
 run_hgt_eval="${run_hgt_eval:-1}"
 run_hgt_plot="${run_hgt_plot:-1}"
+run_hgt_focus="${run_hgt_focus:-1}"
 hgt_use_taxonomy_db="${hgt_use_taxonomy_db:-1}"
 hgt_contamination_dir="${hgt_contamination_dir:-}"
 hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}"
 hgt_taxonomy_flow_max_categories="${hgt_taxonomy_flow_max_categories:-12}"
 hgt_species_tree="${hgt_species_tree:-auto}"
 hgt_species_trait="${hgt_species_trait:-auto}"
+hgt_focus_event_tsv="${hgt_focus_event_tsv:-auto}"
+hgt_focus_event_gene_tsv="${hgt_focus_event_gene_tsv:-auto}"
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
 hgt_promoter_bp="${hgt_promoter_bp:-2000}"
@@ -45,6 +48,7 @@ dir_hgt_tree_plot="${dir_hgt}/tree_plot"
 dir_hgt_tree_input="${dir_hgt}/tree_plot_input"
 dir_hgt_tmp="${dir_hgt}/tmp"
 dir_hgt_provenance="${dir_hgt}/artifact_provenance"
+dir_hgt_trait_focus="${dir_hgt}/trait_focus"
 file_hgt_overview_pdf="${dir_hgt_plot}/hgt_branch_overview.pdf"
 file_hgt_taxonomy_flow_pdf="${dir_hgt_plot}/hgt_taxonomy_flow.pdf"
 file_hgt_transfer_tree_pdf="${dir_hgt_plot}/hgt_transfer_tree.pdf"
@@ -58,6 +62,10 @@ if [[ "${run_hgt_eval}" != "0" && "${run_hgt_eval}" != "1" ]]; then
 fi
 if [[ "${run_hgt_plot}" != "0" && "${run_hgt_plot}" != "1" ]]; then
   echo "Invalid binary flag value: run_hgt_plot=${run_hgt_plot} (expected 0 or 1)"
+  exit 1
+fi
+if [[ "${run_hgt_focus}" != "0" && "${run_hgt_focus}" != "1" ]]; then
+  echo "Invalid binary flag value: run_hgt_focus=${run_hgt_focus} (expected 0 or 1)"
   exit 1
 fi
 if [[ "${hgt_use_taxonomy_db}" != "0" && "${hgt_use_taxonomy_db}" != "1" ]]; then
@@ -496,6 +504,49 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}" \
       "${hgt_transfer_plot_args[@]}"
     gg_artifact_record "${hgt_summary_plot_provenance_args[@]}"
+  fi
+fi
+
+# Export existing event cohorts; scientific selection thresholds stay with their producer.
+if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
+  hgt_focus_events="${file_hgt_events}"
+  hgt_focus_links="${file_hgt_event_genes}"
+  [[ "${hgt_focus_event_tsv}" == "auto" ]] || hgt_focus_events="${hgt_focus_event_tsv}"
+  [[ "${hgt_focus_event_gene_tsv}" == "auto" ]] || hgt_focus_links="${hgt_focus_event_gene_tsv}"
+  if [[ ! -s "${hgt_focus_events}" || ! -s "${hgt_focus_links}" || -z "${hgt_species_tree_path}" ]]; then
+    if [[ "${hgt_focus_event_tsv}" != "auto" || "${hgt_focus_event_gene_tsv}" != "auto" ]]; then
+      echo "Trait-focused HGT results require the supplied event tables and analysis species tree." >&2
+      exit 1
+    fi
+    echo "Skipping trait-focused HGT results: event context tables or analysis species tree unavailable."
+  else
+    hgt_focus_provenance_args=()
+    gg_artifact_contract_init hgt_focus_provenance_args "hgt_trait_focus" "all_category1_targets" \
+      "${dir_hgt_provenance}/hgt_trait_focus.json"
+    hgt_focus_provenance_args+=(
+      --input "events=${hgt_focus_events}"
+      --input "event_genes=${hgt_focus_links}"
+      --input "species_tree=${hgt_species_tree_path}"
+      --input "species_trait=${hgt_species_trait_path}"
+      --input "focus_helper=${gg_support_dir}/focus_hgt_traits.py"
+      --input "plotter=${gg_support_dir}/plot_hgt_summary.py"
+      --input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"
+      --input "trait_contract=${gg_support_dir}/species_trait_contract.py"
+      --input "trait_schema=${gg_support_dir}/species_trait_schema.py"
+      --output "result_bundle=${dir_hgt_trait_focus}"
+      --parameter "schema_version=1"
+      --parameter "plots=${run_hgt_plot}"
+    )
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_schema_input" "${hgt_species_trait_path}.schema.json"
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_metadata" "${hgt_species_trait_path}.metadata.json"
+    gg_artifact_prepare_stage hgt_focus_needs_update run_hgt_focus "${hgt_focus_provenance_args[@]}" || exit $?
+    if [[ ${hgt_focus_needs_update} -eq 1 ]]; then
+      python "${gg_support_dir}/focus_hgt_traits.py" \
+        --event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}" \
+        --species_tree "${hgt_species_tree_path}" --species_trait "${hgt_species_trait_path}" \
+        --output_dir "${dir_hgt_trait_focus}" --plots "${run_hgt_plot}"
+      gg_artifact_record "${hgt_focus_provenance_args[@]}"
+    fi
   fi
 fi
 

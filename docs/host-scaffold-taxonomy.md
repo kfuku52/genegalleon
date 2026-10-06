@@ -163,3 +163,36 @@ highlighting. This is a display rule for homogeneous clades, not inferred
 ancestral states. Links entering a highlighted recipient branch use the same
 orange and render above other links. Reciprocal arrow ends retain separate
 colors; event counts, selection, widths and distance measurements are unchanged.
+
+## Category-1 focused results
+
+When HGT summaries are enabled, `run_hgt_trait_focus=1` (the default) also writes
+`hgt/trait_focus/index.tsv` and result bundles for each eligible trait, each
+observed category-1 tip, and each all-positive internal recipient branch.
+Binary and declared categorical traits are eligible; schema-free columns must
+contain only observed 0/1 values. Declared continuous numeric/text traits and
+observation/quality columns are excluded. Categorical values other than 1 are
+other categories, not evidence of biological absence; missing stays unknown.
+Hash-bound trait schemas and observation contracts are validated.
+
+The exporter uses native event/context tables by default. To return a previously
+filtered project cohort, set `hgt_summary_focus_event_tsv` and optionally
+`hgt_summary_focus_event_gene_tsv` to its event and enriched link TSVs. Existing
+support, direction, scaffold, product-name and quality columns are preserved;
+no additional scientific threshold or organism-specific filter is introduced.
+`run_hgt_trait_focus=0` disables these outputs; disabling all HGT summaries does
+not start an HGT analysis merely because the focus default is on.
+
+Each bundle contains events, branch pairs, event-gene links, donor/recipient gene
+tables and counts. Internal donor/recipient IDs have their full species-tree tip
+lists alongside them. Per-tip `direct_events.tsv` and
+`ancestral_recipient_events.tsv` separate direct transfers from qualifying
+ancestor-branch context. An ancestral event can occur in multiple tip reports;
+the aggregate counts it once by event ID. Do not sum per-tip totals as independent
+acquisitions. Mixed/missing recipient clades remain outside the focused cohort
+with explicit reasons. Empty targets are retained as zero-result reports.
+
+With `run_hgt_summary_plots=1`, each bundle includes a native transfer-tree PDF
+and edge TSV, with all selected arrows and category-1 branches highlighted.
+`manifest.json` binds inputs and every output to SHA-256 hashes. Focus bundles
+are replaced as a managed unit; invalid inputs do not publish a partial bundle.
