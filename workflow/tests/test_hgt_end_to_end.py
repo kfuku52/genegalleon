@@ -501,7 +501,11 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert set(focus_index["target"]) == {"ALL_CATEGORY1", "Arabidopsis_thaliana"}
     assert focus_index["event_count"].sum() == 0
     assert json.loads((focus_root / "manifest.json").read_text())["source_event_count"] == 1
-    assert (focus_root / "traits/test_trait/tips/Arabidopsis_thaliana/transfer_tree.pdf").is_file()
+    assert (focus_root / "traits/test_trait/all_category1/transfer_tree.pdf").is_file()
+    recipient_result = focus_root / "traits/test_trait/tips/Arabidopsis_thaliana"
+    assert not (recipient_result / "transfer_tree.pdf").exists()
+    assert (recipient_result / "transfer_edges.tsv").is_file()
+    assert (recipient_result / "events.tsv").is_file()
 
     assert branch_df.shape[0] == 1
     assert branch_df.loc[0, "orthogroup"] == "OG0001"

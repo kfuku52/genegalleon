@@ -136,13 +136,29 @@ def test_native_plot_exports_all_selected_arrows(source, monkeypatch):
     monkeypatch.setattr(PdfPages, "savefig", capture)
     manifest = generate(*source, plots=True, arrow_alpha=0.4)
     assert manifest["transfer_arrow_alpha"] == 0.4
+    assert manifest["plot_scope"] == "trait_aggregate_only"
     assert alphas and set(alphas) == {0.4}
     root = source[-1] / "traits/binary/all_category1"
     _, edges = read_tsv(root / "transfer_edges.tsv")
     assert sum(int(row["hgt_event_count"]) for row in edges) == 3
     assert (root / "transfer_tree.pdf").read_bytes().startswith(b"%PDF")
+    assert {str(path.relative_to(source[-1])) for path in source[-1].rglob("*.pdf")} == {
+        "traits/binary/all_category1/transfer_tree.pdf", "traits/category/all_category1/transfer_tree.pdf"}
+    for target in manifest["result_index"]:
+        if target["target_type"] != "aggregate":
+            directory = source[-1] / target["relative_path"]
+            _, target_edges = read_tsv(directory / "transfer_edges.tsv")
+            assert sum(int(row["hgt_event_count"]) for row in target_edges) == target["event_count"]
+            assert (directory / "events.tsv").is_file()
     from plot_hgt_summary import read_transfer_traits
     assert list(read_transfer_traits(source[3]).columns) == ["binary", "continuous"]
+    # Republishing a managed legacy bundle removes old per-recipient PDFs.
+    legacy = source[-1] / "traits/binary/tips/A/transfer_tree.pdf"
+    legacy.write_bytes(b"previous recipient figure")
+    generate(*source, plots=True, arrow_alpha=0.4)
+    assert not legacy.exists()
+    assert (legacy.parent / "events.tsv").is_file()
+    assert (legacy.parent / "transfer_edges.tsv").is_file()
 
 
 def test_republication_replaces_managed_bundle_and_failure_preserves_it(source, monkeypatch):

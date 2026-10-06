@@ -152,7 +152,7 @@ def add_clade_labels(events, fields, nodes):
 
 
 def export_bundle(directory, events, fields, links, link_fields, trait, trait_table, tree_path, plots, tip=None,
-                  arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA):
+                  arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, render_tree=True):
     directory.mkdir(parents=True)
     write_tsv(directory / "events.tsv", fields, events)
     direct = [row for row in events if row["focus_recipient_basis"] == "observed_tip_category1"]
@@ -202,7 +202,8 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
     if plots:
         from plot_hgt_summary import plot_transfer_tree
 
-        plot_transfer_tree(pandas.DataFrame(events, columns=fields), str(directory / "transfer_tree.pdf"),
+        plot_transfer_tree(pandas.DataFrame(events, columns=fields),
+                           str(directory / "transfer_tree.pdf") if render_tree else "",
                            species_tree_path=str(tree_path), edges_tsv=str(directory / "transfer_edges.tsv"),
                            max_edges=0, species_trait_path=str(trait_table), highlight_trait=trait,
                            arrow_alpha=arrow_alpha)
@@ -290,7 +291,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             destination = root / ("tips" if terminal else "internal_branches") / target_dirs[target]
             summary = export_bundle(destination, selected_events, fields, links, link_fields,
                                     trait, indicator, tree_path, plots, tip=target if terminal else None,
-                                    arrow_alpha=arrow_alpha)
+                                    arrow_alpha=arrow_alpha, render_tree=False)
             index.append(dict(trait=trait, target=target, target_type="tip" if terminal else "internal_branch",
                               relative_path=str(destination.relative_to(stage)), **summary))
     index_fields = ["trait", "target", "target_type", "relative_path", "event_count", "direct_event_count",
@@ -308,10 +309,12 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "The same ancestral event can appear in multiple tip reports; aggregate event IDs count it once. Do not sum per-tip totals.\n"
         "Recipient gene tables in tip reports contain that tip's eligible event-linked genes. Donor gene tables preserve event-linked donor homologs.\n"
         "An empty table means no selected result in this input cohort, not biological absence of HGT.\n"
-        "Figures use GeneGalleon's native transfer-tree plotter, showing every selected arrow with category-1 branches highlighted.\n"
+        "Figures use GeneGalleon's native transfer-tree plotter only for each trait's aggregate cohort, with category-1 branches highlighted.\n"
+        "Per-recipient tips and internal branches retain tables and directed edge TSVs but have no separate tree PDF.\n"
         "Scaffold background and shared-neighbor synteny are distinct evidence. Neither proves physical integration.\n")
     return dict(schema_version=VERSION, source_event_count=len(events), trait_contract=audit,
-                trait_selection=reports, result_index=index, plots=plots, transfer_arrow_alpha=arrow_alpha)
+                trait_selection=reports, result_index=index, plots=plots, transfer_arrow_alpha=arrow_alpha,
+                plot_scope="trait_aggregate_only")
 
 
 def generate(event_path, link_path, tree_path, trait_path, output, plots=True,

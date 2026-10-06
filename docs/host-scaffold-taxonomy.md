@@ -195,7 +195,9 @@ the aggregate counts it once by event ID. Do not sum per-tip totals as independe
 acquisitions. Mixed/missing recipient clades remain outside the focused cohort
 with explicit reasons. Empty targets are retained as zero-result reports.
 
-With `run_hgt_summary_plots=1`, each bundle includes a native transfer-tree PDF
-and edge TSV, with all selected arrows and category-1 branches highlighted.
+With `run_hgt_summary_plots=1`, each trait's aggregate bundle includes a native
+transfer-tree PDF with all selected arrows and category-1 branches highlighted.
+Per-recipient tips and internal branches retain their tables without separate
+PDFs. All bundles retain their directed edge TSVs.
 `manifest.json` binds inputs and every output to SHA-256 hashes. Focus bundles
 are replaced as a managed unit; invalid inputs do not publish a partial bundle.

@@ -489,7 +489,7 @@ def build_readme(paths: Dict[str, str]) -> str:
         "# GeneGalleon HGT output tables",
         "",
         "このREADMEは、HGT評価とイベント別scaffold集約で生成されるTSVの列定義です。",
-        "Category-1 focused outputs are enabled by default with HGT summaries (`run_hgt_trait_focus=1`). See `trait_focus/index.tsv` and `trait_focus/README.txt` for per-trait, per-tip and internal-recipient results. The supplied event cohort is preserved; ancestral context is not counted as independent tip acquisitions.",
+        "Category-1 focused outputs are enabled by default with HGT summaries (`run_hgt_trait_focus=1`). See `trait_focus/index.tsv` and `trait_focus/README.txt` for per-trait, per-tip and internal-recipient tables. Tree PDFs are generated only for each trait's aggregate cohort; individual recipients retain tables and directed edge TSVs. The supplied event cohort is preserved; ancestral context is not counted as independent tip acquisitions.",
         "",
         "## まず押さえる点",
         "",
