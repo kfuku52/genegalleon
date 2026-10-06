@@ -403,6 +403,10 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         )
     if swissprot:
         changes["species"]["Species_a"]["rescue_swissprot_groups"] = dict(zip(busco.SWISSPROT_GROUPS, [2, 3, 1, 4, 1], strict=True))
+        changes["swissprot_evidence"] = {"parameters": {
+            "evalue": 1e-7, "query_coverage": .6, "target_coverage": .65, "minimum_alignment": 55,
+            "score_fraction": .95, "max_hits": 40, "sensitivity": 7,
+        }}
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
     for color in (*busco.RESCUE_SUPPORT_COLOURS, busco.RESCUE_SELF_COLOUR):
@@ -425,6 +429,11 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         assert label in svg
     assert ("Upper: donors; lower: Swiss-Prot" if swissprot else "Upper: support; lower: repeats") in svg
     assert ("no support does not exclude TE origin" if swissprot else "no hit does not establish a true gene") in svg
+    if swissprot:
+        for description in ("E-value &lt;= 1e-07", "paired residues &gt;= 55 aa", "query coverage &gt;= 60%", "target coverage &gt;= 65%",
+                            "Bit score &gt;= 95% of the best qualifying hit", "sensitivity 7; max hits 40", "no sequence-identity cutoff",
+                            "Transposable element keyword", "TE silencing/regulation", "each locus counts once"):
+            assert description in svg
     coding_ax = next(b[0] for b in bars if b[3] == "#187d97")
     upper = [b for b in bars if b[0] is coding_ax and b[4] == -.20]
     lower = [b for b in bars if b[0] is coding_ax and b[4] == .20]

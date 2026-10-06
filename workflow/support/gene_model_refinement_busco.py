@@ -642,7 +642,8 @@ def plot_comparison(rows, output, model_changes=None):
     support_legend = stacked_rescue or stacked_paths
     margin_left = .20 if extra else .24
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
-    figure_height = max(8, .52 * len(rows) + 5) if extra else max(6, .43 * len(rows) + 2)
+    support_note_space = 1.5 if swissprot_view else 0
+    figure_height = max(8, .52 * len(rows) + 5) + support_note_space if extra else max(6, .43 * len(rows) + 2)
     fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, figure_height),
                              gridspec_kw={"width_ratios": [1, 1, .65, .75, .9] if extra else [1, 1, .65],
                                           "wspace": .16 if extra else .12}, sharey=True)
@@ -745,14 +746,14 @@ def plot_comparison(rows, output, model_changes=None):
         axes[4].set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
     # Reserve footer space in inches so legends/notes stay separated for both
     # small cohorts and whole-dataset figures.
-    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=4.6 / figure_height if extra else .14)
+    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=(4.6 + support_note_space) / figure_height if extra else .14)
     fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
                  "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
     fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
     fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
-               loc="lower left", bbox_to_anchor=(margin_left, 3.25 / figure_height if extra else .065), ncol=4, frameon=False)
+               loc="lower left", bbox_to_anchor=(margin_left, (3.25 + support_note_space) / figure_height if extra else .065), ncol=4, frameon=False)
     if support_legend:
         if grouped_support:
             group_colors = PATH_SUPPORT_GROUP_COLOURS if stacked_paths else SUPPORT_GROUP_COLOURS
@@ -761,22 +762,22 @@ def plot_comparison(rows, output, model_changes=None):
             group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
             group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
         fig.legend([Patch(facecolor=c) for c in group_colors], group_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, 2.4 / figure_height), ncol=3, frameon=False,
+                   loc="lower left", bbox_to_anchor=(margin_left, (2.4 + support_note_space) / figure_height), ncol=3, frameon=False,
                    title="Supporting donor groups (upper rescue and lower coding-path bars)")
         fig.legend([Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
                    ["Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(.70, 3.25 / figure_height), ncol=2, frameon=False)
+                   loc="lower left", bbox_to_anchor=(.70, (3.25 + support_note_space) / figure_height), ncol=2, frameon=False)
     elif extra:
         fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
                    ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(margin_left, 2.4 / figure_height), ncol=3, frameon=False)
+                   loc="lower left", bbox_to_anchor=(margin_left, (2.4 + support_note_space) / figure_height), ncol=3, frameon=False)
     if extra:
         lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
         lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
         lower_labels = SWISSPROT_LABELS if swissprot_view else REPEAT_GROUP_LABELS
         fig.legend([Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
                     for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, 1.65 / figure_height), ncol=3 if swissprot_view else 2, frameon=False,
+                   loc="lower left", bbox_to_anchor=(margin_left, (1.65 + support_note_space) / figure_height), ncol=3 if swissprot_view else 2, frameon=False,
                    title="Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
                          "Repeat annotation (lower rescue bars; any CDS overlap)")
     note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
@@ -791,12 +792,27 @@ def plot_comparison(rows, output, model_changes=None):
             note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
             note += "\nSelf-species only = no interspecies support; mixed self/interspecies support uses the interspecies group."
     if stacked_paths:
-        note += ("\nOnly = exactly one of S/R/P; other-only = no S/R/P donor. Additional unselected donors remain in the evidence."
+        note += ("\nOnly = exactly one of S/R/P; donor other-only = no S/R/P donor. Additional unselected donors remain in the evidence."
                  if grouped_support else
                  "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate.")
     elif stacked_rescue:
         note += " Labels: total loci."
     if extra:
+        if swissprot_view:
+            parameters = model_changes.get("swissprot_evidence", {}).get("parameters", {})
+            required = {"evalue", "query_coverage", "target_coverage", "minimum_alignment", "score_fraction", "max_hits", "sensitivity"}
+            if required <= parameters.keys():
+                note += (f'\nSwiss-Prot support: E-value <= {parameters["evalue"]:.3g}; paired residues >= {parameters["minimum_alignment"]:g} aa; '
+                         f'query coverage >= {100 * parameters["query_coverage"]:g}%; target coverage >= {100 * parameters["target_coverage"]:g}%.'
+                         f'\nBit score >= {100 * parameters["score_fraction"]:g}% of the best qualifying hit; coverage counts paired non-gap residues.'
+                         f'\nMMseqs2 search: sensitivity {parameters["sensitivity"]:g}; max hits {parameters["max_hits"]:g}; no sequence-identity cutoff.')
+            else:
+                note += "\nSwiss-Prot support/search thresholds were not recorded in this supplied summary."
+            note += ("\nTE indicators: explicit TE protein names, exact Transposable element keyword, or transposase activity GO term."
+                     "\nTE silencing/regulation GO terms or the Transposition keyword alone are not TE indicators."
+                     "\nOther = informative protein annotation lacking TE indicators; non-TE uncharacterized/hypothetical hits without GO/EC are uninformative."
+                     "\nTE-only / other-only / both: union of qualifying support across published coding sequences; each locus counts once.")
+            note += "\nNo informative = no qualifying TE/other support; not assessed = uncertain translation."
         note += ("\nSwiss-Prot support is advisory; other support does not establish host function; no support does not exclude TE origin."
                  if swissprot_view else
                  "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed.")

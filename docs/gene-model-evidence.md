@@ -56,6 +56,9 @@ This changes the lower rescue bar to **Swiss-Prot protein support**, keeping its
 S/R/P donor bar and the original BUSCO palette. Existing DNA repeat-overlap
 measurements remain a separate evidence axis; protein homology is not labelled
 as genomic repeat overlap. Excluded species remain explicitly not analysed.
+The figure legend records the actual search/support thresholds from the audit,
+the TE/other annotation rules and locus-counting method. Thresholds absent from a
+historical summary are labelled unavailable instead of inferred from defaults.
 
 ## Genomic, RNA and repeat evidence
 
