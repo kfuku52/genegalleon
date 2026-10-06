@@ -434,6 +434,79 @@ def test_context_page_has_shared_scale_and_preserves_missing_coordinates(tmp_pat
     assert [(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in simplified] == [(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in audit]
 
 
+def test_bounded_context_caps_distinct_genes_and_audits_omitted_and_unknown_evidence(tmp_path):
+    from focus_hgt_context import GenomeCoordinates, choose_context_genes, render_context
+    from pypdf import PdfReader
+    stat, events, original = focused_node_source()
+    events.append(dict(events[0], event_id='OG1:3:2', event_index='2', generax_transfer='Y@D@B'))
+    links = []
+    for side, genes in [('donor', ['D_gene', 'D_copy1', 'D_copy2', 'D_copy3']),
+                        ('recipient', ['A_gene', 'A_copy1', 'A_copy2', 'A_failed', 'A_unknown'])]:
+        for gene in genes:
+            for event in events:
+                link = dict(supported_link(event['event_id'], side, gene), gene_species=gene[0])
+                if gene == 'A_failed':
+                    link.update(host_scaffold_background_class_compatible_count='8',
+                                host_scaffold_background_class_incompatible_count='2',
+                                host_scaffold_background_class_compatible_fraction='0.8')
+                elif gene == 'A_unknown':
+                    link.update(host_scaffold_status='unavailable', host_scaffold_id='',
+                                host_scaffold_background_class_total_count='',
+                                host_scaffold_background_class_classified_fraction='',
+                                host_scaffold_background_class_compatible_fraction='')
+                links.append(link)
+            if gene not in {'A_gene', 'D_gene'}:
+                stat.append(dict(stat[0], branch_id=str(len(stat)+10), node_name=gene))
+    links.append(dict(links[0]))  # Duplicate listings do not count or render twice.
+    coordinates = GenomeCoordinates(tmp_path/'gff')
+    selected, audit, totals = choose_context_genes(events, links, coordinates)
+    assert totals['donor'] == dict(total=4, shown=3, omitted=1, supported=4)
+    assert totals['recipient'] == dict(total=5, shown=3, omitted=2, supported=3)
+    assert len(selected) == 6 and len(audit) == 18  # Two exact event references per distinct side/gene.
+    assert len({(r['side'], r['link']['gene_id']) for r in selected}) == 6
+    assert {r['link']['gene_id'] for r in selected if r['side'] == 'recipient'} == {'A_gene', 'A_copy1', 'A_copy2'}
+    failed = next(r for r in audit if r['gene_id'] == 'A_failed')
+    unknown = next(r for r in audit if r['gene_id'] == 'A_unknown')
+    assert failed['scaffold_support_status'] == 'scaffold_thresholds_not_met' and failed['displayed'] == 0
+    assert unknown['scaffold_support_status'] == 'scaffold_evidence_unavailable'
+    assert unknown['host_scaffold_background_class_classified_fraction'] == ''
+    assert unknown['intron_count'] == ''
+    pdf = tmp_path/'bounded.pdf'
+    audit = render_context(pdf, stat, events, links, coordinates, gene_tree_panel=False, max_genes_per_side=3)
+    reader = PdfReader(pdf)
+    assert len(reader.pages) == 1
+    assert tuple(map(float, reader.pages[0].mediabox)) == (0, 0, 1080, 648)
+    text = reader.pages[0].extract_text()
+    assert 'DONOR DESCENDANTS' in text and 'RECIPIENTS' in text
+    assert 'Shown 3 of 4 genes | 1 omitted' in text and 'Shown 3 of 5 genes | 2 omitted' in text
+    assert 'substitution/site' not in text
+    assert {(r['shared_axis_min_kb'], r['shared_axis_max_kb']) for r in audit} == {(-20, 20)}
+    # With fewer passing recipients, a measured failure is shown distinctly from unknown evidence.
+    smaller = [r for r in links if r['gene_id'] not in {'A_copy1', 'A_copy2'}]
+    selected, audit, totals = choose_context_genes(events, smaller, coordinates)
+    assert totals['recipient']['shown'] == 3
+    assert {r['status'] for r in selected if r['side'] == 'recipient'} == {
+        'scaffold_supported', 'scaffold_thresholds_not_met', 'scaffold_evidence_unavailable'}
+    gff = tmp_path/'gff'
+    gff.mkdir()
+    gff_row = dict(gene_id='A_unknown', chromosome='recorded_scaffold', start='100', end='300',
+                   strand='+', feature_type='CDS', feature_blocks='100-150;250-300', utr_blocks='', num_intron='1')
+    write_tsv(gff/'A.gff_info.tsv', list(gff_row), [gff_row])
+    _, audit, _ = choose_context_genes(events, smaller, GenomeCoordinates(gff))
+    unknown = next(r for r in audit if r['gene_id'] == 'A_unknown')
+    assert unknown['scaffold_support_status'] == 'scaffold_evidence_unavailable'
+    assert unknown['scaffold'] == 'recorded_scaffold' and unknown['scaffold_basis'] == 'existing_gff'
+    assert unknown['intron_count'] == '1'
+    conflicting = dict(original[0], gene_species='D', host_scaffold_id='different_scaffold')
+    with pytest.raises(ValueError, match='Conflicting scaffold evidence'):
+        choose_context_genes(events, links + [conflicting], coordinates)
+    for limit in [0, 4, True, 1.5]:
+        with pytest.raises(ValueError, match='display limit'):
+            choose_context_genes(events, links, coordinates, limit)
+    with pytest.raises(ValueError, match='passing event-linked gene'):
+        choose_context_genes(events, [r for r in links if r['side'] == 'donor'], coordinates)
+
+
 def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(tmp_path):
     from focus_hgt_figures import filtering_counts, product_labels
     events = [dict(event_id='e1',orthogroup='OG1'),dict(event_id='e2',orthogroup='OG1')]

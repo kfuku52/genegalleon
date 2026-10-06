@@ -224,15 +224,23 @@ recorded by `gg_gene_evolution` (including domain, structure, alignment,
 localization and available similarity panels). Older results use their saved
 tree-plot parameter/input provenance; unavailable optional inputs remain missing.
 `renderer_settings.json` records the settings source and input availability.
-Page 2 shows the exact HGT node and existing gene-tree paths plus one passing
-donor and recipient gene's GFF neighborhood per event. All genomic tracks share
+Page 2 shows the exact HGT node/UFBoot and existing GFF neighborhoods in two
+columns: donor descendants in blue, recipients in orange, and nearby annotations
+in gray. It draws at most three distinct genes per side on one page, with
+shown/total/omitted counts. Eligible event-linked genes with failing or unavailable
+scaffold evidence can appear with explicit status and pale hatched focal blocks;
+this does not change event selection or the individually supported gene counts.
+Display priority is passing scaffold support, available GFF, background coverage,
+host compatibility, then gene ID. Repeated side/gene links draw one track while
+retaining each exact event reference in the audit. All genomic tracks share
 one linear kb axis centered on the focal feature midpoint. The shared window
 includes each focal feature plus at least 20 kb flanks; asterisks mark neighboring
 features extending beyond the window. CDS and available UTR
 blocks retain genomic intron lengths; missing structure and trans-splicing are
 explicitly unavailable. Neighbor annotations do not establish their taxonomy or
-conserved gene order. `context_gene_audit.tsv` records the representative-selection
-rule, complete gene IDs, structures and shared axis limits. The workflow supplies
+conserved gene order. `context_gene_audit.tsv` records displayed and omitted
+genes, selection rank/reason, measured evidence and count units, complete gene
+IDs, structures, exact event branches and shared axis limits. The workflow supplies
 existing `species_gff_info`; standalone calls use `--gff_info_root`.
 
 `hgt_summary_focus_filter_audit_tsv` (standalone `--filter_audit_tsv`) accepts an

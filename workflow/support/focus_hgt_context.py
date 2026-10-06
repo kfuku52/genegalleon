@@ -9,6 +9,7 @@ from pathlib import Path
 
 ORANGE = "#b34d00"
 BLUE = "#2b6ca3"
+CONTEXT_MAX_GENES_PER_SIDE = 3
 
 
 def blocks(text):
@@ -88,7 +89,7 @@ class GenomeCoordinates:
         row = by_gene.get(link["gene_id"])
         if row is None:
             return None, [], "gff_gene_unavailable"
-        if row["chromosome"] != link.get("host_scaffold_id"):
+        if link.get("host_scaffold_id") and row["chromosome"] != link["host_scaffold_id"]:
             raise ValueError("Event-gene scaffold and GFF scaffold disagree: " + link["gene_id"])
         center = (int(row["start"]) + int(row["end"])) / 2
         candidates = [r for r in scaffolds[row["chromosome"]] if r["gene_id"] != row["gene_id"]]
@@ -217,7 +218,228 @@ def selected_gene_clade(ax, rows, event, donor, recipient):
     ax.tick_params(labelsize=7)
 
 
-def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=True):
+def choose_context_genes(events, links, coordinates, max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE):
+    """Cap distinct genes per modeled side, retaining every event/gene in the audit."""
+    from focus_hgt_gene_trees import background_supported, number
+
+    if (type(max_genes_per_side) is not int or not 1 <= max_genes_per_side <= CONTEXT_MAX_GENES_PER_SIDE):
+        raise ValueError(f"Context display limit must be an integer in [1, {CONTEXT_MAX_GENES_PER_SIDE}]")
+    by_event = {e['event_id']: e for e in events}
+    if not by_event or len(by_event) != len(events):
+        raise ValueError('Context requires nonempty, distinct event IDs')
+    grouped = {}
+    passing_by_event = defaultdict(set)
+    prefix = 'host_scaffold_background_class_'
+    for link in links:
+        event_id = link['event_id']
+        if event_id not in by_event or str(link.get('eligible_for_context', '')).lower() not in {'true', '1'}:
+            continue
+        side = link['side']
+        if side not in {'donor', 'recipient'} or link['orthogroup'] != by_event[event_id]['orthogroup']:
+            raise ValueError('Context event/gene side or family is inconsistent')
+        supported = background_supported(link)
+        counts = [number(link.get(prefix + key)) for key in
+                  ('total_count', 'compatible_count', 'incompatible_count', 'unresolved_count')]
+        measured = (link.get('host_scaffold_status') == 'measured' and bool(link.get('host_scaffold_id'))
+                    and all(value is not None for value in counts))
+        status = ('scaffold_supported' if supported else 'scaffold_thresholds_not_met' if measured
+                  else 'scaffold_evidence_unavailable')
+        signature = {key: value for key, value in link.items()
+                     if key.startswith('host_scaffold_') or key == 'gene_species'}
+        key = side, link['gene_id']
+        if key in grouped and grouped[key]['signature'] != signature:
+            raise ValueError('Conflicting scaffold evidence for the same context gene')
+        if key not in grouped:
+            focal, neighbors, structure_status = coordinates.neighborhood(link)
+            grouped[key] = dict(side=side, link=link, event_ids=set(), signature=signature,
+                                supported=supported, status=status, focal=focal,
+                                neighbors=neighbors, structure_status=structure_status)
+        grouped[key]['event_ids'].add(event_id)
+        if supported:
+            passing_by_event[event_id].add(side)
+    if any(passing_by_event[event_id] != {'donor', 'recipient'} for event_id in by_event):
+        raise ValueError('Context page requires a passing event-linked gene on each side of every event')
+    selected, audit, totals = [], [], {}
+    for side in ('donor', 'recipient'):
+        ordered = sorted([entry for entry in grouped.values() if entry['side'] == side], key=lambda entry: (
+            not entry['supported'], entry['focal'] is None,
+            -(number(entry['link'].get(prefix + 'classified_fraction')) or 0),
+            -(number(entry['link'].get(prefix + 'compatible_fraction')) or 0), entry['link']['gene_id']))
+        totals[side] = dict(total=len(ordered), shown=min(len(ordered), max_genes_per_side),
+                            omitted=max(0, len(ordered) - max_genes_per_side),
+                            supported=sum(entry['supported'] for entry in ordered))
+        for rank, entry in enumerate(ordered, 1):
+            link, focal, neighbors = entry['link'], entry['focal'], entry['neighbors']
+            displayed = rank <= max_genes_per_side
+            if displayed:
+                selected.append(entry)
+            for event_id in sorted(entry['event_ids']):
+                audit.append(dict(
+                    event_id=event_id, side=side, gene_id=link['gene_id'], gene_species=link.get('gene_species', ''),
+                    scaffold=focal['chromosome'] if focal else link.get('host_scaffold_id', ''),
+                    scaffold_basis='existing_gff' if focal else 'event_gene_summary' if link.get('host_scaffold_id') else '',
+                    passing_gene_count=sum(g['supported'] and g['side'] == side and event_id in g['event_ids']
+                                           for g in grouped.values()),
+                    representative_rule='supported_then_available_gff_then_coverage_compatibility_gene_id',
+                    structure_status=entry['structure_status'],
+                    feature_blocks=focal.get('feature_blocks', '') if focal else '',
+                    utr_blocks=focal.get('utr_blocks', '') if focal else '',
+                    intron_count=focal.get('num_intron', '') if focal else '',
+                    neighbor_gene_ids='; '.join(r['gene_id'] for r in sorted(neighbors, key=lambda r: int(r['start']))
+                                               if r['gene_id'] != link['gene_id']),
+                    coordinate_unit='genomic_bp_1_based_inclusive', scaffold_support_status=entry['status'],
+                    scaffold_count_unit=link.get('host_scaffold_count_unit', ''),
+                    **{prefix + suffix: link.get(prefix + suffix, '') for suffix in
+                       ('total_count', 'compatible_count', 'incompatible_count', 'unresolved_count',
+                        'classified_fraction', 'compatible_fraction')},
+                    displayed=int(displayed), display_rank=rank, max_genes_per_side=max_genes_per_side,
+                    display_reason='within_side_limit' if displayed else 'side_display_limit',
+                    side_total_gene_count=totals[side]['total'], side_shown_gene_count=totals[side]['shown'],
+                    side_omitted_gene_count=totals[side]['omitted'], side_supported_gene_count=totals[side]['supported']))
+    return selected, audit, totals
+
+
+def draw_context_neighborhood(ax, entry, extent, color):
+    """A linear genomic track; neutral neighbors keep donor/recipient colors distinct."""
+    from matplotlib.patches import Rectangle
+
+    link, focal, neighbors = entry['link'], entry['focal'], entry['neighbors']
+    ax.set_xlim(-extent, extent)
+    ax.set_ylim(-0.6, 0.65)
+    ax.set_yticks([])
+    ax.axvline(0, color='#cccccc', lw=0.5, zorder=0)
+    if focal is None:
+        ax.text(0, 0, 'GFF coordinates unavailable', ha='center', color='#777777', fontsize=8)
+    else:
+        center = (int(focal['start']) + int(focal['end'])) / 2
+        neighbor_number = 0
+        for j, row in enumerate(sorted(neighbors, key=lambda r: int(r['start']))):
+            focal_flag = row['gene_id'] == link['gene_id']
+            edge = color if focal_flag else '#858585'
+            face = edge if not focal_flag or entry['supported'] else '#f6e8df' if entry['side'] == 'recipient' else '#e1edf5'
+            hatch = '///' if focal_flag and not entry['supported'] else None
+            a, b = (int(row['start']) - center) / 1000, (int(row['end']) - center) / 1000
+            info = structure(row)
+            for x, y in info['introns']:
+                ax.plot([(x - center) / 1000, (y - center) / 1000], [0, 0], color='#444444', lw=0.7)
+            for kind, height in [('coding', 0.20), ('utr', 0.10)]:
+                for x, y in info[kind]:
+                    ax.add_patch(Rectangle(((x - center) / 1000, -height / 2), (y - x + 1) / 1000,
+                                           height, facecolor=face if kind == 'coding' else '#a6adb2',
+                                           edgecolor=edge, lw=0.6, hatch=hatch))
+            if not info['coding'] and not info['utr']:
+                ax.add_patch(Rectangle((a, -0.1), b - a, 0.2, fill=False, ec=edge, ls=':', lw=0.8))
+            direction = 1 if row.get('strand') == '+' else -1 if row.get('strand') == '-' else 0
+            if direction:
+                endpoint = b if direction == 1 else a
+                ax.annotate('', xy=(endpoint, 0), xytext=(endpoint - direction * min(0.4, max(0.05, b - a)), 0),
+                            arrowprops=dict(arrowstyle='->', color=edge, lw=0.7))
+            if focal_flag:
+                label = row['gene_id'].removeprefix(link.get('gene_species', '') + '_').replace('GeneID', 'GID')
+            else:
+                neighbor_number += 1
+                label = str(neighbor_number)
+            if a < -extent or b > extent:
+                label += '*'
+            ax.text((max(a, -extent) + min(b, extent)) / 2, 0.33 if j % 2 == 0 else -0.33,
+                    label, ha='center', va='center', fontsize=7, color=edge,
+                    weight='bold' if focal_flag else 'normal')
+        ax.text(0.01, 0.98, structure(focal)['status'].replace('_', ' '), transform=ax.transAxes,
+                fontsize=7, color='#777777', va='top')
+    ax.spines[['top', 'right', 'left']].set_visible(False)
+    ax.tick_params(labelsize=7)
+    ax.set_xlabel('Genomic position relative to focal-gene midpoint (kb)', fontsize=8)
+
+
+def render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE):
+    import matplotlib
+
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from focus_hgt_gene_trees import number
+
+    selected, audit, totals = choose_context_genes(events, links, coordinates, max_genes_per_side)
+    tips = {r['node_name'] for r in rows if r['child1'] == r['child2'] == '-999'}
+    if any(row['gene_id'] not in tips for row in audit):
+        raise ValueError('Context gene is not a tip of its orthogroup gene tree')
+    branches = {r['branch_id']: r for r in rows}
+    ordered_events = sorted(events, key=lambda e: e['event_id'])
+    labels, references = {}, []
+    for i, event in enumerate(ordered_events, 1):
+        branch = branches[event.get('gene_tree_branch_id', event.get('branch_id'))]
+        if branch['node_name'] != event.get('gene_tree_node', event.get('node_name')):
+            raise ValueError('Context transfer branch/node mapping is inconsistent')
+        labels[event['event_id']] = f'HGT{i}'
+        references.append(f"HGT{i}: node {branch['node_name']} | UFBoot {branch['support_generax_ufboot']}")
+    extent = math.ceil(max([20.0] + [
+        max(abs(x - (int(entry['focal']['start']) + int(entry['focal']['end'])) / 2)
+            for x in [int(entry['focal']['start']), int(entry['focal']['end'])]
+            + [x for pair in blocks(entry['focal'].get('utr_blocks', '')) for x in pair]) / 1000 + 20
+        for entry in selected if entry['focal']]) / 5) * 5
+    fig = plt.figure(figsize=(15, 9))
+    fig.suptitle('A traceable candidate with donor and recipient context', fontsize=16, x=0.06, ha='left', y=0.975)
+    fig.text(0.06, 0.925, f"{ordered_events[0]['orthogroup']} | {len(events)} modeled transfer event(s) | "
+             f"at most {max_genes_per_side} distinct genes per side; existing GFF coordinates", fontsize=10)
+    reference_text = '; '.join(references[:4])
+    if len(references) > 4:
+        reference_text += f'; +{len(references) - 4} events (see context audit)'
+    fig.text(0.06, 0.89, reference_text, fontsize=8)
+    nrows = max(totals[side]['shown'] for side in totals)
+    grid = fig.add_gridspec(nrows, 2, left=0.07, right=0.96, top=0.72, bottom=0.20, hspace=1.2, wspace=0.18)
+    for column, (side, color, title) in enumerate([('donor', BLUE, 'DONOR DESCENDANTS'), ('recipient', ORANGE, 'RECIPIENTS')]):
+        left = 0.07 if column == 0 else 0.552
+        fig.text(left, 0.835, title, color=color, fontsize=14, weight='bold')
+        count = totals[side]
+        fig.text(left, 0.8, f"Shown {count['shown']} of {count['total']} genes | {count['omitted']} omitted | "
+                 f"{count['supported']} scaffold-supported in total", fontsize=9, color=color)
+        for index, entry in enumerate(e for e in selected if e['side'] == side):
+            ax = fig.add_subplot(grid[index, column])
+            draw_context_neighborhood(ax, entry, extent, color)
+            link = entry['link']
+            prefix = 'host_scaffold_background_class_'
+            coverage, compatible = [number(link.get(prefix + suffix)) for suffix in ('classified_fraction', 'compatible_fraction')]
+            total, host, other = [number(link.get(prefix + suffix)) for suffix in
+                                  ('total_count', 'compatible_count', 'incompatible_count')]
+            classified = host + other if host is not None and other is not None else None
+            def ratio(value, numerator, denominator):
+                fraction = f'{value:.1%}' if value is not None else 'undefined' if denominator == 0 else 'unavailable'
+                return (f'{numerator:g}/{denominator:g} ({fraction})'
+                        if numerator is not None and denominator is not None else fraction)
+            unit = {'gff_locus': 'GFF loci', 'cds_id': 'CDS IDs'}.get(link.get('host_scaffold_count_unit'),
+                                                                  link.get('host_scaffold_count_unit') or 'count unit unavailable')
+            measured = (f'coverage {ratio(coverage, classified, total)} | '
+                        f'compatible {ratio(compatible, host, classified)} | {unit}')
+            event_tags = [labels[eid] for eid in sorted(entry['event_ids'])]
+            tags = ', '.join(event_tags[:3]) + (f', +{len(event_tags)-3} events' if len(event_tags) > 3 else '')
+            status = entry['status'].replace('_', ' ')
+            scaffold = entry['focal']['chromosome'] if entry['focal'] else link.get('host_scaffold_id') or 'unavailable'
+            ax.set_title(f"{tags} | {link['gene_id']}\nScaffold {scaffold} | {status}\n{measured}",
+                         loc='left', fontsize=8, color=color, pad=10)
+    fig.text(0.06, 0.055,
+             'Blue: donor focal gene; orange: recipient focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
+             'Thick blocks: coding exons; thin gray blocks: recorded UTR; lines: introns. Every genomic track uses the same uncompressed kb axis.\n'
+             'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
+             'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Neighbor labels/IDs, count units and omitted genes are in the context audit.\n'
+             'Neighbors are not asserted to be host-classified or conserved in order; CDS-only records do not establish complete exon/UTR structure. * = feature extends beyond window.',
+             fontsize=7.5, color='#666666')
+    fig.savefig(path, format='pdf')
+    plt.close(fig)
+    by_id = {e['event_id']: e for e in events}
+    for row in audit:
+        event = by_id[row['event_id']]
+        branch_id = event.get('gene_tree_branch_id', event.get('branch_id'))
+        row.update(shared_axis_min_kb=-extent, shared_axis_max_kb=extent,
+                   plot_label=labels[row['event_id']], gene_tree_branch_id=branch_id,
+                   gene_tree_node=event.get('gene_tree_node', event.get('node_name')),
+                   support_generax_ufboot=branches[branch_id]['support_generax_ufboot'])
+    return audit
+
+
+def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=True, max_genes_per_side=None):
+    if max_genes_per_side is not None:
+        if gene_tree_panel:
+            raise ValueError("Bounded context pages require gene_tree_panel=False")
+        return render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side)
     import matplotlib
 
     matplotlib.use("Agg")

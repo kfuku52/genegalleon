@@ -159,7 +159,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", family) or family in {".", ".."}:
             raise ValueError("Unsafe orthogroup identifier")
         families[family].append(event)
-    from focus_hgt_context import GenomeCoordinates, render_context
+    from focus_hgt_context import CONTEXT_MAX_GENES_PER_SIDE, GenomeCoordinates, render_context
     from gene_tree_plot_config import replay
 
     coordinates = GenomeCoordinates(gff_root)
@@ -218,7 +218,8 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
                             context = Path(tmp) / 'context.pdf'
                             selected_ids = {r['event_id'] for r in passed}
                             context_audit += render_context(context, rows, [e for e in group if e['event_id'] in selected_ids],
-                                                            links, coordinates)
+                                                            links, coordinates, gene_tree_panel=False,
+                                                            max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE)
                             from pypdf import PdfReader, PdfWriter
                             if len(PdfReader(source).pages) != 1 or len(PdfReader(context).pages) != 1:
                                 raise ValueError('Focused gene-tree PDF must have exactly one tree and one context page')
@@ -252,7 +253,11 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         "Orange recipient tips are the genes that individually pass that background check.\n"
         "Page 1 replays gg_gene_evolution panels and saved settings, including domain, gene structure and alignment.\n"
         "Missing optional measurements are not invented. Renderer settings and input availability are recorded.\n"
-        "Page 2 gives exact gene-tree paths and representative donor/recipient GFF neighborhoods.\n"
+        "Page 2 separates donor descendants (blue, left) and recipients (orange, right).\n"
+        "It shows at most three distinct genes per side on one page, including eligible genes with unconfirmed or failing scaffold evidence.\n"
+        "Shown/total/omitted gene counts and individual scaffold status remain explicit; omitted genes stay in context_gene_audit.tsv.\n"
+        "Display priority is passing scaffold support, available GFF, coverage, compatibility, then gene ID.\n"
+        "Repeated links for one side/gene are drawn once and preserve every event in the audit. No extra gene-tree inset is drawn.\n"
         "All genomic tracks share a linear kb axis centered on their focal-gene midpoint, without intron compression.\n"
         "CDS blocks are coding exons; UTR blocks are shown when recorded; unavailable structures stay unconfirmed.\n"
         "This is whole-scaffold context, not conserved gene order or proof of physical integration.\n"
