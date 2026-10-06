@@ -15,6 +15,7 @@ marked_layers <- ggplot_build(marked)$data
 if (nrow(marked_layers[[1]]) != 1 || marked_layers[[1]]$x != 2) stop('Focused HGT marker mapped to wrong node.')
 if (marked_layers[[1]]$colour != '#b34d00' || marked_layers[[1]]$shape != 23) stop('Focused HGT marker style is incorrect.')
 if (marked_layers[[2]]$label != 'HGT1 UF=90') stop('Focused HGT label lost exact branch support.')
+if (marked_layers[[2]]$fill != 'white') stop('Focused HGT label needs an opaque background over branch lines.')
 unmarked <- focus_plot
 unmarked$data$hgtfocus_event_count <- 0
 if (length(focus_marker(unmarked, list())$layers) != 0) stop('Empty focused cohort should not add marks.')

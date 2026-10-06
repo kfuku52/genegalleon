@@ -685,9 +685,11 @@ add_focused_hgt_node_marks = function(g, args) {
         color='#b34d00', fill='#b34d00', size=2.2, show.legend=TRUE
     ) + scale_shape_manual(values=c('Focused HGT node'=23), name=NULL)
     if ('hgtfocus_node_label' %in% colnames(g[['data']])) {
-        g = g + geom_text2(
-            aes(x=x, y=y, subset=hgtfocus_selected, label=hgtfocus_node_label),
-            color='#b34d00', size=treevis_text_size(args, 0.9), hjust=-0.08, vjust=1.6
+        g = g + geom_label(
+            data=function(data) data[data[['hgtfocus_selected']], , drop=FALSE],
+            aes(x=x, y=y, label=hgtfocus_node_label), inherit.aes=FALSE,
+            color='#b34d00', fill='white', linewidth=0, label.padding=grid::unit(0.05, 'lines'),
+            size=treevis_text_size(args, 0.9), hjust=-0.15, vjust=0.5
         )
     }
     return(g)
