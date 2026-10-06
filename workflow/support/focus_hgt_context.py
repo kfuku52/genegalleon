@@ -221,7 +221,7 @@ def selected_gene_clade(ax, rows, event, donor, recipient):
     ax.text(
         0.01,
         1.02,
-        f"{event['event_id']} | HGT node {by_id[node]['node_name']} | UFBoot {by_id[node]['support_generax_ufboot']}",
+        f"{event['event_id']} | HGT node {by_id[node]['node_name']} | UFB {by_id[node]['support_generax_ufboot']}",
         transform=ax.transAxes,
         fontsize=9,
         color=ORANGE,
@@ -388,7 +388,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
         if branch['node_name'] != event.get('gene_tree_node', event.get('node_name')):
             raise ValueError('Context transfer branch/node mapping is inconsistent')
         labels[event['event_id']] = f'HGT{i}'
-        references.append(f"HGT{i}: node {branch['node_name']} | UFBoot {branch['support_generax_ufboot']}")
+        references.append(f"HGT{i}: node {branch['node_name']} | UFB {branch['support_generax_ufboot']}")
     extent = math.ceil(max([20.0] + [
         max(abs(x - (int(entry['focal']['start']) + int(entry['focal']['end'])) / 2)
             for x in [int(entry['focal']['start']), int(entry['focal']['end'])]
@@ -455,7 +455,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
              'Blue: donor descendant focal gene; orange: recipient descendant focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
              'Thick blocks: CDS; thin gray blocks: recorded UTR; gray dotted blocks: exons with unknown CDS/UTR identity; lines: introns. Shared uncompressed kb axis.\n'
              'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
-             'Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Best-hit taxonomy is annotation, not the modeled transfer donor.\n'
+             'UFB = Ultrafast bootstrap. Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Best-hit taxonomy is annotation, not the modeled transfer donor.\n'
              'Protein products always use best-hit predictions; unavailable names and ranks stay missing. Full annotation sources and gene/event mappings are in the annotation audit.\n'
              'Neighbors are not asserted to be host-classified or conserved in order; CDS-only records do not establish complete exon/UTR structure. * = feature extends beyond window.',
              fontsize=8, color='#666666')
@@ -544,7 +544,7 @@ def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=Tr
                 branch = next(
                     r for r in rows if r["branch_id"] == event.get("gene_tree_branch_id", event.get("branch_id"))
                 )
-                title = f"HGT node {branch['node_name']} | UFBoot {branch['support_generax_ufboot']}\n" + title
+                title = f"HGT node {branch['node_name']} | UFB {branch['support_generax_ufboot']}\n" + title
             neighbor_key = []
             if focal is None:
                 ax.text(0, 0, "GFF coordinates unavailable", ha="center", color="#777777")
@@ -618,7 +618,7 @@ def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=Tr
         0.07,
         0.055,
         "Orange: focal gene; blue: nearby annotations; thick blocks: coding exons; thin gray blocks: UTR; lines: introns.\n"
-        "All genomic tracks share one uncompressed kb axis."
+        "UFB = Ultrafast bootstrap. All genomic tracks share one uncompressed kb axis."
         + (" Gene-tree paths use their own substitution/site axis.\n" if gene_tree_panel else "\n")
         + "The shared window includes each focal feature plus 20 kb flanks; * = neighboring feature extends beyond the display window.\n"
         "Neighbors are not asserted to be host-classified or conserved in order. CDS-only records do not establish complete exon/UTR structure.\n"

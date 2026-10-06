@@ -9,12 +9,13 @@ pdf(NULL)
 # Focused transfer marks use exact internal nodes, with no family-wide marking.
 focus_marker <- getFromNamespace('add_focused_hgt_node_marks', 'genegalleon.treevis')
 focus_plot <- ggplot(data.frame(x=c(1,2,3), y=c(1,2,3), isTip=c(TRUE,FALSE,FALSE),
-                              hgtfocus_event_count=c(0,1,0), hgtfocus_node_label=c('', 'HGT1 UF=90', '')))
+                              hgtfocus_event_count=c(0,1,0), hgtfocus_node_label=c('', 'HGT1 UFB=90', '')))
 marked <- focus_marker(focus_plot, list(font_size=6, font_size_factor=0.352777778))
 marked_layers <- ggplot_build(marked)$data
 if (nrow(marked_layers[[1]]) != 1 || marked_layers[[1]]$x != 2) stop('Focused HGT marker mapped to wrong node.')
 if (marked_layers[[1]]$colour != '#b34d00' || marked_layers[[1]]$shape != 23) stop('Focused HGT marker style is incorrect.')
-if (marked_layers[[2]]$label != 'HGT1 UF=90') stop('Focused HGT label lost exact branch support.')
+if (marked_layers[[2]]$label != 'HGT1 UFB=90') stop('Focused HGT label lost exact branch support.')
+if (marked$scales$get_scales('shape')$name != 'UFB = Ultrafast bootstrap') stop('Focused HGT legend must spell out UFB.')
 if (marked_layers[[2]]$fill != 'white') stop('Focused HGT label needs an opaque background over branch lines.')
 unmarked <- focus_plot
 unmarked$data$hgtfocus_event_count <- 0

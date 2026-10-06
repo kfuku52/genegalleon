@@ -145,7 +145,7 @@ def annotate(stat_rows, events, links):
                 status.append(('Scaffold-supported ' if name in passing else 'Scaffold-unconfirmed ') + side + ' descendant')
         output.append(dict(row, hgtfocus_event_count=len(matched),
                            hgtfocus_event_ids="; ".join(e["event_id"] for e, _, _ in matched),
-                           hgtfocus_node_label="; ".join(f"{label} UF={support:g}" for _, label, support in matched),
+                           hgtfocus_node_label="; ".join(f"{label} UFB={support:g}" for _, label, support in matched),
                            hgtfocus_recipient_flag=int(row["node_name"] in genes),
                            hgtfocus_donor_flag=int(name in donor_genes),
                            hgtfocus_tip_status='; '.join(status)))
@@ -266,7 +266,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
     (directory / "README.txt").write_text(
         "Native GeneGalleon gene trees for observed category-1 recipients\n\n"
         "Orange diamonds and HGT labels mark exact gene-tree transfer nodes, including internal nodes.\n"
-        "UF labels are the matched branch's support_generax_ufboot (>=90 inclusive).\n"
+        "UFB = Ultrafast bootstrap; labels are the matched branch's support_generax_ufboot (>=90 inclusive).\n"
         "At least one retained event-linked gene on each side must have candidate-free class background\n"
         "with >=10 classified units, >=50% classification coverage and >=90% host compatibility.\n"
         "Orange recipient and blue donor tips individually pass that background check.\n"

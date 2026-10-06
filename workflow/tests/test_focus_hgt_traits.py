@@ -41,7 +41,7 @@ def test_focused_gene_nodes_use_exact_event_branch_and_inclusive_bilateral_profi
     assert audit[0]["status"] == "selected" and audit[0]["support_generax_ufboot"] == 90
     assert output[0]["hgtfocus_recipient_flag"] == 1
     assert output[1]["hgtfocus_event_ids"] == "OG1:3:1"
-    assert output[1]["hgtfocus_node_label"] == "HGT1 UF=90"
+    assert output[1]["hgtfocus_node_label"] == "HGT1 UFB=90"
     assert stat[1].get("hgtfocus_event_ids") is None  # Original table is preserved.
     # Two events sharing a gene-tree node are evaluated separately.
     other = dict(events[0], event_id="OG1:3:2", event_index="2", generax_transfer="Y@D@B")
@@ -440,7 +440,9 @@ def test_context_page_has_shared_scale_and_preserves_missing_coordinates(tmp_pat
     text = PdfReader(context_only).pages[0].extract_text()
     assert 'Existing gene-tree branch length' not in text
     assert 'substitution/site' not in text
-    assert 'HGT node n3 | UFBoot 90' in text
+    assert 'HGT node n3 | UFB 90' in text
+    assert 'UFB = Ultrafast bootstrap' in text
+    assert 'UF=' not in text
     assert [r['gene_id'] for r in simplified] == [r['gene_id'] for r in audit]
     assert [(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in simplified] == [(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in audit]
 

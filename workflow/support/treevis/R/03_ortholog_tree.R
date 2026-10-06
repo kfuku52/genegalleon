@@ -690,7 +690,7 @@ add_focused_hgt_node_marks = function(g, args) {
         aes(x=x, y=y, subset=hgtfocus_selected, shape=hgtfocus_legend),
         color='#b34d00', fill='#b34d00', size=2.2,
         show.legend=c(shape=TRUE, colour=FALSE, fill=FALSE)
-    ) + scale_shape_manual(values=c('Focused HGT node'=23), name=NULL)
+    ) + scale_shape_manual(values=c('Focused HGT node'=23), name='UFB = Ultrafast bootstrap')
     if ('hgtfocus_node_label' %in% colnames(g[['data']])) {
         g = g + geom_label(
             data=function(data) data[data[['hgtfocus_selected']], , drop=FALSE],

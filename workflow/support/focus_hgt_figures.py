@@ -81,7 +81,7 @@ def filtering_counts(source_events, selected, audit_path=""):
         stages += [
             ("All modeled transfers", audited),
             ("Non-Insecta to Insecta", directional),
-            ("Matched gene-tree UFBoot >=90", accepted),
+            ("Matched gene-tree UFB >=90", accepted),
         ]
     stages += [("Input supported-event cohort", source_events), ("Category = 1 recipients", selected)]
     return [
@@ -172,7 +172,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
         "From modeled transfers to focused candidates",
         "Distinct event IDs and orthogroups; duplication and repeated per-tip reports are not new modeled events.",
         "Upstream direction/support counts are shown only when an explicit event-level filtering audit is supplied.\n"
-        "UFBoot is gene-tree split support; category-1 internal recipient branches require all observed descendant tips = 1.",
+        "UFB = Ultrafast bootstrap (gene-tree split support); category-1 internal recipient branches require all observed descendant tips = 1.",
     )
     families = sorted({r["orthogroup"] for r in selected})
     species = [tip.name for tip in tree.get_terminals()]

@@ -206,8 +206,9 @@ bundles retain their directed edge TSVs; focused species-tree and per-recipient
 PDFs are not produced.
 
 Each trait aggregate also has a `tree_plot/` folder with one native gene-tree PDF
-per qualifying orthogroup. Orange diamonds mark the exact transfer nodes;
-labels give the matched `support_generax_ufboot`, including internal nodes.
+per qualifying orthogroup. Orange diamonds mark the exact transfer nodes.
+Labels use `UFB` for the matched `support_generax_ufboot`, including internal nodes;
+the legend spells it out as `UFB = Ultrafast bootstrap`.
 This presentation subset requires UFBoot >=90 and at least one retained
 event-linked gene on **each** side with candidate-free class scaffold background:
 >=10 classified units, >=50% classification coverage and >=90% host compatibility.
@@ -227,7 +228,7 @@ recorded by `gg_gene_evolution` (including domain, structure, alignment,
 localization and available similarity panels). Older results use their saved
 tree-plot parameter/input provenance; unavailable optional inputs remain missing.
 `renderer_settings.json` records the settings source and input availability.
-Page 2 shows the exact HGT node/UFBoot and existing GFF neighborhoods in two
+Page 2 shows the exact HGT node/UFB and existing GFF neighborhoods in two
 columns: donor descendants in blue, recipient descendants in orange, and nearby annotations
 in gray. It draws at most three distinct genes per side on one page, with
 shown/total/omitted counts. Eligible event-linked genes with failing or unavailable
