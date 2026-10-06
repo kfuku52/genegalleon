@@ -275,37 +275,41 @@ counts rather than zeros. `model_change_summary.json` records these counts and
 their source hashes. BUSCO stacks use the existing GeneGalleon palette: black
 single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
 When the original completed rescue publication is available, rescued genes are
-stacked by supporting donor group: nearest relatives only, phylogenetically
-balanced references only, both, or self-species only. Classification uses all consolidated
+stacked in four support categories: S only (self-species homology), R only
+(nearest relatives), P only (phylogenetically balanced references), or multiple
+(at least two of S/R/P). Classification uses all consolidated
 `support` records of each accepted model, deduplicates donor species, and counts
 each gene locus once. A donor in both frozen reference lists supports both
-groups; the both category does not require two distinct donor species. The
-three categories plus separately recorded self-species-only loci must sum to
+types, so the multiple category does not require two distinct donor species.
+Two donors in R alone still count as R only. The four categories must sum to
 the source GFF gene count, with matching accepted
 model IDs and verified plan/model/augmentation receipts. Donor memberships and
 per-gene supporting species are saved in `model_change_summary.json`.
 Rescue model IDs can name gene or transcript features; explicit GFF `Parent`
 links map transcript identities to gene loci without guessing suffixes.
-Self-species-only support must belong to a frozen self-synteny comparison;
-these loci form the fourth stack segment. A locus with both self-species and
-interspecies support is assigned to its interspecies reference group, so each
+Self-species support must belong to a frozen self-synteny comparison.
+A locus with S+R, S+P, R+P or S+R+P support belongs to multiple, so each
 gene appears once. Each bar's label shows the total across all four segments.
 When donor groups are available, the accepted-coding-path panel shows two bars
 per species: the upper bar partitions paths into repairs and additional
 isoforms, and the lower bar partitions the same paths by supporting donor group.
 The lower bar uses the rescue colours and frozen nearest/balanced lists. It
 also includes an `Other interspecies only` segment for paths supported solely
-by interspecies donors outside those lists, which can occur through reverse
-correspondence edges. Paths with a selected-group donor are classified by
-membership in those groups; any additional other donors remain in the saved
-per-path evidence. Self-species-only means homology support from the target
+by interspecies donors outside those lists and without S support, which can
+occur through reverse correspondence edges. Only means exactly one of S/R/P;
+any additional unselected donors remain in the saved per-path evidence.
+Self support means homology support from the target
 species, not target RNA evidence. Counts use the recorded accepted prediction
 `donors`, cross-check candidate support and alignments, and count each candidate
 path once. Each lower bar must sum to the upper bar's repair plus isoform total.
-`accepted_path_support_counts` and `accepted_paths_support` retain the category
-counts and per-path donors in `model_change_summary.json`. Excluded species
+`rescue_support_groups` and `accepted_path_support_groups` store the current
+S/R/P counts. Legacy `rescue_support_counts`, `rescue_self_only_loci`,
+`accepted_path_support_counts` and per-model donor records remain unchanged in
+`model_change_summary.json` for saved-data compatibility. Regrouping requires
+complete per-model evidence; old aggregate counts cannot recover mixed self
+support. Excluded species
 remain unavailable in both panels. Historical summaries lacking donor groups
-retain their original unpartitioned coding-path display.
+retain their original display when complete donor evidence is unavailable.
 The rescue directory is inferred from the refinement plan. For imported explicit
 inputs, supply `--rescue-output /path/to/original-completed-rescue`; its augmented
 GFF hash must match the frozen source annotation. Historical inputs without

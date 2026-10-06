@@ -30,6 +30,76 @@ RESCUE_SELF_LABEL = "Self-species only"
 PATH_SUPPORT = (*RESCUE_SUPPORT, "self_only", "other_interspecies")
 PATH_SUPPORT_COLOURS = (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR, "#8a929b")
 PATH_SUPPORT_LABELS = (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL, "Other interspecies only")
+# Keep the legacy count fields above readable; the current view uses all three
+# support types, including self support in a mixed donor set.
+SUPPORT_GROUPS = ("self_only", "relative_only", "phylogenetic_only", "multiple")
+SUPPORT_GROUP_COLOURS = (RESCUE_SELF_COLOUR, *RESCUE_SUPPORT_COLOURS)
+SUPPORT_GROUP_LABELS = ("S only (self)", "R only (relatives)", "P only (phylogenetic)", "Multiple (at least two of S/R/P)")
+PATH_SUPPORT_GROUPS = (*SUPPORT_GROUPS, "other_interspecies")
+PATH_SUPPORT_GROUP_COLOURS = (*SUPPORT_GROUP_COLOURS, "#8a929b")
+PATH_SUPPORT_GROUP_LABELS = (*SUPPORT_GROUP_LABELS, "Other interspecies only")
+
+
+def group_support_evidence(evidence, species, selection, *, allow_other=False):
+    """Count each locus/path once by S/R/P membership, not donor-species count."""
+    nearest = set(selection["nearest_references"][species]) - {species}
+    balanced = set(selection["common_references"]) - {species}
+    groups = PATH_SUPPORT_GROUPS if allow_other else SUPPORT_GROUPS
+    counts = dict.fromkeys(groups, 0)
+    for identifier, record in evidence.items():
+        donors = record.get("supporting_donors")
+        if (not isinstance(donors, list) or not donors
+                or any(not isinstance(d, str) or not d for d in donors)):
+            raise ValueError("Missing supporting donor evidence: " + identifier)
+        donors = set(donors)
+        if not allow_other and donors - nearest - balanced - {species}:
+            raise ValueError("Rescue donor differs from the frozen reference selection: " + identifier)
+        flags = (species in donors, bool(donors & nearest), bool(donors & balanced))
+        number = sum(flags)
+        category = "multiple" if number >= 2 else SUPPORT_GROUPS[flags.index(True)] if number else "other_interspecies"
+        if category not in counts:
+            raise ValueError("Rescue lacks S/R/P supporting donors: " + identifier)
+        counts[category] += 1
+    return counts
+
+
+def regroup_model_support(changes):
+    """Add the S/R/P view from per-model evidence without changing legacy fields."""
+    selection = changes.get("rescue_reference_selection")
+    if selection is None:
+        return changes
+    updates = {}
+    for species, value in changes["species"].items():
+        updates[species] = {}
+        if value["refinement_status"] == "not_analysed":
+            if any(value.get(k) is not None for k in ("rescue_support_groups", "accepted_path_support_groups")):
+                raise ValueError("Unanalysed support groups must be unavailable")
+            continue
+        for legacy, output, evidence_key, total in (
+            ("rescue_support_counts", "rescue_support_groups", "rescued_loci_support", value["prior_rescued_loci"]),
+            ("accepted_path_support_counts", "accepted_path_support_groups", "accepted_paths_support",
+             value["accepted_repair_paths"] + value["accepted_isoform_paths"]),
+        ):
+            if value.get(legacy) is None:
+                if value.get(output) is not None:
+                    raise ValueError("Support groups lack their source counts: " + species)
+                continue
+            evidence = changes.get("evidence", {}).get(species, {}).get(evidence_key)
+            if not isinstance(evidence, dict) or len(evidence) != total:
+                raise ValueError("Support regrouping needs complete per-model evidence: " + species)
+            counts = group_support_evidence(evidence, species, selection, allow_other=legacy == "accepted_path_support_counts")
+            if value.get(output) is not None and value[output] != counts:
+                raise ValueError("Support groups disagree with per-model evidence: " + species)
+            updates[species][output] = counts
+    for species, value in updates.items():
+        changes["species"][species].update(value)
+    changes["support_group_classification"] = (
+        "S = self-species homology; R = nearest relatives; P = phylogenetically balanced references. "
+        "Only means exactly one of S/R/P; multiple means at least two of these support types, not two donor species. "
+        "A donor in both frozen R/P lists supplies both types. Other interspecies only means no S/R/P support; "
+        "additional unselected donors remain in per-model evidence. Target RNA is separate from S."
+    )
+    return changes
 
 
 def classify_accepted_path_support(models, species, selection, allowed_species):
@@ -96,7 +166,7 @@ def collect_accepted_path_support(root, changes):
     for species, (counts, evidence) in updates.items():
         changes["species"][species]["accepted_path_support_counts"] = counts
         changes["evidence"][species]["accepted_paths_support"] = evidence
-    return changes
+    return regroup_model_support(changes)
 
 
 def classify_rescue_support(models, species, rescued, plan):
@@ -388,7 +458,7 @@ def collect_model_changes(root, pairs, rescue_output=None):
             "nearest_references": rescue_plan["nearest_references"], "common_references": rescue_plan["common_references"],
             "classification": "Supporting donors are deduplicated across all consolidated support records. A donor in both frozen reference lists supports both groups; both does not require two distinct donor species. Self-species-only loci are recorded separately and excluded from the three interspecies support groups.",
         }
-    return result
+    return regroup_model_support(result)
 
 
 def plot_comparison(rows, output, model_changes=None):
@@ -398,11 +468,13 @@ def plot_comparison(rows, output, model_changes=None):
     from matplotlib.patches import Patch
     from matplotlib.ticker import MaxNLocator
 
-    stacked_rescue = stacked_paths = False
+    stacked_rescue = stacked_paths = grouped_support = False
     if model_changes is not None:
         stats = model_changes["species"]
         stacked_rescue = any(v.get("rescue_support_counts") is not None for v in stats.values())
         stacked_paths = any(v.get("accepted_path_support_counts") is not None for v in stats.values())
+        grouped_support = any(v.get("rescue_support_groups") is not None or v.get("accepted_path_support_groups") is not None
+                              for v in stats.values())
         if len(rows) != len(stats) or set(stats) != {r["species"] for r in rows}:
             raise ValueError("Model-count and BUSCO species membership differ")
         for row in rows:
@@ -436,6 +508,19 @@ def plot_comparison(rows, output, model_changes=None):
                         or any(type(c) is not int or c < 0 for c in path_support.values())
                         or sum(path_support.values()) != value["accepted_repair_paths"] + value["accepted_isoform_paths"]):
                     raise ValueError("Coding-path support categories must sum to the accepted path count")
+            for key, categories, stacked, total in (
+                ("rescue_support_groups", SUPPORT_GROUPS, stacked_rescue, value["prior_rescued_loci"]),
+                ("accepted_path_support_groups", PATH_SUPPORT_GROUPS, stacked_paths,
+                 None if row["refinement_status"] == "not_analysed" else value["accepted_repair_paths"] + value["accepted_isoform_paths"]),
+            ):
+                groups = value.get(key)
+                if row["refinement_status"] == "not_analysed" or not stacked:
+                    if groups is not None:
+                        raise ValueError("Support groups must be unavailable without analysed source counts")
+                elif grouped_support:
+                    if (not isinstance(groups, dict) or set(groups) != set(categories)
+                            or any(type(c) is not int or c < 0 for c in groups.values()) or sum(groups.values()) != total):
+                        raise ValueError("S/R/P support groups must sum to the source model count")
     extra = model_changes is not None
     support_legend = stacked_rescue or stacked_paths
     margin_left = .20 if extra else .24
@@ -469,12 +554,14 @@ def plot_comparison(rows, output, model_changes=None):
                 repair, isoform = value["accepted_repair_paths"], value["accepted_isoform_paths"]
                 if stacked_rescue:
                     offset = 0
-                    for category, color in zip(RESCUE_SUPPORT, RESCUE_SUPPORT_COLOURS, strict=True):
-                        count = value["rescue_support_counts"][category]
+                    support = value["rescue_support_groups"] if grouped_support else {
+                        **value["rescue_support_counts"], "self_only": value.get("rescue_self_only_loci", 0)}
+                    categories = SUPPORT_GROUPS if grouped_support else (*RESCUE_SUPPORT, "self_only")
+                    group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
+                    for category, color in zip(categories, group_colors, strict=True):
+                        count = support[category]
                         axes[3].barh(i, count, left=offset, color=color, height=.7)
                         offset += count
-                    axes[3].barh(i, value.get("rescue_self_only_loci", 0), left=offset,
-                                 color=RESCUE_SELF_COLOUR, height=.7)
                 else:
                     axes[3].barh(i, rescued, color="#5275b5", height=.7)
                 axes[3].annotate(str(rescued), (rescued, i),
@@ -487,8 +574,11 @@ def plot_comparison(rows, output, model_changes=None):
                                  textcoords="offset points", va="center", fontsize=9)
                 if stacked_paths:
                     offset = 0
-                    for category, color in zip(PATH_SUPPORT, PATH_SUPPORT_COLOURS, strict=True):
-                        count = value["accepted_path_support_counts"][category]
+                    support = value["accepted_path_support_groups"] if grouped_support else value["accepted_path_support_counts"]
+                    categories = PATH_SUPPORT_GROUPS if grouped_support else PATH_SUPPORT
+                    group_colors = PATH_SUPPORT_GROUP_COLOURS if grouped_support else PATH_SUPPORT_COLOURS
+                    for category, color in zip(categories, group_colors, strict=True):
+                        count = support[category]
                         axes[4].barh(i + .20, count, left=offset, color=color, height=.32)
                         offset += count
                     axes[4].annotate(str(offset), (offset, i + .20), xytext=(4, 0),
@@ -531,8 +621,12 @@ def plot_comparison(rows, output, model_changes=None):
     fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
                loc="lower left", bbox_to_anchor=(margin_left, .175 if support_legend else .09 if extra else .065), ncol=4, frameon=False)
     if support_legend:
-        group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
-        group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
+        if grouped_support:
+            group_colors = PATH_SUPPORT_GROUP_COLOURS if stacked_paths else SUPPORT_GROUP_COLOURS
+            group_labels = PATH_SUPPORT_GROUP_LABELS if stacked_paths else SUPPORT_GROUP_LABELS
+        else:
+            group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
+            group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
         fig.legend([Patch(facecolor=c) for c in group_colors], group_labels,
                    loc="lower left", bbox_to_anchor=(margin_left, .125), ncol=3, frameon=False,
                    title="Supporting donor groups (rescue loci and lower coding-path bars)")
@@ -548,10 +642,16 @@ def plot_comparison(rows, output, model_changes=None):
     if extra:
         note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
     if support_legend:
-        note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
-        note += "\nSelf-species only = no interspecies support; mixed self/interspecies support uses the interspecies group."
+        if grouped_support:
+            note += "\nS = self-species homology; R = nearest relatives; P = phylogenetically balanced references. Target RNA is separate from S."
+            note += "\nMultiple = at least two support types among S/R/P; a donor in both frozen R/P lists supplies both types."
+        else:
+            note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
+            note += "\nSelf-species only = no interspecies support; mixed self/interspecies support uses the interspecies group."
     if stacked_paths:
-        note += "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate."
+        note += ("\nOnly = exactly one of S/R/P; other-only = no S/R/P donor. Additional unselected donors remain in the evidence."
+                 if grouped_support else
+                 "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate.")
     elif stacked_rescue:
         note += " Labels: total loci."
     fig.text(margin_left, .025, note, fontsize=10)
