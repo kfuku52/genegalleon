@@ -197,10 +197,13 @@ the aggregate counts it once by event ID. Do not sum per-tip totals as independe
 acquisitions. Mixed/missing recipient clades remain outside the focused cohort
 with explicit reasons. Empty targets are retained as zero-result reports.
 
-With `run_hgt_summary_plots=1`, each trait's aggregate bundle includes a native
-transfer-tree PDF with all selected arrows and category-1 branches highlighted.
-Per-recipient tips and internal branches retain their tables without separate
-PDFs. All bundles retain their directed edge TSVs.
+With `run_hgt_summary_plots=1`, each trait aggregate's `plots/` contains three
+single-page PDFs: `filtering_flow.pdf`, `orthogroup_species_distribution.pdf`
+and `donor_recipient_counts.pdf`. The distribution includes an existing protein
+product/annotation label, its source gene and evidence basis in the accompanying
+TSV. Counts distinguish event IDs, gene-tree tip copies and orthogroups. All
+bundles retain their directed edge TSVs; focused species-tree and per-recipient
+PDFs are not produced.
 
 Each trait aggregate also has a `tree_plot/` folder with one native gene-tree PDF
 per qualifying orthogroup. Orange diamonds mark the exact transfer nodes;
@@ -215,6 +218,29 @@ branch/token matches do not qualify. Background context is not conserved gene
 order or proof of physical integration. Standalone `focus_hgt_traits.py` calls
 enable this folder by supplying `--gene_family_root` with existing raw/ZIP-backed
 family outputs; the workflow supplies this path automatically when plots run.
+
+Each individual PDF has two pages. Page 1 replays the panels and arguments
+recorded by `gg_gene_evolution` (including domain, structure, alignment,
+localization and available similarity panels). Older results use their saved
+tree-plot parameter/input provenance; unavailable optional inputs remain missing.
+`renderer_settings.json` records the settings source and input availability.
+Page 2 shows the exact HGT node and existing gene-tree paths plus one passing
+donor and recipient gene's GFF neighborhood per event. All genomic tracks share
+one linear kb axis centered on the focal feature midpoint. The shared window
+includes each focal feature plus at least 20 kb flanks; asterisks mark neighboring
+features extending beyond the window. CDS and available UTR
+blocks retain genomic intron lengths; missing structure and trans-splicing are
+explicitly unavailable. Neighbor annotations do not establish their taxonomy or
+conserved gene order. `context_gene_audit.tsv` records the representative-selection
+rule, complete gene IDs, structures and shared axis limits. The workflow supplies
+existing `species_gff_info`; standalone calls use `--gff_info_root`.
+
+`hgt_summary_focus_filter_audit_tsv` (standalone `--filter_audit_tsv`) accepts an
+optional existing project event-level direction/UFBoot audit, including gzip TSV.
+When supplied, the filtering-flow PDF also shows the upstream modeled,
+non-Insecta-to-Insecta and verified UFBoot >=90 counts. Without it, upstream
+counts are not inferred from an already filtered input table. No sequence,
+phylogenetic or annotation-search analysis is run for these figures.
 
 `manifest.json` binds inputs and every output to SHA-256 hashes. Focus bundles
 are replaced as a managed unit; invalid inputs do not publish a partial bundle.

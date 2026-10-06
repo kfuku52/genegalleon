@@ -7,9 +7,10 @@ support is evaluated per retained gene, never from family/scaffold averages.
 import csv
 import hashlib
 import io
+import json
+import logging
 import math
 import re
-import shutil
 import subprocess
 import tempfile
 from collections import defaultdict
@@ -147,7 +148,7 @@ def write(path, fields, rows):
         writer.writerows(rows)
 
 
-def export_gene_trees(directory, events, links, family_root, renderer=None):
+def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root=''):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
     csv.field_size_limit(100_000_000)
     directory.mkdir(parents=True)
@@ -158,7 +159,11 @@ def export_gene_trees(directory, events, links, family_root, renderer=None):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", family) or family in {".", ".."}:
             raise ValueError("Unsafe orthogroup identifier")
         families[family].append(event)
-    index, audit, sources = [], [], {}
+    from focus_hgt_context import GenomeCoordinates, render_context
+    from gene_tree_plot_config import replay
+
+    coordinates = GenomeCoordinates(gff_root)
+    index, audit, sources, context_audit, configurations = [], [], {}, [], {}
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)
         with store.read_snapshot():
@@ -188,27 +193,40 @@ def export_gene_trees(directory, events, links, family_root, renderer=None):
                 write(table, list(annotated[0]), annotated)
                 pdf = directory / (family + "_focused_hgt_tree_plot.pdf")
                 if passed:
+                    logging.info('Focused gene tree %s: %d supported events', family, len(passed))
                     if renderer is not None:
                         renderer(table, pdf)
                     else:
                         with tempfile.TemporaryDirectory(prefix="hgt-focus-tree-") as tmp:
+                            materialized = Path(tmp) / 'family_inputs'
+                            spec = replay(store, family, rows, materialized, sources)
+                            configurations[family] = spec
                             command = [
                                 "Rscript", str(helper / "stat_branch2tree_plot.r"), f"--stat_branch={table.resolve()}",
-                                "--panel1=tree,bl_rooted,support_generax_ufboot,no,L", "--panel2=tiplabel",
-                                "--panel3=categorical,hgtfocus_tip_status,Scaffold-supported recipient,-",
-                                "--show_branch_id=yes", "--event_method=generax", "--species_color_table=PLACEHOLDER",
-                                "--pie_chart_value_transformation=identity", "--long_branch_display=no",
-                                "--panel_widths_mm=tree:100",
+                                *spec['arguments'],
                             ]
                             try:
+                                import os
+                                environment = dict(os.environ, TREEVIS_SPECIES_PARSER=spec['species_label_parser'])
                                 subprocess.run(command, cwd=tmp, check=True, stdout=subprocess.PIPE,
-                                               stderr=subprocess.STDOUT, text=True)
+                                               stderr=subprocess.STDOUT, text=True, env=environment)
                             except subprocess.CalledProcessError as exc:
                                 raise RuntimeError(f"Native focused gene-tree rendering failed for {family}:\n{exc.stdout}") from exc
                             source = Path(tmp) / "stat_branch2tree_plot.pdf"
                             if not source.is_file() or not source.read_bytes().startswith(b"%PDF"):
                                 raise ValueError("Native focused gene-tree renderer did not produce a PDF")
-                            shutil.copyfile(source, pdf)
+                            context = Path(tmp) / 'context.pdf'
+                            selected_ids = {r['event_id'] for r in passed}
+                            context_audit += render_context(context, rows, [e for e in group if e['event_id'] in selected_ids],
+                                                            links, coordinates)
+                            from pypdf import PdfReader, PdfWriter
+                            if len(PdfReader(source).pages) != 1 or len(PdfReader(context).pages) != 1:
+                                raise ValueError('Focused gene-tree PDF must have exactly one tree and one context page')
+                            writer = PdfWriter()
+                            writer.append(str(source))
+                            writer.append(str(context))
+                            with pdf.open('wb') as handle:
+                                writer.write(handle)
                 index.append(dict(orthogroup=family, status="rendered" if passed else "withheld",
                                   reason="" if passed else "no_qualifying_mapped_event", event_count=len(passed),
                                   node_count=len({row["gene_tree_branch_id"] for row in passed}),
@@ -221,6 +239,10 @@ def export_gene_trees(directory, events, links, family_root, renderer=None):
                         raise ValueError("Gene-tree input changed during focused rendering")
     write(directory / "index.tsv", INDEX_FIELDS, index)
     write(directory / "event_node_audit.tsv", EVENT_FIELDS, audit)
+    if context_audit:
+        write(directory / 'context_gene_audit.tsv', list(context_audit[0]), context_audit)
+    (directory / 'renderer_settings.json').write_text(json.dumps(configurations, indent=2) + '\n')
+    coordinates.verify()
     (directory / "README.txt").write_text(
         "Native GeneGalleon gene trees for observed category-1 recipients\n\n"
         "Orange diamonds and HGT labels mark exact gene-tree transfer nodes, including internal nodes.\n"
@@ -228,9 +250,14 @@ def export_gene_trees(directory, events, links, family_root, renderer=None):
         "At least one retained event-linked gene on each side must have candidate-free class background\n"
         "with >=10 classified units, >=50% classification coverage and >=90% host compatibility.\n"
         "Orange recipient tips are the genes that individually pass that background check.\n"
+        "Page 1 replays gg_gene_evolution panels and saved settings, including domain, gene structure and alignment.\n"
+        "Missing optional measurements are not invented. Renderer settings and input availability are recorded.\n"
+        "Page 2 gives exact gene-tree paths and representative donor/recipient GFF neighborhoods.\n"
+        "All genomic tracks share a linear kb axis centered on their focal-gene midpoint, without intron compression.\n"
+        "CDS blocks are coding exons; UTR blocks are shown when recorded; unavailable structures stay unconfirmed.\n"
         "This is whole-scaffold context, not conserved gene order or proof of physical integration.\n"
         "All event IDs, branch/node IDs and selection/withholding reasons are in event_node_audit.tsv.\n"
         "No sequence or phylogenetic analysis is run. The parent focused event tables are unchanged.\n")
-    return dict(profile=PROFILE, family_source_sha256=sources,
+    return dict(profile=PROFILE, family_source_sha256=sources, gff_source_sha256=coordinates.sources,
                 rendered_family_count=sum(row["status"] == "rendered" for row in index),
                 selected_event_count=sum(row["status"] == "selected" for row in audit))

@@ -1,0 +1,354 @@
+"""Three source-backed, single-page summaries of supported category-1 HGT."""
+
+import csv
+import gzip
+import io
+import math
+from collections import Counter
+
+import numpy as np
+from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+
+ORANGE = "#b34d00"
+BLUE = "#2b6ca3"
+
+
+def read(path):
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt") as h:
+        return list(csv.DictReader(h, delimiter="\t"))
+
+
+def write(path, rows, fields=None):
+    with path.open("w", newline="") as h:
+        writer = csv.DictWriter(h, fieldnames=fields or list(rows[0]), delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def filtering_counts(source_events, selected, audit_path=""):
+    stages = []
+    if audit_path:
+        audited = read(audit_path)
+        ids = [row["event_id"] for row in audited]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate modeled event in filtering audit")
+        directional = [
+            row
+            for row in audited
+            if row.get("donor_classification") == "outside" and row.get("recipient_classification") == "insect"
+        ]
+        accepted = [row for row in audited if row.get("status") == "accepted"]
+        for row in accepted:
+            value = float(row.get("support_used") or row.get("support_generax_ufboot") or "nan")
+            support_source = row.get("support_source", "")
+            if (
+                not math.isfinite(value)
+                or not 90 <= value <= 100
+                or not ("support_generax_ufboot" in support_source or "raw_unrooted_split_verified" in support_source)
+            ):
+                raise ValueError("Accepted filtering-audit event lacks verified inclusive UFBoot >=90")
+        accepted_ids = {row["event_id"] for row in accepted}
+        if not {row["event_id"] for row in source_events} <= accepted_ids:
+            raise ValueError("Focused input cohort is not a subset of accepted filtering-audit events")
+        if not accepted_ids <= {row["event_id"] for row in directional}:
+            raise ValueError("Accepted filtering-audit event has unsupported transfer direction")
+        stages += [
+            ("All modeled transfers", audited),
+            ("Non-Insecta to Insecta", directional),
+            ("Matched gene-tree UFBoot >=90", accepted),
+        ]
+    stages += [("Input supported-event cohort", source_events), ("Category = 1 recipients", selected)]
+    return [
+        dict(stage=label, event_count=len(rows), orthogroup_count=len({r["orthogroup"] for r in rows}))
+        for label, rows in stages
+    ]
+
+
+def available_label(value):
+    return (
+        value.strip() if value and value.strip().lower() not in {"na", "nan", "none", "annotation unavailable"} else ""
+    )
+
+
+def product_labels(families, links):
+    def label(row):
+        return available_label(row.get("protein_product_name", "")) or available_label(
+            row.get("best_available_product_label", "")
+        )
+
+    labels = {}
+    for family in families:
+        candidates = sorted(
+            [r for r in links if r["orthogroup"] == family and r["side"] == "recipient"], key=lambda r: r["gene_id"]
+        )
+        known = [r for r in candidates if available_label(r.get("protein_product_name", ""))]
+        if not known:
+            known = [r for r in candidates if available_label(r.get("best_available_product_label", ""))]
+        row = known[0] if known else {}
+        labels[family] = dict(
+            protein_product=label(row) or "Annotation unavailable",
+            annotation_gene_id=row.get("gene_id", ""),
+            annotation_basis=available_label(row.get("protein_product_source", ""))
+            if available_label(row.get("protein_product_name", ""))
+            else available_label(row.get("best_available_product_label_basis", "")),
+            all_recipient_product_labels="; ".join(sorted({label(r) for r in candidates if label(r)})),
+        )
+    return labels
+
+
+def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit=""):
+    import hashlib
+    import textwrap
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.patches import Rectangle
+
+    directory.mkdir(parents=True)
+
+    def save(fig, name, title, subtitle, note):
+        fig.text(0.035, 0.965, title, fontsize=17, weight="bold", va="top")
+        fig.text(0.035, 0.916, subtitle, fontsize=9, color="#556975", va="top")
+        fig.text(0.035, 0.045, note, fontsize=8, color="#556975", va="bottom")
+        fig.savefig(directory / (name + ".pdf"))
+        fig.savefig(directory / (name + ".png"), dpi=140)
+        plt.close(fig)
+
+    counts = filtering_counts(source_events, selected, filter_audit)
+    if filter_audit:
+        counts[-2]["stage"] = "Bilateral scaffold background"
+    counts[-1]["stage"] = trait + " = 1 recipients"
+    write(directory / "filtering_flow.tsv", counts)
+    fig, ax = plt.subplots(figsize=(13, 8))
+    ax.set_axis_off()
+    fig.subplots_adjust(top=0.80, bottom=0.14)
+    for i, row in enumerate(counts):
+        y = 0.91 - i * 0.80 / max(1, len(counts) - 1)
+        color = ORANGE if i == len(counts) - 1 else BLUE
+        ax.add_patch(Rectangle((0.03, y - 0.07), 0.94, 0.14, facecolor="#f0f4f7"))
+        ax.text(0.06, y, f"{i + 1:02d}", fontsize=16, color=color, va="center", weight="bold")
+        ax.text(0.16, y, row["stage"], fontsize=13, va="center")
+        ax.text(0.76, y, f"{row['event_count']:,}", ha="right", va="center", fontsize=20, color=color, weight="bold")
+        ax.text(0.92, y, f"{row['orthogroup_count']:,}", ha="right", va="center", fontsize=15)
+    ax.text(0.76, 1.09, "Events", ha="right", color="#556975")
+    ax.text(0.92, 1.09, "Orthogroups", ha="right", color="#556975")
+    save(
+        fig,
+        "filtering_flow",
+        "From modeled transfers to focused candidates",
+        "Distinct event IDs and orthogroups; duplication and repeated per-tip reports are not new modeled events.",
+        "Upstream direction/support counts are shown only when an explicit event-level filtering audit is supplied.\n"
+        "UFBoot is gene-tree split support; category-1 internal recipient branches require all observed descendant tips = 1.",
+    )
+    families = sorted({r["orthogroup"] for r in selected})
+    species = [tip.name for tip in tree.get_terminals()]
+    membership = Counter()
+    sources = {}
+    missing = set()
+    annotation_links = [dict(r) for r in links]
+    with read_only_observation():
+        store = GeneFamilyOutputStore(family_root)
+        with store.read_snapshot():
+            for family in families:
+                name = family + "_stat.branch.tsv"
+                try:
+                    with store.open_binary("stat_branch", name) as h:
+                        raw = h.read()
+                except FileNotFoundError:
+                    missing.add(family)
+                    continue
+                sources["stat_branch/" + name] = hashlib.sha256(raw).hexdigest()
+                rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
+                tip_annotations = {row["node_name"]: row for row in rows}
+                for link in annotation_links:
+                    if (
+                        link["orthogroup"] == family
+                        and not available_label(link.get("protein_product_name"))
+                        and not available_label(link.get("best_available_product_label"))
+                    ):
+                        recommended = tip_annotations.get(link["gene_id"], {}).get("sprot_recname", "")
+                        if available_label(recommended):
+                            link["best_available_product_label"] = recommended
+                            link["best_available_product_label_basis"] = (
+                                "existing stat_branch:sprot_recname (best-hit annotation)"
+                            )
+                for row in rows:
+                    if row.get("child1") == row.get("child2") == "-999":
+                        matches = [s for s in species if row["node_name"].startswith(s + "_")]
+                        if not matches:
+                            raise ValueError("Gene-tree tip cannot be mapped to analysis species: " + row["node_name"])
+                        membership[family, max(matches, key=len)] += 1
+            for logical, expected in sources.items():
+                with store.open_binary(*logical.split("/", 1)) as h:
+                    if hashlib.sha256(h.read()).hexdigest() != expected:
+                        raise ValueError("Family input changed during distribution plotting")
+    from focus_hgt_gene_trees import background_supported
+
+    selected_ids = {r["event_id"] for r in selected}
+    labels = product_labels(families, annotation_links)
+    highlighted = {
+        (r["orthogroup"], r["gene_species"])
+        for r in links
+        if r["event_id"] in selected_ids and r["side"] == "recipient" and background_supported(r)
+    }
+    distribution = [
+        dict(
+            orthogroup=f,
+            species=s,
+            category1=values.get(s),
+            gene_tree_tip_count="" if f in missing else membership[f, s],
+            supported_recipient=int((f, s) in highlighted),
+            **labels[f],
+        )
+        for f in families
+        for s in species
+    ]
+    write(
+        directory / "orthogroup_species_distribution.tsv",
+        distribution,
+        [
+            "orthogroup",
+            "species",
+            "category1",
+            "gene_tree_tip_count",
+            "supported_recipient",
+            "protein_product",
+            "annotation_gene_id",
+            "annotation_basis",
+            "all_recipient_product_labels",
+        ],
+    )
+    cmap = ListedColormap(["#f4f5f6", "#bad2e2", "#6a9cbc", BLUE, "#173e5a"])
+    cmap.set_bad("#c3c7ca")
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 4.5, 9.5, 100000], 5)
+    matrix = np.array([[np.nan if f in missing else membership[f, s] for s in species] for f in families])
+    # A separate annotation column leaves both product labels and species cells readable.
+    fig = plt.figure(figsize=(23, max(9, len(families) * 0.35 + 4)))
+    grid = fig.add_gridspec(
+        1, 2, left=0.035, right=0.985, top=0.80, bottom=0.34, width_ratios=[0.33, 0.67], wspace=0.01
+    )
+    names = fig.add_subplot(grid[0])
+    ax = fig.add_subplot(grid[1])
+    n = max(1, len(families))
+    names.set_xlim(0, 1)
+    names.set_ylim(n - 0.5, -0.5)
+    names.axis("off")
+    names.text(0.01, -1.1, "Orthogroup", fontsize=10, weight="bold")
+    names.text(0.19, -1.1, "Protein product / existing annotation", fontsize=10, weight="bold")
+    for i, f in enumerate(families):
+        names.text(0.01, i, f, fontsize=8, va="center", color=BLUE)
+        names.text(0.19, i, textwrap.fill(labels[f]["protein_product"], width=53), fontsize=8, va="center")
+    if families:
+        ax.imshow(matrix, cmap=cmap, norm=norm, aspect="auto", interpolation="nearest")
+    ax.set_yticks([])
+    ax.set_xticks(range(len(species)), [s.replace("_", " ") for s in species], rotation=90, fontsize=7)
+    ax.set_ylim(n - 0.5, -0.5)
+    ax.tick_params(length=0)
+    for j, s in enumerate(species):
+        if values.get(s) == 1:
+            ax.get_xticklabels()[j].set_color(ORANGE)
+            ax.add_patch(Rectangle((j - 0.5, -1.2), 1, 0.4, color=ORANGE, clip_on=False))
+    for i, f in enumerate(families):
+        for j, s in enumerate(species):
+            if (f, s) in highlighted:
+                ax.add_patch(Rectangle((j - 0.43, i - 0.43), 0.86, 0.86, fill=False, ec=ORANGE, lw=1.3))
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    for i, (label, color) in enumerate(zip(["0", "1", "2–4", "5–9", "10+"], cmap.colors, strict=True)):
+        fig.patches.append(
+            Rectangle((0.55 + i * 0.065, 0.856), 0.013, 0.014, transform=fig.transFigure, facecolor=color)
+        )
+        fig.text(0.566 + i * 0.065, 0.863, label, fontsize=8, va="center")
+    save(
+        fig,
+        "orthogroup_species_distribution",
+        "Where the focused orthogroups occur in analyzed trees",
+        f"{len(families)} orthogroups × {len(species)} species in species-tree tip order. Orange outlines: individually supported category-1 recipient genes.",
+        "Colors count existing gene-tree tips, including duplicate copies; zero does not establish biological absence. Missing families remain NA.\n"
+        "Product labels use one retained recipient annotation per family; source gene, evidence basis and all available labels are in the TSV. Predicted labels do not establish function.",
+    )
+    nodes = {node.name: [t.name for t in node.get_terminals()] for node in tree.find_clades() if node.name}
+
+    def donor_group(event):
+        branch = event["generax_donor_node"]
+        classes = event.get("donor_descendant_classes", "")
+        return (
+            classes.replace(";", " + ") + f" ({branch})"
+            if branch in nodes and len(nodes[branch]) > 1 and classes
+            else classes or branch.replace("_", " ")
+        )
+
+    donors = sorted({donor_group(e) for e in selected})
+    recipients = sorted({e["generax_recipient_node"] for e in selected})
+    pairs = Counter((donor_group(e), e["generax_recipient_node"]) for e in selected)
+    mapped = [
+        dict(
+            event_id=e["event_id"],
+            orthogroup=e["orthogroup"],
+            donor_group=donor_group(e),
+            donor_branch=e["generax_donor_node"],
+            recipient_branch=e["generax_recipient_node"],
+            donor_clade_tip_labels="; ".join(nodes.get(e["generax_donor_node"], [])),
+            recipient_clade_tip_labels="; ".join(nodes.get(e["generax_recipient_node"], [])),
+        )
+        for e in selected
+    ]
+    write(
+        directory / "donor_recipient_events.tsv",
+        mapped,
+        [
+            "event_id",
+            "orthogroup",
+            "donor_group",
+            "donor_branch",
+            "recipient_branch",
+            "donor_clade_tip_labels",
+            "recipient_clade_tip_labels",
+        ],
+    )
+    write(
+        directory / "donor_recipient_counts.tsv",
+        [dict(donor_group=d, recipient_branch=r, event_count=pairs[d, r]) for d in donors for r in recipients],
+        ["donor_group", "recipient_branch", "event_count"],
+    )
+    fig, ax = plt.subplots(figsize=(14, 9))
+    fig.subplots_adjust(left=0.26, right=0.91, top=0.80, bottom=0.30)
+    maximum = max(pairs.values(), default=1)
+    if donors and recipients:
+        im = ax.imshow(
+            [[pairs[d, r] for r in recipients] for d in donors], cmap="Blues", vmin=0, vmax=maximum, aspect="auto"
+        )
+        for i, d in enumerate(donors):
+            for j, r in enumerate(recipients):
+                if pairs[d, r]:
+                    ax.text(
+                        j,
+                        i,
+                        str(pairs[d, r]),
+                        ha="center",
+                        va="center",
+                        color="white" if pairs[d, r] > maximum * 0.5 else "#183245",
+                        fontsize=11,
+                    )
+        fig.colorbar(im, ax=ax, shrink=0.75, label="Modeled events", ticks=range(maximum + 1), pad=0.02)
+    ax.set_yticks(range(len(donors)), donors, fontsize=9)
+    recipient_labels = [
+        r.replace("_", " ") if len(nodes.get(r, [])) <= 1 else r + ": " + " + ".join(s.split("_")[0] for s in nodes[r])
+        for r in recipients
+    ]
+    ax.set_xticks(range(len(recipients)), recipient_labels, rotation=35, ha="right", fontsize=9)
+    ax.tick_params(length=0)
+    title = "Donor groups and " + trait + "-recipient branches"
+    save(
+        fig,
+        "donor_recipient_counts",
+        title,
+        f"{len(selected)} distinct events; {len(families)} orthogroups. Groups come from modeled donor species branches.",
+        "Each ancestral recipient event is counted once; descendant species and post-transfer copies do not multiply event counts.\n"
+        "Internal branch IDs and complete descendant tip labels are retained in donor_recipient_events.tsv. No ancestral trait state is inferred.",
+    )
+    return dict(pdf_count=3, filtering_counts=counts, family_source_sha256=sources)

@@ -501,7 +501,11 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert set(focus_index["target"]) == {"ALL_CATEGORY1", "Arabidopsis_thaliana"}
     assert focus_index["event_count"].sum() == 0
     assert json.loads((focus_root / "manifest.json").read_text())["source_event_count"] == 1
-    assert (focus_root / "traits/test_trait/all_category1/transfer_tree.pdf").is_file()
+    focused = focus_root / 'traits/test_trait/all_category1'
+    assert not (focused / 'transfer_tree.pdf').exists()
+    for name in ['filtering_flow','orthogroup_species_distribution','donor_recipient_counts']:
+        assert (focused / 'plots' / (name+'.pdf')).is_file()
+    assert not list((focused / 'tree_plot').glob('*.pdf'))  # Unresolved event cannot become a supported tree.
     recipient_result = focus_root / "traits/test_trait/tips/Arabidopsis_thaliana"
     assert not (recipient_result / "transfer_tree.pdf").exists()
     assert (recipient_result / "transfer_edges.tsv").is_file()

@@ -45,7 +45,10 @@ HGT summaries automatically return category-1 trait results with
 `hgt_summary_focus_event_gene_tsv=auto` select native event/context tables;
 explicit paths preserve a previously filtered project cohort and enriched gene
 annotations. See [focused HGT outputs](host-scaffold-taxonomy.md#category-1-focused-results)
-for trait eligibility, internal-branch context and event-counting rules.
+for the three summary PDFs, two-page gene-tree/context PDFs, trait eligibility,
+internal-branch context and event-counting rules.
+`hgt_summary_focus_filter_audit_tsv` optionally supplies an existing project
+direction/UFBoot audit for upstream filtering-flow counts.
 
 ## Configuration precedence
 

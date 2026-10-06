@@ -164,6 +164,7 @@ def test_category_and_binary_focus_preserve_cohort_fields_and_event_identity(sou
 
 
 def test_category1_gene_tree_export_receives_only_aggregate_events(source, monkeypatch):
+    import focus_hgt_figures
     import focus_hgt_gene_trees
     import focus_hgt_traits
 
@@ -174,17 +175,22 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
         positional = list(args)
         positional[8] = False
         return real_export(*positional, **kwargs)
-    def capture(directory, events, links, root):
+    def capture(directory, events, links, root, gff_root=''):
         calls.append((directory, {e['event_id'] for e in events}, root))
+        write_tsv(directory/'event_node_audit.tsv', ['event_id','status'],
+                  [dict(event_id=e['event_id'],status='selected') for e in events])
         return dict(rendered_family_count=1, selected_event_count=len(events))
     monkeypatch.setattr(focus_hgt_traits, 'export_bundle', export_without_species_pdf)
     monkeypatch.setattr(focus_hgt_gene_trees, 'export_gene_trees', capture)
+    monkeypatch.setattr(focus_hgt_figures, 'export_figures', lambda *args, **kwargs:dict(pdf_count=3))
     report = generate(*source, plots=True, gene_family_root='existing-families')
     assert len(calls) == 2  # One aggregate per binary/categorical trait, no per-tip rendering.
     assert all(path.name == 'tree_plot' and root == 'existing-families' for path, _, root in calls)
     assert calls[0][1] == {'OG1:3:1', 'OG1:3:2', 'OG1:3:4'}
     assert calls[1][1] == {'OG1:3:1', 'OG1:3:5'}
     assert report['gene_tree_plots']['binary']['selected_event_count'] == 3
+    assert report['summary_figures']['binary']['pdf_count'] == 3
+    assert not list(source[-1].rglob('transfer_tree.pdf'))
 
 
 def test_empty_category1_targets_are_reported(source):
@@ -249,28 +255,14 @@ def test_schema_free_binary_only_and_missing_retained(source):
     assert next(row for row in values if row["species"] == "D")["binary"] == ""
 
 
-def test_native_plot_exports_all_selected_arrows(source, monkeypatch):
-    from matplotlib.backends.backend_pdf import PdfPages
-    from matplotlib.patches import FancyArrowPatch
-
-    alphas = []
-    original = PdfPages.savefig
-
-    def capture(self, fig, **kwargs):
-        alphas.extend(p.get_alpha() for ax in fig.axes for p in ax.patches if isinstance(p, FancyArrowPatch))
-        return original(self, fig, **kwargs)
-
-    monkeypatch.setattr(PdfPages, "savefig", capture)
+def test_focused_export_retains_edge_tables_and_omits_unrequested_species_pdfs(source):
     manifest = generate(*source, plots=True, arrow_alpha=0.4)
     assert manifest["transfer_arrow_alpha"] == 0.4
     assert manifest["plot_scope"] == "trait_aggregate_only"
-    assert alphas and set(alphas) == {0.4}
     root = source[-1] / "traits/binary/all_category1"
     _, edges = read_tsv(root / "transfer_edges.tsv")
     assert sum(int(row["hgt_event_count"]) for row in edges) == 3
-    assert (root / "transfer_tree.pdf").read_bytes().startswith(b"%PDF")
-    assert {str(path.relative_to(source[-1])) for path in source[-1].rglob("*.pdf")} == {
-        "traits/binary/all_category1/transfer_tree.pdf", "traits/category/all_category1/transfer_tree.pdf"}
+    assert not list(source[-1].rglob('transfer_tree.pdf'))
     for target in manifest["result_index"]:
         if target["target_type"] != "aggregate":
             directory = source[-1] / target["relative_path"]
@@ -324,14 +316,15 @@ def test_observation_columns_are_not_focus_traits(source):
     assert not (source[-1] / "traits/binary").exists()
 
 
-def test_categorical_only_table_can_render_overview_and_focused_native_tree(source):
+def test_categorical_only_table_exports_focused_tables_without_species_pdf(source):
     from plot_hgt_summary import read_transfer_traits
     trait = source[3]
     trait.write_text("species\tcategory\nA\t1\nB\t2\nC\t1\nD\tNA\n")
     schema_path(trait).write_bytes(schema_payload(trait.read_bytes(), {"category": "categorical"}))
     assert read_transfer_traits(trait).shape == (4, 0)
     generate(*source, plots=True)
-    assert (source[-1] / "traits/category/all_category1/transfer_tree.pdf").is_file()
+    assert (source[-1] / "traits/category/all_category1/events.tsv").is_file()
+    assert not (source[-1] / "traits/category/all_category1/transfer_tree.pdf").exists()
 
 
 def test_changed_input_preserves_previous_bundle(source, monkeypatch):
@@ -363,3 +356,99 @@ def test_failed_publication_restores_previous_bundle(source, monkeypatch):
     with pytest.raises(OSError, match="publication failed"):
         generate(*source, plots=False)
     assert (source[-1] / "manifest.json").read_bytes() == previous
+
+
+def test_context_structures_keep_genomic_units_and_utr_boundaries():
+    from focus_hgt_context import structure
+    row = dict(feature_blocks='300-350;100-150', utr_blocks='50-99;351-400',
+               feature_type='CDS', strand='-', start='50', end='400', splice_mode='cis')
+    result = structure(row)
+    assert result['coding'] == [(100, 150), (300, 350)]
+    assert result['utr'] == [(50, 99), (351, 400)]
+    assert result['introns'] == [(151, 299)]
+    assert structure(dict(row, splice_mode='trans'))['introns'] == []
+    assert structure(dict(row, feature_blocks='', utr_blocks=''))['status'] == 'exon_coordinates_unavailable'
+    with pytest.raises(ValueError, match='outside'):
+        structure(dict(row, feature_blocks='1-150'))
+
+
+def test_renderer_argument_record_roundtrip_and_exact_alignment_tip_validation(tmp_path):
+    from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+    from gene_tree_plot_config import record, replay
+    root = tmp_path/'families'
+    path = root/'artifact_provenance/OG1.tree_plot.args.json'
+    args = [f'--stat_branch={root}/stat_branch/OG1_stat.branch.tsv',
+            '--panel1=tree,bl_rooted,support_unrooted,l1ou_regime,L',
+            f'--panel2=domain,{root}/rpsblast/OG1_rpsblast.tsv',
+            '--long_branch_display=auto', '--event_method=auto']
+    record(path, root, args, 'taxonomic')
+    domain = root/'rpsblast/OG1_rpsblast.tsv'
+    domain.parent.mkdir()
+    domain.write_text('gene\tdomain\nA_gene\tD1\n')
+    rows, _, _ = focused_node_source()
+    with read_only_observation():
+        store = GeneFamilyOutputStore(root)
+        with store.read_snapshot():
+            report = replay(store, 'OG1', rows, tmp_path/'materialized', {})
+    assert '--panel1=tree,bl_rooted,support_unrooted,l1ou_regime,L' in report['arguments']
+    assert '--long_branch_display=auto' in report['arguments']
+    assert not any(arg.startswith('--stat_branch=') for arg in report['arguments'])
+    assert report['settings_source'] == 'recorded_gg_gene_evolution_arguments'
+    assert (tmp_path/'materialized/rpsblast/OG1_rpsblast.tsv').read_bytes() == domain.read_bytes()
+
+
+def test_context_page_has_shared_scale_and_preserves_missing_coordinates(tmp_path):
+    from focus_hgt_context import GenomeCoordinates, render_context
+    from pypdf import PdfReader
+    stat, events, links = focused_node_source()
+    for row in stat:
+        row['parent'] = '3' if row['branch_id'] != '3' else '-999'
+        row['bl_rooted'] = '.1'
+    for link in links:
+        link['gene_species'] = link['gene_id'].split('_')[0]
+    gff = tmp_path/'gff'
+    gff.mkdir()
+    row = dict(gene_id='D_gene', feature_size='102', num_intron='1', chromosome='scaffold1',
+               start='1', end='30001', strand='+', feature_blocks='1-51;29951-30001',
+               utr_blocks='', feature_type='CDS', splice_mode='cis')
+    # A nearby gene's very long intron must not shrink the focal display.
+    neighbor = dict(row, gene_id='D_nearby', start='30002', end='500000',
+                    feature_blocks='30002-30100;499900-500000')
+    write_tsv(gff/'D.gff_info.tsv', list(row), [row, neighbor])
+    pdf = tmp_path/'context.pdf'
+    audit = render_context(pdf, stat, events, links, GenomeCoordinates(gff))
+    assert len(PdfReader(pdf).pages) == 1
+    assert len({(r['shared_axis_min_kb'],r['shared_axis_max_kb']) for r in audit}) == 1
+    assert audit[0]['shared_axis_max_kb'] == 35
+    assert 'extends beyond the display window' in PdfReader(pdf).pages[0].extract_text()
+    assert audit[0]['structure_status'] == 'coding_exons_utr_unavailable'
+    assert audit[1]['structure_status'] == 'gff_gene_unavailable'
+    assert audit[1]['intron_count'] == ''  # Unknown is not zero introns.
+
+
+def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(tmp_path):
+    from focus_hgt_figures import filtering_counts, product_labels
+    events = [dict(event_id='e1',orthogroup='OG1'),dict(event_id='e2',orthogroup='OG1')]
+    assert filtering_counts(events, events[:1])[0]['orthogroup_count'] == 1
+    assert len(filtering_counts(events, events[:1])) == 2
+    rows = [dict(event_id='e1',orthogroup='OG1',donor_classification='outside',recipient_classification='insect',status='accepted',support_used='90',support_source='support_generax_ufboot')]
+    path = tmp_path/'audit.tsv'
+    write_tsv(path,list(rows[0]),rows)
+    with pytest.raises(ValueError,match='not a subset'):
+        filtering_counts(events,events[:1],path)
+    names = product_labels(['OG1'],[dict(orthogroup='OG1',side='recipient',gene_id='g1',protein_product_name='Test protein',protein_product_source='existing GFF')])
+    assert names['OG1']['protein_product'] == 'Test protein'
+    assert names['OG1']['annotation_gene_id'] == 'g1'
+    fallback = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
+                              protein_product_name='NA', protein_product_source='NA',
+                              best_available_product_label='Existing best-hit name',
+                              best_available_product_label_basis='existing best-hit annotation')])['OG1']
+    assert fallback['protein_product'] == 'Existing best-hit name'
+    assert fallback['all_recipient_product_labels'] == 'Existing best-hit name'
+    assert fallback['annotation_basis'] == 'existing best-hit annotation'
+    mixed = product_labels(['OG1'], [dict(orthogroup='OG1', side='recipient', gene_id='g1',
+                           protein_product_name='Recorded product'),
+                           dict(orthogroup='OG1', side='recipient', gene_id='g2', protein_product_name='NA',
+                           best_available_product_label='Existing best-hit name')])['OG1']
+    assert mixed['protein_product'] == 'Recorded product'
+    assert mixed['all_recipient_product_labels'] == 'Existing best-hit name; Recorded product'

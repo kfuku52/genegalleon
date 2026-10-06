@@ -1,0 +1,359 @@
+"""Existing-coordinate donor/recipient context pages; no sequence reanalysis."""
+
+import csv
+import hashlib
+import math
+import re
+from collections import defaultdict
+from pathlib import Path
+
+ORANGE = "#b34d00"
+BLUE = "#2b6ca3"
+
+
+def blocks(text):
+    if not text or text.lower() in {"na", "nan"}:
+        return []
+    pairs = []
+    for item in text.split(";"):
+        match = re.fullmatch(r"(\d+)-(\d+)", item)
+        if not match:
+            raise ValueError("Invalid existing GFF block: " + item)
+        start, end = map(int, match.groups())
+        if start < 1 or start > end:
+            raise ValueError("Invalid existing GFF block bounds")
+        pairs.append((start, end))
+    return sorted(pairs)
+
+
+def structure(row):
+    """Keep coding blocks and UTRs distinct; introns use only cis coordinates."""
+    coding = blocks(row.get("feature_blocks", ""))
+    utr = blocks(row.get("utr_blocks", ""))
+    if row.get("splice_mode", "cis") != "cis":
+        return dict(status="trans_splicing_not_drawn_on_single_scaffold", coding=[], utr=[], introns=[])
+    if row.get("feature_type") not in {"CDS", "exon"} or not coding:
+        return dict(status="exon_coordinates_unavailable", coding=[], utr=[], introns=[])
+    start, end = int(row["start"]), int(row["end"])
+    if any(a < start or b > end for a, b in coding):
+        raise ValueError("GFF feature block outside focal feature span")
+    merged = []
+    for a, b in sorted(coding + utr):
+        if merged and a <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+        else:
+            merged.append((a, b))
+    introns = [
+        (left[1] + 1, right[0] - 1) for left, right in zip(merged, merged[1:], strict=False) if right[0] > left[1] + 1
+    ]
+    return dict(
+        status="coding_exons_with_utr" if utr else "coding_exons_utr_unavailable",
+        coding=coding if row["feature_type"] == "CDS" else [],
+        utr=utr if row["feature_type"] == "CDS" else coding,
+        introns=introns,
+    )
+
+
+class GenomeCoordinates:
+    def __init__(self, root):
+        self.root = Path(root) if root else None
+        self.cache = {}
+        self.sources = {}
+
+    def load(self, species):
+        if species in self.cache:
+            return self.cache[species]
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", species):
+            raise ValueError("Unsafe GFF species identifier")
+        path = self.root / (species + ".gff_info.tsv") if self.root else None
+        rows = []
+        if path and path.is_file():
+            raw = path.read_bytes()
+            self.sources[str(path.resolve())] = hashlib.sha256(raw).hexdigest()
+            import io
+
+            rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
+        by_gene = {r["gene_id"]: r for r in rows}
+        if len(by_gene) != len(rows):
+            raise ValueError("Duplicate GFF gene identity: " + species)
+        by_scaffold = defaultdict(list)
+        for row in rows:
+            if row.get("chromosome") and row.get("start") and row.get("end"):
+                by_scaffold[row["chromosome"]].append(row)
+        self.cache[species] = by_gene, by_scaffold
+        return self.cache[species]
+
+    def neighborhood(self, link):
+        by_gene, scaffolds = self.load(link.get("gene_species", ""))
+        row = by_gene.get(link["gene_id"])
+        if row is None:
+            return None, [], "gff_gene_unavailable"
+        if row["chromosome"] != link.get("host_scaffold_id"):
+            raise ValueError("Event-gene scaffold and GFF scaffold disagree: " + link["gene_id"])
+        center = (int(row["start"]) + int(row["end"])) / 2
+        candidates = [r for r in scaffolds[row["chromosome"]] if r["gene_id"] != row["gene_id"]]
+        left = sorted(
+            [r for r in candidates if int(r["end"]) < int(row["start"]) and int(r["end"]) >= center - 20000],
+            key=lambda r: (-int(r["end"]), r["gene_id"]),
+        )[:3]
+        right = sorted(
+            [r for r in candidates if int(r["start"]) > int(row["end"]) and int(r["start"]) <= center + 20000],
+            key=lambda r: (int(r["start"]), r["gene_id"]),
+        )[:3]
+        return row, left + [row] + right, structure(row)["status"]
+
+    def verify(self):
+        for path, expected in self.sources.items():
+            if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected:
+                raise ValueError("GFF coordinate input changed during focused rendering")
+
+
+def choose_representatives(events, links, coordinates):
+    from focus_hgt_gene_trees import background_supported
+
+    selected, audit = [], []
+    for event in events:
+        for side in ("donor", "recipient"):
+            passing = [
+                r for r in links if r["event_id"] == event["event_id"] and r["side"] == side and background_supported(r)
+            ]
+            ranked = sorted(
+                passing,
+                key=lambda r: (
+                    coordinates.neighborhood(r)[0] is None,
+                    -float(r["host_scaffold_background_class_classified_fraction"]),
+                    -float(r["host_scaffold_background_class_compatible_fraction"]),
+                    r["gene_id"],
+                ),
+            )
+            if not ranked:
+                raise ValueError("Context page requires passing event-linked gene on each side")
+            link = ranked[0]
+            focal, neighbors, status = coordinates.neighborhood(link)
+            selected.append((event, side, link, focal, neighbors))
+            audit.append(
+                dict(
+                    event_id=event["event_id"],
+                    side=side,
+                    gene_id=link["gene_id"],
+                    gene_species=link.get("gene_species", ""),
+                    scaffold=link["host_scaffold_id"],
+                    passing_gene_count=len(passing),
+                    representative_rule="available_gff_then_coverage_compatibility_gene_id",
+                    structure_status=status,
+                    feature_blocks=focal.get("feature_blocks", "") if focal else "",
+                    utr_blocks=focal.get("utr_blocks", "") if focal else "",
+                    intron_count=focal.get("num_intron", "") if focal else "",
+                    neighbor_gene_ids="; ".join(
+                        r["gene_id"]
+                        for r in sorted(neighbors, key=lambda r: int(r["start"]))
+                        if r["gene_id"] != link["gene_id"]
+                    ),
+                    coordinate_unit="genomic_bp_1_based_inclusive",
+                )
+            )
+    return selected, audit
+
+
+def selected_gene_clade(ax, rows, event, donor, recipient):
+    """A compact view of existing paths, preserving the exact HGT node."""
+    by_id = {r["branch_id"]: r for r in rows}
+    by_name = {r["node_name"]: r["branch_id"] for r in rows}
+    node = event.get("gene_tree_branch_id", event.get("branch_id"))
+
+    def ancestors(bid):
+        path = []
+        while bid in by_id:
+            if bid in path:
+                raise ValueError("Cycle in gene-tree topology")
+            path.append(bid)
+            bid = by_id[bid].get("parent")
+        return path
+
+    paths = [ancestors(by_name[name]) for name in (donor, recipient)] + [ancestors(node)]
+    root = next(bid for bid in paths[0] if all(bid in path for path in paths))
+    kept = {bid for path in paths for bid in path[: path.index(root) + 1]}
+    children = {bid: [x for x in (by_id[bid].get("child1"), by_id[bid].get("child2")) if x in kept] for bid in kept}
+    ys, xs, edges = {}, {}, []
+    tip_index = [0]
+
+    def layout(bid, x):
+        xs[bid] = x
+        child = children[bid]
+        if not child:
+            ys[bid] = tip_index[0]
+            tip_index[0] += 1
+        else:
+            for c in child:
+                value = float(by_id[c].get("bl_rooted") or 0)
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError("Invalid existing gene-tree branch length")
+                layout(c, x + value)
+                edges.append((bid, c))
+            ys[bid] = sum(ys[c] for c in child) / len(child)
+
+    layout(root, 0)
+    for parent, child in edges:
+        ax.plot([xs[parent], xs[child]], [ys[child], ys[child]], color=BLUE, lw=1)
+        ax.plot([xs[parent], xs[parent]], [ys[parent], ys[child]], color=BLUE, lw=1)
+    maximum = max(xs.values()) or 1
+    for name, color, side in [(donor, BLUE, "donor"), (recipient, ORANGE, "recipient")]:
+        bid = by_name[name]
+        ax.text(xs[bid] + maximum * 0.02, ys[bid], name + " [" + side + "]", color=color, fontsize=8, va="center")
+    ax.scatter([xs[node]], [ys[node]], marker="D", s=25, color=ORANGE, zorder=5)
+    ax.text(
+        0.01,
+        1.02,
+        f"{event['event_id']} | HGT node {by_id[node]['node_name']} | UFBoot {by_id[node]['support_generax_ufboot']}",
+        transform=ax.transAxes,
+        fontsize=9,
+        color=ORANGE,
+    )
+    ax.set_xlim(-maximum * 0.02, maximum * 1.9)
+    ax.set_ylim(-0.5, tip_index[0] - 0.5)
+    ax.set_yticks([])
+    ax.set_xlabel("Existing gene-tree branch length (substitutions/site)", fontsize=8)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.tick_params(labelsize=7)
+
+
+def render_context(path, rows, events, links, coordinates):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    selected, audit = choose_representatives(events, links, coordinates)
+    # Every genomic track on this page uses exactly the same limits and scale.
+    extent = max(
+        [20.0]
+        + [
+            max(
+                abs(a - (int(f["start"]) + int(f["end"])) / 2)
+                for a in [int(f["start"]), int(f["end"])]
+                + [x for pair in blocks(f.get("utr_blocks", "")) for x in pair]
+            )
+            / 1000
+            + 20
+            for _, _, _, f, near in selected
+            if f
+        ]
+    )
+    extent = math.ceil(extent / 5) * 5
+    fig = plt.figure(figsize=(15, max(10, 5 * len(events) + 3)))
+    fig.suptitle("A traceable candidate with donor and recipient context", fontsize=16, x=0.07, ha="left", y=0.98)
+    fig.text(
+        0.07, 0.947, "One passing gene per side per event; existing gene-tree paths and GFF coordinates.", fontsize=10
+    )
+    grid = fig.add_gridspec(
+        len(events) * 3,
+        1,
+        left=0.09,
+        right=0.96,
+        top=0.89,
+        bottom=0.15,
+        hspace=1.12,
+        height_ratios=[1.5, 1, 1] * len(events),
+    )
+    for i, event in enumerate(events):
+        entries = selected[i * 2 : i * 2 + 2]
+        ax = fig.add_subplot(grid[i * 3])
+        selected_gene_clade(ax, rows, event, entries[0][2]["gene_id"], entries[1][2]["gene_id"])
+        for offset, (_, side, link, focal, neighbors) in enumerate(entries, 1):
+            ax = fig.add_subplot(grid[i * 3 + offset])
+            ax.set_xlim(-extent, extent)
+            ax.set_ylim(-0.65, 0.85)
+            ax.set_yticks([])
+            ax.axvline(0, color="#cccccc", lw=0.5, zorder=0)
+            coverage = 100 * float(link["host_scaffold_background_class_classified_fraction"])
+            compatible = 100 * float(link["host_scaffold_background_class_compatible_fraction"])
+            title = (
+                f"{event['event_id']} | {side}: {link.get('gene_species', '')} | {link['host_scaffold_id']}"
+                f" | background coverage {coverage:.1f}%, compatible {compatible:.1f}%"
+            )
+            neighbor_key = []
+            if focal is None:
+                ax.text(0, 0, "GFF coordinates unavailable", ha="center", color="#777777")
+            else:
+                center = (int(focal["start"]) + int(focal["end"])) / 2
+                neighbor_number = 0
+                for j, row in enumerate(sorted(neighbors, key=lambda r: int(r["start"]))):
+                    a, b = (int(row["start"]) - center) / 1000, (int(row["end"]) - center) / 1000
+                    focal_flag = row["gene_id"] == link["gene_id"]
+                    color = ORANGE if focal_flag else BLUE
+                    info = structure(row)
+                    if info["coding"] or info["utr"]:
+                        for x, y in info["introns"]:
+                            ax.plot([(x - center) / 1000, (y - center) / 1000], [0, 0], color="#444444", lw=0.7)
+                        for kind, height in [("coding", 0.20), ("utr", 0.10)]:
+                            for x, y in info[kind]:
+                                ax.add_patch(
+                                    Rectangle(
+                                        ((x - center) / 1000, -height / 2),
+                                        (y - x + 1) / 1000,
+                                        height,
+                                        facecolor=color if kind == "coding" else "#a6adb2",
+                                        edgecolor=color,
+                                        lw=0.6,
+                                    )
+                                )
+                    else:
+                        ax.add_patch(Rectangle((a, -0.1), b - a, 0.2, fill=False, ec=color, ls=":", lw=0.8))
+                    direction = 1 if row.get("strand") == "+" else -1 if row.get("strand") == "-" else 0
+                    if direction:
+                        endpoint = b if direction == 1 else a
+                        ax.annotate(
+                            "",
+                            xy=(endpoint, 0),
+                            xytext=(endpoint - direction * min(0.4, max(0.05, b - a)), 0),
+                            arrowprops=dict(arrowstyle="->", color=color, lw=0.7),
+                        )
+                    label = row["gene_id"].removeprefix(link.get("gene_species", "") + "_").replace("GeneID", "GID")
+                    if not focal_flag:
+                        neighbor_number += 1
+                        neighbor_key.append(f"{neighbor_number}={label}")
+                        label = str(neighbor_number)
+                    if a < -extent or b > extent:
+                        label += "*"
+                    ax.text(
+                        (max(a, -extent) + min(b, extent)) / 2,
+                        0.34 if j % 2 == 0 else -0.34,
+                        label,
+                        ha="center",
+                        va="center",
+                        fontsize=7,
+                        color=color,
+                        weight="bold" if focal_flag else "normal",
+                    )
+                ax.text(
+                    0.01,
+                    0.98,
+                    structure(focal)["status"].replace("_", " "),
+                    transform=ax.transAxes,
+                    fontsize=7,
+                    color="#777777",
+                )
+            if neighbor_key:
+                title += "\nNearby annotation IDs: " + ", ".join(neighbor_key)
+            ax.set_title(title, loc="left", fontsize=8, pad=17)
+            ax.spines[["top", "right", "left"]].set_visible(False)
+            ax.tick_params(labelsize=8)
+            ax.set_xlabel("Genomic position relative to focal-gene midpoint (kb)", fontsize=8)
+    fig.text(
+        0.07,
+        0.055,
+        "Orange: focal gene; blue: nearby annotations; thick blocks: coding exons; thin gray blocks: UTR; lines: introns.\n"
+        "All genomic tracks share one uncompressed kb axis; gene-tree paths use their own substitution/site axis.\n"
+        "The shared window includes each focal feature plus 20 kb flanks; * = neighboring feature extends beyond the display window.\n"
+        "Neighbors are not asserted to be host-classified or conserved in order. CDS-only records do not establish complete exon/UTR structure.\n"
+        "Representative selection and all event/gene identities are exported in the context audit; no sequence analysis was run.",
+        fontsize=8,
+        color="#666666",
+    )
+    fig.savefig(path, format="pdf")
+    plt.close(fig)
+    for row in audit:
+        row["shared_axis_min_kb"] = -extent
+        row["shared_axis_max_kb"] = extent
+    return audit

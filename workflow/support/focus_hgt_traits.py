@@ -211,7 +211,7 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
 
 
 def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
-                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root=""):
+                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit=''):
     csv.field_size_limit(100_000_000)
     fields, events = read_tsv(event_path, EVENT_REQUIRED)
     link_fields, links = read_tsv(link_path, LINK_REQUIRED)
@@ -241,7 +241,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     traits, reports, audit = focused_traits(trait_path)
     trait_dirs = safe_names(traits)
     write_tsv(stage / "trait_selection.tsv", ["trait", "value_type", "status", "reason"], reports)
-    index, gene_trees = [], {}
+    index, gene_trees, figures = [], {}, {}
     for trait, values in traits.items():
         positive = {species for species, value in values.items() if value == 1}
         if positive - terminals:
@@ -280,11 +280,19 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             withheld.append(dict(event_id=event["event_id"], reason=reason))
         write_tsv(root / "events_not_focused.tsv", ["event_id", "reason"], withheld)
         aggregate = export_bundle(root / "all_category1", selected, fields, links, link_fields,
-                                  trait, indicator, tree_path, plots, arrow_alpha=arrow_alpha)
+                                  trait, indicator, tree_path, plots, arrow_alpha=arrow_alpha, render_tree=False)
         if plots and gene_family_root:
             from focus_hgt_gene_trees import export_gene_trees
 
-            gene_trees[trait] = export_gene_trees(root / "all_category1/tree_plot", selected, links, gene_family_root)
+            gene_trees[trait] = export_gene_trees(root / "all_category1/tree_plot", selected, links, gene_family_root,
+                                                 gff_root=gff_root)
+            from focus_hgt_figures import export_figures
+            checks = read_tsv(root / 'all_category1/tree_plot/event_node_audit.tsv')[1]
+            ids = {r['event_id'] for r in checks if r['status'] == 'selected'}
+            figure_events = [r for r in selected if r['event_id'] in ids]
+            figures[trait] = export_figures(root / 'all_category1/plots', events, figure_events,
+                                            [r for r in links if r['event_id'] in ids], tree, values,
+                                            gene_family_root, trait, filter_audit=filter_audit)
         index.append(dict(trait=trait, target="ALL_CATEGORY1", target_type="aggregate",
                           relative_path=str((root / "all_category1").relative_to(stage)), **aggregate))
         target_dirs = safe_names(selected_nodes)
@@ -313,7 +321,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "The same ancestral event can appear in multiple tip reports; aggregate event IDs count it once. Do not sum per-tip totals.\n"
         "Recipient gene tables in tip reports contain that tip's eligible event-linked genes. Donor gene tables preserve event-linked donor homologs.\n"
         "An empty table means no selected result in this input cohort, not biological absence of HGT.\n"
-        "Figures use GeneGalleon's native transfer-tree plotter only for each trait's aggregate cohort, with category-1 branches highlighted.\n"
+        "Aggregate figures are three single-page PDFs: filtering flow, annotated family/species distribution and donor/recipient counts.\n"
+        "Individual qualifying orthogroup PDFs have gg_gene_evolution panels on page 1 and genomic context on page 2.\n"
         "Per-recipient tips and internal branches retain tables and directed edge TSVs but have no separate tree PDF.\n"
         "When gene-family inputs are supplied, each trait aggregate's tree_plot/ contains native per-orthogroup gene-tree PDFs.\n"
         "Only exact transfer branches with UFBoot >=90 and individually passing scaffold background genes on both sides are marked.\n"
@@ -321,13 +330,15 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "Scaffold background and shared-neighbor synteny are distinct evidence. Neither proves physical integration.\n")
     return dict(schema_version=VERSION, source_event_count=len(events), trait_contract=audit,
                 trait_selection=reports, result_index=index, plots=plots, transfer_arrow_alpha=arrow_alpha,
-                plot_scope="trait_aggregate_only", gene_tree_plots=gene_trees)
+                plot_scope="trait_aggregate_only", gene_tree_plots=gene_trees, summary_figures=figures)
 
 
 def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
-             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root=""):
+             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit=''):
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
+    if filter_audit and plots:
+        inputs.append(Path(filter_audit).resolve())
     for suffix in (".schema.json", ".metadata.json"):
         sidecar = Path(str(trait_path) + suffix)
         if sidecar.exists():
@@ -336,7 +347,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     code = [helper_root / name for name in ("focus_hgt_traits.py", "plot_hgt_summary.py", "hgt_species_tree.py",
                                             "species_trait_contract.py", "species_trait_schema.py")]
     if gene_family_root and plots:
-        code += [helper_root / "focus_hgt_gene_trees.py", helper_root / "stat_branch2tree_plot.r"]
+        code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r',
+                                                'focus_hgt_context.py', 'focus_hgt_figures.py', 'gene_tree_plot_config.py')]
         code += sorted((helper_root / "treevis/R").glob("*.R"))
     output = Path(output).absolute()
     if output.is_symlink() or any(path == output.resolve() or output.resolve() in path.parents for path in inputs):
@@ -352,7 +364,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     backup = None
     try:
         manifest = build_focus(stage, *inputs[:4], plots=plots, arrow_alpha=arrow_alpha,
-                               gene_family_root=gene_family_root)
+                               gene_family_root=gene_family_root, gff_root=gff_root, filter_audit=filter_audit)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
         if any(digest(path) != code_before[path.name] for path in code):
@@ -391,12 +403,14 @@ def main():
     parser.add_argument("--plots", choices=("0", "1"), default="1")
     parser.add_argument("--gene_family_root", default="",
                         help="Existing raw/ZIP-backed family outputs for scaffold-supported category-1 gene-tree PDFs")
+    parser.add_argument('--gff_info_root', default='', help='Existing per-species gff_info TSVs for context-page structures')
+    parser.add_argument('--filter_audit_tsv', default='', help='Optional project event-level direction/support filtering audit (TSV or TSV.gz)')
     parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
                         default=DEFAULT_TRANSFER_ARROW_ALPHA)
     args = parser.parse_args()
     manifest = generate(args.event_tsv, args.event_gene_tsv, args.species_tree, args.species_trait,
                         args.output_dir, plots=args.plots == "1", arrow_alpha=args.transfer_arrow_alpha,
-                        gene_family_root=args.gene_family_root)
+                        gene_family_root=args.gene_family_root, gff_root=args.gff_info_root, filter_audit=args.filter_audit_tsv)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],
                           result_sets=len(manifest["result_index"])), indent=2))
 

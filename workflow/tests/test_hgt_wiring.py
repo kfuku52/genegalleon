@@ -26,6 +26,16 @@ def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
     assert '--gene_family_root "${dir_orthogroup}"' in hgt
     assert '--input-gene-family-subdir "gene_tree_stats=${dir_orthogroup}::stat_branch"' in hgt
     assert '--input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"' in hgt
+    assert '--gff_info_root "${gg_workspace_output_dir}/species_gff_info"' in hgt
+    assert '--filter_audit_tsv "${hgt_focus_filter_audit_tsv}"' in hgt
+
+
+def test_gene_evolution_records_the_same_arguments_it_renders_for_focused_replay():
+    text = read_text(GENE_EVOLUTION_CORE)
+    assert 'tree_plot_render_args=(' in text
+    assert '--species-parser "${species_label_parser}" -- "${tree_plot_render_args[@]}"' in text
+    assert 'Rscript "${gg_support_dir}/stat_branch2tree_plot.r" "${tree_plot_render_args[@]}"' in text
+    assert '--output "tree_plot_arguments=${file_og_tree_plot_args}"' in text
 
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
