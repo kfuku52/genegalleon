@@ -123,6 +123,115 @@ def test_combined_figure_preserves_palette_count_units_and_unavailable_species(t
         busco.plot_comparison(rows, tmp_path, changes)
 
 
+def test_rescue_support_classification_uses_all_support_and_frozen_overlap():
+    name = "Species_target"
+    plan = {"nearest_references": {name: ["Near", "Overlap"]},
+            "common_references": ["Balanced", "Overlap", name],
+            "donors": {name: ["Near", "Balanced", "Overlap"]},
+            "synteny_jobs": [{"id": "self", "a": name, "b": name, "kind": "self"}]}
+    def model(identifier, donors, status="accepted"):
+        return {"model_id": identifier, "status": status,
+                "evidence": {"donor": donors[0]},
+                "support": [{"donor": d, "target": name} for d in donors]}
+    models = [model("n", ["Near", "Near"]), model("c", ["Balanced"]),
+              model("b", ["Near", "Balanced"]), model("o", ["Overlap"]),
+              model("duplicate", ["Near"], "duplicate_support")]
+    models += [{"model_id": "s", "status": "accepted", "support": [{"donor": name, "target": name, "comparison": "self"}]},
+               {"model_id": "mixed", "status": "accepted", "support": [{"donor": name, "target": name, "comparison": "self"},
+                                                                         {"donor": "Near", "target": name}]}]
+    counts, evidence = busco.classify_rescue_support(iter(models), name, {"n", "c", "b", "o", "s", "mixed"}, plan)
+    assert counts == {"nearest_only": 2, "balanced_only": 1, "both": 2}
+    assert evidence["s"]["category"] == "self_only"
+    assert evidence["mixed"]["category"] == "nearest_only"
+    assert evidence["n"]["supporting_donors"] == ["Near"]
+    assert evidence["o"]["category"] == "both"
+    mapped, evidence = busco.classify_rescue_support([model("tx", ["Near"])], name, {"gene": {"gene", "tx"}}, plan)
+    assert mapped["nearest_only"] == 1 and evidence["gene"]["source_model_id"] == "tx"
+    with pytest.raises(ValueError, match="gene IDs differ"):
+        busco.classify_rescue_support(models, name, {"n"}, plan)
+    with pytest.raises(ValueError, match="Duplicate accepted"):
+        busco.classify_rescue_support([models[0], models[0]], name, {"n"}, plan)
+    with pytest.raises(ValueError, match="lacks supporting"):
+        busco.classify_rescue_support([dict(models[0], support=[])], name, {"n"}, plan)
+    with pytest.raises(ValueError, match="donor/target differs"):
+        busco.classify_rescue_support([model("x", ["Unknown"])], name, {"x"}, plan)
+    with pytest.raises(ValueError, match="donor/target differs"):
+        busco.classify_rescue_support([model("x", [name])], name, {"x"}, plan)
+
+
+def test_imported_rescue_support_verifies_receipts_models_and_gff(tmp_path):
+    inputs, edges, sources = tiny_inputs(tmp_path)
+    gff = Path(sources[0]["gff"])
+    gff.write_text(gff.read_text().replace("\ts\t", "\tgenegalleon_rescue\t"))
+    root = tmp_path / "refinement"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    refinement.finalize(root, value)
+    rescue = tmp_path / "original_rescue"
+    rescue.mkdir()
+    names = [r["species"] for r in sources]
+    busco.atomic_json(rescue / "plan.json", {
+        "nearest_references": {n: ["Species_donor1"] for n in names},
+        "common_references": ["Species_donor2"],
+        "donors": {n: sorted({"Species_donor1", "Species_donor2"} - {n}) for n in names},
+    })
+    plan_hash = busco.digest(rescue / "plan.json")
+    receipts, files = {}, {}
+    for n, source in zip(names, sources, strict=True):
+        models = [{"status": "accepted", "model_id": "t1", "support": [
+            {"donor": "Species_donor1", "target": n}, {"donor": "Species_donor2", "target": n}]}] if n == names[0] else []
+        worker = rescue / "rescued" / n
+        busco.atomic_json(worker / "models.json", models)
+        busco.atomic_json(worker / "receipt.json", {"key": {"plan": plan_hash, "species": n},
+                                                   "files": {"models.json": busco.digest(worker / "models.json")}})
+        receipts[n] = busco.digest(worker / "receipt.json")
+        files["species_gff/" + n + ".rescue.gff3"] = busco.digest(source["gff"])
+    augmented = {"key": {"plan": plan_hash, "rescue_receipts": receipts}, "files": files}
+    busco.atomic_json(rescue / "augmented/receipt.json", augmented)
+    pairs = busco.input_pairs(root)
+    changes = busco.collect_model_changes(root, pairs, rescue)
+    assert changes["species"][names[0]]["rescue_support_counts"] == {"nearest_only": 0, "balanced_only": 0, "both": 1}
+    assert changes["evidence"][names[0]]["rescued_loci_support"]["g"]["supporting_donors"] == names[1:]
+    assert changes["evidence"][names[0]]["rescued_loci_support"]["g"]["source_model_id"] == "t1"
+    assert changes["rescue_reference_selection"]["plan_sha256"] == plan_hash
+    altered = rescue / "rescued" / names[0] / "models.json"
+    original = altered.read_text()
+    altered.write_text(original + "\n")
+    with pytest.raises(ValueError, match="models changed"):
+        busco.collect_model_changes(root, pairs, rescue)
+    altered.write_text(original)
+    augmented["files"]["species_gff/" + names[0] + ".rescue.gff3"] = "wrong"
+    busco.atomic_json(rescue / "augmented/receipt.json", augmented)
+    with pytest.raises(ValueError, match="differs from the source annotation"):
+        busco.collect_model_changes(root, pairs, rescue)
+
+
+def test_rescue_stacks_render_all_three_groups_and_reject_missing_or_wrong_totals(tmp_path):
+    path = tmp_path / "summary.txt"
+    path.write_text(summary())
+    result = busco.read_result(path)
+    rows = [busco.paired_result({"species": n, "refinement_status": status}, result, result)
+            for n, status in [("Species_a", "analysed"), ("Drosophyllum_lusitanicum", "not_analysed")]]
+    changes = {"species": {
+        "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 11, "accepted_repair_paths": 2,
+                      "accepted_isoform_paths": 3, "rescue_self_only_loci": 1,
+                      "rescue_support_counts": {"nearest_only": 3, "balanced_only": 2, "both": 5}},
+        "Drosophyllum_lusitanicum": {"refinement_status": "not_analysed", "prior_rescued_loci": None,
+                                   "accepted_repair_paths": None, "accepted_isoform_paths": None},
+    }}
+    busco.plot_comparison(rows, tmp_path, changes)
+    svg = (tmp_path / "busco_comparison.svg").read_text()
+    for color in busco.RESCUE_SUPPORT_COLOURS:
+        assert color in svg
+    for label in busco.RESCUE_SUPPORT_LABELS:
+        assert label in svg
+    assert "donor belonging to both lists" in svg
+    assert ">10 / 1<" in svg and "self-only loci are outside the three groups" in svg
+    assert svg.count(">Not analysed<") == 2
+    changes["species"]["Species_a"]["rescue_support_counts"]["both"] = 6
+    with pytest.raises(ValueError, match="sum to the rescued"):
+        busco.plot_comparison(rows, tmp_path, changes)
+
+
 @pytest.mark.parametrize("field,value", [("busco_version", "6.0"), ("mode", "proteins"),
                                          ("lineage_creation_date", "2025-01-01"), ("total", 100),
                                          ("dependencies", {"metaeuk": "different"})])

@@ -274,6 +274,25 @@ and isoform paths can belong to the same locus. Unanalysed species show unavaila
 counts rather than zeros. `model_change_summary.json` records these counts and
 their source hashes. BUSCO stacks use the existing GeneGalleon palette: black
 single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
+When the original completed rescue publication is available, rescued genes are
+stacked by supporting donor group: nearest relatives only, phylogenetically
+balanced references only, or both. Classification uses all consolidated
+`support` records of each accepted model, deduplicates donor species, and counts
+each gene locus once. A donor in both frozen reference lists supports both
+groups; the both category does not require two distinct donor species. The
+three categories plus separately recorded self-species-only loci must sum to
+the source GFF gene count, with matching accepted
+model IDs and verified plan/model/augmentation receipts. Donor memberships and
+per-gene supporting species are saved in `model_change_summary.json`.
+Rescue model IDs can name gene or transcript features; explicit GFF `Parent`
+links map transcript identities to gene loci without guessing suffixes.
+Self-species-only support must belong to a frozen self-synteny comparison;
+these loci are excluded from the interspecies stack and shown in each bar's
+`interspecies-supported / self-species-only` count label.
+The rescue directory is inferred from the refinement plan. For imported explicit
+inputs, supply `--rescue-output /path/to/original-completed-rescue`; its augmented
+GFF hash must match the frozen source annotation. Historical inputs without
+support evidence retain an unpartitioned total, rather than invented categories.
 Each phase also retains a hashed `runs/SPECIES/before/full_table.tsv` or
 `runs/SPECIES/after/full_table.tsv`, so lost, gained and duplicated BUSCO groups
 can be investigated without repeating the predictor run. Summary and full-table

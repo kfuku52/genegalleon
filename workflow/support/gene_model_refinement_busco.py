@@ -22,6 +22,56 @@ from gene_model_refinement import verify_inputs
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 from species_labeling import extract_species_label
 
+RESCUE_SUPPORT = ("nearest_only", "balanced_only", "both")
+RESCUE_SUPPORT_COLOURS = ("#5275b5", "#9a6ab2", "#37956f")
+RESCUE_SUPPORT_LABELS = ("Nearest relatives only", "Phylogenetically balanced only", "Both reference groups")
+
+
+def classify_rescue_support(models, species, rescued, plan):
+    """Count each accepted gene once using all consolidated supporting donors."""
+    nearest = set(plan["nearest_references"][species]) - {species}
+    balanced = set(plan["common_references"]) - {species}
+    allowed = set(plan["donors"][species])
+    if allowed != nearest | balanced:
+        raise ValueError("Rescue donor groups differ from the frozen donor selection")
+    counts = dict.fromkeys(RESCUE_SUPPORT, 0)
+    evidence = {}
+    aliases = {}
+    for gene in rescued:
+        for identifier in rescued[gene] if isinstance(rescued, dict) else [gene]:
+            if identifier in aliases and aliases[identifier] != gene:
+                raise ValueError("Rescue model maps to multiple source genes: " + identifier)
+            aliases[identifier] = gene
+    self_comparisons = {job["id"] for job in plan.get("synteny_jobs", [])
+                        if job["a"] == job["b"] == species and job.get("kind") == "self"}
+    for model in models:
+        if model.get("status") != "accepted":
+            continue
+        identifier = model["model_id"]
+        gene = aliases.get(identifier)
+        if gene is None:
+            raise ValueError("Accepted rescue gene IDs differ from the source annotation: " + species)
+        if gene in evidence:
+            raise ValueError("Duplicate accepted rescue gene: " + identifier)
+        support = model.get("support")
+        if not isinstance(support, list) or not support:
+            raise ValueError("Accepted rescue gene lacks supporting donors: " + identifier)
+        donors = set()
+        for entry in support:
+            donor = entry.get("donor")
+            if (entry.get("target") != species
+                    or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
+                raise ValueError("Rescue support donor/target differs from the frozen plan")
+            donors.add(donor)
+        near, common = bool(donors & nearest), bool(donors & balanced)
+        category = "both" if near and common else "nearest_only" if near else "balanced_only" if common else "self_only"
+        if category != "self_only":
+            counts[category] += 1
+        evidence[gene] = {"source_model_id": identifier, "supporting_donors": sorted(donors), "category": category}
+    if set(evidence) != set(rescued):
+        raise ValueError("Accepted rescue gene IDs differ from the source annotation: " + species)
+    return counts, evidence
+
 
 def input_pairs(root, cds_dir=None):
     """Native sources are frozen; extra CDS-only species are explicit passthroughs."""
@@ -152,7 +202,7 @@ def run_one(pair, phase, report, contract, cpus):
         return result
 
 
-def collect_model_changes(root, pairs):
+def collect_model_changes(root, pairs, rescue_output=None):
     """Bind gene rescue and accepted coding-path counts to the same publication."""
     from format_species_annotation.common import parse_gff_attributes
     from plot_gene_model_refinement import verified_json
@@ -164,6 +214,27 @@ def collect_model_changes(root, pairs):
         raise ValueError("Model-count species differ from the refinement plan")
     stats, evidence = {}, {}
     batch = FreshDigestBatch()
+    anchor = request.get("rescue_output")
+    if rescue_output is not None and anchor and Path(rescue_output).resolve() != Path(anchor).resolve():
+        raise ValueError("Rescue support directory differs from the refinement plan")
+    rescue_root = Path(rescue_output or anchor) if rescue_output or anchor else None
+    # Refinement can reuse synteny anchors before any missing-gene augmentation.
+    if rescue_output is None and rescue_root is not None and not (rescue_root / "augmented/receipt.json").is_file():
+        rescue_root = None
+    rescue_plan = augmented = None
+    if rescue_root is not None:
+        from rescue_model_evidence import read_json_snapshot
+        rescue_plan, rescue_hash = read_json_snapshot(rescue_root / "plan.json")
+        augmented, augmented_hash = read_json_snapshot(rescue_root / "augmented/receipt.json")
+        if augmented["key"]["plan"] != rescue_hash:
+            raise ValueError("Rescue augmentation belongs to a different plan")
+        expected = request["files"].get(str(rescue_root / "plan.json"))
+        if expected is not None and expected != rescue_hash:
+            raise ValueError("Frozen rescue plan changed")
+        hashes = batch.read([rescue_root / "plan.json", rescue_root / "augmented/receipt.json"])
+        if (hashes[str(rescue_root / "plan.json")] != rescue_hash
+                or hashes[str(rescue_root / "augmented/receipt.json")] != augmented_hash):
+            raise ValueError("Rescue metadata changed while loading support")
     for pair in pairs:
         name = pair["species"]
         if pair["refinement_status"] == "not_analysed":
@@ -180,7 +251,7 @@ def collect_model_changes(root, pairs):
         source_hash = batch.read([gff])[str(gff)]
         if source_hash != metadata["sources"]["gff"]["sha256"] or source_hash != request["files"][str(gff)]:
             raise ValueError("Rescue source annotation changed: " + name)
-        rescued = set()
+        rescued, transcripts = {}, []
         opener = gzip.open if gff.suffix == ".gz" else open
         with opener(gff, "rt") as handle:
             for line in handle:
@@ -191,7 +262,16 @@ def collect_model_changes(root, pairs):
                     identifiers = parse_gff_attributes(fields[8]).get("ID", [])
                     if len(identifiers) != 1:
                         raise ValueError("Rescued gene lacks a unique ID: " + name)
-                    rescued.add(identifiers[0])
+                    rescued.setdefault(identifiers[0], set()).add(identifiers[0])
+                elif len(fields) == 9 and fields[1] == "genegalleon_rescue" and fields[2] in {"mRNA", "transcript"}:
+                    attr = parse_gff_attributes(fields[8])
+                    if len(attr.get("ID", [])) != 1 or not attr.get("Parent"):
+                        raise ValueError("Rescued transcript lacks an ID or gene parent: " + name)
+                    transcripts.append((attr["ID"][0], attr["Parent"]))
+        for identifier, parents in transcripts:
+            for parent in parents:
+                if parent in rescued:
+                    rescued[parent].add(identifier)
         accepted = [m for m in models if m["status"] == "accepted"]
         stats[name] = {
             "refinement_status": "analysed", "prior_rescued_loci": len(rescued),
@@ -201,13 +281,39 @@ def collect_model_changes(root, pairs):
         evidence[name] = {"source_gff_sha256": source_hash,
                           "catalog_receipt_sha256": digest(root / "catalog" / name / "receipt.json"),
                           "prediction_receipt_sha256": digest(root / "predictions" / name / "receipt.json")}
+        if rescue_root is not None:
+            from rescue_model_evidence import json_array, read_json_snapshot
+            worker = rescue_root / "rescued" / name
+            receipt, receipt_hash = read_json_snapshot(worker / "receipt.json")
+            expected = request["files"].get(str(worker / "receipt.json"))
+            if (receipt["key"]["plan"] != rescue_hash or receipt["key"]["species"] != name
+                    or augmented["key"]["rescue_receipts"].get(name) != receipt_hash
+                    or (expected is not None and expected != receipt_hash)
+                    or augmented["files"].get("species_gff/" + name + ".rescue.gff3") != source_hash):
+                raise ValueError("Rescue support publication differs from the source annotation: " + name)
+            hashes = batch.read([worker / "receipt.json", worker / "models.json"])
+            if (hashes[str(worker / "receipt.json")] != receipt_hash
+                    or hashes[str(worker / "models.json")] != receipt["files"]["models.json"]):
+                raise ValueError("Frozen rescue models changed: " + name)
+            counts, support = classify_rescue_support(json_array(worker / "models.json"), name, rescued, rescue_plan)
+            stats[name]["rescue_support_counts"] = counts
+            stats[name]["rescue_self_only_loci"] = sum(s["category"] == "self_only" for s in support.values())
+            evidence[name].update(rescue_receipt_sha256=receipt_hash,
+                                  rescue_models_sha256=receipt["files"]["models.json"], rescued_loci_support=support)
     batch.check()
     if digest(root / "plan.json") != plan_hash:
         raise ValueError("Refinement plan changed while collecting model counts")
-    return {"schema": 1, "plan_sha256": plan_hash,
+    result = {"schema": 1, "plan_sha256": plan_hash,
             "effective_receipt_sha256": digest(root / "effective/receipt.json"),
             "species": stats, "evidence": evidence,
             "units": "Prior missing-gene rescue counts unique source gene loci already present before refinement; repairs and additional isoforms count accepted coding paths, not unique loci."}
+    if rescue_root is not None:
+        result["rescue_reference_selection"] = {
+            "rescue_output": str(rescue_root), "plan_sha256": rescue_hash, "augmented_receipt_sha256": augmented_hash,
+            "nearest_references": rescue_plan["nearest_references"], "common_references": rescue_plan["common_references"],
+            "classification": "Supporting donors are deduplicated across all consolidated support records. A donor in both frozen reference lists supports both groups; both does not require two distinct donor species. Self-species-only loci are recorded separately and excluded from the three interspecies support groups.",
+        }
+    return result
 
 
 def plot_comparison(rows, output, model_changes=None):
@@ -217,8 +323,10 @@ def plot_comparison(rows, output, model_changes=None):
     from matplotlib.patches import Patch
     from matplotlib.ticker import MaxNLocator
 
+    stacked_rescue = False
     if model_changes is not None:
         stats = model_changes["species"]
+        stacked_rescue = any(v.get("rescue_support_counts") is not None for v in stats.values())
         if len(rows) != len(stats) or set(stats) != {r["species"] for r in rows}:
             raise ValueError("Model-count and BUSCO species membership differ")
         for row in rows:
@@ -232,6 +340,17 @@ def plot_comparison(rows, output, model_changes=None):
                         raise ValueError("Unanalysed model counts must be unavailable, not zero")
                 elif type(count) is not int or count < 0:
                     raise ValueError("Model counts must be nonnegative integers")
+            support = value.get("rescue_support_counts")
+            if row["refinement_status"] == "not_analysed":
+                if support is not None or value.get("rescue_self_only_loci") is not None:
+                    raise ValueError("Unanalysed rescue support counts must be unavailable")
+            elif stacked_rescue:
+                self_only = value.get("rescue_self_only_loci", 0)
+                if (not isinstance(support, dict) or set(support) != set(RESCUE_SUPPORT)
+                        or any(type(c) is not int or c < 0 for c in support.values())
+                        or type(self_only) is not int or self_only < 0
+                        or sum(support.values()) + self_only != value["prior_rescued_loci"]):
+                    raise ValueError("Rescue support categories plus self-only loci must sum to the rescued gene count")
     extra = model_changes is not None
     margin_left = .20 if extra else .24
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
@@ -262,8 +381,18 @@ def plot_comparison(rows, output, model_changes=None):
             else:
                 rescued = value["prior_rescued_loci"]
                 repair, isoform = value["accepted_repair_paths"], value["accepted_isoform_paths"]
-                axes[3].barh(i, rescued, color="#5275b5", height=.7)
-                axes[3].annotate(str(rescued), (rescued, i), xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
+                if stacked_rescue:
+                    offset = 0
+                    for category, color in zip(RESCUE_SUPPORT, RESCUE_SUPPORT_COLOURS, strict=True):
+                        count = value["rescue_support_counts"][category]
+                        axes[3].barh(i, count, left=offset, color=color, height=.7)
+                        offset += count
+                else:
+                    axes[3].barh(i, rescued, color="#5275b5", height=.7)
+                self_only = value.get("rescue_self_only_loci", 0)
+                label = f"{rescued - self_only} / {self_only}" if stacked_rescue else str(rescued)
+                axes[3].annotate(label, (rescued - self_only if stacked_rescue else rescued, i),
+                                 xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
                 axes[4].barh(i, repair, color="#187d97", height=.7)
                 axes[4].barh(i, isoform, left=repair, color="#d38b21", height=.7)
                 axes[4].annotate(f"{repair} / {isoform}", (repair + isoform, i), xytext=(4, 0),
@@ -295,17 +424,24 @@ def plot_comparison(rows, output, model_changes=None):
         axes[4].set_xlim(0, max(1, paths_max) * 1.65)
         for ax in axes[3:]:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axes[3].set_xlabel("Previously added gene loci")
+        axes[3].set_xlabel("Loci with interspecies support" if stacked_rescue else "Previously added gene loci")
         axes[4].set_xlabel("Accepted paths; labels: repair / isoform")
-    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=.18 if extra else .14)
+    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=.23 if stacked_rescue else .18 if extra else .14)
     fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
                  "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
     fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
     fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
-               loc="lower left", bbox_to_anchor=(margin_left, .09 if extra else .065), ncol=4, frameon=False)
-    if extra:
+               loc="lower left", bbox_to_anchor=(margin_left, .14 if stacked_rescue else .09 if extra else .065), ncol=4, frameon=False)
+    if stacked_rescue:
+        fig.legend([Patch(facecolor=c) for c in RESCUE_SUPPORT_COLOURS], RESCUE_SUPPORT_LABELS,
+                   loc="lower left", bbox_to_anchor=(margin_left, .105), ncol=3, frameon=False,
+                   title="Previously rescued gene loci: supporting donor groups")
+        fig.legend([Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
+                   ["Repair coding paths", "Additional isoform paths"],
+                   loc="lower left", bbox_to_anchor=(.70, .14), ncol=2, frameon=False)
+    elif extra:
         fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
                    ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
                    loc="lower left", bbox_to_anchor=(.59, .09), ncol=3, frameon=False)
@@ -313,13 +449,16 @@ def plot_comparison(rows, output, model_changes=None):
     note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
     if extra:
         note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
+    if stacked_rescue:
+        note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
+        note += "\nRescue labels = interspecies-supported / self-species-only loci; self-only loci are outside the three groups."
     fig.text(margin_left, .025, note, fontsize=10)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
 
 
-def render_existing(report, root=None):
+def render_existing(report, root=None, rescue_output=None):
     """Redraw a historical evaluation without executing its predictor again."""
     value = json.loads((report / "busco_comparison.json").read_text())
     frozen = json.loads((report / "contract.json").read_text())
@@ -346,7 +485,7 @@ def render_existing(report, root=None):
                 verified_tables += 1
         if paired_result(pair, row["before_result"], row["after_result"]) != row:
             raise ValueError("Comparison delta changed")
-    changes = collect_model_changes(root, rows) if root is not None else None
+    changes = collect_model_changes(root, rows, rescue_output) if root is not None else None
     if changes is not None:
         atomic_json(report / "model_change_summary.json", changes)
     plot_comparison(rows, report, changes)
@@ -408,16 +547,20 @@ def main():
     parser.add_argument("--output", type=Path, help="Refinement publication; optional with --plot-only to include model-change counts")
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--cds-dir", type=Path, help="All dataset species, including unrefined CDS-only species")
+    parser.add_argument("--rescue-output", type=Path,
+                        help="Original completed rescue publication for imported inputs; otherwise inferred from the refinement plan")
     parser.add_argument("--lineage", type=Path, help="Frozen local lineage directory")
     parser.add_argument("--download-path", type=Path)
     parser.add_argument("--plot-only", action="store_true", help="Validate and redraw an existing comparison using its original evaluation contract")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
+    if args.rescue_output and not args.output:
+        parser.error("--rescue-output requires --output to bind support to the source annotation")
     if args.plot_only:
         if args.lineage or args.download_path or args.cds_dir:
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
-        render_existing(args.report.resolve(), args.output.resolve() if args.output else None)
+        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output)
         return
     if not args.output or not args.lineage or not args.download_path:
         parser.error("--output, --lineage and --download-path are required for evaluation")
@@ -428,7 +571,7 @@ def main():
         parser.error("Report must be separate from the immutable refinement tree")
     pairs = input_pairs(root, args.cds_dir)
     evaluate(pairs, report, args.lineage.resolve(), args.download_path.resolve(), args.cpus, args.jobs,
-             model_changes=collect_model_changes(root, pairs))
+             model_changes=collect_model_changes(root, pairs, args.rescue_output))
 
 
 if __name__ == "__main__":
