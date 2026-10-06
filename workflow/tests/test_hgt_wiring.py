@@ -75,6 +75,7 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert '--species_trait "${hgt_species_trait_path}"' in core_text
     assert 'species_trait.tsv' in core_text
     assert 'hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}"' in entrypoint_text
+    assert 'hgt_summary_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}"' in entrypoint_text
     assert 'hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}"' in entrypoint_text
     assert "hgt_min_branch_score" not in entrypoint_text
     assert 'bash "${gg_core_dir}/gg_hgt_core.sh"' in summary_core_text
@@ -83,10 +84,12 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert 'hgt_contamination_dir="${hgt_summary_contamination_dir:-}"' in summary_core_text
     assert 'hgt_species_tree="${hgt_summary_species_tree:-auto}"' in summary_core_text
     assert 'hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}"' in summary_core_text
+    assert 'hgt_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
     assert 'hgt_tree_width_mm="${hgt_tree_width_mm:-60}"' in core_text
     assert 'hgt_species_tree="${hgt_species_tree:-auto}"' in core_text
     assert 'hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"' in core_text
+    assert 'hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text
     assert 'default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contamination_removal_tsv"' in core_text
     assert 'file_hgt_readme="${dir_hgt}/README.md"' in core_text
@@ -102,6 +105,8 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert '--transfer_edges_tsv "${file_hgt_transfer_edges}"' in core_text
     assert '--species_tree "${hgt_species_tree_path}"' in core_text
     assert '--transfer_tree_max_edges "${hgt_transfer_tree_max_edges}"' in core_text
+    assert core_text.count('--transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"') == 2
+    assert core_text.count('--parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"') == 2
     assert 'python "${gg_support_dir}/write_hgt_output_readme.py"' in core_text
     assert '--output "${file_hgt_readme}"' in core_text
     assert 'python "${gg_support_dir}/annotate_hgt_tree_plot.py"' in core_text

@@ -161,6 +161,7 @@ hgt_summary_species_trait="${hgt_summary_species_trait:-auto}" # auto uses input
 hgt_summary_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}" # auto uses native event rows; a project-filtered event TSV preserves that cohort for trait focus.
 hgt_summary_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" # auto uses native event-gene links; an enriched TSV retains project annotations and quality flags.
 hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" # Maximum mapped donor-recipient edges drawn in the transfer plot; 0 draws all.
+hgt_summary_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" # Transfer-arrow opacity (0 transparent; 1 opaque).
 hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}" # Minimum tree data-panel width in mm; PDF width is automatic.
 hgt_summary_promoter_bp="${hgt_summary_promoter_bp:-2000}" # Promoter length used when re-rendering FIMO panels in HGT tree plots.
 hgt_summary_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" # FIMO q-value threshold used when re-rendering HGT tree plots.

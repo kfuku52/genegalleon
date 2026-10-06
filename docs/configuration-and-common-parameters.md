@@ -411,13 +411,17 @@ candidate-free background, missing-data semantics, and counting units.
 - `hgt_summary_transfer_tree_max_edges` (default `200`): number of mapped
   donor-to-recipient edges drawn in `plots/hgt_transfer_tree.pdf`, selected by
   alternating event-count and tree-distance rankings. Existing reverse
-  directions are then added to the same curves, so the directional count can
+  directions are then added as separate arrows, so the directional count can
   exceed this initial limit; `0` draws
   all mapped edges. `plots/hgt_transfer_edges.tsv` always retains all parsed
   directed pairs.
+- `hgt_summary_transfer_arrow_alpha` (default `0.55`): transfer-arrow opacity
+  from `0` (transparent) to `1` (opaque), used by the summary and trait-focused
+  figures. Translucent arrows make overlapping transfers easier to inspect.
 
 The transfer plot counts branch-level GeneRax `Y@donor@recipient` records and
-changes link width in proportion to that event count. Arrowheads point to the
+sets each arrow's constant shaft width in proportion to that direction's event
+count. Reciprocal directions use separate curves. Arrowheads point to the
 recipient/target. This is a count visualization, not a probability or HGT
 confidence score.
 

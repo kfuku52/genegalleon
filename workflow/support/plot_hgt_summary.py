@@ -58,6 +58,7 @@ OVERVIEW_TEXT_COLUMNS: List[Tuple[str, str, int, str]] = [
 FLOW_FALLBACK_LABEL = "Unresolved"
 FLOW_OTHER_LABEL = "Other"
 TRAIT_HIGHLIGHT_COLOR = "#b34d00"
+DEFAULT_TRANSFER_ARROW_ALPHA = 0.55
 TRANSFER_EDGE_COLUMNS = [
     "donor_node",
     "recipient_node",
@@ -115,9 +116,19 @@ def build_arg_parser():
         metavar="INT",
         default=200,
         type=int,
-        help="Initial mapped-direction selection limit; reverse directions are then included on shared curves. 0 selects all.",
+        help="Initial mapped-direction selection limit; existing reverse directions are then included. 0 selects all.",
     )
+    parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
+                        default=DEFAULT_TRANSFER_ARROW_ALPHA,
+                        help="Transfer-arrow opacity between 0 and 1 (default: 0.55).")
     return parser
+
+
+def validate_transfer_arrow_alpha(value):
+    alpha = float(value)
+    if not math.isfinite(alpha) or not 0 <= alpha <= 1:
+        raise ValueError("Transfer-arrow alpha must be finite and between 0 and 1")
+    return alpha
 
 
 def get_pyplot():
@@ -176,7 +187,7 @@ def write_overview_readme(out_pdf: str) -> None:
             "Links attach to the midpoint of the horizontal branch entering each labelled node. These positions are display conventions, not estimated transfer times. Root endpoints use a dashed display-only stem; zero-length branches coincide with their nodes. Color and ranking retain endpoint-node path distance as a lineage-separation proxy, not distance between inferred transfer locations.",
             "Link width is max(0.35, 5 * count / maximum_count) points, using the maximum across all parsed pairs. The visibility floor preserves rare distant events; counts below the floor share a width. It is not a probability score.",
             "Arrowheads point to the recipient/target. `hgt_transfer_edges.tsv` contains every parseable pair, including edges not drawn in the PDF.",
-            "Both directions share one curve: each arrow-end half encodes the count toward that endpoint. A one-way link has a thin source half with no source arrow. Existing reverse directions are added after initial selection (`selection_reason=reciprocal`), so displayed direction counts can exceed the limit without adding more connections. TSV rows remain directional. All internal branch names are drawn above their incoming branch midpoints, regardless of HGT participation. Species names are to the right of terminal branches. All transfer-tree text is 8 pt, including title, legend and colorbar.",
+            "Each directed pair has one arrow with a constant shaft width from donor to recipient. Reciprocal directions use separate curves and their own directional counts. Arrows are translucent by default (`--transfer_arrow_alpha 0.55`; range 0 to 1). Existing reverse directions are added after initial selection (`selection_reason=reciprocal`), so displayed direction counts can exceed the limit without adding more connections. TSV rows remain directional. All internal branch names are drawn above their incoming branch midpoints, regardless of HGT participation. Species names are to the right of terminal branches. All transfer-tree text is 8 pt, including title, legend and colorbar.",
             "The PDF selects up to 200 mapped pairs by alternating event-count and distance rankings (0 selects all). Darker blue means greater tree distance; width scales with event count with the visibility floor above. Distant links are drawn last.",
             "`phylogenetic_distance` is the path length between labelled endpoint nodes, not transfer time. `distance_metric` is branch_length when every non-root branch has a finite nonnegative length and at least one is positive; otherwise the entire tree uses topology_edges. `selection_reason` records count, distance, all, or reciprocal; unselected pairs are not_displayed. Unmapped distances are missing. Rankings break ties by count, distance, and endpoint labels deterministically. The color scale uses all mapped pairs, including hidden pairs.",
         ]
@@ -649,6 +660,25 @@ def transfer_half_paths(ax, start, end):
             Path(inverse.transform([middle, right, b]), codes))
 
 
+def transfer_arrow_path(ax, start, end):
+    """Full donor-to-recipient curve; reversing direction bends the opposite way."""
+    from matplotlib.path import Path
+
+    a, b = ax.transData.transform([start, end])
+    inverse = ax.transData.inverted()
+    if numpy.allclose(a, b, rtol=0, atol=1e-8):
+        radius = 12 * ax.figure.dpi / 72
+        # One continuous visible loop, including for coincident branch anchors.
+        vertices = [a, a + [2 * radius, radius], b + [2 * radius, -radius], b]
+        codes = [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4]
+    else:
+        delta = b - a
+        control = (a + b) / 2 + 0.10 * numpy.array([delta[1], -delta[0]])
+        vertices = [a, control, b]
+        codes = [Path.MOVETO, Path.CURVE3, Path.CURVE3]
+    return Path(inverse.transform(vertices), codes)
+
+
 def species_branch_anchors(tree, x_by_id, y_by_id):
     """Midpoints of incoming horizontal branches; root uses a display-only stem."""
     anchors = {id(tree.root): (x_by_id[id(tree.root)] / 2, y_by_id[id(tree.root)])}
@@ -738,8 +768,10 @@ def plot_transfer_tree(
     max_edges: int = 200,
     species_trait_path: str = "",
     highlight_trait: str = "",
+    arrow_alpha: float = DEFAULT_TRANSFER_ARROW_ALPHA,
 ) -> None:
     """Plot directed GeneRax HGT event counts over a species tree."""
+    arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     tree, x_by_id, y_by_id, tree_label_map = load_species_tree_layout(species_tree_path)
     traits = read_transfer_traits(species_trait_path)
     highlighted_clades = trait_highlight_clades(tree, traits, highlight_trait)
@@ -814,24 +846,20 @@ def plot_transfer_tree(
         connections = transfer_connections(display_df)
         patches = []
         for (a, b), rows in connections:
-            a_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(a, tree_label_map)])]
-            b_point = branch_anchors[id(clade_by_label[resolve_tree_endpoint(b, tree_label_map)])]
-            halves = transfer_half_paths(ax, a_point, b_point)
-            by_target = {str(r.recipient_node): r for r in rows}
-            for half_index, (target, path) in enumerate(zip((a, b), halves, strict=True)):
-                row = None if a == b and half_index == 0 else by_target.get(target)
-                # One-way connections keep a thin source half without an arrow.
-                width = max(0.35, 5.0 * int(row.hgt_event_count) / max_count) if row else 0.35
-                recipient = row or (rows[0] if len(rows) == 1 else None)
-                highlighted = bool(recipient is not None and id(clade_by_label[
-                    resolve_tree_endpoint(str(recipient.recipient_node), tree_label_map)]) in highlighted_clades)
+            for row in rows:
+                donor = clade_by_label[resolve_tree_endpoint(str(row.donor_node), tree_label_map)]
+                recipient = clade_by_label[resolve_tree_endpoint(str(row.recipient_node), tree_label_map)]
+                path = transfer_arrow_path(ax, branch_anchors[id(donor)], branch_anchors[id(recipient)])
+                width = max(0.35, 5.0 * int(row.hgt_event_count) / max_count)
+                highlighted = id(recipient) in highlighted_clades
                 patch = FancyArrowPatch(
-                    path=path, arrowstyle="-|>" if row else "-",
+                    path=path, arrowstyle="-|>",
                     mutation_scale=7.0, linewidth=width,
-                    color=TRAIT_HIGHLIGHT_COLOR if highlighted else cmap(norm(rows[0].phylogenetic_distance)),
+                    color=TRAIT_HIGHLIGHT_COLOR if highlighted else cmap(norm(row.phylogenetic_distance)),
+                    alpha=arrow_alpha,
                     capstyle="butt", zorder=4 if highlighted else 2,
                 )
-                patch.set_gid(f"hgt:{a}:{b}:{half_index}")
+                patch.set_gid(f"hgt:{row.donor_node}:{row.recipient_node}")
                 patches.append((highlighted, patch))
         for _, patch in sorted(patches, key=lambda item: item[0]):
             ax.add_patch(patch)
@@ -852,7 +880,8 @@ def plot_transfer_tree(
         ]
         for count in sorted({1, max(1, max_count // 10), max_count}):
             handles.append(Line2D([0], [0], color=edge_color,
-                                  linewidth=max(0.35, 5.0 * count / max_count), label=f"{count} HGT events"))
+                                  linewidth=max(0.35, 5.0 * count / max_count), alpha=arrow_alpha,
+                                  label=f"{count} HGT events"))
         if highlight_trait:
             handles.append(Line2D([0], [0], color=TRAIT_HIGHLIGHT_COLOR, linewidth=0.8,
                                   label=f"{highlight_trait}=1 clades / incoming HGT"))
@@ -881,7 +910,7 @@ def plot_transfer_tree(
         ax.text(
             0.5,
             float(terminal_count) + (1.3 if highlight_trait else 0.88),
-            "Arrow-end half width: directional count (0.35 pt floor) | darker blue: greater distance | shared curve for both directions",
+            f"Constant arrow width: directional count (0.35 pt floor) | alpha: {arrow_alpha:g} | darker blue: greater distance",
             ha="center",
             va="bottom",
             fontsize=8,
@@ -1196,6 +1225,7 @@ def main():
             species_tree_path=args.species_tree,
             edges_tsv=args.transfer_edges_tsv,
             max_edges=max(0, int(args.transfer_tree_max_edges)),
+            arrow_alpha=args.transfer_arrow_alpha,
             species_trait_path=args.species_trait,
             highlight_trait=args.transfer_tree_highlight_trait,
         )

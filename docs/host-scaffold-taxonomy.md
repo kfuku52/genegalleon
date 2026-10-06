@@ -161,8 +161,11 @@ labels and incoming species branches are orange; an internal branch is colored
 only when all descendant tips have an observed `1`. Missing descendants prevent
 highlighting. This is a display rule for homogeneous clades, not inferred
 ancestral states. Links entering a highlighted recipient branch use the same
-orange and render above other links. Reciprocal arrow ends retain separate
-colors; event counts, selection, widths and distance measurements are unchanged.
+orange and render above other links. Each direction has one constant-width arrow;
+reciprocal directions use separate curves and recipient-specific colors.
+Arrow opacity defaults to `0.55` and can be changed with
+`--transfer_arrow_alpha` (range `0` to `1`). Event counts, selection and distance
+measurements are unchanged.
 
 ## Category-1 focused results
 

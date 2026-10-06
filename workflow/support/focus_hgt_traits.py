@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pandas
 from hgt_species_tree import read_species_tree
+from plot_hgt_summary import DEFAULT_TRANSFER_ARROW_ALPHA, validate_transfer_arrow_alpha
 from species_trait_contract import select_foreground_traits
 from species_trait_schema import schema_path, schema_payload, trait_value_types
 
@@ -150,7 +151,8 @@ def add_clade_labels(events, fields, nodes):
                 event[f"{side}_clade_tip_count"] = str(len(tips))
 
 
-def export_bundle(directory, events, fields, links, link_fields, trait, trait_table, tree_path, plots, tip=None):
+def export_bundle(directory, events, fields, links, link_fields, trait, trait_table, tree_path, plots, tip=None,
+                  arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA):
     directory.mkdir(parents=True)
     write_tsv(directory / "events.tsv", fields, events)
     direct = [row for row in events if row["focus_recipient_basis"] == "observed_tip_category1"]
@@ -202,11 +204,13 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
 
         plot_transfer_tree(pandas.DataFrame(events, columns=fields), str(directory / "transfer_tree.pdf"),
                            species_tree_path=str(tree_path), edges_tsv=str(directory / "transfer_edges.tsv"),
-                           max_edges=0, species_trait_path=str(trait_table), highlight_trait=trait)
+                           max_edges=0, species_trait_path=str(trait_table), highlight_trait=trait,
+                           arrow_alpha=arrow_alpha)
     return summary
 
 
-def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True):
+def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
+                arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA):
     csv.field_size_limit(100_000_000)
     fields, events = read_tsv(event_path, EVENT_REQUIRED)
     link_fields, links = read_tsv(link_path, LINK_REQUIRED)
@@ -275,7 +279,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True)
             withheld.append(dict(event_id=event["event_id"], reason=reason))
         write_tsv(root / "events_not_focused.tsv", ["event_id", "reason"], withheld)
         aggregate = export_bundle(root / "all_category1", selected, fields, links, link_fields,
-                                  trait, indicator, tree_path, plots)
+                                  trait, indicator, tree_path, plots, arrow_alpha=arrow_alpha)
         index.append(dict(trait=trait, target="ALL_CATEGORY1", target_type="aggregate",
                           relative_path=str((root / "all_category1").relative_to(stage)), **aggregate))
         target_dirs = safe_names(selected_nodes)
@@ -285,7 +289,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True)
                                or (terminal and target in nodes[key(row["generax_recipient_node"])])]
             destination = root / ("tips" if terminal else "internal_branches") / target_dirs[target]
             summary = export_bundle(destination, selected_events, fields, links, link_fields,
-                                    trait, indicator, tree_path, plots, tip=target if terminal else None)
+                                    trait, indicator, tree_path, plots, tip=target if terminal else None,
+                                    arrow_alpha=arrow_alpha)
             index.append(dict(trait=trait, target=target, target_type="tip" if terminal else "internal_branch",
                               relative_path=str(destination.relative_to(stage)), **summary))
     index_fields = ["trait", "target", "target_type", "relative_path", "event_count", "direct_event_count",
@@ -306,10 +311,12 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True)
         "Figures use GeneGalleon's native transfer-tree plotter, showing every selected arrow with category-1 branches highlighted.\n"
         "Scaffold background and shared-neighbor synteny are distinct evidence. Neither proves physical integration.\n")
     return dict(schema_version=VERSION, source_event_count=len(events), trait_contract=audit,
-                trait_selection=reports, result_index=index, plots=plots)
+                trait_selection=reports, result_index=index, plots=plots, transfer_arrow_alpha=arrow_alpha)
 
 
-def generate(event_path, link_path, tree_path, trait_path, output, plots=True):
+def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
+             arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA):
+    arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
     for suffix in (".schema.json", ".metadata.json"):
         sidecar = Path(str(trait_path) + suffix)
@@ -331,7 +338,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True):
     stage = Path(tempfile.mkdtemp(prefix=".hgt-trait-focus-", dir=output.parent))
     backup = None
     try:
-        manifest = build_focus(stage, *inputs[:4], plots=plots)
+        manifest = build_focus(stage, *inputs[:4], plots=plots, arrow_alpha=arrow_alpha)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
         if any(digest(path) != code_before[path.name] for path in code):
@@ -368,9 +375,11 @@ def main():
     parser.add_argument("--species_trait", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--plots", choices=("0", "1"), default="1")
+    parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
+                        default=DEFAULT_TRANSFER_ARROW_ALPHA)
     args = parser.parse_args()
     manifest = generate(args.event_tsv, args.event_gene_tsv, args.species_tree, args.species_trait,
-                        args.output_dir, plots=args.plots == "1")
+                        args.output_dir, plots=args.plots == "1", arrow_alpha=args.transfer_arrow_alpha)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],
                           result_sets=len(manifest["result_index"])), indent=2))
 

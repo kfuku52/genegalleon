@@ -84,9 +84,51 @@ def test_self_transfer_has_visible_loop_and_one_arrow(tmp_path, monkeypatch):
     edges = tmp_path / "edges.tsv"
     plotter.plot_transfer_tree(pandas.DataFrame({"generax_transfer": ["Y@A@A"]}),
                               str(tmp_path / "plot.pdf"), str(path), str(edges))
-    assert [item["arrowstyle"] for item in captured] == ["-", "-|>"]
+    assert [item["arrowstyle"] for item in captured] == ["-|>"]
     assert all(numpy.ptp(item["path"].vertices[:, 0]) > 0 for item in captured)
     assert pandas.read_csv(edges, sep="\t").iloc[0].hgt_event_count == 1
+
+
+@pytest.mark.parametrize("alpha", [plotter.DEFAULT_TRANSFER_ARROW_ALPHA, 0, 0.3, 1])
+def test_full_directional_arrows_have_constant_width_and_configurable_alpha(tmp_path, monkeypatch, alpha):
+    import numpy
+    from matplotlib.patches import FancyArrowPatch
+
+    captured = []
+    original = FancyArrowPatch.__init__
+
+    def record(self, *args, **kwargs):
+        if "path" in kwargs:
+            captured.append(kwargs)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(FancyArrowPatch, "__init__", record)
+    tree_path = tmp_path / "tree.nwk"
+    tree_path.write_text("(A:1,B:1,C:1)root;")
+    frame = pandas.DataFrame({"generax_transfer": ["Y@A@B"] * 8 + ["Y@B@A"]})
+    edge_path = tmp_path / "edges.tsv"
+    plotter.plot_transfer_tree(frame, str(tmp_path / "plot.pdf"), str(tree_path), str(edge_path),
+                              max_edges=1, arrow_alpha=alpha)
+    # Exactly one full path and one linewidth per direction, including a rare reverse direction.
+    assert len(captured) == 2
+    assert {item["linewidth"] for item in captured} == {5.0, 0.625}
+    assert all(item["alpha"] == alpha and item["arrowstyle"] == "-|>" for item in captured)
+    forward, reverse = (item["path"].vertices for item in captured)
+    numpy.testing.assert_allclose(forward[0], reverse[-1])
+    numpy.testing.assert_allclose(forward[-1], reverse[0])
+    assert not numpy.allclose(forward[1], reverse[1])  # Opposite curves preserve separate counts.
+    saved = pandas.read_csv(edge_path, sep="\t")
+    assert sorted(saved.hgt_event_count) == [1, 8]
+    assert saved.displayed.eq(1).all()
+
+
+@pytest.mark.parametrize("alpha", [-0.01, 1.01, float("nan"), float("inf")])
+def test_invalid_arrow_alpha_does_not_write_outputs(tmp_path, alpha):
+    out = tmp_path / "plot.pdf"
+    edges = tmp_path / "edges.tsv"
+    with pytest.raises(ValueError, match="finite and between 0 and 1"):
+        plotter.plot_transfer_tree(pandas.DataFrame(), str(out), edges_tsv=str(edges), arrow_alpha=alpha)
+    assert not out.exists() and not edges.exists()
 
 
 def test_plot_hgt_summary_generates_overview_and_taxonomy_flow_pdfs(tmp_path: Path):
@@ -419,10 +461,11 @@ def test_trait_highlight_colors_tree_and_incoming_arrows_above_other_directions(
     assert captured['labels']['C'] != color
     assert color in captured['branches']
     patches = captured['patches']
-    # Reciprocal ends retain separate colors; a one-way positive link colors both halves.
-    positive = [p for p in patches if p.get_edgecolor() == to_rgba(color)]
-    ordinary = [p for p in patches if p.get_edgecolor() != to_rgba(color)]
-    assert len(positive) == 3 and len(ordinary) == 1
+    # Each full directional arrow inherits its recipient's color.
+    positive = [p for p in patches if p.get_edgecolor() == to_rgba(color, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)]
+    ordinary = [p for p in patches if p.get_edgecolor() != to_rgba(color, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)]
+    assert len(positive) == 2 and len(ordinary) == 1
+    assert all(p.get_alpha() == plotter.DEFAULT_TRANSFER_ARROW_ALPHA for p in patches)
     assert min(p.get_zorder() for p in positive) > max(p.get_zorder() for p in ordinary)
     assert patches[-len(positive):] == positive
     saved = pandas.read_csv(edge_path, sep='\t')

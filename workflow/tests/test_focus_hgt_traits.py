@@ -122,8 +122,21 @@ def test_schema_free_binary_only_and_missing_retained(source):
     assert next(row for row in values if row["species"] == "D")["binary"] == ""
 
 
-def test_native_plot_exports_all_selected_arrows(source):
-    generate(*source, plots=True)
+def test_native_plot_exports_all_selected_arrows(source, monkeypatch):
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.patches import FancyArrowPatch
+
+    alphas = []
+    original = PdfPages.savefig
+
+    def capture(self, fig, **kwargs):
+        alphas.extend(p.get_alpha() for ax in fig.axes for p in ax.patches if isinstance(p, FancyArrowPatch))
+        return original(self, fig, **kwargs)
+
+    monkeypatch.setattr(PdfPages, "savefig", capture)
+    manifest = generate(*source, plots=True, arrow_alpha=0.4)
+    assert manifest["transfer_arrow_alpha"] == 0.4
+    assert alphas and set(alphas) == {0.4}
     root = source[-1] / "traits/binary/all_category1"
     _, edges = read_tsv(root / "transfer_edges.tsv")
     assert sum(int(row["hgt_event_count"]) for row in edges) == 3

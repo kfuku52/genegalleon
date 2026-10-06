@@ -29,6 +29,7 @@ hgt_species_trait="${hgt_species_trait:-auto}"
 hgt_focus_event_tsv="${hgt_focus_event_tsv:-auto}"
 hgt_focus_event_gene_tsv="${hgt_focus_event_gene_tsv:-auto}"
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
+hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
 hgt_promoter_bp="${hgt_promoter_bp:-2000}"
 hgt_fimo_qvalue="${hgt_fimo_qvalue:-0.05}"
@@ -78,6 +79,10 @@ if ! [[ "${hgt_taxonomy_flow_max_categories}" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "${hgt_transfer_tree_max_edges}" =~ ^[0-9]+$ ]]; then
   echo "Invalid hgt_transfer_tree_max_edges: ${hgt_transfer_tree_max_edges}"
+  exit 1
+fi
+if ! python -c 'import math, sys; a = float(sys.argv[1]); sys.exit(not (math.isfinite(a) and 0 <= a <= 1))' "${hgt_transfer_arrow_alpha}"; then
+  echo "Invalid hgt_transfer_arrow_alpha: ${hgt_transfer_arrow_alpha} (expected a finite value from 0 to 1)" >&2
   exit 1
 fi
 if ! [[ "${hgt_tree_width_mm}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -463,6 +468,7 @@ hgt_summary_plot_provenance_args+=(
   --parameter "taxonomy_flow_rank=${hgt_taxonomy_flow_rank}"
   --parameter "taxonomy_flow_max_categories=${hgt_taxonomy_flow_max_categories}"
   --parameter "transfer_tree_max_edges=${hgt_transfer_tree_max_edges}"
+  --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
 )
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_tree" "${hgt_species_tree_path}"
@@ -502,6 +508,7 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       --species_tree "${hgt_species_tree_path}" \
       --species_trait "${hgt_species_trait_path}" \
       --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}" \
+      --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}" \
       "${hgt_transfer_plot_args[@]}"
     gg_artifact_record "${hgt_summary_plot_provenance_args[@]}"
   fi
@@ -536,6 +543,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --output "result_bundle=${dir_hgt_trait_focus}"
       --parameter "schema_version=1"
       --parameter "plots=${run_hgt_plot}"
+      --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
     )
     gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_schema_input" "${hgt_species_trait_path}.schema.json"
     gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_metadata" "${hgt_species_trait_path}.metadata.json"
@@ -544,7 +552,8 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       python "${gg_support_dir}/focus_hgt_traits.py" \
         --event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}" \
         --species_tree "${hgt_species_tree_path}" --species_trait "${hgt_species_trait_path}" \
-        --output_dir "${dir_hgt_trait_focus}" --plots "${run_hgt_plot}"
+        --output_dir "${dir_hgt_trait_focus}" --plots "${run_hgt_plot}" \
+        --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
       gg_artifact_record "${hgt_focus_provenance_args[@]}"
     fi
   fi
