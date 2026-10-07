@@ -835,6 +835,19 @@ def test_tool_identity_binds_jcvi_support_code(tmp_path, monkeypatch):
     assert rescue.identities() != before
 
 
+def test_tool_identity_binds_canonical_busco_source_not_call_wrapper(tmp_path, monkeypatch):
+    before = rescue.identities()
+    implementation = rescue.busco_reference_implementation
+    assert before["busco_quality_implementation"] == rescue.digest(implementation.__file__)
+    original_quality = rescue.busco_quality
+    monkeypatch.setattr(rescue, "busco_quality", lambda path: original_quality(path))
+    assert rescue.identities() == before
+    source = tmp_path / "busco_reference_quality.py"
+    source.write_bytes(Path(implementation.__file__).read_bytes() + b"\n# changed source\n")
+    monkeypatch.setattr(implementation, "__file__", str(source))
+    assert rescue.identities()["busco_quality_implementation"] != before["busco_quality_implementation"]
+
+
 @pytest.mark.parametrize("revision", ["date", "markers"])
 def test_same_lineage_name_with_different_dataset_revision_is_not_comparable(hidden_models, revision):
     root, species, _ = hidden_models

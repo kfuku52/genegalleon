@@ -30,6 +30,7 @@ from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
+    import busco_reference_quality as busco_reference_implementation
     from busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
@@ -42,6 +43,7 @@ try:
     from species_labeling import extract_species_label
     from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
+    from . import busco_reference_quality as busco_reference_implementation
     from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
@@ -112,7 +114,7 @@ def identities():
     versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
-    versions["busco_quality_implementation"] = digest(sys.modules[busco_quality.__module__].__file__)
+    versions["busco_quality_implementation"] = digest(busco_reference_implementation.__file__)
     versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
     versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
     versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))

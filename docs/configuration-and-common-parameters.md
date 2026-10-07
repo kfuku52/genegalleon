@@ -249,6 +249,9 @@ The original FigTree/NEXUS declarations and dated tree remain unchanged during
 sidecar recovery. Explicit NWKit `--rooting-token yes` emits the rooting token;
 the ON/OFF outputs must have the same interpreted tree semantics.
 Conversions that cannot retain the interpreted rooting state remain rejected.
+WGD classification output follows the same default-OFF token policy; its
+writer/reader round trip must preserve rooted topology, lengths and node
+annotations for both leading-token and NHX-rooted inputs.
 
 ## How `GG_COMMON_*` is applied
 
