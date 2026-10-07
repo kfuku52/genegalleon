@@ -2,6 +2,7 @@
 
 import csv
 import hashlib
+import json
 import math
 import re
 from collections import defaultdict
@@ -10,6 +11,16 @@ from pathlib import Path
 ORANGE = "#b34d00"
 BLUE = "#2b6ca3"
 CONTEXT_MAX_GENES_PER_SIDE = 3
+CONTEXT_MIN_FLANK_GENES = 2
+CONTEXT_MAX_OVERLAPPING_GENES = 2
+NONCODING_GAP_THRESHOLD_BP = 5000
+NONCODING_GAP_DISPLAY_BP = 2000
+
+
+def support_label(branch):
+    from focus_hgt_gene_trees import number
+    support = number(branch.get('support_generax_ufboot'))
+    return f'{support:g}' if support is not None else 'NA'
 
 
 def blocks(text):
@@ -57,6 +68,85 @@ def structure(row):
         exon=coding if row['feature_type'] == 'exon' else [],
         introns=introns,
     )
+
+
+def neighbor_relation(row, focal):
+    if focal is None:
+        return 'unavailable'
+    if row['gene_id'] == focal['gene_id']:
+        return 'focal'
+    if int(row['end']) < int(focal['start']):
+        return 'left'
+    if int(row['start']) > int(focal['end']):
+        return 'right'
+    return 'overlapping'
+
+
+def neighbor_counts(focal, neighbors):
+    counts = {side: sum(neighbor_relation(row, focal) == side for row in neighbors)
+              for side in ('left', 'right', 'overlapping')} if focal else {}
+    return {f'neighbor_{side}_{field}': value
+            for side in ('left', 'right', 'overlapping')
+            for field, value in (
+                ('gene_count', counts.get(side, '')),
+                ('status', 'gff_unavailable' if not focal else 'shown' if side == 'overlapping'
+                 else 'minimum_met' if counts[side] >= CONTEXT_MIN_FLANK_GENES else 'insufficient_annotated_loci'))}
+
+
+def model_span(row):
+    utr = blocks(row.get('utr_blocks', ''))
+    return (min([int(row['start'])] + [a for a, _ in utr]),
+            max([int(row['end']) + 1] + [b + 1 for _, b in utr]))
+
+
+class GapCompressedCoordinates:
+    """Monotone map; recorded exon/UTR blocks and unknown spans never shrink."""
+
+    def __init__(self, focal, neighbors):
+        self.gaps, self.center, self.anchor = [], 0, 0
+        if focal is None:
+            return
+        spans, protected = [], []
+        for row in neighbors:
+            spans.append(model_span(row))
+            info = structure(row)
+            recorded = info['coding'] + info['exon'] + info['utr']
+            protected.extend([(a, b + 1) for a, b in recorded] if recorded else [spans[-1]])
+        merged = []
+        for start, end in sorted(protected):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+            else:
+                merged.append((start, end))
+        for left, right in zip(merged, merged[1:], strict=False):
+            length = right[0] - left[1]
+            if length > NONCODING_GAP_THRESHOLD_BP:
+                within_gene = any(a <= left[1] and right[0] <= b for a, b in spans)
+                mixed = any(a < right[0] and b > left[1] for a, b in spans)
+                self.gaps.append(dict(gap_type='intronic' if within_gene else 'mixed_noncoding' if mixed else 'intergenic',
+                                      genomic_start_bp=left[1], genomic_end_exclusive_bp=right[0],
+                                      original_gap_bp=length, display_gap_bp=NONCODING_GAP_DISPLAY_BP,
+                                      omitted_bp=length - NONCODING_GAP_DISPLAY_BP))
+        self.center = (int(focal['start']) + int(focal['end'])) / 2
+        self.anchor = self.transform(self.center)
+        self.bounds = (min(start for start, _ in spans), max(end for _, end in spans))
+
+    def transform(self, position):
+        reduction = 0
+        for gap in self.gaps:
+            covered = min(max(position - gap['genomic_start_bp'], 0), gap['original_gap_bp'])
+            reduction += covered * gap['omitted_bp'] / gap['original_gap_bp']
+        return position - reduction
+
+    def point(self, position):
+        return (self.transform(position) - self.anchor) / 1000
+
+    def audit(self, extent=None):
+        gaps = [gap for gap in self.gaps if extent is None or
+                self.point(gap['genomic_start_bp']) <= extent and self.point(gap['genomic_end_exclusive_bp']) >= -extent]
+        return [dict(gap, break_label=str(i), display_start_kb=self.point(gap['genomic_start_bp']),
+                     display_end_kb=self.point(gap['genomic_end_exclusive_bp']))
+                for i, gap in enumerate(gaps, 1)]
 
 
 class GenomeCoordinates:
@@ -107,17 +197,30 @@ class GenomeCoordinates:
             return None, [], 'gff_coordinates_unavailable'
         if link.get("host_scaffold_id") and row["chromosome"] != link["host_scaffold_id"]:
             raise ValueError("Event-gene scaffold and GFF scaffold disagree: " + link["gene_id"])
-        center = (int(row["start"]) + int(row["end"])) / 2
         candidates = [r for r in scaffolds[row["chromosome"]] if r["gene_id"] != row["gene_id"]]
         left = sorted(
-            [r for r in candidates if int(r["end"]) < int(row["start"]) and int(r["end"]) >= center - 20000],
+            [r for r in candidates if int(r["end"]) < int(row["start"])],
             key=lambda r: (-int(r["end"]), r["gene_id"]),
-        )[:3]
+        )[:CONTEXT_MIN_FLANK_GENES]
         right = sorted(
-            [r for r in candidates if int(r["start"]) > int(row["end"]) and int(r["start"]) <= center + 20000],
+            [r for r in candidates if int(r["start"]) > int(row["end"])],
             key=lambda r: (int(r["start"]), r["gene_id"]),
-        )[:3]
-        return row, left + [row] + right, structure(row)["status"]
+        )[:CONTEXT_MIN_FLANK_GENES]
+        center = (int(row['start']) + int(row['end'])) / 2
+        # Intronic/nested loci are additional context, never substitutes for
+        # the required left/right flanks. Missing scaffold annotations stay missing.
+        overlapping = sorted([r for r in candidates if int(r['start']) <= int(row['end'])
+                              and int(r['end']) >= int(row['start'])],
+                             key=lambda r: (abs((int(r['start']) + int(r['end'])) / 2 - center), r['gene_id']))[:CONTEXT_MAX_OVERLAPPING_GENES]
+        selected = left + right + overlapping
+        return row, sorted(selected + [row], key=lambda r: (int(r['start']), r['gene_id'])), structure(row)["status"]
+
+    def scaffold_models(self, link, focal):
+        """All coordinate-bearing models, including outer and nested loci."""
+        if focal is None:
+            return []
+        _, scaffolds = self.load(link.get('gene_species', ''))
+        return sorted(scaffolds[focal['chromosome']], key=lambda r: (int(r['start']), r['gene_id']))
 
     def verify(self):
         for path, expected in self.sources.items():
@@ -221,7 +324,7 @@ def selected_gene_clade(ax, rows, event, donor, recipient):
     ax.text(
         0.01,
         1.02,
-        f"{event['event_id']} | HGT node {by_id[node]['node_name']} | UFB {by_id[node]['support_generax_ufboot']}",
+        f"{event['event_id']} | HGT node {by_id[node]['node_name']} | UFB {support_label(by_id[node])}",
         transform=ax.transAxes,
         fontsize=9,
         color=ORANGE,
@@ -303,6 +406,7 @@ def choose_context_genes(events, links, coordinates, max_genes_per_side=CONTEXT_
                     intron_count=focal.get('num_intron', '') if focal else '',
                     neighbor_gene_ids='; '.join(r['gene_id'] for r in sorted(neighbors, key=lambda r: int(r['start']))
                                                if r['gene_id'] != link['gene_id']),
+                    **neighbor_counts(focal, neighbors),
                     coordinate_unit='genomic_bp_1_based_inclusive', scaffold_support_status=entry['status'],
                     scaffold_count_unit=link.get('host_scaffold_count_unit', ''),
                     **{prefix + suffix: link.get(prefix + suffix, '') for suffix in
@@ -315,56 +419,104 @@ def choose_context_genes(events, links, coordinates, max_genes_per_side=CONTEXT_
     return selected, audit, totals
 
 
+def model_lanes(models, focal, display):
+    """Pack full model spans; overlapping models never share a vertical lane."""
+    if focal is None:
+        return {}
+    occupied, result = {0: [tuple(display.point(x) for x in model_span(focal))]}, {focal['gene_id']: 0}
+    for row in models:
+        if row['gene_id'] == focal['gene_id']:
+            continue
+        start, end = (display.point(x) for x in model_span(row))
+        for index in range(2 * len(models) + 1):
+            lane = 0 if index == 0 else (index + 1) // 2 * (1 if index % 2 else -1)
+            if all(end <= a or start >= b for a, b in occupied.get(lane, [])):
+                occupied.setdefault(lane, []).append((start, end))
+                result[row['gene_id']] = lane * .48
+                break
+    return result
+
+
+def prepare_context_models(selected, coordinates):
+    """Use all scaffold exons for compression, then draw every model in view."""
+    for entry in selected:
+        models = coordinates.scaffold_models(entry['link'], entry['focal'])
+        entry['scaffold_models'] = models
+        entry['display_coordinates'] = GapCompressedCoordinates(entry['focal'], models)
+    extent = math.ceil(max([20.0] + [max(abs(entry['display_coordinates'].point(x))
+                     for row in entry['neighbors'] for x in model_span(row)) + 2
+                     for entry in selected if entry['focal']]) / 5) * 5
+    for entry in selected:
+        display = entry['display_coordinates']
+        entry['models'] = [row for row in entry['scaffold_models']
+                           if display.point(model_span(row)[0]) <= extent and display.point(model_span(row)[1]) >= -extent]
+        entry['model_lanes'] = model_lanes(entry['models'], entry['focal'], display)
+        entry['model_height_pt'] = max(62, 24 + 18 * len(set(entry['model_lanes'].values())))
+    return extent
+
+
 def draw_context_neighborhood(ax, entry, extent, color):
-    """A linear genomic track; neutral neighbors keep donor/recipient colors distinct."""
+    """Shared genic scale with marked intergenic omissions and separate overlap lanes."""
     from matplotlib.patches import Rectangle
 
     link, focal, neighbors = entry['link'], entry['focal'], entry['neighbors']
     ax.set_xlim(-extent, extent)
-    ax.set_ylim(-0.6, 0.65)
+    levels = list(entry.get('model_lanes', {}).values()) or [0]
+    ax.set_ylim(min(levels) - 1, max(levels) + .6)
     ax.set_yticks([])
     ax.axvline(0, color='#cccccc', lw=0.5, zorder=0)
     if focal is None:
         ax.text(0, 0, 'GFF coordinates unavailable', ha='center', color='#777777', fontsize=8)
     else:
-        center = (int(focal['start']) + int(focal['end'])) / 2
-        neighbor_number = 0
-        for j, row in enumerate(sorted(neighbors, key=lambda r: int(r['start']))):
+        display = entry.get('display_coordinates') or GapCompressedCoordinates(focal, neighbors)
+        numbered = [r['gene_id'] for r in sorted(neighbors, key=lambda r: int(r['start'])) if r['gene_id'] != link['gene_id']]
+        numbers = {gene: str(i) for i, gene in enumerate(numbered, 1)}
+        models = entry.get('models', neighbors)
+        lanes = entry.get('model_lanes') or model_lanes(models, focal, display)
+        ordered = enumerate(sorted(models, key=lambda r: (int(r['start']), r['gene_id'])))
+        # Keep genomic label positions, but paint the focal structure last so
+        # an overlapping neighbor cannot obscure its donor/recipient color.
+        for j, row in sorted(ordered, key=lambda item: item[1]['gene_id'] == link['gene_id']):
             focal_flag = row['gene_id'] == link['gene_id']
+            level = lanes.get(row['gene_id'], 0)
             edge = color if focal_flag else '#858585'
             face = edge if not focal_flag or entry['supported'] else '#f6e8df' if entry['side'] == 'recipient' else '#e1edf5'
             hatch = '///' if focal_flag and not entry['supported'] else None
-            a, b = (int(row['start']) - center) / 1000, (int(row['end']) - center) / 1000
+            a, b = display.point(int(row['start'])), display.point(int(row['end']) + 1)
             info = structure(row)
             for x, y in info['introns']:
-                ax.plot([(x - center) / 1000, (y - center) / 1000], [0, 0], color='#444444', lw=0.7)
+                ax.plot([display.point(x), display.point(y + 1)], [level, level], color='#444444', lw=0.7)
             for kind, height in [('coding', 0.20), ('exon', 0.20), ('utr', 0.10)]:
                 for x, y in info[kind]:
-                    ax.add_patch(Rectangle(((x - center) / 1000, -height / 2), (y - x + 1) / 1000,
+                    ax.add_patch(Rectangle((display.point(x), level - height / 2), display.point(y + 1) - display.point(x),
                                            height, facecolor=face if kind == 'coding' else '#f0f0f0' if kind == 'exon' else '#a6adb2',
                                            edgecolor=edge, lw=0.6, hatch=('..' + (hatch or '')) if kind == 'exon' else hatch))
             if not any(info[kind] for kind in ('coding', 'utr', 'exon')):
-                ax.add_patch(Rectangle((a, -0.1), b - a, 0.2, fill=False, ec=edge, ls=':', lw=0.8))
+                ax.add_patch(Rectangle((a, level - 0.1), b - a, 0.2, fill=False, ec=edge, ls=':', lw=0.8))
             direction = 1 if row.get('strand') == '+' else -1 if row.get('strand') == '-' else 0
             if direction:
                 endpoint = b if direction == 1 else a
-                ax.annotate('', xy=(endpoint, 0), xytext=(endpoint - direction * min(0.4, max(0.05, b - a)), 0),
+                ax.annotate('', xy=(endpoint, level), xytext=(endpoint - direction * min(0.4, max(0.05, b - a)), level),
                             arrowprops=dict(arrowstyle='->', color=edge, lw=0.7))
             if focal_flag:
                 label = 'Focal'
             else:
-                neighbor_number += 1
-                label = str(neighbor_number)
-            if a < -extent or b > extent:
+                label = numbers.get(row['gene_id'], '')
+            if label and (a < -extent or b > extent):
                 label += '*'
-            ax.text((max(a, -extent) + min(b, extent)) / 2, 0.33 if j % 2 == 0 else -0.33,
-                    label, ha='center', va='center', fontsize=7, color=edge,
-                    weight='bold' if focal_flag else 'normal')
+            label_level = level + (.25 if level >= 0 else -.25) if level else (.27 if j % 2 == 0 else -.27)
+            if label:
+                ax.text((max(a, -extent) + min(b, extent)) / 2, label_level,
+                        label, ha='center', va='center', fontsize=7, color=edge,
+                        weight='bold' if focal_flag else 'normal')
+        for gap in display.audit(extent):
+            ax.text((max(-extent, gap['display_start_kb']) + min(extent, gap['display_end_kb'])) / 2, min(levels) - .86,
+                    '//' + gap['break_label'], ha='center', va='center', fontsize=7, color='#666666')
         ax.text(0.01, 0.98, structure(focal)['status'].replace('_', ' '), transform=ax.transAxes,
                 fontsize=7, color='#777777', va='top')
     ax.spines[['top', 'right', 'left']].set_visible(False)
     ax.tick_params(labelsize=7)
-    ax.set_xlabel('Genomic position relative to recorded focal-feature midpoint (kb)', fontsize=8)
+    ax.set_xlabel('Compressed display position (kb-equivalent; focal-feature midpoint = 0)', fontsize=8)
 
 
 def render_bounded_context(path, rows, events, links, coordinates, max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE,
@@ -388,12 +540,8 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
         if branch['node_name'] != event.get('gene_tree_node', event.get('node_name')):
             raise ValueError('Context transfer branch/node mapping is inconsistent')
         labels[event['event_id']] = f'HGT{i}'
-        references.append(f"HGT{i}: node {branch['node_name']} | UFB {branch['support_generax_ufboot']}")
-    extent = math.ceil(max([20.0] + [
-        max(abs(x - (int(entry['focal']['start']) + int(entry['focal']['end'])) / 2)
-            for x in [int(entry['focal']['start']), int(entry['focal']['end'])]
-            + [x for pair in blocks(entry['focal'].get('utr_blocks', '')) for x in pair]) / 1000 + 20
-        for entry in selected if entry['focal']]) / 5) * 5
+        references.append(f"HGT{i}: node {branch['node_name']} | UFB {support_label(branch)}")
+    extent = prepare_context_models(selected, coordinates)
     annotations = annotations if annotations is not None else ContextAnnotations()
     family = ordered_events[0]['orthogroup']
     leaves = {r['node_name']: r for r in rows if r['child1'] == r['child2'] == '-999'}
@@ -403,9 +551,10 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
         annotations.display_audit.extend({k: v for k, v in r.items() if k not in {'cells', 'height_pt'}}
                                           for r in tables[id(entry)])
     nrows = max(totals[side]['shown'] for side in totals)
-    row_heights = [145 + max(25 + sum(r['height_pt'] for r in tables[id(entries[side][i])])
+    plot_heights = [max(entries[side][i]['model_height_pt'] for side in entries if i < len(entries[side])) for i in range(nrows)]
+    row_heights = [83 + plot_heights[i] + max(25 + sum(r['height_pt'] for r in tables[id(entries[side][i])])
                             for side in entries if i < len(entries[side])) + 30 for i in range(nrows)]
-    page_height = 165 + sum(row_heights) + 95
+    page_height = 165 + sum(row_heights) + 115
     fig = plt.figure(figsize=(22, page_height / 72))
     def y(point):
         return 1 - point / page_height
@@ -424,7 +573,8 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
                  f"{count['supported']} scaffold-supported in total", fontsize=9, color=color)
         top = 165
         for index, entry in enumerate(entries[side]):
-            ax = fig.add_axes([left, y(top+115), .415, 62 / page_height])
+            plot_height = plot_heights[index]
+            ax = fig.add_axes([left, y(top+53+plot_height), .415, plot_height / page_height])
             draw_context_neighborhood(ax, entry, extent, color)
             link = entry['link']
             prefix = 'host_scaffold_background_class_'
@@ -444,29 +594,52 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
             tags = ', '.join(event_tags[:3]) + (f', +{len(event_tags)-3} events' if len(event_tags) > 3 else '')
             status = entry['status'].replace('_', ' ')
             scaffold = entry['focal']['chromosome'] if entry['focal'] else link.get('host_scaffold_id') or 'unavailable'
-            ax.set_title(f"{tags} | {link['gene_id']}\nScaffold {scaffold} | {status}\n{measured}",
+            counts = neighbor_counts(entry['focal'], entry['neighbors'])
+            flank_label = ('Flanks unavailable' if entry['focal'] is None else
+                           f"Left {counts['neighbor_left_gene_count']}/2 | Right {counts['neighbor_right_gene_count']}/2 | "
+                           f"Overlapping {counts['neighbor_overlapping_gene_count']}")
+            gaps = entry['display_coordinates'].audit(extent)
+            omitted = ', '.join(f"{kind} {sum(g['omitted_bp'] for g in gaps if g['gap_type'] == kind)/1000:.3g}kb"
+                                for kind in ('intergenic', 'intronic', 'mixed_noncoding') if any(g['gap_type'] == kind for g in gaps))
+            if omitted:
+                flank_label += ' | Omitted gaps: ' + omitted
+            ax.set_title(f"{tags} | {link['gene_id']}\nScaffold {scaffold} | {status}\n{measured}\n"
+                         f"All models in view: {len(entry['models'])} | {flank_label}",
                          loc='left', fontsize=9, color=color, pad=10)
             table_rows = tables[id(entry)]
             table_height = 25 + sum(r['height_pt'] for r in table_rows)
-            table_ax = fig.add_axes([left, y(top+145+table_height), .435, table_height / page_height])
+            table_ax = fig.add_axes([left, y(top+83+plot_height+table_height), .435, table_height / page_height])
             draw_annotation_table(table_ax, table_rows, color)
             top += row_heights[index]
     fig.text(0.05, y(page_height-23),
              'Blue: donor descendant focal gene; orange: recipient descendant focal gene; gray: nearby annotated loci. Pale hatched focal blocks: scaffold support not established.\n'
-             'Thick blocks: CDS; thin gray blocks: recorded UTR; gray dotted blocks: exons with unknown CDS/UTR identity; lines: introns. Shared uncompressed kb axis.\n'
+             'Thick blocks: CDS; thin gray blocks: recorded UTR; gray dotted blocks: exons with unknown CDS/UTR identity; lines: introns. Overlapping loci use separate vertical lanes.\n'
+             'Every annotated model intersecting the display range is drawn. Only numbered neighbors (nearest two left/right plus up to two overlaps) appear in the annotation table.\n'
+             'Shared exon/UTR kb scale: recorded blocks remain uncompressed. Noncoding gaps >5 kb (intergenic or intronic) are capped at 2 kb; numbered // marks identify omissions.\n'
              'Display priority: scaffold-supported, available GFF, background coverage, host compatibility, gene ID. Counts are distinct genes per side, not acquisitions.\n'
              'UFB = Ultrafast bootstrap. Candidate-free class background: at least 10 classified units, 50% coverage, 90% host compatibility. Best-hit taxonomy is annotation, not the modeled transfer donor.\n'
-             'Protein products always use best-hit predictions; unavailable names and ranks stay missing. Full annotation sources and gene/event mappings are in the annotation audit.\n'
-             'Neighbors are not asserted to be host-classified or conserved in order; CDS-only records do not establish complete exon/UTR structure. * = feature extends beyond window.',
+             'MMseqs2 shows each focal/neighbor query classification and its saved host-class/species match; unavailable and unresolved are distinct. These labels do not alter candidate selection.\n'
+             'Swiss-Prot best hits provide predicted products and hit taxonomy, separately from MMseqs2 query classification. Full sources and gene/event mappings are in the annotation audit.\n'
+             'Distances across // marks and long introns are compressed, not physical genomic distances. Titles give total omitted lengths; audits retain each original interval and length. Neighbor order does not establish conserved synteny.',
              fontsize=8, color='#666666')
     fig.savefig(path, format='pdf')
     plt.close(fig)
     annotations.verify()
     by_id = {e['event_id']: e for e in events}
+    displayed = {(e['side'], e['link']['gene_id']): e for e in selected}
     for row in audit:
         event = by_id[row['event_id']]
         branch_id = event.get('gene_tree_branch_id', event.get('branch_id'))
         row.update(shared_axis_min_kb=-extent, shared_axis_max_kb=extent,
+                   shared_axis_unit='kb_equivalent_after_noncoding_gap_compression',
+                   noncoding_gap_threshold_bp=NONCODING_GAP_THRESHOLD_BP,
+                   noncoding_gap_display_bp=NONCODING_GAP_DISPLAY_BP,
+                   drawn_gene_model_ids='; '.join(r['gene_id'] for r in displayed[row['side'], row['gene_id']]['models'])
+                   if (row['side'], row['gene_id']) in displayed else '',
+                   drawn_gene_model_count=len(displayed[row['side'], row['gene_id']]['models'])
+                   if (row['side'], row['gene_id']) in displayed else '',
+                   compressed_gaps_json=json.dumps(displayed[row['side'], row['gene_id']]['display_coordinates'].audit(extent))
+                   if (row['side'], row['gene_id']) in displayed else '',
                    plot_label=labels[row['event_id']], gene_tree_branch_id=branch_id,
                    gene_tree_node=event.get('gene_tree_node', event.get('node_name')),
                    support_generax_ufboot=branches[branch_id]['support_generax_ufboot'])
@@ -544,7 +717,7 @@ def render_context(path, rows, events, links, coordinates, *, gene_tree_panel=Tr
                 branch = next(
                     r for r in rows if r["branch_id"] == event.get("gene_tree_branch_id", event.get("branch_id"))
                 )
-                title = f"HGT node {branch['node_name']} | UFB {branch['support_generax_ufboot']}\n" + title
+                title = f"HGT node {branch['node_name']} | UFB {support_label(branch)}\n" + title
             neighbor_key = []
             if focal is None:
                 ax.text(0, 0, "GFF coordinates unavailable", ha="center", color="#777777")

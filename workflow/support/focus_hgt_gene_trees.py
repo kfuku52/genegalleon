@@ -20,7 +20,7 @@ from gene_family_output_store import GeneFamilyOutputStore, read_only_observatio
 
 PROFILE = {"rank": "class", "minimum_classified_units": 10,
            "minimum_classified_fraction": 0.5, "minimum_compatible_fraction": 0.9,
-           "minimum_ufboot": 90, "minimum_passing_genes_per_side": 1}
+           "minimum_ufboot": None, "minimum_passing_genes_per_side": 1}
 INDEX_FIELDS = ["orthogroup", "status", "reason", "event_count", "node_count",
                 "pdf", "annotated_stat_branch", "source_stat_branch_sha256"]
 EVENT_FIELDS = ["event_id", "orthogroup", "gene_tree_branch_id", "gene_tree_node",
@@ -71,8 +71,12 @@ def identity(event, project_name, native_name):
     return values.pop()
 
 
-def annotate(stat_rows, events, links):
+def annotate(stat_rows, events, links, minimum_ufboot=None):
     """Match exact family/branch/node/token and audit every requested event."""
+    if minimum_ufboot is not None:
+        minimum_ufboot = number(minimum_ufboot)
+        if minimum_ufboot is None or not 0 <= minimum_ufboot <= 100:
+            raise ValueError("Gene-tree UFB threshold must be a finite number in [0, 100]")
     branches = {row["branch_id"]: row for row in stat_rows}
     if len(branches) != len(stat_rows) or len({row["node_name"] for row in stat_rows}) != len(stat_rows):
         raise ValueError("Duplicate gene-tree branch or node identity")
@@ -101,15 +105,15 @@ def annotate(stat_rows, events, links):
                     or tokens[int(position) - 1] != event["generax_transfer"]):
                 reason = "transfer_token_or_event_index_unmapped"
             support = number(row.get("support_generax_ufboot"))
-            if not reason and support is None:
+            if not reason and support is None and minimum_ufboot is not None:
                 reason = "generax_ufboot_unavailable"
-            elif not reason and not 0 <= support <= 100:
+            elif not reason and support is not None and not 0 <= support <= 100:
                 raise ValueError("Gene-tree UFBoot must be in [0, 100]")
-            elif not reason and support < PROFILE["minimum_ufboot"]:
+            elif not reason and minimum_ufboot is not None and support < minimum_ufboot:
                 reason = "generax_ufboot_below_threshold"
             if not reason:
                 recorded = number(event.get("support_used", event.get("support_generax_ufboot")))
-                if recorded is not None and abs(recorded - support) > 1e-9:
+                if recorded is not None and (support is None or abs(recorded - support) > 1e-9):
                     raise ValueError("Focused event support disagrees with its exact gene-tree branch")
         if not reason:
             for side in ("donor", "recipient"):
@@ -145,7 +149,8 @@ def annotate(stat_rows, events, links):
                 status.append(('Scaffold-supported ' if name in passing else 'Scaffold-unconfirmed ') + side + ' descendant')
         output.append(dict(row, hgtfocus_event_count=len(matched),
                            hgtfocus_event_ids="; ".join(e["event_id"] for e, _, _ in matched),
-                           hgtfocus_node_label="; ".join(f"{label} UFB={support:g}" for _, label, support in matched),
+                           hgtfocus_node_label="; ".join(f"{label} UFB=" + (f"{support:g}" if support is not None else "NA")
+                                                         for _, label, support in matched),
                            hgtfocus_recipient_flag=int(row["node_name"] in genes),
                            hgtfocus_donor_flag=int(name in donor_genes),
                            hgtfocus_tip_status='; '.join(status)))
@@ -160,7 +165,8 @@ def write(path, fields, rows):
         writer.writerows(rows)
 
 
-def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations=''):
+def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations='',
+                      mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
     csv.field_size_limit(100_000_000)
     directory.mkdir(parents=True)
@@ -176,7 +182,8 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
     from gene_tree_plot_config import replay
 
     coordinates = GenomeCoordinates(gff_root)
-    annotations = ContextAnnotations(context_annotations)
+    annotations = ContextAnnotations(context_annotations, mmseqs2_taxonomy_dir=mmseqs2_taxonomy_dir,
+                                     scaffold_taxonomy_dir=scaffold_taxonomy_dir, taxonomy_dbfile=taxonomy_dbfile)
     index, audit, sources, context_audit, configurations = [], [], {}, [], {}
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)
@@ -201,7 +208,8 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
                 sha = hashlib.sha256(raw).hexdigest()
                 sources["stat_branch/" + family + "_stat.branch.tsv"] = sha
                 rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
-                annotated, checks = annotate(rows, group, [link for link in links if link["orthogroup"] == family])
+                annotated, checks = annotate(rows, group, [link for link in links if link["orthogroup"] == family],
+                                             minimum_ufboot=minimum_ufboot)
                 audit.extend(checks)
                 passed = [row for row in checks if row["status"] == "selected"]
                 table = directory / "tree_plot_input" / (family + "_focused_stat.branch.tsv")
@@ -266,28 +274,39 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
     (directory / "README.txt").write_text(
         "Native GeneGalleon gene trees for observed category-1 recipients\n\n"
         "Orange diamonds and HGT labels mark exact gene-tree transfer nodes, including internal nodes.\n"
-        "UFB = Ultrafast bootstrap; labels are the matched branch's support_generax_ufboot (>=90 inclusive).\n"
+        "UFB = Ultrafast bootstrap; labels retain the matched branch's measured support_generax_ufboot.\n"
+        + ("No UFB threshold is applied; missing support is NA, never imputed.\n" if minimum_ufboot is None
+           else f"Gene-tree UFB threshold: >= {minimum_ufboot} inclusive.\n") +
         "At least one retained event-linked gene on each side must have candidate-free class background\n"
         "with >=10 classified units, >=50% classification coverage and >=90% host compatibility.\n"
         "Orange recipient and blue donor tips individually pass that background check.\n"
         "The shared descendants column also records eligible genes with unconfirmed scaffold support.\n"
         "Page 1 replays gg_gene_evolution panels and saved settings, including domain, gene structure and alignment.\n"
+        "Syntenic similarity and Sequence identity are disabled in focused replay; the synteny neighborhood remains.\n"
         "Missing optional measurements are not invented. Renderer settings and input availability are recorded.\n"
         "Page 2 separates donor descendants (blue, left) and recipient descendants (orange, right).\n"
         "It shows at most three distinct genes per side on one page, including eligible genes with unconfirmed or failing scaffold evidence.\n"
         "Shown/total/omitted gene counts and individual scaffold status remain explicit; omitted genes stay in context_gene_audit.tsv.\n"
         "Display priority is passing scaffold support, available GFF, coverage, compatibility, then gene ID.\n"
         "Repeated links for one side/gene are drawn once and preserve every event in the audit. No extra gene-tree inset is drawn.\n"
-        "All genomic tracks share a linear kb axis centered on their focal-gene midpoint, without intron compression.\n"
+        "Tracks share an exon/UTR kb scale centered on the focal midpoint; noncoding gaps >5 kb are capped at 2 kb.\n"
+        "Numbered // marks and titles identify intergenic/intronic omissions; recorded exon/UTR blocks remain uncompressed.\n"
         "CDS and UTR blocks are distinct; exon-only blocks have unknown CDS/UTR identity; missing structures stay unconfirmed.\n"
         "Each displayed focal/neighbor gene has its own product, best-hit organism/accession and kingdom-to-genus ranks.\n"
         "Protein products always use Swiss-Prot best-hit predictions; missing names/ranks stay unavailable. GFF products are not displayed.\n"
+        "MMseqs2 query classification (LCA name/rank/taxid), kingdom-to-genus names and per-gene host labels are separate from Swiss-Prot.\n"
+        "Query ranks reuse saved lineage taxids and an existing read-only database; lower unresolved ranks are not filled from the host or best hit.\n"
+        "Column order: Track label, Protein product, Swiss-Prot best hit, MMseqs2 classification.\n"
+        "Unresolved classification is not a host match. These display fields do not change candidate selection.\n"
+        "Every coordinate-bearing model intersecting the display range is drawn; overlapping models have separate lanes.\n"
+        "Only the focal, two nearest loci on each coordinate side and up to two overlaps are numbered/listed in the annotation table.\n"
+        "Insufficient scaffold annotations are explicit; overlapping loci never substitute for missing flanks.\n"
         "Best-hit taxonomy does not identify the modeled donor or establish host background for a neighbor.\n"
         "context_annotation_audit.tsv retains the per-gene input fields, sources and exact event/context mapping.\n"
         "This is whole-scaffold context, not conserved gene order or proof of physical integration.\n"
         "All event IDs, branch/node IDs and selection/withholding reasons are in event_node_audit.tsv.\n"
         "No sequence or phylogenetic analysis is run. The parent focused event tables are unchanged.\n")
-    return dict(profile=PROFILE, family_source_sha256=sources, gff_source_sha256=coordinates.sources,
+    return dict(profile=dict(PROFILE, minimum_ufboot=minimum_ufboot), family_source_sha256=sources, gff_source_sha256=coordinates.sources,
                 context_annotation_source_sha256=annotations.sources,
                 context_neighbor_family_source_sha256=annotations.family_sources,
                 rendered_family_count=sum(row["status"] == "rendered" for row in index),

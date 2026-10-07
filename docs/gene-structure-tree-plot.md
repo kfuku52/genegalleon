@@ -148,3 +148,57 @@ classify each join as a cis intron, `num_intron` is missing and
 reports `trans_splicing` explicitly rather than treating them as intron-free.
 CDS length checks still apply. Trans-spliced transcripts with explicit UTRs are
 rejected until their UTR order can also be represented unambiguously.
+
+## Shared Pfam filter for focused HGT
+
+The focused HGT PDF's second page compares each focal and displayed neighbor
+gene's saved MMseqs2 LCA classification/host match with its separate Swiss-Prot
+best-hit product and taxonomy. Missing and unresolved classifications remain
+explicit. Overlapping and intron-hosting genes are included in the bounded
+neighborhood. See [context inputs and provenance](host-scaffold-taxonomy.md).
+
+Focused category-1 HGT tables and plots now require at least one donor/recipient
+gene pair sharing an exact query Pfam accession and at least 50% shared-domain
+query coverage on each protein by default. Both genes must be retained
+descendants linked to the same modeled event and individually satisfy the
+existing class-level scaffold-background thresholds. One qualifying pair
+retains the event; other eligible descendants remain in its context tables.
+Events, genes and independent orthogroups are counted separately.
+
+`hgt_summary_focus_min_shared_pfam_coverage=0.5` sets this inclusive fraction;
+`0` restores any shared query Pfam. For each exact pair, take the union of saved
+query amino-acid intervals for its shared accessions and divide by each query's
+own protein length. Overlaps count once. Coverage is not pairwise alignment
+coverage; separate pairs cannot supply separate sides of a passing decision.
+Event/pair audits retain both lengths, covered amino acids, coverage and a
+traceable best pair. Review flags identify repeat/generic-binding-only matches,
+differing domain sets, >2-fold length differences and proteins shorter than
+100 aa. These are attention flags, not exclusions or proof of a partial gene
+model. Domain-set differences alone do not establish incompatible architecture.
+
+The filter reads saved `rpsblast/<OG>_rpsblast.tsv` (also the existing
+`<OG>.rpsblast.tsv` convention), including ZIP-backed families. It does not
+use best-hit `pfam_ids`, borrow neighbor domains, infer domain architecture
+equivalence, or run additional sequence searches. Exact Pfam sharing is an
+additional candidate criterion, not proof of HGT or complete sequence quality.
+
+In `gg_gene_summary`, `hgt_summary_focus_require_shared_pfam=1` enables the
+filter by default; set it to `0` to reproduce the earlier scaffold-only cohort.
+`hgt_summary_focus_allow_both_no_pfam=0` excludes pairs without a shared hit.
+Setting this option to `1` additionally allows pairs where **both genes have
+explicit searched-no-hit rows**. A no-hit on only one side, disjoint detected
+domains, and missing search/query records still fail. These correspond to
+`focus_hgt_traits.py --require_shared_pfam 1 --allow_both_no_pfam 0`.
+The bilateral no-hit opt-in is an explicit exception to domain coverage;
+coverage stays unmeasured. Saved hits receive no additional E-value cutoff.
+
+The Pfam step evaluates the shared input cohort once; the combined taxonomy/trait step selects each
+trait's category-1 recipients from that same Pfam-passing set. The bundle root
+contains `pfam_events.tsv` and `pfam_event_audit.tsv`, `pfam_pair_audit.tsv` and
+`pfam_gene_audit.tsv`, recording all input events before trait selection, exact
+gene pairs, rejection reasons, detected accessions and source hashes.
+Per-trait audit paths are retained as trait-specific views of those shared decisions.
+Selected event tables add `pfam_*` decision/count columns; per-tip tables, native tree
+PDFs and the three aggregate figures use the same filtered event set. This
+filter also runs when plotting is disabled. Missing evidence remains unknown
+and does not qualify through the bilateral no-hit option.

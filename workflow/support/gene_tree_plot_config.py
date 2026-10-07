@@ -201,7 +201,14 @@ def replay(store, family, rows, destination, sources):
         ]
         parser = p("species_label_parser", "taxonomic")
         source = "saved_gg_gene_evolution_parameter_provenance"
-    arguments = [arg for arg in arguments if not arg.startswith("--stat_branch=")]
+    disabled_panels = ('synteny_similarity', 'sequence_similarity')
+    arguments = [arg for arg in arguments if not arg.startswith("--stat_branch=")
+                 and not (re.match(r"--panel\d+=", arg) and arg.split('=', 1)[1].split(',', 1)[0] in disabled_panels)]
+    panel_index = 0
+    for i, arg in enumerate(arguments):
+        if re.match(r'--panel\d+=', arg):
+            panel_index += 1
+            arguments[i] = f"--panel{panel_index}=" + arg.split('=', 1)[1]
     panels = [arg for arg in arguments if re.match(r"--panel\d+=", arg)]
     last = max([int(arg.split("=")[0][7:]) for arg in panels], default=0)
     arguments.append(f"--panel{last + 1}=categorical,hgtfocus_tip_status,Scaffold-supported descendants,-")
@@ -209,6 +216,7 @@ def replay(store, family, rows, destination, sources):
         arguments=arguments,
         species_label_parser=parser,
         settings_source=source,
+        focused_disabled_panels=list(disabled_panels),
         optional_input_availability={key: value in raw_files for key, value in optional.items()},
     )
 

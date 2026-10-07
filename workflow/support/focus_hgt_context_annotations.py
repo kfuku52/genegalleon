@@ -4,13 +4,21 @@ import csv
 import hashlib
 import io
 import re
+import sqlite3
+from contextlib import closing
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 
 RANKS = ('kingdom', 'phylum', 'class', 'order', 'family', 'genus')
-TABLE_EDGES = (0, .16, .41, .66, 1)
+TABLE_EDGES = (0, .14, .36, .70, 1)
 TABLE_WIDTH_PT = .435 * 22 * 72
+SEQUENCE_FIELDS = ('mmseqs2_status', 'mmseqs2_lca_taxid', 'mmseqs2_lca_rank', 'mmseqs2_lca_name',
+                   'mmseqs2_source', 'mmseqs2_source_sha256', 'mmseqs2_host_class_label',
+                   'mmseqs2_host_species_label', 'mmseqs2_host_species_taxid',
+                   'mmseqs2_host_label_status', 'mmseqs2_host_label_source', 'mmseqs2_host_label_source_sha256',
+                   'mmseqs2_lineage_taxids', 'mmseqs2_lineage_status', 'mmseqs2_taxonomy_source',
+                   'mmseqs2_taxonomy_source_sha256', *(f'mmseqs2_{rank}' for rank in RANKS))
 FIELDS = ('gene_id', 'orthogroup', 'protein_product_name', 'protein_product_status',
           'protein_product_source', 'protein_product_source_sha256', 'protein_product_feature_ids',
           'protein_product_mapping_scope', 'gene_description', 'swissprot_best_hit_protein_name',
@@ -18,7 +26,7 @@ FIELDS = ('gene_id', 'orthogroup', 'protein_product_name', 'protein_product_stat
           'besthit_accession', 'besthit_organism', 'besthit_taxid', 'besthit_source',
           'besthit_source_sha256', 'besthit_status', 'annotation_validation_status', 'besthit_coverage_percent', 'besthit_identity_percent',
           'besthit_evalue', 'taxonomy_source', 'taxonomy_source_sha256',
-          *(f'besthit_{rank}' for rank in RANKS))
+          *(f'besthit_{rank}' for rank in RANKS), *SEQUENCE_FIELDS)
 
 
 def available(value):
@@ -40,12 +48,26 @@ def taxid(value):
     return int(number)
 
 
+def source_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class ContextAnnotations:
     """Exact gene IDs only; neighbor genes never inherit focal annotations."""
 
-    def __init__(self, path='', store=None):
+    def __init__(self, path='', store=None, mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile=''):
         self.rows, self.sources, self.display_audit = {}, {}, []
         self.store, self.leaf_cache, self.family_sources = store, {}, {}
+        self.sequence_root = Path(mmseqs2_taxonomy_dir) if mmseqs2_taxonomy_dir else None
+        self.host_root = Path(scaffold_taxonomy_dir) if scaffold_taxonomy_dir else None
+        self.sequence_cache = {}
+        self.taxonomy_path = Path(taxonomy_dbfile).resolve() if taxonomy_dbfile else None
+        if self.taxonomy_path is not None and not self.taxonomy_path.is_file():
+            raise FileNotFoundError(self.taxonomy_path)
         if path:
             path = Path(path).resolve()
             raw = path.read_bytes()
@@ -74,6 +96,122 @@ class ContextAnnotations:
                     raise ValueError('Best-hit organism/taxonomy requires the same hit accession')
                 self.rows[gene] = row
 
+    @lru_cache(maxsize=None)
+    def query_lineage(self, assigned, saved_lineage):
+        result = dict.fromkeys((f'mmseqs2_{rank}' for rank in RANKS), '')
+        result['mmseqs2_lineage_status'] = 'unclassified' if not assigned else 'taxonomy_source_unavailable'
+        if not assigned or self.taxonomy_path is None:
+            return result
+        path = self.taxonomy_path
+        if str(path) not in self.sources:
+            self.sources[str(path)] = source_digest(path)
+        result.update(mmseqs2_taxonomy_source=str(path), mmseqs2_taxonomy_source_sha256=self.sources[str(path)])
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as conn:
+            node = conn.execute('SELECT spname,rank,track FROM species WHERE taxid=?', (assigned,)).fetchone()
+            if node is None:
+                merged = conn.execute('SELECT taxid_new FROM merged WHERE taxid_old=?', (assigned,)).fetchone()
+                node = conn.execute('SELECT spname,rank,track FROM species WHERE taxid=?', (merged[0],)).fetchone() if merged else None
+            if node is None:
+                result['mmseqs2_lineage_status'] = 'lca_taxid_unresolved_in_existing_database'
+                return result
+            expected = tuple(reversed([int(value) for value in node[2].split(',')]))
+            lineage = expected
+            missing = False
+            if saved_lineage:
+                canonical = []
+                for ancestor in saved_lineage:
+                    present = conn.execute('SELECT taxid FROM species WHERE taxid=?', (ancestor,)).fetchone()
+                    if present is None:
+                        merged = conn.execute('SELECT taxid_new FROM merged WHERE taxid_old=?', (ancestor,)).fetchone()
+                        present = conn.execute('SELECT taxid FROM species WHERE taxid=?', (merged[0],)).fetchone() if merged else None
+                    if present is None:
+                        missing = True
+                    else:
+                        canonical.append(present[0])
+                # Never borrow ranks from a foreign lineage ending in the same LCA ID.
+                positions = [expected.index(ancestor) for ancestor in canonical if ancestor in expected]
+                if (len(positions) != len(canonical) or positions != sorted(set(positions))
+                        or not canonical or canonical[-1] != expected[-1]):
+                    result['mmseqs2_lineage_status'] = 'saved_lineage_conflicts_existing_database'
+                    return result
+                lineage = tuple(canonical)
+            for ancestor in lineage:
+                row = conn.execute('SELECT spname,rank FROM species WHERE taxid=?', (ancestor,)).fetchone()
+                if row is None:
+                    missing = True
+                    continue
+                if row[1] in RANKS:
+                    field = 'mmseqs2_' + row[1]
+                    if result[field] and result[field] != row[0]:
+                        raise ValueError('Conflicting ranks in saved MMseqs2 lineage')
+                    result[field] = row[0]
+            result['mmseqs2_lineage_status'] = ('saved_lineage_partially_unresolved' if missing else
+                                               'saved_lineage_resolved' if saved_lineage else 'existing_database_lineage')
+        return result
+
+    def sequence_taxonomy(self, gene, species):
+        """Saved query classification and saved per-gene host labels, never a best hit."""
+        result = dict.fromkeys(SEQUENCE_FIELDS, '')
+        result.update(mmseqs2_status='source_unavailable', mmseqs2_host_label_status='source_unavailable')
+        if not species:
+            return result
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', species) or species in {'.', '..'}:
+            raise ValueError('Unsafe sequence taxonomy species identifier')
+        if species not in self.sequence_cache:
+            assignments, labels, metadata = {}, {}, {}
+            path = self.sequence_root / (species + '_mmseqs2taxonomy.tsv') if self.sequence_root else None
+            if path and path.is_file():
+                raw = path.read_bytes()
+                sha = hashlib.sha256(raw).hexdigest()
+                self.sources[str(path.resolve())] = sha
+                metadata.update(mmseqs2_source=str(path.resolve()), mmseqs2_source_sha256=sha)
+                for row in csv.reader(io.StringIO(raw.decode('utf-8-sig')), delimiter='\t'):
+                    if len(row) < 4 or not all(available(v) for v in row[:4]):
+                        raise ValueError('Malformed saved MMseqs2 classification row')
+                    if row[0] in assignments:
+                        raise ValueError('Duplicate MMseqs2 query gene ID')
+                    assigned = 0 if row[1] in {'0', '0.0'} else taxid(row[1])
+                    saved = tuple(taxid(v) for v in row[8].split(';')) if len(row) >= 9 and available(row[8]) else ()
+                    if saved and (None in saved or len(saved) != len(set(saved)) or saved[-1] != assigned):
+                        raise ValueError('Saved MMseqs2 lineage disagrees with query LCA')
+                    assignments[row[0]] = dict(mmseqs2_lca_taxid=str(assigned), mmseqs2_lca_rank=row[2],
+                                               mmseqs2_lca_name=row[3],
+                                               mmseqs2_lineage_taxids=';'.join(map(str, saved)),
+                                               mmseqs2_status='assigned' if assigned else 'unclassified')
+            path = self.host_root / (species + '_gene_taxonomy.tsv') if self.host_root else None
+            if path and path.is_file():
+                import pandas
+                from scaffold_taxonomy import validate_gene_table
+
+                raw = path.read_bytes()
+                sha = hashlib.sha256(raw).hexdigest()
+                self.sources[str(path.resolve())] = sha
+                metadata.update(mmseqs2_host_label_source=str(path.resolve()), mmseqs2_host_label_source_sha256=sha)
+                data = pandas.read_csv(io.StringIO(raw.decode('utf-8-sig')), sep='\t', dtype=str, keep_default_na=False)
+                validate_gene_table(data)
+                if set(data.species) - {species}:
+                    raise ValueError('Scaffold taxonomy file contains a different species')
+                for row in data.to_dict('records'):
+                    labels.setdefault(row['gene_id'], {})[row['rank']] = row
+            self.sequence_cache[species] = assignments, labels, metadata
+        assignments, labels, metadata = self.sequence_cache[species]
+        result.update(metadata)
+        if metadata.get('mmseqs2_source'):
+            result['mmseqs2_status'] = 'gene_record_unavailable'
+        result.update(assignments.get(gene, {}))
+        if gene in assignments:
+            assignment = assignments[gene]
+            saved = tuple(int(v) for v in assignment['mmseqs2_lineage_taxids'].split(';')) if assignment['mmseqs2_lineage_taxids'] else ()
+            result.update(self.query_lineage(int(assignment['mmseqs2_lca_taxid']), saved))
+        if metadata.get('mmseqs2_host_label_source'):
+            result['mmseqs2_host_label_status'] = 'gene_record_unavailable'
+        if gene in labels:
+            result.update(mmseqs2_host_label_status='measured',
+                          mmseqs2_host_class_label=labels[gene]['class']['label'],
+                          mmseqs2_host_species_label=labels[gene]['species']['label'],
+                          mmseqs2_host_species_taxid=labels[gene]['species']['host_taxid'])
+        return result
+
     def family_leaves(self, family):
         """Read a neighbor's own existing family, including archived store members."""
         if family not in self.leaf_cache:
@@ -98,7 +236,7 @@ class ContextAnnotations:
                 self.leaf_cache[family] = leaves
         return self.leaf_cache[family]
 
-    def get(self, gene, family='', leaf=None):
+    def get(self, gene, family='', leaf=None, species=''):
         row = self.rows.get(gene)
         validation = 'supplemental_only' if row is not None else 'annotation_unavailable'
         if row is not None and self.store is not None and leaf is None:
@@ -134,6 +272,7 @@ class ContextAnnotations:
                                       ('swissprot_best_hit_protein_name', 'sprot_recname')]:
                     result[field] = result[field] or available(leaf.get(native))
             result['annotation_validation_status'] = validation
+            result.update(self.sequence_taxonomy(gene, species))
             return result
         result = dict.fromkeys(FIELDS, '')
         result.update(gene_id=gene, orthogroup=family, protein_product_status='annotation_unavailable',
@@ -147,11 +286,12 @@ class ContextAnnotations:
                           if available(leaf.get('sprot_best')) else '',
                           besthit_source='existing exact family stat.branch.tsv leaf',
                           besthit_status='existing_family_leaf_hit' if available(leaf.get('sprot_best')) else 'no_existing_hit')
+        result.update(self.sequence_taxonomy(gene, species))
         return result
 
     def verify(self):
         for path, expected in self.sources.items():
-            if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected:
+            if source_digest(path) != expected:
                 raise ValueError('Context annotation input changed during rendering')
         for logical, expected in self.family_sources.items():
             with self.store.open_binary(*logical.split('/', 1)) as handle:
@@ -201,7 +341,17 @@ def annotation_cells(row, species, label):
     for i in range(0, len(RANKS), 2):
         taxonomy.append(' | '.join(f'{rank.capitalize()}: {available(row.get("besthit_" + rank)) or "unavailable"}'
                                    for rank in RANKS[i:i+2]))
-    cells = [label + '\n' + gene, product, hit, '\n'.join(taxonomy)]
+    assigned = available(row.get('mmseqs2_lca_name'))
+    classification = (assigned + '\nLCA rank: ' + (available(row.get('mmseqs2_lca_rank')) or 'unavailable')
+                      + ' | taxid: ' + (available(row.get('mmseqs2_lca_taxid')) or 'unavailable')) if assigned else 'Unavailable'
+    classification += '\nHost class: ' + (available(row.get('mmseqs2_host_class_label')) or 'unavailable')
+    classification += '\nHost species: ' + (available(row.get('mmseqs2_host_species_label')) or 'unavailable')
+    lineage_status = available(row.get('mmseqs2_lineage_status'))
+    missing_rank = 'unresolved' if lineage_status and 'unavailable' not in lineage_status else 'unavailable'
+    for i in range(0, len(RANKS), 2):
+        classification += '\n' + ' | '.join(f'{rank.capitalize()}: {available(row.get("mmseqs2_" + rank)) or missing_rank}'
+                                               for rank in RANKS[i:i+2])
+    cells = [label + '\n' + gene, product, hit + '\n' + '\n'.join(taxonomy), classification]
     widths = [(b-a)*TABLE_WIDTH_PT-10 for a, b in zip(TABLE_EDGES[:-1], TABLE_EDGES[1:], strict=True)]
     return [wrap_cell(cell, width) for cell, width in zip(cells, widths, strict=True)]
 
@@ -213,16 +363,21 @@ def context_annotation_rows(entry, annotations, family, leaves):
     if not neighbors:
         neighbors = [dict(gene_id=focal_id)]
     result, number = [], 0
+    from focus_hgt_context import neighbor_relation
     for gene in neighbors:
         focal = gene['gene_id'] == focal_id
         if not focal:
             number += 1
         label = 'Focal' if focal else str(number)
         leaf = leaves.get(gene['gene_id'])
-        annotation = annotations.get(gene['gene_id'], family if focal or leaf is not None else '', leaf)
-        cells = annotation_cells(annotation, species, label)
+        annotation = annotations.get(gene['gene_id'], family if focal or leaf is not None else '', leaf, species=species)
+        relation = 'focal' if focal else neighbor_relation(gene, entry.get('focal'))
+        cells = annotation_cells(annotation, species, label if focal else label + ' (' + relation + ')')
         result.append(dict(annotation, context_focal_gene_id=focal_id, side=entry['side'],
                            context_role='focal' if focal else 'neighbor', neighbor_label=label,
+                           context_neighbor_relation=relation,
+                           context_genomic_start_bp=gene.get('start', ''), context_genomic_end_bp=gene.get('end', ''),
+                           context_genomic_strand=gene.get('strand', ''), context_scaffold=gene.get('chromosome', ''),
                            event_ids='; '.join(sorted(entry['event_ids'])), cells=cells,
                            height_pt=max(cell.count('\n')+1 for cell in cells)*10 + 9))
     return result
@@ -236,7 +391,9 @@ def draw_annotation_table(ax, records, color):
     ax.set_ylim(0, height)
     ax.axis('off')
     edges = TABLE_EDGES
-    headings = ['Track label / gene ID', 'Protein product (best-hit)', 'Best-hit organism / accession', 'Best-hit taxonomic ranks']
+    headings = ['Track label / gene ID', 'Protein product\n(Swiss-Prot best-hit)',
+                'Swiss-Prot best hit / accession\nBest-hit taxonomic ranks',
+                'MMseqs2 classification\nQuery taxonomic ranks / host match']
     ax.add_patch(Rectangle((0, height-25), 1, 25, color='#eef1f4', zorder=0))
     for x, text in zip(edges[:-1], headings, strict=True):
         ax.text(x+.006, height-8, text, fontsize=8, weight='bold', va='top')

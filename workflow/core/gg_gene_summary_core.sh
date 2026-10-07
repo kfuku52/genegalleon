@@ -923,6 +923,11 @@ run_hgt_summary_for_source() {
   hgt_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" \
   hgt_focus_filter_audit_tsv="${hgt_summary_focus_filter_audit_tsv:-}" \
   hgt_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}" \
+  hgt_focus_require_shared_pfam="${hgt_summary_focus_require_shared_pfam:-1}" \
+  hgt_focus_allow_both_no_pfam="${hgt_summary_focus_allow_both_no_pfam:-0}" \
+  hgt_focus_min_shared_pfam_coverage="${hgt_summary_focus_min_shared_pfam_coverage:-0.5}" \
+  hgt_focus_direction_filter="${hgt_summary_focus_direction_filter:-any}" \
+  hgt_focus_species_taxonomy="${hgt_summary_focus_species_taxonomy:-auto}" \
   hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" \
   hgt_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" \
   hgt_tree_width_mm="${hgt_summary_tree_width_mm:-60}" \

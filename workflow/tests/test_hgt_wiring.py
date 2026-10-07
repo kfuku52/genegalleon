@@ -33,6 +33,10 @@ def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
     assert '--context_annotations_tsv "${hgt_focus_context_annotations_tsv}"' in hgt
     assert '--input "context_annotations=${hgt_focus_context_annotations_tsv}"' in hgt
     assert '--input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"' in hgt
+    assert '--mmseqs2_taxonomy_dir "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"' in hgt
+    assert '--scaffold_taxonomy_dir "${gg_workspace_output_dir}/species_scaffold_taxonomy"' in hgt
+    assert '"context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"' in hgt
+    assert '"context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"' in hgt
     assert 'hgt_summary_focus_context_annotations_tsv' in (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
 
 
@@ -42,6 +46,36 @@ def test_gene_evolution_records_the_same_arguments_it_renders_for_focused_replay
     assert '--species-parser "${species_label_parser}" -- "${tree_plot_render_args[@]}"' in text
     assert 'Rscript "${gg_support_dir}/stat_branch2tree_plot.r" "${tree_plot_render_args[@]}"' in text
     assert '--output "tree_plot_arguments=${file_og_tree_plot_args}"' in text
+
+
+def test_shared_query_pfam_filter_defaults_and_provenance_apply_without_plotting():
+    entry, summary, hgt = [read_text(path) for path in (GENE_SUMMARY_ENTRYPOINT, GENE_SUMMARY_CORE, HGT_CORE)]
+    forwarded = (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
+    for suffix, default in [('require_shared_pfam', '1'), ('allow_both_no_pfam', '0'), ('min_shared_pfam_coverage', '0.5')]:
+        assert f'hgt_summary_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in entry
+        assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
+        assert f'--{suffix} "${{hgt_focus_{suffix}}}"' in hgt
+        assert f'--parameter "{suffix}=${{hgt_focus_{suffix}}}"' in hgt
+        assert f'hgt_summary_focus_{suffix}' in forwarded
+    pfam = hgt.index('--input-gene-family-subdir "pfam_query_hits=')
+    plotting = hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', pfam)
+    assert pfam < plotting
+    assert '--input "pfam_filter=${gg_support_dir}/focus_hgt_pfam.py"' in hgt
+
+
+def test_species_direction_configuration_and_taxonomy_provenance_apply_without_plotting():
+    entry, summary, hgt = [read_text(path) for path in (GENE_SUMMARY_ENTRYPOINT, GENE_SUMMARY_CORE, HGT_CORE)]
+    forwarded = (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
+    for suffix, default in [('direction_filter', 'any'), ('species_taxonomy', 'auto')]:
+        assert f'hgt_summary_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in entry
+        assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
+        assert f'hgt_summary_focus_{suffix}' in forwarded
+    assert '--direction_filter "${hgt_focus_direction_filter}"' in hgt
+    assert '--species_taxonomy "${hgt_focus_taxonomy_path}"' in hgt
+    assert '--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}"' in hgt
+    assert '--parameter "direction_filter=${hgt_focus_direction_filter}"' in hgt
+    taxonomy = hgt.index('--input "direction_species_taxonomy=')
+    assert taxonomy < hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', taxonomy)
 
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():

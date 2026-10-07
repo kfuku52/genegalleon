@@ -184,7 +184,35 @@ The exporter uses native event/context tables by default. To return a previously
 filtered project cohort, set `hgt_summary_focus_event_tsv` and optionally
 `hgt_summary_focus_event_gene_tsv` to its event and enriched link TSVs. Existing
 support, direction, scaffold, product-name and quality columns are preserved;
-no additional scientific threshold or organism-specific filter is introduced.
+category-1 focused results now also require a shared query Pfam in a bilateral
+scaffold-supported event-gene pair by default. The source cohort is preserved.
+`hgt_summary_focus_require_shared_pfam=0` reproduces the prior cohort;
+`hgt_summary_focus_allow_both_no_pfam=1` additionally allows a pair where both
+genes have explicit searched/no-hit records. Missing records, one-sided no-hits
+and disjoint detected domains still fail. The filter reuses saved RPS-BLAST
+records and runs even without plots; event/pair/gene audits retain failed
+evidence and source hashes. See the [Pfam contract](gene-structure-tree-plot.md#shared-pfam-filter-for-focused-hgt).
+Pfam is evaluated once across the input cohort, before each
+trait's category-1 recipients are selected. Bundle-root Pfam event,
+pair and gene audits retain the common decisions; per-trait audits are views.
+Set `hgt_summary_focus_direction_filter=non_arthropoda_to_insecta` to insert a
+direction filter immediately after Pfam. The filtering-flow figure combines
+this direction rule and category-1 recipients into one final stage,
+`Non-Arthropoda donor & <trait> = 1 recipient`; the historical upstream direction
+row is omitted. Source audits and manifests retain the individual decisions,
+and support/scaffold/Pfam counts still describe the previously verified input
+cohort rather than implying reevaluation of every modeled transfer.
+The saved host-species taxonomy (`hgt_summary_focus_species_taxonomy=auto`)
+is joined to the exact analysis species-tree tip labels. Every donor descendant
+must be outside Arthropoda, and every recipient descendant within Insecta.
+Daphnia and crustacean ancestral donors are excluded. Branches spanning both
+sides of a taxonomic boundary, with unknown descendant classifications, or
+without an exact species-branch mapping are withheld. Best-hit and query
+MMseqs2 classifications never determine this modeled transfer direction.
+Root `direction_event_audit.tsv` records every post-Pfam decision;
+`direction_species_branches.tsv` retains full descendant labels, counts and
+unknown tips. `direction_events.tsv` is the common passing cohort for all traits.
+The default `any` preserves general projects' existing directions.
 `run_hgt_trait_focus=0` disables these outputs; disabling all HGT summaries does
 not start an HGT analysis merely because the focus default is on.
 
@@ -209,23 +237,27 @@ Each trait aggregate also has a `tree_plot/` folder with one native gene-tree PD
 per qualifying orthogroup. Orange diamonds mark the exact transfer nodes.
 Labels use `UFB` for the matched `support_generax_ufboot`, including internal nodes;
 the legend spells it out as `UFB = Ultrafast bootstrap`.
-This presentation subset requires UFBoot >=90 and at least one retained
+Native focused plots apply no additional UFB threshold and require at least one retained
 event-linked gene on **each** side with candidate-free class scaffold background:
 >=10 classified units, >=50% classification coverage and >=90% host compatibility.
 Those recipient genes have orange tip labels; supported donor tips are blue.
 The shared `Scaffold-supported descendants` column records both roles, with
 pale cells for eligible descendants whose scaffold support is unconfirmed.
-The parent focused tables are
-unchanged. `tree_plot/event_node_audit.tsv` retains every requested event with
+The parent focused tables and plots use the same configured Pfam-filtered
+event set. Other eligible descendants of surviving events remain in their
+context tables. `tree_plot/event_node_audit.tsv` retains every requested event with
 selection/withholding reasons; terminal nodes, missing support and unresolved
 branch/token matches do not qualify. Background context is not conserved gene
 order or proof of physical integration. Standalone `focus_hgt_traits.py` calls
 enable this folder by supplying `--gene_family_root` with existing raw/ZIP-backed
-family outputs; the workflow supplies this path automatically when plots run.
+family outputs; the workflow supplies this path for filtering and plotting.
 
 Each individual PDF has two pages. Page 1 replays the panels and arguments
 recorded by `gg_gene_evolution` (including domain, structure, alignment,
-localization and available similarity panels). Older results use their saved
+localization). Focused replay omits `synteny_similarity` and
+`sequence_similarity` (the Syntenic similarity and Sequence identity panels);
+the synteny neighborhood, alignment and other saved panels are retained.
+Older results use their saved
 tree-plot parameter/input provenance; unavailable optional inputs remain missing.
 `renderer_settings.json` records the settings source and input availability.
 Page 2 shows the exact HGT node/UFB and existing GFF neighborhoods in two
@@ -237,10 +269,24 @@ this does not change event selection or the individually supported gene counts.
 Display priority is passing scaffold support, available GFF, background coverage,
 host compatibility, then gene ID. Repeated side/gene links draw one track while
 retaining each exact event reference in the audit. All genomic tracks share
-one linear kb axis centered on the focal feature midpoint. The shared window
-includes each focal feature plus at least 20 kb flanks; asterisks mark neighboring
-features extending beyond the window. CDS and available UTR
-blocks retain genomic intron lengths. Exon-only annotations are gray dotted blocks with
+one common genic kb scale centered on the focal feature midpoint. Each track
+draws every coordinate-bearing model intersecting the shared display range,
+including outer and nested loci. Full scaffold exon/UTR coordinates protect
+all recorded blocks from gap compression. Overlapping models occupy separate
+lanes and the track height expands as needed. Only the focal gene, nearest
+two coordinate-left/right loci and up to two overlaps receive numbered
+annotation-table rows; extra drawn models do not expand that table.
+If fewer flanking loci are annotated, the
+display and audit explicitly record the shortage. Overlapping loci do not
+substitute for left/right flanks. Noncoding gaps longer than 5 kb, including
+intergenic regions and long recorded introns, are capped at 2 kb in the display;
+numbered `//` marks identify each omission and track titles give total removed
+lengths by gap type. Displayed distances across these gaps are
+compressed coordinates, not physical genomic distances. Original genomic
+coordinates and each gap's type/boundaries/removed length remain in the audits.
+CDS and available UTR/exon blocks retain genomic lengths. Unknown feature spans
+are protected from compression; unrecorded exon boundaries are never invented.
+Exon-only annotations are gray dotted blocks with
 unknown CDS/UTR identity, never relabeled as UTRs; missing structure and trans-splicing are
 explicitly unavailable. Neighbor annotations do not establish their taxonomy or
 conserved gene order. `context_gene_audit.tsv` records displayed and omitted
@@ -251,9 +297,19 @@ Axis zero is the midpoint of the saved focal-feature `start/end` span. For
 CDS records this span excludes flanking UTRs; UTRs keep their own recorded
 coordinates and remain visible beyond the CDS span.
 
-Under each genomic track, page 2 lists the focal gene and every displayed
-neighbor with its Swiss-Prot best-hit protein product prediction, organism/accession,
-and kingdom, phylum, class, order, family and genus. The table uses the same
+Under each genomic track, page 2 lists the focal gene and numbered
+neighbors with their Swiss-Prot best-hit protein product prediction, organism/accession,
+and kingdom, phylum, class, order, family and genus. A separate MMseqs2 column
+shows that exact query's saved LCA name, rank and taxid, kingdom through genus,
+plus its per-gene host class/species compatibility labels. Rank names come
+from the saved query lineage taxids and the existing read-only ETE database;
+when saved lineage taxids are absent, the existing LCA database lineage is used.
+No search or taxonomy database update is started. Ranks below a broad LCA stay
+unresolved; missing databases/records remain unavailable. The columns are
+Track label, Protein product, Swiss-Prot best hit, MMseqs2 classification.
+`unresolved` does not mean compatible;
+missing sources and missing query records stay unavailable. These display
+fields do not introduce another candidate filter. The table uses the same
 left-to-right neighbor numbers as the track; focal rows are colored by side.
 Products always use the same best hit's protein name, labeled `best-hit prediction`;
 GFF products are not displayed or used as a fallback.
@@ -280,6 +336,15 @@ inputs and exact context/event references; the input TSV hash is in the manifest
 `hgt_summary_focus_context_annotations_tsv` to both the context pages and
 orthogroup distribution summary. The stage records this input and the annotation
 helper in its provenance, so annotation changes invalidate cached plots.
+`gg_gene_summary` also reads existing `species_cds_mmseqs2taxonomy` and
+`species_scaffold_taxonomy` outputs automatically for the context pages.
+Standalone calls supply `--mmseqs2_taxonomy_dir` and `--scaffold_taxonomy_dir`.
+They optionally supply `--taxonomy_dbfile` for existing query rank names;
+the workflow forwards its existing workspace database and records its hash.
+No taxonomy search is enabled. Source paths/hashes and exact gene matches are
+retained in `context_annotation_audit.tsv` and plot provenance.
+Neighbor selection reserves two loci on each genomic side before adding up to
+two overlapping/intron-hosting loci, so at most six neighbors are annotated.
 Distribution product labels use eligible retained recipient descendants;
 descendants transferred out of the modeled recipient lineage do not supply them.
 The renderer checks supplemental focal and neighbor hits against each gene's
@@ -288,12 +353,16 @@ and `annotation_validation_status`. Missing family sources remain explicit.
 Malformed rows, fractional taxids and conflicting gene/family/hit mappings fail
 instead of producing a plausible annotation.
 The one-page canvas expands to fit complete annotations while retaining the
-three-gene-per-side display limit and the same linear genomic scale per track.
+three-gene-per-side display limit and a shared exon/UTR scale with labeled noncoding-gap compression.
 
 `hgt_summary_focus_filter_audit_tsv` (standalone `--filter_audit_tsv`) accepts an
 optional existing project event-level direction/UFBoot audit, including gzip TSV.
-When supplied, the filtering-flow PDF also shows the upstream modeled,
-non-Insecta-to-Insecta and verified UFBoot >=90 counts. Without it, upstream
+When supplied, the filtering-flow PDF shows all modeled transfers and verifies
+that the input event identities belong to that audit. Mapping checks stay in
+the audit and are omitted from the displayed steps. UFB values remain annotations;
+no new UFB cutoff or historical direction filter is applied to the input cohort.
+Step 00 counts all recorded gene-tree branch-summary orthogroups, including
+zero-transfer families, with event count NA. Without an audit, upstream event
 counts are not inferred from an already filtered input table. No sequence,
 phylogenetic or annotation-search analysis is run for these figures.
 

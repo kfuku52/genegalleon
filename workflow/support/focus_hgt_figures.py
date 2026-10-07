@@ -26,7 +26,8 @@ def write(path, rows, fields=None):
         writer.writerows(rows)
 
 
-def filtering_counts(source_events, selected, audit_path=""):
+def filtering_counts(source_events, selected, audit_path="", prefilter_selected=None, pfam_selected=None,
+                     direction_selected=None, support_filter_enabled=False):
     def unique(rows):
         result = {row['event_id']: row for row in rows}
         if len(result) != len(rows) or '' in result:
@@ -51,39 +52,78 @@ def filtering_counts(source_events, selected, audit_path=""):
     source_by_id = unique(source_events)
     unique(selected)
     subset(selected, source_by_id)
+    if prefilter_selected is not None and pfam_selected is not None:
+        raise ValueError('Supply only one Pfam/trait filtering order')
+    if pfam_selected is not None:
+        pfam_by_id = unique(pfam_selected)
+        subset(pfam_selected, source_by_id)
+        subset(selected, pfam_by_id)
+    if prefilter_selected is not None:
+        prefilter_by_id = unique(prefilter_selected)
+        subset(prefilter_selected, source_by_id)
+        subset(selected, prefilter_by_id)
+    if direction_selected is not None:
+        if prefilter_selected is not None:
+            raise ValueError('Species-branch direction filtering requires Pfam-before-trait order')
+        direction_by_id = unique(direction_selected)
+        subset(direction_selected, pfam_by_id if pfam_selected is not None else source_by_id)
+        subset(selected, direction_by_id)
     stages = []
     if audit_path:
         audited = read(audit_path)
         ids = [row["event_id"] for row in audited]
         if len(ids) != len(set(ids)):
             raise ValueError("Duplicate modeled event in filtering audit")
-        directional = [
-            row
-            for row in audited
-            if row.get("donor_classification") == "outside" and row.get("recipient_classification") == "insect"
-        ]
-        accepted = [row for row in audited if row.get("status") == "accepted"]
-        for row in accepted:
-            value = float(row.get("support_used") or row.get("support_generax_ufboot") or "nan")
-            support_source = row.get("support_source", "")
-            if (
-                not math.isfinite(value)
-                or not 90 <= value <= 100
-                or not ("support_generax_ufboot" in support_source or "raw_unrooted_split_verified" in support_source)
-            ):
-                raise ValueError("Accepted filtering-audit event lacks verified inclusive UFBoot >=90")
-        accepted_ids = {row["event_id"] for row in accepted}
-        if not {row["event_id"] for row in source_events} <= accepted_ids:
-            raise ValueError("Focused input cohort is not a subset of accepted filtering-audit events")
-        subset(source_events, {r['event_id']: r for r in accepted})
-        if not accepted_ids <= {row["event_id"] for row in directional}:
-            raise ValueError("Accepted filtering-audit event has unsupported transfer direction")
-        stages += [
-            ("All modeled transfers", audited),
-            ("Non-Insecta to Insecta", directional),
-            ("Matched gene-tree UFB >=90", accepted),
-        ]
-    stages += [("Input supported-event cohort", source_events), ("Category = 1 recipients", selected)]
+        if not support_filter_enabled:
+            audited_by_id = unique(audited)
+            subset(source_events, audited_by_id)
+            for row in source_events:
+                original = audited_by_id[row['event_id']]
+                for field, expected in (('mapping_status', 'matched'),
+                                        ('species_tree_mapping_status', 'matched_external_tree')):
+                    if field in original and original[field] != expected:
+                        raise ValueError('Focused cohort contains an unresolved event/species mapping')
+            stages.append(("All modeled transfers", audited))
+        else:
+            directional = [
+                row
+                for row in audited
+                if row.get("donor_classification") == "outside" and row.get("recipient_classification") == "insect"
+            ]
+            accepted = [row for row in audited if row.get("status") == "accepted"]
+            for row in accepted:
+                value = float(row.get("support_used") or row.get("support_generax_ufboot") or "nan")
+                support_source = row.get("support_source", "")
+                if (
+                    not math.isfinite(value)
+                    or not 90 <= value <= 100
+                    or not ("support_generax_ufboot" in support_source or "raw_unrooted_split_verified" in support_source)
+                ):
+                    raise ValueError("Accepted filtering-audit event lacks verified inclusive UFBoot >=90")
+            accepted_ids = {row["event_id"] for row in accepted}
+            if not {row["event_id"] for row in source_events} <= accepted_ids:
+                raise ValueError("Focused input cohort is not a subset of accepted filtering-audit events")
+            subset(source_events, {r['event_id']: r for r in accepted})
+            if not accepted_ids <= {row["event_id"] for row in directional}:
+                raise ValueError("Accepted filtering-audit event has unsupported transfer direction")
+            stages.append(("All modeled transfers", audited))
+            # Historical direction decisions stay in the source audit. Focused
+            # figures show taxonomy only at the final, combined selection stage.
+            if direction_selected is None:
+                stages.append(("Non-Insecta to Insecta", directional))
+            stages.append(("Matched gene-tree UFB >=90", accepted))
+    stages.append(("Input supported-event cohort", source_events))
+    if pfam_selected is not None:
+        stages.append(("Event-gene pair Pfam filter", pfam_selected))
+        stages.append(("Non-Arthropoda donor & category = 1 recipient"
+                       if direction_selected is not None else "Category = 1 recipients", selected))
+    else:
+        # Compatibility for callers reproducing the earlier trait-first figure.
+        stages.append(("Non-Arthropoda donor & category = 1 recipient"
+                       if direction_selected is not None else "Category = 1 recipients",
+                       selected if prefilter_selected is None else prefilter_selected))
+        if prefilter_selected is not None:
+            stages.append(("Event-gene pair Pfam filter", selected))
     return [
         dict(stage=label, event_count=len(rows), orthogroup_count=len({r["orthogroup"] for r in rows}))
         for label, rows in stages
@@ -127,8 +167,93 @@ def product_labels(families, links):
     return labels
 
 
+def export_filtering_flow(directory, source_events, selected, trait, filter_audit='',
+                          prefilter_selected=None, pfam_selected=None, direction_selected=None,
+                          support_filter_enabled=False, analyzed_orthogroups=None):
+    """Render shared Pfam followed by one combined taxonomy/trait stage."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+    directory.mkdir(parents=True, exist_ok=True)
+    def save(fig, name, title, subtitle, note):
+        fig.text(0.035, 0.965, title, fontsize=17, weight='bold', va='top')
+        fig.text(0.035, 0.916, subtitle, fontsize=9, color='#556975', va='top')
+        fig.text(0.035, 0.045, note, fontsize=8, color='#556975', va='bottom')
+        fig.savefig(directory / (name + '.pdf'))
+        fig.savefig(directory / (name + '.png'), dpi=140)
+        plt.close(fig)
+    counts = filtering_counts(source_events, selected, filter_audit,
+                              prefilter_selected=prefilter_selected, pfam_selected=pfam_selected,
+                              direction_selected=direction_selected, support_filter_enabled=support_filter_enabled)
+    coverage_values = {float(r['pfam_min_shared_query_coverage']) for r in (pfam_selected or [])
+                       if r.get('pfam_min_shared_query_coverage') not in (None, '')}
+    if len(coverage_values) > 1:
+        raise ValueError('Mixed shared-Pfam coverage thresholds in filtering cohort')
+    if coverage_values:
+        minimum = coverage_values.pop()
+        for row in counts:
+            if row['stage'] == 'Event-gene pair Pfam filter':
+                row['stage'] = f'Event-pair Pfam (>={100 * minimum:g}% each query)'
+    trait_index = -1 if prefilter_selected is None else -2
+    if filter_audit:
+        for row in counts:
+            if row['stage'] == 'Input supported-event cohort':
+                row['stage'] = 'Bilateral scaffold background'
+    counts[trait_index]["stage"] = ("Non-Arthropoda donor & " + trait + " = 1 recipient"
+                                   if direction_selected is not None else trait + " = 1 recipients")
+    write(directory / "filtering_flow_audit.tsv", counts)
+    displayed = [dict(row) for row in counts if row['stage'] != 'Matched event and species branches']
+    first_step = 1
+    if analyzed_orthogroups is not None:
+        families = list(analyzed_orthogroups)
+        if len(families) != len(set(families)) or any(not family for family in families):
+            raise ValueError('Duplicate or empty analyzed orthogroup ID')
+        if not {row['orthogroup'] for row in source_events + selected} <= set(families):
+            raise ValueError('Filtering cohort is outside analyzed orthogroups')
+        if any(row['orthogroup_count'] > len(families) for row in counts):
+            raise ValueError('Filtering orthogroup count exceeds analyzed orthogroups')
+        displayed.insert(0, dict(stage='All analyzed orthogroups', event_count='NA', orthogroup_count=len(families)))
+        first_step = 0
+    displayed = [dict(step=f'{i + first_step:02d}', **row) for i, row in enumerate(displayed)]
+    write(directory / "filtering_flow.tsv", displayed)
+    fig, ax = plt.subplots(figsize=(13, 8))
+    ax.set_axis_off()
+    fig.subplots_adjust(top=0.80, bottom=0.14)
+    for i, row in enumerate(displayed):
+        y = 0.91 - i * 0.80 / max(1, len(displayed) - 1)
+        color = ORANGE if i == len(displayed) - 1 else BLUE
+        height = min(0.14, 0.72 / max(1, len(displayed) - 1))
+        ax.add_patch(Rectangle((0.03, y - height / 2), 0.94, height, facecolor="#f0f4f7"))
+        ax.text(0.06, y, row['step'], fontsize=16, color=color, va="center", weight="bold")
+        ax.text(0.16, y, row["stage"], fontsize=13, va="center")
+        event_label = f"{row['event_count']:,}" if isinstance(row['event_count'], int) else row['event_count']
+        ax.text(0.76, y, event_label, ha="right", va="center", fontsize=20, color=color, weight="bold")
+        ax.text(0.92, y, f"{row['orthogroup_count']:,}", ha="right", va="center", fontsize=15)
+    ax.text(0.76, 1.09, "Events", ha="right", color="#556975")
+    ax.text(0.92, 1.09, "Orthogroups", ha="right", color="#556975")
+    save(
+        fig,
+        "filtering_flow",
+        "From modeled transfers to focused candidates",
+        "Distinct event IDs and orthogroups; duplication and repeated per-tip reports are not new modeled events."
+        + ("\nStep 00 counts existing gene-tree summaries, including zero-transfer OGs; its event count is NA."
+           if analyzed_orthogroups is not None else ""),
+        ("No UFB threshold applied; measured support and missingness remain annotations.\n"
+         if not support_filter_enabled else
+         "UFB/scaffold/Pfam counts retain the previously verified input cohort; broader upstream support counts are not inferred.\n"
+         if direction_selected is not None and filter_audit else
+         "Upstream direction/support counts are shown only when an explicit event-level filtering audit is supplied.\n") +
+        "UFB = Ultrafast bootstrap (gene-tree split support); category-1 internal recipient branches require all observed descendant tips = 1."
+        + ("\nEvent/species correspondence checks remain in the audit."
+           if not support_filter_enabled and filter_audit else ""),
+    )
+    return counts
+
+
 def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit="",
-                   context_annotations=''):
+                   context_annotations='', prefilter_selected=None, pfam_selected=None, direction_selected=None,
+                   support_filter_enabled=False, analyzed_orthogroups=None):
     import hashlib
     import textwrap
 
@@ -149,32 +274,10 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
         fig.savefig(directory / (name + ".png"), dpi=140)
         plt.close(fig)
 
-    counts = filtering_counts(source_events, selected, filter_audit)
-    if filter_audit:
-        counts[-2]["stage"] = "Bilateral scaffold background"
-    counts[-1]["stage"] = trait + " = 1 recipients"
-    write(directory / "filtering_flow.tsv", counts)
-    fig, ax = plt.subplots(figsize=(13, 8))
-    ax.set_axis_off()
-    fig.subplots_adjust(top=0.80, bottom=0.14)
-    for i, row in enumerate(counts):
-        y = 0.91 - i * 0.80 / max(1, len(counts) - 1)
-        color = ORANGE if i == len(counts) - 1 else BLUE
-        ax.add_patch(Rectangle((0.03, y - 0.07), 0.94, 0.14, facecolor="#f0f4f7"))
-        ax.text(0.06, y, f"{i + 1:02d}", fontsize=16, color=color, va="center", weight="bold")
-        ax.text(0.16, y, row["stage"], fontsize=13, va="center")
-        ax.text(0.76, y, f"{row['event_count']:,}", ha="right", va="center", fontsize=20, color=color, weight="bold")
-        ax.text(0.92, y, f"{row['orthogroup_count']:,}", ha="right", va="center", fontsize=15)
-    ax.text(0.76, 1.09, "Events", ha="right", color="#556975")
-    ax.text(0.92, 1.09, "Orthogroups", ha="right", color="#556975")
-    save(
-        fig,
-        "filtering_flow",
-        "From modeled transfers to focused candidates",
-        "Distinct event IDs and orthogroups; duplication and repeated per-tip reports are not new modeled events.",
-        "Upstream direction/support counts are shown only when an explicit event-level filtering audit is supplied.\n"
-        "UFB = Ultrafast bootstrap (gene-tree split support); category-1 internal recipient branches require all observed descendant tips = 1.",
-    )
+    counts = export_filtering_flow(directory, source_events, selected, trait, filter_audit,
+                                   prefilter_selected=prefilter_selected, pfam_selected=pfam_selected,
+                                   direction_selected=direction_selected, support_filter_enabled=support_filter_enabled,
+                                   analyzed_orthogroups=analyzed_orthogroups)
     families = sorted({r["orthogroup"] for r in selected})
     species = [tip.name for tip in tree.get_terminals()]
     membership = Counter()

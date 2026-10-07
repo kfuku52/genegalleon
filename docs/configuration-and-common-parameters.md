@@ -44,7 +44,19 @@ HGT summaries automatically return category-1 trait results with
 `run_hgt_trait_focus=1`. `hgt_summary_focus_event_tsv=auto` and
 `hgt_summary_focus_event_gene_tsv=auto` select native event/context tables;
 explicit paths preserve a previously filtered project cohort and enriched gene
-annotations. See [focused HGT outputs](host-scaffold-taxonomy.md#category-1-focused-results)
+annotations as inputs. Focused results additionally apply the configured
+[shared query-Pfam pair filter](gene-structure-tree-plot.md#shared-pfam-filter-for-focused-hgt).
+Pfam filtering precedes trait selection, so multiple traits share the same
+passing cohort and Pfam-stage counts.
+For non-Arthropoda donors into Insecta, set
+`hgt_summary_focus_direction_filter=non_arthropoda_to_insecta`. This additional
+species-branch filter follows the Pfam pair filter and precedes every trait's
+category-1 selection. `hgt_summary_focus_species_taxonomy=auto` reads the saved
+`output/species_taxonomy/species_taxonomy.tsv`; an explicit path selects another
+existing host-species taxonomy table. The general default `any` preserves other
+projects' transfer directions. See the root `direction_event_audit.tsv` and
+`direction_species_branches.tsv` for excluded, unknown and mixed branches.
+See [focused HGT outputs](host-scaffold-taxonomy.md#category-1-focused-results)
 for the three summary PDFs, two-page gene-tree/context PDFs, trait eligibility,
 internal-branch context and event-counting rules.
 `hgt_summary_focus_filter_audit_tsv` optionally supplies an existing project
@@ -421,6 +433,34 @@ candidate-free background, missing-data semantics, and counting units.
 - `hgt_summary_transfer_arrow_alpha` (default `0.55`): transfer-arrow opacity
   from `0` (transparent) to `1` (opaque), used by the summary and trait-focused
   figures. Translucent arrows make overlapping transfers easier to inspect.
+- `hgt_summary_focus_require_shared_pfam` (default `1`): category-1 focused
+  tables and figures require at least one retained event-linked donor/recipient
+  gene pair sharing a query Pfam accession, with each gene individually passing
+  the existing class scaffold-background profile. Set `0` for the earlier
+  scaffold-only cohort. The input and global candidate tables are preserved.
+- `hgt_summary_focus_min_shared_pfam_coverage` (default `0.5`): inclusive
+  fraction required on **both proteins of the same event-gene pair**. Union
+  overlapping saved query-domain intervals before dividing by that protein's
+  length in amino acids. This measures shared-domain query coverage, not
+  pairwise alignment coverage. Set `0` for any shared query Pfam. Review flags
+  for repeat/generic binding domains, differing domain sets, >2-fold query
+  length differences and proteins <100 aa do not exclude events.
+- `hgt_summary_focus_allow_both_no_pfam` (default `0`): when the Pfam filter is
+  enabled, set `1` to also allow a pair whose two genes both have explicit
+  searched/no-hit records. Missing records and one-sided no-hits still fail.
+  This explicit opt-in bypasses unavailable domain coverage; coverage stays
+  unmeasured. No additional E-value threshold is imposed on saved Pfam hits.
+  Saved query RPS-BLAST records are used; no additional search is run. Per-trait
+  event/pair/gene audits retain exclusion reasons and source hashes, including
+  when plotting is disabled.
+- `hgt_summary_focus_direction_filter` (default `any`): set
+  `non_arthropoda_to_insecta` to require modeled donor species branches entirely
+  outside Arthropoda and recipients entirely within Insecta, after Pfam and
+  before category-1 traits. Mixed, unknown and unmapped branches are withheld.
+- `hgt_summary_focus_species_taxonomy` (default `auto`): existing host-species
+  taxonomy for the direction filter, normally
+  `output/species_taxonomy/species_taxonomy.tsv`. An enabled filter requires
+  this table even without plotting.
 
 The transfer plot counts branch-level GeneRax `Y@donor@recipient` records and
 sets each arrow's constant shaft width in proportion to that direction's event

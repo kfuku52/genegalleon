@@ -8,8 +8,146 @@ SUPPORT = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT))
 
 from focus_hgt_gene_trees import annotate, background_supported  # noqa: E402
-from focus_hgt_traits import generate, read_tsv, write_tsv  # noqa: E402
+from focus_hgt_traits import generate as generate_filtered  # noqa: E402
+from focus_hgt_traits import read_tsv, write_tsv  # noqa: E402
 from species_trait_schema import schema_path, schema_payload  # noqa: E402
+
+
+def generate(*args, **kwargs):
+    # Existing trait/context tests isolate that behavior from the additional
+    # domain filter. Its enabled/default path has dedicated regressions below.
+    kwargs.setdefault('require_shared_pfam', False)
+    return generate_filtered(*args, **kwargs)
+
+
+def saved_species_taxonomy(path):
+    rows = [dict(species=name, resolution_status='resolved', domain=domain, phylum=phylum, **{'class': klass})
+            for name, domain, phylum, klass in [('A', 'Eukaryota', 'Arthropoda', 'Insecta'),
+                                               ('B', 'Eukaryota', 'Arthropoda', 'Insecta'),
+                                               ('C', 'Eukaryota', 'Arthropoda', 'Branchiopoda'),
+                                               ('D', 'Eukaryota', 'Streptophyta', 'Bryopsida'),
+                                               ('K', 'Bacteria', '', ''),
+                                               ('U', 'Eukaryota', '', '')]]
+    write_tsv(path, list(rows[0]), rows)
+    return path
+
+
+@pytest.mark.parametrize('donor,recipient,status,reason', [
+    ('D', 'A', 'passed', 'all_donor_tips_outside_arthropoda_all_recipient_tips_in_insecta'),
+    ('K', 'all_insects', 'passed', 'all_donor_tips_outside_arthropoda_all_recipient_tips_in_insecta'),
+    ('C', 'A', 'excluded_direction', 'donor_within_arthropoda'),
+    ('mixed_donor', 'A', 'withheld', 'donor_mixed_arthropoda'),
+    ('unknown_donor', 'A', 'withheld', 'donor_unknown_arthropoda'),
+    ('missing', 'A', 'withheld', 'donor_unmapped_arthropoda'),
+    ('D', 'C', 'excluded_direction', 'recipient_outside_insecta'),
+    ('D', 'mixed_recipient', 'withheld', 'recipient_mixed_insecta'),
+    ('D', 'U', 'withheld', 'recipient_unknown_insecta'),
+])
+def test_direction_uses_exact_species_branches_and_withholds_unknown_tips(tmp_path, donor, recipient, status, reason):
+    from focus_hgt_direction import filter_events
+    path = saved_species_taxonomy(tmp_path/'taxonomy.tsv')
+    nodes = {name: (name,) for name in ('A', 'B', 'C', 'D', 'K', 'U')}
+    nodes.update(all_insects=('A', 'B'), mixed_donor=('C', 'D'), unknown_donor=('D', 'U'), mixed_recipient=('A', 'C'))
+    event = dict(event_id='OG1:3:1', orthogroup='OG1', generax_donor_node=donor, generax_recipient_node=recipient,
+                 generax_transfer=f'Y@{donor}@{recipient}', donor_phylum='Arthropoda', donor_class='Insecta')
+    before = path.read_bytes()
+    selected, audit, branches, _ = filter_events([event], nodes, path)
+    assert audit[0]['direction_filter_status'] == status and audit[0]['direction_filter_reason'] == reason
+    assert bool(selected) == (status == 'passed')
+    assert 'direction_filter_status' not in event and path.read_bytes() == before
+    mixed = next(r for r in branches if r['species_branch'] == 'mixed_donor')
+    assert mixed['clade_tip_labels'] == 'C; D' and mixed['arthropoda_within_tip_count'] == 1
+
+
+def test_direction_taxonomy_aliases_are_exact_and_malformed_classifications_fail(tmp_path):
+    from focus_hgt_direction import filter_events, read_taxonomy
+    path = saved_species_taxonomy(tmp_path/'taxonomy.tsv')
+    fields, rows = read_tsv(path)
+    rows[0].update(species='canonical_A', tree_status='mapped', tree_tip='A')
+    fields += ['tree_status', 'tree_tip']
+    write_tsv(path, fields, rows)
+    aliases, _ = read_taxonomy(path)
+    assert aliases['A'] is aliases['canonical_A']
+    rows[1].update(tree_status='mapped', tree_tip='A')
+    write_tsv(path, fields, rows)
+    with pytest.raises(ValueError, match='alias'):
+        read_taxonomy(path)
+    rows[1].update(tree_tip='B', phylum='Streptophyta')
+    write_tsv(path, fields, rows)
+    with pytest.raises(ValueError, match='Arthropoda'):
+        read_taxonomy(path)
+    with pytest.raises(ValueError, match='transfer token'):
+        filter_events([dict(generax_donor_node='D', generax_recipient_node='A', generax_transfer='Y@C@A')],
+                      {'A': ('A',), 'D': ('D',)}, saved_species_taxonomy(path))
+
+
+def test_direction_is_evaluated_once_after_pfam_before_multiple_traits(source, monkeypatch):
+    import focus_hgt_direction
+    _, links = read_tsv(source[1])
+    links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
+    write_tsv(source[1], list(links[0]), links)
+    root = source[0].parent/'families'
+    saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=[], C_gene=['PF01053']))
+    taxonomy = saved_species_taxonomy(source[0].parent/'taxonomy.tsv')
+    calls = []
+    original = focus_hgt_direction.filter_events
+    def capture(events, *args):
+        calls.append({r['event_id'] for r in events})
+        assert all(r['pfam_filter_status'] == 'passed' and 'focus_trait' not in r for r in events)
+        return original(events, *args)
+    monkeypatch.setattr(focus_hgt_direction, 'filter_events', capture)
+    before = taxonomy.read_bytes()
+    report = generate_filtered(*source, plots=False, gene_family_root=root,
+                               direction_filter='non_arthropoda_to_insecta', species_taxonomy=taxonomy)
+    assert calls == [{'OG1:3:1', 'OG1:3:2', 'OG1:3:3', 'OG1:3:5'}]
+    assert report['shared_pfam_filter']['passed_event_count'] == 4
+    assert report['shared_direction_filter']['passed_event_count'] == 2
+    assert report['filtering_order'] == ['input_cohort', 'pfam_pair_filter', 'species_branch_direction_filter', 'trait_category1']
+    assert len(read_tsv(source[-1]/'direction_event_audit.tsv')[1]) == 4
+    assert len(read_tsv(source[-1]/'direction_species_branches.tsv')[1]) == 7
+    assert {r['event_id'] for r in read_tsv(source[-1]/'traits/category/all_category1/events.tsv')[1]} == {'OG1:3:1'}
+    assert report['pfam_filter']['category']['category1_passed_event_count'] == 2
+    assert str(taxonomy.resolve()) in report['inputs_sha256'] and taxonomy.read_bytes() == before
+    with pytest.raises(ValueError, match='requires existing species taxonomy'):
+        generate_filtered(*source, plots=False, gene_family_root=root, direction_filter='non_arthropoda_to_insecta')
+
+
+def test_direction_filter_flow_is_post_pfam_and_rejects_cohort_mismatches():
+    from focus_hgt_figures import filtering_counts
+    events = [dict(event_id=str(i), orthogroup='OG'+str(i)) for i in range(4)]
+    counts = filtering_counts(events, events[:1], pfam_selected=events[:3], direction_selected=events[:2])
+    assert [r['stage'] for r in counts] == ['Input supported-event cohort', 'Event-gene pair Pfam filter',
+                                           'Non-Arthropoda donor & category = 1 recipient']
+    assert [r['event_count'] for r in counts] == [4, 3, 1]
+    with pytest.raises(ValueError, match='subset'):
+        filtering_counts(events, events[:1], pfam_selected=events[:1], direction_selected=events[:2])
+
+
+def test_combined_flow_keeps_verified_support_grain_and_historical_audit(tmp_path):
+    from focus_hgt_figures import export_filtering_flow, filtering_counts
+    events = [dict(event_id=str(i), orthogroup='OG'+str(i), donor_classification='outside',
+                   recipient_classification='insect', status='accepted', support_used='90',
+                   support_source='support_generax_ufboot') for i in range(2)]
+    # A numeric support on an excluded event is not independently verified
+    # support, so removing its direction row cannot make it a passing event.
+    audit = events + [dict(events[0], event_id='other', status='excluded_direction',
+                          donor_classification='insect', support_used='99', support_source='NA')]
+    path = tmp_path/'audit.tsv'
+    write_tsv(path, list(audit[0]), audit)
+    original = path.read_bytes()
+    counts = export_filtering_flow(tmp_path/'plots', events, events[:1], 'gall', path,
+                                   pfam_selected=events, direction_selected=events[:1], support_filter_enabled=True)
+    assert [r['event_count'] for r in counts] == [3, 2, 2, 2, 1]
+    assert counts[-1]['stage'] == 'Non-Arthropoda donor & gall = 1 recipient'
+    assert len(counts) == 5 and counts[2]['stage'] == 'Bilateral scaffold background'
+    assert path.read_bytes() == original
+    legacy = filtering_counts(events, events[:1], path, pfam_selected=events, support_filter_enabled=True)
+    assert legacy[1]['stage'] == 'Non-Insecta to Insecta'
+    from pypdf import PdfReader
+    text = PdfReader(tmp_path/'plots/filtering_flow.pdf').pages[0].extract_text()
+    assert 'Upstream directional cohort' not in text
+    assert 'Non-Arthropoda donor & gall = 1 recipient' in text
+    assert 'previously verified input cohort' in text
 
 
 def supported_link(event_id, side, gene):
@@ -19,6 +157,241 @@ def supported_link(event_id, side, gene):
                 host_scaffold_background_class_incompatible_count="1", host_scaffold_background_class_unresolved_count="10",
                 host_scaffold_background_class_classified_fraction="0.5",
                 host_scaffold_background_class_compatible_fraction="0.9")
+
+
+def saved_pfam(root, gene_domains, family='OG1', legacy=False):
+    rows = []
+    fields = ['qacc', 'sacc', 'qlen', 'stitle', 'qstart', 'qend', 'evalue']
+    for gene, domains in gene_domains.items():
+        for domain in domains or ['']:
+            rows.append(dict(qacc=gene, sacc='123' if domain else '', qlen='100',
+                             stitle='pfam' + domain.removeprefix('PF') + ', Name, Description' if domain else '',
+                             qstart='1' if domain else '', qend='90' if domain else '', evalue='1e-20' if domain else ''))
+    path = root/'rpsblast'/(family + ('.rpsblast.tsv' if legacy else '_rpsblast.tsv'))
+    write_tsv(path, fields, rows)
+    return path
+
+
+@pytest.mark.parametrize('donor,recipient,allow,expected,status', [
+    (['PF01053'], ['PF01053'], False, True, 'shared_pfam_detected'),
+    (['PF01053'], ['PF00001'], True, False, 'detected_pfam_sets_disjoint'),
+    ([], ['PF01053'], True, False, 'one_searched_no_pfam_hit'),
+    (['PF01053'], [], True, False, 'one_searched_no_pfam_hit'),
+    ([], [], False, False, 'both_searched_no_pfam_hit'),
+    ([], [], True, True, 'both_searched_no_pfam_hit'),
+    (None, [], True, False, 'annotation_record_unavailable'),
+    (None, None, True, False, 'annotation_record_unavailable'),
+])
+def test_pfam_pair_filter_distinguishes_saved_no_hits_from_missing(tmp_path, donor, recipient, allow, expected, status):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    saved_pfam(tmp_path, {gene: domains for gene, domains in [('D_gene', donor), ('A_gene', recipient)]
+                          if domains is not None})
+    result, audit, pairs, genes, sources = filter_events(events, links, tmp_path, allow_both_no_pfam=allow)
+    assert bool(result) == expected
+    assert audit[0]['pfam_filter_status'] == ('passed' if expected else 'withheld')
+    assert pairs[0]['pair_status'] == status
+    assert pairs[0]['passes_pfam_filter'] == str(expected)
+    assert len(genes) == 2 and sources
+
+
+def test_pfam_filter_is_exact_event_pair_and_supported_gene_specific(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    other = dict(events[0], event_id='OG1:3:2', event_index='2', generax_transfer='Y@D@B')
+    links += [supported_link(other['event_id'], 'donor', 'D_other'),
+              supported_link(other['event_id'], 'recipient', 'B_gene'),
+              dict(supported_link(events[0]['event_id'], 'recipient', 'A_unconfirmed'), host_scaffold_status='unavailable'),
+              dict(supported_link(events[0]['event_id'], 'recipient', 'A_transferred_out'), lineage_status='transferred_out')]
+    saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF00001'], D_other=['PF00001'],
+                              B_gene=['PF00001'], A_unconfirmed=['PF01053'], A_transferred_out=['PF01053'],
+                              neighbor=['PF01053']))
+    selected, audit, pairs, _, _ = filter_events(events + [other], links, tmp_path)
+    assert [r['event_id'] for r in selected] == [other['event_id']]
+    assert [r['pfam_passing_pair_count'] for r in audit] == [0, 1]
+    assert len(pairs) == 2  # No event-wide/domain-wide unions, unconfirmed genes or neighbor rescue.
+    # Additional recipient copy forms its own pair; one passing pair retains the event.
+    links.append(supported_link(events[0]['event_id'], 'recipient', 'A_good_copy'))
+    saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF00001'], A_good_copy=['PF01053'],
+                              D_other=['PF00001'], B_gene=['PF00001']))
+    selected, audit, _, _, _ = filter_events(events + [other], links, tmp_path)
+    assert len(selected) == 2 and audit[0]['pfam_compared_pair_count'] == 2
+    assert audit[0]['pfam_shared_accessions'] == 'PF01053'
+
+
+def test_pfam_filter_never_borrows_another_family_record_and_supports_legacy_filename(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']), family='OG2')
+    assert not filter_events(events, links, tmp_path, allow_both_no_pfam=True)[0]
+    saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']), legacy=True)
+    assert len(filter_events(events, links, tmp_path)[0]) == 1
+    links[0]['orthogroup'] = 'OG2'
+    with pytest.raises(ValueError, match='identity mismatch'):
+        filter_events(events, links, tmp_path)
+
+
+def test_pfam_filter_rejects_malformed_no_hit_or_model_records(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, dict(D_gene=[], A_gene=[]))
+    fields, rows = read_tsv(path)
+    rows[0]['qstart'] = '1'
+    write_tsv(path, fields, rows)
+    with pytest.raises(ValueError, match='no-hit record'):
+        filter_events(events, links, tmp_path, allow_both_no_pfam=True)
+    path = saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']))
+    fields, rows = read_tsv(path)
+    rows[0]['stitle'] = 'Unidentified domain'
+    write_tsv(path, fields, rows)
+    with pytest.raises(ValueError, match='Unmapped Pfam'):
+        filter_events(events, links, tmp_path)
+
+
+def test_pfam_filter_reads_archived_query_hits_without_materializing_inputs(tmp_path):
+    from focus_hgt_pfam import filter_events
+    from gene_family_output_store import archive_completed_outputs
+    _, events, links = focused_node_source()
+    root = tmp_path/'family'
+    path = saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053']))
+    # Existing store completion contract includes the rendered family tree.
+    for subdir, filename in [('mafft', 'OG1_cds.aln.fa.gz'),
+                             ('stat_branch', 'OG1_stat.branch.tsv'), ('stat_tree', 'OG1_stat.tree.tsv'),
+                             ('tree_plot', 'OG1_tree_plot.pdf')]:
+        target = root/subdir/filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('archive fixture\n')
+    original = filter_events(events, links, root)
+    archive_completed_outputs(root, 'query2family', ['OG1'], lambda name: 'OG1' if name.startswith('OG1_') else None,
+                              min_files=1)
+    assert not path.exists()
+    before = {p: p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    archived = filter_events(events, links, root)
+    assert original == archived
+    assert before == {p: p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
+def test_pfam_filter_flow_preserves_pre_filter_trait_count_and_validates_subset():
+    from focus_hgt_figures import filtering_counts
+    events = [dict(event_id=f'e{i}', orthogroup='OG1') for i in range(3)]
+    counts = filtering_counts(events, events[:1], prefilter_selected=events[:2])
+    assert [r['event_count'] for r in counts] == [3, 2, 1]
+    assert counts[-1]['stage'] == 'Event-gene pair Pfam filter'
+    with pytest.raises(ValueError, match='not a subset'):
+        filtering_counts(events, events[2:], prefilter_selected=events[:2])
+    counts = filtering_counts(events, events[:1], pfam_selected=events[:2])
+    assert [r['stage'] for r in counts][-2:] == ['Event-gene pair Pfam filter', 'Category = 1 recipients']
+    assert [r['event_count'] for r in counts] == [3, 2, 1]
+    with pytest.raises(ValueError, match='not a subset'):
+        filtering_counts(events, events[2:], pfam_selected=events[:2])
+
+
+def test_pfam_filter_rejects_reserved_columns_even_without_category1_events(source):
+    fields, events = read_tsv(source[0])
+    for row in events:
+        row['pfam_filter_status'] = 'passed'
+    write_tsv(source[0], fields + ['pfam_filter_status'], events)
+    source[3].write_text('species\tbinary\nA\t0\nB\t0\nC\t0\nD\t0\n')
+    schema_path(source[3]).write_bytes(schema_payload(source[3].read_bytes(), {'binary': 'binary'}))
+    with pytest.raises(ValueError, match='Reserved Pfam'):
+        generate_filtered(*source, plots=False)
+
+
+def test_pfam_filter_defaults_apply_to_tables_without_plotting_and_empty_exception_is_opt_in(source):
+    events, links, tree, trait, output = source
+    _, erows = read_tsv(events)
+    _, lrows = read_tsv(links)
+    lrows = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in lrows]
+    write_tsv(links, list(lrows[0]), lrows)
+    root = events.parent/'families'
+    saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=[], C_gene=[]))
+    originals = events.read_bytes(), links.read_bytes()
+    report = generate_filtered(*source, plots=False, gene_family_root=root)
+    selected = read_tsv(output/'traits/binary/all_category1/events.tsv')[1]
+    assert {r['event_id'] for r in selected} == {'OG1:3:1', 'OG1:3:2'}
+    assert report['require_shared_pfam'] is True and report['allow_both_no_pfam'] is False
+    assert len(read_tsv(output/'traits/binary/pfam_event_audit.tsv')[1]) == 3
+    assert read_tsv(output/'traits/binary/tips/B/direct_events.tsv')[1] == []
+    assert len(read_tsv(output/'traits/binary/tips/B/ancestral_recipient_events.tsv')[1]) == 1
+    assert all(r['pfam_filter_status'] == 'passed' for r in selected)
+    saved_pfam(root, dict(D_gene=[], A_gene=[], B_gene=[], C_gene=[]))
+    generate_filtered(*source, plots=False, gene_family_root=root)
+    assert read_tsv(output/'traits/binary/all_category1/events.tsv')[1] == []
+    generate_filtered(*source, plots=False, gene_family_root=root, allow_both_no_pfam=True)
+    assert len(read_tsv(output/'traits/binary/all_category1/events.tsv')[1]) == 3
+    assert (events.read_bytes(), links.read_bytes()) == originals
+    assert len(erows) == 5
+
+
+def test_filtered_plot_consumers_receive_the_same_cohort_as_filtered_tables(source, monkeypatch):
+    import focus_hgt_figures
+    import focus_hgt_gene_trees
+    import focus_hgt_traits
+    fields, links = read_tsv(source[1])
+    links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
+    write_tsv(source[1], list(links[0]), links)
+    root = source[0].parent/'families'
+    saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=[], C_gene=[]))
+    original = focus_hgt_traits.export_bundle
+    def without_species_pdf(*args, **kwargs):
+        args = list(args)
+        args[8] = False
+        return original(*args, **kwargs)
+    trees, figures = [], []
+    def capture_tree(directory, events, links, family_root, **kwargs):
+        trees.append({r['event_id'] for r in events})
+        write_tsv(directory/'event_node_audit.tsv', ['event_id', 'status'],
+                  [dict(event_id=r['event_id'], status='selected') for r in events])
+        return dict(rendered_family_count=1)
+    def capture_figure(directory, source_events, selected, *args, **kwargs):
+        counts = focus_hgt_figures.filtering_counts(source_events, selected, pfam_selected=kwargs['pfam_selected'])
+        figures.append([r['event_count'] for r in counts])
+        return dict(pdf_count=3)
+    monkeypatch.setattr(focus_hgt_traits, 'export_bundle', without_species_pdf)
+    monkeypatch.setattr(focus_hgt_gene_trees, 'export_gene_trees', capture_tree)
+    monkeypatch.setattr(focus_hgt_figures, 'export_figures', capture_figure)
+    generate_filtered(*source, plots=True, gene_family_root=root)
+    assert trees == [{'OG1:3:1', 'OG1:3:2'}, {'OG1:3:1'}]
+    assert figures == [[5, 2, 2], [5, 2, 1]]
+    for trait, expected in zip(('binary', 'category'), trees, strict=True):
+        assert {r['event_id'] for r in read_tsv(source[-1]/f'traits/{trait}/all_category1/events.tsv')[1]} == expected
+
+
+def test_shared_pfam_is_evaluated_once_before_multiple_traits(source, monkeypatch):
+    import focus_hgt_pfam
+    fields, links = read_tsv(source[1])
+    links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
+    write_tsv(source[1], list(links[0]), links)
+    root = source[0].parent/'families'
+    saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=[], C_gene=[]))
+    calls=[]
+    original=focus_hgt_pfam.filter_events
+    def capture(events, *args, **kwargs):
+        calls.append({r['event_id'] for r in events})
+        assert all('focus_trait' not in r for r in events)
+        return original(events, *args, **kwargs)
+    monkeypatch.setattr(focus_hgt_pfam, 'filter_events', capture)
+    report=generate_filtered(*source, plots=False, gene_family_root=root)
+    assert calls == [{f'OG1:3:{i}' for i in range(1,6)}]
+    assert report['shared_pfam_filter']['input_event_count']==5
+    assert report['shared_pfam_filter']['passed_event_count']==2
+    assert report['filtering_order']==['input_cohort','pfam_pair_filter','trait_category1']
+    assert len(read_tsv(source[-1]/'pfam_event_audit.tsv')[1])==5
+    assert len(read_tsv(source[-1]/'pfam_events.tsv')[1])==2
+    assert all(report['pfam_filter'][trait]['passed_event_count']==2 for trait in ('binary','category'))
+
+
+def test_no_scaffold_supported_genes_do_not_consume_irrelevant_domain_inputs(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    for row in links:
+        row['host_scaffold_status']='unavailable'
+    path=tmp_path/'rpsblast/OG1_rpsblast.tsv'
+    path.parent.mkdir()
+    path.write_text('Legacy plotting-only fixture\n')
+    selected, audit, pairs, genes, sources=filter_events(events,links,tmp_path)
+    assert not selected and not pairs and not genes and not sources
+    assert audit[0]['pfam_filter_reason']=='no_bilateral_scaffold_supported_gene_pair'
 
 
 def focused_node_source():
@@ -77,7 +450,7 @@ def test_focused_gene_nodes_withhold_missing_or_unmapped_evidence(alteration, re
         links[0]['gene_id'] = 'other_family_gene'
     else:
         links[1]["host_scaffold_background_class_total_count"] = ""
-    output, audit = annotate(stat, events, links)
+    output, audit = annotate(stat, events, links, minimum_ufboot=90)
     assert audit[0]["reason"] == reason
     assert all(row["hgtfocus_event_count"] == 0 for row in output)
 
@@ -434,6 +807,9 @@ def test_renderer_argument_record_roundtrip_and_exact_alignment_tip_validation(t
     args = [f'--stat_branch={root}/stat_branch/OG1_stat.branch.tsv',
             '--panel1=tree,bl_rooted,support_unrooted,l1ou_regime,L',
             f'--panel2=domain,{root}/rpsblast/OG1_rpsblast.tsv',
+            '--panel3=synteny_similarity,missing.tsv,20,15',
+            '--panel4=sequence_similarity,missing.fa,cds,15,1',
+            '--panel5=synteny,missing.tsv,5',
             '--long_branch_display=auto', '--event_method=auto']
     record(path, root, args, 'taxonomic')
     domain = root/'rpsblast/OG1_rpsblast.tsv'
@@ -448,6 +824,9 @@ def test_renderer_argument_record_roundtrip_and_exact_alignment_tip_validation(t
     assert '--long_branch_display=auto' in report['arguments']
     assert not any(arg.startswith('--stat_branch=') for arg in report['arguments'])
     assert report['settings_source'] == 'recorded_gg_gene_evolution_arguments'
+    assert not any('=sequence_similarity,' in arg or '=synteny_similarity,' in arg for arg in report['arguments'])
+    assert '--panel3=synteny,missing.tsv,5' in report['arguments']
+    assert report['focused_disabled_panels'] == ['synteny_similarity', 'sequence_similarity']
     assert (tmp_path/'materialized/rpsblast/OG1_rpsblast.tsv').read_bytes() == domain.read_bytes()
 
 
@@ -579,7 +958,7 @@ def test_context_annotations_require_exact_gene_family_and_same_best_hit(tmp_pat
     assert 'best-hit prediction' in cells[1] and 'GFF' not in cells[1]
     assert annotation_cells(dict(exact, swissprot_best_hit_protein_name=''), 'A', 'Focal')[1] == 'Unavailable'
     assert annotation_cells(dict(exact, besthit_accession=''), 'A', 'Focal')[1] == 'Unavailable'
-    assert 'Kingdom: unavailable' in cells[3]  # No name-based taxonomy inference.
+    assert 'Kingdom: unavailable' in cells[2]  # No name-based taxonomy inference.
     missing = annotations.get('A_neighbor')
     assert missing['besthit_accession'] == '' and missing['protein_product_name'] == ''
     with pytest.raises(ValueError, match='family/gene mapping'):
@@ -642,7 +1021,8 @@ def test_context_annotation_page_six_tracks_with_neighbors_and_long_rank_names(t
                                ['Fungi', 'Ascomycota', 'Schizosaccharomycetes', 'Schizosaccharomycetales',
                                 'Schizosaccharomycetaceae', 'Schizosaccharomyces'], strict=True)})
                 records.append(row)
-                expected.add((gene, ident))
+                if j in {1, 2, 3, 4, 5}:
+                    expected.add((gene, ident))
         write_tsv(gff/f'{species}.gff_info.tsv', list(gff_rows[0]), gff_rows)
     path = tmp_path/'annotations.tsv'
     write_tsv(path, list(records[0]), records)
@@ -654,10 +1034,11 @@ def test_context_annotation_page_six_tracks_with_neighbors_and_long_rank_names(t
     assert len(reader.pages) == 1
     text = ' '.join(reader.pages[0].extract_text().split())
     assert text.count('Best-hit taxonomic ranks') == 6
+    assert text.count('MMseqs2 classification') == 6
     assert 'best-hit prediction' in text and 'GFF product' not in text
     assert 'Transcriptional regulator (NtrC/NifA family)' not in text
     assert 'Schizosaccharomycetaceae' in text and 'Genus: Schizosaccharomyces' in text
-    assert len(annotations.display_audit) == 42
+    assert len(annotations.display_audit) == 30
     assert {(r['context_focal_gene_id'], r['gene_id']) for r in annotations.display_audit} == expected
     assert all(r['event_ids'] == events[0]['event_id'] for r in annotations.display_audit)
     assert all(r['orthogroup'] == 'OtherOG' for r in annotations.display_audit if r['context_role'] == 'neighbor')
@@ -666,6 +1047,190 @@ def test_context_annotation_page_six_tracks_with_neighbors_and_long_rank_names(t
         for i, cell in enumerate(cells):
             assert all(text_width(line) <= (TABLE_EDGES[i+1]-TABLE_EDGES[i])*TABLE_WIDTH_PT-10
                        for line in cell.split('\n'))
+
+
+def test_context_displays_own_mmseqs2_taxonomy_separately_from_swissprot(tmp_path):
+    from focus_hgt_context_annotations import RANKS, ContextAnnotations, annotation_cells
+    from scaffold_taxonomy import RANKS as HOST_RANKS
+
+    raw, host = tmp_path/'raw', tmp_path/'host'
+    raw.mkdir()
+    host.mkdir()
+    path = raw/'A_mmseqs2taxonomy.tsv'
+    path.write_text('A_gene\t4792\tspecies\tPhytophthora nicotianae\n'
+                    'A_neighbor\t6656\tphylum\tArthropoda\nA_unknown\t0\tno rank\tunclassified\n')
+    rows = [dict(species='A', gene_id=gene, scaffold='scaffold', locus_id=gene, count_unit='gff_locus',
+                 rank=rank, host_taxid=str(4792 if rank == 'species' else 1),
+                 label='compatible' if gene == 'A_gene' else 'unresolved')
+            for gene in ['A_gene', 'A_neighbor'] for rank in HOST_RANKS]
+    write_tsv(host/'A_gene_taxonomy.tsv', list(rows[0]), rows)
+    annotations = ContextAnnotations(mmseqs2_taxonomy_dir=raw, scaffold_taxonomy_dir=host)
+    record = annotations.get('A_gene', species='A')
+    record.update(besthit_accession='Q96T49', besthit_organism='Homo sapiens',
+                  swissprot_best_hit_protein_name='Human predicted product', **{f'besthit_{rank}': '' for rank in RANKS})
+    cells = annotation_cells(record, 'A', 'Focal')
+    assert 'Phytophthora nicotianae' in cells[3] and 'Homo sapiens' not in cells[3]
+    assert 'Homo sapiens' in cells[2] and 'Phytophthora nicotianae' not in cells[2]
+    assert 'Host class: compatible' in cells[3] and 'taxid: 4792' in cells[3]
+    neighbor = annotations.get('A_neighbor', species='A')
+    assert neighbor['mmseqs2_lca_name'] == 'Arthropoda' and neighbor['mmseqs2_host_class_label'] == 'unresolved'
+    assert annotations.get('A_unknown', species='A')['mmseqs2_status'] == 'unclassified'
+    missing = annotations.get('A_missing', species='A')
+    assert missing['mmseqs2_status'] == 'gene_record_unavailable' and missing['mmseqs2_lca_name'] == ''
+    assert annotations.get('B_gene', species='B')['mmseqs2_status'] == 'source_unavailable'
+    path.write_text(path.read_text() + 'A_copy\t1\tno rank\troot\n')
+    with pytest.raises(ValueError, match='changed during rendering'):
+        annotations.verify()
+    for text, message in [('A_gene\t9606.1\tspecies\tHuman\n', 'taxid'),
+                          ('A_gene\t9606\tspecies\tHuman\nA_gene\t4792\tspecies\tOther\n', 'Duplicate'),
+                          ('A_gene\t9606\n', 'Malformed')]:
+        path.write_text(text)
+        with pytest.raises(ValueError, match=message):
+            ContextAnnotations(mmseqs2_taxonomy_dir=raw).get('A_gene', species='A')
+
+
+def test_context_neighbor_selection_reserves_two_flanks_and_adds_intron_hosting_gene(tmp_path):
+    from focus_hgt_context import GenomeCoordinates
+
+    focal = dict(gene_id='A_focal', chromosome='scaffold', start='2244212', end='2244850',
+                 feature_type='CDS', feature_blocks='2244212-2244850')
+    enclosing = dict(focal, gene_id='A_enclosing', start='2226370', end='2246543',
+                     feature_blocks='2226370-2226660;2235466-2235743;2246441-2246543')
+    rows = [focal, enclosing]
+    rows += [dict(focal, gene_id=f'A_flank{i}', start=str(2240000-i*1000), end=str(2240100-i*1000)) for i in range(6)]
+    rows += [dict(focal, gene_id=f'A_right{i}', start=str(2250000+i*1000), end=str(2250100+i*1000)) for i in range(6)]
+    write_tsv(tmp_path/'A.gff_info.tsv', list(focal), rows)
+    _, neighbors, _ = GenomeCoordinates(tmp_path).neighborhood(dict(gene_species='A', gene_id='A_focal'))
+    assert 'A_enclosing' in {r['gene_id'] for r in neighbors}
+    assert len(neighbors) == 6  # Focal, two left, two right, one overlapping.
+    from focus_hgt_context import neighbor_counts
+    counts = neighbor_counts(focal, neighbors)
+    assert counts['neighbor_left_gene_count'] == counts['neighbor_right_gene_count'] == 2
+
+
+def test_all_models_in_view_are_drawn_without_expanding_annotation_table(tmp_path):
+    from focus_hgt_context import GenomeCoordinates, model_span, prepare_context_models
+    from focus_hgt_context_annotations import ContextAnnotations, context_annotation_rows
+    focal = dict(gene_id='A_focal', chromosome='s1', start='10000', end='10100',
+                 feature_type='CDS', feature_blocks='10000-10100', utr_blocks='')
+    rows = [focal]
+    for i, start in enumerate([1000,2000,3000,7000,11000,12000,13000,14000,15000]):
+        rows.append(dict(focal, gene_id=f'A_neighbor{i}', start=str(start), end=str(start+100),
+                         feature_blocks=f'{start}-{start+100}'))
+    rows += [dict(focal, gene_id=f'A_nested{i}', start='10010', end='10050',
+                  feature_blocks='10010-10050') for i in range(4)]
+    rows += [dict(focal, gene_id='A_far', start='200000', end='200100', feature_blocks='200000-200100'),
+             dict(focal, gene_id='A_wrong_scaffold', chromosome='s2')]
+    write_tsv(tmp_path/'A.gff_info.tsv', list(focal), rows)
+    coords = GenomeCoordinates(tmp_path)
+    link = dict(gene_id='A_focal', gene_species='A')
+    _, neighbors, _ = coords.neighborhood(link)
+    entry = dict(focal=focal, neighbors=neighbors, link=link, side='recipient', event_ids={'e1'})
+    extent = prepare_context_models([entry], coords)
+    expected = {r['gene_id'] for r in rows if r['chromosome']=='s1'
+                and entry['display_coordinates'].point(model_span(r)[0]) <= extent
+                and entry['display_coordinates'].point(model_span(r)[1]) >= -extent}
+    assert {r['gene_id'] for r in entry['models']} == expected
+    assert len(entry['models']) > len(neighbors)
+    assert 'A_wrong_scaffold' not in expected
+    assert len({entry['model_lanes'][f'A_nested{i}'] for i in range(4)}) == 4
+    assert entry['model_height_pt'] > 62
+    for row in entry['models']:
+        assert entry['display_coordinates'].point(int(row['end'])+1)-entry['display_coordinates'].point(int(row['start'])) == pytest.approx(
+            (int(row['end'])+1-int(row['start']))/1000)
+    tables = context_annotation_rows(entry, ContextAnnotations(), 'OG1', {})
+    assert {r['gene_id'] for r in tables} == {r['gene_id'] for r in neighbors}
+
+
+def test_mmseqs2_query_rank_names_follow_saved_lineage_not_host_or_best_hit(tmp_path):
+    import sqlite3
+
+    from focus_hgt_context_annotations import RANKS, ContextAnnotations, annotation_cells
+    db = tmp_path/'taxa.sqlite'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE species(taxid INTEGER PRIMARY KEY,spname TEXT,rank TEXT,track TEXT)')
+        conn.execute('CREATE TABLE merged(taxid_old INTEGER,taxid_new INTEGER)')
+        for i, rank in enumerate(RANKS, 1):
+            conn.execute('INSERT INTO species VALUES(?,?,?,?)', (i, 'Query_'+rank, rank, ','.join(map(str, range(i,0,-1)))))
+        conn.execute('INSERT INTO species VALUES(7,"Query_species","species","7,6,5,4,3,2,1")')
+    (tmp_path/'A_mmseqs2taxonomy.tsv').write_text('A_gene\t7\tspecies\tQuery_species\t1\t1\t1\t1\t1;2;3;4;5;6;7\n'
+                                               'A_broad\t2\tphylum\tQuery_phylum\t1\t1\t1\t1\t1;2\n')
+    before = db.read_bytes()
+    annotations = ContextAnnotations(mmseqs2_taxonomy_dir=tmp_path, taxonomy_dbfile=db)
+    row = annotations.get('A_gene', species='A')
+    assert all(row['mmseqs2_'+rank] == 'Query_'+rank for rank in RANKS)
+    broad = annotations.get('A_broad', species='A')
+    assert broad['mmseqs2_kingdom']=='Query_kingdom' and broad['mmseqs2_genus']==''
+    assert broad['mmseqs2_lineage_status']=='saved_lineage_resolved'
+    cells = annotation_cells(dict(row, besthit_accession='P1', besthit_organism='Other organism',
+                                  besthit_genus='Other genus', swissprot_best_hit_protein_name='Product'), 'A', 'Focal')
+    assert 'Product' in cells[1] and 'Other organism' in cells[2] and 'Query_genus' in cells[3]
+    assert 'Other genus' not in cells[3]
+    annotations.verify()
+    assert db.read_bytes()==before
+    missing = ContextAnnotations(mmseqs2_taxonomy_dir=tmp_path).get('A_gene', species='A')
+    assert missing['mmseqs2_lineage_status']=='taxonomy_source_unavailable' and missing['mmseqs2_genus']==''
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE species SET spname="Changed" WHERE taxid=6')
+    with pytest.raises(ValueError,match='changed during rendering'):
+        annotations.verify()
+
+
+def test_context_two_flanks_ignore_distance_cutoff_and_keep_scaffolds_separate(tmp_path):
+    from focus_hgt_context import GenomeCoordinates, neighbor_counts
+    focal = dict(gene_id='A_focal', chromosome='s1', start='1000000', end='1001000',
+                 feature_type='CDS', feature_blocks='1000000-1001000')
+    rows = [focal]
+    for name, start in [('left_far', 100), ('left_near', 900000), ('right_near', 1100000),
+                        ('right_far', 2000000), ('right_extra', 3000000)]:
+        rows.append(dict(focal, gene_id='A_'+name, start=str(start), end=str(start+100),
+                         feature_blocks=f'{start}-{start+100}'))
+    rows.append(dict(rows[1], gene_id='A_other_scaffold', chromosome='s2'))
+    write_tsv(tmp_path/'A.gff_info.tsv', list(focal), rows)
+    _, neighbors, _ = GenomeCoordinates(tmp_path).neighborhood(dict(gene_species='A', gene_id='A_focal'))
+    assert {r['gene_id'] for r in neighbors} == {'A_focal','A_left_far','A_left_near','A_right_near','A_right_far'}
+    counts = neighbor_counts(focal, neighbors)
+    assert counts['neighbor_left_status'] == counts['neighbor_right_status'] == 'minimum_met'
+    sparse = neighbor_counts(focal, [focal, rows[1]])
+    assert sparse['neighbor_left_gene_count'] == 1 and sparse['neighbor_right_gene_count'] == 0
+    assert sparse['neighbor_right_status'] == 'insufficient_annotated_loci'
+    assert neighbor_counts(None, [])['neighbor_left_gene_count'] == ''
+
+
+def test_gap_compression_preserves_unknown_gene_spans_and_overlapping_loci():
+    from focus_hgt_context import GapCompressedCoordinates
+    focal = dict(gene_id='A_focal', start='100000', end='130000', utr_blocks='99000-99999')
+    enclosing = dict(gene_id='A_enclosing', start='95000', end='135000')
+    left = dict(gene_id='A_left', start='1000', end='2000')
+    right = dict(gene_id='A_right', start='1000000', end='1001000')
+    display = GapCompressedCoordinates(focal, [left, enclosing, focal, right])
+    assert display.point(115000) == 0
+    for row in [left, enclosing, focal, right]:
+        assert display.point(int(row['end'])+1) - display.point(int(row['start'])) == pytest.approx(
+            (int(row['end'])+1-int(row['start']))/1000)
+    assert display.point(129000)-display.point(101000) == pytest.approx(28)  # Introns remain genomic-length.
+    gaps = display.audit()
+    assert len(gaps) == 2
+    assert all(g['display_end_kb']-g['display_start_kb'] == pytest.approx(2) for g in gaps)
+    assert gaps[0]['genomic_start_bp'] == 2001 and gaps[0]['genomic_end_exclusive_bp'] == 95000
+    assert gaps[0]['omitted_bp'] == 92999 - 2000
+    positions = [1000,2001,50000,95000,115000,135001,500000,1000000,1001001]
+    assert [display.point(x) for x in positions] == sorted(display.point(x) for x in positions)
+
+
+def test_compressed_introns_preserve_nested_focal_exon_and_true_coordinate_audit():
+    from focus_hgt_context import GapCompressedCoordinates
+    host = dict(gene_id='A_host', start='100', end='100000', feature_type='CDS',
+                feature_blocks='100-200;99900-100000')
+    focal = dict(gene_id='A_focal', start='50000', end='50638', feature_type='CDS',
+                 feature_blocks='50000-50638')
+    display = GapCompressedCoordinates(focal, [host, focal])
+    assert display.point(50319) == 0
+    assert display.point(50639)-display.point(50000) == pytest.approx(.639)
+    assert display.point(201)-display.point(100) == pytest.approx(.101)
+    assert len(display.audit()) == 2 and all(g['gap_type'] == 'intronic' for g in display.audit())
+    assert sum(g['omitted_bp'] for g in display.audit()) == (50000-201)+(99900-50639)-4000
+    assert all(g['display_end_kb']-g['display_start_kb'] == pytest.approx(2) for g in display.audit())
 
 
 def test_filter_flow_validates_event_grain_and_does_not_invent_upstream_counts(tmp_path):
@@ -864,3 +1429,190 @@ def test_missing_gff_coordinates_remain_unavailable_and_invalid_spans_fail(tmp_p
         write_tsv(root/'A.gff_info.tsv', list(row), [dict(row, start=span[0], end=span[1])])
         with pytest.raises(ValueError, match='Invalid GFF coordinate span'):
             GenomeCoordinates(root).load('A')
+
+
+@pytest.mark.parametrize('donor_end,recipient_end,minimum,passed', [
+    (50, 50, .5, True), (49, 90, .5, False), (90, 49, .5, False),
+    (1, 1, 0, True), (100, 100, 1, True)])
+def test_shared_pfam_query_coverage_is_inclusive_on_both_genes(tmp_path, donor_end, recipient_end, minimum, passed):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']))
+    fields, rows = read_tsv(path)
+    for row, end in zip(rows, (donor_end, recipient_end), strict=True):
+        row['qend'] = str(end)
+    write_tsv(path, fields, rows)
+    selected, audit, pairs, _, _ = filter_events(events, links, tmp_path, min_shared_pfam_coverage=minimum)
+    assert bool(selected) is passed
+    assert pairs[0]['donor_shared_pfam_covered_aa'] == donor_end
+    assert pairs[0]['recipient_shared_pfam_query_coverage'] == recipient_end / 100
+    assert pairs[0]['coverage_status'] == ('passed' if passed else 'below_minimum')
+    if not passed:
+        assert audit[0]['pfam_filter_reason'] == 'shared_pfam_below_minimum_query_coverage'
+
+
+def test_shared_domain_intervals_are_unioned_without_overlap_double_counting(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']))
+    fields, rows = read_tsv(path)
+    hits = []
+    for row in rows:
+        hits.extend([dict(row, qstart='1', qend='30'), dict(row, qstart='11', qend='40')])
+    write_tsv(path, fields, hits)
+    selected, _, pairs, _, _ = filter_events(events, links, tmp_path)
+    assert not selected and pairs[0]['donor_shared_pfam_covered_aa'] == 40
+    hits.append(dict(rows[0], stitle='pfam00001, Other, Description', qstart='41', qend='100'))
+    write_tsv(path, fields, hits)
+    assert not filter_events(events, links, tmp_path)[0]  # Unshared domain cannot rescue coverage.
+
+
+def test_coverages_cannot_be_borrowed_from_different_pairs(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    eid = events[0]['event_id']
+    links += [supported_link(eid, 'donor', 'D_other'), supported_link(eid, 'recipient', 'A_other')]
+    path = saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053'],
+                                    D_other=['PF00001'], A_other=['PF00001']))
+    fields, rows = read_tsv(path)
+    for row in rows:
+        row['qend'] = '90' if row['qacc'] in {'D_gene', 'A_other'} else '20'
+    write_tsv(path, fields, rows)
+    selected, audit, pairs, _, _ = filter_events(events, links, tmp_path)
+    assert not selected and len(pairs) == 4
+    assert min(audit[0]['pfam_best_pair_donor_query_coverage'], audit[0]['pfam_best_pair_recipient_query_coverage']) == .2
+    for row in rows:
+        if row['qacc'] == 'A_gene':
+            row['qend'] = '50'
+    write_tsv(path, fields, rows)
+    selected, audit, pairs, _, _ = filter_events(events, links, tmp_path)
+    assert len(selected) == 1 and audit[0]['pfam_passing_pair_count'] == 1
+    assert audit[0]['pfam_best_pair_donor_gene'] == 'D_gene'
+    assert audit[0]['pfam_best_pair_recipient_gene'] == 'A_gene'
+
+
+@pytest.mark.parametrize('minimum', [-.1, 1.1, float('nan'), float('inf'), 'bad', None])
+def test_invalid_pfam_coverage_configuration_fails_even_for_empty_cohort(minimum):
+    from focus_hgt_pfam import filter_events
+    with pytest.raises(ValueError, match='finite fraction'):
+        filter_events([], [], '', min_shared_pfam_coverage=minimum)
+
+
+def test_domain_review_flags_are_not_hard_exclusions(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, dict(D_gene=['PF00023', 'PF00001'], A_gene=['PF00023']))
+    fields, rows = read_tsv(path)
+    for row in rows:
+        row.update(qlen='90', qend='60')
+        if row['stitle'].startswith('pfam00023'):
+            row['stitle'] = 'pfam00023, Ank, Ankyrin repeat'
+    write_tsv(path, fields, rows)
+    selected, _, pairs, genes, _ = filter_events(events, links, tmp_path)
+    assert selected
+    flags = pairs[0]['pair_attention_flags']
+    assert 'shared_repeat_or_generic_binding_domain_only' in flags
+    assert 'pfam_domain_sets_differ_architecture_review' in flags
+    assert 'donor_short_query_protein_lt100aa' in flags and 'recipient_short_query_protein_lt100aa' in flags
+    assert all(r['gene_attention_flags'] == 'short_query_protein_lt100aa' for r in genes)
+    assert selected[0]['pfam_attention_flags'] == '; '.join(sorted(flags.split('; ')))
+
+
+def test_explicit_no_domain_exception_has_unmeasured_coverage(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    saved_pfam(tmp_path, dict(D_gene=[], A_gene=[]))
+    selected, _, pairs, _, _ = filter_events(events, links, tmp_path, allow_both_no_pfam=True)
+    assert selected and pairs[0]['coverage_status'] == 'explicit_bilateral_no_hit_exception'
+    assert pairs[0]['donor_shared_pfam_query_coverage'] == ''
+    assert pairs[0]['donor_shared_pfam_covered_aa'] == ''
+
+
+def test_coverage_parameter_reaches_trait_tables_without_plotting(source):
+    _, links = read_tsv(source[1])
+    links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
+    write_tsv(source[1], list(links[0]), links)
+    root = source[0].parent / 'families'
+    saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=['PF01053'], C_gene=['PF01053']))
+    report = generate_filtered(*source, plots=False, gene_family_root=root, min_shared_pfam_coverage=.95)
+    assert report['min_shared_pfam_coverage'] == .95
+    assert report['shared_pfam_filter']['passed_event_count'] == 0
+    assert report['shared_pfam_filter']['attention_flags_are_exclusion_criteria'] is False
+    assert not read_tsv(source[-1]/'traits/category/all_category1/events.tsv')[1]
+    assert all(r['coverage_status'] == 'below_minimum' for r in read_tsv(source[-1]/'pfam_pair_audit.tsv')[1])
+    report = generate_filtered(*source, plots=False, gene_family_root=root, min_shared_pfam_coverage=.9)
+    assert report['shared_pfam_filter']['passed_event_count'] > 0
+
+
+@pytest.mark.parametrize('support', ['', '0', '89.9', '90'])
+def test_native_focus_does_not_reapply_ufb_filter(support):
+    stat, events, links = focused_node_source()
+    stat[1]['support_generax_ufboot'] = support
+    events[0]['support_used'] = support
+    output, audit = annotate(stat, events, links)
+    assert audit[0]['status'] == 'selected'
+    assert output[1]['hgtfocus_node_label'] == 'HGT1 UFB=' + (support or 'NA')
+    assert audit[0]['support_generax_ufboot'] == (float(support) if support else '')
+
+
+@pytest.mark.parametrize('field', ['branch_id', 'gene_tree_branch_id', 'node_name', 'gene_tree_node'])
+def test_pfam_links_cannot_borrow_project_or_native_branch_identity(tmp_path, field):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    links[0][field] = 'wrong'
+    with pytest.raises(ValueError, match='identity mismatch'):
+        filter_events(events, links, tmp_path)
+
+
+def test_disabled_pfam_still_records_imported_code(source):
+    report = generate(*source, plots=False)
+    assert {'focus_hgt_pfam.py', 'focus_hgt_gene_trees.py', 'gene_family_output_store.py'} <= set(report['code_sha256'])
+
+
+def test_no_ufb_flow_has_analyzed_ogs_zero_step_and_preserves_cohort(tmp_path):
+    from focus_hgt_figures import export_filtering_flow
+    from pypdf import PdfReader
+    events = [dict(event_id='e1', orthogroup='OG1', support_generax_ufboot='12',
+                   mapping_status='matched', species_tree_mapping_status='matched_external_tree')]
+    audit = tmp_path/'audit.tsv'
+    write_tsv(audit, list(events[0]), events)
+    output = tmp_path/'plots'
+    counts = export_filtering_flow(output, events, events, 'gall', audit,
+                                  pfam_selected=events, direction_selected=events,
+                                  analyzed_orthogroups=['OG1', 'OG_without_transfers'])
+    displayed = read_tsv(output/'filtering_flow.tsv')[1]
+    assert displayed[0] == dict(step='00', stage='All analyzed orthogroups', event_count='NA', orthogroup_count='2')
+    assert displayed[-1]['event_count'] == '1'
+    text = PdfReader(output/'filtering_flow.pdf').pages[0].extract_text()
+    assert 'Matched event and species branches' not in text and 'UFB >=90' not in text
+    assert 'No UFB threshold' in text
+    assert len(counts) == 4
+
+
+def test_query_taxonomic_ranks_cannot_borrow_a_foreign_saved_lineage(tmp_path):
+    import sqlite3
+
+    from focus_hgt_context_annotations import RANKS, ContextAnnotations
+    db = tmp_path/'taxa.sqlite'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE species(taxid INTEGER PRIMARY KEY,spname TEXT,rank TEXT,track TEXT)')
+        conn.execute('CREATE TABLE merged(taxid_old INTEGER,taxid_new INTEGER)')
+        conn.executemany('INSERT INTO species VALUES(?,?,?,?)', [
+            (1, 'root', 'no rank', '1'), (2, 'Own kingdom', 'kingdom', '2,1'),
+            (3, 'Own species', 'species', '3,2,1'), (4, 'Foreign kingdom', 'kingdom', '4,1')])
+        conn.execute('INSERT INTO merged VALUES(20,2)')
+    annotations = ContextAnnotations(taxonomy_dbfile=db)
+    invalid = annotations.query_lineage(3, (1,4,3))
+    assert invalid['mmseqs2_lineage_status'] == 'saved_lineage_conflicts_existing_database'
+    assert all(invalid['mmseqs2_'+rank] == '' for rank in RANKS)
+    merged = annotations.query_lineage(3, (1,20,3))
+    assert merged['mmseqs2_kingdom'] == 'Own kingdom'
+    missing = annotations.query_lineage(999, (1,4,999))
+    assert missing['mmseqs2_lineage_status'] == 'lca_taxid_unresolved_in_existing_database'
+    assert all(missing['mmseqs2_'+rank] == '' for rank in RANKS)
+
+
+def test_missing_context_support_label_is_explicit_na():
+    from focus_hgt_context import support_label
+    assert support_label({'support_generax_ufboot': ''}) == 'NA'
+    assert support_label({'support_generax_ufboot': '0'}) == '0'
