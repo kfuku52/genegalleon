@@ -214,6 +214,26 @@ def test_real_mmseqs_search_cache_and_verified_gene_counts(tmp_path):
     changes["species"]["Excluded_species"] = {"refinement_status": "not_analysed", "prior_rescued_loci": None}
     swiss.collect(changes, args.output)
     assert changes["species"]["Excluded_species"]["rescue_swissprot_groups"] is None
+    assert changes["species"]["Excluded_species"].get("rescue_no_support_reasons") is None
+    altered_receipt = copy.deepcopy(receipt)
+    altered_receipt["key"]["parameters"]["minimum_alignment"] += 1
+    atomic_json(args.output / "receipt.json", altered_receipt)
+    with pytest.raises(ValueError, match="different rescue inputs"):
+        swiss.collect(changes, args.output)
+    atomic_json(args.output / "receipt.json", receipt)
+    legacy = tmp_path / "legacy_audit"
+    legacy.mkdir()
+    old_evidence = copy.deepcopy(evidence)
+    for data in old_evidence["species"].values():
+        del data["no_support_reasons"]
+    atomic_json(legacy / "evidence.json", old_evidence)
+    old_receipt = copy.deepcopy(receipt)
+    old_receipt["files"]["evidence.json"] = digest(legacy / "evidence.json")
+    atomic_json(legacy / "receipt.json", old_receipt)
+    old_changes = copy.deepcopy(changes)
+    swiss.collect(old_changes, legacy)
+    assert old_changes["species"]["Animal_one"]["rescue_partial_te_groups"] is None
+    assert old_changes["species"]["Animal_one"]["rescue_no_support_reasons"] is None
     broken = copy.deepcopy(changes)
     broken["evidence"]["Animal_one"]["source_gff_sha256"] = "changed"
     with pytest.raises(ValueError, match="identities/source differ"):

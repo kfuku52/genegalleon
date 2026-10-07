@@ -327,14 +327,26 @@ To validate and redraw an existing comparison without running BUSCO again, use
 `python workflow/support/gene_model_refinement_busco.py --plot-only --report
 /path/to/paired-busco`. This retains the original evaluation contract and also
 supports earlier summary-only comparisons; changed input/score bytes are rejected.
+Input CDS, saved contracts, receipts and score files stay within one fresh
+verification boundary until drawing finishes, so concurrent changes also fail.
+Relocating a report preserves the original summary paths as provenance; those
+paths are not scores. Receipt hashes still bind every summary, and all counts,
+tool and lineage metadata must match the original evaluation.
 Add `--output /path/to/refinement` to this plot-only command to include rescue
 and coding-path counts from that verified publication without rerunning BUSCO.
+The report must remain outside the immutable refinement tree, including when
+using `--plot-only`. Three-stage BUSCO and Swiss-Prot diagnostic legends also
+sit below their corresponding panels, outside the data area.
 
 The missing-gene panel also has two bars per species: upper, the same donor-group
 support counts; lower, repeat overlap for the same rescued loci. The lower bar
 partitions loci into any TE-labelled CDS overlap, other/unclassified repeat
 overlap without a TE hit, assessed with no repeat overlap, or not assessed.
 Each bar sums to the rescued-locus total; excluded species remain unavailable.
+Swiss-Prot diagnostic counts must agree with those locus totals and the primary
+support categories. The displayed thresholds are bound to the audit receipt;
+historical audits without diagnostics show unavailable diagnostic fields rather
+than retaining values from a previously loaded audit.
 Missing annotation is hatched and never treated as a negative hit. These are
 annotation-overlap categories, not confirmed TE origins or functional-gene calls.
 Intronic-only repeats do not count as CDS hits. The existing BUSCO palette is

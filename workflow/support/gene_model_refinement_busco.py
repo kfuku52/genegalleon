@@ -597,6 +597,30 @@ def collect_model_changes(root, pairs, rescue_output=None):
     return regroup_model_support(result)
 
 
+def _place_legends_below_plots(fig, axes, legend_columns, note_artist):
+    """Keep full legend labels beneath their plots and clear of footer notes."""
+    figure_height = fig.get_figheight()
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_heights = {legend: legend.get_window_extent(renderer).height / fig.dpi
+                      for _, legends in legend_columns for legend in legends}
+    label_depth = max((ax.bbox.y0 - ax.get_tightbbox(renderer).y0) / fig.dpi for ax in axes)
+    column_height = max(sum(legend_heights[legend] for legend in legends) + .18 * (len(legends) - 1)
+                        for _, legends in legend_columns)
+    note_height = note_artist.get_window_extent(renderer).height / fig.dpi
+    plot_height = axes[0].get_position().height * figure_height
+    footer_height = .25 + note_height + .25 + column_height + .20 + label_depth
+    figure_height = (plot_height + footer_height) / fig.subplotpars.top
+    fig.set_size_inches(fig.get_figwidth(), figure_height)
+    fig.subplots_adjust(bottom=footer_height / figure_height)
+    for ax, legends in legend_columns:
+        top = ax.get_position().y0 - (label_depth + .20) / figure_height
+        for legend in legends:
+            legend.set_bbox_to_anchor((ax.get_position().x0, top))
+            top -= (legend_heights[legend] + .18) / figure_height
+    note_artist.set_position((note_artist.get_position()[0], .25 / figure_height))
+
+
 def plot_comparison(rows, output, model_changes=None):
     from textwrap import fill
 
@@ -605,6 +629,11 @@ def plot_comparison(rows, output, model_changes=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from matplotlib.ticker import MaxNLocator
+
+    diagnostic_view = model_changes is not None and any(
+        v.get("rescue_no_support_reasons") is not None for v in model_changes["species"].values())
+    if diagnostic_view:
+        _validate_swissprot_diagnostics(rows, model_changes)
 
     stacked_rescue = stacked_paths = grouped_support = False
     swissprot_view = False
@@ -869,34 +898,13 @@ def plot_comparison(rows, output, model_changes=None):
                  "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed.")
     note_artist = fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
     if extra:
-        # Measure the full labels instead of assuming a fixed number of lines.
-        # Each legend column stays directly below its own plot, above the notes.
-        fig.canvas.draw()
-        renderer = fig.canvas.get_renderer()
-        legend_heights = {legend: legend.get_window_extent(renderer).height / fig.dpi
-                          for _, legends in legend_columns for legend in legends}
-        label_depth = max((ax.bbox.y0 - ax.get_tightbbox(renderer).y0) / fig.dpi for ax in axes)
-        column_height = max(sum(legend_heights[legend] for legend in legends) + .18 * (len(legends) - 1)
-                            for _, legends in legend_columns)
-        note_height = note_artist.get_window_extent(renderer).height / fig.dpi
-        plot_height = axes[0].get_position().height * figure_height
-        footer_height = .25 + note_height + .25 + column_height + .20 + label_depth
-        figure_height = (plot_height + footer_height) / .90
-        fig.set_size_inches(fig.get_figwidth(), figure_height)
-        fig.subplots_adjust(bottom=footer_height / figure_height)
-        for ax, legends in legend_columns:
-            top = ax.get_position().y0 - (label_depth + .20) / figure_height
-            for legend in legends:
-                legend.set_bbox_to_anchor((ax.get_position().x0, top))
-                top -= (legend_heights[legend] + .18) / figure_height
-        note_artist.set_position((margin_left, .25 / figure_height))
+        _place_legends_below_plots(fig, axes, legend_columns, note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
     if any("pre_rescue_result" in row for row in rows):
         plot_three_stage(rows, output)
-    if model_changes is not None and any(v.get("rescue_no_support_reasons") is not None
-                                         for v in model_changes["species"].values()):
+    if diagnostic_view:
         plot_swissprot_diagnostics(rows, output, model_changes)
 
 
@@ -937,7 +945,6 @@ def plot_three_stage(rows, output):
     axes[3].axvline(0, color="#777777", linewidth=.7)
     axes[3].set_title("Change in complete groups", fontsize=11)
     axes[3].set_xlabel("BUSCO group count")
-    axes[3].legend(loc="lower right", fontsize=8)
     for axis in axes:
         axis.spines[["top", "right"]].set_visible(False)
         for i, row in enumerate(rows):
@@ -947,13 +954,46 @@ def plot_three_stage(rows, output):
     identity = rows[0]["before_result"]
     fig.text(.03, .93, f'BUSCO {identity["busco_version"]}; {identity["lineage"]}; '
              f'{identity["total"]} groups. Every phase uses the same frozen lineage, tools and predictor parameters.', fontsize=9)
-    fig.legend([Patch(color=c) for c in STATUS_COLOURS], STATUS_LABELS,
-               loc="lower center", bbox_to_anchor=(.6, .035), ncol=4, frameon=False, fontsize=9)
-    fig.text(.03, .015, "Grey rows: structure improvement not analysed; CDS retained unchanged and included in BUSCO.", fontsize=9)
     fig.subplots_adjust(left=.26, right=.97, bottom=.12, top=.87, wspace=.28)
+    status_legend = fig.legend([Patch(color=c) for c in STATUS_COLOURS], STATUS_LABELS,
+                              loc="upper left", bbox_to_anchor=(.26, .5), ncol=4, frameon=False, fontsize=9, borderaxespad=0)
+    change_legend = fig.legend(*axes[3].get_legend_handles_labels(), loc="upper left",
+                              bbox_to_anchor=(axes[3].get_position().x0, .5), frameon=False, fontsize=9, borderaxespad=0)
+    note_artist = fig.text(.03, .015, "Grey rows: structure improvement not analysed; CDS retained unchanged and included in BUSCO.", fontsize=9)
+    _place_legends_below_plots(fig, axes, [(axes[0], [status_legend]), (axes[3], [change_legend])], note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_three_stage." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
+
+
+def _validate_swissprot_diagnostics(rows, changes):
+    from rescue_swissprot_evidence import NO_SUPPORT_REASONS
+
+    stats = changes["species"]
+    if not rows or len(rows) != len(stats) or {r["species"] for r in rows} != set(stats):
+        raise ValueError("Swiss-Prot diagnostic species membership differs")
+    fields = (("rescue_partial_te_groups", ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")),
+              ("rescue_no_support_reasons", NO_SUPPORT_REASONS), ("rescue_swissprot_groups", SWISSPROT_GROUPS))
+    for row in rows:
+        value = stats[row["species"]]
+        if value.get("refinement_status") != row["refinement_status"]:
+            raise ValueError("Swiss-Prot diagnostic analysis status differs")
+        if row["refinement_status"] == "not_analysed":
+            if value.get("prior_rescued_loci") is not None or any(value.get(field) is not None for field, _ in fields):
+                raise ValueError("Unanalysed Swiss-Prot diagnostics must be unavailable")
+            continue
+        for field, keys in fields:
+            counts = value.get(field)
+            if (not isinstance(counts, dict) or set(counts) != set(keys)
+                    or any(type(c) is not int or c < 0 for c in counts.values())):
+                raise ValueError("Incomplete or invalid Swiss-Prot diagnostic counts: " + row["species"])
+        groups, reasons, proteins = (value[field] for field, _ in fields)
+        total = value.get("prior_rescued_loci")
+        if (type(total) is not int or total < 0 or sum(groups.values()) != total or sum(proteins.values()) != total
+                or sum(reasons.values()) != proteins["no_informative_hit"]
+                or groups["primary_te_support"] != proteins["te_only"] + proteins["both"]
+                or groups["not_assessed"] != proteins["not_assessed"]):
+            raise ValueError("Swiss-Prot diagnostic counts disagree with rescued loci: " + row["species"])
 
 
 def plot_swissprot_diagnostics(rows, output, changes):
@@ -961,6 +1001,7 @@ def plot_swissprot_diagnostics(rows, output, changes):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from rescue_swissprot_evidence import NO_SUPPORT_REASONS
+    _validate_swissprot_diagnostics(rows, changes)
     groups = ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")
     labels = ("Primary TE support", "Partial TE flag only", "No TE support / flag", "Translation not assessed")
     colours = ("#b45158", "#d99843", "#477b80", "#d6dbe1")
@@ -990,9 +1031,11 @@ def plot_swissprot_diagnostics(rows, output, changes):
     axes[0].set_yticks(range(len(rows)), [r["species"].replace("_", " ") for r in rows], fontsize=9)
     axes[0].invert_yaxis()
     fig.suptitle("Swiss-Prot evidence diagnostics for missing-gene rescue", fontsize=16, y=.985)
-    for x, keys, palette in ((.36, labels, colours), (.78, reason_labels, reason_colours)):
-        fig.legend([Patch(color=c) for c in palette], keys, loc="upper center",
-                   bbox_to_anchor=(x, .92), ncol=1, fontsize=8, frameon=False)
+    legend_columns = []
+    for ax, keys, palette in ((axes[0], labels, colours), (axes[1], reason_labels, reason_colours)):
+        legend = fig.legend([Patch(color=c) for c in palette], keys, loc="upper left",
+                            bbox_to_anchor=(ax.get_position().x0, .5), ncol=1, fontsize=9, frameon=False, borderaxespad=0)
+        legend_columns.append((ax, [legend]))
     p = changes["swissprot_evidence"]["parameters"]
     note = (f'Primary TE support: E <= {p["evalue"]:g}; paired residues >= {p["minimum_alignment"]:g} aa; '
             f'query/target coverage >= {100*p["query_coverage"]:g}%/{100*p["target_coverage"]:g}%; '
@@ -1004,8 +1047,9 @@ def plot_swissprot_diagnostics(rows, output, changes):
             'Per locus, the most informative coding-sequence reason takes priority (annotation unknown > partial > short > weak > no hit).\n'
             f'MMseqs2: search E <= {p.get("search_evalue", p["evalue"]):g}; sensitivity {p["sensitivity"]:g}; '
             f'max hits {p["max_hits"]:g}. No identity cutoff; short-protein thresholds are unchanged. Grey rows were not analysed.')
-    fig.text(.03, .025, note, fontsize=9, linespacing=1.5)
-    fig.subplots_adjust(left=.24, right=.97, bottom=.2, top=.77, wspace=.24)
+    note_artist = fig.text(.03, .025, note, fontsize=9, linespacing=1.5)
+    fig.subplots_adjust(left=.24, right=.97, bottom=.2, top=.90, wspace=.24)
+    _place_legends_below_plots(fig, axes, legend_columns, note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("rescue_swissprot_diagnostics." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
@@ -1013,27 +1057,43 @@ def plot_swissprot_diagnostics(rows, output, changes):
 
 def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=None, rescue_swissprot_dir=None):
     """Redraw a historical evaluation without executing its predictor again."""
+    boundary = FreshDigestBatch()
+    boundary.read([report / "busco_comparison.json", report / "contract.json"])
     value = json.loads((report / "busco_comparison.json").read_text())
     frozen = json.loads((report / "contract.json").read_text())
     pairs = {p["species"]: p for p in frozen["pairs"]}
     rows = value["species"]
-    if (value["contract"] != frozen["contract"] or len(pairs) != len(frozen["pairs"])
+    if (not rows or value["contract"] != frozen["contract"] or len(pairs) != len(frozen["pairs"])
             or len(rows) != len(pairs) or {r["species"] for r in rows} != set(pairs)):
         raise ValueError("Comparison contract or species membership changed")
+    paths = [report / "busco_comparison.json", report / "contract.json"]
+    for pair in pairs.values():
+        for phase in phases(pair):
+            directory = report / "runs" / pair["species"] / phase
+            paths.extend([pair[phase], directory / "receipt.json", directory / "summary.txt"])
+            if (directory / "full_table.tsv").is_file():
+                paths.append(directory / "full_table.tsv")
+    hashes = boundary.read(paths)
     verified_tables = 0
     for row in rows:
         pair = pairs[row["species"]]
         for phase in phases(pair):
             directory = report / "runs" / pair["species"] / phase
             saved = json.loads((directory / "receipt.json").read_text())
+            current_result = read_result(directory / "summary.txt")
+            original_result = row[phase + "_result"]
+            # The original source path remains provenance in the saved rows.
+            # A relocated report has the same scores, bound by the summary hash.
+            current_scores = {k: v for k, v in current_result.items() if k != "source"}
+            original_scores = {k: v for k, v in original_result.items() if k != "source"}
             if (saved["key"]["contract"] != frozen["contract"]
-                    or saved["key"]["source_sha256"] != digest(pair[phase])
-                    or saved["summary_sha256"] != digest(directory / "summary.txt")
-                    or read_result(directory / "summary.txt") != row[phase + "_result"]):
+                    or saved["key"]["source_sha256"] != hashes[str(pair[phase])]
+                    or saved["summary_sha256"] != hashes[str(directory / "summary.txt")]
+                    or current_scores != original_scores):
                 raise ValueError("Comparison input or score changed")
             # Summary-only historical publications remain renderable as such.
             if "full_table_sha256" in saved:
-                if digest(directory / "full_table.tsv") != saved["full_table_sha256"]:
+                if hashes.get(str(directory / "full_table.tsv")) != saved["full_table_sha256"]:
                     raise ValueError("Comparison full table changed")
                 verified_tables += 1
         if staged_result(pair, row["before_result"], row["after_result"], row.get("pre_rescue_result")) != row:
@@ -1042,10 +1102,13 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
     if changes is not None:
         collect_rescue_repeat_evidence(changes, rescue_evidence_dir)
         collect_rescue_swissprot_evidence(changes, rescue_swissprot_dir)
+        boundary.check()
         atomic_json(report / "model_change_summary.json", changes)
+    boundary.check()
     plot_comparison(rows, report, changes)
+    boundary.check()
     atomic_json(report / "rendering_provenance.json", {
-        "comparison_sha256": digest(report / "busco_comparison.json"),
+        "comparison_sha256": hashes[str(report / "busco_comparison.json")],
         "evaluation_contract": frozen["contract"], "renderer_sha256": digest(Path(__file__)),
         "verified_full_tables": verified_tables, "predictor_executed": False,
         "model_change_summary_sha256": digest(report / "model_change_summary.json") if changes is not None else None,
@@ -1116,21 +1179,22 @@ def main():
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
+    root = args.output.resolve() if args.output else None
+    report = args.report.resolve()
+    if root is not None and (root == report or root in report.parents or report in root.parents):
+        parser.error("Report must be separate from the immutable refinement tree")
     if (args.rescue_output or args.rescue_evidence_dir or args.rescue_swissprot_dir) and not args.output:
         parser.error("Rescue support/evidence requires --output to bind it to the source annotation")
     if args.plot_only:
         if args.lineage or args.download_path or args.cds_dir:
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
-        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output,
+        render_existing(report, root, args.rescue_output,
                         args.rescue_evidence_dir, args.rescue_swissprot_dir)
         return
     if not args.output or not args.lineage or not args.download_path:
         parser.error("--output, --lineage and --download-path are required for evaluation")
-    root, report = args.output.resolve(), args.report.resolve()
     if args.cpus < 1 or args.jobs < 1:
         parser.error("CPU and job counts must be positive")
-    if root == report or root in report.parents or report in root.parents:
-        parser.error("Report must be separate from the immutable refinement tree")
     pairs = input_pairs(root, args.cds_dir)
     changes = collect_model_changes(root, pairs, args.rescue_output)
     if args.three_stage:
