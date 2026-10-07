@@ -293,6 +293,15 @@ if (length(unique(cluster_variants('black',3))) != 3 ||
   stop('Black and white species labels should also produce distinct cluster shades.')
 }
 
+# Missing coordinates must remain blank rather than corrupt nearby clusters.
+missing_cluster <- df_tip_cluster
+missing_cluster$start[2] <- NA
+missing_cluster$chromosome[4] <- NA
+missing_cluster$taxon[8] <- NA
+missing_result <- add_gene_cluster_membership(missing_cluster, 100)
+stopifnot(all(missing_result$cluster_membership[c(2,4,8)] == ''),
+          missing_result$cluster_membership[3] == missing_result$cluster_membership[6])
+
 # 6) add_complete_overlap_groups: fully overlapping motifs are merged.
 df_fimo_overlap <- data.frame(
   label = c("geneA", "geneA", "geneB", "geneB"),

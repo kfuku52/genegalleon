@@ -53,6 +53,35 @@ input$tree$data$other_category <- 'family'
 g <- add_categorical_column(input,args,'categorical,other,Other','other_category','Other')
 stopifnot(g[['categorical,other,Other']]$labels$x == 'Other',
           inherits(cowplot::get_legend(g[['categorical,other,Other']]), 'gtable'))
+
+# Cluster guides are semantic swatches, not hundreds of cluster identifiers.
+# They retain the plotted species palette; missing locations remain blank.
+cluster_input <- base
+tip_rows <- cluster_input$tree$data$isTip
+cluster_input$tree$data$so_event <- ifelse(tip_rows,'L','S')
+cluster_input$tree$data$taxon <- 'Sp one'
+cluster_input$tree$data$chromosome <- 'chr1'
+cluster_input$tree$data$start <- NA_real_
+cluster_input$tree$data$end <- NA_real_
+cluster_input$tree$data$start[tip_rows] <- c(100,140,1000,2000,NA)
+cluster_input$tree$data$end[tip_rows] <- c(120,160,1020,2020,NA)
+cluster_input$tree$data$tiplab_color <- '#16A085'
+for (distance in c(100,1)) {
+    p <- add_cluster_membership_column(cluster_input,args,'cluster_membership',distance)$cluster_membership
+    built <- ggplot_build(p)
+    scale <- built$plot$scales$get_scales('colour')
+    stopifnot(identical(unname(scale$get_labels()),
+                       c('Multi-gene cluster','Singleton','Same species')),
+              identical(unname(scale$map(scale$get_breaks())[2:3]),rep('gray90',2)),
+              p$labels$caption == 'Blank: location unavailable',
+              inherits(cowplot::get_legend(p),'gtable'))
+    keys <- p$guides$guides$colour$params$override.aes
+    stopifnot(identical(keys$shape,c(16,16,NA)),
+              identical(keys$linetype,c(1,0,1)), keys$linewidth[3] == 0.2)
+    # The legend-only points have NA coordinates, so no fabricated gene is drawn.
+    stopifnot(all(is.na(tail(built$data,1)[[1]]$y)),
+              !anyNA(built$layout$panel_params[[1]]$x$get_labels()))
+}
 g[[key]] <- g[['categorical,other,Other']]
 w <- get_rel_widths(g,'')
 stopifnot(abs(w[key] / w['categorical,other,Other'] - 0.5) < 1e-12)

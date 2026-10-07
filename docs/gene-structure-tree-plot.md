@@ -37,6 +37,18 @@ ordinary exon/intron drawing, because repeated genomic bases do not define a
 single linear genomic geometry. They are reported as excluded diagnostics
 when intron correspondence is requested.
 
+## Gene cluster membership
+
+The membership column has a graphical legend: colored circles and connecting
+lines mark clusters containing at least two tips from this gene family; pale
+gray circles mark singletons. Clusters are formed separately within each species
+and chromosome/scaffold, splitting when consecutive intergenic gaps exceed the
+displayed maximum distance in bp. Different clusters within a species use
+different shades of its tip-label color. A thin pale gray background line joins
+the species' tips across cluster boundaries. Missing taxon, coordinates, or
+scaffold assignments remain blank. These symbols describe family-gene proximity,
+not HGT direction, conserved gene order, or host-scaffold background support.
+
 ## Intron correspondence within the structure column
 
 The default CDS-mode plot annotates introns directly inside the exon/intron
