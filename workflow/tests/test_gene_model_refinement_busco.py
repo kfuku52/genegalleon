@@ -453,9 +453,11 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         assert color in svg
     for label in busco.SUPPORT_GROUP_LABELS if grouped else (*busco.RESCUE_SUPPORT_LABELS, busco.RESCUE_SELF_LABEL):
         assert label in svg
-    assert ("at least two support types among S/R/P" if grouped else "donor belonging to both lists") in svg
+    assert ("at least two support types" if grouped else "donor belonging to both lists") in svg
+    if grouped:
+        assert "S/R/P" not in svg
     assert ">11<" in svg
-    assert ("Target RNA is separate from S" if grouped else "mixed self/interspecies support uses the interspecies group") in svg
+    assert ("Target RNA is separate from self-species homology" if grouped else "mixed self/interspecies support uses the interspecies group") in svg
     self_bar = next(b for b in bars if b[3] == busco.RESCUE_SELF_COLOUR)
     assert self_bar[1:3] == (1, 0 if grouped else 10)
     rescue_bars = [b for b in bars if b[0] is self_bar[0]]

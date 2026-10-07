@@ -277,35 +277,35 @@ counts rather than zeros. `model_change_summary.json` records these counts and
 their source hashes. BUSCO stacks use the existing GeneGalleon palette: black
 single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
 When the original completed rescue publication is available, rescued genes are
-stacked in four support categories: S only (self-species homology), R only
-(nearest relatives), P only (phylogenetically balanced references), or multiple
-(at least two of S/R/P). Classification uses all consolidated
+stacked in four support categories: Self species only, Nearest relatives only,
+Phylogenetically balanced references only, or Multiple groups (at least two).
+The legend and explanatory notes spell out these groups. Classification uses all consolidated
 `support` records of each accepted model, deduplicates donor species, and counts
 each gene locus once. A donor in both frozen reference lists supports both
 types, so the multiple category does not require two distinct donor species.
-Two donors in R alone still count as R only. The four categories must sum to
+Two donors from nearest relatives alone still count as Nearest relatives only. The four categories must sum to
 the source GFF gene count, with matching accepted
 model IDs and verified plan/model/augmentation receipts. Donor memberships and
 per-gene supporting species are saved in `model_change_summary.json`.
 Rescue model IDs can name gene or transcript features; explicit GFF `Parent`
 links map transcript identities to gene loci without guessing suffixes.
 Self-species support must belong to a frozen self-synteny comparison.
-A locus with S+R, S+P, R+P or S+R+P support belongs to multiple, so each
+A locus supported by at least two of the three groups belongs to multiple, so each
 gene appears once. Each bar's label shows the total across all four segments.
 When donor groups are available, the accepted-coding-path panel shows two bars
 per species: the upper bar partitions paths into repairs and additional
 isoforms, and the lower bar partitions the same paths by supporting donor group.
 The lower bar uses the rescue colours and frozen nearest/balanced lists. It
 also includes an `Other interspecies only` segment for paths supported solely
-by interspecies donors outside those lists and without S support, which can
-occur through reverse correspondence edges. Only means exactly one of S/R/P;
+by interspecies donors outside those lists and without self-species support, which can
+occur through reverse correspondence edges. Only means exactly one donor group;
 any additional unselected donors remain in the saved per-path evidence.
 Self support means homology support from the target
 species, not target RNA evidence. Counts use the recorded accepted prediction
 `donors`, cross-check candidate support and alignments, and count each candidate
 path once. Each lower bar must sum to the upper bar's repair plus isoform total.
 `rescue_support_groups` and `accepted_path_support_groups` store the current
-S/R/P counts. Legacy `rescue_support_counts`, `rescue_self_only_loci`,
+donor-group counts. Legacy `rescue_support_counts`, `rescue_self_only_loci`,
 `accepted_path_support_counts` and per-model donor records remain unchanged in
 `model_change_summary.json` for saved-data compatibility. Regrouping requires
 complete per-model evidence; old aggregate counts cannot recover mixed self
@@ -327,7 +327,7 @@ supports earlier summary-only comparisons; changed input/score bytes are rejecte
 Add `--output /path/to/refinement` to this plot-only command to include rescue
 and coding-path counts from that verified publication without rerunning BUSCO.
 
-The missing-gene panel also has two bars per species: upper, the same S/R/P
+The missing-gene panel also has two bars per species: upper, the same donor-group
 support counts; lower, repeat overlap for the same rescued loci. The lower bar
 partitions loci into any TE-labelled CDS overlap, other/unclassified repeat
 overlap without a TE hit, assessed with no repeat overlap, or not assessed.

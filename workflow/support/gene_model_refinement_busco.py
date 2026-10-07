@@ -38,7 +38,7 @@ PATH_SUPPORT_LABELS = (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL, "Other intersp
 # support types, including self support in a mixed donor set.
 SUPPORT_GROUPS = ("self_only", "relative_only", "phylogenetic_only", "multiple")
 SUPPORT_GROUP_COLOURS = (RESCUE_SELF_COLOUR, *RESCUE_SUPPORT_COLOURS)
-SUPPORT_GROUP_LABELS = ("S only (self)", "R only (relatives)", "P only (phylogenetic)", "Multiple (at least two of S/R/P)")
+SUPPORT_GROUP_LABELS = ("Self species only", "Nearest relatives only", "Phylogenetically balanced references only", "Multiple groups (at least two)")
 PATH_SUPPORT_GROUPS = (*SUPPORT_GROUPS, "other_interspecies")
 PATH_SUPPORT_GROUP_COLOURS = (*SUPPORT_GROUP_COLOURS, "#8a929b")
 PATH_SUPPORT_GROUP_LABELS = (*SUPPORT_GROUP_LABELS, "Other interspecies only")
@@ -191,10 +191,10 @@ def regroup_model_support(changes):
     for species, value in updates.items():
         changes["species"][species].update(value)
     changes["support_group_classification"] = (
-        "S = self-species homology; R = nearest relatives; P = phylogenetically balanced references. "
-        "Only means exactly one of S/R/P; multiple means at least two of these support types, not two donor species. "
-        "A donor in both frozen R/P lists supplies both types. Other interspecies only means no S/R/P support; "
-        "additional unselected donors remain in per-model evidence. Target RNA is separate from S."
+        "Donor groups are self species, nearest relatives and phylogenetically balanced references. "
+        "Only means exactly one of these groups; multiple means at least two groups, not two donor species. "
+        "A donor in both frozen reference lists supplies both reference groups. Other interspecies only means support outside these three groups; "
+        "additional unselected donors remain in per-model evidence. Target RNA is separate from self-species homology."
     )
     return changes
 
@@ -825,13 +825,13 @@ def plot_comparison(rows, output, model_changes=None):
         note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
     if support_legend:
         if grouped_support:
-            note += "\nS = self-species homology; R = nearest relatives; P = phylogenetically balanced references. Target RNA is separate from S."
-            note += "\nMultiple = at least two support types among S/R/P; a donor in both frozen R/P lists supplies both types."
+            note += "\nDonor groups: self species, nearest relatives and phylogenetically balanced references. Target RNA is separate from self-species homology."
+            note += "\nMultiple = at least two support types; a donor in both frozen reference lists supplies both reference groups."
         else:
             note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
             note += "\nSelf-species only = no interspecies support; mixed self/interspecies support uses the interspecies group."
     if stacked_paths:
-        note += ("\nOnly = exactly one of S/R/P; donor other-only = no S/R/P donor. Additional unselected donors remain in the evidence."
+        note += ("\nOnly = exactly one donor group; other interspecies only = support outside all three groups. Additional unselected donors remain in the evidence."
                  if grouped_support else
                  "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate.")
     elif stacked_rescue:
