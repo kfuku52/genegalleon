@@ -37,6 +37,7 @@ presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 presence_absence_evidence_layout=$(echo "${presence_absence_evidence_layout:-band}" | tr '[:upper:]' '[:lower:]')
 presence_absence_ortholog_basis=$(echo "${presence_absence_ortholog_basis:-reference_species}" | tr '[:upper:]' '[:lower:]')
+presence_absence_dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold:-0}"
 presence_absence_species_tree="${presence_absence_species_tree:-auto}"
 presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}"
 presence_absence_species_tree_support="${presence_absence_species_tree_support:-auto}"
@@ -70,6 +71,16 @@ if [[ "${presence_absence_query_selection}" == "closest" && ( -z "${presence_abs
   echo 'closest requires presence_absence_target_species and query_gene/both ortholog basis' >&2
   exit 1
 fi
+python - "${presence_absence_dup_conf_score_threshold}" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    sys.exit("presence_absence_dup_conf_score_threshold must be a finite number between 0 and 1")
+if not math.isfinite(value) or not 0 <= value <= 1:
+    sys.exit("presence_absence_dup_conf_score_threshold must be a finite number between 0 and 1")
+PY
 summary_output_dir="${summary_output_dir:-auto}"
 hgt_summary_output_dir="${hgt_summary_output_dir:-auto}"
 csubst_site_output_dir="${csubst_site_output_dir:-auto}"
@@ -620,6 +631,7 @@ run_presence_absence_summary_for_source() {
       local file_reference_tree="${summary_output_dir}/query2family_reference_gene_orthologs.tree.tsv"
       local file_reference_synteny="${summary_output_dir}/query2family_reference_gene_orthologs.synteny.tsv"
       local file_reference_ufboot="${summary_output_dir}/query2family_reference_gene_orthologs.ufboot.tsv"
+      local file_reference_dup_conf="${summary_output_dir}/query2family_reference_gene_orthologs.dup_conf.tsv"
       local file_reference_pdf="${summary_output_dir}/query2family_reference_gene_orthologs.pdf"
       local file_reference_svg="${summary_output_dir}/query2family_reference_gene_orthologs.svg"
 
@@ -629,6 +641,8 @@ run_presence_absence_summary_for_source() {
         --dir_query_gene "${dir_query_gene}" \
         --family_file "${file_selection}" \
         --reference_species "${reference_species_resolved}" \
+        --dup_conf_score_threshold "${presence_absence_dup_conf_score_threshold}" \
+        --out_dup_conf "${file_reference_dup_conf}" \
         --out_columns "${file_reference_columns}" \
         --out_glyphs "${file_reference_glyphs}" \
         --out_tree "${file_reference_tree}" \
@@ -644,9 +658,11 @@ run_presence_absence_summary_for_source() {
           --ortholog_tree_table="${file_reference_tree}"
           --ortholog_synteny_table="${file_reference_synteny}"
           --ortholog_ufboot_table="${file_reference_ufboot}"
+          --ortholog_dup_conf_table="${file_reference_dup_conf}"
           --species_mapping_tree="${file_species_mapping_tree}"
           --ortholog_basis=reference_species
           --reference_species="${reference_species_resolved}"
+          --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
           --evidence_layout="${presence_absence_evidence_layout}"
           --value=presence
           --width="${presence_absence_plot_width}"
@@ -677,6 +693,7 @@ run_presence_absence_summary_for_source() {
       local file_query_tree="${summary_output_dir}/query2family_query_gene_orthologs.tree.tsv"
       local file_query_synteny="${summary_output_dir}/query2family_query_gene_orthologs.synteny.tsv"
       local file_query_ufboot="${summary_output_dir}/query2family_query_gene_orthologs.ufboot.tsv"
+      local file_query_dup_conf="${summary_output_dir}/query2family_query_gene_orthologs.dup_conf.tsv"
       local file_query_map="${summary_output_dir}/query2family_query_gene_orthologs.query_map.tsv"
       local file_query_pdf="${summary_output_dir}/query2family_query_gene_orthologs.pdf"
       local file_query_svg="${summary_output_dir}/query2family_query_gene_orthologs.svg"
@@ -692,6 +709,8 @@ run_presence_absence_summary_for_source() {
         --out_selection "${summary_output_dir}/query2family_query_gene_orthologs.selection.tsv"
         --out_overlap "${summary_output_dir}/query2family_query_gene_orthologs.overlap.tsv"
         --out_long "${file_query_long}"
+        --dup_conf_score_threshold "${presence_absence_dup_conf_score_threshold}"
+        --out_dup_conf "${file_query_dup_conf}"
       )
 
       python "${gg_support_dir}/query_gene_orthologs.py" \
@@ -714,8 +733,10 @@ run_presence_absence_summary_for_source() {
           --ortholog_column_table="${file_query_columns}"
           --ortholog_glyph_table="${file_query_glyphs}"
           --ortholog_tree_table="${file_query_tree}"
+          --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
           --ortholog_synteny_table="${file_query_synteny}"
           --ortholog_ufboot_table="${file_query_ufboot}"
+          --ortholog_dup_conf_table="${file_query_dup_conf}"
           --species_mapping_tree="${file_species_mapping_tree}"
           --ortholog_basis=query_gene
           --evidence_layout="${presence_absence_evidence_layout}"

@@ -70,7 +70,8 @@ def test_empty_svg_and_both_empty_outputs_do_not_write_sentinel_file(tmp_path):
 
 
 @pytest.mark.parametrize("source", ["query2family", "orthogroup"])
-def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, source):
+@pytest.mark.parametrize("cutoff", [0, 1])
+def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, source, cutoff):
     assert shutil.which("Rscript"), "Run this test in a GeneGalleon container"
     _store, manifest = saved_manifest(tmp_path)
     tree = tmp_path / "species.nwk"
@@ -85,6 +86,7 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
                presence_absence_species_tree_ci="", presence_absence_species_tree_support="",
                presence_absence_busco_table="", presence_absence_ortholog_basis="query_gene",
                presence_absence_family_manifest=str(manifest), presence_absence_query_label="label",
+               presence_absence_dup_conf_score_threshold=str(cutoff),
                presence_absence_focus_species="Anchor_one", presence_absence_plot_width="auto",
                presence_absence_legend_columns="3" if source == "orthogroup" else "auto")
     result = subprocess.run(["bash", str(ROOT / "workflow/core/gg_gene_summary_core.sh")],
@@ -98,6 +100,13 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
     mapping = pandas.read_csv(str(prefix) + ".query_map.tsv", sep="\t")
     assert set(mapping.hog_ids) == {"HOG1", "HOG2"}
     assert Path(str(prefix) + ".selection.tsv").is_file()
+    candidates = pandas.read_csv(str(prefix) + ".dup_conf.tsv", sep="\t")
+    if cutoff:
+        assert len(candidates) == 2 and set(candidates.dup_conf_score) == {1}
+        assert set(candidates.mrca_branch_id) == {0}
+        assert "Additional ortholog candidate" in Path(str(prefix) + ".svg").read_text()
+    else:
+        assert candidates.empty
     assert Path(str(prefix) + ".overlap.tsv").is_file()
     assert "Skipping gene-family presence/absence summary because no" not in result.stdout
     svg_path = Path(str(prefix) + ".svg")
@@ -106,7 +115,7 @@ def test_gene_summary_manifest_only_reuses_saved_trees_and_evidence(tmp_path, so
         r"translate\([0-9.]+,([0-9.]+)\) rotate\(-90\).*?textLength='([0-9.]+)px'", text)]
     svg = ET.parse(svg_path).getroot()
     legend = next(element for element in svg.iter()
-                  if element.tag.endswith("text") and element.text == "Query-gene orthologs")
+                  if element.tag.endswith("text") and element.text.startswith("Query-gene orthologs"))
     assert max(y + length for y, length in label_boxes) + 6 < float(legend.attrib["y"])
     if source == "orthogroup":
         legend_text = [element for element in svg.iter()

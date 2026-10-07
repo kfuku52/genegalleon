@@ -45,6 +45,124 @@ get_arg <- function(args, key, default = "") {
   default
 }
 
+ortholog_pair_keys <- function(table) {
+  paste(table$family_id, table$reference_cds_fasta_id, table$candidate_cds_fasta_id, sep = "::")
+}
+
+validate_evidence_glyph_ids <- function(evidence, glyphs, label, weak_pairs) {
+  geometry_fields <- c("family_id", "species", "start_order", "end_order", "lane_index", "lane_count", "copy_number")
+  glyph_keys <- do.call(paste, c(glyphs[geometry_fields], sep = "::"))
+  evidence_fields <- c("family_id", "species", paste0("glyph_", geometry_fields[3:7]))
+  evidence_keys <- do.call(paste, c(evidence[evidence_fields], sep = "::"))
+  indices <- match(evidence_keys, glyph_keys)
+  if (anyNA(indices)) stop(label, " rows do not map to an ortholog glyph")
+  if (any((evidence$relation == "weak_duplication") != (glyphs$relation[indices] == "weak_duplication"))) {
+    stop(label, " candidate relations disagree with the ortholog glyphs")
+  }
+  if ("gene_ids" %in% names(glyphs)) {
+    for (i in seq_len(nrow(evidence))) {
+      genes <- strsplit(as.character(glyphs$gene_ids[indices[i]]), ";", fixed = TRUE)[[1]]
+      if (!evidence$candidate_cds_fasta_id[i] %in% genes) {
+        stop(label, " candidate gene IDs disagree with the ortholog glyphs")
+      }
+    }
+  }
+  if (!setequal(ortholog_pair_keys(evidence[evidence$relation == "weak_duplication", , drop = FALSE]),
+                ortholog_pair_keys(weak_pairs))) {
+    stop(label, " gene pairs disagree with the additional candidate glyphs")
+  }
+}
+
+additional_candidate_pairs <- function(glyphs, columns) {
+  weak <- glyphs[glyphs$relation == "weak_duplication", , drop = FALSE]
+  empty <- data.frame(family_id = character(), species = character(), family_order = integer(), glyph_index = integer(),
+                      reference_cds_fasta_id = character(), candidate_cds_fasta_id = character())
+  if (nrow(weak) == 0) return(empty)
+  if (!all(c("gene_ids", "reference_cds_fasta_ids") %in% names(weak))) {
+    stop("Additional ortholog candidates require glyph gene identifiers")
+  }
+  pairs <- lapply(seq_len(nrow(weak)), function(i) {
+    genes <- strsplit(as.character(weak$gene_ids[i]), ";", fixed = TRUE)[[1]]
+    refs <- strsplit(as.character(weak$reference_cds_fasta_ids[i]), ";", fixed = TRUE)[[1]]
+    expected_refs <- columns$cds_fasta_id[columns$column_order >= weak$start_order[i] &
+                                          columns$column_order <= weak$end_order[i]]
+    if (anyNA(genes) || any(!nzchar(genes)) || anyDuplicated(genes) ||
+        length(genes) != weak$copy_number[i] || anyNA(refs) || anyDuplicated(refs) ||
+        !setequal(refs, expected_refs)) {
+      stop("Additional candidate gene IDs, copy numbers or anchor spans disagree with the glyphs")
+    }
+    result <- expand.grid(reference_cds_fasta_id = refs, candidate_cds_fasta_id = genes,
+                          stringsAsFactors = FALSE)
+    result$family_id <- weak$family_id[i]
+    result$family_order <- weak$family_order[i]
+    result$species <- weak$species[i]
+    result$glyph_index <- i
+    result
+  })
+  result <- do.call(rbind, pairs)
+  if (anyDuplicated(ortholog_pair_keys(result))) stop("Additional candidate glyphs contain duplicate gene pairs")
+  result
+}
+
+validate_duplication_confidence <- function(table, expected, threshold) {
+  fields <- c("family_id", "family_order", "species", "reference_cds_fasta_id", "candidate_cds_fasta_id",
+              "mrca_branch_id", "mrca_event", "shared_species_count", "union_species_count",
+              "dup_conf_score", "dup_conf_score_threshold")
+  if (!all(fields %in% names(table))) stop("Duplication confidence table is missing required columns")
+  keys <- ortholog_pair_keys(table)
+  if (anyDuplicated(keys) || !setequal(keys, ortholog_pair_keys(expected))) {
+    stop("Duplication confidence gene pairs disagree with the additional candidate glyphs")
+  }
+  if (nrow(table) == 0) return(invisible(NULL))
+  index <- match(keys, ortholog_pair_keys(expected))
+  if (anyNA(table$species) || any(table$species != expected$species[index]) ||
+      anyNA(table$family_order) || any(table$family_order != expected$family_order[index]) ||
+      anyNA(table$mrca_event) || any(table$mrca_event != "D")) {
+    stop("Duplication confidence species, family order or events disagree with the candidate glyphs")
+  }
+  for (field in c("mrca_branch_id", "shared_species_count", "union_species_count")) {
+    values <- suppressWarnings(as.numeric(table[[field]]))
+    if (any(!is.finite(values)) || any(values < 0) || any(abs(values - round(values)) > 1e-8)) {
+      stop("Duplication confidence ", field, " must contain non-negative integers")
+    }
+  }
+  shared <- as.numeric(table$shared_species_count)
+  union <- as.numeric(table$union_species_count)
+  score <- suppressWarnings(as.numeric(table$dup_conf_score))
+  cutoff <- suppressWarnings(as.numeric(table$dup_conf_score_threshold))
+  if (threshold <= 0 || any(union < 1) || any(shared < 1) || any(shared > union) ||
+      any(!is.finite(score)) || any(!is.finite(cutoff)) ||
+      any(abs(score - shared / union) > 1e-12) ||
+      any(abs(cutoff - threshold) > 1e-12) || any(score > threshold + 1e-12)) {
+    stop("Duplication confidence counts, scores or cutoffs disagree with the plotted threshold")
+  }
+  mrca_groups <- split(table$mrca_branch_id, expected$glyph_index[index])
+  if (any(vapply(mrca_groups, function(ids) length(unique(ids)) != 1, logical(1)))) {
+    stop("Duplication confidence MRCAs disagree within an additional candidate glyph")
+  }
+}
+
+validate_candidate_tree <- function(table, nodes) {
+  if (nrow(table) == 0 || nrow(nodes) == 0) return(invisible(NULL))
+  index <- match(paste(table$family_id, table$mrca_branch_id, sep = "::"),
+                 paste(nodes$family_id, nodes$node_id, sep = "::"))
+  if (anyNA(index) || anyNA(nodes$event[index]) || any(nodes$event[index] != "D")) {
+    stop("Duplication confidence MRCAs disagree with the original tree D nodes")
+  }
+  fields <- c("displayed_child1_gene_ids", "displayed_child2_gene_ids")
+  if (!all(fields %in% names(nodes))) return(invisible(NULL))
+  for (i in seq_len(nrow(table))) {
+    left <- strsplit(as.character(nodes$displayed_child1_gene_ids[index[i]]), ";", fixed = TRUE)[[1]]
+    right <- strsplit(as.character(nodes$displayed_child2_gene_ids[index[i]]), ";", fixed = TRUE)[[1]]
+    anchor <- table$reference_cds_fasta_id[i]
+    candidate <- table$candidate_cds_fasta_id[i]
+    if (!((anchor %in% left && candidate %in% right) ||
+          (anchor %in% right && candidate %in% left))) {
+      stop("Duplication confidence gene pairs disagree with their MRCA child subtrees")
+    }
+  }
+}
+
 read_label_map <- function(path) {
   if (!nzchar(path)) return(data.frame(kind = character(), id = character(), label = character()))
   labels <- read.delim(path, check.names = FALSE, stringsAsFactors = FALSE)
@@ -63,6 +181,58 @@ display_labels <- function(ids, kind, fallback = ids) {
   result <- as.character(fallback)
   result[!is.na(index)] <- selected$label[index[!is.na(index)]]
   result
+}
+
+displayed_duplication_nodes <- function(nodes, glyphs, visible_species) {
+  fields <- c("displayed_gene_ids", "displayed_child1_gene_ids", "displayed_child2_gene_ids")
+  supplied <- fields %in% names(nodes)
+  if (!any(supplied)) {
+    if (nrow(nodes) > 0 && any(nodes$event == "D")) {
+      warning("Legacy ortholog tree table uses full-family duplication counts; regenerate summary tables to restrict bars to displayed genes")
+    }
+    return(list(nodes = nodes[nodes$event == "D", , drop = FALSE], scope = "full_family"))
+  }
+  if (!all(supplied)) stop("Ortholog tree displayed-gene provenance columns are incomplete")
+  if (!"gene_ids" %in% names(glyphs)) stop("Displayed duplication bars require glyph gene_ids")
+  split_genes <- function(value) {
+    if (is.na(value) || !nzchar(value)) return(character())
+    genes <- strsplit(as.character(value), ";", fixed = TRUE)[[1]]
+    if (any(!nzchar(genes)) || anyDuplicated(genes)) {
+      stop("Displayed duplication provenance requires distinct, non-empty gene IDs")
+    }
+    genes
+  }
+  keep <- rep(FALSE, nrow(nodes))
+  for (family in unique(as.character(nodes$family_id))) {
+    index <- which(nodes$family_id == family)
+    family_glyphs <- glyphs[glyphs$family_id == family, , drop = FALSE]
+    expected <- unique(unlist(lapply(family_glyphs$gene_ids, split_genes)))
+    provenance_rows <- index[!is.na(nodes$displayed_gene_ids[index]) &
+                              nzchar(nodes$displayed_gene_ids[index])]
+    if (length(provenance_rows) != 1 ||
+        !setequal(split_genes(nodes$displayed_gene_ids[provenance_rows]), expected)) {
+      stop("Ortholog tree displayed gene IDs disagree with the ortholog glyphs: ", family)
+    }
+    provenance_row <- provenance_rows[[1]]
+    if (nodes$in_reference_tree[provenance_row] != 1 ||
+        (!is.na(nodes$parent_node_id[provenance_row]) && nzchar(nodes$parent_node_id[provenance_row]))) {
+      stop("Displayed gene provenance must be recorded on the compact tree root")
+    }
+    visible <- unique(unlist(lapply(
+      family_glyphs$gene_ids[family_glyphs$species %in% visible_species], split_genes
+    )))
+    for (i in index) {
+      left <- split_genes(nodes$displayed_child1_gene_ids[i])
+      right <- split_genes(nodes$displayed_child2_gene_ids[i])
+      if (length(intersect(left, right)) > 0 || !all(c(left, right) %in% expected) ||
+          (nodes$event[i] != "D" && length(c(left, right)) > 0)) {
+        stop("Invalid displayed descendant gene IDs in ortholog tree: ", family, "/", nodes$node_id[i])
+      }
+      keep[i] <- nodes$event[i] == "D" &&
+        any(left %in% visible) && any(right %in% visible)
+    }
+  }
+  list(nodes = nodes[keep, , drop = FALSE], scope = "displayed_genes")
 }
 
 text_width_inches <- function(labels, size = font_size_pt) {
@@ -704,6 +874,7 @@ ortholog_glyph_path <- get_arg(args, "ortholog_glyph_table")
 ortholog_tree_path <- get_arg(args, "ortholog_tree_table")
 ortholog_synteny_path <- get_arg(args, "ortholog_synteny_table")
 ortholog_ufboot_path <- get_arg(args, "ortholog_ufboot_table")
+ortholog_dup_conf_path <- get_arg(args, "ortholog_dup_conf_table")
 ortholog_basis <- tolower(get_arg(args, "ortholog_basis", "reference_species"))
 reference_species <- get_arg(args, "reference_species")
 out_pdf <- get_arg(args, "out_pdf")
@@ -721,6 +892,10 @@ if (!legend_columns_arg %in% c("auto", "1", "2", "3")) {
 }
 plot_height_arg <- get_arg(args, "height", "auto")
 evidence_layout <- tolower(get_arg(args, "evidence_layout", "band"))
+dup_conf_threshold <- suppressWarnings(as.numeric(get_arg(args, "dup_conf_score_threshold", "0")))
+if (length(dup_conf_threshold) != 1 || !is.finite(dup_conf_threshold) || dup_conf_threshold < 0 || dup_conf_threshold > 1) {
+  stop("--dup_conf_score_threshold must be a finite number between 0 and 1")
+}
 glyph_mode <- has_nonempty_file(ortholog_column_path) && has_nonempty_file(ortholog_glyph_path)
 if (!ortholog_basis %in% c("reference_species", "query_gene")) {
   stop("--ortholog_basis must be reference_species or query_gene: ", ortholog_basis)
@@ -802,8 +977,11 @@ source_df <- df
 ortholog_columns <- data.frame()
 ortholog_glyphs <- data.frame()
 ortholog_tree_nodes <- data.frame()
+duplication_bar_nodes <- data.frame()
+duplication_bar_scope <- "displayed_genes"
 ortholog_synteny <- data.frame()
 ortholog_ufboot <- data.frame()
+ortholog_dup_conf <- data.frame()
 ortholog_family_count <- 0
 duplication_family_mode <- FALSE
 family_colors <- character(0)
@@ -818,6 +996,12 @@ if (glyph_mode) {
   }
   if (has_nonempty_file(ortholog_ufboot_path)) {
     ortholog_ufboot <- read.table(ortholog_ufboot_path, sep = "\t", header = TRUE, quote = "", comment.char = "", check.names = FALSE)
+  }
+  if (nzchar(ortholog_dup_conf_path)) {
+    ortholog_dup_conf <- read.delim(ortholog_dup_conf_path, check.names = FALSE, quote = "", comment.char = "")
+    if (query_ortholog_mode && "anchor_cds_fasta_id" %in% names(ortholog_dup_conf)) {
+      ortholog_dup_conf$reference_cds_fasta_id <- ortholog_dup_conf$anchor_cds_fasta_id
+    }
   }
   if (query_ortholog_mode) {
     require_query_fields <- function(table, required, path, label) {
@@ -1047,9 +1231,9 @@ if (glyph_mode) {
   ) {
     stop("Ortholog glyph family_order values disagree with the ortholog column table")
   }
-  allowed_glyph_relations <- c("specific", "shared_ancestral", "ambiguous")
+  allowed_glyph_relations <- c("specific", "shared_ancestral", "ambiguous", "weak_duplication")
   if (any(is.na(ortholog_glyphs$relation) | !ortholog_glyphs$relation %in% allowed_glyph_relations)) {
-    stop("Ortholog glyph relation must be specific, shared_ancestral, or ambiguous")
+    stop("Ortholog glyph relation must be specific, shared_ancestral, ambiguous, or weak_duplication")
   }
   if (
     any(!is.finite(ortholog_glyphs$copy_number)) ||
@@ -1089,6 +1273,13 @@ if (glyph_mode) {
       any(ortholog_glyphs$family_id != glyph_end_family)
   ) {
     stop("Ortholog glyph column spans must remain within their declared family")
+  }
+  weak_pairs <- additional_candidate_pairs(ortholog_glyphs, ortholog_columns)
+  if (nrow(weak_pairs) > 0 && !nzchar(ortholog_dup_conf_path)) {
+    stop("Additional ortholog candidates require --ortholog_dup_conf_table to verify the cutoff")
+  }
+  if (nzchar(ortholog_dup_conf_path)) {
+    validate_duplication_confidence(ortholog_dup_conf, weak_pairs, dup_conf_threshold)
   }
 
   if (nrow(ortholog_synteny) > 0) {
@@ -1282,6 +1473,7 @@ if (glyph_mode) {
     if (any(!synteny_glyph_keys %in% glyph_keys)) {
       stop("Ortholog synteny rows do not map to an ortholog glyph")
     }
+    validate_evidence_glyph_ids(ortholog_synteny, ortholog_glyphs, "Ortholog synteny", weak_pairs)
   }
 
   if (nrow(ortholog_ufboot) > 0) {
@@ -1396,6 +1588,13 @@ if (glyph_mode) {
       stop("Ortholog UFBoot reference_self status disagrees with candidate/reference IDs")
     }
     evaluated_ufboot_rows <- ortholog_ufboot$orthology_ufboot_status == "evaluated"
+    weak_ufboot_rows <- ortholog_ufboot$relation == "weak_duplication"
+    if (any(weak_ufboot_rows & (
+      ortholog_ufboot$orthology_ufboot_status != "not_evaluable" |
+        ortholog_ufboot$orthology_ufboot_unavailable_reason != "weak_duplication"
+    ))) {
+      stop("Weak-duplication candidates cannot report speciation-based orthology UFBoot")
+    }
     nonself_ufboot_rows <- !is_reference_self
     nonself_mrca_branch_ids <- suppressWarnings(as.numeric(
       ortholog_ufboot$orthology_mrca_branch_id[nonself_ufboot_rows]
@@ -1405,7 +1604,7 @@ if (glyph_mode) {
         any(!is.finite(nonself_mrca_branch_ids)) ||
         any(abs(nonself_mrca_branch_ids - round(nonself_mrca_branch_ids)) > 1e-8) ||
         any(is_reference_self & nzchar(ortholog_ufboot$orthology_mrca_branch_id)) ||
-        any(nonself_ufboot_rows & ortholog_ufboot$orthology_mrca_event != "S") ||
+        any(nonself_ufboot_rows & ortholog_ufboot$orthology_mrca_event != ifelse(weak_ufboot_rows, "D", "S")) ||
         any(is_reference_self & nzchar(ortholog_ufboot$orthology_mrca_event))
     ) {
       stop("Ortholog UFBoot MRCA fields are inconsistent with the orthology assignment")
@@ -1428,7 +1627,7 @@ if (glyph_mode) {
       any(
         ortholog_ufboot$orthology_ufboot_status == "not_evaluable" &
           !ortholog_ufboot$orthology_ufboot_unavailable_reason %in% c(
-            "missing_support", "mrca_is_root"
+            "missing_support", "mrca_is_root", "weak_duplication"
           )
       ) ||
         any(
@@ -1470,6 +1669,15 @@ if (glyph_mode) {
     if (any(!ufboot_glyph_keys %in% glyph_keys)) {
       stop("Ortholog UFBoot rows do not map to an ortholog glyph")
     }
+    validate_evidence_glyph_ids(ortholog_ufboot, ortholog_glyphs, "Ortholog UFBoot", weak_pairs)
+    if (nrow(ortholog_dup_conf) > 0) {
+      weak_support <- ortholog_ufboot[weak_ufboot_rows, , drop = FALSE]
+      index <- match(ortholog_pair_keys(weak_support), ortholog_pair_keys(ortholog_dup_conf))
+      if (any(as.numeric(weak_support$orthology_mrca_branch_id) !=
+              as.numeric(ortholog_dup_conf$mrca_branch_id[index]))) {
+        stop("Duplication confidence and UFBoot candidate MRCAs disagree")
+      }
+    }
     ufboot_glyph_row_groups <- split(
       seq_len(nrow(ortholog_ufboot)),
       factor(ufboot_glyph_keys, levels = unique(ufboot_glyph_keys))
@@ -1478,6 +1686,10 @@ if (glyph_mode) {
       glyph_rows <- ortholog_ufboot[row_indices, , drop = FALSE]
       glyph_is_reference_self <-
         glyph_rows$orthology_ufboot_status == "reference_self"
+      if (glyph_rows$relation[[1]] == "weak_duplication" &&
+          length(unique(glyph_rows$orthology_mrca_branch_id)) != 1) {
+        stop("Additional candidate pairs in one glyph must share one duplication MRCA")
+      }
       if (query_ortholog_mode) {
         if (
           length(unique(glyph_rows$relation)) != 1 ||
@@ -1611,10 +1823,18 @@ if (glyph_mode) {
     }
   }
   ortholog_family_count <- length(unique(as.character(ortholog_columns$family_id)))
-  mapped_species_nodes <- as.character(ortholog_tree_nodes$mapped_species_node)
-  has_mapped_duplications <- nrow(ortholog_tree_nodes) > 0 && any(
-    as.character(ortholog_tree_nodes$event) == "D" &
-      !is.na(mapped_species_nodes) & nzchar(mapped_species_nodes)
+  if (nrow(ortholog_tree_nodes) > 0) {
+    duplication_selection <- displayed_duplication_nodes(
+      ortholog_tree_nodes, ortholog_glyphs,
+      intersect(as.character(tree_for_plot$tip.label), unique(as.character(source_df$species)))
+    )
+    duplication_bar_nodes <- duplication_selection$nodes
+    duplication_bar_scope <- duplication_selection$scope
+    validate_candidate_tree(ortholog_dup_conf, ortholog_tree_nodes)
+  }
+  mapped_species_nodes <- as.character(duplication_bar_nodes$mapped_species_node)
+  has_mapped_duplications <- nrow(duplication_bar_nodes) > 0 && any(
+    !is.na(mapped_species_nodes) & nzchar(mapped_species_nodes)
   )
   duplication_family_mode <- has_mapped_duplications
   family_colors <- grDevices::hcl.colors(
@@ -1638,9 +1858,9 @@ plot_data$species_mapping_label <- unname(
   species_mapping_label_by_node[as.character(plot_data$node)]
 )
 plot_data$species_mapping_label[is.na(plot_data$species_mapping_label)] <- ""
-if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
-  duplication_event_values <- as.character(ortholog_tree_nodes$event)
-  duplication_mapping_values <- as.character(ortholog_tree_nodes$mapped_species_node)
+if (glyph_mode && nrow(duplication_bar_nodes) > 0) {
+  duplication_event_values <- as.character(duplication_bar_nodes$event)
+  duplication_mapping_values <- as.character(duplication_bar_nodes$mapped_species_node)
   mapped_duplication_labels <- unique(
     duplication_mapping_values[
       !is.na(duplication_event_values) & duplication_event_values == "D" &
@@ -1745,11 +1965,9 @@ if (length(root_node) == 1) {
   root_row <- plot_data[plot_data$node == root_node[[1]], , drop = FALSE]
   root_mapping_label <- as.character(root_row$species_mapping_label[[1]])
   mapped_duplication_nodes <- character(0)
-  if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
+  if (glyph_mode && nrow(duplication_bar_nodes) > 0) {
     mapped_duplication_nodes <- as.character(
-      ortholog_tree_nodes$mapped_species_node[
-        as.character(ortholog_tree_nodes$event) == "D"
-      ]
+      duplication_bar_nodes$mapped_species_node
     )
     mapped_duplication_nodes <- mapped_duplication_nodes[
       !is.na(mapped_duplication_nodes) & nzchar(mapped_duplication_nodes)
@@ -1758,13 +1976,13 @@ if (length(root_node) == 1) {
   root_stem_needed <- nzchar(root_mapping_label) &&
     root_mapping_label %in% mapped_duplication_nodes
   if (root_stem_needed) {
-    root_event_values <- as.character(ortholog_tree_nodes$event)
-    root_mapping_values <- as.character(ortholog_tree_nodes$mapped_species_node)
+    root_event_values <- as.character(duplication_bar_nodes$event)
+    root_mapping_values <- as.character(duplication_bar_nodes$mapped_species_node)
     root_duplication_rows <- !is.na(root_event_values) & root_event_values == "D" &
       !is.na(root_mapping_values) & root_mapping_values == root_mapping_label
     root_mapped_family_count <- max(
       1,
-      length(unique(as.character(ortholog_tree_nodes$family_id[root_duplication_rows])))
+      length(unique(as.character(duplication_bar_nodes$family_id[root_duplication_rows])))
     )
   }
   root_x_raw <- as.numeric(root_row$x[[1]])
@@ -1966,6 +2184,8 @@ if (glyph_mode && nrow(ortholog_glyphs) > 0) {
     ifelse(glyph_rect_df$relation == "shared_ancestral", "#6baed6", "#d95f0e")
   )
   glyph_rect_df$text_color <- ifelse(glyph_rect_df$relation == "specific", "white", "black")
+  glyph_rect_df$fill[glyph_rect_df$relation == "weak_duplication"] <- "#fdba74"
+  glyph_rect_df$border[glyph_rect_df$relation == "weak_duplication"] <- "#c2410c"
   glyph_rect_df$copy_label <- ifelse(is.finite(glyph_rect_df$copy_number), format(glyph_rect_df$copy_number, trim = TRUE), "")
   evidence_rail_width <- heatmap_cell_half * 0.56 - 0.014
   if (identical(evidence_layout, "rail")) {
@@ -2437,11 +2657,11 @@ duplication_family_key_df <- data.frame()
 duplication_count_breaks <- c(0, 1)
 duplication_count_scale_max <- 1
 duplication_bar_height_max <- heatmap_cell_pitch * 0.62
-if (glyph_mode && nrow(ortholog_tree_nodes) > 0) {
-  all_mapped_species_nodes <- as.character(ortholog_tree_nodes$mapped_species_node)
+if (glyph_mode && nrow(duplication_bar_nodes) > 0) {
+  all_mapped_species_nodes <- as.character(duplication_bar_nodes$mapped_species_node)
   all_mapped_species_nodes[is.na(all_mapped_species_nodes)] <- ""
-  duplication_event_df <- ortholog_tree_nodes[
-    as.character(ortholog_tree_nodes$event) == "D" & nzchar(all_mapped_species_nodes),
+  duplication_event_df <- duplication_bar_nodes[
+    nzchar(all_mapped_species_nodes),
     c("family_id", "family_order", "mapped_species_node"),
     drop = FALSE
   ]
@@ -2683,7 +2903,11 @@ if (nrow(duplication_family_key_df) > 0) {
   duplication_count_key_title_df <- data.frame(
     x = tree_left,
     y = count_key_title_y,
-    label = "Bar height = duplication count",
+    label = if (duplication_bar_scope == "displayed_genes") {
+      "Bar height = displayed-gene duplication count"
+    } else {
+      "Bar height = full-family duplication count"
+    },
     stringsAsFactors = FALSE
   )
   y_min <- min(y_min, count_key_y - 0.75)
@@ -2718,6 +2942,15 @@ if (glyph_mode) {
     glyph_legend_labels <- c(glyph_legend_labels, "non-contiguous orthology")
     glyph_legend_fills <- c(glyph_legend_fills, "#fdd49e")
   }
+  if (nrow(glyph_rect_df) > 0 && any(glyph_rect_df$relation == "weak_duplication")) {
+    weak_label <- if (dup_conf_threshold > 0) {
+      paste0("Additional ortholog candidate\nduplication confidence score <=", format(dup_conf_threshold, trim = TRUE))
+    } else {
+      "Additional ortholog candidate"
+    }
+    glyph_legend_labels <- c(glyph_legend_labels, weak_label)
+    glyph_legend_fills <- c(glyph_legend_fills, "#fdba74")
+  }
   legend_df <- data.frame(
     label = c(glyph_legend_labels, tree_legend_labels),
     fill = c(glyph_legend_fills, tree_legend_fills),
@@ -2738,7 +2971,12 @@ if (glyph_mode) {
   legend_index <- seq_len(nrow(legend_df)) - 1
   legend_rows <- ceiling(nrow(legend_df) / legend_columns)
   legend_df$x <- heatmap_left + 0.05 + floor(legend_index / legend_rows) * legend_cell_width
-  legend_df$y <- y_legend - (legend_index %% legend_rows) * 0.75
+  legend_line_counts <- lengths(strsplit(legend_df$label, "\n", fixed = TRUE))
+  for (column_rows in split(seq_len(nrow(legend_df)), floor(legend_index / legend_rows))) {
+    row_heights <- 0.75 * legend_line_counts[column_rows]
+    row_centers <- cumsum(row_heights) - row_heights / 2
+    legend_df$y[column_rows] <- y_legend - (row_centers - 0.375)
+  }
 } else if (value_mode == "presence") {
   legend_df <- data.frame(
     label = c("undetected", "detected"),
@@ -2952,9 +3190,12 @@ if (nrow(busco_df) > 0) {
   )
 }
 if (nrow(legend_df) > 0) {
+  legend_label_width <- vapply(strsplit(legend_df$label, "\n", fixed = TRUE), function(lines) {
+    max(nchar(lines, type = "width"))
+  }, integer(1))
   ortholog_legend_right <- max(
     heatmap_left + 0.05 + nchar(ifelse(glyph_mode, ortholog_scope_label, "Ortholog"), type = "width") * 0.33,
-    legend_df$x + 0.62 + nchar(legend_df$label, type = "width") * 0.33
+    legend_df$x + 0.62 + legend_label_width * 0.33
   )
   x_max <- max(x_max, ortholog_legend_right + 0.15)
   if ("y" %in% colnames(legend_df) && any(is.finite(legend_df$y))) {
@@ -3005,7 +3246,8 @@ if (nrow(legend_df) > 0) {
 for (legend_parts in list(
   list(synteny_legend_title_df, 0), list(ufboot_legend_title_df, 0),
   list(evidence_state_legend_title_df, 0), list(evidence_state_legend_df, 0.25),
-  list(busco_legend_df, 0.42), list(duplication_family_key_df, 0.42)
+  list(busco_legend_df, 0.42), list(duplication_family_key_df, 0.42),
+  list(duplication_count_key_title_df, 0)
 )) {
   if (nrow(legend_parts[[1]]) > 0) {
     x_max <- max(x_max, fit_text_right(legend_parts[[1]]$x, legend_parts[[1]]$label, legend_parts[[2]]))
@@ -3028,6 +3270,14 @@ if (glyph_mode && nrow(legend_df) > 0) {
   )
 }
 final_data_units_per_inch <- (x_max - x_min) / plot_width
+layout_y_ratio <- 1
+if (nrow(glyph_rect_df) > 0) {
+  # All ortholog lanes must leave physical space for the fixed-size
+  # copy-number text, including the central area between two evidence bands.
+  available_height <- min(glyph_rect_df$ymax - glyph_rect_df$ymin)
+  if (identical(evidence_layout, "band")) available_height <- available_height * 0.64
+  layout_y_ratio <- max(1, font_size_pt * 1.10 * final_data_units_per_inch / (72 * available_height))
+}
 final_label_depth <- max(2.6, max(text_width_inches(query_plot_labels)) * final_data_units_per_inch + 0.40)
 final_y_legend <- min(row_y_min - 4.15, y_query_label - final_label_depth - 0.80)
 if (final_y_legend < y_legend) {
@@ -3316,7 +3566,7 @@ combined <- combined +
   annotate("text", x = tree_axis_label_x, y = y_axis_label, label = tree_axis_label, hjust = tree_axis_label_hjust, size = font_size_mm, color = "black") +
   scale_fill_identity() +
   scale_color_identity() +
-  coord_fixed(ratio = 1, xlim = c(x_min, x_max), ylim = c(y_min, y_max), expand = FALSE, clip = "off") +
+  coord_fixed(ratio = layout_y_ratio, xlim = c(x_min, x_max), ylim = c(y_min, y_max), expand = FALSE, clip = "off") +
   theme_void(base_size = font_size_pt) +
   theme(plot.margin = margin(3, 3, 3, 3))
 
@@ -3497,13 +3747,18 @@ if (nrow(busco_legend_df) > 0) {
     geom_text(data = busco_legend_df, aes(x = x + 0.42, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
 }
 
+automatic_plot_height <- max(2.8, plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min))
 plot_height <- if (identical(plot_height_arg, "auto")) {
-  max(2.8, plot_width * (y_max - y_min) / (x_max - x_min))
+  automatic_plot_height
 } else {
   as.numeric(plot_height_arg)
 }
 if (!is.finite(plot_height) || plot_height <= 0) {
   stop("Invalid --height: ", plot_height_arg)
+}
+if (layout_y_ratio > 1 && plot_height < automatic_plot_height) {
+  stop("Ortholog plot height is too small for copy-number labels; use --height=auto or at least ",
+       format(automatic_plot_height, digits = 4), " inches")
 }
 
 if (nzchar(out_pdf)) {

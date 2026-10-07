@@ -397,6 +397,24 @@ def test_gene_summary_run_csubst_scan_aa_change_summary_env_override_and_forward
     ]
 
 
+@pytest.mark.parametrize("threshold", ["0.05", "0.1", "0.2"])
+def test_gene_summary_duplication_confidence_scoped_override_reaches_container(tmp_path, threshold):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
+        "presence_absence_dup_conf_score_threshold=0; "
+        f"GG_GENE_SUMMARY_PRESENCE_ABSENCE_DUP_CONF_SCORE_THRESHOLD={threshold}; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "%s\\n%s\\n%s\\n" "${presence_absence_dup_conf_score_threshold}" '
+        '"${SINGULARITYENV_presence_absence_dup_conf_score_threshold:-}" '
+        '"${APPTAINERENV_presence_absence_dup_conf_score_threshold:-}"'
+    )
+    result = run_bash(command, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [threshold] * 3
+
+
 def test_gene_summary_candidate_site_options_are_forwarded(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "

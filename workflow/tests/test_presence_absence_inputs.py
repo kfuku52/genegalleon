@@ -43,6 +43,40 @@ def species_tree(tmp_path):
     return str(path)
 
 
+def test_displayed_duplication_membership_excludes_hidden_paralogs_and_deduplicates_genes():
+    rows = [
+        row(0, -1, 1, 2, "D", "root"),
+        row(1, 0, 3, 4, "D", "one_visible_child"),
+        row(2, 0, 5, 6, "S", "right_clade"),
+        row(3, 1, -1, -1, "L", "Ref_gene"),
+        row(4, 1, -1, -1, "L", "Hidden_candidate"),
+        row(5, 2, 7, 8, "D", "visible_expansion"),
+        row(6, 2, 9, 10, "D", "hidden_expansion"),
+        row(7, 5, -1, -1, "L", "Visible_a"),
+        row(8, 5, -1, -1, "L", "Visible_b"),
+        row(9, 6, -1, -1, "L", "Hidden_a"),
+        row(10, 6, -1, -1, "L", "Hidden_b"),
+    ]
+    by_id, children, root = mod.build_tree_index(rows)
+    nodes = [dict(node_id=i, event="D", parent_node_id="" if i == 0 else rows[i]["parent"],
+                  in_reference_tree=int(i == 0)) for i in (0, 1, 5, 6)]
+    glyphs = [dict(gene_ids="Ref_gene;Visible_a;Visible_b"), dict(gene_ids="Visible_a")]
+    original = [dict(node) for node in nodes]
+    mod.annotate_displayed_duplications(by_id, children, root, glyphs, nodes)
+    def counted():
+        return {node["node_id"] for node in nodes
+                if node["displayed_child1_gene_ids"] and node["displayed_child2_gene_ids"]}
+    assert counted() == {0, 5}
+    assert nodes[0]["displayed_gene_ids"] == "Ref_gene;Visible_a;Visible_b"
+    assert nodes[0]["displayed_child2_gene_ids"] == "Visible_a;Visible_b"
+    glyphs.append(dict(gene_ids="Hidden_candidate", relation="weak_duplication"))
+    mod.annotate_displayed_duplications(by_id, children, root, glyphs, nodes)
+    assert counted() == {0, 1, 5}
+    assert [{key: node[key] for key in old} for node, old in zip(nodes, original, strict=True)] == original
+    with pytest.raises(ValueError, match="absent from the saved tree"):
+        mod.annotate_displayed_duplications(by_id, children, root, [dict(gene_ids="Missing_gene")], nodes)
+
+
 def test_source_metadata_is_explicit_and_preserved(tmp_path):
     path = tmp_path / "query.fa"
     path.write_text(">q1 | Display | species=Near species evidence=curated\nAA\n"
@@ -180,6 +214,19 @@ def test_manifest_combines_query_file_and_hog_sources_including_zip(tmp_path, zi
     records = mod.read_family_manifest(path)
     columns, glyphs, _tree, mapping = mod.collect_query_anchor_orthologs(
         store, "", manifest_records=records, query_label="label")
+    candidate_glyphs, evidence = mod.add_weak_duplication_candidates(
+        mod.ManifestOutputStore(records), columns, glyphs, 1
+    )
+    assert len(evidence) == 3
+    assert {r["family_id"] for r in evidence} == {"Native", "HOGs"}
+    support = mod.collect_reference_ufboot_evidence(
+        mod.ManifestOutputStore(records), columns, candidate_glyphs, require_one_branch_per_glyph=False
+    )
+    candidates = [r for r in support if r["relation"] == "weak_duplication"]
+    assert len(candidates) == 3
+    assert all(r["orthology_ufboot_status"] == "not_evaluable" and
+               r["orthology_ufboot_unavailable_reason"] == "weak_duplication" and
+               r["decisive_branch_ufboot"] == "" for r in candidates)
     assert [c["family_id"] for c in columns] == ["Native", "HOGs", "HOGs"]
     assert columns[0]["plot_label"] == "Native query"
     assert mapping[0]["source_species"] == "Near_species"

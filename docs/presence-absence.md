@@ -125,6 +125,108 @@ The plotting helper also accepts these as `--width=auto`, `--label_map=PATH`,
 `--out_pdf=` / `--out_svg=` explicitly disable that format; omitted output
 options also leave that format disabled.
 
+## Interpret duplication bars
+
+Colored bars count distinct original species-overlap **D nodes with displayed
+genes in both child subtrees**, grouped by family and mapped species-tree branch.
+Displayed genes include strict orthologs and additional ortholog candidates in
+the matrix. Each gene ID contributes once to subtree membership even when it
+appears in several query columns or glyphs, and each qualifying D node contributes
+one event. D nodes with displayed genes in only one child are excluded.
+
+The original full-tree S/D calls remain unchanged; the method does not rerun
+species overlap on a pruned tree or turn candidate-associated D nodes into S.
+Internal-node mapping still uses the saved GeneRax assignment, or species
+coverage when that assignment is unavailable. Query/anchor/HOG selection and
+the candidate cutoff can change which genes are displayed and therefore which
+D nodes qualify. Standalone plots also restrict membership to the species rows
+actually displayed. The legend says **Bar height = displayed-gene duplication
+count**. Its numbered bars are height references; an upper legend value need
+not occur in the data.
+
+The `.tree.tsv` preserves all original D rows and adds
+`displayed_child1_gene_ids` and `displayed_child2_gene_ids` for auditability.
+`displayed_gene_ids` records the complete displayed gene set once per family,
+on the compact anchor-tree root. The plot checks that this set agrees with its
+glyph table. Legacy tree tables without these three columns remain readable
+with a warning and the **full-family duplication count** legend; regenerate the
+summary tables to apply the displayed-gene scope.
+
+Counts are inferred events, not present-day gene copy numbers or confirmed
+biological duplications. Gene-tree uncertainty and the underlying gene models
+still matter; no bootstrap filter is applied to these counts.
+
+## Flag candidates across low-confidence duplication nodes
+
+Set the threshold in the editable configuration block of
+`workflow/gg_gene_summary_entrypoint.sh`:
+
+```bash
+presence_absence_dup_conf_score_threshold="0.05"
+```
+
+For a one-off run showing every original query, use scoped overrides from the
+repository root after configuring the workspace/input/output paths:
+
+```bash
+GG_GENE_SUMMARY_RUN_PRESENCE_ABSENCE_SUMMARY=1 \
+GG_GENE_SUMMARY_PRESENCE_ABSENCE_ORTHOLOG_BASIS=query_gene \
+GG_GENE_SUMMARY_PRESENCE_ABSENCE_QUERY_SELECTION=all \
+GG_GENE_SUMMARY_PRESENCE_ABSENCE_PLOT_WIDTH=auto \
+GG_GENE_SUMMARY_PRESENCE_ABSENCE_DUP_CONF_SCORE_THRESHOLD=0.05 \
+bash workflow/gg_gene_summary_entrypoint.sh
+```
+
+Use `0.1` or `0.2` in place of `0.05` to compare cutoffs. Set a distinct
+`summary_output_dir` (or `GG_GENE_SUMMARY_SUMMARY_OUTPUT_DIR`) for each run to
+retain all versions; the same output directory otherwise replaces the summary
+files. No rerun of sequence search, tree inference or reconciliation is needed.
+The query-gene PDF/SVG and `.dup_conf.tsv` files use the
+`query2family_query_gene_orthologs` prefix in that directory.
+
+The default `0` preserves strict orthology calls. A positive threshold adds
+**orange additional ortholog candidate glyphs** when a gene and an anchor from
+different species have a D MRCA whose duplication confidence score is less
+than or equal to the threshold. Existing blue orthologs and the original D
+events remain intact. Both reference-species and query-gene bases support this
+setting, including saved OG/HOG sources. Query selection still uses strict
+orthology; candidates cannot authorize replacing a query or merging anchors.
+
+The legend labels these as **Additional ortholog candidate**, with
+`duplication confidence score <= threshold` on a separate line. The saved
+`weak_duplication` relation identifier is retained for compatibility.
+
+The score is the Jaccard overlap of species under the two children, recomputed
+on the full saved gene tree. It is not a bootstrap value or a probability that
+the duplication is real. Same-species paralogs are never added by this setting.
+Gapped anchor sets are split into separate glyphs so intervening columns are
+not painted. A copy spanning several anchors is counted once in its glyph;
+column totals are not independent copies. Family-level presence and sequence
+counts remain unchanged.
+
+The new `.dup_conf.tsv` companion records every added gene/anchor pair, its
+original D MRCA, shared/union species counts, score, threshold and raw branch
+UFBoot when available. Orthology UFBoot remains unavailable for these D pairs,
+with reason `weak_duplication`; branch support does not establish orthology.
+Local synteny is evaluated separately. The collector accepts
+`--dup_conf_score_threshold 0.05 --out_dup_conf candidates.dup_conf.tsv`, and
+requires `--out_dup_conf` whenever the cutoff is positive. This prevents saving
+additional candidate glyphs without their audit table. Similarly,
+standalone candidate plots require both `--dup_conf_score_threshold=0.05` and
+`--ortholog_dup_conf_table=candidates.dup_conf.tsv`. The summary stage forwards
+these automatically. The plot checks the pair identities, scores and cutoff
+against the glyphs, and checks supplied synteny/UFBoot identities and candidate
+classifications. Mixed results are errors. Added candidates must have a saved
+CDS sequence.
+Every additional candidate glyph must have one D MRCA and a positive species
+overlap. When a tree table is supplied, the plot checks that MRCA against its
+original D nodes, and with displayed-descendant provenance also checks that the
+gene/anchor pair lies in opposite child subtrees, even without a UFBoot table.
+Ortholog plots reserve enough vertical space for copy-number text, including
+strict-only and stacked candidate lanes. Automatic height can therefore
+increase, especially with evidence bands.
+An explicit height below the required minimum is rejected with that minimum.
+
 ## Interpret evidence conservatively
 
 Undetected orthologs are not proof of genomic deletion. Copy-number contraction
