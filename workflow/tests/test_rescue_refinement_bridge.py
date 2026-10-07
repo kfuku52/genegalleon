@@ -287,6 +287,14 @@ def test_gene_level_primary_fasta_does_not_mark_rescue_alternative_as_mismatched
 
 
 def test_refinement_prediction_completes_genomic_terminus_before_normal_acceptance(tmp_path, monkeypatch):
+    # Search results are supplied below, so this unit test must not depend on
+    # the optional predictor being installed on the fast-test runner.
+    predictor = tmp_path / 'miniprot'
+    predictor.write_text('#!/bin/sh\nexit 99\n')
+    predictor.chmod(0o755)
+    original_which = refinement.shutil.which
+    monkeypatch.setattr(refinement.shutil, 'which',
+                        lambda name: str(predictor) if name == 'miniprot' else original_which(name))
     sequence = 'ATGAAACCCGGGCCCTAA'
     names = ['Species_target', 'Species_donor1', 'Species_donor2']
     inputs, edges = tmp_path / 'inputs.tsv', tmp_path / 'edges.tsv'
