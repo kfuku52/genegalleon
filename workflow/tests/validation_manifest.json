@@ -6,6 +6,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_query_gene_orthologs_runtime.py",
     "test_gene_model_refinement.py",
     "test_gene_model_refinement_downstream.py",
     "test_plot_gene_model_refinement.py",

@@ -33,7 +33,7 @@ gg_resolve_tmp_root() {
   case "${requested}" in
     auto)
       if gg_tmp_is_nig; then
-        gg_tmp_validate_nig_data1 || return 1
+        gg_tmp_validate_nig_data1 /data1 || return 1
         requested=/data1
       else
         requested=workspace

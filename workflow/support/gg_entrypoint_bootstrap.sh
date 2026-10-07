@@ -296,7 +296,8 @@ gg_source_common_params_if_available() {
 
 gg_configure_python_pycacheprefix() {
   [[ -z "${PYTHONPYCACHEPREFIX:-}" ]] || return 0
-  local storage_support="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  local storage_support
+  storage_support=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || return 1
   # shellcheck disable=SC1090
   source "${storage_support}/gg_tmp_storage.sh"
   local selected runtime_tmp
