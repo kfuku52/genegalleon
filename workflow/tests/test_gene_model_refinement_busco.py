@@ -41,6 +41,19 @@ def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette
     original_save = Figure.savefig
     def save(fig, *args, **kwargs):
         fig.canvas.draw()
+        assert len(fig.axes) == 2
+        # Each species has exactly three four-category stacks. Check phase
+        # order and percentages, rather than only the presence of SVG colours.
+        patches = fig.axes[0].patches[:12 * species_count]
+        assert len(patches) == 12 * species_count
+        for phase_index, (phase, offset) in enumerate((("pre_rescue", -.26), ("before", 0), ("after", .26))):
+            for i, row in enumerate(rows):
+                stack = patches[(phase_index * species_count + i) * 4:(phase_index * species_count + i + 1) * 4]
+                assert sum(p.get_width() for p in stack) == pytest.approx(100)
+                for patch, category in zip(stack, busco.STATUS, strict=True):
+                    assert patch.get_height() == pytest.approx(.18)
+                    assert patch.get_y() + patch.get_height() / 2 == pytest.approx(i + offset)
+                    assert patch.get_width() == pytest.approx(100 * row[phase + "_result"][category] / row[phase + "_result"]["total"])
         renderer = fig.canvas.get_renderer()
         assert all(ax.get_legend() is None for ax in fig.axes)
         assert len(fig.legends) == 2
@@ -49,7 +62,7 @@ def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette
             assert all(not bounds.overlaps(ax.bbox) for ax in fig.axes)
             assert all(not bounds.overlaps(ax.xaxis.label.get_window_extent(renderer)) for ax in fig.axes)
             assert not bounds.overlaps(fig.texts[-1].get_window_extent(renderer))
-            start, end = (0, 2) if "Single-copy" in [t.get_text() for t in legend.get_texts()] else (3, 3)
+            start, end = (0, 0) if "Single-copy" in [t.get_text() for t in legend.get_texts()] else (1, 1)
             assert fig.axes[start].bbox.x0 - 1 <= bounds.x0 < bounds.x1 <= fig.axes[end].bbox.x1 + 1
         return original_save(fig, *args, **kwargs)
     monkeypatch.setattr(Figure, "savefig", save)
@@ -68,6 +81,7 @@ def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette
     svg = (tmp_path / "busco_three_stage.svg").read_text()
     assert "Drosophyllum lusitanicum (not analysed)" in svg
     assert all(c.lower() in svg.lower() for c in busco.STATUS_COLOURS)
+    assert "Top to bottom within each species" in svg
     summaries[0]["lineage"] = "insecta_odb12"
     with pytest.raises(ValueError, match="Noncomparable"):
         busco.staged_result(pair, summaries[1], summaries[2], summaries[0])
@@ -456,7 +470,8 @@ def test_srp_regrouping_preserves_legacy_counts_and_requires_complete_evidence()
 
 @pytest.mark.parametrize("grouped", [False, True])
 @pytest.mark.parametrize("swissprot", [False, True])
-def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped, swissprot):
+@pytest.mark.parametrize("staged", [False, True])
+def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped, swissprot, staged):
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
     original_barh = Axes.barh
@@ -468,8 +483,14 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     monkeypatch.setattr(Axes, "barh", barh)
     def save(fig, *args, **kwargs):
         fig.canvas.draw()
+        if len(fig.axes) == 2:  # Separate three-stage figure has its own geometry check.
+            return original_save(fig, *args, **kwargs)
+        assert len(fig.axes) == (4 if staged else 5)
         renderer = fig.canvas.get_renderer()
         legends = [legend.get_window_extent(renderer) for legend in fig.legends]
+        if staged:
+            assert all(not ax.title.get_window_extent(renderer).overlaps(text.get_window_extent(renderer))
+                       for ax in fig.axes for text in fig.texts[:2])
         labels = [ax.xaxis.label.get_window_extent(renderer) for ax in fig.axes]
         note = fig.texts[-1].get_window_extent(renderer)
         assert all(not a.overlaps(b) for a in legends for b in labels)
@@ -478,9 +499,9 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         for legend, bounds in zip(fig.legends, legends, strict=True):
             title = legend.get_title().get_text().replace("\n", " ")
             if title == "BUSCO status":
-                left, right = fig.axes[0].bbox.x0, fig.axes[1].bbox.x1
+                left, right = fig.axes[0].bbox.x0, fig.axes[0 if staged else 1].bbox.x1
             else:
-                ax = fig.axes[4] if "coding-path" in title or "Coding-path" in title else fig.axes[3]
+                ax = fig.axes[-1] if "coding-path" in title or "Coding-path" in title else fig.axes[-2]
                 left, right = ax.bbox.x0, ax.bbox.x1
             assert left - 1 <= bounds.x0 < bounds.x1 <= right + 1
         return original_save(fig, *args, **kwargs)
@@ -490,6 +511,9 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     result = busco.read_result(path)
     rows = [busco.paired_result({"species": n, "refinement_status": status}, result, result)
             for n, status in [("Species_a", "analysed"), ("Drosophyllum_lusitanicum", "not_analysed")]]
+    if staged:
+        rows = [busco.staged_result({k: v for k, v in row.items() if not k.endswith("_result")}, result, result, result)
+                for row in rows]
     changes = {"species": {
         "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 11, "accepted_repair_paths": 2,
                       "accepted_isoform_paths": 3, "rescue_self_only_loci": 1,

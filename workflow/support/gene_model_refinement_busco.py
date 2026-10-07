@@ -621,6 +621,19 @@ def _place_legends_below_plots(fig, axes, legend_columns, note_artist):
     note_artist.set_position((note_artist.get_position()[0], .25 / figure_height))
 
 
+def _draw_three_stage_busco(axis, rows):
+    """Three thin bars per species, ordered top to bottom after y inversion."""
+    for phase, offset in (("pre_rescue", -.26), ("before", 0), ("after", .26)):
+        for i, row in enumerate(rows):
+            result, left = row[phase + "_result"], 0
+            for category, colour in zip(STATUS, STATUS_COLOURS, strict=True):
+                value = 100 * result[category] / result["total"]
+                axis.barh(i + offset, value, left=left, height=.18, color=colour)
+                left += value
+            axis.text(101, i + offset, f'{100 * result["complete"] / result["total"]:.2f}',
+                      va="center", fontsize=7)
+
+
 def plot_comparison(rows, output, model_changes=None):
     from textwrap import fill
 
@@ -708,21 +721,34 @@ def plot_comparison(rows, output, model_changes=None):
                     if (not isinstance(groups, dict) or set(groups) != set(categories)
                             or any(type(c) is not int or c < 0 for c in groups.values()) or sum(groups.values()) != total):
                         raise ValueError("S/R/P support groups must sum to the source model count")
+    staged = any("pre_rescue_result" in row for row in rows)
+    if staged:
+        if not all("pre_rescue_result" in row for row in rows):
+            raise ValueError("Three-stage BUSCO requires all three phases for every species")
+        for row in rows:
+            staged_result({k: v for k, v in row.items() if not k.endswith("_result")},
+                          row["before_result"], row["after_result"], row["pre_rescue_result"])
     extra = model_changes is not None
     support_legend = stacked_rescue or stacked_paths
     margin_left = .20 if extra else .24
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
     support_note_space = 1.5 if swissprot_view else 0
     figure_height = max(8, .52 * len(rows) + 5) + support_note_space if extra else max(6, .43 * len(rows) + 2)
-    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, figure_height),
-                             gridspec_kw={"width_ratios": [1, 1, .65, .75, .9] if extra else [1, 1, .65],
-                                          "wspace": .16 if extra else .12}, sharey=True)
+    ratios = ([1.65, .65, .75, .9] if extra else [1.65, .8]) if staged else ([1, 1, .65, .75, .9] if extra else [1, 1, .65])
+    fig, axes = plt.subplots(1, len(ratios), figsize=(25 if extra else 19, figure_height),
+                             gridspec_kw={"width_ratios": ratios, "wspace": .16 if extra else .12}, sharey=True)
+    busco_axes = axes[:1] if staged else axes[:2]
+    delta_axis = axes[len(busco_axes)]
+    evidence_axes = axes[len(busco_axes) + 1:]
+    rescue_axis, path_axis = evidence_axes if extra else (None, None)
+    if staged:
+        _draw_three_stage_busco(busco_axes[0], rows)
     colors = STATUS_COLOURS
     for i, row in enumerate(rows):
         if row["refinement_status"] == "not_analysed":
             for ax in axes:
                 ax.axhspan(i - .48, i + .48, color="#eef0f3", zorder=0)
-        for j, phase in enumerate(("before", "after")):
+        for j, phase in enumerate(() if staged else ("before", "after")):
             result, left = row[phase + "_result"], 0
             for category, color in zip(STATUS, colors, strict=True):
                 value = 100 * result[category] / result["total"]
@@ -730,13 +756,13 @@ def plot_comparison(rows, output, model_changes=None):
                 left += value
             axes[j].text(101, i, f'{100 * result["complete"] / result["total"]:.2f}', va="center", fontsize=9)
         delta = row["delta_complete_pp"]
-        axes[2].barh(i, delta, color="#2a8d75" if delta >= 0 else "#b85250", height=.65)
-        axes[2].text(.98, i, f'{row["delta_complete"]:+d} ({delta:+.2f} pp)',
-                     transform=axes[2].get_yaxis_transform(), ha="right", va="center", fontsize=9)
+        delta_axis.barh(i, delta, color="#2a8d75" if delta >= 0 else "#b85250", height=.65)
+        delta_axis.text(.98, i, f'{row["delta_complete"]:+d} ({delta:+.2f} pp)',
+                     transform=delta_axis.get_yaxis_transform(), ha="right", va="center", fontsize=9)
         if extra:
             value = stats[row["species"]]
             if row["refinement_status"] == "not_analysed":
-                for ax in axes[3:]:
+                for ax in evidence_axes:
                     ax.text(.03, i, "Not analysed", transform=ax.get_yaxis_transform(), va="center", color="#657585", fontsize=9)
             else:
                 rescued = value["prior_rescued_loci"]
@@ -750,11 +776,11 @@ def plot_comparison(rows, output, model_changes=None):
                     group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
                     for category, color in zip(categories, group_colors, strict=True):
                         count = support[category]
-                        axes[3].barh(rescue_y, count, left=offset, color=color, height=.32)
+                        rescue_axis.barh(rescue_y, count, left=offset, color=color, height=.32)
                         offset += count
                 else:
-                    axes[3].barh(rescue_y, rescued, color="#5275b5", height=.32)
-                axes[3].annotate(str(rescued), (rescued, rescue_y),
+                    rescue_axis.barh(rescue_y, rescued, color="#5275b5", height=.32)
+                rescue_axis.annotate(str(rescued), (rescued, rescue_y),
                                  xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
                 lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
                 lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
@@ -762,16 +788,16 @@ def plot_comparison(rows, output, model_changes=None):
                     **dict.fromkeys(lower_groups, 0), "not_assessed": rescued}
                 offset = 0
                 for category, color in zip(lower_groups, lower_colours, strict=True):
-                    axes[3].barh(i + .20, repeats[category], left=offset, color=color, height=.32,
+                    rescue_axis.barh(i + .20, repeats[category], left=offset, color=color, height=.32,
                                  hatch="///" if category == "not_assessed" else None)
                     offset += repeats[category]
-                axes[3].annotate(str(rescued), (rescued, i + .20), xytext=(4, 0),
+                rescue_axis.annotate(str(rescued), (rescued, i + .20), xytext=(4, 0),
                                  textcoords="offset points", va="center", fontsize=9)
                 type_y = i - .20 if stacked_paths else i
                 height = .32 if stacked_paths else .7
-                axes[4].barh(type_y, repair, color="#187d97", height=height)
-                axes[4].barh(type_y, isoform, left=repair, color="#d38b21", height=height)
-                axes[4].annotate(f"{repair} / {isoform}", (repair + isoform, type_y), xytext=(4, 0),
+                path_axis.barh(type_y, repair, color="#187d97", height=height)
+                path_axis.barh(type_y, isoform, left=repair, color="#d38b21", height=height)
+                path_axis.annotate(f"{repair} / {isoform}", (repair + isoform, type_y), xytext=(4, 0),
                                  textcoords="offset points", va="center", fontsize=9)
                 if stacked_paths:
                     offset = 0
@@ -780,14 +806,16 @@ def plot_comparison(rows, output, model_changes=None):
                     group_colors = PATH_SUPPORT_GROUP_COLOURS if grouped_support else PATH_SUPPORT_COLOURS
                     for category, color in zip(categories, group_colors, strict=True):
                         count = support[category]
-                        axes[4].barh(i + .20, count, left=offset, color=color, height=.32)
+                        path_axis.barh(i + .20, count, left=offset, color=color, height=.32)
                         offset += count
-                    axes[4].annotate(str(offset), (offset, i + .20), xytext=(4, 0),
+                    path_axis.annotate(str(offset), (offset, i + .20), xytext=(4, 0),
                                      textcoords="offset points", va="center", fontsize=9)
     labels = [r["species"].replace("_", " ") + ("  [not analysed]" if r["refinement_status"] == "not_analysed" else "") for r in rows]
     axes[0].set_yticks(range(len(rows)), labels)
     axes[0].invert_yaxis()
-    titles = ["Before refinement", "After refinement", "Change in complete BUSCOs"]
+    titles = (["BUSCO: before rescue / after rescue /\nafter refinement (top to bottom)",
+               "Refinement change\nin Complete BUSCOs"] if staged else
+              ["Before refinement", "After refinement", "Change in complete BUSCOs"])
     if extra:
         titles += ["Missing-gene rescue", "Accepted coding paths"]
     for ax, title in zip(axes, titles, strict=True):
@@ -796,27 +824,28 @@ def plot_comparison(rows, output, model_changes=None):
         ax.grid(axis="x", alpha=.15)
         ax.set_axisbelow(True)
         ax.tick_params(axis="y", length=0)
-    for ax in axes[:2]:
+    for ax in busco_axes:
         ax.set_xlim(0, 116)
         ax.set_xticks([0, 25, 50, 75, 100])
         ax.set_xlabel("BUSCO groups (%)     C (%) at right")
     limit = max(1, max(abs(r["delta_complete_pp"]) for r in rows) * 1.2)
-    axes[2].set_xlim(-limit, limit * 2.5)
-    axes[2].axvline(0, color="#647383", linewidth=.7)
-    axes[2].set_xlabel("Percentage points (pp)")
+    delta_axis.set_xlim(-limit, limit * 2.5)
+    delta_axis.axvline(0, color="#647383", linewidth=.7)
+    delta_axis.set_xlabel("Percentage points (pp)")
     if extra:
         rescued_max = max((v["prior_rescued_loci"] or 0) for v in stats.values())
         paths_max = max((v["accepted_repair_paths"] or 0) + (v["accepted_isoform_paths"] or 0) for v in stats.values())
-        axes[3].set_xlim(0, max(1, rescued_max) * 1.25)
-        axes[4].set_xlim(0, max(1, paths_max) * 1.65)
-        for ax in axes[3:]:
+        rescue_axis.set_xlim(0, max(1, rescued_max) * 1.25)
+        path_axis.set_xlim(0, max(1, paths_max) * 1.65)
+        for ax in evidence_axes:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axes[3].set_xlabel(("Upper: donors; lower: Swiss-Prot" if swissprot_view else "Upper: support; lower: repeats")
+        rescue_axis.set_xlabel(("Upper: donors; lower: Swiss-Prot" if swissprot_view else "Upper: support; lower: repeats")
                           + "\nPreviously rescued gene loci")
-        axes[4].set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
+        path_axis.set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
     # Reserve footer space in inches so legends/notes stay separated for both
     # small cohorts and whole-dataset figures.
-    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=(4.6 + support_note_space) / figure_height if extra else .14)
+    fig.subplots_adjust(left=margin_left, right=.98, top=.86 if staged else .90,
+                        bottom=(4.6 + support_note_space) / figure_height if extra else .14)
     fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
                  "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
@@ -836,19 +865,19 @@ def plot_comparison(rows, output, model_changes=None):
         if stacked_rescue:
             group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
             group_labels = SUPPORT_GROUP_LABELS if grouped_support else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
-            rescue_legends.append(local_legend(axes[3], [Patch(facecolor=c) for c in group_colors], group_labels,
+            rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor=c) for c in group_colors], group_labels,
                                                 "Supporting donor groups (upper rescue bars)"))
         else:
-            rescue_legends.append(local_legend(axes[3], [Patch(facecolor="#5275b5")],
+            rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor="#5275b5")],
                                                 ["Previously rescued gene loci"], "Upper rescue bars"))
-        path_legends = [local_legend(axes[4], [Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
+        path_legends = [local_legend(path_axis, [Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
                                     ["Repair coding paths", "Additional isoform paths"], "Coding-path type (upper bars)")]
         if stacked_paths:
             group_colors = PATH_SUPPORT_GROUP_COLOURS if grouped_support else PATH_SUPPORT_COLOURS
             group_labels = PATH_SUPPORT_GROUP_LABELS if grouped_support else PATH_SUPPORT_LABELS
-            path_legends.append(local_legend(axes[4], [Patch(facecolor=c) for c in group_colors], group_labels,
+            path_legends.append(local_legend(path_axis, [Patch(facecolor=c) for c in group_colors], group_labels,
                                               "Supporting donor groups (lower coding-path bars)"))
-        legend_columns.extend(((axes[3], rescue_legends), (axes[4], path_legends)))
+        legend_columns.extend(((rescue_axis, rescue_legends), (path_axis, path_legends)))
     else:
         fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
                    loc="lower left", bbox_to_anchor=(margin_left, .065), ncol=4, frameon=False)
@@ -856,14 +885,15 @@ def plot_comparison(rows, output, model_changes=None):
         lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
         lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
         lower_labels = SWISSPROT_LABELS if swissprot_view else REPEAT_GROUP_LABELS
-        rescue_legends.append(local_legend(axes[3], [Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
+        rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
                               for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
                               "Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
                               "Repeat annotation (lower rescue bars; any CDS overlap)"))
     note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
-    note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
+    note += ("Within each species, top to bottom: before rescue; after missing-gene rescue; after refinement. Values at right: Complete (%)."
+             if staged else "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms.")
     if extra:
-        note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
+        note += "\nRescue counts are added gene loci; repair / isoform counts are accepted paths and may share a locus."
     if support_legend:
         if grouped_support:
             note += "\nDonor groups: self species, nearest relatives and phylogenetically balanced references. Target RNA is separate from self-species homology."
@@ -909,42 +939,34 @@ def plot_comparison(rows, output, model_changes=None):
 
 
 def plot_three_stage(rows, output):
-    """Keep rescue gains separate from representative/refinement effects."""
+    import matplotlib
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
-    palette = dict(zip(STATUS, STATUS_COLOURS, strict=True))
+
     if not all("pre_rescue_result" in row for row in rows):
         raise ValueError("Three-stage BUSCO requires all three phases for every species")
     for row in rows:
         staged_result({k: v for k, v in row.items() if not k.endswith("_result")},
                       row["before_result"], row["after_result"], row["pre_rescue_result"])
-    height = max(7, .36 * len(rows) + 3)
-    fig, axes = plt.subplots(1, 4, figsize=(18, height), sharey=True,
-                             gridspec_kw={"width_ratios": [1, 1, 1, .85]})
+    height = max(7, .48 * len(rows) + 3)
+    fig, axes = plt.subplots(1, 2, figsize=(13, height), sharey=True,
+                             gridspec_kw={"width_ratios": [2.3, 1]})
     y = list(range(len(rows)))
-    for axis, phase, title in zip(axes[:3], ("pre_rescue", "before", "after"),
-                                  ("Before rescue", "After missing-gene rescue", "After refinement"), strict=True):
-        left = [0.] * len(rows)
-        for key in ("single", "duplicated", "fragmented", "missing"):
-            values = [100 * r[phase + "_result"][key] / r[phase + "_result"]["total"] for r in rows]
-            axis.barh(y, values, left=left, height=.68, color=palette[key])
-            left = [a + b for a, b in zip(left, values, strict=True)]
-        for i, row in enumerate(rows):
-            result = row[phase + "_result"]
-            axis.text(101, i, f'{100 * result["complete"] / result["total"]:.1f}%', va="center", fontsize=8)
-        axis.set_xlim(0, 118)
-        axis.set_xticks([0, 50, 100])
-        axis.set_title(title, fontsize=11)
-        axis.set_xlabel("BUSCO (%)")
+    _draw_three_stage_busco(axes[0], rows)
+    axes[0].set_xlim(0, 118)
+    axes[0].set_xticks([0, 25, 50, 75, 100])
+    axes[0].set_title("Before rescue / After rescue / After refinement\nTop to bottom within each species", fontsize=11)
+    axes[0].set_xlabel("BUSCO (%)     Complete (%) at right")
     axes[0].set_yticks(y, [r["species"].replace("_", " ") +
                          (" (not analysed)" if r["refinement_status"] == "not_analysed" else "") for r in rows], fontsize=9)
     axes[0].invert_yaxis()
     for offset, key, label, colour in ((-.17, "delta_rescue_complete", "Rescue", "#37956f"),
                                        (.17, "delta_complete", "Refinement", "#5275b5")):
-        axes[3].barh([i + offset for i in y], [r[key] for r in rows], height=.28, label=label, color=colour)
-    axes[3].axvline(0, color="#777777", linewidth=.7)
-    axes[3].set_title("Change in complete groups", fontsize=11)
-    axes[3].set_xlabel("BUSCO group count")
+        axes[1].barh([i + offset for i in y], [r[key] for r in rows], height=.28, label=label, color=colour)
+    axes[1].axvline(0, color="#777777", linewidth=.7)
+    axes[1].set_title("Change in complete groups", fontsize=11)
+    axes[1].set_xlabel("BUSCO group count")
     for axis in axes:
         axis.spines[["top", "right"]].set_visible(False)
         for i, row in enumerate(rows):
@@ -953,14 +975,14 @@ def plot_three_stage(rows, output):
     fig.suptitle("BUSCO across gene-model improvement stages", fontsize=16, y=.975)
     identity = rows[0]["before_result"]
     fig.text(.03, .93, f'BUSCO {identity["busco_version"]}; {identity["lineage"]}; '
-             f'{identity["total"]} groups. Every phase uses the same frozen lineage, tools and predictor parameters.', fontsize=9)
-    fig.subplots_adjust(left=.26, right=.97, bottom=.12, top=.87, wspace=.28)
+             f'{identity["total"]} groups. Same frozen lineage, tools and predictor parameters in every phase.', fontsize=9)
+    fig.subplots_adjust(left=.34, right=.97, bottom=.12, top=.87, wspace=.28)
     status_legend = fig.legend([Patch(color=c) for c in STATUS_COLOURS], STATUS_LABELS,
-                              loc="upper left", bbox_to_anchor=(.26, .5), ncol=4, frameon=False, fontsize=9, borderaxespad=0)
-    change_legend = fig.legend(*axes[3].get_legend_handles_labels(), loc="upper left",
-                              bbox_to_anchor=(axes[3].get_position().x0, .5), frameon=False, fontsize=9, borderaxespad=0)
+                              loc="upper left", bbox_to_anchor=(.34, .5), ncol=2, frameon=False, fontsize=9, borderaxespad=0)
+    change_legend = fig.legend(*axes[1].get_legend_handles_labels(), loc="upper left",
+                              bbox_to_anchor=(axes[1].get_position().x0, .5), frameon=False, fontsize=9, borderaxespad=0)
     note_artist = fig.text(.03, .015, "Grey rows: structure improvement not analysed; CDS retained unchanged and included in BUSCO.", fontsize=9)
-    _place_legends_below_plots(fig, axes, [(axes[0], [status_legend]), (axes[3], [change_legend])], note_artist)
+    _place_legends_below_plots(fig, axes, [(axes[0], [status_legend]), (axes[1], [change_legend])], note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_three_stage." + suffix), dpi=180, facecolor="white")
     plt.close(fig)

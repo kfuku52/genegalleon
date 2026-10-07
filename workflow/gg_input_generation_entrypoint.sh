@@ -101,6 +101,7 @@ gg_entrypoint_name="gg_input_generation_entrypoint.sh"
 run_gene_model_refinement=0 # Opt-in all-isoform selection, existing-model revision and isoform addition.
 gene_model_refinement_dir="" # Blank uses output/input_generation/gene_model_refinement.
 gene_model_refinement_policy="conserved" # longest|conserved; representative ranking policy.
+gene_model_refinement_isoform_adoption="rna_required" # rna_required|conservation_supported; additional isoform adoption gate.
 gene_model_refinement_mode="conservative" # off|audit|conservative; audit publishes proposals without accepting predictions.
 gene_model_refinement_inputs="" # Optional raw CDS/GFF/genome TSV; requires an explicit frozen correspondence table.
 gene_model_refinement_edges="" # Optional trusted synteny locus correspondence TSV.

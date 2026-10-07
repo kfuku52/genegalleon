@@ -47,7 +47,7 @@ except ImportError:
 
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
-DEFAULTS = dict(policy='conserved', mode='conservative', min_margin=0.10, min_support=2,
+DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_required', min_margin=0.10, min_support=2,
                 minimum_coverage=0.95, minimum_identity=0.50, max_intron=20000,
                 padding=2000, max_interval=200000, candidate_limit=32)
 
@@ -152,6 +152,10 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         params = {**DEFAULTS, **parameters}
         if params['policy'] not in {'longest', 'conserved'} or params['mode'] not in {'off', 'audit', 'conservative'}:
             raise ValueError('Unknown selection policy/refinement mode')
+        if params['isoform_adoption'] not in {'rna_required', 'conservation_supported'}:
+            raise ValueError('Unknown isoform adoption policy')
+        if params['isoform_adoption'] == 'conservation_supported' and params['policy'] != 'conserved':
+            raise ValueError('Conservation-supported isoform adoption requires the conserved selection policy')
         if any(not math.isfinite(float(params[k])) or not 0 <= float(params[k]) <= 1
                for k in ('min_margin', 'minimum_coverage', 'minimum_identity')):
             raise ValueError('Invalid probability/margin')
@@ -513,6 +517,18 @@ def annotation_ownership_spans(gff_path, catalog):
             for (seqid, owner), (start, end) in sorted(spans.items())]
 
 
+def set_representative_admission(row, valid_original, params):
+    """Set the independent adoption gate without changing prediction evidence."""
+    conservation_adoption = (valid_original and not row['rna_paths']
+                             and params.get('isoform_adoption', 'rna_required') == 'conservation_supported'
+                             and params['policy'] == 'conserved')
+    quality = row['candidate']['quality']
+    quality['representative_eligible'] = row['status'] == 'accepted' and (bool(row['rna_paths']) or not valid_original or conservation_adoption)
+    quality.pop('representative_admission', None)
+    if conservation_adoption:
+        quality['representative_admission'] = 'conservation_supported'
+
+
 def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     """Require target ownership, intact genomic ORF and independent support."""
     rna_rows = rna_path_index(rna_rows)
@@ -619,7 +635,7 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         valid_original = any(c['quality'].get('valid_orf') for c in loci[row['gene_id']]['candidates'])
         row['change_type'] = 'isoform_addition' if valid_original else 'model_revision'
         row['evidence_class'] = 'rna_path_supported' if row['rna_paths'] else 'homology_only_predicted'
-        row['candidate']['quality']['representative_eligible'] = row['status'] == 'accepted' and (bool(row['rna_paths']) or not valid_original)
+        set_representative_admission(row, valid_original, params)
         row['candidate']['support'] = {'donors': row['donors'], 'rna_paths': row['rna_paths'], 'class': row['evidence_class']}
         result.append(row)
     active = []

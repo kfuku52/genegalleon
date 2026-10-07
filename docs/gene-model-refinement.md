@@ -93,7 +93,14 @@ conflicting phases and translation/annotation exceptions remain unresolved.
 
 Two donor isoforms from one species count as one donor. Homology-only additions
 at an already intact locus remain nonrepresentative until target RNA supports
-the whole coding path. A supported repair of an incomplete original can become
+the whole coding path by default (`isoform_adoption=rna_required`). The opt-in
+`conservation_supported` policy permits accepted homology-only additions to
+enter conserved representative selection. Adoption still requires its score
+margin, independent donor species and copy/span safeguards, plus a strictly
+positive gain in the cross-species protein/junction score against the final
+adopted neighbors. A length/ORF quality improvement alone is insufficient. This
+does not claim target RNA support or establish isoform expression.
+A supported repair of an incomplete original can become
 representative after the independent selection gates. An accepted candidate is
 therefore not automatically the chosen representative. True species-specific
 isoforms, pseudogene annotations, translation exceptions and genomic disruptions
@@ -145,6 +152,7 @@ Important settings:
 | `run_gene_model_rescue_swissprot` | `1` | Audit missing-gene rescue candidates with the existing Swiss-Prot DB and use protein support for lower rescue bars. |
 | `gene_model_rescue_swissprot_dir` | blank | Separate evidence publication; default is the frozen rescue directory's sibling `.swissprot`. See [candidate evidence](gene-model-evidence.md#candidate-only-swiss-prot-support). |
 | `gene_model_refinement_policy` | `conserved` | `longest` or `conserved`. |
+| `gene_model_refinement_isoform_adoption` | `rna_required` | `conservation_supported` allows homology-only additions when cross-species consistency improves; requires `conserved` selection. |
 | `gene_model_refinement_mode` | `conservative` | `off` skips prediction; `audit` retains prediction proposals; `conservative` accepts only supported predictions. |
 | `gene_model_refinement_dir` | blank | `output/input_generation/gene_model_refinement`. Use a new directory for changed inputs/settings/implementation. |
 | `gene_model_refinement_inputs` | blank | Optional original species CDS/GFF/genome TSV, paired with `gene_model_refinement_edges`. |
@@ -507,6 +515,12 @@ streams contig lengths to validate annotation bounds. Final effective bundles
 retain their self-contained genome copies.
 
 ## Three-stage BUSCO
+
+Within each species, three thin horizontal stacked bars are ordered vertically:
+before missing-gene rescue, after rescue, and after refinement. This layout is
+also used by the combined improvement plot when all three phases are available.
+The same BUSCO palette and per-panel legends apply; excluded species remain
+visible and explicitly marked as not analysed.
 
 The standard pipeline using completed rescue inputs also emits
 `busco_three_stage.png/svg`: pre-rescue CDS, after missing-gene rescue, and

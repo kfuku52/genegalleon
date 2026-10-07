@@ -403,6 +403,36 @@ def test_conserved_choice_changes_longest_wrong_terminal_extension():
     assert result["parameters"]["cutoffs_calibrated"] is False
 
 
+def test_homology_isoform_adoption_requires_measured_crossspecies_gain():
+    catalogs, edges = extension_fixture()
+    proposed = catalogs[0]["loci"][0]["candidates"][1]
+    proposed["origin"] = "predicted"
+    proposed["quality"].update(representative_eligible=True,
+                               representative_admission="conservation_supported")
+    result = select_representatives(catalogs, edges)
+    selected = result["selections"][0]
+    assert selected["candidate_id"] == "A_conserved"
+    assert selected["crossspecies_score_gain"] > 0
+    assert not proposed["quality"].get("rna_supported", False)
+
+
+def test_quality_improvement_alone_cannot_adopt_homology_isoform():
+    sequence = protein()
+    source = candidate("A_source", sequence, quality={"partial": True})
+    proposed = candidate("A_predicted", sequence, origin="predicted",
+                         quality={"representative_eligible": True,
+                                  "representative_admission": "conservation_supported"})
+    catalogs = [catalog("A", ("g", [source, proposed])),
+                catalog("B", ("g", [candidate("B_main", sequence)])),
+                catalog("C", ("g", [candidate("C_main", sequence)]))]
+    catalogs[0]["loci"][0]["source_baseline_candidate_id"] = "A_source"
+    result = select_representatives(catalogs, [edge("A", "B"), edge("A", "C")])
+    selected = result["selections"][0]
+    assert selected["candidate_id"] == "A_source"
+    assert selected["reason"] == "no_crossspecies_conservation_gain"
+    assert selected["proposed_crossspecies_score_gain"] == pytest.approx(0)
+
+
 def test_longest_policy_uses_corrected_unpadded_length_and_stable_tie():
     catalogs = [catalog("A", ("g", [candidate("z", protein(), corrected_cds_length=268),
                                    candidate("a", protein(), corrected_cds_length=269)]))]

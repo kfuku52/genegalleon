@@ -437,6 +437,36 @@ def test_homology_addition_to_intact_gene_requires_target_path_for_representativ
     assert row["evidence_class"] == "homology_only_predicted"
 
 
+def test_conservation_supported_adoption_changes_only_the_independent_gate():
+    catalog, models, edges = classification_fixture(valid_original=True)
+    baseline = classify(catalog, models, edges)[0]
+    relaxed = classify(catalog, models, edges, isoform_adoption="conservation_supported")[0]
+    expected = copy.deepcopy(baseline)
+    expected["candidate"]["quality"].update(representative_eligible=True,
+                                           representative_admission="conservation_supported")
+    assert relaxed == expected
+    assert relaxed["evidence_class"] == "homology_only_predicted"
+    assert not relaxed["candidate"]["quality"]["rna_supported"]
+
+
+@pytest.mark.parametrize("problem", ["frameshift", "internal_stop", "invalid_phase"])
+def test_relaxing_rna_adoption_does_not_admit_failed_predictions(problem):
+    catalog, models, edges = classification_fixture(valid_original=True)
+    for model in models:
+        model["problems"] = [problem]
+    row = classify(catalog, models, edges, isoform_adoption="conservation_supported")[0]
+    assert row["status"] == "proposal"
+    assert not row["candidate"]["quality"]["representative_eligible"]
+
+
+@pytest.mark.parametrize("policy,adoption", [("conserved", "unknown"), ("longest", "conservation_supported")])
+def test_invalid_isoform_adoption_configuration_is_rejected(tmp_path, policy, adoption):
+    inputs, edges, _ = tiny_inputs(tmp_path)
+    with pytest.raises(ValueError, match="(?i)(adoption|conservation)"):
+        refinement.plan(tmp_path / "run", inputs=inputs, edges=edges, mode="off",
+                        policy=policy, isoform_adoption=adoption)
+
+
 @pytest.mark.parametrize("case,problem", [
     ("other_locus", "overlap_other_locus"),
     ("unowned", "no_overlap_owned_locus"),

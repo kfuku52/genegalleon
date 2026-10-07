@@ -529,6 +529,7 @@ EOF
 run_gene_model_refinement
 gene_model_refinement_dir
 gene_model_refinement_policy
+gene_model_refinement_isoform_adoption
 gene_model_refinement_mode
 gene_model_refinement_inputs
 gene_model_refinement_edges
