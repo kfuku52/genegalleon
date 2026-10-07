@@ -505,6 +505,14 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                              "seqid": seqid, "strand": strand, "cds": sequence, "protein": "",
                              "blocks": blocks, "junctions": [], "quality": quality, "origin": "original",
                              "source_fasta_ids": [], "source_cds_sha256": [], "source_cds": []}
+                rescue_alternative = any(row['source'] == 'genegalleon_rescue'
+                                         and row['attributes'].get('support') == 'homology_coding_path'
+                                         for row in normaliser.nodes.get(transcript, []))
+                if rescue_alternative:
+                    candidate['origin'] = 'predicted'
+                    candidate['rescue_alternative_coding_path'] = True
+                    candidate['quality']['representative_eligible'] = False
+                    candidate['support'] = {'class': 'homology_only_predicted', 'source': 'missing_gene_rescue_alternative'}
                 candidate["quality"] = validate_candidate(candidate, genetic_code)
                 if not candidate["quality"]["phase_conflict"] and not candidate["quality"]["phase_unresolved"]:
                     candidate["junctions"] = _junctions(blocks, strand)
@@ -630,6 +638,9 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                "usable_candidates": sum(candidate["quality"]["usable"] for candidate in candidates.values()),
                "coding_paths": len({candidate["coding_key"] for candidate in candidates.values()}),
                "fasta_mapping": dict(Counter(row["mapping_status"] for row in mapping))}
+    alternatives = sum(c.get('rescue_alternative_coding_path', False) for c in candidates.values())
+    if alternatives:
+        summary['rescue_alternative_coding_paths'] = alternatives
     if excluded_loci:
         summary.update(excluded_loci=len(excluded_loci),
                        excluded_candidates=sum(len(locus["candidates"]) for locus in excluded_loci.values()))

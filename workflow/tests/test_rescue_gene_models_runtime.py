@@ -637,6 +637,7 @@ def test_rescue_exports_invalid_originals_and_audits_while_adding_intact_model(h
     plan = rescue.load(output)
     plan["donors"][name] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     monkeypatch.setattr(rescue, "candidates", lambda *_: [{"id": "query", "donor": names[1], "query": names[1] + "_g8",
@@ -704,6 +705,7 @@ def test_invalid_genome_annotation_pair_fails_even_without_candidates(hidden_mod
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     monkeypatch.setattr(rescue, "candidates", lambda *_: [])
     with pytest.raises(ValueError, match="annotation.*genome|FASTA index warning"):
@@ -731,6 +733,7 @@ def test_compressed_inputs_and_literal_contigs_recover_and_export(hidden_models,
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     region = {"id": "query", "donor": names[1], "query": names[1] + "_g8", "seqid": contig,
@@ -766,6 +769,7 @@ def test_mixed_species_genetic_codes_apply_to_local_and_genome_prediction(hidden
     assert plan["request"]["sources"][names[1]]["genetic_code"] == 1
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     start = 9 * (len(sequences[0]) + 60)
     region = {"id": "recoded_query", "donor": names[1], "query": names[1] + "_g9", "seqid": "chr1",
@@ -1146,6 +1150,7 @@ def test_padding_does_not_accept_a_model_outside_its_flanking_anchors(hidden_mod
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     region = {"id": "padded_window", "donor": names[1], "query": names[1] + "_g8", "seqid": "chr1",
@@ -1165,6 +1170,7 @@ def test_only_conflict_free_models_skip_refinement(hidden_models, monkeypatch, q
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     plan["request"]["parameters"]["genome_fallback"] = int(fallback)
     plan["request"]["gemoma_jar"] = "test-refinement.jar"
     rescue.atomic_json(output / "plan.json", plan)
@@ -1197,6 +1203,7 @@ def test_rescue_refuses_dependencies_replaced_during_prediction(hidden_models, m
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     start = 8 * (len(sequences[0]) + 60)
     region = {"id": "query", "donor": names[1], "query": names[1] + "_g8", "seqid": "chr1",
@@ -1424,6 +1431,7 @@ def test_worker_completion_refuses_qc_changed_after_comparability_check(hidden_m
     name = names[0]
     plan["donors"][name] = [names[1]]
     plan["synteny_jobs"] = []
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
     rescue.atomic_json(output / "plan.json", plan)
     monkeypatch.setattr(rescue, "candidates", lambda *_: [])
     rescue.rescue(output, plan, name, 1)
@@ -1681,3 +1689,43 @@ def test_gemoma_reads_proteins_once_per_donor_and_keeps_each_query_alignment(tmp
     assert reads == [prepared / "genes.pep"]
     assert len(validated) == 6
     assert all(model["coverage"] == model["identity"] == 1.0 and model["problems"] == [] for model in validated)
+
+
+def test_new_producer_predictions_can_be_reused_transitively_without_search(hidden_models, monkeypatch):
+    """Published pristine fields and query coverage survive two cache generations."""
+    fixture, species, _ = hidden_models
+    original, _, _ = make_plan(hidden_models)
+    cli("run", "--output", original, "--cpus", 2)
+    expected = json.loads((original / "rescued" / species[0] / "models.json").read_text())
+    assert expected and all(m["raw_prediction"]["evidence"] == m["evidence"] for m in expected)
+    previous = original
+    fields = ("query", "cds", "sequence", "problems", "status", "raw_prediction", "coverage", "identity",
+              "terminal_completion", "model_id", "quality_evidence")
+    def checked_rows(models):
+        # Exact-AA reuse can change record order and private predictor IDs.
+        # Public model IDs, query provenance and all biological checks stay equal.
+        rows = []
+        for model in models:
+            row = {key: model.get(key) for key in fields}
+            row["raw_prediction"] = {k: v for k, v in row["raw_prediction"].items() if k != "id"}
+            rows.append(json.dumps(row, sort_keys=True))
+        return sorted(rows)
+    for generation in (2, 3):
+        output = fixture / ("generation_" + str(generation))
+        cli("plan", "--cds-dir", fixture / "cds", "--gff-dir", fixture / "gff", "--genome-dir", fixture / "genome",
+            "--busco-dir", fixture / "busco", "--tree", fixture / "tree.nwk", "--output", output,
+            "--prediction-cache", previous)
+        plan = rescue.load(output)
+        for job in plan["synteny_jobs"]:
+            if species[0] in {job["a"], job["b"]}:
+                rescue.synteny(output, plan, job["index"], 2)
+        def no_prediction(*args, **kwargs):
+            raise AssertionError("A proven identical search was repeated")
+        with monkeypatch.context() as patch:
+            patch.setattr(rescue, "search_intervals", lambda *args, **kwargs: [] if not args[1] else no_prediction())
+            patch.setattr(rescue, "run", no_prediction)
+            directory = rescue.rescue(output, plan, species[0], 2)
+        actual = json.loads((directory / "models.json").read_text())
+        assert checked_rows(actual) == checked_rows(expected)
+        assert (directory / "genome_query_mapping.tsv").is_file()
+        previous = output

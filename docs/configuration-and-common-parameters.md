@@ -92,6 +92,18 @@ The editable entrypoint blocks are the source of generated configuration
 metadata. Run `bash ./dev config-check` to detect forwarding-registry drift,
 or `bash ./dev config-schema markdown` to render a current reference table.
 
+Missing-model rescue additional exploration uses
+`GG_INPUT_GENE_MODEL_RESCUE_MAX_GENOME_QUERIES` (default `20000`) and
+`GG_INPUT_GENE_MODEL_RESCUE_UNANCHORED_MIN_SPECIES` (default `2`).
+Terminal completion is bounded by
+`GG_INPUT_GENE_MODEL_RESCUE_TERMINAL_MAX_EXTENSION` (default `300` bp) and
+`GG_INPUT_GENE_MODEL_RESCUE_TERMINAL_MAX_UNALIGNED_C_OVERHANG` (default `2`
+donor residues). `GG_INPUT_GENE_MODEL_RESCUE_PREDICTION_CACHE` optionally selects
+a completed rescue output whose prediction inputs and contents are frozen and
+verified; acceptance and genome validation are rerun. See
+[additional rescue candidates](rescue-additional-candidates.md) for the explicit
+limits, independent donor support and distinction from orthology/copy recovery.
+
 ## Shared common parameter file
 
 `workflow/gg_common_params.sh` currently defines:

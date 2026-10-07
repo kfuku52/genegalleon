@@ -531,7 +531,7 @@ def test_exon_only_gtf_noncoding_owner_protects_the_entire_declared_locus(tmp_pa
                       'chr1\tprovider\texon\t171\t180\t.\t+\t.\tgene_id "nc"; transcript_id "nct1";\n'
                       'chr1\tprovider\texon\t151\t160\t.\t+\t.\tgene_id "nc"; transcript_id "nct2";\n')
     catalog["annotation_spans"] = refinement.annotation_ownership_spans(source, catalog)
-    assert catalog["annotation_spans"] == [{"seqid": "chr1", "start": 140, "end": 180, "gene_id": "annotation:nc"}]
+    assert catalog["annotation_spans"] == [{"seqid": "chr1", "start": 140, "end": 180, "gene_id": "annotation:nc", "strand": "+"}]
     row = classify(catalog, models, edges)[0]
     assert row["status"] == "proposal"
     assert "overlap_other_locus" in row["problems"]

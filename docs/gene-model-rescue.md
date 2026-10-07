@@ -23,8 +23,11 @@ flowchart LR
   C --> J[Audit and admit existing protein anchors]
   J --> D[Deduplicated pair comparisons and unquota self synteny]
   D --> E[Two-anchor candidate intervals]
+  D --> U[Bounded missing or ambiguous donor queries]
   E --> F[miniprot and optional GeMoMa]
+  U --> F
   F --> G[ORF and conflict validation]
+  G --> R[Existing-locus revision candidates for refinement]
   G --> H[Augmented CDS and GFF]
   H --> I[BUSCO for changed species and downstream orthogroups]
 ```
@@ -204,22 +207,46 @@ embedded PAF evidence. Automatic acceptance requires at least 95% donor protein
 coverage and 50% identity, an intact start and terminal stop, consistent CDS
 phases, canonical GT–AG/GC–AG/AT–AC splice junctions, and no assembly ambiguities,
 frameshifts or internal stops. If the predictor omits the terminal stop from CDS,
-the export extends only when the actual next genomic codon is a stop. Minus-strand
+the actual next genomic stop is added. Incomplete termini may additionally undergo
+[bounded genomic completion and donor realignment](gene-model-terminal-completion.md).
+The default bound is 300 nt per end; a stop after an already aligned donor end
+permits at most two actual genomic amino acids. Hard structural failures remain
+failures. True partial models stay in `partial_models.json` and cannot become
+intact representatives. Minus-strand
 models are reconstructed in transcription order. Coverage is the fraction of
 donor residues aligned to genomic residues, including split codons, excluding
 query insertions; an alignment spanning both ends is insufficient. Both the
 aligned fraction and query-span fraction are retained in model evidence. These are conservative
 defaults, not calibrated species-independent sensitivity estimates.
 
-Unresolved queries optionally receive a whole-genome search. Every engine,
-including searches with padding, requires the assembled CDS to stay inside the
-expected two-anchor interval. Outside hits remain unresolved evidence, including
-possible relocations and other WGD copies. No disruption is repaired or masked. Models
-overlapping any original gene/transcript/CDS, or conflicting with another new
-model, are withheld. Such conflicting predictions do not mark a query resolved
-and suppress optional refinement. Queries recovered by the whole-genome fallback
-are rechecked before GeMoMa dispatch. Identical coordinates from multiple donors
-are consolidated with their supporting records. Accepted IDs are stable hashes of genomic exon
+Unresolved queries optionally receive a whole-genome search. Selected donor genes
+without a two-anchor nomination are also screened against the existing protein
+comparisons; absent, incomplete and copy-ambiguous matches nominate a bounded,
+balanced extra queue. The default is 20,000 extra queries per target, and deferred
+queries are explicitly recorded. Species profiles can set `max_genome_queries`
+without naming individual genes. See [nomination and verified prediction reuse](rescue-additional-candidates.md).
+
+An outside or unanchored hit can become an intact homologue annotation only with
+at least two independent donor species and compatible, unique coding-locus
+support. Two paralogs from one donor remain one species of support. These hits
+retain `orthology=unassigned` and `expected_copy=unassigned`; annotation is not
+evidence that an expected lost copy was recovered. Incompatible or ambiguous
+placements remain proposals. No genomic disruption is repaired or masked.
+
+Original ownership uses strand and coding overlap; intron-only or opposite-strand
+overlap does not by itself veto an intact coding model. A single existing owner
+receives `revision_candidates.json` for the refinement stage's normal donor,
+structure and representative-adoption checks. Multi-owner split/merge ambiguity
+is withheld. Same-locus alternative paths require at least 80% overlap of the
+shorter CDS in the same frame. More nearest-species support, then more donor
+species, distinguishes a representative; with equal species support, an identity
+advantage of at least 0.10 is required. Ties and incompatible paths remain
+proposals. Compatible alternatives are additional transcripts under one gene,
+with one primary CDS FASTA record. They are marked as homology predictions and
+pass the existing RNA/conservation adoption policy; they are not confirmed RNA
+isoforms. Conflicting predictions do not suppress optional refinement.
+Identical coordinates from multiple donors are consolidated with each donor's
+own coverage and identity. Accepted IDs are stable hashes of genomic exon
 coordinates; neither orthogroup IDs nor run order define them.
 
 Optional `--gemoma-jar` / `GG_INPUT_GENE_MODEL_RESCUE_GEMOMA_JAR` runs the
@@ -275,6 +302,8 @@ and acceptance checks, including identical proteins nominated at different loci.
 | `synteny/comparison_NNNNNN/` | Raw anchors, all blocks, commands and logs |
 | `rescued/SPECIES/candidates.json` | Donor gene, flanks, interval, orientation and comparison |
 | `rescued/SPECIES/models.json`, `audit.tsv` | Accepted, duplicate-support and unresolved models with reasons |
+| `rescued/SPECIES/revision_candidates.json`, `partial_models.json` | Existing-locus revisions and incomplete coding evidence, kept separate from new intact genes |
+| `rescued/SPECIES/genome_search_nomination.json`, `placement_audit.json`, `prediction_reuse.json` | Extra-query limits, unassigned placement decisions and verified search reuse |
 | `effective/SPECIES/` | Validated per-species augmented inputs, ready for BUSCO workers |
 | `augmented/species_cds`, `augmented/species_gff` | Original records plus accepted new models |
 | `augmented/inputs.tsv`, `summary.json` | Explicit effective input paths and model counts |
