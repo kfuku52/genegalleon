@@ -279,7 +279,10 @@ single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
 When the original completed rescue publication is available, rescued genes are
 stacked in four support categories: Self species only, Nearest relatives only,
 Phylogenetically balanced references only, or Multiple groups (at least two).
-The legend and explanatory notes spell out these groups. Classification uses all consolidated
+The legend and explanatory notes spell out these groups. Graphical legends sit
+directly below their corresponding BUSCO, missing-gene rescue, or coding-path
+panels. Donor-group legends appear separately below each supported-model panel;
+the Swiss-Prot legend stays below the rescue panel. Classification uses all consolidated
 `support` records of each accepted model, deduplicates donor species, and counts
 each gene locus once. A donor in both frozen reference lists supports both
 types, so the multiple category does not require two distinct donor species.

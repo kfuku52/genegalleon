@@ -598,6 +598,8 @@ def collect_model_changes(root, pairs, rescue_output=None):
 
 
 def plot_comparison(rows, output, model_changes=None):
+    from textwrap import fill
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -791,34 +793,44 @@ def plot_comparison(rows, output, model_changes=None):
     identity = rows[0]["before_result"]
     fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
-    fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
-               loc="lower left", bbox_to_anchor=(margin_left, (3.25 + support_note_space) / figure_height if extra else .065), ncol=4, frameon=False)
-    if support_legend:
-        if grouped_support:
-            group_colors = PATH_SUPPORT_GROUP_COLOURS if stacked_paths else SUPPORT_GROUP_COLOURS
-            group_labels = PATH_SUPPORT_GROUP_LABELS if stacked_paths else SUPPORT_GROUP_LABELS
+    legend_columns = []
+    if extra:
+        def local_legend(ax, handles, labels, title, ncol=1):
+            legend = fig.legend(handles, [fill(label, 30) for label in labels], title=fill(title, 30),
+                                loc="upper left", bbox_to_anchor=(ax.get_position().x0, .5),
+                                ncol=ncol, frameon=False, borderaxespad=0, fontsize=10, title_fontsize=10)
+            return legend
+
+        legend_columns.append((axes[0], [local_legend(axes[0], [Patch(facecolor=c) for c in colors],
+                                                     STATUS_LABELS, "BUSCO status", ncol=2)]))
+        rescue_legends = []
+        if stacked_rescue:
+            group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
+            group_labels = SUPPORT_GROUP_LABELS if grouped_support else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
+            rescue_legends.append(local_legend(axes[3], [Patch(facecolor=c) for c in group_colors], group_labels,
+                                                "Supporting donor groups (upper rescue bars)"))
         else:
-            group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
-            group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
-        fig.legend([Patch(facecolor=c) for c in group_colors], group_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, (2.4 + support_note_space) / figure_height), ncol=3, frameon=False,
-                   title="Supporting donor groups (upper rescue and lower coding-path bars)")
-        fig.legend([Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
-                   ["Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(.70, (3.25 + support_note_space) / figure_height), ncol=2, frameon=False)
-    elif extra:
-        fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
-                   ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(margin_left, (2.4 + support_note_space) / figure_height), ncol=3, frameon=False)
+            rescue_legends.append(local_legend(axes[3], [Patch(facecolor="#5275b5")],
+                                                ["Previously rescued gene loci"], "Upper rescue bars"))
+        path_legends = [local_legend(axes[4], [Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
+                                    ["Repair coding paths", "Additional isoform paths"], "Coding-path type (upper bars)")]
+        if stacked_paths:
+            group_colors = PATH_SUPPORT_GROUP_COLOURS if grouped_support else PATH_SUPPORT_COLOURS
+            group_labels = PATH_SUPPORT_GROUP_LABELS if grouped_support else PATH_SUPPORT_LABELS
+            path_legends.append(local_legend(axes[4], [Patch(facecolor=c) for c in group_colors], group_labels,
+                                              "Supporting donor groups (lower coding-path bars)"))
+        legend_columns.extend(((axes[3], rescue_legends), (axes[4], path_legends)))
+    else:
+        fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
+                   loc="lower left", bbox_to_anchor=(margin_left, .065), ncol=4, frameon=False)
     if extra:
         lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
         lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
         lower_labels = SWISSPROT_LABELS if swissprot_view else REPEAT_GROUP_LABELS
-        fig.legend([Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
-                    for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, (1.65 + support_note_space) / figure_height), ncol=3 if swissprot_view else 2, frameon=False,
-                   title="Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
-                         "Repeat annotation (lower rescue bars; any CDS overlap)")
+        rescue_legends.append(local_legend(axes[3], [Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
+                              for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
+                              "Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
+                              "Repeat annotation (lower rescue bars; any CDS overlap)"))
     note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
     note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
     if extra:
@@ -855,7 +867,29 @@ def plot_comparison(rows, output, model_changes=None):
         note += ("\nSwiss-Prot support is advisory; other support does not establish host function; no support does not exclude TE origin."
                  if swissprot_view else
                  "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed.")
-    fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
+    note_artist = fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
+    if extra:
+        # Measure the full labels instead of assuming a fixed number of lines.
+        # Each legend column stays directly below its own plot, above the notes.
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legend_heights = {legend: legend.get_window_extent(renderer).height / fig.dpi
+                          for _, legends in legend_columns for legend in legends}
+        label_depth = max((ax.bbox.y0 - ax.get_tightbbox(renderer).y0) / fig.dpi for ax in axes)
+        column_height = max(sum(legend_heights[legend] for legend in legends) + .18 * (len(legends) - 1)
+                            for _, legends in legend_columns)
+        note_height = note_artist.get_window_extent(renderer).height / fig.dpi
+        plot_height = axes[0].get_position().height * figure_height
+        footer_height = .25 + note_height + .25 + column_height + .20 + label_depth
+        figure_height = (plot_height + footer_height) / .90
+        fig.set_size_inches(fig.get_figwidth(), figure_height)
+        fig.subplots_adjust(bottom=footer_height / figure_height)
+        for ax, legends in legend_columns:
+            top = ax.get_position().y0 - (label_depth + .20) / figure_height
+            for legend in legends:
+                legend.set_bbox_to_anchor((ax.get_position().x0, top))
+                top -= (legend_heights[legend] + .18) / figure_height
+        note_artist.set_position((margin_left, .25 / figure_height))
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)

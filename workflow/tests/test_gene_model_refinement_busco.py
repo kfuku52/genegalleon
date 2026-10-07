@@ -420,6 +420,14 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         assert all(not a.overlaps(b) for a in legends for b in labels)
         assert all(not a.overlaps(note) for a in legends)
         assert all(not a.overlaps(b) for i, a in enumerate(legends) for b in legends[i + 1:])
+        for legend, bounds in zip(fig.legends, legends, strict=True):
+            title = legend.get_title().get_text().replace("\n", " ")
+            if title == "BUSCO status":
+                left, right = fig.axes[0].bbox.x0, fig.axes[1].bbox.x1
+            else:
+                ax = fig.axes[4] if "coding-path" in title or "Coding-path" in title else fig.axes[3]
+                left, right = ax.bbox.x0, ax.bbox.x1
+            assert left - 1 <= bounds.x0 < bounds.x1 <= right + 1
         return original_save(fig, *args, **kwargs)
     monkeypatch.setattr(Figure, "savefig", save)
     path = tmp_path / "summary.txt"
@@ -449,10 +457,12 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         }}
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
+    from xml.etree import ElementTree
+    displayed = " ".join(" ".join(ElementTree.fromstring(svg).itertext()).split())
     for color in (*busco.RESCUE_SUPPORT_COLOURS, busco.RESCUE_SELF_COLOUR):
         assert color in svg
     for label in busco.SUPPORT_GROUP_LABELS if grouped else (*busco.RESCUE_SUPPORT_LABELS, busco.RESCUE_SELF_LABEL):
-        assert label in svg
+        assert label in displayed
     assert ("at least two support types" if grouped else "donor belonging to both lists") in svg
     if grouped:
         assert "S/R/P" not in svg
@@ -468,7 +478,7 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [2, 3, 4, 2])
     assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 2, 5, 9])
     for label in busco.SWISSPROT_LABELS if swissprot else busco.REPEAT_GROUP_LABELS:
-        assert label in svg
+        assert label in displayed
     assert ("Upper: donors; lower: Swiss-Prot" if swissprot else "Upper: support; lower: repeats") in svg
     assert ("no support does not exclude TE origin" if swissprot else "no hit does not establish a true gene") in svg
     if swissprot:
