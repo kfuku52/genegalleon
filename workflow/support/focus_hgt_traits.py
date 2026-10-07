@@ -166,7 +166,7 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
     for side in ("donor", "recipient"):
         genes = defaultdict(list)
         for row in selected_links:
-            if row["side"] == side and row["eligible_for_context"] == "True":
+            if row["side"] == side and str(row["eligible_for_context"]).lower() in {"true", "1"}:
                 if tip and side == "recipient" and key(row["gene_species"]) != tip:
                     continue
                 genes[(row["orthogroup"], row["gene_id"])].append(row)
@@ -366,7 +366,10 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                                 'focus_hgt_figures.py', 'gene_tree_plot_config.py')]
         code += sorted((helper_root / "treevis/R").glob("*.R"))
     output = Path(output).absolute()
-    if output.is_symlink() or any(path == output.resolve() or output.resolve() in path.parents for path in inputs):
+    # These directories are read inputs too. Replacing a managed report must
+    # never remove curated family/GFF sources nested underneath it, even via aliases.
+    protected = inputs + [Path(path).resolve() for path in (gene_family_root, gff_root) if path]
+    if output.is_symlink() or any(path == output.resolve() or output.resolve() in path.parents for path in protected):
         raise ValueError("Output must not replace or contain an input")
     if output.exists():
         manifest = output / "manifest.json"

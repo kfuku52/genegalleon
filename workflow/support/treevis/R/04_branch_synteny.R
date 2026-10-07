@@ -133,7 +133,10 @@ add_gene_cluster_membership = function(df_tip, max_bp_membership) {
             if (nrow(b_cr) == 1) {
                 cluster_ids = gene_membership_counter
             } else {
-                intergenic = b_cr[['start']][-1] - b_cr[['end']][-nrow(b_cr)]
+                # A nested feature must not hide the right edge of an overlapping
+                # interval and create a spurious gap within the same cluster.
+                covered_end = cummax(b_cr[['end']])
+                intergenic = b_cr[['start']][-1] - covered_end[-nrow(b_cr)]
                 is_new_cluster = c(TRUE, intergenic > max_bp_membership)
                 cluster_ids = (gene_membership_counter - 1L) + cumsum(is_new_cluster)
                 gene_membership_counter = max(cluster_ids)
@@ -147,16 +150,20 @@ add_gene_cluster_membership = function(df_tip, max_bp_membership) {
 
 treevis_cluster_color_variants = function(base_color, n) {
     if (n == 0) return(character(0))
-    variants = rep(base_color, n)
     rgb = as.numeric(grDevices::col2rgb(base_color)) / 255
     luminance = sum(rgb * c(0.2126, 0.7152, 0.0722))
+    # Very pale tip colors need a darker starting shade to remain visible and
+    # distinct from the gray90 singleton key on a white page.
+    if (luminance > 0.82) base_color = colorspace::darken(base_color, amount=0.25)
+    variants = rep(base_color, n)
     if (n > 1) for (i in seq.int(2L, n)) {
         if (luminance < 0.18 || luminance > 0.82) {
-            amount = 1 - 0.8^(i - 1)
+            amount = 0.65 * (i - 1) / (n - 1)
             use_light = luminance < 0.18
         } else {
-            amount = 1 - 0.8^ceiling((i - 1) / 2)
             use_light = (i %% 2 == 1)
+            steps = if (use_light) floor((n - 1) / 2) else ceiling((n - 1) / 2)
+            amount = (if (use_light) 0.45 else 0.65) * ceiling((i - 1) / 2) / steps
         }
         if (use_light) {
             variants[[i]] = colorspace::lighten(base_color, amount=amount)
@@ -510,4 +517,3 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
         )
     return(g)
 }
-

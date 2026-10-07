@@ -165,6 +165,21 @@ def test_category_and_binary_focus_preserve_cohort_fields_and_event_identity(sou
     assert recipient[0]["product_name"] == "Protein A" and recipient[0]["synteny_support_score"] == "NA"
 
 
+@pytest.mark.parametrize('eligible', ['true', 'TRUE', '1'])
+def test_focus_gene_tables_use_the_same_eligibility_as_event_validation(source, eligible):
+    fields, links = read_tsv(source[1])
+    for row in links:
+        if row['eligible_for_context'] == 'True':
+            row['eligible_for_context'] = eligible
+    write_tsv(source[1], fields, links)
+    manifest = generate(*source, plots=False)
+    target = source[-1] / 'traits/binary/tips/A'
+    assert read_tsv(target / 'recipient_genes.tsv')[1][0]['gene_id'] == 'A_gene'
+    assert read_tsv(target / 'donor_genes.tsv')[1][0]['gene_id'] == 'D_gene'
+    summary = next(row for row in manifest['result_index'] if row['trait'] == 'binary' and row['target'] == 'A')
+    assert summary['recipient_gene_count'] == summary['donor_gene_count'] == 1
+
+
 def test_category1_gene_tree_export_receives_only_aggregate_events(source, monkeypatch):
     import focus_hgt_figures
     import focus_hgt_gene_trees
@@ -313,6 +328,34 @@ def test_unmanaged_output_and_input_containment_are_rejected(source):
         generate(*source, plots=False)
     with pytest.raises(ValueError, match="contain an input"):
         generate(*source[:-1], source[0].parent, plots=False)
+
+
+@pytest.mark.parametrize('parameter', ['gene_family_root', 'gff_root'])
+@pytest.mark.parametrize('aliased', [False, True])
+def test_managed_output_cannot_replace_existing_family_or_gff_inputs(source, monkeypatch, parameter, aliased):
+    import focus_hgt_traits
+
+    output = source[-1]
+    output.mkdir()
+    manifest = output / 'manifest.json'
+    manifest.write_text(json.dumps({'schema_version': focus_hgt_traits.VERSION}))
+    inputs = output / 'existing_inputs'
+    inputs.mkdir()
+    sentinel = inputs / 'curated.tsv'
+    sentinel.write_text('existing input must survive\n')
+    root = inputs
+    if aliased:
+        root = output.parent / 'source_alias'
+        root.symlink_to(inputs, target_is_directory=True)
+    # Avoid scientific rendering; the publication guard must fire before dispatch.
+    def synthetic_build(*args, **kwargs):
+        return {'schema_version': focus_hgt_traits.VERSION}
+    monkeypatch.setattr(focus_hgt_traits, 'build_focus', synthetic_build)
+    before = manifest.read_bytes()
+    with pytest.raises(ValueError, match='contain an input'):
+        generate(*source, **{parameter: str(root)})
+    assert sentinel.read_text() == 'existing input must survive\n'
+    assert manifest.read_bytes() == before
 
 
 def test_observation_columns_are_not_focus_traits(source):
@@ -745,12 +788,12 @@ def test_exon_only_structure_is_not_labeled_or_drawn_as_utr():
 def test_filtering_cohorts_cannot_borrow_event_identity_or_duplicate_counts():
     from focus_hgt_figures import filtering_counts
 
-    row = dict(event_id='e1', orthogroup='OG1', gene_tree_branch_id='3')
+    row = dict(event_id='e1', orthogroup='OG1', gene_tree_branch_id='3', generax_transfer='Y@D@A')
     with pytest.raises(ValueError, match='Duplicate'):
         filtering_counts([row, row], [row])
     with pytest.raises(ValueError, match='not a subset'):
         filtering_counts([row], [dict(row, event_id='e2')])
-    for field in ('orthogroup', 'gene_tree_branch_id'):
+    for field in ('orthogroup', 'gene_tree_branch_id', 'generax_transfer'):
         with pytest.raises(ValueError, match='identity disagrees'):
             filtering_counts([row], [dict(row, **{field: 'wrong'})])
     with pytest.raises(ValueError, match='identity disagrees'):

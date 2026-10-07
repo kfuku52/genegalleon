@@ -292,6 +292,16 @@ if (length(unique(cluster_variants('black',3))) != 3 ||
     length(unique(cluster_variants('white',3))) != 3) {
   stop('Black and white species labels should also produce distinct cluster shades.')
 }
+# Real family plots can contain dozens of multi-gene clusters per species.
+# Shades must not converge to repeated white/black or the singleton gray key.
+for (base_color in c('black','white','#16A085','#b34d00')) {
+  many_colors <- cluster_variants(base_color,62)
+  singleton_rgb <- as.numeric(grDevices::col2rgb('gray90'))
+  color_rgb <- grDevices::col2rgb(many_colors)
+  contrast <- sqrt(colSums((color_rgb-singleton_rgb)^2))
+  stopifnot(length(unique(tolower(many_colors))) == 62,
+            !any(tolower(many_colors) == '#ffffff'), all(contrast > 25))
+}
 
 # Missing coordinates must remain blank rather than corrupt nearby clusters.
 missing_cluster <- df_tip_cluster
@@ -301,6 +311,21 @@ missing_cluster$taxon[8] <- NA
 missing_result <- add_gene_cluster_membership(missing_cluster, 100)
 stopifnot(all(missing_result$cluster_membership[c(2,4,8)] == ''),
           missing_result$cluster_membership[3] == missing_result$cluster_membership[6])
+
+# Nested intervals must not manufacture a gap inside an overlapping cluster.
+# Reversed coordinates and input order must leave the interval partition intact.
+nested_cluster <- data.frame(
+  so_event='L', taxon='Sp one', chromosome='chr1',
+  label=c('long','nested','overlap','boundary','far'),
+  start=c(100,200,900,1100,1301), end=c(1000,250,950,1200,1400))
+nested_result <- add_gene_cluster_membership(nested_cluster,100)
+stopifnot(length(unique(nested_result$cluster_membership[1:4])) == 1L,
+          nested_result$cluster_membership[4] != nested_result$cluster_membership[5])
+reversed_cluster <- nested_cluster[c(5,3,1,4,2),]
+reversed_cluster[c('start','end')] <- reversed_cluster[c('end','start')]
+reversed_result <- add_gene_cluster_membership(reversed_cluster,100)
+stopifnot(identical(nested_result$cluster_membership,
+                   reversed_result$cluster_membership[match(nested_result$label,reversed_result$label)]))
 
 # 6) add_complete_overlap_groups: fully overlapping motifs are merged.
 df_fimo_overlap <- data.frame(

@@ -39,7 +39,7 @@ def filtering_counts(source_events, selected, audit_path=""):
             if original is None:
                 raise ValueError('Focused input cohort is not a subset of its source events')
             for field in ('orthogroup', 'gene_tree_branch_id', 'branch_id', 'gene_tree_node', 'node_name',
-                          'generax_donor_node', 'generax_recipient_node', 'event_index'):
+                          'generax_donor_node', 'generax_recipient_node', 'generax_transfer', 'event_index'):
                 if field in row and field in original and row[field] != original[field]:
                     raise ValueError('Filtering event identity disagrees: ' + field)
             for aliases in [('gene_tree_branch_id', 'branch_id'), ('gene_tree_node', 'node_name')]:
