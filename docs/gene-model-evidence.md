@@ -1,5 +1,67 @@
 # Advisory evidence for rescued models
 
+## Candidate-only Swiss-Prot support
+
+Input generation searches finalized missing-gene rescue CDSs against its existing
+Swiss-Prot MMseqs2 database when `run_gene_model_rescue_swissprot=1` (default).
+The scoped override is `GG_INPUT_RUN_GENE_MODEL_RESCUE_SWISSPROT`. This runs only
+with a completed rescue publication, including one reused by refinement. Set it
+to `0` to omit this advisory search. No additional TE database is downloaded.
+The normal shared Swiss-Prot FASTA/index/metadata preparation runs on first use.
+
+The audit is separate from the frozen rescue tree, by default its sibling
+`gene_model_rescue.swissprot`; `gene_model_rescue_swissprot_dir` overrides it.
+Its CLI can annotate an old frozen run without repeating synteny, prediction or BUSCO:
+
+```bash
+python workflow/support/rescue_swissprot_evidence.py \
+  --rescue-output /data/gene_model_rescue --output /data/gene_model_rescue.swissprot \
+  --db-prefix /data/workspace/downloads/uniprot_sprot/uniprot_sprot \
+  --metadata /data/workspace/downloads/uniprot_sprot/uniprot_sprot.meta.tsv.gz \
+  --cache /data/workspace/downloads/rescue_swissprot_cache --cpus 4 --memory-gb 8
+```
+
+Only published rescued coding sequences are translated, using the frozen
+species genetic code and ordinary initiator residues. Context-dependent genetic
+codes are marked unassessed. Identical proteins share a search across species;
+distinct loci and coding-sequence identities remain in the report. The verified
+sequence cache queries only new proteins for the same DB, parameters, MMseqs2
+binary and annotator. DB preparation and the cache use shared locks.
+
+Search retains up to 50 hits, sensitivity 7.5 and E-value <= 1e-5. Support
+requires at least 50 paired residues and 50% paired-residue coverage of both
+query and target, and a bit score within 90% of the best qualifying hit. Gap
+spans cannot inflate coverage. These are conservative, configurable screening
+heuristics, not calibrated probabilities; coverage-sensitive partial matches
+remain inspectable. Explicit transposon/transposase/retrotransposon names,
+the exact `Transposable element` keyword or `transposase activity` GO term supply
+TE-related support. TE silencing/regulation GO terms and the `Transposition`
+process keyword alone do not establish TE origin; host methyltransferases,
+helicases and other TE-silencing factors remain other proteins. Other informative Swiss-Prot entries supply other-protein
+support. Uncharacterized entries without function annotations do not supply
+informative support. A generic polymerase/RNase H match is not itself a TE call.
+
+Outputs are `evidence.json`, `loci.tsv`, `hits.tsv`, `summary.json` and a verified
+`receipt.json`. The hit table retains accession, annotation, score, coverage and
+positions, including hits that did not meet the support rules. An execution
+JSON beside the audit records elapsed time and cached/searched query counts.
+Each locus counts once as TE-only, other-only, both, no informative support or
+not assessed, taking the union of support across its published coding sequences.
+Other-protein support does not prove host function. No support does not exclude
+a divergent or unrepresented TE. TE-related homology also occurs in domesticated
+host genes. The audit never excludes or changes gene models automatically.
+
+The BUSCO comparison accepts `--rescue-swissprot-dir /data/gene_model_rescue.swissprot`.
+This changes the lower rescue bar to **Swiss-Prot protein support**, keeping its
+S/R/P donor bar and the original BUSCO palette. Existing DNA repeat-overlap
+measurements remain a separate evidence axis; protein homology is not labelled
+as genomic repeat overlap. Excluded species remain explicitly not analysed.
+The figure legend records the actual search/support thresholds from the audit,
+the TE/other annotation rules and locus-counting method. Thresholds absent from a
+historical summary are labelled unavailable instead of inferred from defaults.
+
+## Genomic, RNA and repeat evidence
+
 Ordinary rescue automatically writes `quality_evidence` in `models.json` and
 `quality_flags.tsv`. These report the genomic start triplet, donor N/C terminal
 alignment, donor species and strand conflicts. They do not alter ORF/conflict
@@ -93,6 +155,26 @@ classes are reported separately from other repeats. High TE overlap is a review
 flag, not a rejection rule. Different loci encoding identical proteins remain
 different models. No protein-sequence deduplication is applied to this report.
 
+For repeat annotation, reuse an existing RepeatMasker `.out` only when it belongs
+to the exact frozen genome. For unannotated plant genomes, a species-specific
+library from [EDTA](https://github.com/oushujun/EDTA) followed by
+[RepeatMasker](https://github.com/Dfam-consortium/RepeatMasker) is a practical
+route. EDTA accepts trusted coding sequences to remove gene contamination from
+the repeat library. Retain simple/low-complexity repeats as well as TE classes
+when the report needs both axes. GeneGalleon currently consumes RepeatMasker
+output; it does not launch EDTA or RepeatMasker, or treat softmasking alone as
+a classified TE annotation.
+
+To assess whether an overlapping coding model itself encodes a TE protein,
+inspect TE protein domains separately, for example with
+[TEsorter/REXdb](https://github.com/zhangrengang/TEsorter), along with domain
+coverage, RNA structure, synteny and conserved non-TE gene homology. An isolated
+domain or repeat overlap is advisory; a domain-negative result cannot exclude
+non-autonomous or divergent TEs. The repeat bar in the
+[BUSCO/model-change comparison](gene-model-refinement.md) counts any CDS overlap,
+with TE hits taking priority over other/unclassified repeats. The existing
+`te_overlap_ge_50pct` flag remains a separate high-overlap review flag.
+
 DNA coverage excludes unmapped, secondary, supplementary, QC-failed and duplicate
 reads, excludes MAPQ 255 (mapping quality unavailable, as defined by the
 [SAM specification](https://samtools.github.io/hts-specs/SAMv1.pdf)), and applies
@@ -127,3 +209,31 @@ species, with initial BUSCO lineage/version/date/marker count preserved.
 New rescue plans can reuse comparisons only through the verified comparison
 cache when BED/PEP content, parameters and comparison tool identities agree.
 Never edit an old plan's implementation hash or relabel its receipts.
+
+Swiss-Prot raw alignment and target-annotation caches are independent. Raw
+alignment identity binds the exact query protein, MMseqs binary/database,
+alignment parser, search E-value, sensitivity and maximum hits. Metadata or
+classification changes do not discard raw searches. Target annotations bind
+the FASTA/metadata release and annotation classifier. Checksummed SQLite records
+and batched cursors avoid per-accession network lock operations.
+Coverage, length and competing-score changes therefore only reassess hits.
+When omitted, `--search-evalue` uses the larger of `1e-5` and the support
+E-value, preserving older calls that only set a looser support cutoff.
+An explicitly set search bound must include the support E-value. A tighter
+support cutoff alone keeps the default search bound and cache. Actual search parameter,
+sequence or database changes correctly require new searches.
+
+Primary TE/other categories remain unchanged. A separate
+`partial_te_homology` flag marks any returned TE-labelled hit passing support
+E-value, paired-residue and query-coverage thresholds but failing target
+coverage, without a competing-score filter. It does not prove TE origin.
+`rescue_swissprot_diagnostics.png/svg` distinguishes primary TE support,
+partial flags alone, no TE support/flag and unassessed translation, and displays
+excluded species. Every locus counts once.
+
+`no_support_reason` partitions only no-informative-support loci: no returned
+hit; all E-values fail; E/coverage pass but paired length fails; coverage fails;
+or qualifying best-score annotation unknown. Across coding sequences, priority
+is annotation unknown, partial, short, weak, no hit. Thresholds and priority
+appear in the diagnostic legend. Short proteins retain the same minimum
+alignment length; separate counts permit calibration without silent relaxation.

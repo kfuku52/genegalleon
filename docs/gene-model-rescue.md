@@ -1,8 +1,8 @@
 # Synteny-guided gene-model rescue
 
 `workflow/support/rescue_gene_models.py` is an independent, restartable CLI.
-Input generation optionally runs it after formatting, initial BUSCO and species
-taxonomy, before augmented CDS/GFF inputs are used in OrthoFinder. Enable it with
+Input generation optionally runs it after formatting and initial BUSCO, before
+augmented CDS/GFF inputs are used in OrthoFinder. Enable it with
 `GG_INPUT_RUN_GENE_MODEL_RESCUE=1`; it is off by default. Evidence-based repairs
 of existing CDS models already run during ordinary input formatting, before
 longest-isoform selection, independently of this flag. That step exports matching
@@ -17,8 +17,9 @@ do not silently change model admission or claim experimentally confirmed functio
 
 ```mermaid
 flowchart LR
-  A[Formatted CDS, GFF, genomes] --> B[Initial BUSCO and initial tree]
-  B --> C[Freeze five common references and three nearest donors]
+  A[Formatted CDS, GFF, genomes] --> B[Initial single-copy BUSCO proteins]
+  B --> T[k-mer distances and RapidNJ guide tree]
+  T --> C[Freeze common references and nearest donors]
   C --> J[Audit and admit existing protein anchors]
   J --> D[Deduplicated pair comparisons and unquota self synteny]
   D --> E[Two-anchor candidate intervals]
@@ -96,16 +97,77 @@ Each target also receives its three nearest species by tree distance, with
 BUSCO completeness and species name as tie-breakers. Remove self and deduplicate
 shared donors and unordered pairs. Every species receives an additional raw,
 unquota self comparison. At 500 species this gives at most 4,000 pair assignments
-before deduplication and 500 self jobs, compared with 124,750 all-pairs jobs.
+when guide panels agree,
+or 5,500 when alternatives are added, before deduplication and 500 self jobs,
+compared with 124,750 all-pairs jobs.
 
-Use an initial external tree with `GG_INPUT_GENE_MODEL_RESCUE_TREE`, or the
-generated `output/species_taxonomy/taxonomy_tree.nwk` with the default `auto`.
-The CLI requires an explicit `--tree`; it does not discover downstream inferred
-trees. A tree without positive branch lengths uses unit edges and records that
-choice. An NCBI taxonomy topology supplies no divergence-time information.
+The default `GG_INPUT_GENE_MODEL_RESCUE_TREE=auto` builds an unrooted guide
+from **pre-rescue single-copy BUSCO proteins**, then uses its branch distances
+for both nearest donors and phylogenetically balanced common references.
+BUSCO's exact predicted AA sequences are saved before temporary output removal
+as `species_busco_full/single_copy/<species>.json.gz`, with table/CDS hashes and
+raw predicted IDs. This avoids guessing MetaEuk coordinates from sequence IDs.
+Protein IDs must correspond to the full-table match, including MetaEuk's wrapped
+reference/contig/strand IDs. Preservation checks that both the tables/CDS and
+the raw protein files stay unchanged while reading them. All species must use
+the same complete BUSCO marker universe, including missing markers.
+Older full/short-table-only runs need BUSCO regeneration to supply these proteins;
+no taxonomy substitute is selected silently.
+
+The guide selects up to 200 markers with at least 80% species occupancy,
+ordered by occupancy and a deterministic marker-ID hash. Each protein uses
+a bottom-256 sketch of amino-acid 5-mers. For every pair, average the Mash-style
+distance `min(1, -log(2J/(1+J))/k)` across matching markers, where `J` is the
+intersection fraction within the bottom-k sample of the sketch union. Missing
+proteins are excluded from the denominator; present proteins with no shared
+k-mers count as saturated distance 1. Ambiguous residues break k-mer windows.
+Pairs require at least 50 usable shared markers and 25 per diagnostic panel with
+defaults. Runs with no informative branch lengths, wholly saturated marker
+pairs, or a species saturated against every other species fail instead of
+selecting arbitrary neighbours. The error names the affected species. These distances guide
+reference choice; they are not calibrated substitution lengths or divergence dates.
+
+RapidNJ uses `-n` to adjust negative lengths. Two interleaved marker panels also
+produce trees; their nearest-donor agreement is a sensitivity diagnostic, not
+bootstrap support. When panels disagree, retain up to three additional nearest
+alternatives from their union (at most six nearest donors with defaults).
+Full and panel trees, pairwise distances, selected markers, diagnostics, commands,
+timings and SHA-256 receipts are saved under `<rescue output>/guide_tree/`.
+Per-species sketches and pairwise distances are verified and reused from a shared
+cache. Changes to a verified cache during calculation abort publication;
+output files are copied atomically and checked before the completion receipt.
+Caches from the earlier unfenced implementation are retained and rebuilt once
+under the new cache contract, so a failed computation cannot poison a retry.
+Output paths cannot overlap input files. A changed request, including changes
+to support-module implementations, requires a new guide output directory. Post-rescue
+BUSCO never reselects donors.
+
+| Environment variable | Default |
+| --- | --- |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_MARKERS` | `200` |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_K` | `5` |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_SKETCH_SIZE` | `256` |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_OCCUPANCY` | `0.8` |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_MINIMUM_SHARED` | `50` |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_DIR` | `<rescue output>/guide_tree` |
+| `GG_INPUT_GENE_MODEL_RESCUE_GUIDE_CACHE` | `<rescue parent>/busco_guide_sketch_cache` |
+
+A C++17 kernel performs sketching and threaded pairwise comparisons; RapidNJ
+builds the trees. Container builds record both moving source branches:
+[somme89/rapidNJ](https://github.com/somme89/rapidNJ) for x86 and the existing
+[johnlees/rapidNJ-M1](https://github.com/johnlees/rapidNJ-M1) ARM implementation.
+The exact corresponding sources and licence notices are included in runtimes.
+See `workflow/benchmarks/benchmark_busco_guide_tree.py` for a reproducible
+synthetic scaling benchmark, which excludes BUSCO execution.
+
+Set `GG_INPUT_GENE_MODEL_RESCUE_TREE` to an external tree to bypass guide creation.
+The independent rescue CLI still requires explicit `--tree`; add
+`--guide-tree-receipt` to consume the generated diagnostics. Its receipt must
+use the same species cohort and nearest-reference count as the rescue plan;
+rebuild the guide when either changes. A manually supplied
+tree without positive branch lengths uses unit edges and records that choice.
 If any non-root edge has a positive length, every non-root edge must have an
-explicit length. Partially specified lengths are rejected rather than treating
-missing edges as zero distance. Root stem lengths do not affect this decision.
+explicit length. Root stem lengths do not affect this decision.
 
 The plan freezes all source hashes, genetic codes, thresholds, reference lists,
 tool identities (including executable and alignment/annotation source hashes)

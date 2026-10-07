@@ -345,7 +345,13 @@ def _install_fake_toolchain(root: Path) -> Path:
                 f"BUSCO1\\tComplete\\t{header}\\t1\\t100\\thttps://example.org/BUSCO1\\tfixture description\\n",
                 encoding="utf-8",
             )
+            proteins_dir = result_dir / "busco_sequences" / "single_copy_busco_sequences"
+            proteins_dir.mkdir(parents=True, exist_ok=True)
+            (proteins_dir / "BUSCO1.faa").write_text(f">{header}\\nMKKKKKKKKKKKKKKKKKKK\\n")
             (result_dir / "short_summary.txt").write_text(
+                "# BUSCO version is: fixture\\n"
+                f"# The lineage dataset is: {lineage} (Creation date: 2026-01-01)\\n"
+                "# BUSCO was run in mode: transcriptome\\n"
                 "C:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:1\\n",
                 encoding="utf-8",
             )

@@ -1020,6 +1020,79 @@ def test_orthogroups_mode_preserves_tree_contracts_and_later_outputs(tmp_path):
 
 
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("mode", ["all", "orthogroups"])
+@pytest.mark.parametrize("input_mode,provided_proteins", [
+    ("cds", False), ("cds", True), ("protein", False), ("protein", True),
+])
+def test_orthogroup_producer_preserves_cds_translation_prerequisite(
+    tmp_path, mode, input_mode, provided_proteins,
+):
+    workspace = tmp_path / "workspace"
+    cds = workspace / "input/species_cds"
+    cds.mkdir(parents=True)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        (cds / f"{species}_cds.fa").write_text(f">{species}_gene1\nATGAAA\n")
+        if provided_proteins:
+            proteins = workspace / "input/species_protein"
+            proteins.mkdir(exist_ok=True)
+            (proteins / f"{species}_pep.fa").write_text(f">{species}_gene1\nMPEP\n")
+    summary = workspace / "output/species_tree/species_tree_summary"
+    summary.mkdir(parents=True)
+    (summary / "undated_species_tree.nwk").write_text(
+        "(Arabidopsis_thaliana:0.1,Oryza_sativa:0.1);\n")
+    config = {"input_sequence_mode": input_mode, "undated_species_tree": "astral_pep",
+              "species_tree_output_storage": "files", "run_cds_translation": "1"}
+    baseline = _run_core(tmp_path, {**config, "genome_evolution_mode": "species_tree"})
+    assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+    saved = {p: p.read_bytes() for directory in (workspace / "output/species_tree",
+        workspace / "output/artifact_provenance/genome_evolution")
+        for p in directory.rglob("*") if p.is_file()}
+    later = workspace / "output/genome_evolution/user-output"
+    later.parent.mkdir(parents=True)
+    later.write_bytes(b"retain scientific output")
+    settings = {**config, "genome_evolution_mode": mode, "artifact_stale_policy": "rebuild"}
+    if mode == "orthogroups":
+        settings.update(run_species_taxonomy="1", run_pairwise_synteny="1",
+                        run_astral_pep="1", run_cafe="1")
+    result = _run_core(tmp_path, settings)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "capture/orthofinder_args.txt").is_file()
+    assert (workspace / "output/orthofinder/hog2og/README.txt").is_file()
+    assert later.read_bytes() == b"retain scientific output"
+    assert all(path.read_bytes() == content for path, content in saved.items())
+    proteins = (tmp_path / "capture/proteins.fasta").read_text()
+    assert ("MPEP" if input_mode == "protein" and provided_proteins else "MK") in proteins
+    if mode == "orthogroups":
+        assert "Orthogroup inference and selection stages finished" in result.stdout
+        assert "run_species_taxonomy=0" in result.stdout
+        assert "run_pairwise_synteny=0" in result.stdout
+        assert "run_cafe=0" in result.stdout
+        assert "run_cds_translation=1" in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("mode", ["all", "orthogroups"])
+def test_orthogroup_producer_does_not_override_explicit_translation_disable(tmp_path, mode):
+    workspace = tmp_path / "workspace"
+    cds = workspace / "input/species_cds"
+    cds.mkdir(parents=True)
+    (cds / "Arabidopsis_thaliana_cds.fa").write_text(
+        ">Arabidopsis_thaliana_gene1\nATGAAA\n")
+    summary = workspace / "output/species_tree/species_tree_summary"
+    summary.mkdir(parents=True)
+    (summary / "undated_species_tree.nwk").write_text("(Arabidopsis_thaliana:0.1);\n")
+    config = {"input_sequence_mode": "cds", "undated_species_tree": "astral_pep",
+              "species_tree_output_storage": "files"}
+    baseline = _run_core(tmp_path, {**config, "genome_evolution_mode": "species_tree"})
+    assert baseline.returncode == 0, baseline.stdout + baseline.stderr
+    result = _run_core(tmp_path, {**config, "genome_evolution_mode": mode,
+        "artifact_stale_policy": "rebuild", "run_cds_translation": "0"})
+    assert result.returncode != 0
+    assert "run_cds_translation must be 1" in result.stdout
+    assert not (tmp_path / "capture/orthofinder_args.txt").exists()
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("failure", ["missing_tree", "changed_tree", "changed_input", "missing_manifest", "reuse"])
 def test_orthogroups_mode_refuses_missing_or_stale_frozen_inputs_before_inference(tmp_path, failure):
     workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
@@ -2394,9 +2467,41 @@ def test_genome_evolution_recovers_legacy_mcmctree_before_required_output_check(
     assert before == {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
 
 
+def _tree_semantic_contract(text):
+    from nwkit.rooting_state import ROOTING_PROPERTIES, get_rooting_info
+    from nwkit.util import read_tree
+
+    tree = read_tree(text, "auto", True, quiet=True)
+    # Declaration provenance differs between ON/OFF. Compare its interpreted
+    # state explicitly, and retain every other node attribute and root split.
+    return {
+        "rooting": get_rooting_info(tree).state,
+        "root_clades": sorted(tuple(sorted(child.leaf_names())) for child in tree.children),
+        "nodes": sorted(
+            (tuple(sorted(node.leaf_names())),
+             tuple(sorted((key, str(value)) for key, value in node.props.items()
+                          if key not in ROOTING_PROPERTIES)))
+            for node in tree.traverse()
+        ),
+    }
+
+
+@pytest.mark.parametrize("changed", [
+    "(a:0.1,(b:0.2,c:0.31):0.4);",
+    "(b:0.2,(a:0.1,c:0.3):0.4);",
+    "[&U](a:0.1,(b:0.2,c:0.3):0.4);",
+    "(a:0.1,(b:0.2,d:0.3):0.4);",
+    "(a:0.1,(b:0.2,c:0.3)[&&NHX:support=80]:0.4);",
+])
+def test_conversion_semantic_contract_rejects_branch_root_species_or_support_changes(changed):
+    assert _tree_semantic_contract(changed) != _tree_semantic_contract("(a:0.1,(b:0.2,c:0.3):0.4);")
+
+
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("native", [False, True])
 def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(tmp_path, native):
+    from nwkit.convert import convert_tree_text
+
     workspace = tmp_path / "workspace"
     species_cds = workspace / "input" / "species_cds"
     directory = workspace / "output" / "species_tree" / "mcmctree_main"
@@ -2417,7 +2522,15 @@ def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(
     })
     assert result.returncode == 0, result.stdout + result.stderr
     assert (directory / "dated_species_tree.nwk").read_text() == dated
-    assert (directory / "mcmctree_95CI.nhx").read_text() == ("[&R]" if native else "") + "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    actual = (directory / "mcmctree_95CI.nhx").read_text()
+    # Standalone NHX uses the approved default OFF. Native NEXUS input keeps
+    # its original declaration; explicit ON remains an available output API.
+    assert actual == "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    assert (directory / "FigTree.tre").read_text() == figtree
+    for enabled in (False, True):
+        converted = convert_tree_text(figtree, target="nhx", rooting_token=enabled)
+        assert converted == ("[&R]" if enabled else "") + actual
+        assert _tree_semantic_contract(converted) == _tree_semantic_contract(actual)
     assert (directory / "mcmctree_no95CI.nwk").is_file()
     summary = directory.parent / "species_tree_summary" / "dated_species_tree.nwk"
     assert summary.read_text() == dated

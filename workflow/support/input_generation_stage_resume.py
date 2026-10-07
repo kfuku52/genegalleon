@@ -29,6 +29,7 @@ from shared_namespace_lock import inspect_lock, namespace_lock
 
 FORMAT_PARAMETERS = ("provider", "gene_grouping_mode", "gff_repair_mode", "strict", "genetic_code",
                      "require_cds", "require_gff", "require_genome")
+PHASE_READER_TIMEOUT = 30
 
 
 def parameters(settings, stage, format_contract_version):
@@ -220,13 +221,18 @@ def import_busco(source_root, target_root, species, source_cds, target_cds, sour
             or payload.get("family_id") != species or payload.get("parameters") != expected):
         raise ValueError("Unsupported BUSCO provenance: " + species)
     inputs, outputs = payload["inputs"], payload["outputs"]
+    output_roles = {item["label"] for item in outputs}
     if ([item["label"] for item in inputs] != ["species_cds"]
-            or {item["label"] for item in outputs} != {"busco_full", "busco_short"} or len(outputs) != 2):
+            or output_roles not in ({"busco_full", "busco_short"}, {"busco_full", "busco_short", "busco_single_copy"})
+            or len(outputs) != len(output_roles)):
         raise ValueError("Unsupported BUSCO artifact roles: " + species)
     sources = {label: Path(source_settings["species_busco_" + label + "_dir"]) /
                (species + ".busco." + ("full.tsv" if label == "full" else "short.txt")) for label in ("full", "short")}
     destinations = {label: Path(target_settings["species_busco_" + label + "_dir"]) / path.name
                     for label, path in sources.items()}
+    if "busco_single_copy" in output_roles:
+        sources["single_copy"] = Path(source_settings["species_busco_full_dir"]) / "single_copy" / (species + ".json.gz")
+        destinations["single_copy"] = Path(target_settings["species_busco_full_dir"]) / "single_copy" / (species + ".json.gz")
     reject_output_overlap(destinations.values(), [*sources.values(), source_cds, target_cds])
     hashes = batch.read([source_cds, target_cds, *sources.values()])
     output_hashes = {item["label"]: item["sha256"] for item in outputs}
@@ -257,7 +263,10 @@ def import_stages(args):
     with measure("stage_import"):
         if getattr(args, "source_only", False):
             return _import_stages(args)
-        with namespace_lock(args.root / ".array-phase.lock", exclusive=False, nonblocking=True) as acquired:
+        # Shared owners briefly hold the registration gate too. Retry that
+        # contention while continuing to exclude prepare/finalize writers.
+        with namespace_lock(args.root / ".array-phase.lock", exclusive=False,
+                            timeout=PHASE_READER_TIMEOUT) as acquired:
             if not acquired:
                 raise ValueError("Target input-generation workspace has active prepare/finalize")
             return _import_stages(args)
@@ -273,7 +282,8 @@ def _import_stages(args):
     if source_root == args.root.resolve():
         raise ValueError("Stage import cannot share the donor output workspace")
     source_only = getattr(args, "source_only", False)
-    with namespace_lock(source_root / ".array-phase.lock", exclusive=source_only, nonblocking=True) as acquired:
+    with namespace_lock(source_root / ".array-phase.lock", exclusive=source_only,
+                        nonblocking=source_only, timeout=PHASE_READER_TIMEOUT) as acquired:
         if not acquired:
             raise ValueError("Source input-generation workspace has active workers/shared stages")
         if digest(source_plan) != args.source_plan_sha256:
@@ -348,10 +358,16 @@ def start_worker(args):
     current = (not args.overwrite and verified_snapshot(args.task_plan, args.task_index, args.root,
                "format", args.format_contract_version, batch=batch) is not None)
     if not current and not args.overwrite and args.source_plan is not None:
-        args.source_only = False
-        result = import_stages(args)
-        if result["imported"]:
-            return
+        sources = [(args.source_plan, args.source_root, args.source_plan_sha256)]
+        if getattr(args, "fallback_source_plan", None) is not None:
+            sources.append((args.fallback_source_plan, args.fallback_source_root, args.fallback_source_plan_sha256))
+        for plan, root, sha in sources:
+            donor_args = argparse.Namespace(**vars(args))
+            donor_args.source_plan, donor_args.source_root, donor_args.source_plan_sha256 = plan, root, sha
+            donor_args.source_only = False
+            result = import_stages(donor_args)
+            if result["imported"]:
+                return
     from run_input_generation_task import build_arg_parser, describe_task
     settings = json.loads(Path(str(args.task_plan) + ".settings.json").read_text())
     command = ["--task-plan", str(args.task_plan), "--task-index", str(args.task_index),
@@ -517,12 +533,19 @@ def main():
     parser.add_argument("--source-plan", type=Path)
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-plan-sha256")
+    parser.add_argument("--fallback-source-plan", type=Path)
+    parser.add_argument("--fallback-source-root", type=Path)
+    parser.add_argument("--fallback-source-plan-sha256")
     parser.add_argument("--target-lock-token", help="Existing native worker's target task lock ownership token")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--download-timeout", type=float, default=120)
     parser.add_argument("--http-header", action="append", default=[])
     parser.add_argument("--auth-bearer-token-env", default="")
     args = parser.parse_args()
+    fallback = (args.fallback_source_plan, args.fallback_source_root, args.fallback_source_plan_sha256)
+    if any(fallback) and (args.action != "start-worker" or not all(fallback) or args.source_plan is None
+                         or args.fallback_source_plan.resolve() == args.source_plan.resolve()):
+        parser.error("Fallback requires start-worker, a distinct source plan, root and sealed SHA-256")
     if args.action == "start-worker":
         if not args.task_index or not 1 <= args.task_index <= load_plan(args.task_plan)["task_count"]:
             parser.error("A valid task index is required")

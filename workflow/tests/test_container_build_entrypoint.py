@@ -97,6 +97,8 @@ def _run_entrypoint(tmp_path: Path, runtime_name: str, extra_env: dict[str, str]
         "KFTOOLS_REPO_SHA",
         "RKFTOOLS_REPO_SHA",
         "FASTK_REPO_SHA",
+        "RAPIDNJ_REPO_SHA",
+        "RAPIDNJ_ARM_REPO_SHA",
         "SMUDGEPLOT_REPO_SHA",
     ):
         env[sha_var] = "0" * 40
@@ -132,6 +134,8 @@ def _run_entrypoint_with_buildx(tmp_path: Path, runtime_name: str, extra_env: di
         "KFTOOLS_REPO_SHA",
         "RKFTOOLS_REPO_SHA",
         "FASTK_REPO_SHA",
+        "RAPIDNJ_REPO_SHA",
+        "RAPIDNJ_ARM_REPO_SHA",
         "SMUDGEPLOT_REPO_SHA",
     ):
         env[sha_var] = "0" * 40

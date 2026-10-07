@@ -93,6 +93,15 @@ cat > "${{base_dir}}/call_${{count}}.stdin"
     return bin_dir
 
 
+def test_default_docker_shim_uses_checked_in_executable():
+    completed = _run_bash(
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; unset GG_WRAPPER_BIN; gg_docker_singularity_shim_path",
+        cwd=REPO_ROOT,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(SHIM_PATH)
+
+
 def test_detect_container_runtime_binary_returns_docker_shim(tmp_path: Path):
     wrapper_bin = tmp_path / "gg_wrapper_bin"
     command = (

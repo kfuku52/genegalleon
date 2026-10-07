@@ -370,6 +370,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 with store.read_snapshot():
                     analyzed = [name.removesuffix('_stat.branch.tsv') for name in store.file_names('stat_branch')
                                 if name.endswith('_stat.branch.tsv')]
+            inventory_missing = sorted({r['orthogroup'] for r in events} - set(analyzed))
+            # An incomplete store cannot establish the total analyzed OG count.
             # Missing native plot inputs are audited, not another candidate filter.
             ids = {r['event_id'] for r in selected}
             figure_events = selected
@@ -379,7 +381,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                                             context_annotations=context_annotations,
                                             pfam_selected=pfam_cohort if require_shared_pfam else None,
                                             direction_selected=cohort if direction_filter != 'any' else None,
-                                            analyzed_orthogroups=analyzed)
+                                            analyzed_orthogroups=analyzed if not inventory_missing else None)
+            figures[trait]['analysis_inventory_missing_event_families'] = inventory_missing
         index.append(dict(trait=trait, target="ALL_CATEGORY1", target_type="aggregate",
                           relative_path=str((root / "all_category1").relative_to(stage)), **aggregate))
         target_dirs = safe_names(selected_nodes)

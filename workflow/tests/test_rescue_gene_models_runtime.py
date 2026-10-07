@@ -835,6 +835,19 @@ def test_tool_identity_binds_jcvi_support_code(tmp_path, monkeypatch):
     assert rescue.identities() != before
 
 
+def test_tool_identity_binds_canonical_busco_source_not_call_wrapper(tmp_path, monkeypatch):
+    before = rescue.identities()
+    implementation = rescue.busco_reference_implementation
+    assert before["busco_quality_implementation"] == rescue.digest(implementation.__file__)
+    original_quality = rescue.busco_quality
+    monkeypatch.setattr(rescue, "busco_quality", lambda path: original_quality(path))
+    assert rescue.identities() == before
+    source = tmp_path / "busco_reference_quality.py"
+    source.write_bytes(Path(implementation.__file__).read_bytes() + b"\n# changed source\n")
+    monkeypatch.setattr(implementation, "__file__", str(source))
+    assert rescue.identities()["busco_quality_implementation"] != before["busco_quality_implementation"]
+
+
 @pytest.mark.parametrize("revision", ["date", "markers"])
 def test_same_lineage_name_with_different_dataset_revision_is_not_comparable(hidden_models, revision):
     root, species, _ = hidden_models
@@ -946,7 +959,12 @@ def arg(flag):
 lineage = Path(arg("--lineage_dataset")).name
 out = Path(arg("--out")) / ("run_" + lineage)
 out.mkdir(parents=True, exist_ok=True)
-(out / "full_table.tsv").write_text("# BUSCO version is: 6.0.0\\nBUSCO1\\tComplete\\tfixture\\n")
+(out / "full_table.tsv").write_text("# BUSCO version is: 6.0.0\\n" + "".join(
+    f"BUSCO{i}\\tComplete\\tfixture{i}\\n" for i in range(1, 101)))
+proteins = out / "busco_sequences/single_copy_busco_sequences"
+proteins.mkdir(parents=True)
+for i in range(1, 101):
+    (proteins / f"BUSCO{i}.faa").write_text(f">fixture{i}\\nMKAAA\\n")
 (out / "short_summary.txt").write_text("# BUSCO version is: 6.0.0\\n# The lineage dataset is: " + lineage + "\\n# BUSCO was run in mode: transcriptome\\nC:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:100\\n")
 with Path(CALLS).open("a") as log:
     log.write("run\\n")
@@ -956,10 +974,12 @@ with Path(CALLS).open("a") as log:
     full = root / "full_busco"
     full.mkdir()
     for n in species:
-        (full / (n + ".busco.full.tsv")).write_text("# initial fixture\nBUSCO1\tComplete\tfixture\n")
+        (full / (n + ".busco.full.tsv")).write_text("# initial fixture\n" + "".join(
+            f"BUSCO{i}\tComplete\tfixture{i}\n" if i <= 95 else f"BUSCO{i}\tMissing\n" for i in range(1, 101)))
     _write_runtime_busco_dataset(workspace, "embryophyta_odb12")
     env = _core_env(workspace, None, fake, "rescue_models", task_id=1)
     env.update(gene_model_rescue_dir=str(output), species_busco_full_dir=str(full),
+               run_gene_model_rescue_swissprot="0",  # This fixture verifies selective BUSCO scheduling, not annotation downloads.
                species_busco_short_dir=str(root / "busco"), species_cds_dir=str(root / "cds"),
                species_gff_dir=str(root / "gff"), species_genome_dir=str(root / "genome"), overwrite="0")
     core = SCRIPT.parent.parent / "core" / "gg_input_generation_core.sh"
@@ -1377,7 +1397,7 @@ def test_external_qc_refuses_inputs_changed_during_report(hidden_models, monkeyp
     augmented.mkdir()
     (augmented / "receipt.json").write_text("{}\n")
     rescue.write_tsv(augmented / "inputs.tsv", ("species", "rescued_models"), [(n, 0) for n in names])
-    monkeypatch.setattr(rescue, "finalize", lambda *_: augmented)
+    monkeypatch.setattr(rescue, "finalize", lambda *_, **__: augmented)
     post = root / "post_busco"
     post.mkdir()
     for source in (root / "busco").iterdir():

@@ -25,6 +25,7 @@ RUNTIME_SUPPORT_PATHS = {
     "workflow/support/resource_metrics.py",
     "workflow/support/gg_shared_lock.sh",
     "workflow/support/gg_site_runtime.sh",
+    "workflow/support/gg_tmp_storage.sh",
     *{
         f"workflow/support/gg_util/{number:02d}_{name}.sh"
         for number, name in enumerate(
@@ -397,6 +398,24 @@ def test_gene_summary_run_csubst_scan_aa_change_summary_env_override_and_forward
     ]
 
 
+@pytest.mark.parametrize("threshold", ["0.05", "0.1", "0.2"])
+def test_gene_summary_duplication_confidence_scoped_override_reaches_container(tmp_path, threshold):
+    command = (
+        f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+        f"source {shlex.quote(str(GG_ENTRYPOINT_CONFIG_VARS_PATH))}; "
+        "presence_absence_dup_conf_score_threshold=0; "
+        f"GG_GENE_SUMMARY_PRESENCE_ABSENCE_DUP_CONF_SCORE_THRESHOLD={threshold}; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "%s\\n%s\\n%s\\n" "${presence_absence_dup_conf_score_threshold}" '
+        '"${SINGULARITYENV_presence_absence_dup_conf_score_threshold:-}" '
+        '"${APPTAINERENV_presence_absence_dup_conf_score_threshold:-}"'
+    )
+    result = run_bash(command, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [threshold] * 3
+
+
 def test_gene_summary_candidate_site_options_are_forwarded(tmp_path):
     command = (
         f"source {shlex.quote(str(GG_UTIL_PATH))}; "
@@ -641,11 +660,13 @@ def test_entrypoint_pycache_rejects_a_precreated_symlink(tmp_path):
     attacker_dir = tmp_path / "attacker"
     tmp_root.mkdir()
     attacker_dir.mkdir()
-    cache_path = tmp_root / f"genegalleon_pycache_{os.getuid()}"
+    runtime = tmp_root / f".genegalleon-runtime-{os.getuid()}"
+    runtime.mkdir(mode=0o700)
+    cache_path = runtime / "pycache"
     cache_path.symlink_to(attacker_dir, target_is_directory=True)
     command = (
         "unset PYTHONPYCACHEPREFIX; "
-        f"TMPDIR={shlex.quote(str(tmp_root))}; "
+        f"GG_COMMON_TMP_ROOT=workspace; gg_workspace_dir={shlex.quote(str(tmp_root))}; "
         f"source {shlex.quote(str(GG_ENTRYPOINT_BOOTSTRAP_PATH))}; "
         "gg_configure_python_pycacheprefix"
     )
@@ -653,7 +674,7 @@ def test_entrypoint_pycache_rejects_a_precreated_symlink(tmp_path):
     completed = run_bash(command, cwd=tmp_path)
 
     assert completed.returncode != 0
-    assert "Refusing unsafe Python bytecode cache path" in completed.stderr
+    assert "Refusing unsafe runtime temporary child" in completed.stderr
 
 
 def test_entrypoint_pycache_creates_an_owned_private_directory(tmp_path):
@@ -661,7 +682,7 @@ def test_entrypoint_pycache_creates_an_owned_private_directory(tmp_path):
     tmp_root.mkdir()
     command = (
         "unset PYTHONPYCACHEPREFIX; "
-        f"TMPDIR={shlex.quote(str(tmp_root))}; "
+        f"GG_COMMON_TMP_ROOT=workspace; gg_workspace_dir={shlex.quote(str(tmp_root))}; "
         f"source {shlex.quote(str(GG_ENTRYPOINT_BOOTSTRAP_PATH))}; "
         "gg_configure_python_pycacheprefix; "
         "printf '%s\\n' \"${PYTHONPYCACHEPREFIX}\""
@@ -671,7 +692,7 @@ def test_entrypoint_pycache_creates_an_owned_private_directory(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     cache_path = Path(completed.stdout.strip())
-    assert cache_path == tmp_root / f"genegalleon_pycache_{os.getuid()}"
+    assert cache_path == tmp_root / f".genegalleon-runtime-{os.getuid()}" / "pycache"
     assert stat.S_IMODE(cache_path.stat().st_mode) == 0o700
 
 
@@ -994,7 +1015,8 @@ def test_entrypoint_bootstrap_resolves_workflow_dir_from_sourced_bootstrap_when_
     assert completed.stdout.strip() == str(expected_workflow_dir)
 
 
-def test_all_entrypoint_locators_try_later_project_directory_for_spooled_scripts(tmp_path):
+def test_all_entrypoint_locators_try_later_project_directory_for_spooled_scripts(tmp_path, monkeypatch):
+    monkeypatch.setenv("gg_workspace_dir", str(tmp_path / "workspace"))
     workflow_dir = GG_ENTRYPOINT_BOOTSTRAP_PATH.parents[1]
     repo_root = workflow_dir.parent
     unrelated_submit_dir = tmp_path / "submit"
@@ -1077,6 +1099,7 @@ def test_spooled_entrypoint_binds_to_verified_explicit_runtime_release(tmp_path)
         "workflow/gg_common_params.sh",
         "workflow/support/gg_core_bootstrap.sh",
         "workflow/support/gg_site_runtime.sh",
+        "workflow/support/gg_tmp_storage.sh",
         "workflow/support/gg_entrypoint_config_vars.sh",
         "workflow/support/resource_metrics.py",
         "workflow/support/gg_shared_lock.sh",

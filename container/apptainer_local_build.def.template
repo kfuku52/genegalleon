@@ -8,6 +8,7 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     @@STAGING_ROOT@@/testdata /opt/pg/testdata
     @@STAGING_ROOT@@/scripts /opt/pg/scripts
     @@STAGING_ROOT@@/source_branches.env /opt/pg/source_branches.env
+    @@STAGING_ROOT@@/busco_kmer_distance.cpp /opt/pg/src/busco_kmer_distance.cpp
     @@STAGING_ROOT@@/treevis /opt/pg/src/genegalleon.treevis
     @@STAGING_ROOT@@/pip-compatibility.requirements.txt /opt/pg/pip-compatibility.requirements.txt
 
@@ -80,6 +81,12 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     fastk_repo_url="@@FASTK_REPO_URL@@"
     fastk_repo_ref="@@FASTK_REPO_REF@@"
     fastk_repo_sha="@@FASTK_REPO_SHA@@"
+    rapidnj_repo_url="@@RAPIDNJ_REPO_URL@@"
+    rapidnj_repo_ref="@@RAPIDNJ_REPO_REF@@"
+    rapidnj_repo_sha="@@RAPIDNJ_REPO_SHA@@"
+    rapidnj_arm_repo_url="@@RAPIDNJ_ARM_REPO_URL@@"
+    rapidnj_arm_repo_ref="@@RAPIDNJ_ARM_REPO_REF@@"
+    rapidnj_arm_repo_sha="@@RAPIDNJ_ARM_REPO_SHA@@"
     smudgeplot_repo_url="@@SMUDGEPLOT_REPO_URL@@"
     smudgeplot_repo_ref="@@SMUDGEPLOT_REPO_REF@@"
     smudgeplot_repo_sha="@@SMUDGEPLOT_REPO_SHA@@"
@@ -171,6 +178,19 @@ From: mambaorg/micromamba@sha256:a0a4da2d5315f0d5b9d98196f2e9ecf50152c750bed4023
     bash /opt/pg/scripts/build_source_artifact.sh smudgeplot smudgeplot \
         "${smudgeplot_repo_url}" "${smudgeplot_repo_sha:-${smudgeplot_repo_ref}}" \
         "${artifact_root}/smudgeplot"
+    rapidnj_kind=rapidnj
+    rapidnj_arm_kind=source
+    if [[ "${target_arch}" == arm64 ]]; then
+        rapidnj_kind=source
+        rapidnj_arm_kind=rapidnj
+    fi
+    bash /opt/pg/scripts/build_source_artifact.sh "${rapidnj_kind}" rapidnj \
+        "${rapidnj_repo_url}" "${rapidnj_repo_sha:-${rapidnj_repo_ref}}" \
+        "${artifact_root}/rapidnj"
+    bash /opt/pg/scripts/build_source_artifact.sh "${rapidnj_arm_kind}" rapidnjArm \
+        "${rapidnj_arm_repo_url}" "${rapidnj_arm_repo_sha:-${rapidnj_arm_repo_ref}}" \
+        "${artifact_root}/rapidnjArm"
+    g++ -std=c++17 -O3 -pthread /opt/pg/src/busco_kmer_distance.cpp -o /usr/local/bin/gg-kmer-distance
     bash /opt/pg/scripts/install_source_artifacts.sh "${artifact_root}"
     rm -rf -- "${artifact_root}"
     /opt/pg/scripts/install_helvetica_compat_font.sh base

@@ -43,6 +43,8 @@ jobs:
       kftools_repo_sha: ${{ steps.vars.outputs.kftools_repo_sha }}
       rkftools_repo_sha: ${{ steps.vars.outputs.rkftools_repo_sha }}
       fastk_repo_sha: ${{ steps.vars.outputs.fastk_repo_sha }}
+      rapidnj_repo_sha: ${{ steps.vars.outputs.rapidnj_repo_sha }}
+      rapidnj_arm_repo_sha: ${{ steps.vars.outputs.rapidnj_arm_repo_sha }}
       smudgeplot_repo_sha: ${{ steps.vars.outputs.smudgeplot_repo_sha }}
 
     steps:
@@ -114,6 +116,8 @@ jobs:
           kftools_repo_sha="${KFTOOLS_REPO_SHA}"
           rkftools_repo_sha="${RKFTOOLS_REPO_SHA}"
           fastk_repo_sha="${FASTK_REPO_SHA}"
+          rapidnj_repo_sha="${RAPIDNJ_REPO_SHA}"
+          rapidnj_arm_repo_sha="${RAPIDNJ_ARM_REPO_SHA}"
           smudgeplot_repo_sha="${SMUDGEPLOT_REPO_SHA}"
           source_revision_hash="$(
             printf '%s\n' \
@@ -129,6 +133,8 @@ jobs:
               "${kftools_repo_sha}" \
               "${rkftools_repo_sha}" \
               "${fastk_repo_sha}" \
+              "${rapidnj_repo_sha}" \
+              "${rapidnj_arm_repo_sha}" \
               "${smudgeplot_repo_sha}" \
               | sha256sum | cut -c1-12
           )"
@@ -157,6 +163,8 @@ jobs:
             echo "kftools_repo_sha=${kftools_repo_sha}"
             echo "rkftools_repo_sha=${rkftools_repo_sha}"
             echo "fastk_repo_sha=${fastk_repo_sha}"
+            echo "rapidnj_repo_sha=${rapidnj_repo_sha}"
+            echo "rapidnj_arm_repo_sha=${rapidnj_arm_repo_sha}"
             echo "smudgeplot_repo_sha=${smudgeplot_repo_sha}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -213,6 +221,8 @@ jobs:
           KFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.kftools_repo_sha }}
           RKFTOOLS_REPO_SHA: ${{ needs.prepare-release.outputs.rkftools_repo_sha }}
           FASTK_REPO_SHA: ${{ needs.prepare-release.outputs.fastk_repo_sha }}
+          RAPIDNJ_REPO_SHA: ${{ needs.prepare-release.outputs.rapidnj_repo_sha }}
+          RAPIDNJ_ARM_REPO_SHA: ${{ needs.prepare-release.outputs.rapidnj_arm_repo_sha }}
           SMUDGEPLOT_REPO_SHA: ${{ needs.prepare-release.outputs.smudgeplot_repo_sha }}
         run: |
           set -euo pipefail
@@ -274,6 +284,8 @@ jobs:
             KFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.kftools_repo_sha }}
             RKFTOOLS_REPO_SHA=${{ needs.prepare-release.outputs.rkftools_repo_sha }}
             FASTK_REPO_SHA=${{ needs.prepare-release.outputs.fastk_repo_sha }}
+            RAPIDNJ_REPO_SHA=${{ needs.prepare-release.outputs.rapidnj_repo_sha }}
+            RAPIDNJ_ARM_REPO_SHA=${{ needs.prepare-release.outputs.rapidnj_arm_repo_sha }}
             SMUDGEPLOT_REPO_SHA=${{ needs.prepare-release.outputs.smudgeplot_repo_sha }}
           # Consume the regular image-build cache, but do not block the release
           # SIF on a new cache export.

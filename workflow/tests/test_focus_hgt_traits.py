@@ -323,7 +323,8 @@ def test_pfam_filter_defaults_apply_to_tables_without_plotting_and_empty_excepti
     assert len(erows) == 5
 
 
-def test_filtered_plot_consumers_receive_the_same_cohort_as_filtered_tables(source, monkeypatch):
+@pytest.mark.parametrize('native_status', ['selected', 'withheld'])
+def test_filtered_plot_consumers_receive_the_same_cohort_as_filtered_tables(source, monkeypatch, native_status):
     import focus_hgt_figures
     import focus_hgt_gene_trees
     import focus_hgt_traits
@@ -341,10 +342,11 @@ def test_filtered_plot_consumers_receive_the_same_cohort_as_filtered_tables(sour
     def capture_tree(directory, events, links, family_root, **kwargs):
         trees.append({r['event_id'] for r in events})
         write_tsv(directory/'event_node_audit.tsv', ['event_id', 'status'],
-                  [dict(event_id=r['event_id'], status='selected') for r in events])
+                  [dict(event_id=r['event_id'], status=native_status) for r in events])
         return dict(rendered_family_count=1)
     def capture_figure(directory, source_events, selected, *args, **kwargs):
         counts = focus_hgt_figures.filtering_counts(source_events, selected, pfam_selected=kwargs['pfam_selected'])
+        assert kwargs['analyzed_orthogroups'] is None  # The fixture lacks native branch summaries.
         figures.append([r['event_count'] for r in counts])
         return dict(pdf_count=3)
     monkeypatch.setattr(focus_hgt_traits, 'export_bundle', without_species_pdf)

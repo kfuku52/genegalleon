@@ -382,3 +382,12 @@ external source directories. Source hashes and normal preparation/worker checks
 remain required. Source mounts use separate command arguments to avoid Linux
 environment-variable length limits. An existing bind for a declared source file
 cannot override its read-only access.
+
+An optional second donor uses `resume_fallback_task_plan`,
+`resume_fallback_task_plan_sha256` and `resume_fallback_input_generation_root`.
+Prepare verifies both inactive donors. Each worker tries the fallback only when
+the primary lacks reusable formatting for that species. Changed source proofs
+remain errors. Both imports retain the same content, parameter, task-ownership
+and BUSCO checks; new settings are written only when configured. Shared phase
+admission waits up to 30 seconds for reader-registration contention while still
+excluding prepare/finalize writers. Task-owner conflicts remain immediate errors.

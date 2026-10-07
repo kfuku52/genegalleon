@@ -77,6 +77,119 @@ def classify(catalog, models, edges, rna=(), **params):
                                            list(rna), "assembly-sha256")
 
 
+@pytest.mark.parametrize("problem", ["low_identity", "low_coverage"])
+def test_weak_extra_donor_cannot_veto_two_qualifying_donors(problem):
+    catalog, models, edges = classification_fixture()
+    weak = {**copy.deepcopy(models[0]), "donor_species": "Species_weak",
+            "donor_candidate": "Species_weak_t", "problems": [problem]}
+    edges.append({**edges[0], "species_b": "Species_weak"})
+    result = classify(catalog, models + [weak], edges)[0]
+    assert result["status"] == "accepted"
+    assert result["donors"] == ["Species_donor1", "Species_donor2"]
+    assert result["alignments"][-1]["supports_path"] is False
+    assert result["alignments"][-1]["problems"] == [problem]
+
+
+def test_weak_donor_cannot_supply_independent_support():
+    catalog, models, edges = classification_fixture()
+    models[1]["problems"] = ["low_identity"]
+    result = classify(catalog, models, edges)[0]
+    assert result["status"] == "proposal"
+    assert result["donors"] == ["Species_donor1"]
+    assert result["problems"] == ["insufficient_independent_support"]
+
+
+@pytest.mark.parametrize("problem", ["frameshift", "noncanonical_splice", "assembly_gap", "outside_search_window"])
+def test_structural_defect_still_vetoes_shared_path(problem):
+    catalog, models, edges = classification_fixture()
+    models[1]["problems"] = [problem]
+    result = classify(catalog, models, edges)[0]
+    assert result["status"] == "proposal"
+    assert problem in result["problems"]
+
+
+def test_source_coding_path_phase_inference_reaches_verified_analysis_gff_and_protein(tmp_path):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    Path(target['gff']).write_text('##gff-version 3\n'
+                                 'chr1\ts\tgene\t1\t12\t.\t+\t.\tID=g\n'
+                                 'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g\n'
+                                 'chr1\ts\tCDS\t1\t12\t.\t+\t.\tID=c1;Parent=t1\n'
+                                 'chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t2;Parent=g\n'
+                                 'chr1\ts\tCDS\t1\t12\t.\t+\t.\tID=c2;Parent=t2\n')
+    root = tmp_path / 'refinement'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
+    refinement.finalize(root, value)
+    refinement.verify_inputs(root / 'effective/inputs.tsv')
+    assert (root / 'effective/species_protein/Species_target.fa').read_text() == '>Species_target_g\nMKP\n'
+    assert '\tCDS\t1\t12\t.\t+\t0\t' in (root / 'effective/analysis_gff/Species_target.gff3').read_text()
+    assert (root / 'effective/source_annotation/Species_target.gff3').read_text() == Path(target['gff']).read_text()
+    locus = json.loads((root / 'catalog/Species_target/loci.jsonl').read_text())
+    assert not locus['source_baseline_candidate_id']
+    assert all(c['source_fasta_ids'] == [] for c in locus['candidates'])
+    assert all(c['quality']['phase_inference_evidence'] == 'complete_genomic_cds_and_unique_source_coding_path' for c in locus['candidates'])
+    review = import_module('plot_gene_model_refinement').collect(root, max_loci=2)
+    assert review['species']['Species_target']['coding_path_phase_resolved_representatives'] == 1
+    assert review['coding_path_phase_loci_available'] == 1
+    assert [(r['species'], r['gene_id']) for r in review['details']] == [('Species_target', 'Species_target_g')]
+    assert all(c['source_blocks'] == [[0, 12, -1]] for c in review['details'][0]['candidates'])
+
+
+def test_gene_only_mismatch_is_archived_but_not_exported_as_genomic_representative(tmp_path):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    Path(target["gff"]).write_text("##gff-version 3\n"
+                                 "chr1\ts\tgene\t1\t12\t.\t+\t.\tID=g\n"
+                                 "chr1\ts\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g\n"
+                                 "chr1\ts\tCDS\t1\t12\t.\t+\t0\tID=c1;Parent=t1\n")
+    original = ">g\nATGCCCCCCTAA\n"
+    Path(target["cds"]).write_text(original)
+    root = tmp_path / "run"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    effective = refinement.finalize(root, value)
+    assert (effective / "source_cds" / (target["species"] + ".fa")).read_text() == original
+    assert (effective / "species_cds" / (target["species"] + ".fa")).read_text() == ""
+    assert (effective / "species_protein" / (target["species"] + ".fa")).read_text() == ""
+    assert "source_cds_sequence_mismatch" in (effective / "effective_exclusions.tsv").read_text()
+    assert "ID=t1;Parent=g" in (effective / "source_annotation" / (target["species"] + ".gff3")).read_text()
+    assert refinement.verify_inputs(effective / "inputs.tsv")
+
+
+@pytest.mark.parametrize("kind", ["five_prime_partial", "masked_iupac"])
+def test_explained_formatter_difference_retains_dna_with_separate_translation_admission(tmp_path, kind):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target = rows[0]
+    partial = kind == "five_prime_partial"
+    genomic = "CCATGAAACCC" if partial else "ATGGRGTAA"
+    supplied = "NNNCATGAAACCC" if partial else "ATGGNGTAA"
+    coding = genomic[2:] if partial else genomic
+    n = len(genomic)
+    Path(target["genome"]).write_text(">chr1\n" + genomic + "\n")
+    original = ">g\n" + supplied + "\n"
+    Path(target["cds"]).write_text(original)
+    Path(target["gff"]).write_text("##gff-version 3\n"
+                                 f"chr1\ts\tgene\t1\t{n}\t.\t+\t.\tID=g\n"
+                                 f"chr1\ts\tmRNA\t1\t{n}\t.\t+\t.\tID=t;Parent=g\n"
+                                 f"chr1\ts\texon\t1\t{n}\t.\t+\t.\tID=e;Parent=t\n"
+                                 f"chr1\ts\tCDS\t{3 if partial else 1}\t{n}\t.\t+\t0\tID=c;Parent=t\n")
+    root = tmp_path / "run"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    effective = refinement.finalize(root, value)
+    species = target["species"]
+    assert (effective / "source_cds" / (species + ".fa")).read_text() == original
+    assert (effective / "species_cds" / (species + ".fa")).read_text() == f">{species}_g\n{coding}\n"
+    assert (effective / "source_annotation" / (species + ".gff3")).read_text() == Path(target["gff"]).read_text()
+    assert not [r for r in refinement.read_table(effective / "effective_exclusions.tsv") if r["species"] == species]
+    admitted = next(r for r in refinement.read_table(effective / "translation_admission.tsv") if r["species"] == species)
+    quality = json.loads(admitted["quality"])
+    assert not quality["sequence_mismatch"]
+    assert quality["partial"] is partial
+    assert quality["ambiguous"] is not partial
+    assert admitted["status"] == ("included" if partial else "excluded")
+    assert bool((effective / "species_protein" / (species + ".fa")).read_text()) is partial
+    assert refinement.verify_inputs(effective / "inputs.tsv")
+
+
 @pytest.mark.parametrize('code,dual', [(27, 'TGA'), (28, 'TAA'), (31, 'TAA')])
 def test_whole_rna_cannot_adopt_predicted_dual_coding_translation_context(code, dual):
     catalog, models, edges = classification_fixture()
@@ -273,6 +386,22 @@ def test_many_isoforms_of_one_donor_are_not_independent_species_support():
     assert not rows[0]["candidate"]["quality"]["representative_eligible"]
 
 
+def test_prediction_correspondence_is_direction_independent_and_locus_specific():
+    catalog, models, edges = classification_fixture()
+    reverse = [{**e, 'species_a': e['species_b'], 'gene_a': e['gene_b'],
+                'species_b': e['species_a'], 'gene_b': e['gene_a']} for e in edges]
+    unrelated = {**edges[0], 'species_a': 'Other_target', 'ambiguous': True}
+    accepted = classify(catalog, models, [unrelated, *reverse])
+    assert accepted == classify(catalog, models, edges)
+    ambiguous = {**reverse[0], 'ambiguous': True}
+    row = classify(catalog, models, [*reverse, ambiguous])[0]
+    assert row['status'] == 'proposal'
+    assert 'ambiguous_locus_correspondence' in row['problems']
+    untrusted = copy.deepcopy(models)
+    untrusted[0]['donor_species'] = 'Unrelated_donor'
+    assert 'untrusted_donor_correspondence' in classify(catalog, untrusted, reverse)[0]['problems']
+
+
 @pytest.mark.parametrize("rna_supported", [False, True])
 def test_source_sequence_contradiction_cannot_be_treated_as_homology_only_incompleteness(rna_supported):
     catalog, models, edges = classification_fixture()
@@ -306,6 +435,36 @@ def test_homology_addition_to_intact_gene_requires_target_path_for_representativ
     row = classify(catalog, models[:1], edges, rna)[0]
     assert row["status"] == "proposal"
     assert row["evidence_class"] == "homology_only_predicted"
+
+
+def test_conservation_supported_adoption_changes_only_the_independent_gate():
+    catalog, models, edges = classification_fixture(valid_original=True)
+    baseline = classify(catalog, models, edges)[0]
+    relaxed = classify(catalog, models, edges, isoform_adoption="conservation_supported")[0]
+    expected = copy.deepcopy(baseline)
+    expected["candidate"]["quality"].update(representative_eligible=True,
+                                           representative_admission="conservation_supported")
+    assert relaxed == expected
+    assert relaxed["evidence_class"] == "homology_only_predicted"
+    assert not relaxed["candidate"]["quality"]["rna_supported"]
+
+
+@pytest.mark.parametrize("problem", ["frameshift", "internal_stop", "invalid_phase"])
+def test_relaxing_rna_adoption_does_not_admit_failed_predictions(problem):
+    catalog, models, edges = classification_fixture(valid_original=True)
+    for model in models:
+        model["problems"] = [problem]
+    row = classify(catalog, models, edges, isoform_adoption="conservation_supported")[0]
+    assert row["status"] == "proposal"
+    assert not row["candidate"]["quality"]["representative_eligible"]
+
+
+@pytest.mark.parametrize("policy,adoption", [("conserved", "unknown"), ("longest", "conservation_supported")])
+def test_invalid_isoform_adoption_configuration_is_rejected(tmp_path, policy, adoption):
+    inputs, edges, _ = tiny_inputs(tmp_path)
+    with pytest.raises(ValueError, match="(?i)(adoption|conservation)"):
+        refinement.plan(tmp_path / "run", inputs=inputs, edges=edges, mode="off",
+                        policy=policy, isoform_adoption=adoption)
 
 
 @pytest.mark.parametrize("case,problem", [

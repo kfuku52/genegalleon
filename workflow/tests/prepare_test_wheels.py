@@ -10,8 +10,10 @@ from pathlib import Path
 TEST_DIR = Path(__file__).resolve().parent
 
 
-def prepare(directory: Path, csubst_sha: str, nwkit_sha: str, cdskit_sha: str):
-    sources = {"csubst": csubst_sha, "nwkit": nwkit_sha, "cdskit": cdskit_sha}
+def prepare(directory: Path, csubst_sha: str, nwkit_sha: str, cdskit_sha: str, kffractbias_sha: str):
+    sources = {"csubst": csubst_sha, "nwkit": nwkit_sha, "cdskit": cdskit_sha,
+               "kffractbias": kffractbias_sha}
+    repositories = {**{name: name for name in sources}, "kffractbias": "kfFractBias"}
     for name, sha in sources.items():
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
             raise ValueError(f"{name} source must be a resolved 40-character commit SHA")
@@ -22,7 +24,7 @@ def prepare(directory: Path, csubst_sha: str, nwkit_sha: str, cdskit_sha: str):
     found = dict.fromkeys(sources, 0)
     for line in requirements.read_text().splitlines():
         for name, sha in sources.items():
-            prefix = f"{name} @ git+https://github.com/kfuku52/{name}.git@"
+            prefix = f"{name} @ git+https://github.com/kfuku52/{repositories[name]}.git@"
             if line.startswith(prefix):
                 found[name] += 1
                 build_lines.append(prefix + sha)
@@ -52,8 +54,9 @@ def main():
     parser.add_argument("--csubst-sha", required=True)
     parser.add_argument("--nwkit-sha", required=True)
     parser.add_argument("--cdskit-sha", required=True)
+    parser.add_argument("--kffractbias-sha", required=True)
     args = parser.parse_args()
-    prepare(args.directory, args.csubst_sha, args.nwkit_sha, args.cdskit_sha)
+    prepare(args.directory, args.csubst_sha, args.nwkit_sha, args.cdskit_sha, args.kffractbias_sha)
 
 
 if __name__ == "__main__":

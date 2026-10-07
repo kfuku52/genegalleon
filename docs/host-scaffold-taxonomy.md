@@ -362,7 +362,9 @@ that the input event identities belong to that audit. Mapping checks stay in
 the audit and are omitted from the displayed steps. UFB values remain annotations;
 no new UFB cutoff or historical direction filter is applied to the input cohort.
 Step 00 counts all recorded gene-tree branch-summary orthogroups, including
-zero-transfer families, with event count NA. Without an audit, upstream event
+zero-transfer families, with event count NA. If the store lacks an input event's
+family, that total is withheld and the missing inventory is recorded; the
+candidate tables and aggregate figure cohort still remain intact. Without an audit, upstream event
 counts are not inferred from an already filtered input table. No sequence,
 phylogenetic or annotation-search analysis is run for these figures.
 

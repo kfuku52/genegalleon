@@ -8,7 +8,6 @@ import importlib.metadata
 import json
 import math
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +21,7 @@ from Bio.Seq import Seq
 from kffractbias.io import annotation_to_genes, natural_key, select_isoforms, write_bed
 
 try:
+    from busco_reference_quality import safe_token
     from fasta_sequence_store import fasta_records
     from pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from pairwise_synteny_karyotype import chromosome_colors
@@ -34,6 +34,7 @@ try:
     )
     from species_labeling import extract_species_label
 except ImportError:  # package imports in tests
+    from .busco_reference_quality import safe_token
     from .fasta_sequence_store import fasta_records
     from .pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from .pairwise_synteny_karyotype import chromosome_colors
@@ -69,12 +70,6 @@ def write_tsv(path, columns, rows):
         writer = csv.writer(handle, delimiter="\t")
         writer.writerow(columns)
         writer.writerows(rows)
-
-
-def safe_token(value, label):
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
-        raise ValueError(f"{label} must be a safe identifier: {value!r}")
-    return value
 
 
 def source_file(workspace, explicit, directory, species, suffixes):
@@ -252,7 +247,8 @@ def build_plan(args):
               str(pairs_file.resolve()): pairs_digest}
     dotplot_source = Path(__file__).with_name("pairwise_synteny_dotplot.py").resolve()
     inputs[str(dotplot_source)] = digest(dotplot_source)
-    for helper in ("pairwise_synteny_karyotype.py", "pairwise_synteny_style.py", "pairwise_synteny_layout.py"):
+    for helper in ("pairwise_synteny_karyotype.py", "pairwise_synteny_style.py", "pairwise_synteny_layout.py",
+                   "busco_reference_quality.py"):
         path = Path(__file__).with_name(helper).resolve()
         inputs[str(path)] = digest(path)
     reader_source = Path(__file__).with_name("fasta_sequence_store.py").resolve()
@@ -324,7 +320,8 @@ def contract_args(plan, phase):
     result = ["--manifest", str(provenance), "--step", f"pairwise_synteny_{phase}", "--family-id", "all_pairs",
               "--logical-root", str(workspace / "output/.gg_global_artifacts"), "--workspace-root", str(workspace),
               "--output", f"results={phase_root(plan, phase)}", "--input", f"implementation={Path(__file__).resolve()}",
-              "--input", f"sequence_reader={Path(__file__).with_name('fasta_sequence_store.py').resolve()}"]
+              "--input", f"sequence_reader={Path(__file__).with_name('fasta_sequence_store.py').resolve()}",
+              "--input", f"identifier_implementation={Path(__file__).with_name('busco_reference_quality.py').resolve()}"]
     if phase == "analysis":
         if plan.get("representative_inputs"):
             result.extend(("--input", "representative_inputs=" + plan["representative_inputs"]))
@@ -793,8 +790,8 @@ def main(argv=None):
     planning.add_argument("--pairs", required=True, type=Path)
     planning.add_argument("--sequence-mode", choices=("auto", "protein", "cds"), default="auto")
     planning.add_argument("--genetic-code", type=int, default=1)
-    planning.add_argument("--representative-map", default="", type=Path)
-    planning.add_argument("--representative-inputs", default="", type=Path)
+    planning.add_argument("--representative-map", type=Path)
+    planning.add_argument("--representative-inputs", type=Path)
     planning.add_argument("--cscore", type=float, default=0.7)
     planning.add_argument("--min-anchors", type=int, default=4)
     planning.add_argument("--distance", type=int, default=20)

@@ -202,7 +202,9 @@ if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
     *) echo "orthogroups mode requires artifact_stale_policy=stop or rebuild" >&2; exit 2 ;;
   esac
   while IFS= read -r config_name; do
-    if [[ "${config_name}" == run_* && "${config_name}" != run_orthofinder && "${config_name}" != run_og_selection ]]; then
+    # CDS translation prepares OrthoFinder input; it is not a separate producer.
+    # Preserve its requested value so CDS mode and protein-mode fallback work.
+    if [[ "${config_name}" == run_* && "${config_name}" != run_orthofinder && "${config_name}" != run_og_selection && "${config_name}" != run_cds_translation ]]; then
       printf -v "${config_name}" '%s' 0
     fi
   done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)

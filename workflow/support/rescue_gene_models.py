@@ -7,7 +7,6 @@ no orthogroup, inferred species tree, or family-loss calls are required.
 import argparse
 import bisect
 import csv
-import gzip
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -31,26 +30,33 @@ from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
+    import busco_reference_quality as busco_reference_implementation
+    from busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from gene_model_species_profiles import parameters_for, read_profiles
     from gff_attribute_syntax import validate_gff
     from input_generation_array_state import atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from rescue_anchor_admission import prepare_rescue_genome
     from rescue_model_quality import model_quality
     from species_labeling import extract_species_label
+    from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
+    from . import busco_reference_quality as busco_reference_implementation
+    from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
+    from .gene_model_species_profiles import parameters_for, read_profiles
     from .gff_attribute_syntax import validate_gff
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .rescue_anchor_admission import prepare_rescue_genome
     from .rescue_model_quality import model_quality
     from .species_labeling import extract_species_label
+    from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
-COMPARABLE_QUALITY = ("lineage", "version", "mode", "lineage_date", "markers")
 PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscore",
               "min_anchors", "distance", "diagonal_bound", "max_interval", "padding",
               "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback")
@@ -67,25 +73,6 @@ def run(command, directory, label, stdout=None):
                                     env={**os.environ, "MPLBACKEND": "Agg"})
     if result.returncode:
         raise RuntimeError(f"{label} failed ({result.returncode}): {logs / (label + '.log')}")
-
-
-def busco_quality(path):
-    text = Path(path).read_text()
-    complete = re.search(r"C:([\d.]+)%", text)
-    lineage = re.search(r"lineage dataset is:\s*(\S+)", text)
-    version = re.search(r"BUSCO version is:\s*(\S+)", text)
-    mode = re.search(r"BUSCO was run in mode:\s*(\S+)", text)
-    markers = re.search(r"\bn:\s*(\d+)", text)
-    date = re.search(r"Creation date:\s*([^,\s)]+)", text)
-    if not all((complete, lineage, version, mode, markers)):
-        raise ValueError(f"BUSCO summary lacks completeness/lineage/version/mode/marker count: {path}")
-    value = float(complete[1])
-    if not math.isfinite(value) or not 0 <= value <= 100:
-        raise ValueError(f"Invalid BUSCO completeness: {path}")
-    if int(markers[1]) < 1:
-        raise ValueError(f"Invalid BUSCO marker count: {path}")
-    return {"complete_pct": value, "lineage": lineage[1], "version": version[1], "mode": mode[1],
-            "lineage_date": date[1] if date else None, "markers": int(markers[1])}
 
 
 def table(path):
@@ -127,8 +114,57 @@ def identities():
     versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
+    versions["busco_quality_implementation"] = digest(busco_reference_implementation.__file__)
     versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
+    versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
+    versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))
+    versions["output_hashes_implementation"] = digest(sys.modules[hash_outputs.__module__].__file__)
     return versions
+
+
+def guide_evidence(path, tree_path, expected_inputs=None, nearest_references=None):
+    """Read and freeze the guide's exact inputs, outputs and panel diagnostics."""
+    raw = path.read_bytes()
+    payload = json.loads(raw)
+    request = payload.get("request", {})
+    if request.get("schema") != SCHEMA:
+        raise ValueError("Invalid BUSCO guide receipt schema")
+    files = payload.get("files", {})
+    if (not isinstance(files, dict) or not {"guide_tree.nwk", "stability.json", "markers.json"} <= set(files)
+            or any(Path(p).name != p for p in files) or (path.parent / "guide_tree.nwk").resolve() != tree_path.resolve()):
+        raise ValueError("Invalid BUSCO guide receipt/tree path")
+    sources = payload.get("request", {}).get("files", {})
+    expected = {str(path.parent / p): h for p, h in files.items()}
+    expected.update(sources)
+    if digest_paths(expected) != expected or digest(path) != hashlib.sha256(raw).hexdigest():
+        raise ValueError("Frozen BUSCO guide inputs/outputs changed")
+    if expected_inputs is not None:
+        guide_sources = payload["request"].get("sources", {})
+        if set(guide_sources) != set(expected_inputs):
+            raise ValueError("BUSCO guide species cohort differs from rescue; rebuild the guide for these species")
+        for name, hashes in expected_inputs.items():
+            source = guide_sources.get(name, {})
+            if tuple(sources.get(source.get(key)) for key in ("cds", "short")) != hashes:
+                raise ValueError("BUSCO guide does not use the rescue CDS/BUSCO inputs: " + name)
+    stability = json.loads((path.parent / "stability.json").read_text())
+    names = set(payload["request"].get("sources", {}))
+    count = request.get("parameters", {}).get("nearest")
+    if type(count) is not int or count < 0 or (nearest_references is not None and count != nearest_references):
+        raise ValueError("BUSCO guide nearest-reference count differs from rescue; rebuild the guide with this count")
+    count = min(count, len(names)-1)
+    if not isinstance(stability, dict) or set(stability) != names:
+        raise ValueError("Invalid BUSCO guide stability species")
+    for name, evidence in stability.items():
+        if not isinstance(evidence, dict):
+            raise ValueError("Invalid BUSCO guide stability evidence: " + name)
+        panels = [evidence.get(key) for key in ("nearest", "panel_0", "panel_1")]
+        if (any(not isinstance(panel, list) or len(panel) != count
+                or any(not isinstance(value, str) for value in panel) or len(panel) != len(set(panel))
+                or not set(panel) <= names - {name} for panel in panels)
+                or evidence.get("stable") is not (set(panels[0]) == set(panels[1]) == set(panels[2]))):
+            raise ValueError("Invalid BUSCO guide stability evidence: " + name)
+    expected[str(path.resolve())] = hashlib.sha256(raw).hexdigest()
+    return expected, stability
 
 
 def build_plan(args):
@@ -205,10 +241,27 @@ def build_plan(args):
         if args.genetic_codes:
             files.append(str(args.genetic_codes.resolve()))
         params = {key: getattr(args, key) for key in PARAMETERS}
+        profiles_path = getattr(args, "species_profiles", None)
+        profiles = read_profiles(profiles_path, sources)
+        if profiles_path:
+            files.append(str(profiles_path.resolve()))
         request = {"schema": SCHEMA, "sources": sources, "files": digest_paths(files), "parameters": params,
+                   "species_profiles": profiles,
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
                    "gemoma_java": None}
+        guide_stability = None
+        if getattr(args, "guide_tree_receipt", None):
+            if topology_only:
+                raise ValueError("A BUSCO k-mer guide must have informative branch lengths")
+            guide_files, guide_stability = guide_evidence(
+                args.guide_tree_receipt.resolve(), args.tree,
+                {n: (request["files"][sources[n]["fasta"]], request["files"][sources[n]["busco"]]) for n in species},
+                nearest_references=args.nearest_references)
+            if not set(species) <= set(guide_stability):
+                raise ValueError("BUSCO guide diagnostics lack rescue species")
+            request["files"].update(guide_files)
+            request["guide_tree_receipt"] = str(args.guide_tree_receipt.resolve())
         if request["files"][str(args.tree.resolve())] != hashlib.sha256(tree_bytes).hexdigest():
             raise ValueError("Initial tree changed during planning")
         if args.genetic_codes and request["files"][str(args.genetic_codes.resolve())] != code_hash:
@@ -242,9 +295,20 @@ def build_plan(args):
             refs = [row["leaf_name"] for row in table(tmp / "references.tsv")]
             if len(refs) != args.common_references or len(set(refs)) != len(refs) or not set(refs) <= eligible:
                 raise ValueError("NWKIT did not select the requested eligible reference set")
+            distances = patristic_distances(tree)
             neighbors = {n: sorted((m for m in species if m != n),
-                                   key=lambda m: (tree.distance(n, m), -sources[m]["quality"]["complete_pct"], m))[:args.nearest_references]
+                                   key=lambda m: (distances[n][m], -sources[m]["quality"]["complete_pct"], m))[:args.nearest_references]
                          for n in species}
+            if guide_stability:
+                # Retain alternative supported neighbourhoods within a bounded
+                # extra budget; marker-panel agreement is not a bootstrap value.
+                for name in species:
+                    evidence = guide_stability[name]
+                    if not evidence["stable"]:
+                        alternatives = (set(evidence["panel_0"]) | set(evidence["panel_1"])) & set(species) - {name}
+                        ordered = sorted(alternatives - set(neighbors[name]),
+                                         key=lambda m: (distances[name][m], -sources[m]["quality"]["complete_pct"], m))
+                        neighbors[name] += ordered[:args.nearest_references]
             donors = {n: sorted((set(refs) | set(neighbors[n])) - {n}) for n in species}
             pairs = sorted({tuple(sorted((n, m))) for n in species for m in donors[n]})
             jobs = [{"a": a, "b": b, "kind": "pair"} for a, b in pairs]
@@ -252,6 +316,10 @@ def build_plan(args):
             plan = {"request": request, "common_references": refs, "nearest_references": neighbors,
                     "donors": donors, "species": species,
                     "synteny_jobs": [{**job, "index": i, "id": f"comparison_{i:06d}"} for i, job in enumerate(jobs, 1)]}
+            if guide_stability:
+                plan["guide_tree_stability"] = {n: guide_stability[n] for n in species}
+            if guide_stability and digest_paths(request["files"]) != request["files"]:
+                raise ValueError("Guide evidence changed during reference selection")
             for file in ("selection.nwk", "quality.tsv", "references.nwk", "references.tsv"):
                 shutil.copyfile(tmp / file, root / file)
             atomic_json(path, plan, immutable=True)
@@ -263,6 +331,10 @@ def load(root):
     if plan["request"]["schema"] != SCHEMA or plan["request"]["tools"] != identities():
         raise ValueError("Rescue schema/tools changed; use a new output directory")
     plan_digest(root, plan)
+    if plan["request"].get("guide_tree_receipt"):
+        path = Path(plan["request"]["guide_tree_receipt"])
+        if digest(path) != plan["request"]["files"][str(path)]:
+            raise ValueError("Frozen BUSCO guide receipt changed")
     return plan
 
 
@@ -283,12 +355,18 @@ def verify_sources(plan, names, keys):
         raise ValueError("Frozen rescue input changed")
 
 
-def verified(directory, key):
+def verified(directory, key, hash_workers=1):
     try:
         receipt = json.loads((directory / "receipt.json").read_text())
-        return isinstance(receipt, dict) and receipt.get("key") == key and isinstance(receipt.get("files"), dict) and bool(receipt["files"]) and all(
-            isinstance(p, str) and isinstance(value, str) and
-            (directory / p).is_file() and digest(directory / p) == value for p, value in receipt["files"].items())
+        if not (isinstance(receipt, dict) and receipt.get("key") == key
+                and isinstance(receipt.get("files"), dict) and bool(receipt["files"])
+                and all(isinstance(p, str) and isinstance(value, str)
+                        for p, value in receipt["files"].items())):
+            return False
+        paths = [directory / p for p in receipt["files"]]
+        # digest itself refuses nonregular files and fences content reads with
+        # before/after stat identities. Every listed file is still read in full.
+        return hash_paths(directory, paths, workers=hash_workers, hash_function=digest) == receipt["files"]
     except (OSError, ValueError):
         return False
 
@@ -334,7 +412,7 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None):
+def stage(root, relative, key, builder, guard=None, hash_workers=1):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -346,7 +424,7 @@ def stage(root, relative, key, builder, guard=None):
         recover_publication(dest, journal, token)
         if guard:
             guard()
-        if verified(dest, key):
+        if verified(dest, key, hash_workers=hash_workers):
             print(f"Reused {relative}", flush=True)
             return dest
         tmp = Path(tempfile.mkdtemp(prefix=".working-" + token + "-", dir=dest.parent))
@@ -354,8 +432,7 @@ def stage(root, relative, key, builder, guard=None):
             builder(tmp)
             if guard:
                 guard()
-            files = {str(p.relative_to(tmp)): digest(p) for p in tmp.rglob("*")
-                     if p.is_file() and p.name not in {"genome.fa", "genome.mpi"} and not p.is_symlink()}
+            files = hash_outputs(tmp, workers=hash_workers, hash_function=digest)
             if not files:
                 raise ValueError("Empty stage outputs")
             atomic_json(tmp / "receipt.json", {"key": key, "files": files})
@@ -609,7 +686,7 @@ def candidate_intervals(target, donor, blocks, target_positions, donor_positions
 
 
 def candidates(root, plan, name):
-    params = plan["request"]["parameters"]
+    params = parameters_for(plan["request"], name)
     position = {}
     def positions(n):
         if n not in position:
@@ -921,9 +998,43 @@ def rescue(root, plan, name, cpus, interval_workers=None):
     regions = candidates(root, plan, name)
     verify_sources(plan, [name], ["genome", "fasta", "gff"])
     source = plan["request"]["sources"][name]
-    params = plan["request"]["parameters"]
+    params = parameters_for(plan["request"], name)
     def build(tmp):
-        import pysam
+        from gene_model_catalog import indexed_genome
+        if not regions:
+            # No copy/index/predictor is needed, but invalid source annotations
+            # must still fail. Stream contig lengths without materializing DNA.
+            lengths = {}
+            identifier = None
+            with open_text(Path(source["genome"])) as handle:
+                for line in handle:
+                    if line.startswith(">"):
+                        token = line[1:].split()
+                        if not token or token[0] in lengths:
+                            raise ValueError("FASTA index warning: missing or duplicate contig")
+                        identifier = token[0]
+                        lengths[identifier] = 0
+                    elif line.strip():
+                        if identifier is None:
+                            raise ValueError("FASTA index warning: sequence before header")
+                        lengths[identifier] += len(line.strip())
+            with open_text(Path(source["gff"])) as handle:
+                for line in handle:
+                    if line.strip() == "##FASTA":
+                        break
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    f = line.rstrip().split("\t")
+                    if (len(f) == 9 and f[2] in {"gene", "mRNA", "transcript", "CDS"}
+                            and (f[0] not in lengths or not 0 <= int(f[3]) - 1 < int(f[4]) <= lengths[f[0]])):
+                        raise ValueError("Original annotation outside or absent from genome")
+            atomic_json(tmp / "models.json", [])
+            atomic_json(tmp / "candidates.json", [])
+            write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"), [])
+            write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
+                      "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
+                      "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"), [])
+            return
         existing = []
         with open_text(Path(source["gff"])) as handle:
             for line in handle:
@@ -934,20 +1045,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 fields = line.rstrip().split("\t")
                 if len(fields) == 9 and fields[2] in {"gene", "mRNA", "transcript", "CDS"}:
                     existing.append({"seqid": fields[0], "start": int(fields[3]) - 1, "end": int(fields[4])})
-        if source["genome"].endswith(".gz"):
-            with gzip.open(source["genome"], "rb") as handle, (tmp / "genome.fa").open("wb") as out:
-                shutil.copyfileobj(handle, out)
-        else:
-            (tmp / "genome.fa").symlink_to(source["genome"])
-        # htslib can ignore duplicate contig names without failing. Its native
-        # stderr is not exposed by pysam's get_messages(), so isolate indexing
-        # in a child process and retain/refuse warnings before any prediction.
-        run([sys.executable, "-c", "import pysam, sys; pysam.faidx(sys.argv[1])", tmp / "genome.fa"], tmp, "genome_index")
-        warning = (tmp / "logs" / "genome_index.log").read_text().strip()
-        if warning:
-            raise ValueError("FASTA index warning: " + warning)
         proteins = {donor: {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")} for donor in donors}
-        with pysam.FastaFile(str(tmp / "genome.fa")) as genome:
+        with indexed_genome(source["genome"]) as genome:
+            (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             positions = json.loads((root / "prepared" / name / "positions.json").read_text())
             for feature in [*existing, *positions]:
@@ -1026,7 +1126,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         (tmp / "genome.mpi").unlink(missing_ok=True)
         (tmp / "genome.fa").unlink()
     return stage(root, Path("rescued") / name, key, build,
-                 lambda: require_same_key(key, rescue_key(root, plan, name)))
+                 lambda: require_same_key(key, rescue_key(root, plan, name)), hash_workers=cpus)
 
 
 def consolidate(validated, existing, species):
@@ -1088,7 +1188,7 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
     java = plan["request"]["gemoma_java"]
     if digest(java) != plan["request"]["files"][java]:
         raise ValueError("GeMoMa Java executable changed")
-    params = plan["request"]["parameters"]
+    params = parameters_for(plan["request"], source.get("species", ""))
     for donor in sorted({r["donor"] for r in regions}):
         ref = plan["request"]["sources"][donor]
         verify_sources(plan, [donor], ["genome", "gff"])
@@ -1182,13 +1282,13 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                 validated.append(check_interval(checked))
 
 
-def finalize(root, plan, names=None, destination=Path("augmented")):
+def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1):
     names = names or plan["species"]
     key = {"plan": plan_digest(root, plan), "rescue_receipts": {
         n: digest(root / "rescued" / n / "receipt.json") for n in names}}
     def guard():
         for name in names:
-            if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
+            if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=hash_workers):
                 raise ValueError("Rescue incomplete or corrupted: " + name)
         verify_sources(plan, names, ["fasta", "gff", "genome", "busco"])
         require_same_key(key, {"plan": plan_digest(root, plan), "rescue_receipts": {
@@ -1275,24 +1375,24 @@ def finalize(root, plan, names=None, destination=Path("augmented")):
                                            "common_references": plan["common_references"],
                                            "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
-    return stage(root, destination, key, build, guard)
+    return stage(root, destination, key, build, guard, hash_workers=hash_workers)
 
 
-def qc_work_items(root, plan, indices):
+def qc_work_items(root, plan, indices, hash_workers=1):
     """Verify the exact effective inputs before dispatching or reusing BUSCO."""
     result = []
     for index in indices:
         name = plan["species"][index - 1]
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
+        if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=hash_workers):
             raise ValueError("Rescue incomplete or corrupted: " + name)
         effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
             name: digest(root / "rescued" / name / "receipt.json")}}
-        if not verified(root / "effective" / name, effective_key):
+        if not verified(root / "effective" / name, effective_key, hash_workers=hash_workers):
             raise ValueError("Effective inputs incomplete or corrupted: " + name)
         rows = table(root / "effective" / name / "inputs.tsv")
         if len(rows) != 1 or rows[0]["species"] != name:
             raise ValueError("Effective input table has the wrong species")
-        done = verified(root / "workers" / name, {"plan": plan_digest(root, plan), "species": name})
+        done = verified(root / "workers" / name, {"plan": plan_digest(root, plan), "species": name}, hash_workers=hash_workers)
         result.append((index, name, rows[0]["cds"], rows[0]["rescued_models"], int(done)))
     return result
 
@@ -1307,10 +1407,12 @@ def parser():
     for name in ("cds-dir", "gff-dir", "genome-dir", "busco-dir", "tree", "output"):
         plan.add_argument("--" + name, type=Path, required=True)
     plan.add_argument("--common-references", type=int, default=5)
+    plan.add_argument("--guide-tree-receipt", type=Path, help="Optional frozen pre-rescue BUSCO k-mer guide receipt")
     plan.add_argument("--nearest-references", type=int, default=3)
     plan.add_argument("--minimum-busco", type=float, default=90)
     plan.add_argument("--genetic-code", type=int, default=1)
     plan.add_argument("--genetic-codes", type=Path)
+    plan.add_argument("--species-profiles", type=Path, help="Explicit target-species prediction parameter overrides (TSV)")
     plan.add_argument("--feature", default="")
     plan.add_argument("--attribute", default="")
     plan.add_argument("--cscore", type=float, default=0.7)
@@ -1328,8 +1430,7 @@ def parser():
     for name in ("synteny", "rescue", "finalize", "run", "status", "qc", "worker-complete", "qc-inputs"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--output", type=Path, required=True)
-        if name in {"synteny", "rescue", "run"}:
-            cmd.add_argument("--cpus", type=int, default=1)
+        cmd.add_argument("--cpus", type=int, default=1, help="Predictor and full-checksum CPU budget")
         if name in {"rescue", "run"}:
             cmd.add_argument("--interval-workers", type=int, help="Concurrent independent intervals (default: cpus); total threads stay within cpus")
         if name in {"synteny", "run"}:
@@ -1372,13 +1473,13 @@ def main():
             p.error("task index outside frozen plan")
     if args.command == "qc-inputs":
         indices = [args.task_index] if args.task_index is not None else range(1, len(plan["species"]) + 1)
-        for row in qc_work_items(root, plan, indices):
+        for row in qc_work_items(root, plan, indices, hash_workers=args.cpus):
             print(*row, sep="\t")
     if args.command == "status":
         pending_pairs = []
         for job in plan["synteny_jobs"]:
             try:
-                complete = verified(root / "synteny" / job["id"], comparison_key(root, job))
+                complete = verified(root / "synteny" / job["id"], comparison_key(root, job), hash_workers=args.cpus)
             except (OSError, ValueError):
                 complete = False
             if not complete:
@@ -1386,7 +1487,7 @@ def main():
         pending_species = []
         for i, n in enumerate(plan["species"], 1):
             try:
-                complete = verified(root / "rescued" / n, rescue_key(root, plan, n))
+                complete = verified(root / "rescued" / n, rescue_key(root, plan, n), hash_workers=args.cpus)
             except (OSError, ValueError):
                 complete = False
             if not complete or pending_pairs:
@@ -1396,11 +1497,11 @@ def main():
         if not args.task_index or not 1 <= args.task_index <= len(plan["species"]):
             p.error("Worker index outside frozen plan")
         name = plan["species"][args.task_index - 1]
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name)):
+        if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=args.cpus):
             raise ValueError("Rescue worker has no verified models")
         effective_key = {"plan": plan_digest(root, plan), "rescue_receipts": {
             name: digest(root / "rescued" / name / "receipt.json")}}
-        if not verified(root / "effective" / name, effective_key):
+        if not verified(root / "effective" / name, effective_key, hash_workers=args.cpus):
             raise ValueError("Rescue worker has no verified exported inputs")
         files = [root / "rescued" / name / "receipt.json", root / "effective" / name / "receipt.json",
                  root / "qc/species_cds_busco_full" / (name + ".busco.full.tsv"),
@@ -1410,7 +1511,8 @@ def main():
             files += [directory / p for p in json.loads((directory / "receipt.json").read_text())["files"]]
         worker_dir = root / "workers" / name
         def current_files():
-            return {os.path.relpath(p, worker_dir): digest(p) for p in files}
+            hashes = hash_paths(root, files, workers=args.cpus, hash_function=digest)
+            return {os.path.relpath(root / p, worker_dir): value for p, value in hashes.items()}
         frozen_files = current_files()
         quality = busco_quality(summary)
         initial = plan["request"]["sources"][name]["quality"]
@@ -1420,13 +1522,14 @@ def main():
         if int(effective["rescued_models"]) == 0 and quality != initial:
             raise ValueError("Unchanged species BUSCO differs from the initial run")
         require_same_key(frozen_files, current_files())
-        if not verified(root / "rescued" / name, rescue_key(root, plan, name)) or not verified(root / "effective" / name, effective_key):
+        if (not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=args.cpus)
+                or not verified(root / "effective" / name, effective_key, hash_workers=args.cpus)):
             raise ValueError("Worker dependencies changed during execution")
         atomic_json(worker_dir / "receipt.json", {
             "key": {"plan": plan_digest(root, plan), "species": name},
             "files": frozen_files})
     if args.command == "qc":
-        finalize(root, plan)
+        finalize(root, plan, hash_workers=args.cpus)
         files = {n: args.busco_dir / (n + ".busco.short.txt") for n in plan["species"]}
         def current_key():
             return {"plan": plan_digest(root, plan), "augmented": digest(root / "augmented" / "receipt.json"),
@@ -1455,9 +1558,9 @@ def main():
                 p.error("rescue task index outside frozen plan")
             rescue(root, plan, plan["species"][index - 1], args.cpus, args.interval_workers)
             name = plan["species"][index - 1]
-            finalize(root, plan, [name], Path("effective") / name)
+            finalize(root, plan, [name], Path("effective") / name, hash_workers=args.cpus)
     if args.command in {"finalize", "run"}:
-        finalize(root, plan)
+        finalize(root, plan, hash_workers=args.cpus)
 
 
 if __name__ == "__main__":

@@ -254,7 +254,8 @@ def _node_key(species: Any, gene: Any) -> tuple[str, str]:
 
 
 def _baseline(locus: dict, candidates: list[dict]) -> dict:
-    requested = locus.get("baseline_candidate_id") or locus.get("source_baseline_candidate_id")
+    requested = (locus.get("baseline_candidate_id") or locus.get("source_baseline_candidate_id")
+                 or locus.get("source_baseline_coding_candidate_id"))
     by_id = {_candidate_id(candidate): candidate for candidate in candidates}
     if requested:
         if requested not in by_id:
@@ -609,7 +610,19 @@ def select_representatives(catalogs: list[dict], edges: list[dict], policy: str 
             baseline_pair = pairs.get(baseline, proposed)
             if baseline_pair.internal_loss_a:
                 return abstain("possible_species_specific_internal_region")
-        return _selection(proposed, node, "conserved", "supported_crossspecies_coding_isoform", proposed_score, margin)
+        result = _selection(proposed, node, "conserved", "supported_crossspecies_coding_isoform", proposed_score, margin)
+        if proposed.get("quality", {}).get("representative_admission") == "conservation_supported":
+            # An improved length/ORF quality score alone is insufficient when
+            # relaxing the RNA gate. Compare both paths against the same final
+            # adopted neighbors, keeping the existing copy/span/support gates.
+            gain = ((proposed_score - quality[node][_candidate_id(proposed)])
+                    - (local_score(node, baseline, frozen) - quality[node][_candidate_id(baseline)]))
+            if gain <= 1e-12:
+                rejected = abstain("no_crossspecies_conservation_gain")
+                rejected["proposed_crossspecies_score_gain"] = gain
+                return rejected
+            result["crossspecies_score_gain"] = gain
+        return result
 
     adopted_state, rejected = dict(state), set()
     for _ in range(len(nodes) + 1):

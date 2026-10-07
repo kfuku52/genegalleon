@@ -2,7 +2,7 @@
 set -euo pipefail
 
 artifact_root="${1:?Usage: install_source_artifacts.sh ARTIFACT_ROOT}"
-sources=(amalgkit cdskit csubst nwkit BUSCO paml iqtree ASTER kfFractBias kftools rkftools fastk smudgeplot)
+sources=(amalgkit cdskit csubst nwkit BUSCO paml iqtree ASTER kfFractBias kftools rkftools fastk rapidnj rapidnjArm smudgeplot)
 wheels=()
 shopt -s nullglob
 for source_name in "${sources[@]}"; do

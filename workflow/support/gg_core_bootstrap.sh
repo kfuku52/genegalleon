@@ -51,26 +51,15 @@ gg_source_common_params_from_core() {
 }
 
 gg_configure_python_pycacheprefix_from_core() {
-  local default_pycache_prefix=""
-  local pycache_uid=""
-
-  if [[ -n "${PYTHONPYCACHEPREFIX:-}" ]]; then
-    return 0
-  fi
-
-  pycache_uid="$(id -u)" || return 1
-  default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"
-  if [[ -L "${default_pycache_prefix}" || ( -e "${default_pycache_prefix}" && ( ! -d "${default_pycache_prefix}" || ! -O "${default_pycache_prefix}" ) ) ]]; then
-    echo "Refusing unsafe Python bytecode cache path: ${default_pycache_prefix}" >&2
-    return 1
-  fi
-  (umask 077; mkdir -p -- "${default_pycache_prefix}") || return 1
-  if [[ -L "${default_pycache_prefix}" || ! -d "${default_pycache_prefix}" || ! -O "${default_pycache_prefix}" ]]; then
-    echo "Python bytecode cache path is not an owned directory: ${default_pycache_prefix}" >&2
-    return 1
-  fi
-  chmod 700 "${default_pycache_prefix}" || return 1
-  export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"
+  [[ -z "${PYTHONPYCACHEPREFIX:-}" ]] || return 0
+  local storage_support
+  storage_support=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+  # shellcheck disable=SC1090
+  source "${storage_support}/gg_tmp_storage.sh"
+  local selected runtime_tmp
+  selected=$(gg_resolve_tmp_root) || return 1
+  runtime_tmp=$(gg_private_runtime_tmp "${selected}") || return 1
+  export PYTHONPYCACHEPREFIX="${runtime_tmp}/pycache"
 }
 
 gg_bootstrap_core_runtime() {
@@ -105,5 +94,14 @@ gg_bootstrap_core_runtime() {
 
   # shellcheck disable=SC1090
   source "${gg_support_dir}/gg_util.sh"
+  if [[ "${GG_COMMON_TMP_ROOT:-auto}" == auto ]]; then
+    GG_COMMON_TMP_ROOT=$(gg_resolve_tmp_root) || return 1
+    export GG_COMMON_TMP_ROOT
+  fi
+  if [[ "${GG_COMMON_TMP_ROOT}" == workspace && -z "${GG_TMP_TASK_ROOT:-}" ]]; then
+    local runtime_tmp
+    runtime_tmp=$(gg_private_runtime_tmp workspace) || return 1
+    export TMPDIR="${runtime_tmp}/tmp" TMP="${runtime_tmp}/tmp" TEMP="${runtime_tmp}/tmp"
+  fi
   gg_prepare_cmd_runtime "${gg_workspace_dir}" "${conda_env}" "${set_unlimited_stack}" "${print_start_message}"
 }

@@ -6,8 +6,11 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_query_gene_orthologs_runtime.py",
     "test_gene_model_refinement.py",
     "test_gene_model_refinement_downstream.py",
+    "test_plot_gene_model_refinement.py",
+    "test_gene_model_refinement_busco.py",
     "test_presence_absence_runtime.py",
     "test_workflow_cds_validation_runtime.py",
     "test_native_mul_reconcile_runtime.py",
@@ -49,8 +52,10 @@
     "test_tree_plot_batch.py",
     "test_rescue_gene_models_runtime.py",
     "test_rescue_model_evidence.py",
+    "test_rescue_swissprot_evidence.py",
     "test_genome_format_streaming_runtime.py",
-    "test_gene_model_refinement_runtime.py"
+    "test_gene_model_refinement_runtime.py",
+    "test_busco_guide_tree_runtime.py"
   ],
   "runtime_extra_python": [
     "workflow/tests/test_hgt_end_to_end.py",

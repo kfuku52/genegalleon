@@ -10,13 +10,13 @@ from shell_static_helpers import (
 )
 
 
-def test_common_scratch_defaults_to_node_local_tmp():
+def test_common_scratch_defaults_to_auto():
     common_params = read_text(WORKFLOW_DIR / "gg_common_params.sh")
-    assert ': "${GG_COMMON_TMP_ROOT:=/tmp}"' in common_params
+    assert ': "${GG_COMMON_TMP_ROOT:=auto}"' in common_params
     assert "GG_COMMON_TMP_ROOT=workspace" in read_text(
         REPO_ROOT / "docs" / "temporary-storage.md"
     )
-    assert "default is\nnode-local `/tmp`" in read_text(
+    assert "default `auto`" in read_text(
         REPO_ROOT / "docs" / "execution-model.md"
     )
 

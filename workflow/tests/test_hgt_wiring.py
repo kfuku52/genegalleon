@@ -1,5 +1,8 @@
+import shlex
+import subprocess
 from pathlib import Path
 
+import pytest
 from shell_static_helpers import read_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -170,3 +173,21 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert '--panel8="categorical,besthit_lca_rank_display,Hit LCA,-"' in core_text
     assert '--panel9="signal_peptide"' in core_text
     assert '--panel10="transmembrane_domain"' in core_text
+
+
+@pytest.mark.parametrize('coverage', ['0', '0.5', '0.95', '1'])
+def test_shared_pfam_coverage_scoped_override_is_forwarded_to_runtime(coverage):
+    support = REPO_ROOT/'workflow/support'
+    script = (
+        f"source {shlex.quote(str(support/'gg_util.sh'))}; "
+        f"source {shlex.quote(str(support/'gg_entrypoint_config_vars.sh'))}; "
+        "hgt_summary_focus_min_shared_pfam_coverage=0.5; "
+        f"GG_GENE_SUMMARY_HGT_SUMMARY_FOCUS_MIN_SHARED_PFAM_COVERAGE={coverage}; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "%s\\n%s\\n%s\\n" "${hgt_summary_focus_min_shared_pfam_coverage}" '
+        '"${SINGULARITYENV_hgt_summary_focus_min_shared_pfam_coverage:-}" '
+        '"${APPTAINERENV_hgt_summary_focus_min_shared_pfam_coverage:-}"'
+    )
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == [coverage] * 3

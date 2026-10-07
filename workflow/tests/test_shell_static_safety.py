@@ -57,6 +57,7 @@ def test_non_library_workflow_shell_scripts_use_strict_euo_pipefail():
         WORKFLOW_DIR / "gg_common_params.sh",
         WORKFLOW_DIR / "support" / "gg_shared_lock.sh",
         WORKFLOW_DIR / "support" / "gg_util.sh",
+        WORKFLOW_DIR / "support" / "gg_tmp_storage.sh",
     }
     scripts = _workflow_shell_scripts()
     assert scripts, "No workflow shell scripts were found."
@@ -96,13 +97,12 @@ def test_gg_versions_uses_shared_core_bootstrap_runtime():
     assert 'source "${gg_support_dir}/gg_util.sh"' not in text
 
 
-def test_core_bootstrap_sets_python_pycacheprefix_under_tmp():
+def test_core_bootstrap_uses_selected_private_pycache():
     text = _read_text(WORKFLOW_DIR / "support" / "gg_core_bootstrap.sh")
     body = _function_body(text, "gg_configure_python_pycacheprefix_from_core")
-    assert 'default_pycache_prefix="${TMPDIR:-/tmp}/genegalleon_pycache_${pycache_uid}"' in body
-    assert '! -O "${default_pycache_prefix}"' in body
-    assert 'chmod 700 "${default_pycache_prefix}"' in body
-    assert 'export PYTHONPYCACHEPREFIX="${default_pycache_prefix}"' in body
+    assert 'selected=$(gg_resolve_tmp_root)' in body
+    assert 'runtime_tmp=$(gg_private_runtime_tmp "${selected}")' in body
+    assert 'export PYTHONPYCACHEPREFIX="${runtime_tmp}/pycache"' in body
     runtime_body = _function_body(text, "gg_bootstrap_core_runtime")
     assert "export PYTHONNOUSERSITE=1" in runtime_body
     assert "gg_configure_python_pycacheprefix_from_core" in runtime_body

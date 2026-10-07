@@ -253,6 +253,38 @@ RUN --mount=type=cache,target=/root/.cache/pip source /opt/pg/source_branches.en
       "${SMUDGEPLOT_REPO_SHA:-${SMUDGEPLOT_REPO_REF:-${GG_SOURCE_SMUDGEPLOT_REPO_REF}}}" \
       /opt/pg/artifact
 
+FROM source-builder AS rapidnj-build
+ARG RAPIDNJ_REPO_URL="https://github.com/somme89/rapidNJ.git"
+ARG RAPIDNJ_REPO_REF=""
+ARG RAPIDNJ_REPO_SHA=""
+ARG TARGETARCH
+RUN source /opt/pg/source_branches.env \
+ && kind=rapidnj \
+ && if [[ "${TARGETARCH}" == arm64 ]]; then kind=source; fi \
+ && bash /opt/pg/scripts/build_source_artifact.sh "${kind}" rapidnj \
+      "${RAPIDNJ_REPO_URL}" \
+      "${RAPIDNJ_REPO_SHA:-${RAPIDNJ_REPO_REF:-${GG_SOURCE_RAPIDNJ_REPO_REF}}}" \
+      /opt/pg/artifact
+
+# The maintained ARM fork replaces x86 SSE2 with sse2neon. Resolve and record
+# both sources once across platforms; retain the corresponding source bundles.
+FROM source-builder AS rapidnj-arm-build
+ARG RAPIDNJ_ARM_REPO_URL="https://github.com/johnlees/rapidNJ-M1.git"
+ARG RAPIDNJ_ARM_REPO_REF=""
+ARG RAPIDNJ_ARM_REPO_SHA=""
+ARG TARGETARCH
+RUN source /opt/pg/source_branches.env \
+ && kind=source \
+ && if [[ "${TARGETARCH}" == arm64 ]]; then kind=rapidnj; fi \
+ && bash /opt/pg/scripts/build_source_artifact.sh "${kind}" rapidnjArm \
+      "${RAPIDNJ_ARM_REPO_URL}" \
+      "${RAPIDNJ_ARM_REPO_SHA:-${RAPIDNJ_ARM_REPO_REF:-${GG_SOURCE_RAPIDNJ_ARM_REPO_REF}}}" \
+      /opt/pg/artifact
+
+FROM system AS guide-kernel-build
+COPY workflow/support/busco_kmer_distance.cpp /tmp/busco_kmer_distance.cpp
+RUN g++ -std=c++17 -O3 -pthread /tmp/busco_kmer_distance.cpp -o /usr/local/bin/gg-kmer-distance
+
 FROM base AS runtime-system
 RUN bash /opt/pg/scripts/install_system_packages.sh runtime
 
@@ -264,6 +296,7 @@ ARG TARGETARCH
 ARG TARGETPLATFORM
 # Copy the solved environment exactly once. All upstream artifacts below are
 # small additions to this shared prefix, not copies of whole environments.
+COPY --from=guide-kernel-build /usr/local/bin/gg-kmer-distance /usr/local/bin/gg-kmer-distance
 COPY --from=dependencies /opt/conda /opt/conda
 COPY --from=dependencies /usr/local/bin /usr/local/bin
 COPY --from=dependencies /opt/pg/logs /opt/pg/logs
@@ -283,6 +316,8 @@ RUN --mount=from=amalgkit-build,source=/opt/pg/artifact,target=/tmp/artifacts/am
  --mount=from=kftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/kftools \
  --mount=from=rkftools-build,source=/opt/pg/artifact,target=/tmp/artifacts/rkftools \
  --mount=from=fastk-build,source=/opt/pg/artifact,target=/tmp/artifacts/fastk \
+ --mount=from=rapidnj-build,source=/opt/pg/artifact,target=/tmp/artifacts/rapidnj \
+ --mount=from=rapidnj-arm-build,source=/opt/pg/artifact,target=/tmp/artifacts/rapidnjArm \
  --mount=from=smudgeplot-build,source=/opt/pg/artifact,target=/tmp/artifacts/smudgeplot \
  bash /opt/pg/scripts/install_source_artifacts.sh /tmp/artifacts \
  && bash /opt/pg/scripts/install_helvetica_compat_font.sh base

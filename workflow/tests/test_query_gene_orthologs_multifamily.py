@@ -543,7 +543,7 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
     assert "Reference species orthologs" in svg_text
     assert "Reference species genes" not in svg_text
     assert "Duplication bar colors" in svg_text
-    assert "Bar height = duplication count" in svg_text
+    assert "Bar height = displayed-gene duplication count" in svg_text
     assert "non-contiguous orthology" in svg_text
     assert "Evidence band (top): local synteny anchors" in svg_text
     assert "Local synteny anchors (A)" not in svg_text
@@ -725,7 +725,7 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
     assert "Circle area = duplication count" not in svg_text
     bar_title_y = float(
         re.search(
-            r"<text x='[0-9.]+' y='([0-9.]+)'.*?>Bar height = duplication count</text>",
+            r"<text x='[0-9.]+' y='([0-9.]+)'.*?>Bar height = displayed-gene duplication count</text>",
             svg_text,
         ).group(1)
     )
@@ -782,7 +782,8 @@ def test_multifamily_tables_render_to_pdf_and_svg(tmp_path: Path):
 
     tree_table = pandas.read_csv(out_dir / "tree.tsv", sep="\t")
     mapped_duplications = tree_table.loc[
-        (tree_table["event"] == "D") & tree_table["mapped_species_node"].notna()
+        (tree_table["event"] == "D") & tree_table["mapped_species_node"].notna() &
+        tree_table["displayed_child1_gene_ids"].notna() & tree_table["displayed_child2_gene_ids"].notna()
     ]
     expected_bar_count = mapped_duplications.groupby(
         ["family_id", "mapped_species_node"], sort=False
@@ -1015,7 +1016,7 @@ def test_eight_families_and_twenty_three_query_columns_render_without_cross_fami
     assert "Branch length" in svg_text
     assert "Million years ago" not in svg_text
     assert "Duplication bar colors" in svg_text
-    assert "Bar height = duplication count" in svg_text
+    assert "Bar height = displayed-gene duplication count" in svg_text
     assert "Circle area = duplication count" not in svg_text
     assert "D#: query-gene duplication" not in svg_text
     assert "D#: mapped duplication" not in svg_text
