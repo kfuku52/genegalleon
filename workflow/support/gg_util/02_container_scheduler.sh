@@ -11,7 +11,7 @@ gg_docker_singularity_shim_source_path() {
 }
 
 gg_docker_singularity_shim_path() {
-	local wrapper_bin="${GG_WRAPPER_BIN:-/tmp/gg_wrapper_bin}"
+	local wrapper_bin="${GG_WRAPPER_BIN:-}"
 	local source_shim=""
 	local target_shim=""
 
@@ -19,6 +19,10 @@ gg_docker_singularity_shim_path() {
 	if [[ ! -x "${source_shim}" ]]; then
 		echo "Docker runtime shim source is missing or not executable: ${source_shim}" >&2
 		return 1
+	fi
+	if [[ -z "${wrapper_bin}" ]]; then
+		printf '%s\n' "${source_shim}"
+		return 0
 	fi
 
 	target_shim="${wrapper_bin}/singularity"
@@ -697,20 +701,6 @@ set_singularityenv() {
 	export APPTAINERENV_MEM_PER_SLOT=${MEM_PER_SLOT:-3}
 	export SINGULARITYENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
 	export APPTAINERENV_MEM_PER_HOST=${MEM_PER_HOST:-3}
-	local container_pycache_prefix=""
-	container_pycache_prefix="/tmp/genegalleon_pycache_$(id -u)"
-	if [[ -L "${container_pycache_prefix}" || ( -e "${container_pycache_prefix}" && ( ! -d "${container_pycache_prefix}" || ! -O "${container_pycache_prefix}" ) ) ]]; then
-		echo "Refusing unsafe container Python bytecode cache path: ${container_pycache_prefix}" >&2
-		return 1
-	fi
-	(umask 077; mkdir -p -- "${container_pycache_prefix}") || return 1
-	if [[ -L "${container_pycache_prefix}" || ! -d "${container_pycache_prefix}" || ! -O "${container_pycache_prefix}" ]]; then
-		echo "Container Python bytecode cache path is not an owned directory: ${container_pycache_prefix}" >&2
-		return 1
-	fi
-	chmod 700 "${container_pycache_prefix}" || return 1
-	export SINGULARITYENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"
-	export APPTAINERENV_PYTHONPYCACHEPREFIX="${container_pycache_prefix}"
 	export SINGULARITYENV_PYTHONNOUSERSITE=1
 	export APPTAINERENV_PYTHONNOUSERSITE=1
   local gg_common_var_name
@@ -739,38 +729,34 @@ gg_print_container_env_summary
 
 # Scratch configuration is resolved on the execution host, before container launch.
 gg_configure_task_tmp_mount() {
-  local requested="${GG_COMMON_TMP_ROOT:-workspace}"
-  local resolved=""
+  local requested="${GG_COMMON_TMP_ROOT:-auto}" resolved runtime_tmp container_tmp
+  resolved=$(gg_resolve_tmp_root) || return 1
+  runtime_tmp=$(gg_private_runtime_tmp "${resolved}") || return 1
+  export GG_COMMON_TMP_ROOT="${resolved}"
+  export TMPDIR="${runtime_tmp}/tmp" TMP="${runtime_tmp}/tmp" TEMP="${runtime_tmp}/tmp"
+  export APPTAINER_TMPDIR="${runtime_tmp}/tmp" SINGULARITY_TMPDIR="${runtime_tmp}/tmp"
   gg_export_var_to_container_env_if_set GG_COMMON_TMP_ROOT
-  [[ "${requested}" != workspace ]] || return 0
-  if [[ "${requested}" == env ]]; then
-    requested="${TMPDIR:-}"
-    if [[ -z "${requested}" ]]; then
-      echo "GG_COMMON_TMP_ROOT=env requires TMPDIR on the execution node." >&2
+  echo "GeneGalleon temporary storage: requested=${requested}; selected=${resolved}"
+  if [[ "${resolved}" == workspace ]]; then
+    container_tmp="/workspace/$(basename "${runtime_tmp}")"
+    unset GG_TMP_MOUNT GG_TMP_HOST_ROOT GG_TMP_WORKSPACE_ID
+    unset SINGULARITYENV_GG_TMP_MOUNT APPTAINERENV_GG_TMP_MOUNT
+    unset SINGULARITYENV_GG_TMP_HOST_ROOT APPTAINERENV_GG_TMP_HOST_ROOT
+    unset SINGULARITYENV_GG_TMP_WORKSPACE_ID APPTAINERENV_GG_TMP_WORKSPACE_ID
+  else
+    if gg_container_bind_destination_exists "/gg_tmp"; then
+      echo "Reserved scratch mount /gg_tmp is already configured." >&2
       return 1
     fi
+    gg_add_container_bind_mount "${resolved}:/gg_tmp"
+    export GG_TMP_MOUNT=/gg_tmp GG_TMP_HOST_ROOT="${resolved}" GG_TMP_WORKSPACE_ID="${gg_workspace_dir}"
+    gg_export_var_to_container_env_if_set GG_TMP_MOUNT
+    gg_export_var_to_container_env_if_set GG_TMP_HOST_ROOT
+    gg_export_var_to_container_env_if_set GG_TMP_WORKSPACE_ID
+    container_tmp="/gg_tmp/$(basename "${runtime_tmp}")"
   fi
-  if [[ "${requested}" != /* || "${requested}" == *[:,]* || "${requested}" == *$'\n'* ]]; then
-    echo "Scratch root must be an absolute path without colons, commas or newlines: ${requested}" >&2
-    return 1
-  fi
-  if [[ ! -d "${requested}" || ! -w "${requested}" || ! -x "${requested}" ]]; then
-    echo "Scratch root must be an existing writable directory: ${requested}" >&2
-    return 1
-  fi
-  resolved=$(cd -P -- "${requested}" && printf '%s.' "$PWD") || return 1
-  resolved=${resolved%.}
-  if [[ "${resolved}" == *[:,]* || "${resolved}" == *$'\n'* ]]; then
-    echo "Resolved scratch root contains a container bind delimiter: ${resolved}" >&2
-    return 1
-  fi
-  if gg_container_bind_destination_exists "/gg_tmp"; then
-    echo "Reserved scratch mount /gg_tmp is already configured." >&2
-    return 1
-  fi
-  gg_add_container_bind_mount "${resolved}:/gg_tmp"
-  export GG_TMP_MOUNT=/gg_tmp GG_TMP_HOST_ROOT="${resolved}" GG_TMP_WORKSPACE_ID="${gg_workspace_dir}"
-  gg_export_var_to_container_env_if_set GG_TMP_MOUNT
-  gg_export_var_to_container_env_if_set GG_TMP_HOST_ROOT
-  gg_export_var_to_container_env_if_set GG_TMP_WORKSPACE_ID
+  export SINGULARITYENV_TMPDIR="${container_tmp}/tmp" APPTAINERENV_TMPDIR="${container_tmp}/tmp"
+  export SINGULARITYENV_TMP="${container_tmp}/tmp" APPTAINERENV_TMP="${container_tmp}/tmp"
+  export SINGULARITYENV_TEMP="${container_tmp}/tmp" APPTAINERENV_TEMP="${container_tmp}/tmp"
+  export SINGULARITYENV_PYTHONPYCACHEPREFIX="${container_tmp}/pycache" APPTAINERENV_PYTHONPYCACHEPREFIX="${container_tmp}/pycache"
 }
