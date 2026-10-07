@@ -344,6 +344,18 @@ def test_weak_duplication_candidates_render_in_orange_without_false_ufboot(
     assert candidate_cells
     available_fraction = 0.64 if evidence_layout == "band" else 1
     assert min(float(cell.attrib["height"]) * available_fraction for cell in candidate_cells) >= 8
+    # One stacked species must not stretch sparse species rows or the legend.
+    labels_by_species = {element.text: float(element.attrib["y"]) for element in elements
+                         if element.tag.endswith("text") and element.text in
+                         {"Shared species", "Reference species", "Other species 00", "Other species 01"}}
+    sparse_spacing = abs(labels_by_species["Other species 00"] - labels_by_species["Other species 01"])
+    dense_spacing = abs(labels_by_species["Shared species"] - labels_by_species["Reference species"])
+    assert 8 < sparse_spacing < 20
+    assert dense_spacing > sparse_spacing * 1.3
+    candidate_swatches = [element for element in elements if element.tag.endswith("rect") and
+                          "fill: #FDBA74" in element.attrib.get("style", "") and element not in candidate_cells]
+    assert candidate_swatches
+    assert all(4 < float(swatch.attrib["height"]) < 10 for swatch in candidate_swatches)
     if legend_columns == 1:
         too_short = subprocess.run([*plot_command, "--height=1"], check=False, capture_output=True, text=True)
         assert too_short.returncode != 0

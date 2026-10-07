@@ -222,9 +222,12 @@ Every additional candidate glyph must have one D MRCA and a positive species
 overlap. When a tree table is supplied, the plot checks that MRCA against its
 original D nodes, and with displayed-descendant provenance also checks that the
 gene/anchor pair lies in opposite child subtrees, even without a UFBoot table.
-Ortholog plots reserve enough vertical space for copy-number text, including
-strict-only and stacked candidate lanes. Automatic height can therefore
-increase, especially with evidence bands.
+Ortholog plots size each species row independently by its maximum displayed
+lane count, reserving space for 8-point copy-number text and any evidence bands.
+Sparse families are centered within the row. The species tree follows those
+row positions, while column labels and legends retain compact spacing in
+physical units. A dense row does not stretch the other rows or the whole plot.
+Automatic height follows the total space required by the rows and labels.
 An explicit height below the required minimum is rejected with that minimum.
 
 ## Interpret evidence conservatively

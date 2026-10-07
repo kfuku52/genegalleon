@@ -2985,11 +2985,16 @@ if (glyph_mode) {
     stringsAsFactors = FALSE
   )
 }
+ortholog_legend_bottom <- if (glyph_mode && nrow(legend_df) > 0) {
+  min(legend_df$y - pmax(0, legend_line_counts - 1) * 0.375)
+} else {
+  y_legend
+}
 synteny_legend_df <- data.frame()
 synteny_legend_title_df <- data.frame()
 if (glyph_mode && synteny_legend_visible && !identical(evidence_layout, "off")) {
   synteny_legend_marker_y <- if (nrow(legend_df) > 0 && "y" %in% colnames(legend_df)) {
-    min(legend_df$y, na.rm = TRUE) - 2.55
+    ortholog_legend_bottom - 2.55
   } else {
     y_legend - 1.30
   }
@@ -3041,7 +3046,7 @@ if (glyph_mode && ufboot_legend_visible && !identical(evidence_layout, "off")) {
   ufboot_legend_marker_y <- if (nrow(synteny_legend_df) > 0) {
     min(synteny_legend_df$y, na.rm = TRUE) - 2.55
   } else if (nrow(legend_df) > 0 && "y" %in% colnames(legend_df)) {
-    min(legend_df$y, na.rm = TRUE) - 2.55
+    ortholog_legend_bottom - 2.55
   } else {
     y_legend - 1.30
   }
@@ -3121,7 +3126,7 @@ if (
   } else if (nrow(synteny_legend_df) > 0) {
     min(synteny_legend_df$y, na.rm = TRUE) - 1.65
   } else if (nrow(legend_df) > 0 && "y" %in% colnames(legend_df)) {
-    min(legend_df$y, na.rm = TRUE) - 1.65
+    ortholog_legend_bottom - 1.65
   } else {
     y_legend - 1.30
   }
@@ -3253,6 +3258,21 @@ for (legend_parts in list(
     x_max <- max(x_max, fit_text_right(legend_parts[[1]]$x, legend_parts[[1]]$label, legend_parts[[2]]))
   }
 }
+space_evidence_key <- function(table, label_offset, size, bounds_only = FALSE) {
+  if (nrow(table) == 0) return(if (bounds_only) x_max else table)
+  label_inches <- text_width_inches(table$label, size)
+  preceding_inches <- c(0, cumsum(head(label_inches + 0.045, -1)))
+  base_x <- heatmap_left + 0.28 + (seq_len(nrow(table)) - 1) * (label_offset + 0.12)
+  if (bounds_only) {
+    fraction <- (preceding_inches + label_inches) / plot_width
+    if (any(fraction >= 1)) stop("Plot width is too small for evidence key; increase --width")
+    return(max((base_x + label_offset + 0.15 - fraction * x_min) / (1 - fraction)))
+  }
+  table$x <- base_x + preceding_inches * final_data_units_per_inch
+  table
+}
+x_max <- max(x_max, space_evidence_key(synteny_legend_df, 0.22, font_size_pt, TRUE),
+             space_evidence_key(ufboot_legend_df, 0.25, font_size_pt * 0.88, TRUE))
 if (glyph_mode && nrow(legend_df) > 0) {
   legend_column_index <- floor(legend_index / legend_rows)
   legend_text_width <- text_width_inches(legend_df$label)
@@ -3270,32 +3290,154 @@ if (glyph_mode && nrow(legend_df) > 0) {
   )
 }
 final_data_units_per_inch <- (x_max - x_min) / plot_width
+synteny_legend_df <- space_evidence_key(synteny_legend_df, 0.22, font_size_pt)
+ufboot_legend_df <- space_evidence_key(ufboot_legend_df, 0.25, font_size_pt * 0.88)
 layout_y_ratio <- 1
-if (nrow(glyph_rect_df) > 0) {
-  # All ortholog lanes must leave physical space for the fixed-size
-  # copy-number text, including the central area between two evidence bands.
-  available_height <- min(glyph_rect_df$ymax - glyph_rect_df$ymin)
-  if (identical(evidence_layout, "band")) available_height <- available_height * 0.64
-  layout_y_ratio <- max(1, font_size_pt * 1.10 * final_data_units_per_inch / (72 * available_height))
-}
-final_label_depth <- max(2.6, max(text_width_inches(query_plot_labels)) * final_data_units_per_inch + 0.40)
-final_y_legend <- min(row_y_min - 4.15, y_query_label - final_label_depth - 0.80)
-if (final_y_legend < y_legend) {
-  legend_shift <- final_y_legend - y_legend
-  for (table_name in c(
-    "legend_df", "synteny_legend_df", "synteny_legend_title_df", "ufboot_legend_df",
-    "ufboot_legend_title_df", "evidence_state_legend_df", "evidence_state_swatch_df",
-    "evidence_state_legend_title_df", "busco_legend_df", "duplication_family_key_df",
-    "duplication_family_key_title_df", "duplication_count_key_df", "duplication_count_key_title_df"
-  )) {
+legend_table_names <- c(
+  "legend_df", "synteny_legend_df", "synteny_legend_title_df", "ufboot_legend_df",
+  "ufboot_legend_title_df", "evidence_state_legend_df", "evidence_state_swatch_df",
+  "evidence_state_legend_title_df", "busco_legend_df", "duplication_family_key_df",
+  "duplication_family_key_title_df", "duplication_count_key_df", "duplication_count_key_title_df"
+)
+legend_y_scale <- 1
+row_half_height_by_species <- stats::setNames(rep(0.45, length(tip_y_by_species)), names(tip_y_by_species))
+if (glyph_mode) {
+  # Reserve physical text height in each species row, rather than stretching
+  # the entire coordinate system to accommodate the single densest row.
+  text_height <- font_size_pt / 72 * final_data_units_per_inch
+  available_fraction <- if (identical(evidence_layout, "band")) 0.64 else 1
+  compact_lane_height <- text_height * 1.10 / available_fraction + 0.03
+  row_padding <- text_height * 0.30
+  ordered_tips <- tip_df[order(tip_df$y), , drop = FALSE]
+  row_lanes <- stats::setNames(rep(1, nrow(ordered_tips)), as.character(ordered_tips$label))
+  if (nrow(glyph_rect_df) > 0) {
+    observed_lanes <- tapply(glyph_rect_df$lane_count, as.character(glyph_rect_df$species), max)
+    row_lanes[names(observed_lanes)] <- observed_lanes
+  }
+  row_heights <- row_lanes * compact_lane_height + row_padding
+  row_centers <- cumsum(row_heights) - row_heights / 2
+  node_y <- stats::setNames(rep(NA_real_, nrow(plot_data)), as.character(plot_data$node))
+  node_y[as.character(ordered_tips$node)] <- row_centers
+  postorder_edges <- ape::reorder.phylo(tree_for_plot, "postorder")$edge
+  for (parent in unique(postorder_edges[, 1])) {
+    children <- postorder_edges[postorder_edges[, 1] == parent, 2]
+    node_y[as.character(parent)] <- mean(range(node_y[as.character(children)]))
+  }
+  plot_data$y <- unname(node_y[as.character(plot_data$node)])
+  tip_y_by_species <- stats::setNames(unname(node_y[as.character(tip_df$node)]), as.character(tip_df$label))
+  row_half_height_by_species <- (row_lanes * compact_lane_height - 0.03) / 2
+  y_values <- unname(tip_y_by_species[tip_levels])
+  row_y_min <- min(y_values)
+  row_y_max <- max(y_values)
+  edge_df$y <- unname(node_y[as.character(edge_df$node)])
+  edge_df$parent_y <- unname(node_y[as.character(edge_df$parent)])
+  if (nrow(root_stem_df) > 0) root_stem_df$y <- unname(node_y[as.character(root_node)])
+  if (nrow(ci_plot_df) > 0) ci_plot_df$y <- unname(node_y[as.character(ci_plot_df$node_mean)])
+  if (nrow(support_df) > 0) support_df$y <- unname(node_y[as.character(support_df$node)])
+  for (table_name in c("df", "label_df", "heatmap_df", "busco_rect_df")) {
     table <- get(table_name)
-    for (field in intersect(c("y", "ymin", "ymax", "status_y", "status_yend"), colnames(table))) {
-      table[[field]] <- table[[field]] + legend_shift
+    if (nrow(table) == 0) next
+    table$y <- unname(tip_y_by_species[as.character(table$species)])
+    if ("ymin" %in% names(table)) {
+      half_height <- unname(row_half_height_by_species[as.character(table$species)])
+      table$ymin <- table$y - half_height
+      table$ymax <- table$y + half_height
     }
     assign(table_name, table)
   }
-  y_legend <- final_y_legend
-  y_min <- y_min + legend_shift
+
+  # Every glyph lane has the same readable height. Sparse families remain
+  # centered within a taller species row; evidence follows its own glyph.
+  pack_glyph_geometry <- function(table, index_field, count_field) {
+    if (nrow(table) == 0) return(table)
+    index <- as.numeric(table[[index_field]])
+    count <- as.numeric(table[[count_field]])
+    old_lane_height <- 2 * heatmap_cell_half / count
+    old_center <- table$y - heatmap_cell_half + (index - 0.5) * old_lane_height
+    new_y <- unname(tip_y_by_species[as.character(table$species)])
+    new_center <- new_y + (index - (count + 1) / 2) * compact_lane_height
+    scale <- (compact_lane_height - 0.03) / (old_lane_height - 0.03)
+    for (field in intersect(c("ymin", "ymax", "text_y", "evidence_ymin", "evidence_ymax",
+                              "status_y", "status_yend", "marker_y"), names(table))) {
+      table[[field]] <- new_center + (table[[field]] - old_center) * scale
+    }
+    table$y <- new_y
+    table
+  }
+  glyph_rect_df <- pack_glyph_geometry(glyph_rect_df, "lane_index", "lane_count")
+  for (table_name in c("synteny_evidence_df", "synteny_marker_df", "ufboot_evidence_df", "ufboot_marker_df")) {
+    assign(table_name, pack_glyph_geometry(get(table_name), "glyph_lane_index", "glyph_lane_count"))
+  }
+  matrix_bottom <- min(tip_y_by_species - row_half_height_by_species[names(tip_y_by_species)])
+  matrix_top <- max(tip_y_by_species + row_half_height_by_species[names(tip_y_by_species)])
+  if (nrow(family_boundary_df) > 0) {
+    family_boundary_df$ymin <- min(heatmap_df$ymin)
+    family_boundary_df$ymax <- max(heatmap_df$ymax)
+  }
+  if (nrow(duplication_map_df) > 0) {
+    duplication_map_df$species_y <- unname(node_y[as.character(duplication_map_df$node)])
+    duplication_map_df$marker_y <- duplication_map_df$species_y
+    duplication_map_df$ymin <- duplication_map_df$marker_y
+    duplication_bar_height_max <- text_height * 1.10
+    duplication_map_df$ymax <- duplication_map_df$ymin +
+      duplication_map_df$duplication_count / duplication_count_scale_max * duplication_bar_height_max
+  }
+  if (nrow(query_tree_nodes_df) > 0) {
+    family_max_height <- ave(query_tree_nodes_df$node_height, query_tree_nodes_df$family_id, FUN = max)
+    normalized_height <- ifelse(family_max_height > 0, query_tree_nodes_df$node_height / family_max_height, 0)
+    query_tree_nodes_df$y <- matrix_top + 0.24 + normalized_height * 2.0
+    query_node_y <- stats::setNames(query_tree_nodes_df$y, query_tree_nodes_df$node_key)
+    query_tree_edges_df$y <- unname(query_node_y[query_tree_edges_df$node_key])
+    query_tree_edges_df$parent_y <- unname(query_node_y[query_tree_edges_df$parent_key])
+    query_tree_title_df$title_y <- max(query_tree_nodes_df$y) + 0.48
+  }
+  y_ruler <- matrix_bottom - final_data_units_per_inch * 0.17
+  y_axis_label <- y_ruler - final_data_units_per_inch * 0.24
+  y_busco_axis <- y_ruler
+  y_busco_label <- y_axis_label
+  y_query_label <- matrix_bottom - query_label_gap
+  final_label_depth <- max(text_width_inches(query_plot_labels)) * final_data_units_per_inch + text_height * 0.40
+  legend_line_height <- text_height * 1.55
+  legend_y_scale <- legend_line_height / 0.75
+  old_y_legend <- y_legend
+  legend_header_y <- min(y_query_label - final_label_depth, y_axis_label - text_height) - text_height * 0.90
+  y_legend <- legend_header_y - legend_line_height
+  for (table_name in legend_table_names) {
+    table <- get(table_name)
+    for (field in intersect(c("y", "ymin", "ymax", "status_y", "status_yend"), names(table))) {
+      table[[field]] <- y_legend + (table[[field]] - old_y_legend) * legend_y_scale
+    }
+    assign(table_name, table)
+  }
+  # The count key must use exactly the same bar-height scale as the tree.
+  if (nrow(duplication_count_key_df) > 0) {
+    duplication_count_key_df$ymax <- duplication_count_key_df$ymin +
+      duplication_count_key_df$duplication_count / duplication_count_scale_max * duplication_bar_height_max
+  }
+  legend_bottom <- unlist(lapply(legend_table_names, function(name) {
+    table <- get(name)
+    unlist(table[intersect(c("y", "ymin", "ymax"), names(table))], use.names = FALSE)
+  }), use.names = FALSE)
+  if (nrow(legend_df) > 0) {
+    legend_bottom <- c(legend_bottom, legend_df$y - legend_line_counts * legend_line_height / 2)
+  }
+  y_min <- min(legend_bottom, y_axis_label) - legend_line_height * 0.75
+  y_max <- matrix_top + text_height
+} else {
+  final_label_depth <- max(2.6, max(text_width_inches(query_plot_labels)) * final_data_units_per_inch + 0.40)
+  final_y_legend <- min(row_y_min - 4.15, y_query_label - final_label_depth - 0.80)
+  if (final_y_legend < y_legend) {
+    legend_shift <- final_y_legend - y_legend
+    for (table_name in legend_table_names) {
+      table <- get(table_name)
+      for (field in intersect(c("y", "ymin", "ymax", "status_y", "status_yend"), names(table))) {
+        table[[field]] <- table[[field]] + legend_shift
+      }
+      assign(table_name, table)
+    }
+    y_legend <- final_y_legend
+    y_min <- y_min + legend_shift
+  }
 }
 if (nrow(query_tree_title_df) > 0) {
   final_title_depth <- ifelse(query_tree_title_df$title_angle == 90,
@@ -3305,9 +3447,11 @@ if (nrow(query_tree_title_df) > 0) {
 
 combined <- ggplot()
 if (length(focus_species) > 0) {
-  focus_df <- data.frame(y = unname(tip_y_by_species[focus_species]))
+  focus_y <- unname(tip_y_by_species[focus_species])
+  focus_half_height <- unname(row_half_height_by_species[focus_species])
+  focus_df <- data.frame(ymin = focus_y - focus_half_height, ymax = focus_y + focus_half_height)
   combined <- combined + geom_rect(
-    data = focus_df, aes(ymin = y - 0.45, ymax = y + 0.45),
+    data = focus_df, aes(ymin = ymin, ymax = ymax),
     xmin = tree_left, xmax = heatmap_right, fill = NA, color = "black", linewidth = 0.30
   )
 }
@@ -3586,8 +3730,8 @@ if (nrow(busco_rect_df) > 0) {
 
 if (glyph_mode) {
   combined <- combined +
-    annotate("text", x = heatmap_left, y = y_legend + 0.75, label = ortholog_scope_label, hjust = 0, size = font_size_mm, color = "black") +
-    geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18, ymax = y + 0.18, fill = fill), color = "#808080", linewidth = 0.14) +
+    annotate("text", x = heatmap_left, y = y_legend + 0.75 * legend_y_scale, label = ortholog_scope_label, hjust = 0, size = font_size_mm, color = "black") +
+    geom_rect(data = legend_df, aes(xmin = x, xmax = x + 0.36, ymin = y - 0.18 * legend_y_scale, ymax = y + 0.18 * legend_y_scale, fill = fill), color = "#808080", linewidth = 0.14) +
     geom_text(data = legend_df, aes(x = x + 0.62, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
 } else if (value_mode == "presence") {
   combined <- combined +
@@ -3611,8 +3755,8 @@ if (nrow(synteny_legend_df) > 0) {
         aes(
           xmin = x - 0.12,
           xmax = x + 0.12,
-          ymin = y - 0.18,
-          ymax = y + 0.18,
+          ymin = y - 0.18 * legend_y_scale,
+          ymax = y + 0.18 * legend_y_scale,
           fill = fill
         ),
         linewidth = 0.16,
@@ -3654,8 +3798,8 @@ if (nrow(ufboot_legend_df) > 0) {
         aes(
           xmin = x - 0.12,
           xmax = x + 0.12,
-          ymin = y - 0.18,
-          ymax = y + 0.18,
+          ymin = y - 0.18 * legend_y_scale,
+          ymax = y + 0.18 * legend_y_scale,
           fill = fill
         ),
         linewidth = 0.16,
@@ -3722,7 +3866,7 @@ if (nrow(duplication_family_key_df) > 0) {
     ) +
     geom_rect(
       data = duplication_family_key_df,
-      aes(xmin = x, xmax = x + 0.24, ymin = y - 0.22, ymax = y + 0.22, fill = family_color),
+      aes(xmin = x, xmax = x + 0.24, ymin = y - 0.22 * legend_y_scale, ymax = y + 0.22 * legend_y_scale, fill = family_color),
       linewidth = 0.16,
       color = "black"
     ) +
@@ -3742,12 +3886,13 @@ if (nrow(support_df) > 0) {
 }
 if (nrow(busco_legend_df) > 0) {
   combined <- combined +
-    annotate("text", x = busco_left, y = y_legend + 0.75, label = "BUSCO", hjust = 0, size = font_size_mm, color = "black") +
-    geom_rect(data = busco_legend_df, aes(xmin = x, xmax = x + 0.32, ymin = y - 0.16, ymax = y + 0.16, fill = fill), color = "white", linewidth = 0.14) +
+    annotate("text", x = busco_left, y = y_legend + 0.75 * legend_y_scale, label = "BUSCO", hjust = 0, size = font_size_mm, color = "black") +
+    geom_rect(data = busco_legend_df, aes(xmin = x, xmax = x + 0.32, ymin = y - 0.16 * legend_y_scale, ymax = y + 0.16 * legend_y_scale, fill = fill), color = "white", linewidth = 0.14) +
     geom_text(data = busco_legend_df, aes(x = x + 0.42, y = y, label = label), hjust = 0, size = font_size_mm, color = "black")
 }
 
-automatic_plot_height <- max(2.8, plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min))
+required_plot_height <- plot_width * layout_y_ratio * (y_max - y_min) / (x_max - x_min)
+automatic_plot_height <- max(2.8, required_plot_height)
 plot_height <- if (identical(plot_height_arg, "auto")) {
   automatic_plot_height
 } else {
@@ -3756,9 +3901,9 @@ plot_height <- if (identical(plot_height_arg, "auto")) {
 if (!is.finite(plot_height) || plot_height <= 0) {
   stop("Invalid --height: ", plot_height_arg)
 }
-if (layout_y_ratio > 1 && plot_height < automatic_plot_height) {
+if (nrow(glyph_rect_df) > 0 && plot_height < required_plot_height) {
   stop("Ortholog plot height is too small for copy-number labels; use --height=auto or at least ",
-       format(automatic_plot_height, digits = 4), " inches")
+       format(required_plot_height, digits = 4), " inches")
 }
 
 if (nzchar(out_pdf)) {
