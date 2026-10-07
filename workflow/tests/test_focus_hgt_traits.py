@@ -1736,3 +1736,30 @@ def test_distribution_only_annotates_the_selected_events(tmp_path):
     export_figures(output, events + [other], events, links, tree, {'A': 1, 'D': 0}, root, 'gall')
     assert all(row['protein_product'] == 'Annotation unavailable'
                for row in read_tsv(output/'orthogroup_species_distribution.tsv')[1])
+
+
+def test_pfam_family_index_keeps_reused_gene_names_and_event_pairs_separate(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    other = dict(events[0], event_id='OG2:3:1', orthogroup='OG2')
+    links += [dict(link, event_id=other['event_id'], orthogroup='OG2') for link in links]
+    saved_pfam(tmp_path, {'D_gene': ['PF01053'], 'A_gene': ['PF01053'], 'unused': ['PF00001']})
+    saved_pfam(tmp_path, {'D_gene': ['PF01053'], 'A_gene': ['PF00001']}, family='OG2')
+    selected, audit, pairs, genes, sources = filter_events(events + [other], links, tmp_path)
+    assert [row['event_id'] for row in selected] == [events[0]['event_id']]
+    assert [row['pfam_filter_status'] for row in audit] == ['passed', 'withheld']
+    assert [row['pair_status'] for row in pairs] == ['shared_pfam_detected', 'detected_pfam_sets_disjoint']
+    assert [(row['orthogroup'], row['gene_id'], row['pfam_accessions']) for row in genes] == [
+        ('OG1', 'D_gene', 'PF01053'), ('OG1', 'A_gene', 'PF01053'),
+        ('OG2', 'D_gene', 'PF01053'), ('OG2', 'A_gene', 'PF00001')]
+    assert len(sources) == 2
+
+
+def test_unused_pfam_rows_still_receive_structural_validation(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, {'D_gene': ['PF01053'], 'A_gene': ['PF01053'], 'unused': ['PF00001']})
+    with path.open('a') as handle:
+        handle.write('unused\tmalformed\n')
+    with pytest.raises(ValueError, match='Malformed saved Pfam RPS-BLAST row'):
+        filter_events(events, links, tmp_path)

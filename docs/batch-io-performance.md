@@ -534,6 +534,43 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_s
 Use `--support-root` with a complete baseline support tree and keep the same
 `GG_CONTAINER_DOCKER_IMAGE` immutable image ID for both runs.
 
+## Focused HGT Pfam filtering
+
+Qualifying query genes are indexed once per orthogroup instead of scanning
+all event-gene links for every family. Saved-hit rows still receive structural
+validation, but only requested queries are retained in memory. Exact event
+pairs, scaffold eligibility, no-hit/missing distinctions, query coverage,
+audit ordering and source revalidation remain unchanged.
+
+Linux arm64 Docker, Python 3.12.15, baseline `b35f41e`, immutable image
+`sha256:1cb47e896c475e3cba85e23729654de8dce6a7d5270bda89b3ca3ab0030ebe39`,
+one warmup and three measured fresh processes: 2,048 families, 8,192 events,
+65,536 links and 73,728 exact pair comparisons, including repeated local
+gene names across families, excluded descendants, explicit no-hits and missing
+search files. Median filtering time fell from 5.128 to 0.732 s (7.01×).
+Median process peak RSS was 196.1 to 197.4 MiB, a 1.3 MiB increase for the index.
+Complete selected events, event/pair/gene audits and source hashes match.
+
+The existing Kanako cohort (34 events, 32 families, 764 links; 19 MiB of saved
+RPS-BLAST tables) yielded the same complete outputs, including 14 passing
+events and 74 passing pairs. Peak process RSS fell from 82.0 to 65.8 MiB
+(19.8%). Its 0.238 to 0.230 s timings overlap between samples, so no speedup
+claim is made for that small cohort. Timings include saved-hit parsing and
+source verification, excluding fixture/input construction, imports,
+fingerprinting and plotting; these are not whole-workflow speedups.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_focused_hgt_pfam.py \
+  --output focused-hgt-pfam.json
+```
+
+Use `--support-root` for the baseline, with the same immutable Docker image.
+To compare existing results, supply `--events`, `--links` and `--family-root`
+together; saved `pfam_*` decision columns are removed before re-evaluation.
+The JSON records configuration, input/output/source fingerprints, counts,
+individual samples, Python/platform and the command. Benchmark inputs remain
+unchanged and real project results are not overwritten.
+
 ## HGT host-scaffold classification
 
 Isoform disagreement is determined with one grouped distinct-label count rather

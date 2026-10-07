@@ -129,6 +129,7 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
     if len(ids) != len(events) or "" in ids:
         raise ValueError("Duplicate or empty Pfam filtering event ID")
     linked, identities = defaultdict(list), set()
+    family_genes = defaultdict(set)
     for link in links:
         if link["event_id"] not in ids:
             continue
@@ -140,6 +141,7 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
         validate_link_identity(event, link)
         if link.get("lineage_status", "retained") == "retained" and background_supported(link):
             linked[link["event_id"], link["side"]].append(link)
+            family_genes[event["orthogroup"]].add(link["gene_id"])
 
     records, sources = {}, {}
     with read_only_observation():
@@ -148,8 +150,9 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
             for family in sorted({row["orthogroup"] for row in events}):
                 if not re.fullmatch(r"[A-Za-z0-9_.-]+", family) or family in {".", ".."}:
                     raise ValueError("Unsafe orthogroup identifier")
-                genes = {link["gene_id"] for side_links in linked.values() for link in side_links
-                         if link["orthogroup"] == family}
+                # Index qualifying genes once rather than scanning all event
+                # links again for every family. Event-specific pairs stay separate.
+                genes = family_genes[family]
                 if not genes:
                     # The scaffold criterion already failed. Unused domain
                     # inputs cannot affect this event's decision or its audit.
@@ -176,7 +179,8 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
                     for row in reader:
                         if None in row or any(value is None for value in row.values()) or not row["qacc"]:
                             raise ValueError("Malformed saved Pfam RPS-BLAST row: " + logical)
-                        grouped[row["qacc"]].append(row)
+                        if row["qacc"] in genes:
+                            grouped[row["qacc"]].append(row)
                 for gene in genes:
                     records[family, gene] = dict(query_record(grouped[gene]), source=logical,
                                                 sha256=sources.get(logical, ""))
