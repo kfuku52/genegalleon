@@ -175,6 +175,8 @@ traceable best pair. Review flags identify repeat/generic-binding-only matches,
 differing domain sets, >2-fold length differences and proteins shorter than
 100 aa. These are attention flags, not exclusions or proof of a partial gene
 model. Domain-set differences alone do not establish incompatible architecture.
+For a passing event, the recorded best pair is selected from its passing pairs;
+a bilateral no-hit exception retains both gene IDs with unmeasured coverage.
 
 The filter reads saved `rpsblast/<OG>_rpsblast.tsv` (also the existing
 `<OG>.rpsblast.tsv` convention), including ZIP-backed families. It does not
@@ -202,3 +204,9 @@ Selected event tables add `pfam_*` decision/count columns; per-tip tables, nativ
 PDFs and the three aggregate figures use the same filtered event set. This
 filter also runs when plotting is disabled. Missing evidence remains unknown
 and does not qualify through the bilateral no-hit option.
+
+Python callers may supply booleans or explicit `0`/`1` (`false`/`true`) flags;
+ambiguous flag values fail before output generation. Direct native-tree and
+summary exporters also validate event IDs, exact event-gene identities and
+retained lineage eligibility. Summary product labels use only selected events,
+and an explicit native no-hit record cannot be overridden by a stale link hit.

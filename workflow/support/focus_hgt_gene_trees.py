@@ -71,8 +71,47 @@ def identity(event, project_name, native_name):
     return values.pop()
 
 
+def validate_link_identity(event, link):
+    """Match native and project branch aliases without borrowing another event."""
+    for field in ("event_id", "orthogroup", "generax_transfer", "event_index",
+                  "generax_donor_node", "generax_recipient_node"):
+        if field in link and field in event and link[field] != event[field]:
+            raise ValueError("Event-gene identity mismatch: " + field)
+    for aliases in (("branch_id", "gene_tree_branch_id"), ("node_name", "gene_tree_node")):
+        values = [{str(row[name]) for name in aliases if row.get(name) not in (None, "")}
+                  for row in (event, link)]
+        if any(len(group) > 1 for group in values) or all(values) and values[0] != values[1]:
+            raise ValueError("Event-gene identity mismatch: " + "/".join(aliases))
+    if not str(link.get("gene_id", "")).strip():
+        raise ValueError("Empty event-gene identity")
+
+
+def validated_event_links(events, links):
+    """Validate the requested cohort and its exact links, ignoring other events."""
+    ids = {event['event_id']: event for event in events}
+    if len(ids) != len(events) or any(not str(value).strip() for value in ids):
+        raise ValueError('Duplicate or empty transfer event_id')
+    selected, identities = [], set()
+    for link in links:
+        if link['event_id'] not in ids:
+            continue
+        key = link['event_id'], link['side'], link['gene_id']
+        if link['side'] not in {'donor', 'recipient'} or key in identities:
+            raise ValueError('Duplicate or invalid event-gene link')
+        identities.add(key)
+        validate_link_identity(ids[link['event_id']], link)
+        if str(link.get('eligible_for_context', '')).lower() in {'true', '1'} \
+                and link.get('lineage_status', 'retained') != 'retained':
+            raise ValueError('Eligible context gene does not have a retained transfer lineage')
+        selected.append(link)
+    return selected
+
+
 def annotate(stat_rows, events, links, minimum_ufboot=None):
     """Match exact family/branch/node/token and audit every requested event."""
+    links = validated_event_links(events, links)
+    if len({event['orthogroup'] for event in events}) > 1:
+        raise ValueError('Gene-tree annotation requires events from a single orthogroup')
     if minimum_ufboot is not None:
         minimum_ufboot = number(minimum_ufboot)
         if minimum_ufboot is None or not 0 <= minimum_ufboot <= 100:
@@ -168,6 +207,7 @@ def write(path, fields, rows):
 def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations='',
                       mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
+    links = validated_event_links(events, links)
     csv.field_size_limit(100_000_000)
     directory.mkdir(parents=True)
     helper = Path(__file__).resolve().parent

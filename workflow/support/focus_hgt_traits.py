@@ -215,7 +215,9 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
                 mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='any', species_taxonomy='', taxonomy_dbfile='',
                 min_shared_pfam_coverage=0.5):
-    from focus_hgt_pfam import validate_link_identity, validate_shared_pfam_coverage
+    from focus_hgt_pfam import binary_option, validate_link_identity, validate_shared_pfam_coverage
+    require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
+    allow_both_no_pfam = binary_option(allow_both_no_pfam, 'allow_both_no_pfam')
     min_shared_pfam_coverage = validate_shared_pfam_coverage(min_shared_pfam_coverage)
     from focus_hgt_direction import DIRECTION_CHOICES
     from focus_hgt_direction import EVENT_FIELDS as DIRECTION_FIELDS
@@ -450,7 +452,9 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
              context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
              mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='any', species_taxonomy='', taxonomy_dbfile='',
              min_shared_pfam_coverage=0.5):
-    from focus_hgt_pfam import validate_shared_pfam_coverage
+    from focus_hgt_pfam import binary_option, validate_shared_pfam_coverage
+    require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
+    allow_both_no_pfam = binary_option(allow_both_no_pfam, 'allow_both_no_pfam')
     min_shared_pfam_coverage = validate_shared_pfam_coverage(min_shared_pfam_coverage)
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]

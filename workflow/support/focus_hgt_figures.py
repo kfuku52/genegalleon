@@ -283,7 +283,8 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     membership = Counter()
     sources = {}
     missing = set()
-    annotation_links = [dict(r) for r in links]
+    from focus_hgt_gene_trees import validated_event_links
+    annotation_links = [dict(r) for r in validated_event_links(selected, links)]
     from focus_hgt_context_annotations import ContextAnnotations, available
     annotations = ContextAnnotations(context_annotations)
     with read_only_observation():
@@ -309,8 +310,10 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
                     if leaf is None:
                         raise ValueError('Distribution annotation gene is absent from its family tree')
                     annotation = annotations.get(link['gene_id'], family, leaf)
-                    if available(link.get('besthit_accession')) and available(leaf.get('sprot_best')) \
+                    if available(link.get('besthit_accession')) and 'sprot_best' in leaf \
                             and available(link['besthit_accession']) != available(leaf['sprot_best']):
+                        raise ValueError('Distribution annotation best hit disagrees with the exact family leaf')
+                    if 'sprot_best' in leaf and not available(leaf['sprot_best']) and best_hit_product(link):
                         raise ValueError('Distribution annotation best hit disagrees with the exact family leaf')
                     predicted = annotation['swissprot_best_hit_protein_name']
                     if predicted and best_hit_product(link) and predicted != best_hit_product(link):

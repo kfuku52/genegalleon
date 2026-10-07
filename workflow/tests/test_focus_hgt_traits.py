@@ -1618,3 +1618,121 @@ def test_missing_context_support_label_is_explicit_na():
     from focus_hgt_context import support_label
     assert support_label({'support_generax_ufboot': ''}) == 'NA'
     assert support_label({'support_generax_ufboot': '0'}) == '0'
+
+
+def test_no_domain_exception_records_the_pair_that_actually_passed(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    eid = events[0]['event_id']
+    links += [supported_link(eid, 'donor', 'D_nohit'), supported_link(eid, 'recipient', 'A_nohit')]
+    path = saved_pfam(tmp_path, {'D_gene': ['PF01053'], 'A_gene': ['PF01053'], 'D_nohit': [], 'A_nohit': []})
+    fields, hits = read_tsv(path)
+    for hit in hits:
+        if hit['sacc']:
+            hit['qend'] = '49'
+    write_tsv(path, fields, hits)
+    selected, _, pairs, _, _ = filter_events(events, links, tmp_path, allow_both_no_pfam=True)
+    assert selected[0]['pfam_passing_pair_count'] == 1
+    assert selected[0]['pfam_best_pair_donor_gene'] == 'D_nohit'
+    assert selected[0]['pfam_best_pair_recipient_gene'] == 'A_nohit'
+    assert selected[0]['pfam_best_pair_donor_query_coverage'] == ''
+    assert selected[0]['pfam_best_pair_recipient_query_coverage'] == ''
+    assert next(row for row in pairs if row['passes_pfam_filter'] == 'True')['coverage_status'] == 'explicit_bilateral_no_hit_exception'
+
+
+@pytest.mark.parametrize('enabled,expected', [('0', False), ('false', False), ('1', True), ('true', True)])
+def test_no_domain_option_cannot_use_python_string_truthiness(tmp_path, enabled, expected):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    saved_pfam(tmp_path, {'D_gene': [], 'A_gene': []})
+    assert bool(filter_events(events, links, tmp_path, allow_both_no_pfam=enabled)[0]) is expected
+
+
+@pytest.mark.parametrize('case', ['branch_alias', 'duplicate_link', 'transferred_out', 'duplicate_event'])
+def test_direct_native_renderer_cannot_borrow_invalid_event_gene_evidence(case):
+    stat, events, links = focused_node_source()
+    if case == 'branch_alias':
+        links[0]['branch_id'] = 'wrong'
+    elif case == 'duplicate_link':
+        links.append(dict(links[0]))
+    elif case == 'transferred_out':
+        links[0]['lineage_status'] = 'transferred_out_of_donor_lineage'
+    else:
+        events.append(dict(events[0]))
+    with pytest.raises(ValueError):
+        annotate(stat, events, links)
+
+
+@pytest.mark.parametrize('accession', ['', 'P_stale'])
+def test_distribution_link_hit_cannot_override_an_explicit_native_no_hit(tmp_path, accession):
+    from io import StringIO
+
+    from Bio import Phylo
+    from focus_hgt_figures import export_figures
+    stat, events, links = focused_node_source()
+    for row in stat:
+        row.update(sprot_best='', sprot_recname='', organism='')
+    root = tmp_path/'families'
+    write_tsv(root/'stat_branch/OG1_stat.branch.tsv', list(stat[0]), stat)
+    for link, species in zip(links, ['D', 'A'], strict=True):
+        link['gene_species'] = species
+    links[1].update(besthit_accession=accession, swissprot_best_hit_protein_name='Stale predicted product')
+    events[0].update(generax_donor_node='D', generax_recipient_node='A')
+    tree = Phylo.read(StringIO('(A:1,D:1)root;'), 'newick')
+    with pytest.raises(ValueError, match='best hit disagrees'):
+        export_figures(tmp_path/'plots', events, events, links, tree, {'A': 1, 'D': 0}, root, 'gall')
+
+
+def test_focus_api_normalizes_disabled_pfam_flags_before_recording_the_manifest(source):
+    report = generate_filtered(*source, plots=False, require_shared_pfam='0', allow_both_no_pfam='false')
+    assert report['require_shared_pfam'] is False
+    assert report['allow_both_no_pfam'] is False
+    assert 'pfam_pair_filter' not in report['filtering_order']
+    assert not (source[-1]/'pfam_pair_audit.tsv').exists()
+    assert len(read_tsv(source[-1]/'traits/binary/all_category1/events.tsv')[1]) == 3
+
+
+@pytest.mark.parametrize('name', ['require_shared_pfam', 'allow_both_no_pfam'])
+@pytest.mark.parametrize('value', [None, '', 'yes', 2, float('nan'), []])
+def test_focus_api_rejects_ambiguous_pfam_flags_before_writing(source, name, value):
+    with pytest.raises(ValueError, match=name):
+        generate_filtered(*source, plots=False, **{name: value})
+    assert not source[-1].exists()
+
+
+def test_direct_native_export_validates_links_before_skipping_a_missing_family(tmp_path):
+    from focus_hgt_gene_trees import export_gene_trees
+    _, events, links = focused_node_source()
+    links[0]['orthogroup'] = 'OG_wrong'
+    output = tmp_path/'plots'
+    with pytest.raises(ValueError, match='identity mismatch'):
+        export_gene_trees(output, events, links, tmp_path/'missing')
+    assert not output.exists()
+
+
+def test_native_annotation_never_reuses_one_family_tree_for_another_family():
+    stat, events, links = focused_node_source()
+    other = dict(events[0], event_id='OG2:3:1', orthogroup='OG2')
+    with pytest.raises(ValueError, match='single orthogroup'):
+        annotate(stat, events + [other], links)
+
+
+def test_distribution_only_annotates_the_selected_events(tmp_path):
+    from io import StringIO
+
+    from Bio import Phylo
+    from focus_hgt_figures import export_figures
+    stat, events, links = focused_node_source()
+    root = tmp_path/'families'
+    write_tsv(root/'stat_branch/OG1_stat.branch.tsv', list(stat[0]), stat)
+    for link, species in zip(links, ['D', 'A'], strict=True):
+        link['gene_species'] = species
+    events[0].update(generax_donor_node='D', generax_recipient_node='A')
+    other = dict(events[0], event_id='OG1:3:2', event_index='2', generax_transfer='Y@D@B')
+    links.append(dict(links[1], event_id=other['event_id'], gene_id='A_missing',
+                      swissprot_best_hit_protein_name='Unselected product'))
+    tree = Phylo.read(StringIO('(A:1,D:1)root;'), 'newick')
+    output = tmp_path/'plots'
+    export_figures(output, events + [other], events, links, tree, {'A': 1, 'D': 0}, root, 'gall')
+    assert all(row['protein_product'] == 'Annotation unavailable'
+               for row in read_tsv(output/'orthogroup_species_distribution.tsv')[1])

@@ -14,7 +14,7 @@ from collections import defaultdict
 from contextlib import nullcontext
 from itertools import product
 
-from focus_hgt_gene_trees import background_supported, number
+from focus_hgt_gene_trees import background_supported, number, validate_link_identity
 from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
 
 EVENT_FIELDS = ["pfam_filter_status", "pfam_filter_reason", "pfam_compared_pair_count",
@@ -99,19 +99,17 @@ def query_record(rows):
                 length=int(length), pfam=accessions, intervals=intervals, names=names)
 
 
-def validate_link_identity(event, link):
-    """Match native and project branch aliases without borrowing another event."""
-    for field in ("orthogroup", "generax_transfer", "event_index",
-                  "generax_donor_node", "generax_recipient_node"):
-        if field in link and field in event and link[field] != event[field]:
-            raise ValueError("Pfam event-gene identity mismatch: " + field)
-    for aliases in (("branch_id", "gene_tree_branch_id"), ("node_name", "gene_tree_node")):
-        values = [{str(row[name]) for name in aliases if row.get(name) not in (None, "")}
-                  for row in (event, link)]
-        if any(len(group) > 1 for group in values) or all(values) and values[0] != values[1]:
-            raise ValueError("Pfam event-gene identity mismatch: " + "/".join(aliases))
-    if not str(link.get("gene_id", "")).strip():
-        raise ValueError("Empty Pfam event-gene identity")
+def binary_option(value, name):
+    """Normalize explicit API flags without treating the string '0' as true."""
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if value in {'0', 'false'}:
+            return False
+        if value in {'1', 'true'}:
+            return True
+    elif isinstance(value, (bool, int)) and value in (0, 1):
+        return bool(value)
+    raise ValueError(name + ' must be a boolean or an explicit 0/1 flag')
 
 
 def filter_events(events, links, family_root, allow_both_no_pfam=False, min_shared_pfam_coverage=0.5):
@@ -124,6 +122,7 @@ required on both genes of the same pair. Explicit bilateral no-hit opt-in is an
 exception with unmeasured coverage, never a fabricated coverage of zero or one.
 """
     minimum = validate_shared_pfam_coverage(min_shared_pfam_coverage)
+    allow_both_no_pfam = binary_option(allow_both_no_pfam, 'allow_both_no_pfam')
     if any(set(EVENT_FIELDS) & set(row) for row in events):
         raise ValueError("Reserved Pfam filter columns already exist in event input")
     ids = {row["event_id"]: row for row in events}
@@ -236,9 +235,11 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
             comparisons.append(row)
         passing = [row for row in comparisons if row["passes_pfam_filter"] == "True"]
         shared_pairs = [row for row in comparisons if row['shared_pfam_accessions']]
-        # Both coverages and the genes below always come from one actual pair.
-        best = max(shared_pairs, key=lambda row: min(row['donor_shared_pfam_query_coverage'],
-                   row['recipient_shared_pfam_query_coverage'])) if shared_pairs else {}
+        # A surviving event's representative must be one of its passing pairs.
+        # No-hit exceptions have unmeasured coverage and rank below measured hits.
+        candidates = passing or shared_pairs
+        best = max(candidates, key=lambda row: min(row['donor_shared_pfam_query_coverage'],
+                   row['recipient_shared_pfam_query_coverage']) if row['shared_pfam_accessions'] else -1) if candidates else {}
         reason = ("no_bilateral_scaffold_supported_gene_pair" if not comparisons else
                   "shared_pfam_below_minimum_query_coverage" if shared_pairs and not passing else
                   "no_qualifying_pfam_pair" if not passing else "")
