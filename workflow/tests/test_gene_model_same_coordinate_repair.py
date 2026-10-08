@@ -616,9 +616,28 @@ def test_same_coordinate_repair_import_selection_export_end_to_end(tmp_path, mon
     edges = [{"species_a": SPECIES, "gene_a": GENE, "species_b": donor,
               "gene_b": donor + "_g1"} for donor in DONORS]
     refine.rescue.write_tsv(links, list(edges[0]), [list(r.values()) for r in edges])
+    # Freeze a synthetic predictor identity: fast CI has no external miniprot.
+    # Prediction/search dispatch below remains forbidden; genomic QC is real.
+    original_which = refine.shutil.which
+    monkeypatch.setattr(
+        refine.shutil, "which",
+        lambda name, *args, **kwargs: (
+            None if name == "miniprot" else original_which(name, *args, **kwargs)))
+    with pytest.raises(ValueError, match="miniprot is required for prediction"):
+        refine.plan(tmp_path / "missing_predictor", inputs=inputs, edges=links,
+                    mode="conservative", isoform_adoption="conservation_supported")
+    predictor = tmp_path / "fixture_miniprot"
+    predictor.write_text("#!/bin/sh\nexit 97\n")
+    predictor.chmod(0o755)
+    monkeypatch.setattr(
+        refine.shutil, "which",
+        lambda name, *args, **kwargs: (
+            str(predictor) if name == "miniprot" else original_which(name, *args, **kwargs)))
     root = tmp_path / "refinement"
     value = refine.plan(root, inputs=inputs, edges=links, mode="conservative",
                         isoform_adoption="conservation_supported")
+    assert value["request"]["miniprot"] == {
+        "path": str(predictor), "sha256": refine.digest(predictor)}
     initial = refine.select(root, value, predictions=False)
     correspondence = root / "correspondence"
     graph = json.loads((correspondence / "edges.json").read_text())

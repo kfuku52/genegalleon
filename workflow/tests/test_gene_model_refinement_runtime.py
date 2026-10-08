@@ -337,3 +337,52 @@ def test_real_synteny_reuse_recovers_correspondence_for_existing_anchor_excluded
     assert len(repaired) == 1, predictions
     assert repaired[0]["candidate"]["cds"] == truth[3]
     assert repaired[0]["donors"] == names[1:]
+
+
+def test_real_miniprot_repairs_source_cds_mismatch_without_changing_coordinates(tmp_path):
+    """Independent donor predictions repair DNA-consistent original coding blocks."""
+    inputs, edges, _, sources, truth = truth_fixture(tmp_path)
+    target = sources[0]["species"]
+    expected = truth[target, "intact"]["cds"]
+    supplied = expected[:-3] + "NNN" + "AAA" * 18 + "NNN"
+    source_path = Path(sources[0]["cds"])
+    records = list(fasta_records(source_path))
+    source_path.write_text("".join(
+        ">" + identifier + "\n" + (supplied if identifier == "intact.long" else sequence) + "\n"
+        for identifier, _header, sequence in records))
+    original_source = source_path.read_bytes()
+    original_annotation = Path(sources[0]["gff"]).read_bytes()
+    root = tmp_path / "refinement"
+    cli("plan", "--inputs", inputs, "--edges", edges, "--output", root,
+        "--mode", "conservative", "--policy", "conserved",
+        "--isoform-adoption", "conservation_supported", "--min-support", 2,
+        "--minimum-coverage", 0.99, "--minimum-identity", 0.99)
+    cli("run", "--output", root, "--cpus", 1)
+    cli("qc", "--output", root)
+    cli("verify-inputs", "--inputs", root / "effective" / "inputs.tsv")
+    accepted = [row for row in json.loads(
+        (root / "predictions" / target / "predictions.json").read_text())
+        if row.get("status") == "accepted" and row.get("gene_id") == target + "_intact"]
+    assert len(accepted) == 1
+    repair = accepted[0]
+    assert repair["change_type"] == "model_revision"
+    assert repair["candidate"]["blocks"] == truth[target, "intact"]["blocks"]
+    assert repair["candidate"]["cds"] == expected
+    assert repair["same_coordinate_source_repair"]["independent_external_species"] == [
+        source["species"] for source in sources[1:]]
+    assert not repair["candidate"]["quality"]["rna_supported"]
+    selection = json.loads((root / "selection_final" / "selection.json").read_text())
+    chosen = next(row for row in selection["selections"]
+                  if row["species"] == target and row["gene_id"] == target + "_intact")
+    assert chosen["status"] == "sequence_repaired"
+    assert chosen["source_transcript_id"] == "intact.long"
+    assert chosen["candidate_id"] == repair["candidate"]["candidate_id"]
+    effective = root / "effective"
+    assert (effective / "source_cds" / (target + ".fa")).read_bytes() == original_source
+    assert (effective / "source_annotation" / (target + ".gff3")).read_bytes() == original_annotation
+    proteins = {identifier: sequence for identifier, _header, sequence in
+                fasta_records(effective / "species_protein" / (target + ".fa"))}
+    assert proteins[target + "_intact"] == str(Seq(expected).translate()).removesuffix("*")
+    selected = (effective / "species_gff" / (target + ".gff3")).read_text()
+    matching = [line for line in selected.splitlines() if "\tmRNA\t" in line and "ID=intact.long;" in line]
+    assert len(matching) == 1
