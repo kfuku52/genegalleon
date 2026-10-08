@@ -56,6 +56,13 @@ preflight read with file-identity fences. Gzip validation still runs, and
 publication independently rehashes the inputs after intervening work. No
 persistent size/mtime checksum cache certifies mutable research inputs.
 
+Contained native arrays bind declared external sources as individual read-only
+files. Within an explicitly bound project, native staged-cache generations and
+flat raw `input` directories can use one read-only bind per directory. This
+keeps large cohorts below Apptainer's engine-configuration and environment limits
+without exposing additional paths. The writable target workspace, donor lock
+namespaces and conflicting explicit mounts are excluded from grouping.
+
 ## Timing records
 
 Native input generation writes advisory JSONL under
