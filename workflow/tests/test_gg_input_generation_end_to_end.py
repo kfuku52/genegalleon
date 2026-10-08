@@ -1111,7 +1111,9 @@ def test_array_resume_preserves_legacy_busco_contract_and_rejects_changed_output
     _forbid_format_and_validation(fake_bin)
     (fake_bin / 'busco').write_text('#!/bin/sh\nexit 94\n')
     if changed == 'cds':
-        cds = next((root / 'species_cds').glob('Arabidopsis*'))
+        # The directory also contains mapping/proof sidecars; directory order
+        # must not decide which artifact this corruption test modifies.
+        cds, = (root / 'species_cds').glob('Arabidopsis*.fa.gz')
         cds.write_bytes(cds.read_bytes() + b'changed')
     elif changed == 'short':
         short = root / 'species_cds_busco_short/Arabidopsis_thaliana.busco.short.txt'
