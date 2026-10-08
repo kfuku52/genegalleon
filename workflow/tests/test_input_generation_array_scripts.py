@@ -184,6 +184,111 @@ def plan_reuse(new_plan, manifest):
                       '--stage-downloads', '--outfile', str(new_plan))
 
 
+def _prepared_staged_export_source(source_plan, workspace):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+    plan = workspace / 'output/input_generation/tmp/task_plan.json'
+    plan.parent.mkdir(parents=True)
+    plan.write_bytes(source_plan.read_bytes())
+    staging.stage_downloads(plan)
+    settings = Path(str(plan) + '.settings.json')
+    settings.write_text('{}\n')
+    files = list(Path(str(plan) + '.tasks').glob('1.*'))
+    state.atomic_json(Path(str(plan) + '.prepared.json'), {
+        'plan_sha256': state.digest(plan), 'settings_sha256': state.digest(settings),
+        'files': state.digest_paths(files),
+    })
+    return plan
+
+
+def test_native_staged_export_preserves_species_and_uses_sealed_inputs(bound_staging_plan, tmp_path):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+    source, roles = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    manifest = tmp_path / 'export.tsv'
+    state.export_staged_manifest(old, manifest)
+    rows = list(csv.DictReader(manifest.open(), delimiter='\t'))
+    assert [row['species_key'] for row in rows] == state.load_plan(old)['species']
+    assert rows[0]['reuse_staged_plan_sha256'] == state.digest(old)
+    new = tmp_path / 'new.json'
+    assert plan_reuse(new, manifest).returncode == 0
+    staging.stage_downloads(new)
+    actual = json.loads(Path(str(new) + '.tasks/1.json').read_text())['task']
+    assert {role: actual[role + '_path'] for role in roles} == {role: str(path) for role, path in roles.items()}
+    roles['genome'].write_text('changed\n')
+    with pytest.raises(ValueError, match='changed|SHA256'):
+        staging.stage_downloads(new)
+
+
+def test_staged_export_uses_corrected_donor_without_changing_cohort(bound_staging_plan, tmp_path):
+    import input_generation_array_state as state
+    source, roles = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    corrected = tmp_path / 'corrected.cds.fa'
+    corrected.write_bytes(roles['cds'].read_bytes())
+    value = state.load_plan(source)
+    task = value['tasks'][0]
+    task['manifest_row']['cds_url'] = corrected.as_uri()
+    task['input_sha256'].pop(str(roles['cds']))
+    task['input_sha256'][str(corrected)] = state.digest(corrected)
+    replacement = tmp_path / 'replacement.json'
+    replacement.write_text(json.dumps(value))
+    donor = _prepared_staged_export_source(replacement, tmp_path / 'corrected-donor')
+    out = tmp_path / 'export.tsv'
+    state.export_staged_manifest(old, out, [donor])
+    row, = csv.DictReader(out.open(), delimiter='\t')
+    assert row['species_key'] == task['species_key']
+    assert row['cds_url'] == corrected.as_uri()
+    assert row['reuse_staged_plan_sha256'] == state.digest(donor)
+    new = tmp_path / 'new.json'
+    assert plan_reuse(new, out).returncode == 0
+
+
+@pytest.mark.parametrize('target', ['plan', 'receipt', 'raw'])
+def test_staged_export_cannot_overwrite_source_inputs_or_evidence(bound_staging_plan, tmp_path, target):
+    import input_generation_array_state as state
+    source, roles = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    path = {'plan': old, 'receipt': Path(str(old) + '.tasks/1.json'), 'raw': roles['cds']}[target]
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='overlaps protected'):
+        state.export_staged_manifest(old, path)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('bad', ['receipt', 'marker', 'identity', 'changed_during_export'])
+def test_staged_export_rejects_invalid_or_changed_donors(bound_staging_plan, tmp_path, monkeypatch, bad):
+    import input_generation_array_state as state
+    source, _ = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    receipt = Path(str(old) + '.tasks/1.json')
+    if bad == 'receipt':
+        receipt.write_text('{}')
+    elif bad == 'marker':
+        Path(str(old) + '.prepared.json').unlink()
+    elif bad == 'identity':
+        value = json.loads(receipt.read_text())
+        value['task']['species_prefix'] = 'Other_species'
+        receipt.write_text(json.dumps(value))
+        marker = Path(str(old) + '.prepared.json')
+        value = json.loads(marker.read_text())
+        value['files'][str(receipt)] = state.digest(receipt)
+        marker.write_text(json.dumps(value))
+    else:
+        from input_generation_staging_reuse import StagedProofReader
+        original = StagedProofReader.resolve
+        def mutate(reader, task):
+            result = original(reader, task)
+            receipt.write_text(receipt.read_text() + '\n')
+            return result
+        monkeypatch.setattr(StagedProofReader, 'resolve', mutate)
+    out = tmp_path / 'export.tsv'
+    with pytest.raises((ValueError, OSError)):
+        state.export_staged_manifest(old, out)
+    assert not out.exists()
+
+
 def test_cross_plan_reuse_reads_once_keeps_outputs_and_same_plan_resume(reusable_staging_plan, monkeypatch):
     import input_generation_array_state as state
     import plan_input_generation_tasks as planner

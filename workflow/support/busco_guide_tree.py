@@ -422,9 +422,33 @@ def build(args):
             return result
 
 
+def requires_single_copy(manifest, species):
+    """Keep a sealed legacy table-only result valid without inventing AA data.
+
+    The caller still verifies every declared input/output with provenance.
+    Newly generated runs and existing three-output contracts require AA data.
+    """
+    if not manifest.exists():
+        return True
+    value = json.loads(manifest.read_text())
+    outputs = value.get("outputs", [])
+    roles = [item.get("label") for item in outputs]
+    if (value.get("schema_version") != 1 or value.get("step") != "input_generation_species_busco"
+            or value.get("family_id") != species
+            or [item.get("label") for item in value.get("inputs", [])] != ["species_cds"]
+            or len(set(roles)) != len(roles)
+            or set(roles) not in ({"busco_full", "busco_short"},
+                                  {"busco_full", "busco_short", "busco_single_copy"})):
+        raise ValueError("Unsupported BUSCO output contract: " + species)
+    return "busco_single_copy" in roles
+
+
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
+    contract = commands.add_parser("output-contract")
+    contract.add_argument("--manifest", required=True, type=Path)
+    contract.add_argument("--species", required=True)
     export = commands.add_parser("preserve")
     for key in ("run-dir", "full", "short", "input", "output"):
         export.add_argument("--" + key, required=True, type=Path)
@@ -446,6 +470,8 @@ def main():
     args = parser().parse_args()
     if args.command == "preserve":
         preserve(args)
+    elif args.command == "output-contract":
+        print(int(requires_single_copy(args.manifest, args.species)))
     else:
         print(json.dumps(build(args)["performance"], sort_keys=True))
 

@@ -1091,6 +1091,46 @@ def _forbid_format_and_validation(fake_bin):
     _write_text(seqkit, f'#!/bin/sh\n[ "$1" != fx2tab ] || exit 93\nexec "{allowed}" "$@"\n', mode=0o755)
 
 
+@pytest.mark.parametrize('changed', [None, 'cds', 'short', 'required_archive'])
+def test_array_resume_preserves_legacy_busco_contract_and_rejects_changed_outputs(tmp_path, changed):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / 'legacy_busco_workspace'
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    _run_core(workspace, input_dir, fake_bin, 'array_prepare')
+    _run_core(workspace, input_dir, fake_bin, 'array_worker', 1)
+    root = workspace / 'output/input_generation'
+    manifest = root / 'artifact_provenance/busco.Arabidopsis_thaliana.json'
+    value = json.loads(manifest.read_text())
+    archive = root / 'species_cds_busco_full/single_copy/Arabidopsis_thaliana.json.gz'
+    archive.unlink()
+    if changed != 'required_archive':
+        value['outputs'] = [entry for entry in value['outputs'] if entry['label'] != 'busco_single_copy']
+        manifest.write_text(json.dumps(value))
+    _forbid_format_and_validation(fake_bin)
+    (fake_bin / 'busco').write_text('#!/bin/sh\nexit 94\n')
+    if changed == 'cds':
+        cds = next((root / 'species_cds').glob('Arabidopsis*'))
+        cds.write_bytes(cds.read_bytes() + b'changed')
+    elif changed == 'short':
+        short = root / 'species_cds_busco_short/Arabidopsis_thaliana.busco.short.txt'
+        short.write_text(short.read_text() + 'changed\n')
+    env = _core_env(workspace, input_dir, fake_bin, 'array_worker', 1)
+    env['overwrite'] = '0'
+    result = subprocess.run(['bash', str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                            capture_output=True, text=True, timeout=180)
+    if changed is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'Skipped BUSCO:' in result.stdout
+        receipt = json.loads((root / 'tmp/task_plan.json.completed/1.json').read_text())
+        assert not any('/single_copy/' in path for path in receipt['files'])
+        assert any(path.endswith('.busco.full.tsv') for path in receipt['files'])
+    else:
+        assert result.returncode != 0
+    assert not archive.exists()
+
+
 @pytest.mark.parametrize("proof", ["current", "obsolete", "missing_details", "changed_implementation",
                                   "different_options", "missing_genome", "changed_summary",
                                   "changed_raw_genome", "changed_formatted_genome"])

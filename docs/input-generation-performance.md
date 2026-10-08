@@ -7,6 +7,28 @@ already imported checkpoints remain usable. `input_generation_stage_resume.py
 import` without `--task-index` still imports the whole cohort; `check-source`
 checks the donor contract without copying species outputs.
 
+To resume downloaded inputs in a new workspace, export native staging evidence:
+
+```bash
+python workflow/support/input_generation_array_state.py export-staged-manifest \
+  --task-plan /data/source/output/input_generation/tmp/task_plan.json \
+  --staged-donor-plan /data/corrected/output/input_generation/tmp/task_plan.json \
+  --outfile /data/private/download_plan.tsv
+```
+
+The primary plan fixes species and order. Optional prepared donors replace only
+matching species' input rows, preserving their curation and staging evidence.
+The exporter checks prepared metadata in each donor's own namespace. Planning
+reads the sealed metadata instead of rehashing raw inputs; staging still freshly
+hashes every raw input and fences those files through receipt publication.
+Missing, changed or mismatched evidence stops export/reuse. This does not reuse
+incompatible formatter or validation contracts.
+
+Existing BUSCO full/short results keep their verified two-output provenance
+contract. New or rebuilt runs also preserve exact single-copy proteins. A
+three-output contract with a missing protein archive remains invalid; legacy
+table-only results cannot satisfy a guide-tree request requiring those proteins.
+
 Imports use the workflow's shared-filesystem namespace locks: a shared donor
 phase lock excludes prepare/finalize, and a shared donor task lock excludes
 writers of that species. Different species can import concurrently. The target
@@ -98,6 +120,24 @@ them as disjoint I/O. Fingerprints exclude lock-owner diagnostics. Genome indexe
 already live in task scratch and are reused within a normalizer. Broader index
 sharing should follow measurements of the new indexing phase rather than
 changing independent gene-selection parsers.
+
+For an already prepared native donor, compare ordinary bound-local planning and
+staging with `--compare-staged-reuse` in the staging harness. This includes native
+manifest export in planning and checks equivalent staged inputs/settings; only
+the additive staging-proof metadata differs. On 2026-10-08, the same qualified
+Docker runtime (Linux arm64, Python 3.12.15), a 256 MiB nominal genome, warm
+caches, one warmup and three alternating trials gave these medians:
+
+| Operation | Ordinary bound local | Native staged reuse |
+| --- | ---: | ---: |
+| Manifest planning/export | 0.1165 s | 0.0019 s |
+| Input staging | 0.2358 s | 0.1210 s |
+| SHA-256 bytes, planning + staging | 807,926,147 | 269,316,994 |
+| Process peak RSS | 69.37 MB | 69.33 MB |
+
+The sum of phase medians fell by 65.1%, with two thirds fewer hashed bytes.
+This measures prepared-input reuse on warm local storage, not NAS throughput or
+whole-job elapsed time. Fresh content verification still reads all raw inputs.
 
 On 2026-10-05, comparison with v0.8.132 in the same qualified Docker runtime
 (Linux arm64, Python 3.12.14) used a 1,024 MiB nominal synthetic genome, warm

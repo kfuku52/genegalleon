@@ -1548,6 +1548,7 @@ run_species_busco_for_one_file() {
   local busco_input_fasta=""
   local busco_output_dir=""
   local busco_needs_update=0
+  local busco_requires_single_copy=1
   local -a busco_provenance_args=()
 
   seq_file=$(basename "${seq_full}")
@@ -1565,17 +1566,23 @@ run_species_busco_for_one_file() {
   fi
 
   gg_artifact_contract_init busco_provenance_args "input_generation_species_busco" "${species_name}" "${input_generation_provenance_dir}/busco.${species_name}.json"
+  # Retain a verified legacy full/short contract. It cannot provide the exact
+  # BUSCO proteins required by the optional guide-tree stage; new runs do.
+  if [[ ${overwrite} -ne 1 ]]; then
+    busco_requires_single_copy=$(python "${gg_support_dir}/busco_guide_tree.py" output-contract \
+      --manifest "${input_generation_provenance_dir}/busco.${species_name}.json" --species "${species_name}") || return $?
+  fi
   busco_provenance_args+=(
     --input "species_cds=${seq_full}"
     --output "busco_full=${file_sp_busco_full}"
     --output "busco_short=${file_sp_busco_short}"
-    --output "busco_single_copy=${file_sp_busco_proteins}"
     --parameter "busco_lineage_request=${busco_lineage}"
     --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
     --parameter "busco_mode=transcriptome"
     --parameter "evalue=1e-03"
     --parameter "limit=20"
   )
+  [[ ${busco_requires_single_copy} -ne 1 ]] || busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   if [[ ${overwrite} -eq 1 ]]; then
     busco_needs_update=1
   else
@@ -1584,6 +1591,10 @@ run_species_busco_for_one_file() {
   if [[ ${busco_needs_update} -ne 1 || ${run_species_busco} -ne 1 ]]; then
     echo "Skipped BUSCO: ${seq_file}"
     return 0
+  fi
+  # A rebuilt legacy run produces the complete current contract as well.
+  if [[ ${busco_requires_single_copy} -ne 1 ]]; then
+    busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   fi
   remove_busco_outputs_for_species "${species_busco_full_dir}" "${species_name}" "*busco.full.tsv"
   remove_busco_outputs_for_species "${species_busco_short_dir}" "${species_name}" "*busco.short.txt"
@@ -2382,9 +2393,12 @@ run_array_worker_mode() {
     receipt_cmd+=(--file "${species_cds_fx2tab_dir}/${species_prefix}_fx2tab_cds.tsv")
   fi
   if [[ ${run_species_busco} -eq 1 ]]; then
-    receipt_cmd+=(--file "${species_busco_full_dir}/single_copy/${species_prefix}.json.gz"
-      --file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
+    receipt_cmd+=(--file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
       --file "${species_busco_short_dir}/${species_prefix}.busco.short.txt")
+    local busco_requires_single_copy
+    busco_requires_single_copy=$(python "${gg_support_dir}/busco_guide_tree.py" output-contract \
+      --manifest "${input_generation_provenance_dir}/busco.${species_prefix}.json" --species "${species_prefix}") || exit $?
+    [[ ${busco_requires_single_copy} -ne 1 ]] || receipt_cmd+=(--file "${species_busco_full_dir}/single_copy/${species_prefix}.json.gz")
   fi
   "${receipt_cmd[@]}"
 }

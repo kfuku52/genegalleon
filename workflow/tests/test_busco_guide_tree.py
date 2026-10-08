@@ -24,6 +24,23 @@ def test_existing_quality_and_identifier_imports_keep_the_same_implementations()
             assert Path(function.__globals__["__file__"]).resolve() == Path(quality.__file__).resolve()
 
 
+@pytest.mark.parametrize('packed', [False, True])
+def test_declared_busco_contract_keeps_legacy_tables_without_claiming_proteins(tmp_path, packed):
+    manifest = tmp_path / 'busco.json'
+    assert guide.requires_single_copy(manifest, 'Plant_example')
+    labels = ['busco_full', 'busco_short'] + (['busco_single_copy'] if packed else [])
+    value = dict(schema_version=1, step='input_generation_species_busco', family_id='Plant_example',
+                 inputs=[dict(label='species_cds')], outputs=[dict(label=label) for label in labels])
+    manifest.write_text(json.dumps(value))
+    assert guide.requires_single_copy(manifest, 'Plant_example') == packed
+    with pytest.raises(ValueError, match='Unsupported BUSCO'):
+        guide.requires_single_copy(manifest, 'Another_species')
+    value['outputs'].append(dict(label='busco_full'))
+    manifest.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match='Unsupported BUSCO'):
+        guide.requires_single_copy(manifest, 'Plant_example')
+
+
 def make_archive(tmp_path, name, sequences, duplicated=()):
     for folder in ("cds", "full", "short", "full/single_copy"):
         (tmp_path / folder).mkdir(parents=True, exist_ok=True)

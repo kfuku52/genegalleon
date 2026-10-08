@@ -205,6 +205,76 @@ def export_manifest(plan, outfile, tasks=None):
         temp.unlink(missing_ok=True)
 
 
+def export_staged_manifest(plan_path, outfile, donor_plans=()):
+    """Export exact staged inputs; raw bytes are freshly checked by prepare.
+
+    The primary plan fixes the species/order. Later prepared donors may replace
+    those species' inputs, retaining their native staging and curation evidence.
+    No formatter or BUSCO completion is inferred from a staging receipt.
+    """
+    from input_generation_staging_reuse import REUSE_FIELDS, StagedProofReader
+
+    plan_path = Path(plan_path).resolve(strict=True)
+    batch = FreshDigestBatch()
+    sources = {}
+    primary = None
+    reader = StagedProofReader()
+    raw_paths = set()
+    for source in (plan_path, *map(Path, donor_plans)):
+        source = source.resolve(strict=True)
+        workspace = source.parents[3]
+        if source != workspace / "output/input_generation/tmp/task_plan.json":
+            raise ValueError("Staged export requires a native workspace task plan")
+        batch.read([source, Path(str(source) + ".settings.json"), Path(str(source) + ".prepared.json")])
+        if not prepared(source, namespace_root=workspace):
+            raise ValueError("Staged export requires verified prepare evidence")
+        plan = load_plan(source)
+        if plan.get("download_mode") != "staged":
+            raise ValueError("Staged export requires a staged manifest plan")
+        if primary is None:
+            primary = plan
+        selected = {task["species_prefix"]: task for task in primary["tasks"]}
+        receipt_paths = [Path(str(source) + ".tasks") / f"{index}.json"
+                         for index, task in enumerate(plan["tasks"], 1) if task["species_prefix"] in selected]
+        hashes = batch.read([source, *receipt_paths])
+        for index, task in enumerate(plan["tasks"], 1):
+            species = task["species_prefix"]
+            if species not in selected:
+                continue
+            if any(task[key] != selected[species][key] for key in ("provider", "species_key")):
+                raise ValueError("Staged donor species/provider differs: " + species)
+            receipt_path = Path(str(source) + ".tasks") / f"{index}.json"
+            receipt = json.loads(receipt_path.read_text())
+            actual = receipt["task"]
+            if (receipt.get("plan_sha256") != hashes[str(source)]
+                    or receipt.get("task_index") != index
+                    or any(actual.get(key) != task[key] for key in ("provider", "species_key", "species_prefix"))):
+                raise ValueError("Staged receipt belongs to another plan/task")
+            row = {key: value for key, value in task["manifest_row"].items() if key not in REUSE_FIELDS}
+            for role in ("cds", "gff", "gbff", "genome"):
+                raw = actual.get(role + "_path")
+                row[role + "_url"] = namespace_path(raw, workspace).as_uri() if raw else ""
+                if raw:
+                    raw_paths.add(str(namespace_path(raw, workspace)))
+                row[role + "_archive_member"] = ""
+            row.update(bind_local_sources="1", reuse_staged_plan=str(source),
+                       reuse_staged_plan_sha256=hashes[str(source)],
+                       reuse_staged_workspace=str(workspace), reuse_staged_task_index=str(index),
+                       reuse_staged_receipt_sha256=hashes[str(receipt_path)])
+            # Check role hashes and namespace mapping using the same consumer
+            # as planning. It reads only sealed metadata and stat identities.
+            reader.resolve({**task, "manifest_row": row})
+            sources[species] = {**selected[species], "manifest_row": row}
+        batch.check()
+    batch.check()
+    reader.check()
+    output = Path(outfile).resolve()
+    for source in {*batch.paths, *reader.identities, *raw_paths}:
+        if output == Path(source).resolve() or (output.exists() and os.path.samefile(output, source)):
+            raise ValueError("Staged export output overlaps protected source evidence/input")
+    export_manifest(primary, outfile, tasks=[sources[task["species_prefix"]] for task in primary["tasks"]])
+
+
 def prepared(plan, *, namespace_root=None, task_index=None):
     try:
         marker = json.loads(Path(str(plan) + ".prepared.json").read_text())
@@ -261,7 +331,7 @@ def output_lock_paths(paths):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("complete", "pending", "verify", "invalidate", "configure", "prepared", "check-prepared", "claim-workspace", "index", "export-manifest", "output-lock-paths"))
+    parser.add_argument("action", choices=("complete", "pending", "verify", "invalidate", "configure", "prepared", "check-prepared", "claim-workspace", "index", "export-manifest", "export-staged-manifest", "output-lock-paths"))
     parser.add_argument("--task-plan", required=True)
     parser.add_argument("--task-index", type=int)
     parser.add_argument("--file", action="append", default=[])
@@ -269,6 +339,7 @@ def main():
     parser.add_argument("--prepare", action="store_true")
     parser.add_argument("--workspace")
     parser.add_argument("--outfile")
+    parser.add_argument("--staged-donor-plan", action="append", default=[], type=Path)
     args = parser.parse_args()
     if args.action == "output-lock-paths":
         print("\n".join(output_lock_paths(args.file)))
@@ -282,6 +353,11 @@ def main():
         atomic_json(path, settings, immutable=True)
         return
     plan = load_plan(args.task_plan)
+    if args.action == "export-staged-manifest":
+        if not args.outfile:
+            parser.error("--outfile is required")
+        export_staged_manifest(args.task_plan, args.outfile, args.staged_donor_plan)
+        return
     if args.action == "export-manifest":
         if not args.outfile:
             parser.error("--outfile is required")
