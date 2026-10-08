@@ -46,5 +46,8 @@ def test_hgt_output_readme_documents_all_hgt_table_columns(tmp_path: Path):
     assert "# GeneGalleon HGT output tables" in readme_text
     assert "空欄は「陰性」ではなく「未測定・比較不能」" in readme_text
     assert "未定義" not in readme_text
+    assert "non_arthropoda_to_arthropoda" in readme_text
+    assert "non_arthropoda_to_insecta" in readme_text
+    assert "taxonomy and category-1 trait selection as separate stages" in readme_text
     for column in BRANCH_OUTPUT_COLUMNS + GENE_OUTPUT_COLUMNS + ORTHOGROUP_OUTPUT_COLUMNS + EVENT_COLUMNS + LINK_COLUMNS:
         assert f"| `{column}` |" in readme_text

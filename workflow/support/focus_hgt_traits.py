@@ -320,7 +320,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     direction_report = {}
     if direction_filter != 'any':
         from focus_hgt_direction import filter_events as filter_direction
-        cohort, direction_events, branch_audit, taxonomy_sha = filter_direction(cohort, nodes, species_taxonomy)
+        cohort, direction_events, branch_audit, taxonomy_sha = filter_direction(cohort, nodes, species_taxonomy, direction_filter)
         output_fields = output_fields + DIRECTION_FIELDS
         write_tsv(stage / 'direction_events.tsv', output_fields, cohort)
         write_tsv(stage / 'direction_event_audit.tsv', output_fields, direction_events)
@@ -423,6 +423,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                                                 ([f'length ratio >={min_length_ratio:g}'] if require_length_ratio else [])))
                                             if pair_filter_enabled else None,
                                             direction_selected=cohort if direction_filter != 'any' else None,
+                                            direction_filter=direction_filter,
                                             analyzed_orthogroups=analyzed if not inventory_missing else None)
             figures[trait]['analysis_inventory_missing_event_families'] = inventory_missing
         index.append(dict(trait=trait, target="ALL_CATEGORY1", target_type="aggregate",
@@ -461,6 +462,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "Enabled Pfam/length requirements are applied together to each exact pair once over the shared input cohort, followed by the optional species-branch direction filter, then category-1 trait selection.\n"
         f"Species-branch direction filter: {direction_filter}.\n"
         "non_arthropoda_to_insecta requires all donor descendant tips outside Arthropoda and all recipient tips within Insecta.\n"
+        "non_arthropoda_to_arthropoda instead requires all recipient descendant tips within Arthropoda. Taxonomy and trait are separate filtering-flow stages with their own event/orthogroup counts.\n"
         "Direction uses the analysis species tree and host-species taxonomy, never query MMseqs2 or best-hit proxies. Mixed, unknown and unmapped branches stay withheld.\n"
         "origin_event_audit.tsv and the pair/gene audits flag focal donor/recipient classification mismatch or unresolved evidence, and ancestor-donor ambiguity. These review flags do not remove events.\n"
         "Origin review compares the exact focal MMseqs2 query with host taxonomy; class-only and kingdom/domain mismatches remain distinct. Missing or higher-rank LCA evidence never counts as class agreement.\n"
@@ -619,8 +621,9 @@ def main():
                         help='Require measured protein lengths with an inclusive shorter/longer ratio in the same bilateral event-gene pair (default: 1; independent of Pfam)')
     parser.add_argument('--min_length_ratio', type=validate_length_ratio, default=0.5,
                         help='Inclusive shorter/longer protein length ratio for the same pair (fraction 0..1; default: 0.5)')
-    parser.add_argument('--direction_filter', choices=('any', 'non_arthropoda_to_insecta'), default='any',
-                        help='Optional host-species branch direction filter, applied after Pfam and before trait selection')
+    from focus_hgt_direction import DIRECTION_CHOICES
+    parser.add_argument('--direction_filter', choices=DIRECTION_CHOICES, default='any',
+                        help='Optional host-species branch direction filter, applied after exact-pair criteria and before trait selection')
     parser.add_argument('--species_taxonomy', default='', help='Existing species_taxonomy.tsv for direction filtering and focal origin review')
     parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
                         default=DEFAULT_TRANSFER_ARROW_ALPHA)

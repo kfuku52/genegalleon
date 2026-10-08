@@ -209,8 +209,11 @@ The bilateral no-hit opt-in is an explicit exception to domain coverage;
 coverage stays unmeasured, and the enabled length rule still applies. Saved
 hits receive no additional E-value cutoff.
 
-The exact-pair step evaluates the shared input cohort once; the combined taxonomy/trait step selects each
-trait's category-1 recipients from that same passing set. Existing Pfam-named audit
+The exact-pair step evaluates the shared input cohort once. An optional taxonomy
+step then evaluates the modeled donor and recipient species branches; each
+trait's separate category-1 step selects recipients from that passing set.
+The filtering-flow figure reports each step's event and orthogroup counts.
+Existing Pfam-named audit
 files retain their paths when only the length rule is enabled. The bundle root
 contains `pfam_events.tsv` and `pfam_event_audit.tsv`, `pfam_pair_audit.tsv` and
 `pfam_gene_audit.tsv`, recording all input events before trait selection, exact

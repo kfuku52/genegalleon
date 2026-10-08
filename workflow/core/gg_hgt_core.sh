@@ -38,7 +38,7 @@ hgt_focus_min_length_ratio="${hgt_focus_min_length_ratio:-0.5}"
 hgt_focus_direction_filter="${hgt_focus_direction_filter:-any}"
 hgt_focus_species_taxonomy="${hgt_focus_species_taxonomy:-auto}"
 case "${hgt_focus_direction_filter}" in
-  any|non_arthropoda_to_insecta) ;;
+  any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda) ;;
   *) echo "Invalid focused HGT direction filter: ${hgt_focus_direction_filter}" >&2; exit 1 ;;
 esac
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"

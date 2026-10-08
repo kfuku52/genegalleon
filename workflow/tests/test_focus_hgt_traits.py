@@ -60,6 +60,56 @@ def test_direction_uses_exact_species_branches_and_withholds_unknown_tips(tmp_pa
     assert mixed['clade_tip_labels'] == 'C; D' and mixed['arthropoda_within_tip_count'] == 1
 
 
+@pytest.mark.parametrize('donor,recipient,status,reason', [
+    ('D', 'C', 'passed', 'all_donor_tips_outside_arthropoda_all_recipient_tips_in_arthropoda'),
+    ('K', 'all_arthropods', 'passed', 'all_donor_tips_outside_arthropoda_all_recipient_tips_in_arthropoda'),
+    ('C', 'A', 'excluded_direction', 'donor_within_arthropoda'),
+    ('mixed_donor', 'A', 'withheld', 'donor_mixed_arthropoda'),
+    ('unknown_donor', 'A', 'withheld', 'donor_unknown_arthropoda'),
+    ('D', 'mixed_recipient', 'withheld', 'recipient_mixed_arthropoda'),
+    ('D', 'unknown_recipient', 'withheld', 'recipient_unknown_arthropoda'),
+    ('D', 'D', 'excluded_direction', 'recipient_outside_arthropoda'),
+    ('D', 'missing', 'withheld', 'recipient_unmapped_arthropoda'),
+])
+def test_arthropoda_direction_accepts_non_insect_recipients_and_checks_entire_clades(
+        tmp_path, donor, recipient, status, reason):
+    from focus_hgt_direction import filter_events
+    path = saved_species_taxonomy(tmp_path/'taxonomy.tsv')
+    nodes = {name: (name,) for name in ('A', 'B', 'C', 'D', 'K', 'U')}
+    nodes.update(all_arthropods=('A', 'C'), mixed_donor=('C', 'D'), unknown_donor=('D', 'U'),
+                 mixed_recipient=('A', 'D'), unknown_recipient=('A', 'U'))
+    event = dict(event_id='OG1:3:1', orthogroup='OG1', generax_donor_node=donor,
+                 generax_recipient_node=recipient, generax_transfer=f'Y@{donor}@{recipient}')
+    selected, audit, branches, _ = filter_events([event], nodes, path, 'non_arthropoda_to_arthropoda')
+    assert audit[0]['direction_filter_status'] == status
+    assert audit[0]['direction_filter_reason'] == reason
+    assert bool(selected) == (status == 'passed')
+    assert 'direction_filter_status' not in event
+    mixed_class = next(r for r in branches if r['species_branch'] == 'all_arthropods')
+    assert mixed_class['arthropoda_status'] == 'within' and mixed_class['insecta_status'] == 'mixed'
+    if recipient == 'C':
+        assert audit[0]['direction_recipient_arthropoda_status'] == 'within'
+        assert audit[0]['direction_recipient_insecta_status'] == 'outside'
+
+
+def test_arthropoda_direction_does_not_require_a_resolved_recipient_class(tmp_path):
+    from focus_hgt_direction import filter_events
+    path = saved_species_taxonomy(tmp_path/'taxonomy.tsv')
+    fields, rows = read_tsv(path)
+    next(r for r in rows if r['species'] == 'C')['class'] = ''
+    write_tsv(path, fields, rows)
+    event = dict(event_id='OG1:3:1', orthogroup='OG1', generax_donor_node='D',
+                 generax_recipient_node='C', generax_transfer='Y@D@C')
+    selected, audit, _, _ = filter_events([event], {'D': ('D',), 'C': ('C',)}, path,
+                                         'non_arthropoda_to_arthropoda')
+    assert len(selected) == 1 and audit[0]['direction_recipient_insecta_status'] == 'unknown'
+    assert filter_events([event], {'D': ('D',), 'C': ('C',)}, path)[0] == []
+    any_events = filter_events([event], {'D': ('D',), 'C': ('C',)}, path, 'any')[0]
+    assert any_events[0]['direction_filter_reason'] == 'direction_filter_disabled'
+    with pytest.raises(ValueError, match='Invalid focused HGT direction'):
+        filter_events([event], {'D': ('D',), 'C': ('C',)}, path, 'invalid')
+
+
 def test_direction_taxonomy_aliases_are_exact_and_malformed_classifications_fail(tmp_path):
     from focus_hgt_direction import filter_events, read_taxonomy
     path = saved_species_taxonomy(tmp_path/'taxonomy.tsv')
@@ -82,7 +132,11 @@ def test_direction_taxonomy_aliases_are_exact_and_malformed_classifications_fail
                       {'A': ('A',), 'D': ('D',)}, saved_species_taxonomy(path))
 
 
-def test_direction_is_evaluated_once_after_pfam_before_multiple_traits(source, monkeypatch):
+@pytest.mark.parametrize('direction,passed,category', [
+    ('non_arthropoda_to_insecta', 2, {'OG1:3:1'}),
+    ('non_arthropoda_to_arthropoda', 3, {'OG1:3:1', 'OG1:3:5'}),
+])
+def test_direction_is_evaluated_once_after_pfam_before_multiple_traits(source, monkeypatch, direction, passed, category):
     import focus_hgt_direction
     _, links = read_tsv(source[1])
     links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
@@ -99,32 +153,48 @@ def test_direction_is_evaluated_once_after_pfam_before_multiple_traits(source, m
     monkeypatch.setattr(focus_hgt_direction, 'filter_events', capture)
     before = taxonomy.read_bytes()
     report = generate_filtered(*source, plots=False, gene_family_root=root,
-                               direction_filter='non_arthropoda_to_insecta', species_taxonomy=taxonomy)
+                               direction_filter=direction, species_taxonomy=taxonomy)
     assert calls == [{'OG1:3:1', 'OG1:3:2', 'OG1:3:3', 'OG1:3:5'}]
     assert report['shared_pfam_filter']['passed_event_count'] == 4
-    assert report['shared_direction_filter']['passed_event_count'] == 2
+    assert report['shared_direction_filter']['passed_event_count'] == passed
     assert report['filtering_order'] == ['input_cohort', 'pfam_pair_filter', 'species_branch_direction_filter', 'trait_category1']
     assert len(read_tsv(source[-1]/'direction_event_audit.tsv')[1]) == 4
     assert len(read_tsv(source[-1]/'direction_species_branches.tsv')[1]) == 7
-    assert {r['event_id'] for r in read_tsv(source[-1]/'traits/category/all_category1/events.tsv')[1]} == {'OG1:3:1'}
+    assert {r['event_id'] for r in read_tsv(source[-1]/'traits/category/all_category1/events.tsv')[1]} == category
+    assert {r['event_id'] for r in read_tsv(source[-1]/'traits/binary/all_category1/events.tsv')[1]} == {'OG1:3:1', 'OG1:3:2'}
+    direction_rows = read_tsv(source[-1]/'direction_events.tsv')[1]
+    assert len(direction_rows) == passed
+    assert all('direction_recipient_arthropoda_status' in row for row in direction_rows)
     assert report['pfam_filter']['category']['category1_passed_event_count'] == 2
     assert str(taxonomy.resolve()) in report['inputs_sha256'] and taxonomy.read_bytes() == before
     with pytest.raises(ValueError, match='requires existing species taxonomy'):
-        generate_filtered(*source, plots=False, gene_family_root=root, direction_filter='non_arthropoda_to_insecta')
+        generate_filtered(*source, plots=False, gene_family_root=root, direction_filter=direction)
 
 
-def test_direction_filter_flow_is_post_pfam_and_rejects_cohort_mismatches():
+@pytest.mark.parametrize('direction,recipient_group', [('non_arthropoda_to_insecta', 'Insecta'),
+                                                      ('non_arthropoda_to_arthropoda', 'Arthropoda')])
+def test_direction_filter_flow_is_post_pfam_and_rejects_cohort_mismatches(direction, recipient_group):
     from focus_hgt_figures import filtering_counts
     events = [dict(event_id=str(i), orthogroup='OG'+str(i)) for i in range(4)]
-    counts = filtering_counts(events, events[:1], pfam_selected=events[:3], direction_selected=events[:2])
+    counts = filtering_counts(events, events[:1], pfam_selected=events[:3], direction_selected=events[:2],
+                              direction_filter=direction)
     assert [r['stage'] for r in counts] == ['Input supported-event cohort', 'Event-gene pair Pfam filter',
-                                           'Non-Arthropoda donor & category = 1 recipient']
-    assert [r['event_count'] for r in counts] == [4, 3, 1]
+                                           f'Non-Arthropoda donor → {recipient_group} recipient', 'Category = 1 recipients']
+    assert [r['event_count'] for r in counts] == [4, 3, 2, 1]
+    assert [r['orthogroup_count'] for r in counts] == [4, 3, 2, 1]
     with pytest.raises(ValueError, match='subset'):
         filtering_counts(events, events[:1], pfam_selected=events[:1], direction_selected=events[:2])
+    with pytest.raises(ValueError, match='subset'):
+        filtering_counts(events, events[2:3], pfam_selected=events[:3], direction_selected=events[:2])
+    with pytest.raises(ValueError, match='identity'):
+        filtering_counts(events, events[:1], direction_selected=[dict(events[0], orthogroup='changed')])
+    with pytest.raises(ValueError, match='disabled direction filter'):
+        filtering_counts(events, events[:1], direction_selected=events[:2], direction_filter='any')
+    empty = filtering_counts(events, [], pfam_selected=events[:3], direction_selected=[], direction_filter=direction)
+    assert [r['event_count'] for r in empty] == [4, 3, 0, 0]
 
 
-def test_combined_flow_keeps_verified_support_grain_and_historical_audit(tmp_path):
+def test_split_flow_keeps_verified_support_grain_and_historical_audit(tmp_path):
     from focus_hgt_figures import export_filtering_flow, filtering_counts
     events = [dict(event_id=str(i), orthogroup='OG'+str(i), donor_classification='outside',
                    recipient_classification='insect', status='accepted', support_used='90',
@@ -138,17 +208,44 @@ def test_combined_flow_keeps_verified_support_grain_and_historical_audit(tmp_pat
     original = path.read_bytes()
     counts = export_filtering_flow(tmp_path/'plots', events, events[:1], 'gall', path,
                                    pfam_selected=events, direction_selected=events[:1], support_filter_enabled=True)
-    assert [r['event_count'] for r in counts] == [3, 2, 2, 2, 1]
-    assert counts[-1]['stage'] == 'Non-Arthropoda donor & gall = 1 recipient'
-    assert len(counts) == 5 and counts[2]['stage'] == 'Bilateral scaffold background'
+    assert [r['event_count'] for r in counts] == [3, 2, 2, 2, 1, 1]
+    assert counts[-2]['stage'] == 'Non-Arthropoda donor → Insecta recipient'
+    assert counts[-1]['stage'] == 'gall = 1 recipients'
+    assert len(counts) == 6 and counts[2]['stage'] == 'Bilateral scaffold background'
     assert path.read_bytes() == original
     legacy = filtering_counts(events, events[:1], path, pfam_selected=events, support_filter_enabled=True)
     assert legacy[1]['stage'] == 'Non-Insecta to Insecta'
     from pypdf import PdfReader
-    text = PdfReader(tmp_path/'plots/filtering_flow.pdf').pages[0].extract_text()
+    text = ' '.join(PdfReader(tmp_path/'plots/filtering_flow.pdf').pages[0].extract_text().split())
     assert 'Upstream directional cohort' not in text
-    assert 'Non-Arthropoda donor & gall = 1 recipient' in text
+    # Matplotlib's Type-3 PDF text extraction omits the arrow glyph; the
+    # complete label, including the arrow, is asserted in the flow TSV above.
+    assert 'Non-Arthropoda donor Insecta recipient' in text
+    assert 'gall = 1 recipients' in text
     assert 'previously verified input cohort' in text
+
+
+def test_arthropoda_flow_keeps_taxonomy_and_trait_counts_separate_without_ufb(tmp_path):
+    from focus_hgt_figures import export_filtering_flow
+    from pypdf import PdfReader
+    events = [dict(event_id=str(i), orthogroup='OG'+str(i // 2)) for i in range(6)]
+    counts = export_filtering_flow(tmp_path/'plots', events, events[:1], 'gall',
+                                   pfam_selected=events[:4], direction_selected=events[:2],
+                                   direction_filter='non_arthropoda_to_arthropoda',
+                                   analyzed_orthogroups=['OG0', 'OG1', 'OG2', 'zero_transfer_OG'])
+    assert [r['event_count'] for r in counts] == [6, 4, 2, 1]
+    assert [r['orthogroup_count'] for r in counts] == [3, 2, 1, 1]
+    displayed = read_tsv(tmp_path/'plots/filtering_flow.tsv')[1]
+    assert [r['step'] for r in displayed] == ['00', '01', '02', '03', '04']
+    assert [r['event_count'] for r in displayed] == ['NA', '6', '4', '2', '1']
+    assert displayed[0]['orthogroup_count'] == '4'
+    assert displayed[-2]['stage'] == 'Non-Arthropoda donor → Arthropoda recipient'
+    assert displayed[-1]['stage'] == 'gall = 1 recipients'
+    pdf = PdfReader(tmp_path/'plots/filtering_flow.pdf')
+    assert len(pdf.pages) == 1
+    text = ' '.join(pdf.pages[0].extract_text().split())
+    assert 'Non-Arthropoda donor Arthropoda recipient' in text and 'gall = 1 recipients' in text
+    assert 'No UFB threshold applied' in text
 
 
 def supported_link(event_id, side, gene):
@@ -556,12 +653,14 @@ def test_focus_gene_tables_use_the_same_eligibility_as_event_validation(source, 
     assert summary['recipient_gene_count'] == summary['donor_gene_count'] == 1
 
 
-def test_category1_gene_tree_export_receives_only_aggregate_events(source, monkeypatch):
+@pytest.mark.parametrize('direction', ['any', 'non_arthropoda_to_arthropoda'])
+def test_category1_gene_tree_export_receives_only_aggregate_events(source, monkeypatch, direction):
     import focus_hgt_figures
     import focus_hgt_gene_trees
     import focus_hgt_traits
 
     calls = []
+    figure_calls = []
     real_export = focus_hgt_traits.export_bundle
     def export_without_species_pdf(*args, **kwargs):
         # Keep this wiring test independent of the species-tree renderer.
@@ -576,11 +675,22 @@ def test_category1_gene_tree_export_receives_only_aggregate_events(source, monke
         return dict(rendered_family_count=1, selected_event_count=len(events))
     monkeypatch.setattr(focus_hgt_traits, 'export_bundle', export_without_species_pdf)
     monkeypatch.setattr(focus_hgt_gene_trees, 'export_gene_trees', capture)
-    monkeypatch.setattr(focus_hgt_figures, 'export_figures', lambda *args, **kwargs:dict(pdf_count=3))
+    def capture_figures(*args, **kwargs):
+        figure_calls.append(kwargs)
+        assert kwargs['direction_filter'] == direction
+        if direction == 'any':
+            assert kwargs['direction_selected'] is None
+        else:
+            assert len(kwargs['direction_selected']) == 4
+            assert all(row['direction_filter_status'] == 'passed' for row in kwargs['direction_selected'])
+        return dict(pdf_count=3)
+    monkeypatch.setattr(focus_hgt_figures, 'export_figures', capture_figures)
     annotation_path = source[0].parent/'existing_annotations.tsv'
     annotation_path.write_text('Existing normalized annotation input\n')
-    report = generate(*source, plots=True, gene_family_root='existing-families', context_annotations=str(annotation_path))
+    report = generate(*source, plots=True, gene_family_root='existing-families', context_annotations=str(annotation_path),
+                      direction_filter=direction, species_taxonomy=saved_species_taxonomy(source[0].parent/'taxonomy.tsv'))
     assert len(calls) == 2  # One aggregate per binary/categorical trait, no per-tip rendering.
+    assert len(figure_calls) == 2
     assert all(path.name == 'tree_plot' and root == 'existing-families' for path, _, root in calls)
     assert calls[0][1] == {'OG1:3:1', 'OG1:3:2', 'OG1:3:4'}
     assert calls[1][1] == {'OG1:3:1', 'OG1:3:5'}
@@ -1590,7 +1700,9 @@ def test_no_ufb_flow_has_analyzed_ogs_zero_step_and_preserves_cohort(tmp_path):
     text = PdfReader(output/'filtering_flow.pdf').pages[0].extract_text()
     assert 'Matched event and species branches' not in text and 'UFB >=90' not in text
     assert 'No UFB threshold' in text
-    assert len(counts) == 4
+    assert [row['stage'] for row in counts] == ['All modeled transfers', 'Bilateral scaffold background',
+                                                'Event-gene pair Pfam filter',
+                                                'Non-Arthropoda donor → Insecta recipient', 'gall = 1 recipients']
 
 
 def test_query_taxonomic_ranks_cannot_borrow_a_foreign_saved_lineage(tmp_path):

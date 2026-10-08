@@ -212,16 +212,20 @@ unknown. Host-species taxonomy still determines modeled transfer direction,
 and Swiss-Prot best hits remain separate product annotations. Optional saved
 taxonomy/classification inputs participate in provenance even when plots are
 disabled; no new sequence search or gene-tree inference is run.
-Set `hgt_summary_focus_direction_filter=non_arthropoda_to_insecta` to insert a
-direction filter immediately after Pfam. The filtering-flow figure combines
-this direction rule and category-1 recipients into one final stage,
-`Non-Arthropoda donor & <trait> = 1 recipient`; the historical upstream direction
-row is omitted. Source audits and manifests retain the individual decisions,
-and support/scaffold/Pfam counts still describe the previously verified input
+Set `hgt_summary_focus_direction_filter=non_arthropoda_to_arthropoda` to insert a
+direction filter immediately after the exact-pair filter. The filtering-flow
+figure shows `Non-Arthropoda donor → Arthropoda recipient` and
+`<trait> = 1 recipients` as separate steps, with each step's event and
+orthogroup counts. The existing `non_arthropoda_to_insecta` choice instead
+requires Insecta recipients and labels the taxonomy step accordingly.
+The historical upstream direction row is omitted when this post-pair taxonomy
+step is present. Source audits and manifests retain the individual decisions,
+and support/scaffold/pair counts still describe the previously verified input
 cohort rather than implying reevaluation of every modeled transfer.
 The saved host-species taxonomy (`hgt_summary_focus_species_taxonomy=auto`)
 is joined to the exact analysis species-tree tip labels. Every donor descendant
-must be outside Arthropoda, and every recipient descendant within Insecta.
+must be outside Arthropoda, and every recipient descendant within the selected
+recipient group (Arthropoda or Insecta).
 Daphnia and crustacean ancestral donors are excluded. Branches spanning both
 sides of a taxonomic boundary, with unknown descendant classifications, or
 without an exact species-branch mapping are withheld. Best-hit and query

@@ -5,9 +5,10 @@ import hashlib
 from collections import Counter
 from pathlib import Path
 
-DIRECTION_CHOICES = ('any', 'non_arthropoda_to_insecta')
+DIRECTION_CHOICES = ('any', 'non_arthropoda_to_insecta', 'non_arthropoda_to_arthropoda')
 EVENT_FIELDS = ['direction_filter_status', 'direction_filter_reason',
-                'direction_donor_arthropoda_status', 'direction_recipient_insecta_status']
+                'direction_donor_arthropoda_status', 'direction_recipient_insecta_status',
+                'direction_recipient_arthropoda_status']
 MISSING = {'', '.', 'na', 'nan', 'none', 'null', 'unknown', 'unavailable'}
 
 
@@ -75,8 +76,11 @@ def classify_branches(nodes, taxonomy):
     return states, rows
 
 
-def filter_events(events, nodes, taxonomy_path):
-    """Require every donor tip outside Arthropoda and every recipient tip in Insecta."""
+def filter_events(events, nodes, taxonomy_path, direction_filter='non_arthropoda_to_insecta'):
+    """Evaluate each modeled branch's entire descendant clade, preserving unknowns."""
+    if direction_filter not in DIRECTION_CHOICES:
+        raise ValueError('Invalid focused HGT direction filter')
+    recipient_group = 'arthropoda' if direction_filter == 'non_arthropoda_to_arthropoda' else 'insecta'
     taxonomy, source_sha = read_taxonomy(taxonomy_path)
     states, branches = classify_branches(nodes, taxonomy)
     selected, audit = [], []
@@ -85,15 +89,19 @@ def filter_events(events, nodes, taxonomy_path):
         if event['generax_transfer'] != f"Y@{event['generax_donor_node']}@{event['generax_recipient_node']}":
             raise ValueError('Event transfer token disagrees with donor/recipient branch IDs')
         ds = states.get(donor, {}).get('arthropoda_status', 'unmapped')
-        rs = states.get(recipient, {}).get('insecta_status', 'unmapped')
-        reason = ('event_mapping_unresolved' if event.get('mapping_status', 'matched') != 'matched'
+        rs = states.get(recipient, {}).get(recipient_group + '_status', 'unmapped')
+        reason = ('' if direction_filter == 'any' else
+                  'event_mapping_unresolved' if event.get('mapping_status', 'matched') != 'matched'
                   else 'donor_' + ds + '_arthropoda' if ds != 'outside'
-                  else 'recipient_' + rs + '_insecta' if rs != 'within' else '')
+                  else 'recipient_' + rs + '_' + recipient_group if rs != 'within' else '')
         status = ('passed' if not reason else 'withheld' if event.get('mapping_status', 'matched') != 'matched'
                   or ds in {'unknown', 'mixed', 'unmapped'} or rs in {'unknown', 'mixed', 'unmapped'} else 'excluded_direction')
         row = dict(event, direction_filter_status=status,
-                   direction_filter_reason=reason or 'all_donor_tips_outside_arthropoda_all_recipient_tips_in_insecta',
-                   direction_donor_arthropoda_status=ds, direction_recipient_insecta_status=rs)
+                   direction_filter_reason=reason or ('direction_filter_disabled' if direction_filter == 'any' else
+                       'all_donor_tips_outside_arthropoda_all_recipient_tips_in_' + recipient_group),
+                   direction_donor_arthropoda_status=ds,
+                   direction_recipient_insecta_status=states.get(recipient, {}).get('insecta_status', 'unmapped'),
+                   direction_recipient_arthropoda_status=states.get(recipient, {}).get('arthropoda_status', 'unmapped'))
         audit.append(row)
         if status == 'passed':
             selected.append(row)

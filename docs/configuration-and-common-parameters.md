@@ -49,10 +49,13 @@ annotations as inputs. Focused results additionally apply the configured
 Enabled Pfam and protein-length requirements are evaluated together on each
 exact bilateral event-gene pair before trait selection, so multiple traits
 share the same passing cohort and pair-stage counts.
-For non-Arthropoda donors into Insecta, set
-`hgt_summary_focus_direction_filter=non_arthropoda_to_insecta`. This additional
-species-branch filter follows the Pfam pair filter and precedes every trait's
-category-1 selection. `hgt_summary_focus_species_taxonomy=auto` reads the saved
+For non-Arthropoda donors into Arthropoda, set
+`hgt_summary_focus_direction_filter=non_arthropoda_to_arthropoda`; the existing
+`non_arthropoda_to_insecta` choice limits recipients to Insecta. This additional
+species-branch filter follows the exact-pair filter and precedes every trait's
+category-1 selection. The filtering-flow figure shows taxonomy and trait as
+separate steps with their own event and orthogroup counts.
+`hgt_summary_focus_species_taxonomy=auto` reads the saved
 `output/species_taxonomy/species_taxonomy.tsv`; an explicit path selects another
 existing host-species taxonomy table. The general default `any` preserves other
 projects' transfer directions. See the root `direction_event_audit.tsv` and
@@ -498,9 +501,11 @@ candidate-free background, missing-data semantics, and counting units.
   event/pair/gene audits retain exclusion reasons and source hashes, including
   when plotting is disabled.
 - `hgt_summary_focus_direction_filter` (default `any`): set
-  `non_arthropoda_to_insecta` to require modeled donor species branches entirely
-  outside Arthropoda and recipients entirely within Insecta, after Pfam and
-  before category-1 traits. Mixed, unknown and unmapped branches are withheld.
+  `non_arthropoda_to_arthropoda` to require modeled donor species branches
+  entirely outside Arthropoda and recipients entirely within Arthropoda.
+  `non_arthropoda_to_insecta` instead requires all recipient tips within
+  Insecta. This taxonomy step follows the exact-pair filter, before the separate
+  category-1 trait step. Mixed, unknown and unmapped branches are withheld.
 - `hgt_summary_focus_species_taxonomy` (default `auto`): existing host-species
   taxonomy for the direction filter, normally
   `output/species_taxonomy/species_taxonomy.tsv`. An enabled filter requires

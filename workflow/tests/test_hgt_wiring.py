@@ -80,6 +80,7 @@ def test_species_direction_configuration_and_taxonomy_provenance_apply_without_p
     assert '[[ -f "${hgt_focus_existing_taxonomy}" ]] || hgt_focus_existing_taxonomy=""' in hgt
     assert '--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}"' in hgt
     assert '--parameter "direction_filter=${hgt_focus_direction_filter}"' in hgt
+    assert 'any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda)' in hgt
     taxonomy = hgt.index('--input "direction_species_taxonomy=')
     assert taxonomy < hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', taxonomy)
 

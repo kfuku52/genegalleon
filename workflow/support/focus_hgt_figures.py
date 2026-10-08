@@ -28,7 +28,13 @@ def write(path, rows, fields=None):
 
 
 def filtering_counts(source_events, selected, audit_path="", prefilter_selected=None, pfam_selected=None,
-                     direction_selected=None, support_filter_enabled=False):
+                     direction_selected=None, support_filter_enabled=False,
+                     direction_filter='non_arthropoda_to_insecta'):
+    from focus_hgt_direction import DIRECTION_CHOICES
+    if direction_filter not in DIRECTION_CHOICES:
+        raise ValueError('Invalid focused HGT direction filter')
+    if direction_selected is not None and direction_filter == 'any':
+        raise ValueError('Direction cohort supplied with disabled direction filter')
     def unique(rows):
         result = {row['event_id']: row for row in rows}
         if len(result) != len(rows) or '' in result:
@@ -109,22 +115,20 @@ def filtering_counts(source_events, selected, audit_path="", prefilter_selected=
                 raise ValueError("Accepted filtering-audit event has unsupported transfer direction")
             stages.append(("All modeled transfers", audited))
             # Historical direction decisions stay in the source audit. Focused
-            # figures show taxonomy only at the final, combined selection stage.
+            # figures show taxonomy at its own post-pair selection stage.
             if direction_selected is None:
                 stages.append(("Non-Insecta to Insecta", directional))
             stages.append(("Matched gene-tree UFB >=90", accepted))
     stages.append(("Input supported-event cohort", source_events))
     if pfam_selected is not None:
         stages.append(("Event-gene pair Pfam filter", pfam_selected))
-        stages.append(("Non-Arthropoda donor & category = 1 recipient"
-                       if direction_selected is not None else "Category = 1 recipients", selected))
-    else:
-        # Compatibility for callers reproducing the earlier trait-first figure.
-        stages.append(("Non-Arthropoda donor & category = 1 recipient"
-                       if direction_selected is not None else "Category = 1 recipients",
-                       selected if prefilter_selected is None else prefilter_selected))
-        if prefilter_selected is not None:
-            stages.append(("Event-gene pair Pfam filter", selected))
+    if direction_selected is not None:
+        recipient_group = 'Arthropoda' if direction_filter == 'non_arthropoda_to_arthropoda' else 'Insecta'
+        stages.append((f'Non-Arthropoda donor → {recipient_group} recipient', direction_selected))
+    # Preserve the historical trait-first option for direct callers using it.
+    stages.append(('Category = 1 recipients', selected if prefilter_selected is None else prefilter_selected))
+    if prefilter_selected is not None:
+        stages.append(("Event-gene pair Pfam filter", selected))
     return [
         dict(stage=label, event_count=len(rows), orthogroup_count=len({r["orthogroup"] for r in rows}))
         for label, rows in stages
@@ -170,8 +174,9 @@ def product_labels(families, links):
 
 def export_filtering_flow(directory, source_events, selected, trait, filter_audit='',
                           prefilter_selected=None, pfam_selected=None, direction_selected=None,
-                          support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None):
-    """Render the exact-pair criteria followed by one combined taxonomy/trait stage."""
+                          support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None,
+                          direction_filter='non_arthropoda_to_insecta'):
+    """Render exact-pair criteria, taxonomy and trait as distinct cohorts."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -186,7 +191,8 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
         plt.close(fig)
     counts = filtering_counts(source_events, selected, filter_audit,
                               prefilter_selected=prefilter_selected, pfam_selected=pfam_selected,
-                              direction_selected=direction_selected, support_filter_enabled=support_filter_enabled)
+                              direction_selected=direction_selected, support_filter_enabled=support_filter_enabled,
+                              direction_filter=direction_filter)
     coverage_values = {float(r['pfam_min_shared_query_coverage']) for r in (pfam_selected or [])
                        if r.get('pfam_min_shared_query_coverage') not in (None, '')}
     if len(coverage_values) > 1:
@@ -203,8 +209,7 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
         for row in counts:
             if row['stage'] == 'Input supported-event cohort':
                 row['stage'] = 'Bilateral scaffold background'
-    counts[trait_index]["stage"] = ("Non-Arthropoda donor & " + trait + " = 1 recipient"
-                                   if direction_selected is not None else trait + " = 1 recipients")
+    counts[trait_index]["stage"] = trait + " = 1 recipients"
     write(directory / "filtering_flow_audit.tsv", counts)
     displayed = [dict(row) for row in counts if row['stage'] != 'Matched event and species branches']
     first_step = 1
@@ -257,7 +262,8 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
 
 def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit="",
                    context_annotations='', prefilter_selected=None, pfam_selected=None, direction_selected=None,
-                   support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None):
+                   support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None,
+                   direction_filter='non_arthropoda_to_insecta'):
     import hashlib
     import textwrap
 
@@ -281,7 +287,8 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     counts = export_filtering_flow(directory, source_events, selected, trait, filter_audit,
                                    prefilter_selected=prefilter_selected, pfam_selected=pfam_selected,
                                    direction_selected=direction_selected, support_filter_enabled=support_filter_enabled,
-                                   analyzed_orthogroups=analyzed_orthogroups, pair_filter_label=pair_filter_label)
+                                   analyzed_orthogroups=analyzed_orthogroups, pair_filter_label=pair_filter_label,
+                                   direction_filter=direction_filter)
     families = sorted({r["orthogroup"] for r in selected})
     species = [tip.name for tip in tree.get_terminals()]
     membership = Counter()
