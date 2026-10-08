@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
 
@@ -104,6 +105,7 @@ class GapCompressedCoordinates:
 
     def __init__(self, focal, neighbors):
         self.gaps, self.center, self.anchor = [], 0, 0
+        self._gap_starts, self._gap_offsets = [], [0]
         if focal is None:
             return
         spans, protected = [], []
@@ -127,11 +129,32 @@ class GapCompressedCoordinates:
                                       genomic_start_bp=left[1], genomic_end_exclusive_bp=right[0],
                                       original_gap_bp=length, display_gap_bp=NONCODING_GAP_DISPLAY_BP,
                                       omitted_bp=length - NONCODING_GAP_DISPLAY_BP))
+        self._gap_starts = [gap['genomic_start_bp'] for gap in self.gaps]
+        try:
+            for gap in self.gaps:
+                # Keep the original full-gap arithmetic and addition order;
+                # an integer sum could round differently for large coordinates.
+                full = gap['original_gap_bp'] * gap['omitted_bp'] / gap['original_gap_bp']
+                self._gap_offsets.append(self._gap_offsets[-1] + full)
+        except OverflowError:
+            # A distant oversized gap need not affect an earlier position.
+            # Retain the scalar behavior where a full-gap prefix cannot fit.
+            self._gap_offsets = None
         self.center = (int(focal['start']) + int(focal['end'])) / 2
         self.anchor = self.transform(self.center)
         self.bounds = (min(start for start, _ in spans), max(end for _, end in spans))
 
     def transform(self, position):
+        if not self.gaps:
+            return position
+        if self._gap_offsets is not None and type(position) in (int, float):
+            index = bisect_right(self._gap_starts, position) - 1
+            if index < 0:
+                return position - 0.0
+            gap = self.gaps[index]
+            covered = min(max(position - gap['genomic_start_bp'], 0), gap['original_gap_bp'])
+            reduction = self._gap_offsets[index] + covered * gap['omitted_bp'] / gap['original_gap_bp']
+            return position - reduction
         reduction = 0
         for gap in self.gaps:
             covered = min(max(position - gap['genomic_start_bp'], 0), gap['original_gap_bp'])

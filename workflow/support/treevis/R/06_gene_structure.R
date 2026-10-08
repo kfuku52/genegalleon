@@ -209,11 +209,11 @@ treevis_intron_connection_polygons = function(labels, half_width, tolerance_nt=3
     labels = labels[labels$status %in% c('mapped','position_only'),,drop=FALSE]
     labels$connection_index = seq_len(nrow(labels))
     polygons = list()
-    seen = character()
+    seen = new.env(hash=TRUE,parent=emptyenv())
     add_band = function(a,b,kind) {
         pair = paste(sort(c(a$connection_index,b$connection_index)),collapse=':')
-        if (pair %in% seen || a$y == b$y) return(invisible(NULL))
-        seen <<- c(seen,pair)
+        if (exists(pair,envir=seen,inherits=FALSE) || a$y == b$y) return(invisible(NULL))
+        assign(pair,TRUE,envir=seen)
         wa = min(half_width,(a$end-a$start)/2)
         wb = min(half_width,(b$end-b$start)/2)
         polygons[[length(polygons)+1]] <<- data.frame(
@@ -224,22 +224,32 @@ treevis_intron_connection_polygons = function(labels, half_width, tolerance_nt=3
             x=c(a$x-wa,a$x+wa,b$x+wb,b$x-wb),y=c(a$y,a$y,b$y,b$y))
     }
     rows = sort(unique(labels$y))
-    if (length(rows)>1) for (r in seq_len(length(rows)-1)) {
-        a = labels[labels$y == rows[r],,drop=FALSE]
-        for (i in seq_len(nrow(a))) for (next_row in rows[(r+1):length(rows)]) {
-            b = labels[labels$y == next_row,,drop=FALSE]
-            distance = abs(outer(a$alignment_left,b$alignment_left,'-'))
-            if (min(distance[i,])>tolerance_nt) next
-            candidates = which(distance[i,] == min(distance[i,]))
-            # An ambiguous nearest row is not bypassed to manufacture a link.
-            if (length(candidates)!=1) break
-            j = candidates[1]
-            reverse = which(distance[,j] == min(distance[,j]))
-            if (length(reverse)!=1 || reverse[1]!=i) break
-            exact = a$status[i]=='mapped' && b$status[j]=='mapped' &&
-                !is.na(a$site_id[i]) && !is.na(b$site_id[j]) && a$site_id[i]==b$site_id[j]
-            add_band(a[i,],b[j,],if(exact) 'exact_phase' else 'position_candidate')
-            break
+    if (length(rows)>1) {
+        row_data = lapply(rows,function(y) labels[labels$y == y,,drop=FALSE])
+        positions = unique(labels$alignment_left)
+        position_rows = split(match(labels$y,rows),match(labels$alignment_left,positions))
+        for (r in seq_len(length(rows)-1)) {
+            a = row_data[[r]]
+            for (i in seq_len(nrow(a))) {
+                nearby = abs(positions-a$alignment_left[i]) <= tolerance_nt
+                if (anyNA(nearby)) stop('Missing intron alignment boundary')
+                candidate_rows = unlist(position_rows[as.character(which(nearby))],use.names=FALSE)
+                candidate_rows = candidate_rows[candidate_rows>r]
+                if (!length(candidate_rows)) next
+                # Examine the first later row with a nearby boundary. Ties or a
+                # nonreciprocal nearest boundary stop here, just as in the row scan.
+                b = row_data[[min(candidate_rows)]]
+                distance = abs(a$alignment_left[i]-b$alignment_left)
+                candidates = which(distance == min(distance))
+                if (length(candidates)!=1) next
+                j = candidates[1]
+                reverse_distance = abs(a$alignment_left-b$alignment_left[j])
+                reverse = which(reverse_distance == min(reverse_distance))
+                if (length(reverse)!=1 || reverse[1]!=i) next
+                exact = a$status[i]=='mapped' && b$status[j]=='mapped' &&
+                    !is.na(a$site_id[i]) && !is.na(b$site_id[j]) && a$site_id[i]==b$site_id[j]
+                add_band(a[i,],b[j,],if(exact) 'exact_phase' else 'position_candidate')
+            }
         }
     }
     if (length(polygons)) do.call(rbind,polygons) else data.frame()

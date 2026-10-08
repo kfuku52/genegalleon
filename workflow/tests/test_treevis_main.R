@@ -1241,6 +1241,34 @@ if (!identical(domain_order, alignment_order)) {
   stop("Protein domain and alignment overlap stacks should use the same bottom-to-top domain order.")
 }
 
+# Gap-separated runs retain endpoints, stacking order and integer split IDs.
+# An all-gap tip keeps its backbone, and a tip without domains keeps its fill.
+gap_tree <- list(tree=list(data=data.frame(isTip=TRUE, label=c('g1','gap','plain'),
+                                         y=1:3, tiplab_color='black')))
+gap_sequences <- list(g1=c('01','01','04','01','01','04','01','01','04','01','01','01'),
+                      gap=rep('04',12), plain=rep('01',12))
+gap_plot <- add_alignment_column(gap_tree,args_align,gap_sequences,
+                                df_rpsblast=df_rps_overlap,seqs_untrim=gap_sequences)$alignment
+gap_rectangles <- gap_plot$layers[[2]]$data
+focal_rectangles <- gap_rectangles[gap_rectangles$label == 'g1',,drop=FALSE]
+stopifnot(identical(focal_rectangles$xmin,c(0,3,4,4,6,6,9)),
+          identical(focal_rectangles$xmax,c(1,3,4,4,7,7,11)),
+          identical(as.character(focal_rectangles$fill),
+                    c('Domain_A','Domain_A','Domain_A','Domain_B','Domain_A','Domain_B','Domain_B')),
+          identical(focal_rectangles$split_index,c(1L,1L,1L,2L,1L,2L,1L)),
+          identical(focal_rectangles$split_total,c(1L,1L,2L,2L,2L,2L,1L)),
+          !any(gap_rectangles$label == 'gap'),
+          sum(gap_rectangles$label == 'plain') == 1L,
+          as.character(gap_rectangles$fill[gap_rectangles$label == 'plain']) == '__non_domain__',
+          identical(as.character(gap_plot$layers[[1]]$data$label),c('g1','gap','plain')))
+
+# Domain intervals retain the complete occurrence order and exact schema.
+domain_complete <- get_df_domain(df_rps_overlap_ready)
+stopifnot(identical(domain_complete$xmin,c(0,1,1,2)),
+          identical(domain_complete$xmax,c(1,2,2,2)),
+          identical(as.character(domain_complete$sacc),c('Domain_A','Domain_A','Domain_B','Domain_B')),
+          identical(domain_complete$label,rep('g1',4)))
+
 cat("genegalleon.treevis package tests passed.\n")
 
 

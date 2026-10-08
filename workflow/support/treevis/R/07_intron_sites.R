@@ -84,16 +84,25 @@ treevis_intron_site_data = function(tips, seqs) {
         if (length(candidates) == 1) events$site_id[k] = candidates
     }
     cells = list()
-    for (id in names(rows)) {
-        row = rows[[id]]
-        for (j in seq_len(nrow(keys))) {
-            b = keys$alignment_left[j]
-            available = all(row$chars[c(b,b+1)] %in% c('A','C','G','T')) &&
-                (is.na(row$phase) || is.na(keys$phase[j]) || (row$cumulative[b]-row$phase) %% 3 == keys$phase[j])
-            present = any(events$node_name == id & events$status == 'mapped' & !is.na(events$site_id) & events$site_id == keys$site_id[j])
-            possible = any(events$node_name == id & events$status == 'position_only' & events$alignment_left == b)
-            cells[[length(cells)+1]] = data.frame(node_name=id,y=row$y,x=j,site_id=keys$site_id[j],
-                state=if (present) 'present' else if (possible) 'position_only' else if (available) 'absent' else 'unresolved',colour=row$colour)
+    if (nrow(keys)) {
+        mapped = events$status == 'mapped' & !is.na(events$site_id)
+        mapped_by_gene = split(events$site_id[mapped], events$node_name[mapped])
+        possible = events$status == 'position_only'
+        possible_by_gene = split(events$alignment_left[possible], events$node_name[possible])
+        b = keys$alignment_left
+        for (id in names(rows)) {
+            row = rows[[id]]
+            available = row$chars[b] %in% c('A','C','G','T') &
+                row$chars[b+1] %in% c('A','C','G','T') &
+                (is.na(row$phase) | is.na(keys$phase) | (row$cumulative[b]-row$phase) %% 3 == keys$phase)
+            state = rep('unresolved', nrow(keys))
+            state[available] = 'absent'
+            # An unknown phase still marks every candidate at this boundary;
+            # an exact mapped event takes precedence over availability.
+            state[b %in% possible_by_gene[[id]]] = 'position_only'
+            state[keys$site_id %in% mapped_by_gene[[id]]] = 'present'
+            cells[[length(cells)+1]] = data.frame(node_name=id,y=row$y,x=seq_len(nrow(keys)),
+                site_id=keys$site_id,state=state,colour=row$colour)
         }
     }
     list(sites=keys, events=events, cells=if (length(cells)) do.call(rbind,cells) else data.frame(),

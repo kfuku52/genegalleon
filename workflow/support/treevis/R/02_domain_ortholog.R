@@ -85,14 +85,13 @@ get_df_domain <- function(df_rps) {
         
         # One row per active domain
         for (j in seq_along(current_set_sorted)) {
-          out_rows[[out_idx]] <- data.frame(
+          out_rows[[out_idx]] <- list(
             xmin  = current_start - 1,
             xmax  = min(new_pos - 1, qlen - 1),
             ymin  = borders[j],
             ymax  = borders[j + 1],
             sacc  = current_set_sorted[j],
-            label = qacc,
-            stringsAsFactors = FALSE
+            label = qacc
           )
           out_idx <- out_idx + 1
         }
@@ -126,14 +125,13 @@ get_df_domain <- function(df_rps) {
       step_value <- (ymax - ymin) / length(current_set_sorted)
       borders    <- seq(ymin, ymax, step_value)
       for (j in seq_along(current_set_sorted)) {
-        out_rows[[out_idx]] <- data.frame(
+        out_rows[[out_idx]] <- list(
           xmin  = current_start - 1,
           xmax  = qlen - 1,
           ymin  = borders[j],
           ymax  = borders[j + 1],
           sacc  = current_set_sorted[j],
-          label = qacc,
-          stringsAsFactors = FALSE
+          label = qacc
         )
         out_idx <- out_idx + 1
       }
@@ -151,7 +149,12 @@ get_df_domain <- function(df_rps) {
     )
     return(out)
   }
-  out <- do.call(rbind, out_rows)
+  # Preserve the ordered intervals while assembling each typed column once;
+  # thousands of one-row frames otherwise dominate domain-rich families.
+  columns <- names(out_rows[[1]])
+  out <- as.data.frame(setNames(lapply(columns, function(column) {
+    unlist(lapply(out_rows, `[[`, column), use.names = FALSE)
+  }), columns), stringsAsFactors = FALSE)
   
   detected_levels <- unique(as.character(out$sacc))
   if (length(domain_order) == 0) {

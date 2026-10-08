@@ -103,11 +103,14 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     }
     key_vec <- rep(NA_character_, length(seq_vec))
     valid_idx <- which(is_atgc)
-    for (i in valid_idx) {
-      labels_i <- active_domains[[i]]
-      if (is.null(labels_i) || length(labels_i) == 0) {
-        key_vec[i] <- non_domain_fill
-      } else {
+    key_vec[valid_idx] <- non_domain_fill
+    domain_idx <- valid_idx[lengths(active_domains[valid_idx]) > 0]
+    if (length(domain_idx)) {
+      # Adjacent bases repeatedly share the same domain set. Sort each distinct
+      # set once while preserving the original rank and alphabetic tie-breaks.
+      active_sets <- active_domains[domain_idx]
+      unique_sets <- unique(active_sets)
+      set_keys <- vapply(unique_sets, function(labels_i) {
         labels_i <- unique(as.character(labels_i))
         ord_i <- order(
           ifelse(labels_i %in% names(domain_rank), domain_rank[labels_i], Inf),
@@ -115,8 +118,9 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
           method = 'radix',
           na.last = TRUE
         )
-        key_vec[i] <- paste(labels_i[ord_i], collapse = key_sep)
-      }
+        paste(labels_i[ord_i], collapse = key_sep)
+      }, character(1))
+      key_vec[domain_idx] <- set_keys[match(active_sets, unique_sets)]
     }
 
     # Run-length encode
@@ -129,48 +133,20 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     # Keep only runs in non-gap positions
     keep_idx <- which(!is.na(runs$value))
     if (length(keep_idx) > 0) {
-      local_rows <- list()
-      local_n <- 1
-      for (rk in keep_idx) {
-        xmin_val <- run_starts[rk] - 1
-        xmax_val_run <- run_ends[rk] - 1
-        key_val <- runs$value[rk]
-        if (identical(key_val, non_domain_fill)) {
-          local_rows[[local_n]] <- data.frame(
-            xmin = xmin_val,
-            xmax = xmax_val_run,
-            label = seqname,
-            fill = non_domain_fill,
-            split_index = 1L,
-            split_total = 1L,
-            stringsAsFactors = FALSE
-          )
-          local_n <- local_n + 1
-        } else {
-          labels_run <- strsplit(as.character(key_val), key_sep, fixed = TRUE)[[1]]
-          n_split <- length(labels_run)
-          if (n_split == 0) {
-            next
-          }
-          for (j in seq_len(n_split)) {
-            local_rows[[local_n]] <- data.frame(
-              xmin = xmin_val,
-              xmax = xmax_val_run,
-              label = seqname,
-              fill = labels_run[j],
-              split_index = as.integer(j),
-              split_total = as.integer(n_split),
-              stringsAsFactors = FALSE
-            )
-            local_n <- local_n + 1
-          }
-        }
-      }
-      if (length(local_rows) > 0) {
-        df_local <- do.call(rbind, local_rows)
-      } else {
-        df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0), fill = character(0), split_index = integer(0), split_total = integer(0))
-      }
+      # Expand runs once per tip. The old one-row frame for every interval and
+      # overlapping domain spent most alignment-panel time constructing frames.
+      # Keep run order, domain order, zero-based endpoints and integer split IDs.
+      labels_run <- strsplit(as.character(runs$value[keep_idx]), key_sep, fixed = TRUE)
+      n_split <- lengths(labels_run)
+      df_local <- data.frame(
+        xmin = rep(run_starts[keep_idx] - 1, n_split),
+        xmax = rep(run_ends[keep_idx] - 1, n_split),
+        label = rep(seqname, sum(n_split)),
+        fill = unlist(labels_run, use.names = FALSE),
+        split_index = sequence(n_split),
+        split_total = rep(n_split, n_split),
+        stringsAsFactors = FALSE
+      )
     } else {
       # If there are no TRUE runs, just store an empty data frame
       df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0), fill = character(0), split_index = integer(0), split_total = integer(0))

@@ -417,6 +417,9 @@ see [remaining I/O performance](remaining-io-performance.md) and
 [batch I/O performance](batch-io-performance.md). Its benchmark also
 checks equivalent logical outputs and separates parent/child peak RSS.
 
+For profiling native two-page HGT PDFs and verifying exact drawing/audit
+equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
+
 ## Input staging comparisons
 
 See [input-generation performance](input-generation-performance.md) for native

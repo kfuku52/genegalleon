@@ -85,6 +85,57 @@ unknown_sites = genegalleon.treevis:::treevis_intron_site_data(unknown,seqs)
 stopifnot(unknown_sites$events$status[unknown_sites$events$node_name=='b']=='position_only',
     all(unknown_sites$cells$state[unknown_sites$cells$node_name=='b']=='position_only'))
 
+# A scalar correspondence oracle checks the batched cell grid independently of
+# its per-gene event indexes, including ordering and storage types.
+check_site_cells = function(input_tips, input_seqs, result) {
+    ids = unique(as.character(input_tips$label[!input_tips$label %in% result$diagnostics$node_name]))
+    expected = list()
+    for (id in ids) {
+        tip = input_tips[match(id,input_tips$label),,drop=FALSE]
+        chars = strsplit(input_seqs[[id]],'',fixed=TRUE)[[1]]
+        cumulative = cumsum(!chars %in% c('-','.'))
+        state = vapply(seq_len(nrow(result$sites)), function(j) {
+            site = result$sites[j,,drop=FALSE]
+            event = result$events[result$events$node_name==id,,drop=FALSE]
+            if (any(event$status=='mapped' & !is.na(event$site_id) & event$site_id==site$site_id)) return('present')
+            if (any(event$status=='position_only' & event$alignment_left==site$alignment_left)) return('position_only')
+            b = site$alignment_left
+            available = all(chars[c(b,b+1)] %in% c('A','C','G','T')) &&
+                (is.na(tip$cds_first_phase) || is.na(site$phase) ||
+                 (cumulative[b]-tip$cds_first_phase) %% 3 == site$phase)
+            if (available) 'absent' else 'unresolved'
+        }, character(1))
+        expected[[length(expected)+1]] = data.frame(node_name=id,y=tip$y,x=seq_len(nrow(result$sites)),
+            site_id=result$sites$site_id,state=state,colour=tip$tiplab_color)
+    }
+    stopifnot(identical(result$cells,do.call(rbind,expected)))
+}
+mixed_tips = rbind(unknown,transform(unknown[1,,drop=FALSE],label='ambiguous'),
+    transform(unknown[1,,drop=FALSE],label='third_phase',cds_first_phase=2),
+    transform(unknown[1,,drop=FALSE],label='unknown_only',intron_positions='6',cds_first_phase=NA_real_),
+    transform(unknown[1,,drop=FALSE],label='missing_alignment',num_intron=0,intron_positions=''))
+mixed_seqs = c(seqs,ambiguous='AANCCCGGGTTT',third_phase='AAACCCGGGTTT',unknown_only='AAACCCGGGTTT')
+mixed_sites = genegalleon.treevis:::treevis_intron_site_data(mixed_tips,mixed_seqs)
+stopifnot(identical(mixed_sites$sites$alignment_left,c(3L,3L,3L,6L)),
+    identical(mixed_sites$sites$phase,c(0,1,2,NA_real_)),
+    mixed_sites$events$status[mixed_sites$events$node_name=='ambiguous']=='ambiguous_bases',
+    mixed_sites$events$candidate_site_ids[mixed_sites$events$node_name=='b']=='I001;I002;I003',
+    mixed_sites$events$site_id[mixed_sites$events$node_name=='unknown_only']=='I004',
+    mixed_sites$diagnostics$reason[mixed_sites$diagnostics$node_name=='missing_alignment']=='missing_alignment')
+check_site_cells(mixed_tips,mixed_seqs,mixed_sites)
+
+# Many genes share site boundaries with distinct phases and unknown phase.
+# This exercises an event-sparse grid, rather than only a few populated cells.
+grid_tips = data.frame(label=paste0('grid',seq_len(120)),y=seq_len(120),num_intron=1,
+    intron_positions=as.character(3*((seq_len(120)-1) %% 36+1)),intron_feature_size=120,
+    cds_first_phase=rep(c(0,1,2,NA_real_),30),tiplab_color=rep(c('red','blue'),60))
+grid_seqs = setNames(rep(paste(rep('A',120),collapse=''),120),grid_tips$label)
+grid_sites = genegalleon.treevis:::treevis_intron_site_data(grid_tips,grid_seqs)
+stopifnot(nrow(grid_sites$diagnostics)==0,nrow(grid_sites$cells)==120*nrow(grid_sites$sites),
+    all(c('present','position_only','absent','unresolved') %in% grid_sites$cells$state))
+check_site_cells(grid_tips,grid_seqs,grid_sites)
+cat('Batched intron cells retain mixed phase/gap states, sparse-grid order and storage types.\n')
+
 # Inline IDs attach by CDS offset rather than genomic/UTR intron order.
 inline_introns = data.frame(label=c('a','a','b','gap'),cds_offset=c(0,3,3,3),
     y=c(1,1,2,4),start=c(0,50,60,70),end=c(10,60,70,80))
@@ -133,6 +184,30 @@ stopifnot(nrow(near_bands)==12,all(near_bands$kind=='position_candidate'),
 # Equidistant alternatives do not arbitrarily select a nearby intron.
 tied = rbind(near_labels[1:2,],transform(near_labels[2,],alignment_left=99,x=3,start=2.5,end=3.5))
 stopifnot(nrow(genegalleon.treevis:::treevis_intron_connection_polygons(tied,0.3))==0)
+
+# A closer match on a later tip must not bypass the first ambiguous tip row.
+blocked = rbind(tied,transform(near_labels[1,],y=3,x=4,start=3.5,end=4.5))
+blocked_bands = genegalleon.treevis:::treevis_intron_connection_polygons(blocked,0.3)
+stopifnot(!any(blocked_bands$from_index==1))
+# Reciprocal nearest ties on the current row also stop the search.
+reverse_tie = near_labels[c(1,1,2,1),]
+reverse_tie$alignment_left = c(100,102,101,100)
+reverse_tie$y = c(1,1,2,3)
+reverse_tie$x = seq_len(4)
+reverse_tie$start = reverse_tie$x-0.5; reverse_tie$end = reverse_tie$x+0.5
+reverse_bands = genegalleon.treevis:::treevis_intron_connection_polygons(reverse_tie,0.3)
+stopifnot(nrow(reverse_bands)==4,all(reverse_bands$from_index==3),all(reverse_bands$to_index==4))
+# Skip distant rows, then pick the unique closest boundary on the first nearby
+# row. Connection indices and polygon coordinates retain the input row order.
+sparse = near_labels
+sparse$alignment_left = c(100,1000,105,97,102)
+sparse$y = c(1,2,3,4,4)
+sparse_bands = genegalleon.treevis:::treevis_intron_connection_polygons(sparse,0.3)
+stopifnot(identical(unique(sparse_bands$connection),c('1:5','3:5')),
+    all(sparse_bands$to_index==5),
+    identical(sparse_bands$x[1:4],c(0.7,1.3,5.3,4.7)))
+bad_boundary = near_labels[1:2,]; bad_boundary$alignment_left[2]=NA_real_
+stopifnot(inherits(try(genegalleon.treevis:::treevis_intron_connection_polygons(bad_boundary,0.3),silent=TRUE),'try-error'))
 
 # A complete intron-free family and an all-missing family are valid empty results.
 empty_tips = data.frame(label='a',y=1,num_intron=0,intron_feature_size=6,
