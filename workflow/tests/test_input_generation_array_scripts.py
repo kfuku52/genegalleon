@@ -18,6 +18,96 @@ REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
 
 
 @pytest.fixture
+def atomic_state(monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    import input_generation_array_state as state
+    return state
+
+
+@pytest.mark.parametrize("value", [
+    None, [], {},
+    {"z": [True, False, None], "a": {"unicode": "遺伝子🧬", "escaped": "\\\"\n\r\t"}},
+    {"floats": [-0.0, 1.25, 1e-100, float("inf"), float("-inf"), float("nan")]},
+    [{"cds": [[10, 13, 0], [40, 49, 0]], "evidence": {"query": "donor_gene", "donor": "Species_a"},
+      "problems": [], "coverage": .95, "raw_prediction": {"frameshift": False, "identity": .88}}],
+    {"sequence": "ATGC" * 300000, "support": [{"donor": "近縁種", "identity": .99}]},
+], ids=["null", "empty_list", "empty_dict", "nested_unicode", "floats", "rescue_model", "large_sequence"])
+def test_atomic_json_keeps_exact_legacy_bytes(tmp_path, atomic_state, value):
+    expected = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    destination = tmp_path / "result.json"
+    atomic_state.atomic_json(destination, value)
+    assert destination.read_bytes() == expected
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_atomic_json_immutable_keeps_existing_bytes_and_universal_newline_equivalence(tmp_path, atomic_state, newline):
+    value = {"sequence": "A" * (2 * 1024 * 1024 + 3), "tail": 1}
+    destination = tmp_path / "plan.json"
+    raw = (json.dumps(value, sort_keys=True, indent=2) + "\n").replace("\n", newline).encode()
+    destination.write_bytes(raw)
+    before = destination.stat()
+    atomic_state.atomic_json(destination, value, immutable=True)
+    assert destination.read_bytes() == raw
+    assert (destination.stat().st_ino, destination.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    with pytest.raises(ValueError, match="Plan already exists with different inputs"):
+        atomic_state.atomic_json(destination, {**value, "tail": 2}, immutable=True)
+    assert destination.read_bytes() == raw
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_atomic_json_immutable_creates_actual_receipt_once(tmp_path, atomic_state):
+    destination = tmp_path / "nested" / "receipt.json"
+    value = {"files": {"models.json": "a" * 64}, "task_index": 1}
+    atomic_state.atomic_json(destination, value, immutable=True)
+    expected = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    assert destination.read_bytes() == expected
+    before = destination.stat()
+    atomic_state.atomic_json(destination, value, immutable=True)
+    assert destination.read_bytes() == expected
+    assert destination.stat().st_ino == before.st_ino
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+@pytest.mark.parametrize("failure", ["unsupported", "circular", "write", "replace", "link"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_atomic_json_failure_preserves_destination_and_removes_partial_temporary(tmp_path, atomic_state, monkeypatch, failure, existing):
+    destination = tmp_path / "result.json"
+    old = b'{"unchanged": true}\n'
+    if existing:
+        destination.write_bytes(old)
+    value = ["A" * (2 * 1024 * 1024 + 3)]
+    expected_error = OSError
+    if failure == "unsupported":
+        value.append(object())
+        expected_error = TypeError
+    elif failure == "circular":
+        value.append(value)
+        expected_error = ValueError
+    elif failure == "write":
+        from contextlib import contextmanager
+        named = atomic_state.tempfile.NamedTemporaryFile
+        @contextmanager
+        def broken_writer(*args, **kwargs):
+            with named(*args, **kwargs) as handle:
+                class Writer:
+                    name = handle.name
+                    def write(self, chunk):
+                        handle.write(chunk)
+                        raise OSError("injected write failure")
+                yield Writer()
+        monkeypatch.setattr(atomic_state.tempfile, "NamedTemporaryFile", broken_writer)
+    elif failure in {"replace", "link"}:
+        def broken_publication(*_):
+            raise OSError("injected publication failure")
+        monkeypatch.setattr(atomic_state.os, failure, broken_publication)
+    with pytest.raises(expected_error):
+        atomic_state.atomic_json(destination, value, immutable=failure == "link")
+    assert destination.read_bytes() == old if existing else not destination.exists()
+    assert set(tmp_path.iterdir()) == ({destination} if existing else set())
+
+
+@pytest.fixture
 def bound_staging_plan(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(SUPPORT_DIR))
     species = 'Arabidopsis_thaliana'

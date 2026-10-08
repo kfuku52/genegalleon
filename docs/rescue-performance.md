@@ -127,3 +127,17 @@ canonical JSON SHA256. One warmup plus three alternating measured trials per
 method gave a median 42.7 s / 12.1 GiB peak RSS for full-array loading versus
 25.5 s / 38 MiB for streaming. These figures measure JSON loading/filtering,
 not the whole export, genome validation or alignment.
+
+Atomic JSON output streams the same sorted, indented document through a 1 MiB
+buffer. Temporary files are removed after encoding, writing or publication
+failures, and immutable plans retain their existing comparison semantics.
+This avoids keeping an additional whole-document string and encoder chunk list
+in memory. During the 23-species run, the Simmondsia worker reached 176.6 GiB
+virtual-memory peak while materialising a 32.2 GB JSON result before writing it.
+
+A separate normal-SIF benchmark used 2,048 actual Simmondsia records, one warmup
+and three trials per method. All output bytes were identical. Median peak RSS
+was 66.0 MiB for full-document encoding and 38.8 MiB for buffered streaming;
+the loaded input itself used about 39 MiB. Median wall times were 0.238 s and
+0.247 s, so this benchmark demonstrates lower additional memory, not a timing
+speedup. The full-run peak is an observation, not a controlled comparison.
