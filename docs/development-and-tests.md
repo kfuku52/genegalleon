@@ -16,6 +16,10 @@ guarantee of duration or lack of network activity.
 | R helpers or treevis | Container R parse check and affected R tests; treevis also needs `check_treevis_package.sh` (commands below) |
 | Container inputs or tool-dependent behavior | Read [runtime policy](agent-runtime-validation.md), use a matching runtime, and select the required manifest checks; `runtime`/`full` are substantial runs, not preflight |
 
+Changes to refinement input verification should also preserve the
+[command-local input proof contract](refinement-input-proof.md), including fresh
+CLI boundaries, exact species scopes and publication races.
+
 For a focused Python test without lane filtering, use:
 
 ```bash

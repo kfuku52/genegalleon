@@ -42,6 +42,7 @@ try:
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from input_generation_array_state import atomic_json, digest, digest_paths
+    from refinement_input_snapshot import RefinementInputSnapshot
     from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from rescue_prepared_snapshot import PreparedSnapshot
@@ -62,6 +63,7 @@ except ImportError:
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from .input_generation_array_state import atomic_json, digest, digest_paths
+    from .refinement_input_snapshot import RefinementInputSnapshot
     from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from .rescue_prepared_snapshot import PreparedSnapshot
@@ -77,20 +79,23 @@ DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_r
 # Fresh CLI boundaries and each publication still verify frozen source bytes.
 _INVOCATION_CACHE = None
 _RECEIPT_SNAPSHOT = None
+_INPUT_SNAPSHOT = None
 
 
 @contextlib.contextmanager
 def invocation_context():
     """Retain immutable dependency proofs only within an explicit command."""
-    global _INVOCATION_CACHE, _RECEIPT_SNAPSHOT
-    previous = _INVOCATION_CACHE, _RECEIPT_SNAPSHOT
+    global _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
+    previous = _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
     snapshot = ReceiptSnapshot(rescue.verified)
+    inputs = RefinementInputSnapshot()
     _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = {}, snapshot
+    _INPUT_SNAPSHOT = inputs
     try:
-        with snapshot:
+        with inputs, snapshot:
             yield
     finally:
-        _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = previous
+        _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT = previous
 
 
 def invocation_cached(function):
@@ -120,7 +125,8 @@ def implementation():
                     'format_species_provider_config.py', 'format_species_taxonomy.py',
                     'rescue_terminal_completion.py', 'rescue_coding_paths.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
-                    'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py')
+                    'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
+                    'refinement_input_snapshot.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -283,7 +289,14 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
 
 def load(root, names=None):
     root = Path(root)
-    value = json.loads((root / 'plan.json').read_text())
+    try:
+        value = json.loads((root / 'plan.json').read_text())
+    except (OSError, ValueError) as exc:
+        if _INPUT_SNAPSHOT is not None:
+            _INPUT_SNAPSHOT.reject_plan_read(exc)
+        raise
+    if _INPUT_SNAPSHOT is not None:
+        _INPUT_SNAPSHOT.verify_plan(root, value)
     request = value['request']
     if request['schema'] != SCHEMA or request['implementation'] != implementation() or request['dependencies'] != dependency_identities():
         raise ValueError('Refinement implementation changed; use a new output directory')
@@ -291,8 +304,11 @@ def load(root, names=None):
     files = request['files'] if names is None else {p: value for p, value in request['files'].items() if p not in species_paths}
     if names is not None:
         files.update({request['sources'][n][k]: request['files'][request['sources'][n][k]] for n in names for k in ('fasta', 'gff', 'genome')})
-    if digest_paths(files) != files:
-        raise ValueError('Frozen refinement input changed')
+    if _INPUT_SNAPSHOT is None:
+        if digest_paths(files) != files:
+            raise ValueError('Frozen refinement input changed')
+    else:
+        _INPUT_SNAPSHOT.verify_files(files)
     tool = request['miniprot']
     if tool and digest(tool['path']) != tool['sha256']:
         raise ValueError('Frozen predictor changed')
@@ -360,6 +376,8 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
                     'child_lifetime_peak_rss_mib': children.ru_maxrss / rss_factor,
                     'note': 'Builder excludes source/receipt verification; RSS is a lifetime high-water mark, not an isolated stage peak.'})
     def publication_guard():
+        if _INPUT_SNAPSHOT is not None:
+            load(root, names)
         if receipt_snapshot is not None:
             receipt_snapshot.check(ordinary)
         if prepared_snapshot is not None:
@@ -368,7 +386,7 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
             except (OSError, ValueError) as exc:
                 raise ValueError('Stage dependency content changed: prepared annotation') from exc
 
-    publication = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot else {}
+    publication = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
     return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **publication)
 
 
