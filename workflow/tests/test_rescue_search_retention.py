@@ -164,3 +164,38 @@ def test_unknown_storage_contract_is_rejected_before_any_preparation(value, tmp_
 def test_legacy_plans_keep_their_original_retention_contract():
     from workflow.support import rescue_gene_models as rescue
     assert rescue.output_storage({"request": {}}) == {"format": "legacy", "retain_search_inputs": True}
+
+
+@pytest.mark.parametrize("command", ["export-search-inputs", "export-models"])
+@pytest.mark.parametrize("location", ["worker", "other_worker", "prepared", "future_stage", "symlink"])
+def test_review_export_cannot_add_unreceipted_files_to_frozen_rescue_output(tmp_path, monkeypatch, command, location):
+    import sys
+
+    from workflow.support import rescue_gene_models as rescue
+    root = tmp_path / "producer"
+    worker = root / "rescued/Self"
+    worker.mkdir(parents=True)
+    (worker / "receipt.json").write_text('{"key":"frozen","files":{"evidence.txt":"untouched"}}')
+    (worker / "evidence.txt").write_text("original genomic evidence")
+    locations = {"worker": worker / "export", "other_worker": root / "rescued/Other/export",
+                 "prepared": root / "prepared/Self/export", "future_stage": root / "augmented/review"}
+    if location == "symlink":
+        alias = tmp_path / "producer_alias"
+        alias.symlink_to(root, target_is_directory=True)
+        destination = alias / "rescued/Self/export"
+    else:
+        destination = locations[location]
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    before_paths = {str(p.relative_to(root)) for p in root.rglob("*")}
+    monkeypatch.setattr(rescue, "load", lambda *args, **kwargs: {"species": ["Self"]})
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Unsafe export must stop before hashing or writing producer members")
+    monkeypatch.setattr(rescue, "verified", unexpected)
+    monkeypatch.setattr(rescue, "rescue_key", unexpected)
+    monkeypatch.setattr(sys, "argv", ["rescue_gene_models.py", command, "--output", str(root),
+                                    "--task-index", "1", "--destination", str(destination)])
+    with pytest.raises(ValueError, match="outside the frozen rescue output"):
+        rescue.main()
+    assert not destination.exists()
+    assert {str(p.relative_to(root)) for p in root.rglob("*")} == before_paths
+    assert {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before

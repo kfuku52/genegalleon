@@ -1668,19 +1668,27 @@ def qc_work_items(root, plan, indices, hash_workers=1):
     return result
 
 
+def export_destination(root, destination):
+    """Keep review exports outside the frozen producer and its future stages."""
+    destination = Path(destination).resolve()
+    if destination.is_relative_to(Path(root).resolve()):
+        raise ValueError("Review export destination must be outside the frozen rescue output")
+    if destination.exists():
+        raise FileExistsError("Review export destination already exists")
+    return destination
+
+
 def export_worker_inputs(root, plan, name, destination, *, combined=False, cpus=1):
     """Read a completed producer without rerunning it or changing its receipt."""
     try:
         from gene_model_catalog import indexed_genome
     except ImportError:
         from .gene_model_catalog import indexed_genome
+    destination = export_destination(root, destination)
     directory = root / "rescued" / name
     key = rescue_key(root, plan, name)
     if not verified(directory, key, hash_workers=cpus):
         raise ValueError("Predictor input export requires a complete verified rescue")
-    destination = Path(destination).resolve()
-    if destination.exists():
-        raise FileExistsError("Predictor input export destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=".working-search-inputs-", dir=destination.parent))
     tmp.rmdir()
@@ -1837,12 +1845,13 @@ def main():
                                    combined=args.combined, cpus=args.cpus))
         return
     if args.command == "export-models":
+        destination = export_destination(root, args.destination)
         name = plan["species"][args.task_index - 1]
         directory = root / "rescued" / name
         if not verified(directory, rescue_key(root, plan, name), hash_workers=args.cpus):
             raise ValueError("Legacy export requires a complete verified rescue")
-        export_legacy_models(directory, args.destination, directory=True)
-        print(args.destination)
+        export_legacy_models(directory, destination, directory=True)
+        print(destination)
         return
     if args.command == "qc-inputs":
         indices = [args.task_index] if args.task_index is not None else range(1, len(plan["species"]) + 1)

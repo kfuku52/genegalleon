@@ -366,7 +366,8 @@ The search export regenerates exact interval inputs from frozen genome and
 prepared proteins. `--combined` also creates `regions.fa`, `queries.fa`, the
 full unresolved-query FASTA and expanded genome GFF. It verifies reconstructed
 sequence/GFF hashes and rechecks source and producer receipts before publishing
-an export receipt. Export destinations must not exist. Legacy model exports
+an export receipt. CLI export destinations must not exist and must be outside
+the rescue output, including paths reached through symlinks. Legacy model exports
 contain all three arrays and their own provenance receipt. Automatic compression
 uses zstd when its Python module is available, otherwise gzip; the manifest
 records the selected codec. Shards have a bounded target size, though a single
