@@ -210,6 +210,18 @@ graph, including missing stages. A copied effective input TSV must match its
 published bytes; changing species membership or genetic codes is not permitted
 by retaining the sequence hashes.
 
+During correspondence, each species' rescue sources and completed prepared
+publication are read in full once within a command-local verification scope.
+Repeated comparisons check the two participating species' file identities,
+resolved paths and permissions. All used proofs are checked before publication
+and at command exit; a later command reads the bytes again. Initially damaged
+prepared outputs retain the ordinary locked recovery/rebuild policy, but a
+change after successful verification aborts rather than refreshing the proof.
+Mutable comparison outputs still receive full content verification, and each
+new intermediate publication also checks its participating species immediately
+before publication. Comparison keys, donor order and biological gates are
+unchanged. The scope does not persist stat-authorized checksums between runs.
+
 For an externally reviewed graph, `plan --inputs sources.tsv --edges edges.tsv`
 avoids rebuilding synteny. Paths in `sources.tsv` may be relative to that table;
 columns are `species`, `cds`, `gff`, `genome`, `genetic_code` (default 1).

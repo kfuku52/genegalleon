@@ -1949,7 +1949,7 @@ def test_new_producer_predictions_can_be_reused_transitively_without_search(hidd
     expected = json.loads((original / "rescued" / species[0] / "models.json").read_text())
     assert expected and all(m["raw_prediction"]["evidence"] == m["evidence"] for m in expected)
     previous = original
-    fields = ("query", "cds", "sequence", "problems", "status", "raw_prediction", "coverage", "identity",
+    fields = ("query", "evidence", "seqid", "strand", "search", "cds", "sequence", "problems", "status", "raw_prediction", "coverage", "identity",
               "terminal_completion", "model_id", "quality_evidence")
     def checked_rows(models):
         # Exact-AA reuse can change record order and private predictor IDs.
@@ -1972,16 +1972,32 @@ def test_new_producer_predictions_can_be_reused_transitively_without_search(hidd
         def no_prediction(*args, **kwargs):
             raise AssertionError("A proven identical search was repeated")
         original_symlink = Path.symlink_to
-        def no_predictor_genome(path, target, *args, original_symlink=original_symlink, **kwargs):
-            if path.name == "genome.fa":
+        original_validation = rescue.validate_model
+        qc_aliases, qc_sequences = [], []
+        def no_predictor_genome(path, target, *args, original_symlink=original_symlink,
+                                output=output, qc_aliases=qc_aliases, **kwargs):
+            # The predictor stages its alias in this worker's publication tree.
+            # Mandatory DNA QC uses its own gg-isoform-genome-* temporary index.
+            if path.name == "genome.fa" and path.is_relative_to(output / "rescued"):
                 raise AssertionError("A covered search materialized a predictor genome alias")
+            if path.name == "genome.fa" and path.parent.name.startswith("gg-isoform-genome-"):
+                qc_aliases.append(path)
             return original_symlink(path, target, *args, **kwargs)
+        def fresh_genomic_qc(model, genome, code, params, *, original_validation=original_validation,
+                             qc_sequences=qc_sequences):
+            checked = original_validation(model, genome, code, params)
+            qc_sequences.append(checked["sequence"])
+            return checked
         with monkeypatch.context() as patch:
+            patch.delenv("GG_GENOME_INDEX_CACHE", raising=False)
             patch.setattr(rescue, "search_intervals", lambda *args, **kwargs: [] if not args[1] else no_prediction())
             patch.setattr(rescue, "run", no_prediction)
+            patch.setattr(rescue, "validate_model", fresh_genomic_qc)
             patch.setattr(Path, "symlink_to", no_predictor_genome)
             directory = rescue.rescue(output, plan, species[0], 2)
         actual = json.loads((directory / "models.json").read_text())
+        assert qc_aliases and qc_sequences  # Fresh indexing and real DNA validation ran in both generations.
+        assert {model["sequence"] for model in actual} <= set(qc_sequences)
         assert checked_rows(actual) == checked_rows(expected)
         assert (directory / "genome_query_mapping.tsv").is_file()
         assert not (directory / "queries.fa").exists() and not (directory / "regions.fa").exists()

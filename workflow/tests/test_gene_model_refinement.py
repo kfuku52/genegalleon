@@ -1312,12 +1312,15 @@ def test_effective_binds_directly_read_catalog_metadata_content(tmp_path, monkey
     assert not (root / 'effective' / 'receipt.json').exists()
 
 
-def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, monkeypatch):
+@pytest.mark.parametrize('mutation_boundary', ['reading_id_map', 'hashing_outputs'])
+def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, monkeypatch, mutation_boundary):
     inputs, edges, _rows = tiny_inputs(tmp_path)
     root, anchor_root = tmp_path / 'run', tmp_path / 'anchors'
     value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
     anchor_root.mkdir()
-    (anchor_root / 'plan.json').write_text('{}\n')
+    anchor_plan = {'synteny_jobs': [], 'request': {'sources': value['request']['sources'],
+                                                  'files': value['request']['files']}}
+    refinement.atomic_json(anchor_root / 'plan.json', anchor_plan)
     value['request'].update(rescue_output=str(anchor_root), edges=None)
     refinement.atomic_json(root / 'plan.json', value)
     for name in value['species']:
@@ -1328,18 +1331,26 @@ def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, mo
                   [dict(jcvi_id='g', locus_id='g', original_id='g', status='selected')])
         refinement.atomic_json(directory / 'receipt.json', {'key': {'plan': refinement.digest(anchor_root / 'plan.json'), 'species': name},
                                                            'files': {'genes.id_map.tsv': refinement.digest(mapping)}})
-    monkeypatch.setattr(refinement.rescue, 'load', lambda *_args: {'synteny_jobs': []})
-    monkeypatch.setattr(refinement.rescue, 'prepared', lambda _root, _value, name: anchor_root / 'prepared' / name)
+    monkeypatch.setattr(refinement.rescue, 'load', lambda *_args: anchor_plan)
     original = refinement.read_table
     damaged = anchor_root / 'prepared' / value['species'][-1] / 'genes.id_map.tsv'
 
     def changing_id_map(path):
         result = original(path)
-        if Path(path) == damaged:
+        if mutation_boundary == 'reading_id_map' and Path(path) == damaged:
             damaged.write_text(damaged.read_text() + '\n')
         return result
 
     monkeypatch.setattr(refinement, 'read_table', changing_id_map)
+    original_hash_outputs = refinement.rescue.hash_outputs
+
+    def changing_output_hashes(directory, **kwargs):
+        result = original_hash_outputs(directory, **kwargs)
+        if mutation_boundary == 'hashing_outputs' and (directory / 'edges.json').exists():
+            damaged.write_text(damaged.read_text() + '\n')
+        return result
+
+    monkeypatch.setattr(refinement.rescue, 'hash_outputs', changing_output_hashes)
     with pytest.raises(ValueError, match='Stage dependency content changed'):
         refinement.correspondence(root, value)
     assert not (root / 'correspondence' / 'receipt.json').exists()

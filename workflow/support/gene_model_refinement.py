@@ -43,6 +43,7 @@ try:
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from input_generation_array_state import atomic_json, digest, digest_paths
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
+    from rescue_prepared_snapshot import PreparedSnapshot
 except ImportError:
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
@@ -61,6 +62,7 @@ except ImportError:
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
+    from .rescue_prepared_snapshot import PreparedSnapshot
 
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
@@ -100,7 +102,8 @@ def implementation():
                     'format_species_writers.py', 'format_species_common.py', 'format_species_constants.py',
                     'format_species_provider_config.py', 'format_species_taxonomy.py',
                     'rescue_terminal_completion.py', 'rescue_coding_paths.py',
-                    'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py')
+                    'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
+                    'rescue_prepared_snapshot.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -279,7 +282,7 @@ def load(root, names=None):
     return value
 
 
-def stage(root, relative, key, builder, names=None):
+def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
     dependencies = key.get('dependencies', {})
     snapshots = {root / 'catalog' / name / 'receipt.json': expected
                  for name, expected in dependencies.get('catalog', {}).items()}
@@ -300,11 +303,23 @@ def stage(root, relative, key, builder, names=None):
         snapshots.update({revision_worker(request, name) / 'receipt.json': expected
                           for name, expected in dependencies['rescue_workers'].items()})
     snapshots = {str(path): expected for path, expected in snapshots.items()}
+    prepared_receipts = ({str(prepared_snapshot.root / 'prepared' / name / 'receipt.json'): name
+                          for name in dependencies.get('prepared', {})} if prepared_snapshot else {})
 
     def guard():
         load(root, names)
-        rescue.require_same_key(snapshots, digest_paths(snapshots))
+        ordinary = {path: expected for path, expected in snapshots.items() if path not in prepared_receipts}
+        rescue.require_same_key(ordinary, digest_paths(ordinary))
+        if prepared_snapshot is not None:
+            try:
+                prepared_snapshot.check_all()
+                for path, name in prepared_receipts.items():
+                    rescue.require_same_key(snapshots[path], prepared_snapshot.receipt_digest(name))
+            except (OSError, ValueError) as exc:
+                raise ValueError('Stage dependency content changed: prepared annotation') from exc
         for path in snapshots:
+            if path in prepared_receipts:
+                continue
             directory = Path(path).parent
             receipt = json.loads(Path(path).read_text())
             if not rescue.verified(directory, receipt['key']):
@@ -323,7 +338,15 @@ def stage(root, relative, key, builder, names=None):
                     'process_lifetime_peak_rss_mib': self_usage.ru_maxrss / rss_factor,
                     'child_lifetime_peak_rss_mib': children.ru_maxrss / rss_factor,
                     'note': 'Builder excludes source/receipt verification; RSS is a lifetime high-water mark, not an isolated stage peak.'})
-    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard)
+    def publication_guard():
+        if prepared_snapshot is not None:
+            try:
+                prepared_snapshot.check_all()
+            except (OSError, ValueError) as exc:
+                raise ValueError('Stage dependency content changed: prepared annotation') from exc
+
+    publication = {'publication_guard': publication_guard} if prepared_snapshot else {}
+    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **publication)
 
 
 @invocation_cached
@@ -432,24 +455,30 @@ def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, p
 def correspondence(root, value, cpus=1, comparison_cache=None):
     db = catalog_index(root, value)
     request = value['request']
+    anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
+    if anchor_root and not request['edges']:
+        anchor_plan = rescue.load(anchor_root)
+        with PreparedSnapshot(anchor_root, anchor_plan, rescue) as snapshot:
+            return _correspondence(root, value, db, cpus, comparison_cache, anchor_plan, snapshot)
+    return _correspondence(root, value, db, cpus, comparison_cache)
+
+
+def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, prepared_snapshot=None):
+    request = value['request']
     dependencies = {'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     jobs = []
-    anchor_plan = None
     if anchor_root and not request['edges']:
-        anchor_plan = rescue.load(anchor_root)
         jobs = [j for j in anchor_plan['synteny_jobs'] if j['a'] != j['b']]
         for job in jobs:
-            rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache)
+            rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
+                           prepared_snapshot=prepared_snapshot)
         dependencies['anchors'] = {j['id']: digest(anchor_root / 'synteny' / j['id'] / 'receipt.json') for j in jobs}
         dependencies['prepared'] = {}
-        anchor_hash = digest(anchor_root / 'plan.json')
         for name in value['species']:
-            directory = rescue.prepared(anchor_root, anchor_plan, name)
-            if not rescue.verified(directory, {'plan': anchor_hash, 'species': name}):
-                raise ValueError('Prepared annotation incomplete or corrupted: ' + name)
-            dependencies['prepared'][name] = digest(directory / 'receipt.json')
+            prepared_snapshot.prepared(name)
+            dependencies['prepared'][name] = prepared_snapshot.receipt_digest(name)
     def build(tmp):
         edges = []
         valid = defaultdict(set)
@@ -469,6 +498,7 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
         else:
             aliases = {}
             for n in value['species']:
+                prepared_snapshot.check([n])
                 lookup = {}
                 for g in iter_loci(db, n):
                     for token in {g['gene_id'], g['gene_id'].removeprefix(n + '_'),
@@ -492,7 +522,7 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
             with store_connection(db) as connection:
                 for job in jobs:
-                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job)):
+                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job, prepared_snapshot)):
                         raise ValueError('Unverified synteny comparison')
                     blocks = json.loads((anchor_root / 'synteny' / job['id'] / 'blocks.json').read_text())
                     for block in blocks:
@@ -524,7 +554,8 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
                 e['ambiguous'] = True
         atomic_json(tmp / 'edges.json', edges)
         atomic_json(tmp / 'summary.json', {'edges': len(edges), 'ambiguous': sum(e['ambiguous'] for e in edges)})
-    return stage(root, 'correspondence', {'dependencies': dependencies}, build)
+    return stage(root, 'correspondence', {'dependencies': dependencies}, build,
+                 prepared_snapshot=prepared_snapshot)
 
 
 @invocation_cached

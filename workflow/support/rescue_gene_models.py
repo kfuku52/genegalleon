@@ -495,7 +495,7 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None, hash_workers=1):
+def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -519,6 +519,8 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1):
             if not files:
                 raise ValueError("Empty stage outputs")
             atomic_json(tmp / "receipt.json", {"key": key, "files": files})
+            if publication_guard:
+                publication_guard()
             # Retain the previous complete directory until replacement succeeds.
             backup = None
             if dest.exists():
@@ -546,18 +548,25 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1):
     return dest
 
 
-def prepared(root, plan, name):
+def prepared(root, plan, name, source_snapshot=None):
     source = plan["request"]["sources"][name]
-    key = {"plan": plan_digest(root, plan), "species": name}
+    if source_snapshot is not None:
+        source_snapshot.assert_context(root, plan)
+    key = {"plan": source_snapshot.plan_digest() if source_snapshot else plan_digest(root, plan), "species": name}
     def guard():
-        require_same_key(key["plan"], plan_digest(root, plan))
-        verify_sources(plan, [name], ["fasta", "gff", "genome"])
+        if source_snapshot is not None:
+            source_snapshot.verify_source(name)
+            require_same_key(key["plan"], source_snapshot.plan_digest())
+        else:
+            require_same_key(key["plan"], plan_digest(root, plan))
+            verify_sources(plan, [name], ["fasta", "gff", "genome"])
     guard()
     def build(tmp):
         genes, meta = prepare_rescue_genome(source, tmp, "genes", 1.0)
         atomic_json(tmp / "mapping.json", meta)
         atomic_json(tmp / "positions.json", [vars(g) for g in genes])
-    return stage(root, Path("prepared") / name, key, build, guard)
+    publication = {'publication_guard': lambda: source_snapshot.check([name])} if source_snapshot else {}
+    return stage(root, Path("prepared") / name, key, build, guard, **publication)
 
 
 def parse_anchors(path):
@@ -623,7 +632,10 @@ def build_comparison(tmp, job, dirs, params, cpus):
     atomic_json(tmp / "blocks.json", parse_anchors(anchors))
 
 
-def comparison_cache_key(root, plan, job):
+def comparison_cache_key(root, plan, job, prepared_snapshot=None):
+    if prepared_snapshot is not None:
+        prepared_snapshot.assert_context(root, plan)
+        prepared_snapshot.check_job(job)
     names = sorted({job["a"], job["b"]})
     tools = plan["request"]["tools"]
     owners = ("kfFractBias", "jcvi", "biopython", "numpy", "natsort", "more-itertools", "python",
@@ -631,7 +643,8 @@ def comparison_cache_key(root, plan, job):
     modules = {k: v for k, v in tools["source_hashes"].items() if k.startswith(("kffractbias.", "jcvi."))}
     algorithm = "\n".join(inspect.getsource(f) for f in (build_comparison, align_self, parse_anchors, run))
     return {"schema": 1, "job": {k: job[k] for k in ("a", "b", "kind")},
-            "inputs": {n: {ext: digest(root / "prepared" / n / ("genes." + ext)) for ext in ("bed", "pep")} for n in names},
+            "inputs": {n: {ext: (prepared_snapshot.file_digest(n, "genes." + ext) if prepared_snapshot
+                                else digest(root / "prepared" / n / ("genes." + ext))) for ext in ("bed", "pep")} for n in names},
             "parameters": {k: plan["request"]["parameters"][k] for k in ("cscore", "min_anchors", "distance", "diagonal_bound")},
             "tools": {k: tools[k] for k in owners}, "source_hashes": modules,
             "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
@@ -656,33 +669,48 @@ def copy_verified_comparison(source, destination, key):
         raise ValueError("Comparison cache changed during copying")
 
 
-def synteny(root, plan, index, cpus, comparison_cache=None):
+def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=None):
     jobs = plan["synteny_jobs"]
     if not 1 <= index <= len(jobs):
         raise ValueError("Synteny index outside frozen plan")
     job = jobs[index - 1]
-    dirs = {n: prepared(root, plan, n) for n in {job["a"], job["b"]}}
+    if prepared_snapshot is not None:
+        prepared_snapshot.assert_context(root, plan)
+        prepared_snapshot.check_job(job)
+    dirs = {n: prepared_snapshot.prepared(n) if prepared_snapshot else prepared(root, plan, n)
+            for n in {job["a"], job["b"]}}
     params = plan["request"]["parameters"]
-    key = comparison_key(root, job)
-    cache_key = comparison_cache_key(root, plan, job)
+    key = comparison_key(root, job, prepared_snapshot)
+    cache_key = comparison_cache_key(root, plan, job, prepared_snapshot)
     cache_root = (comparison_cache or root.parent / "gene_model_rescue_comparison_cache").resolve()
     if cache_root == root or root in cache_root.parents:
         raise ValueError("Comparison cache must be outside the frozen rescue output")
     cache_id = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode()).hexdigest()
     def guard():
-        plan_digest(root, plan)
-        require_same_key(key, comparison_key(root, job))
-        require_same_key(cache_key, comparison_cache_key(root, plan, job))
+        if prepared_snapshot is not None:
+            prepared_snapshot.plan_digest()
+        else:
+            plan_digest(root, plan)
+        require_same_key(key, comparison_key(root, job, prepared_snapshot))
+        require_same_key(cache_key, comparison_cache_key(root, plan, job, prepared_snapshot))
     def build(tmp):
+        publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}
         cached = stage(cache_root, Path("comparisons") / cache_id, cache_key,
-                       lambda output: build_comparison(output, job, dirs, params, cpus), guard)
+                       lambda output: build_comparison(output, job, dirs, params, cpus), guard,
+                       **publication)
         copy_verified_comparison(cached, tmp, cache_key)
         atomic_json(tmp / "job.json", job)
         atomic_json(tmp / "cache.json", {"cache_key": cache_key, "cache_receipt_sha256": digest(cached / "receipt.json")})
-    return stage(root, Path("synteny") / job["id"], key, build, guard)
+    publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}
+    return stage(root, Path("synteny") / job["id"], key, build, guard, **publication)
 
 
-def comparison_key(root, job):
+def comparison_key(root, job, prepared_snapshot=None):
+    if prepared_snapshot is not None:
+        prepared_snapshot.assert_context(root)
+        prepared_snapshot.check_job(job)
+        return {"plan": prepared_snapshot.plan_digest(), "job": job,
+                "prepared": {n: prepared_snapshot.receipt_digest(n) for n in sorted({job["a"], job["b"]})}}
     plan_hash = digest(root / "plan.json")
     names = sorted({job["a"], job["b"]})
     for name in names:
