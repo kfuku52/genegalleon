@@ -18,6 +18,15 @@ search for compressed coordinates. It preserves cell states, phase ambiguity,
 reciprocal connection rules, interval ordering, coordinates and missing-data
 diagnostics. Context source verification remains enabled at the original points.
 
+Alignment domain keys use an interval sweep over the existing monotone
+trimmed-to-untrimmed mapping. Active counts retain repeated overlapping labels;
+inclusive endpoints, missing mappings and the final stacking order are unchanged.
+Intron event rows and cell columns are assembled in batches, and a nongap mask is
+reused without removing nucleotide validation. Domain sweeps use indexed query
+groups and parallel event vectors while retaining stable boundary ordering.
+Context gap types use a sorted span index and prefix maximum ends to test exact
+containment and overlap, preserving each locus rather than merging loci.
+
 ## Verification and measurement
 
 Compare frozen and current helpers in the same dependency runtime, with the same
@@ -32,10 +41,13 @@ also compare the merged PDF bytes. Preserve input digests and renderer parameter
 with the private benchmark outputs rather than committing research files.
 
 Regression tests cover intron phase/gap states, sparse cell grids, first-row and
-reciprocal-nearest ties, domain stacking and gap-separated alignment runs. Context
-tests check exact floating-point results at gap boundaries, large coordinates,
-numeric-type behavior, and PDF/audit equality against the scalar transform. Batch
-tests retain failed-output isolation and source-change rejection.
+reciprocal-nearest ties, domain stacking and gap-separated alignment runs. An
+independent point-membership oracle checks inclusive domain endpoints, repeated
+overlaps, missing mappings and complete plot layers. Context tests check exact
+floating-point results at gap boundaries, large coordinates, numeric-type
+behavior, gap classification against individual loci, and PDF/audit equality
+against the scalar transform. Batch tests retain failed-output isolation and
+source-change rejection.
 
 Use the existing check entrypoint and runtime freshness checks described in
 [Development and Tests](development-and-tests.md#choose-checks-for-a-change).

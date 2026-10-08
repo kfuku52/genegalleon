@@ -12,10 +12,22 @@ get_df_domain <- function(df_rps) {
   out_rows <- list()
   out_idx <- 1
   
-  # Process each 'qacc' separately
-  for (qacc in unique(df_rps$qacc)) {
+  # Preserve first-occurrence gene order and each group's original row order.
+  # Index once instead of scanning every hit for every query.
+  query_order <- unique(df_rps$qacc)
+  query_rows <- split(seq_len(nrow(df_rps)), match(df_rps$qacc, query_order))
+  missing_queries <- which(is.na(df_rps$qacc))
+  for (qacc in query_order) {
     
-    tmp <- df_rps[df_rps$qacc == qacc, ]
+    if (is.na(qacc)) next
+    index <- query_rows[[as.character(match(qacc, query_order))]]
+    if (length(missing_queries)) {
+      # Logical row selection previously inserted all-NA rows for missing
+      # query IDs. Retain their source positions and first-row validation.
+      source_order <- order(c(index, missing_queries))
+      index <- c(index, rep(NA_integer_, length(missing_queries)))[source_order]
+    }
+    tmp <- df_rps[index, , drop = FALSE]
     if (nrow(tmp) == 0) next
     
     qlen <- suppressWarnings(as.integer(tmp[1, "qlen"]))
@@ -39,33 +51,27 @@ get_df_domain <- function(df_rps) {
     # Create "events" for each domain start/end
     #   event = +1 when domain starts
     #   event = -1 when domain ends
-    events <- data.frame(
-      pos   = c(tmp$qstart, tmp$qend + 1),    # end at qend => next position is qend+1
-      sacc  = c(tmp$sacc,   tmp$sacc),
-      event = c(rep(+1, nrow(tmp)), 
-                rep(-1, nrow(tmp))),
-      stringsAsFactors = FALSE
-    )
-    events <- na.omit(events)
-    
-    # Also ensure we don't go beyond qlen + 1
-    # (in case any domain ends exactly at qlen; qend+1 would be qlen+1)
-    # and at least one event at pos=1 if needed
-    # -- If you want explicit guaranteed boundaries, you might do something like:
-    # events <- rbind(events, data.frame(pos=1, sacc="", event=0))
-    # events <- rbind(events, data.frame(pos=qlen+1, sacc="", event=0))
-    # but this depends on how strictly you'd like to define bounding events.
-    
-    # Sort events by position
-    events <- events[order(events$pos), ]
-    
+    # Keep the original stable start-before-end ordering at tied positions.
+    # Parallel vectors avoid repeated data-frame access in the event sweep.
+    event_pos <- c(tmp$qstart, tmp$qend + 1)
+    event_sacc <- c(tmp$sacc, tmp$sacc)
+    event_direction <- c(rep(+1, nrow(tmp)), rep(-1, nrow(tmp)))
+    keep <- stats::complete.cases(event_pos, event_sacc, event_direction)
+    event_pos <- event_pos[keep]
+    event_sacc <- event_sacc[keep]
+    event_direction <- event_direction[keep]
+    event_order <- order(event_pos)
+    event_pos <- event_pos[event_order]
+    event_sacc <- event_sacc[event_order]
+    event_direction <- event_direction[event_order]
+
     # Track current domain set, start of that set's range
     current_set   <- character()  # empty vector
     current_start <- 1
     
     # Traverse all events
-    for (i in seq_len(nrow(events))) {
-      new_pos <- events$pos[i]
+    for (i in seq_along(event_pos)) {
+      new_pos <- event_pos[i]
       
       # Build the interval [current_start, new_pos - 1] for the old set
       # only if the old set is not empty AND we haven't gone past qlen
@@ -98,12 +104,12 @@ get_df_domain <- function(df_rps) {
       }
       
       # Update the domain set based on this event
-      if (events$event[i] == +1) {
+      if (event_direction[i] == +1) {
         # Domain is starting
-        current_set <- union(current_set, events$sacc[i])
+        current_set <- union(current_set, event_sacc[i])
       } else {
         # Domain is ending
-        current_set <- setdiff(current_set, events$sacc[i])
+        current_set <- setdiff(current_set, event_sacc[i])
       }
       
       # Move our start pointer to the new position

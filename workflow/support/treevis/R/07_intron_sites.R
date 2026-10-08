@@ -4,7 +4,9 @@ treevis_intron_site_data = function(tips, seqs) {
     seqs = seqs[names(seqs) %in% as.character(tips[['label']])]
     if (!length(seqs)) return(NULL)
     if (any(nchar(seqs) == 0) || length(unique(nchar(seqs))) != 1) stop('Intron sites require an equal-length untrimmed CDS alignment')
-    if (any(grepl('[^ACGTRYSWKMBDHVN?.-]', seqs))) stop('Intron sites require nucleotide sequences')
+    # The accepted alphabet is ASCII; byte matching keeps the same validation
+    # while avoiding locale-aware regex work on every alignment character.
+    if (any(grepl('[^ACGTRYSWKMBDHVN?.-]', seqs,perl=TRUE,useBytes=TRUE))) stop('Intron sites require nucleotide sequences')
     events = list()
     rows = list()
     diagnostics = list()
@@ -20,7 +22,8 @@ treevis_intron_site_data = function(tips, seqs) {
         if ((!trans && is.na(count)) || is.na(length_cds)) reason = 'missing_GFF'
         if (is.na(reason)) {
             chars = strsplit(seqs[[id]], '', fixed=TRUE)[[1]]
-            nongap = which(!chars %in% c('-', '.'))
+            is_nongap = !chars %in% c('-', '.')
+            nongap = which(is_nongap)
             if (length(nongap) != length_cds) {
                 # CDSKit may complete the terminal codon with one or two N
                 # bases. GFF coordinates and intron offsets describe only the
@@ -57,14 +60,15 @@ treevis_intron_site_data = function(tips, seqs) {
         offsets = if (is.na(value) || !nzchar(value)) numeric() else suppressWarnings(as.numeric(strsplit(value, '[;,]')[[1]]))
         if (length(offsets) != count || any(!is.finite(offsets)) || any(offsets != floor(offsets)) ||
             any(offsets < 1 | offsets >= length_cds) || anyDuplicated(offsets) || is.unsorted(offsets)) stop('Invalid intron offsets for ', id)
-        rows[[id]] = list(chars=chars, cumulative=cumsum(!chars %in% c('-', '.')), phase=phase, y=tips[['y']][i],
+        rows[[id]] = list(chars=chars, cumulative=cumsum(is_nongap), phase=phase, y=tips[['y']][i],
             colour=if ('tiplab_color' %in% names(tips)) as.character(tips[['tiplab_color']][i]) else 'black')
-        for (k in seq_along(offsets)) {
-            offset = offsets[k]
-            left = nongap[offset]; right = nongap[offset+1]
-            status = if (right != left + 1) 'alignment_gap' else if (!all(chars[c(left,right)] %in% c('A','C','G','T'))) 'ambiguous_bases' else if (is.na(phase)) 'position_only' else 'mapped'
-            events[[length(events)+1]] = data.frame(node_name=id, intron_index=k, cds_offset=offset,
-                alignment_left=left, alignment_right=right, phase=(offset-phase) %% 3, status=status)
+        if (length(offsets)) {
+            left = nongap[offsets]; right = nongap[offsets+1]
+            status = rep(if (is.na(phase)) 'position_only' else 'mapped',length(offsets))
+            status[!(chars[left] %in% c('A','C','G','T') & chars[right] %in% c('A','C','G','T'))] = 'ambiguous_bases'
+            status[right != left+1] = 'alignment_gap'
+            events[[length(events)+1]] = data.frame(node_name=id, intron_index=seq_along(offsets), cds_offset=offsets,
+                alignment_left=left, alignment_right=right, phase=(offsets-phase) %% 3, status=status)
         }
     }
     events = if (length(events)) do.call(rbind, events) else data.frame(node_name=character(), intron_index=integer(),
@@ -83,28 +87,36 @@ treevis_intron_site_data = function(tips, seqs) {
         events$candidate_site_ids[k] = paste(candidates,collapse=';')
         if (length(candidates) == 1) events$site_id[k] = candidates
     }
-    cells = list()
+    cells = data.frame()
     if (nrow(keys)) {
         mapped = events$status == 'mapped' & !is.na(events$site_id)
         mapped_by_gene = split(events$site_id[mapped], events$node_name[mapped])
         possible = events$status == 'position_only'
         possible_by_gene = split(events$alignment_left[possible], events$node_name[possible])
         b = keys$alignment_left
-        for (id in names(rows)) {
+        row_ids = names(rows)
+        site_count = nrow(keys)
+        states = character(length(rows)*site_count)
+        x = seq_len(site_count)
+        for (i in seq_along(rows)) {
+            id = row_ids[i]
             row = rows[[id]]
             available = row$chars[b] %in% c('A','C','G','T') &
                 row$chars[b+1] %in% c('A','C','G','T') &
                 (is.na(row$phase) | is.na(keys$phase) | (row$cumulative[b]-row$phase) %% 3 == keys$phase)
-            state = rep('unresolved', nrow(keys))
+            state = rep('unresolved', site_count)
             state[available] = 'absent'
             # An unknown phase still marks every candidate at this boundary;
             # an exact mapped event takes precedence over availability.
             state[b %in% possible_by_gene[[id]]] = 'position_only'
             state[keys$site_id %in% mapped_by_gene[[id]]] = 'present'
-            cells[[length(cells)+1]] = data.frame(node_name=id,y=row$y,x=seq_len(nrow(keys)),
-                site_id=keys$site_id,state=state,colour=row$colour)
+            states[(i-1)*site_count+x] = state
         }
+        cells = data.frame(node_name=rep(row_ids,each=site_count),
+            y=rep(unlist(lapply(rows,'[[','y'),use.names=FALSE),each=site_count),
+            x=rep(x,length(rows)),site_id=rep(keys$site_id,length(rows)),state=states,
+            colour=rep(unlist(lapply(rows,'[[','colour'),use.names=FALSE),each=site_count))
     }
-    list(sites=keys, events=events, cells=if (length(cells)) do.call(rbind,cells) else data.frame(),
+    list(sites=keys, events=events, cells=cells,
         diagnostics=if (length(diagnostics)) do.call(rbind,diagnostics) else data.frame(node_name=character(),reason=character()))
 }

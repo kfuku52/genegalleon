@@ -136,6 +136,43 @@ stopifnot(nrow(grid_sites$diagnostics)==0,nrow(grid_sites$cells)==120*nrow(grid_
 check_site_cells(grid_tips,grid_seqs,grid_sites)
 cat('Batched intron cells retain mixed phase/gap states, sparse-grid order and storage types.\n')
 
+# One gene can have mapped, gap-spanning and ambiguous events. Preserve their
+# input order, even when a repeated label replaces the displayed tip metadata.
+multi_tips = data.frame(label=c('known','unknown','ambiguous','zero','known'),y=c(1L,2L,3L,4L,99L),
+    num_intron=c(3L,3L,3L,0L,3L),intron_positions=c('3;6;8','3;6;8','3;6;8','','3;6;8'),
+    intron_feature_size=12L,cds_first_phase=c(0L,NA_integer_,0L,0L,1L),
+    tiplab_color=c('red','green',NA_character_,'black','blue'))
+multi_seqs = c(known='AAACCC---GGGTTT',unknown='AAACCC---GGGTTT',
+    ambiguous='AAANCC---GGNTTT',zero='AAACCC---GGGTTT')
+multi = genegalleon.treevis:::treevis_intron_site_data(multi_tips,multi_seqs)
+stopifnot(identical(multi$events$node_name,rep(c('known','unknown','ambiguous','known'),each=3L)),
+    identical(multi$events$intron_index,rep(1:3,4L)),
+    identical(multi$events$status,c('mapped','alignment_gap','mapped',
+        'position_only','alignment_gap','position_only','ambiguous_bases','alignment_gap',
+        'ambiguous_bases','mapped','alignment_gap','mapped')),
+    identical(multi$cells$node_name,rep(c('known','unknown','ambiguous','zero'),each=4L)),
+    identical(multi$cells$y,rep(c(99L,2L,3L,4L),each=4L)),
+    all(multi$cells$colour[multi$cells$node_name=='known']=='blue'),
+    all(multi$cells$state[multi$cells$node_name=='known']=='present'),
+    all(multi$cells$state[multi$cells$node_name=='unknown']=='position_only'),
+    all(multi$cells$state[multi$cells$node_name=='ambiguous']=='unresolved'),
+    identical(multi$cells$x,rep(1:4,4L)),is.double(multi$events$cds_offset),
+    is.integer(multi$events$alignment_left),is.integer(multi$cells$y))
+for (offsets in c('3;3;8','8;3;6','3.5;6;8','3;6','0;6;8','3;6;12','3;a;8')) {
+    invalid = multi_tips[1,,drop=FALSE]; invalid$intron_positions=offsets
+    stopifnot(inherits(try(genegalleon.treevis:::treevis_intron_site_data(invalid,multi_seqs),silent=TRUE),'try-error'))
+}
+# The nucleotide alphabet remains ASCII and includes all IUPAC ambiguity codes.
+alphabet = 'ACGTRYSWKMBDHVN?.-'
+alphabet_tip = data.frame(label='alphabet',y=1,num_intron=0,intron_positions='',
+    intron_feature_size=sum(!strsplit(alphabet,'',fixed=TRUE)[[1]] %in% c('-','.')),cds_first_phase=0)
+stopifnot(nrow(genegalleon.treevis:::treevis_intron_site_data(alphabet_tip,c(alphabet=alphabet))$diagnostics)==0)
+for (suffix in c('a','U','X','é','\n')) {
+    invalid = paste0(alphabet,suffix)
+    stopifnot(inherits(try(genegalleon.treevis:::treevis_intron_site_data(alphabet_tip,c(alphabet=invalid)),silent=TRUE),'try-error'))
+}
+cat('Batched multi-event ordering, repeated-label metadata, integer cells and nucleotide validation passed.\n')
+
 # Inline IDs attach by CDS offset rather than genomic/UTR intron order.
 inline_introns = data.frame(label=c('a','a','b','gap'),cds_offset=c(0,3,3,3),
     y=c(1,1,2,4),start=c(0,50,60,70),end=c(10,60,70,80))

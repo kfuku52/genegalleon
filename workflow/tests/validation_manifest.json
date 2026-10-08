@@ -71,6 +71,7 @@
     ["Rscript", "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"],
     ["Rscript", "workflow/tests/test_copy_number_quality_diagnostics.R"],
     ["Rscript", "workflow/tests/test_treevis_main.R"],
+    ["Rscript", "workflow/tests/test_treevis_alignment_equivalence.R"],
     ["Rscript", "workflow/tests/test_treevis_peroxisome.R"],
     ["Rscript", "workflow/tests/test_treevis_layout.R"],
     ["Rscript", "workflow/tests/test_treevis_gene_structure.R"],

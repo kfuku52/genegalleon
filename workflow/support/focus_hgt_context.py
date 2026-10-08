@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from pathlib import Path
 
@@ -120,11 +120,19 @@ class GapCompressedCoordinates:
                 merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
             else:
                 merged.append((start, end))
+        # A prefix maximum tests existence of one qualifying locus without
+        # rescanning every span or merging distinct loci into a synthetic span.
+        span_starts, span_max_ends = [], []
+        for start, end in sorted(spans):
+            span_starts.append(start)
+            span_max_ends.append(max(span_max_ends[-1], end) if span_max_ends else end)
         for left, right in zip(merged, merged[1:], strict=False):
             length = right[0] - left[1]
             if length > NONCODING_GAP_THRESHOLD_BP:
-                within_gene = any(a <= left[1] and right[0] <= b for a, b in spans)
-                mixed = any(a < right[0] and b > left[1] for a, b in spans)
+                containing = bisect_right(span_starts, left[1]) - 1
+                overlapping = bisect_left(span_starts, right[0]) - 1
+                within_gene = containing >= 0 and span_max_ends[containing] >= right[0]
+                mixed = overlapping >= 0 and span_max_ends[overlapping] > left[1]
                 self.gaps.append(dict(gap_type='intronic' if within_gene else 'mixed_noncoding' if mixed else 'intergenic',
                                       genomic_start_bp=left[1], genomic_end_exclusive_bp=right[0],
                                       original_gap_bp=length, display_gap_bp=NONCODING_GAP_DISPLAY_BP,

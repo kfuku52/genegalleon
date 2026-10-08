@@ -1271,6 +1271,26 @@ stopifnot(identical(domain_complete$xmin,c(0,1,1,2)),
 
 cat("genegalleon.treevis package tests passed.\n")
 
+# Stable sweep semantics include simultaneous boundaries, repeated labels,
+# clipping, missing domains and first-row validation of missing query IDs.
+domain_edge <- data.frame(qacc=c('b','','a','b','a','b',NA,'invalid','outside'),
+                         sacc=c('B','A','A','B',NA,'C','A','A','A'),
+                         qlen=c(rep(10,7),NA,10),qstart=c(3,1,1,4,5,6,1,1,12),
+                         qend=c(5,10,7,9,8,10,10,10,11),ymin=0,ymax=0.75)
+domain_edge_result <- get_df_domain(domain_edge)
+domain_edge_expected <- data.frame(xmin=c(2,3,5,9,0,0),xmax=c(3,5,9,9,9,7),
+                                  ymin=0,ymax=0.75,
+                                  sacc=factor(c('B','B','C','C','A','A'),levels=c('A','B','C')),
+                                  label=c(rep('b',4),'','a'))
+stopifnot(identical(domain_edge_result,domain_edge_expected),
+          identical(get_df_domain(transform(domain_edge,qacc=factor(qacc),sacc=factor(sacc))),
+                    domain_edge_expected))
+domain_empty <- get_df_domain(domain_edge[c(7,1:6,8:9),])
+stopifnot(nrow(domain_empty)==0L,
+          identical(names(domain_empty),c('xmin','xmax','ymin','ymax','sacc','label')),
+          is.character(domain_empty$sacc),is.double(domain_empty$xmin),
+          identical(get_df_domain(transform(domain_edge,sacc=NA_character_)),domain_empty))
+
 
 # Tip labels reserve rendered glyph width and scale with font size.
 tip_width <- function(label, font_size=6, figure_width=7.2) {
