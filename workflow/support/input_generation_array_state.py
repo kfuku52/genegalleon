@@ -69,24 +69,57 @@ def digest_paths(paths):
     return FreshDigestBatch().read(paths)
 
 
+def _write_json_stream(handle, value):
+    """Keep the legacy JSON bytes without materializing the whole document."""
+    limit = 1024 * 1024
+    chunks, size = [], 0
+    for chunk in json.JSONEncoder(sort_keys=True, indent=2).iterencode(value):
+        if size + len(chunk) > limit:
+            if chunks:
+                handle.write("".join(chunks))
+                chunks, size = [], 0
+            if len(chunk) > limit:
+                for start in range(0, len(chunk), limit):
+                    handle.write(chunk[start:start + limit])
+                continue
+        chunks.append(chunk)
+        size += len(chunk)
+    if chunks:
+        handle.write("".join(chunks))
+    handle.write("\n")
+
+
+def _same_text(left, right):
+    # read_text previously accepted equivalent CRLF/CR input. Compare decoded
+    # universal-newline text in bounded blocks to preserve that contract.
+    with Path(left).open() as a, Path(right).open() as b:
+        while True:
+            first, second = a.read(1024 * 1024), b.read(1024 * 1024)
+            if first != second:
+                return False
+            if not first:
+                return True
+
+
 def atomic_json(path, value, immutable=False):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(value, sort_keys=True, indent=2) + "\n"
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
-        temporary = Path(handle.name)
-        handle.write(data)
+    temporary = None
     try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            _write_json_stream(handle, value)
         if immutable:
             try:
                 os.link(temporary, path)
             except FileExistsError:
-                if path.read_text() != data:
+                if not _same_text(path, temporary):
                     raise ValueError("Plan already exists with different inputs; use a new output workspace: " + str(path)) from None
         else:
             os.replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def safe_component(value):
