@@ -1,5 +1,10 @@
 # CDS and intron structure in tree plots
 
+The standard tree column places branching-event and focused-HGT legends in an
+external strip above the tree, aligned left. Its actual legend height is measured
+with the PDF's font metrics and added to the page height, preserving leaf-row
+spacing and keeping the legend clear of branches and support labels.
+
 The default gene-family tree plot includes a structure column between the intron
 count and protein domains when GFF-derived block coordinates are available.
 Boxes show CDS in the tip-label color and explicitly annotated UTRs in a

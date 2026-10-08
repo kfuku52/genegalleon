@@ -42,6 +42,23 @@ read_plot_input = function(path, kind) {
   assign(key, list(path=path, signature=before, value=value), envir=plot_input_cache)
   return(value)
 }
+place_tree_legend = function(plot) {
+  plot + ggplot2::theme(
+    legend.position='top', legend.justification='left',
+    legend.box='vertical', legend.box.just='left',
+    legend.box.spacing=grid::unit(1, 'mm'))
+}
+measure_tree_legend_height_mm = function(plot) {
+  legend = cowplot::get_legend(plot, legend='top')
+  if (is.null(legend)) return(0)
+  # Include the same explicit gap used by place_tree_legend. Legend margins,
+  # keys and text are already part of this grob's physical PDF-device height.
+  measured = grid::convertHeight(grid::grobHeight(legend) + grid::unit(1, 'mm'),
+                                'mm', valueOnly=TRUE)
+  if (length(measured) != 1 || !is.finite(measured) || measured <= 0)
+    stop('Invalid external tree legend height.')
+  measured
+}
 script_file_arg = grep('^--file=', commandArgs(), value = TRUE)
 if (length(script_file_arg) > 0) {
   script_dir = dirname(normalizePath(sub('^--file=', '', script_file_arg[[1]]), winslash = '/', mustWork = FALSE))
@@ -487,15 +504,23 @@ if ('gene_structure' %in% names(g) && 'domain' %in% names(g)) {
 }
 height = max(3, length(tree[['tip.label']]) / 10)
 if ('synteny' %in% names(g)) height = height + 1.4
+tree_panel_names = grep('^tree($|,)', names(g), value=TRUE)
+for (name in tree_panel_names) g[[name]] = place_tree_legend(g[[name]])
 # Measure using the same device/font metrics as the final PDF.
 measurement_pdf = tempfile(fileext='.pdf')
 grDevices::pdf(measurement_pdf)
-layout_mm = tryCatch(treevis_layout_mm(g, args[['panel_widths_mm']], height_mm=height * 25.4),
+requested_height_mm = height * 25.4
+layout_mm = tryCatch({
+    tree_legend_height_mm = max(c(0, vapply(g[tree_panel_names], measure_tree_legend_height_mm, numeric(1))))
+    requested_height_mm = requested_height_mm + tree_legend_height_mm
+    cat('External tree legend height (mm):', tree_legend_height_mm, '\n')
+    treevis_layout_mm(g, args[['panel_widths_mm']], height_mm=requested_height_mm)
+  },
     finally = { grDevices::dev.off(); unlink(measurement_pdf) })
 # An older installed treevis package returns widths without height_mm. The
 # requested height remains valid when no square expression panel enlarged it.
 output_height_mm = layout_mm$height_mm
-if (is.null(output_height_mm)) output_height_mm = height * 25.4
+if (is.null(output_height_mm)) output_height_mm = requested_height_mm
 if (length(output_height_mm) != 1 || !is.finite(output_height_mm) || output_height_mm <= 0)
     stop('Invalid tree plot height from treevis_layout_mm.')
 rel_widths = layout_mm$widths_mm

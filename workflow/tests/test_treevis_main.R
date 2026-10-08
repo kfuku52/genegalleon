@@ -709,10 +709,36 @@ plot_script <- file.path(repo_root, 'workflow/support/stat_branch2tree_plot.r')
 reader_env <- new.env(parent=globalenv())
 for (expr in parse(plot_script)) {
   if (is.call(expr) && is.symbol(expr[[1]]) && as.character(expr[[1]]) %in% c('=', '<-') &&
-      is.symbol(expr[[2]]) && as.character(expr[[2]]) %in% c('plot_input_cache', 'plot_input_signature', 'read_plot_input')) {
+      is.symbol(expr[[2]]) && as.character(expr[[2]]) %in% c('plot_input_cache', 'plot_input_signature', 'read_plot_input',
+                                                          'place_tree_legend', 'measure_tree_legend_height_mm')) {
     eval(expr, envir=reader_env)
   }
 }
+# The public driver keeps ordinary/focused tree guides outside the data panel
+# and grows the page by their actual physical height, preserving leaf density.
+outside_height_mm <- function(plot) {
+  gt <- ggplotGrob(plot)
+  panel <- gt$layout[gt$layout$name == 'panel', , drop=FALSE]
+  rows <- setdiff(seq_along(gt$heights), seq.int(panel$t, panel$b))
+  sum(grid::convertHeight(gt$heights[rows], 'mm', valueOnly=TRUE))
+}
+for (plot in list(event_plot, focused_legend_plot)) {
+  inside <- plot + theme(legend.position='inside', legend.position.inside=c(0, 1),
+                         legend.justification=c(0, 1))
+  outside <- reader_env$place_tree_legend(inside)
+  stopifnot(identical(outside$theme$legend.position, 'top'),
+            identical(outside$theme$legend.justification, 'left'),
+            identical(outside$theme$legend.box, 'vertical'))
+  stopifnot(!is.null(cowplot::get_legend(outside, legend='top')),
+            is.null(cowplot::get_legend(outside, legend='inside')))
+  legend_height <- reader_env$measure_tree_legend_height_mm(outside)
+  before_panel_height <- 76.2 - outside_height_mm(inside)
+  after_panel_height <- 76.2 + legend_height - outside_height_mm(outside)
+  stopifnot(abs(before_panel_height - after_panel_height) < 1e-7,
+            identical(ggplot_build(inside)$data, ggplot_build(outside)$data))
+}
+empty_legend_plot <- reader_env$place_tree_legend(ggplot() + geom_blank())
+stopifnot(identical(reader_env$measure_tree_legend_height_mm(empty_legend_plot), 0))
 reader_dir <- tempfile('treevis-reader-')
 dir.create(reader_dir)
 domain_file <- file.path(reader_dir, 'domain.tsv')
