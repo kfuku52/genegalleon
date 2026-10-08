@@ -587,6 +587,111 @@ def test_focused_gene_tree_folder_audits_missing_families_and_preserves_inputs(t
     assert read_tsv(tmp_path / "missing/event_node_audit.tsv")[1][0]["reason"] == "stat_branch_unavailable"
 
 
+def test_native_export_keeps_each_familys_events_settings_and_two_pages_across_batches(tmp_path, monkeypatch):
+    import focus_hgt_context
+    import focus_hgt_gene_trees as exporter
+    import gene_tree_plot_config
+    from pypdf import PdfReader, PdfWriter
+
+    root = tmp_path / 'families'
+    events, links, originals = [], [], {}
+    for index in range(10):
+        family = f'OG{index:04d}'
+        stat, group, context = focused_node_source()
+        for row in stat:
+            if row['node_name'].endswith('_gene'):
+                row['node_name'] = family + '_' + row['node_name']
+        group[0].update(orthogroup=family, event_id=f'{family}:3:1')
+        for row in context:
+            row.update(orthogroup=family, event_id=group[0]['event_id'], gene_id=family + '_' + row['gene_id'])
+        table = root / 'stat_branch' / f'{family}_stat.branch.tsv'
+        write_tsv(table, list(stat[0]), stat)
+        originals[table] = table.read_bytes()
+        events.extend(group)
+        links.extend(context)
+    events.append(dict(events[0], orthogroup='OGmissing', event_id='OGmissing:3:1'))
+    batches, context_families, workspaces = [], [], []
+
+    def page(path, width):
+        writer = PdfWriter()
+        writer.add_blank_page(width=width, height=100)
+        with path.open('wb') as handle:
+            writer.write(handle)
+
+    def replay(store, family, rows, destination, sources):
+        index = int(family[2:])
+        return {'arguments': [f'--family-specific-width={100 + index}'],
+                'species_label_parser': 'gene' if index % 2 else 'taxonomy'}
+
+    def batch(requests, workspace):
+        batches.append([job['id'] for job in requests])
+        workspaces.append(workspace)
+        for job in requests:
+            index = int(job['id'][2:])
+            assert job['species_parser'] == ('gene' if index % 2 else 'taxonomy')
+            assert job['args'][1] == f'--family-specific-width={100 + index}'
+            branch = read_tsv(Path(job['args'][0].split('=', 1)[1]))[1]
+            assert branch[1]['hgtfocus_event_ids'] == f"{job['id']}:3:1"
+            assert branch[0]['node_name'] == job['id'] + '_A_gene'
+            page(Path(job['output']), 100 + index)
+
+    def context(path, rows, selected, family_links, coordinates, **kwargs):
+        family = selected[0]['orthogroup']
+        assert {row['event_id'] for row in family_links} == {selected[0]['event_id']}
+        assert {row['orthogroup'] for row in family_links} == {family}
+        assert rows[0]['node_name'] == family + '_A_gene'
+        context_families.append(family)
+        page(path, 200 + int(family[2:]))
+        return [dict(orthogroup=family, event_id=selected[0]['event_id'])]
+
+    monkeypatch.setattr(gene_tree_plot_config, 'replay', replay)
+    monkeypatch.setattr(exporter, 'render_native_batch', batch)
+    monkeypatch.setattr(focus_hgt_context, 'render_context', context)
+    output = tmp_path / 'tree_plot'
+    report = exporter.export_gene_trees(output, events, links, root)
+    expected = [f'OG{index:04d}' for index in range(10)]
+    assert report['rendered_family_count'] == report['selected_event_count'] == 10
+    assert [family for batch in batches for family in batch] == expected
+    assert all(len(batch) <= 8 for batch in batches) and len(batches) > 1
+    assert context_families == expected
+    assert all(not path.exists() for path in workspaces)
+    assert all(path.read_bytes() == original for path, original in originals.items())
+    for index, family in enumerate(expected):
+        pages = PdfReader(output / f'{family}_focused_hgt_tree_plot.pdf').pages
+        assert len(pages) == 2
+        assert [page.mediabox.width for page in pages] == [100 + index, 200 + index]
+    audit = read_tsv(output / 'event_node_audit.tsv')[1]
+    assert [row['event_id'] for row in audit if row['status'] == 'selected'] == [f'{family}:3:1' for family in expected]
+    assert audit[-1]['reason'] == 'stat_branch_unavailable'
+
+
+@pytest.mark.parametrize('problem', ['missing', 'reordered', 'wrong_output', 'failed', 'process_failed'])
+def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, monkeypatch, problem):
+    from types import SimpleNamespace
+
+    import focus_hgt_gene_trees as exporter
+
+    jobs = [dict(id=family, output=str(tmp_path / f'{family}.pdf')) for family in ('OG1', 'OG2')]
+
+    def run(command, **kwargs):
+        assert Path(command[1]).name == 'tree_plot_batch.r'
+        rows = [dict(job, exit_code=0) for job in jobs]
+        if problem == 'reordered':
+            rows.reverse()
+        elif problem == 'wrong_output':
+            rows[0]['output'] = jobs[1]['output']
+        elif problem == 'failed':
+            rows[1].update(exit_code=1, detail='deliberate family failure')
+        if problem != 'missing':
+            Path(command[2] + '.results.json').write_text(json.dumps(
+                dict(schema='genegalleon-plot-batch-result-v1', results=rows)))
+        return SimpleNamespace(returncode=int(problem == 'process_failed'), stdout='worker diagnostics')
+
+    monkeypatch.setattr(exporter.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='Native focused gene-tree'):
+        exporter.render_native_batch(jobs, tmp_path)
+
+
 @pytest.fixture
 def source(tmp_path):
     tree = tmp_path / "tree.nwk"

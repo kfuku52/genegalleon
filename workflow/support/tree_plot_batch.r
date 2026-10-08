@@ -11,6 +11,7 @@ for (job in jobs) {
       !all(vapply(job[c('id','cwd','output')], valid_text, logical(1))) ||
       !is.list(job$args) || length(job$args) > 256 ||
       !all(vapply(job$args, valid_text, logical(1))) ||
+      (!is.null(job$check_ggimage) && (!is.logical(job$check_ggimage) || length(job$check_ggimage) != 1 || is.na(job$check_ggimage))) ||
       !startsWith(job$cwd, '/') || !dir.exists(job$cwd) || !startsWith(job$output, '/'))
     stop('Invalid plot job; cwd/output and all input file arguments must be absolute')
 }
@@ -26,6 +27,7 @@ renderer_bytes = function() {
 source_bytes = renderer_bytes()
 expressions = parse(text=rawToChar(source_bytes))
 render = function(job) {
+  env = NULL
   before_dir = getwd()
   before_options = options()
   before_theme = ggplot2::theme_get()
@@ -46,6 +48,7 @@ render = function(job) {
     }
     setwd(before_dir)
     unlink(scratch, recursive=TRUE)
+    env = NULL
     gc(verbose=FALSE)
   })
   result = tryCatch({
@@ -66,7 +69,8 @@ render = function(job) {
     setwd(scratch)
     if (!is.null(job$species_parser)) Sys.setenv(TREEVIS_SPECIES_PARSER=job$species_parser)
     # The optional dependency decision belongs to this request, never a stale PDF.
-    if (!requireNamespace('ggimage', quietly=TRUE)) return(list(id=job$id, exit_code=42L, output=job$output))
+    if (!identical(job$check_ggimage, FALSE) && !requireNamespace('ggimage', quietly=TRUE))
+      return(list(id=job$id, exit_code=42L, output=job$output))
     Sys.setenv(GG_TREE_PLOT_CHECK_GGIMAGE='0')
     env = new.env(parent=globalenv())
     env$.gg_tree_plot_args = unlist(job$args, use.names=FALSE)

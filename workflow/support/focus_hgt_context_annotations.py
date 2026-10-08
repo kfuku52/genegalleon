@@ -65,11 +65,13 @@ class ContextAnnotations:
         self.sequence_root = Path(mmseqs2_taxonomy_dir) if mmseqs2_taxonomy_dir else None
         self.host_root = Path(scaffold_taxonomy_dir) if scaffold_taxonomy_dir else None
         self.sequence_cache = {}
+        self._annotation_source = None
         self.taxonomy_path = Path(taxonomy_dbfile).resolve() if taxonomy_dbfile else None
         if self.taxonomy_path is not None and not self.taxonomy_path.is_file():
             raise FileNotFoundError(self.taxonomy_path)
         if path:
             path = Path(path).resolve()
+            self._annotation_source = str(path)
             raw = path.read_bytes()
             self.sources[str(path)] = hashlib.sha256(raw).hexdigest()
             reader = csv.DictReader(io.StringIO(raw.decode('utf-8-sig')), delimiter='\t')
@@ -289,11 +291,32 @@ class ContextAnnotations:
         result.update(self.sequence_taxonomy(gene, species))
         return result
 
-    def verify(self):
+    def verify(self, records=None):
+        """Verify one page's exact dependencies, or every accumulated input.
+
+        Returned annotation records retain source paths even for cached query
+        classifications and lineages. The canonical supplemental table is always
+        checked; its per-row upstream provenance is not a substitute for it.
+        Exporters must also call the unrestricted check before completing.
+        """
+        paths, families = None, None
+        if records is not None:
+            paths = {self._annotation_source} if self._annotation_source else set()
+            families = set()
+            for row in records:
+                paths.update(value for field, value in row.items()
+                             if field.endswith('_source') and value in self.sources)
+                family = available(row.get('orthogroup'))
+                if family:
+                    families.add('stat_branch/' + family + '_stat.branch.tsv')
         for path, expected in self.sources.items():
+            if paths is not None and path not in paths:
+                continue
             if source_digest(path) != expected:
                 raise ValueError('Context annotation input changed during rendering')
         for logical, expected in self.family_sources.items():
+            if families is not None and logical not in families:
+                continue
             with self.store.open_binary(*logical.split('/', 1)) as handle:
                 if hashlib.sha256(handle.read()).hexdigest() != expected:
                     raise ValueError('Neighbor family input changed during rendering')

@@ -26,6 +26,7 @@ INDEX_FIELDS = ["orthogroup", "status", "reason", "event_count", "node_count",
 EVENT_FIELDS = ["event_id", "orthogroup", "gene_tree_branch_id", "gene_tree_node",
                 "generax_transfer", "status", "reason", "support_generax_ufboot",
                 "donor_passing_gene_count", "recipient_passing_gene_count", "plot_label"]
+NATIVE_BATCH_SIZE = 8
 
 
 def number(value):
@@ -204,19 +205,44 @@ def write(path, fields, rows):
         writer.writerows(rows)
 
 
+def render_native_batch(requests, workspace):
+    """Use the shared tree-plot worker; receipts alone do not attest completion."""
+    if not requests:
+        return
+    plan = workspace / 'native_jobs.json'
+    plan.write_text(json.dumps(requests) + '\n')
+    command = ['Rscript', str(Path(__file__).resolve().parent / 'tree_plot_batch.r'), str(plan)]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    receipt = Path(str(plan) + '.results.json')
+    if not receipt.is_file():
+        raise RuntimeError('Native focused gene-tree batch produced no receipt:\n' + result.stdout)
+    report = json.loads(receipt.read_text())
+    rows = report.get('results', [])
+    expected = [(job['id'], job['output']) for job in requests]
+    observed = [(row.get('id'), row.get('output')) for row in rows]
+    if report.get('schema') != 'genegalleon-plot-batch-result-v1' or observed != expected:
+        raise RuntimeError('Native focused gene-tree batch receipt does not match the requested families')
+    failed = [row for row in rows if row.get('exit_code') != 0]
+    if result.returncode or failed:
+        detail = '; '.join(f"{row['id']}: {row.get('detail', 'exit=' + str(row.get('exit_code')))}"
+                           for row in failed)
+        raise RuntimeError('Native focused gene-tree rendering failed: ' + detail + '\n' + result.stdout)
+
+
 def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations='',
                       mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
     links = validated_event_links(events, links)
     csv.field_size_limit(100_000_000)
     directory.mkdir(parents=True)
-    helper = Path(__file__).resolve().parent
-    families = defaultdict(list)
+    families, family_links = defaultdict(list), defaultdict(list)
     for event in events:
         family = event["orthogroup"]
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", family) or family in {".", ".."}:
             raise ValueError("Unsafe orthogroup identifier")
         families[family].append(event)
+    for link in links:
+        family_links[link['orthogroup']].append(link)
     from focus_hgt_context import CONTEXT_MAX_GENES_PER_SIDE, GenomeCoordinates, render_context
     from focus_hgt_context_annotations import ContextAnnotations
     from gene_tree_plot_config import replay
@@ -229,74 +255,73 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
         store = GeneFamilyOutputStore(family_root)
         annotations.store = store
         with store.read_snapshot():
-            for family, group in sorted(families.items()):
-                try:
-                    with store.open_binary("stat_branch", family + "_stat.branch.tsv") as handle:
-                        raw = handle.read()
-                except FileNotFoundError:
-                    for event in group:
-                        audit.append(dict(event_id=event["event_id"], orthogroup=family,
-                                          gene_tree_branch_id=identity(event, "gene_tree_branch_id", "branch_id"),
-                                          gene_tree_node=identity(event, "gene_tree_node", "node_name"),
-                                          generax_transfer=event["generax_transfer"], status="withheld",
-                                          reason="stat_branch_unavailable", support_generax_ufboot="",
-                                          donor_passing_gene_count="", recipient_passing_gene_count="", plot_label=""))
-                    index.append(dict(orthogroup=family, status="withheld", reason="stat_branch_unavailable",
-                                      event_count=0, node_count=0, pdf="", annotated_stat_branch="",
-                                      source_stat_branch_sha256=""))
-                    continue
-                sha = hashlib.sha256(raw).hexdigest()
-                sources["stat_branch/" + family + "_stat.branch.tsv"] = sha
-                rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
-                annotated, checks = annotate(rows, group, [link for link in links if link["orthogroup"] == family],
-                                             minimum_ufboot=minimum_ufboot)
-                audit.extend(checks)
-                passed = [row for row in checks if row["status"] == "selected"]
-                table = directory / "tree_plot_input" / (family + "_focused_stat.branch.tsv")
-                write(table, list(annotated[0]), annotated)
-                pdf = directory / (family + "_focused_hgt_tree_plot.pdf")
-                if passed:
-                    logging.info('Focused gene tree %s: %d supported events', family, len(passed))
-                    if renderer is not None:
-                        renderer(table, pdf)
-                    else:
-                        with tempfile.TemporaryDirectory(prefix="hgt-focus-tree-") as tmp:
-                            materialized = Path(tmp) / 'family_inputs'
-                            spec = replay(store, family, rows, materialized, sources)
-                            configurations[family] = spec
-                            command = [
-                                "Rscript", str(helper / "stat_branch2tree_plot.r"), f"--stat_branch={table.resolve()}",
-                                *spec['arguments'],
-                            ]
-                            try:
-                                import os
-                                environment = dict(os.environ, TREEVIS_SPECIES_PARSER=spec['species_label_parser'])
-                                subprocess.run(command, cwd=tmp, check=True, stdout=subprocess.PIPE,
-                                               stderr=subprocess.STDOUT, text=True, env=environment)
-                            except subprocess.CalledProcessError as exc:
-                                raise RuntimeError(f"Native focused gene-tree rendering failed for {family}:\n{exc.stdout}") from exc
-                            source = Path(tmp) / "stat_branch2tree_plot.pdf"
-                            if not source.is_file() or not source.read_bytes().startswith(b"%PDF"):
-                                raise ValueError("Native focused gene-tree renderer did not produce a PDF")
-                            context = Path(tmp) / 'context.pdf'
-                            selected_ids = {r['event_id'] for r in passed}
-                            context_audit += render_context(context, rows, [e for e in group if e['event_id'] in selected_ids],
-                                                            links, coordinates, gene_tree_panel=False,
-                                                            max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE,
-                                                            annotations=annotations)
-                            from pypdf import PdfReader, PdfWriter
-                            if len(PdfReader(source).pages) != 1 or len(PdfReader(context).pages) != 1:
-                                raise ValueError('Focused gene-tree PDF must have exactly one tree and one context page')
-                            writer = PdfWriter()
-                            writer.append(str(source))
-                            writer.append(str(context))
-                            with pdf.open('wb') as handle:
-                                writer.write(handle)
-                index.append(dict(orthogroup=family, status="rendered" if passed else "withheld",
-                                  reason="" if passed else "no_qualifying_mapped_event", event_count=len(passed),
-                                  node_count=len({row["gene_tree_branch_id"] for row in passed}),
-                                  pdf=pdf.name if passed else "", annotated_stat_branch=str(table.relative_to(directory)),
-                                  source_stat_branch_sha256=sha))
+            ordered = sorted(families.items())
+            for start in range(0, len(ordered), NATIVE_BATCH_SIZE):
+                with tempfile.TemporaryDirectory(prefix="hgt-focus-tree-") as tmp:
+                    workspace = Path(tmp)
+                    requests, pending = [], []
+                    for family, group in ordered[start:start + NATIVE_BATCH_SIZE]:
+                        try:
+                            with store.open_binary("stat_branch", family + "_stat.branch.tsv") as handle:
+                                raw = handle.read()
+                        except FileNotFoundError:
+                            for event in group:
+                                audit.append(dict(event_id=event["event_id"], orthogroup=family,
+                                                  gene_tree_branch_id=identity(event, "gene_tree_branch_id", "branch_id"),
+                                                  gene_tree_node=identity(event, "gene_tree_node", "node_name"),
+                                                  generax_transfer=event["generax_transfer"], status="withheld",
+                                                  reason="stat_branch_unavailable", support_generax_ufboot="",
+                                                  donor_passing_gene_count="", recipient_passing_gene_count="", plot_label=""))
+                            index.append(dict(orthogroup=family, status="withheld", reason="stat_branch_unavailable",
+                                              event_count=0, node_count=0, pdf="", annotated_stat_branch="",
+                                              source_stat_branch_sha256=""))
+                            continue
+                        sha = hashlib.sha256(raw).hexdigest()
+                        sources["stat_branch/" + family + "_stat.branch.tsv"] = sha
+                        rows = list(csv.DictReader(io.StringIO(raw.decode()), delimiter="\t"))
+                        annotated, checks = annotate(rows, group, family_links[family], minimum_ufboot=minimum_ufboot)
+                        audit.extend(checks)
+                        passed = [row for row in checks if row["status"] == "selected"]
+                        table = directory / "tree_plot_input" / (family + "_focused_stat.branch.tsv")
+                        write(table, list(annotated[0]), annotated)
+                        pdf = directory / (family + "_focused_hgt_tree_plot.pdf")
+                        if passed:
+                            logging.info('Focused gene tree %s: %d supported events', family, len(passed))
+                            if renderer is not None:
+                                renderer(table, pdf)
+                            else:
+                                job_root = workspace / family
+                                job_root.mkdir()
+                                spec = replay(store, family, rows, job_root / 'family_inputs', sources)
+                                configurations[family] = spec
+                                source = job_root / 'stat_branch2tree_plot.pdf'
+                                requests.append(dict(id=family, cwd=str(job_root), output=str(source),
+                                                     args=[f"--stat_branch={table.resolve()}", *spec['arguments']],
+                                                     species_parser=spec['species_label_parser'], check_ggimage=False))
+                                selected_ids = {row['event_id'] for row in passed}
+                                pending.append((family, rows, [e for e in group if e['event_id'] in selected_ids],
+                                                source, job_root / 'context.pdf', pdf))
+                        index.append(dict(orthogroup=family, status="rendered" if passed else "withheld",
+                                          reason="" if passed else "no_qualifying_mapped_event", event_count=len(passed),
+                                          node_count=len({row["gene_tree_branch_id"] for row in passed}),
+                                          pdf=pdf.name if passed else "", annotated_stat_branch=str(table.relative_to(directory)),
+                                          source_stat_branch_sha256=sha))
+                    render_native_batch(requests, workspace)
+                    for family, rows, selected, source, context, pdf in pending:
+                        if not source.is_file() or not source.read_bytes().startswith(b"%PDF"):
+                            raise ValueError("Native focused gene-tree renderer did not produce a PDF")
+                        context_audit += render_context(context, rows, selected, family_links[family], coordinates,
+                                                        gene_tree_panel=False,
+                                                        max_genes_per_side=CONTEXT_MAX_GENES_PER_SIDE,
+                                                        annotations=annotations)
+                        from pypdf import PdfReader, PdfWriter
+                        if len(PdfReader(source).pages) != 1 or len(PdfReader(context).pages) != 1:
+                            raise ValueError('Focused gene-tree PDF must have exactly one tree and one context page')
+                        writer = PdfWriter()
+                        writer.append(str(source))
+                        writer.append(str(context))
+                        with pdf.open('wb') as handle:
+                            writer.write(handle)
             for logical, expected in sources.items():
                 subdir, name = logical.split("/", 1)
                 with store.open_binary(subdir, name) as handle:

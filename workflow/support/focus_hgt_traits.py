@@ -536,7 +536,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                             "species_trait_contract.py", "species_trait_schema.py", "focus_hgt_direction.py", "focus_hgt_pfam.py", "focus_hgt_origin.py",
                                             "focus_hgt_gene_trees.py", "gene_family_output_store.py")]
     if gene_family_root and plots:
-        code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r',
+        code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r', 'tree_plot_batch.r',
                                                 'focus_hgt_context.py', 'focus_hgt_context_annotations.py',
                                                 'focus_hgt_figures.py', 'gene_tree_plot_config.py', 'scaffold_taxonomy.py')]
         code += sorted((helper_root / "treevis/R").glob("*.R"))

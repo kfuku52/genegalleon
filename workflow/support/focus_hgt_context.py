@@ -655,7 +655,7 @@ def render_bounded_context(path, rows, events, links, coordinates, max_genes_per
              fontsize=8, color='#666666')
     fig.savefig(path, format='pdf')
     plt.close(fig)
-    annotations.verify()
+    annotations.verify(records=[row for records in tables.values() for row in records])
     by_id = {e['event_id']: e for e in events}
     displayed = {(e['side'], e['link']['gene_id']): e for e in selected}
     for row in audit:
