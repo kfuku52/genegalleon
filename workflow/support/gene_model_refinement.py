@@ -37,7 +37,7 @@ try:
         validate_candidate,
         write_catalog,
     )
-    from gene_model_selection import pair_score, select_representatives
+    from gene_model_selection import _baseline, pair_score, select_representatives
     from gene_model_species_profiles import parameters_for, read_profiles
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
@@ -45,6 +45,7 @@ try:
     from refinement_input_snapshot import RefinementInputSnapshot
     from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
+    from rescue_prediction_cache import stream_json_array
     from rescue_prepared_snapshot import PreparedSnapshot
 except ImportError:
     from . import rescue_gene_models as rescue
@@ -58,7 +59,7 @@ except ImportError:
         validate_candidate,
         write_catalog,
     )
-    from .gene_model_selection import pair_score, select_representatives
+    from .gene_model_selection import _baseline, pair_score, select_representatives
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
@@ -66,6 +67,7 @@ except ImportError:
     from .refinement_input_snapshot import RefinementInputSnapshot
     from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
+    from .rescue_prediction_cache import stream_json_array
     from .rescue_prepared_snapshot import PreparedSnapshot
 
 SCHEMA = 1
@@ -646,6 +648,11 @@ def select(root, value, predictions=False):
         edges = json.loads((directory / 'edges.json').read_text())
         selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
                                            min_support=params['min_support'], candidate_limit=params['candidate_limit'])
+        if predictions:
+            repairs = (row for name in value['species']
+                       for row in stream_json_array(root / 'predictions' / name / 'predictions.json')
+                       if row.get('same_coordinate_source_repair'))
+            selection = apply_same_coordinate_repairs(selection, repairs)
         atomic_json(tmp / 'selection.json', selection)
         rescue.write_tsv(tmp / 'representative_map.tsv', MAP_FIELDS,
                          [[r.get(k, '') for k in MAP_FIELDS] for r in selection['selections']])
@@ -736,6 +743,112 @@ def set_representative_admission(row, valid_original, params):
         quality['representative_admission'] = 'conservation_supported'
 
 
+def same_coordinate_source_owner(model, gene, genetic_code):
+    """Identify one source-invalid, otherwise complete exact genomic path."""
+    if gene.get('ambiguous_coordinates') or not isinstance(genetic_code, int) or isinstance(genetic_code, bool):
+        return None
+    shape = (model['seqid'], model['strand'], tuple(tuple(b) for b in model['cds']))
+    matches = [c for c in gene['candidates'] if
+               (c.get('seqid', gene['seqid']), c.get('strand', gene['strand']),
+                tuple(tuple(b) for b in c['blocks'])) == shape]
+    if len(matches) != 1:
+        return None
+    original = matches[0]
+    quality = original.get('quality', {})
+    sources = original.get('source_cds', [])
+    if (original.get('origin') != 'original' or not quality.get('sequence_mismatch')
+            or original.get('cds') != model.get('sequence') or len(sources) != 1
+            or not sources[0].get('cds') or sources[0].get('sequence_agreement') is not False
+            or sources[0]['cds'] == original['cds']):
+        return None
+    prohibited = ('partial', 'annotated_partial', 'phase_conflict', 'phase_unknown',
+                  'phase_unresolved', 'internal_stop', 'ambiguous', 'invalid_base',
+                  'incomplete_codon', 'translation_uncertain', 'structure_problem',
+                  'annotated_exception', 'annotated_pseudogene', 'translation_exception',
+                  'sequence_exception', 'frameshift', 'ownership_conflict')
+    if any(quality.get(flag) for flag in prohibited):
+        return None
+    probe = copy.deepcopy(original)
+    probe['quality']['sequence_mismatch'] = False
+    try:
+        fresh = validate_candidate(probe, genetic_code)
+    except (TypeError, ValueError):
+        return None
+    if not fresh.get('valid_orf') or any(fresh.get(flag) for flag in prohibited):
+        return None
+    return original
+
+
+def apply_same_coordinate_repairs(selection, prediction_rows):
+    """Update a newly built selection in place, retaining bounded graph audit."""
+    repairs = defaultdict(list)
+    for row in prediction_rows:
+        proof = row.get('same_coordinate_source_repair')
+        candidate = row.get('candidate', {})
+        if (row.get('status') != 'accepted' or not isinstance(proof, dict)
+                or proof.get('schema') != 1 or not proof.get('baseline_candidate_id')
+                or proof.get('minimum_external_species', 0) < 2
+                or len(set(proof.get('independent_external_species', []))) < proof['minimum_external_species']
+                or not candidate.get('quality', {}).get('valid_orf')
+                or not candidate.get('quality', {}).get('representative_eligible')
+                or hashlib.sha256(candidate.get('cds', '').encode()).hexdigest() != proof.get('genomic_cds_sha256')
+                or candidate.get('source_transcript_id') != proof.get('source_transcript_id')):
+            continue
+        shape = (candidate.get('seqid'), candidate.get('strand'),
+                 tuple(tuple(b) for b in candidate.get('blocks', [])))
+        if hashlib.sha256(json.dumps(shape).encode()).hexdigest() != proof.get('coding_key'):
+            continue
+        probe = copy.deepcopy(candidate)
+        try:
+            fresh = validate_candidate(probe, proof.get('genetic_code'))
+        except (TypeError, ValueError):
+            continue
+        if not fresh.get('valid_orf') or not fresh.get('usable'):
+            continue
+        repairs[proof['species'], row['gene_id']].append(row)
+    applied = {}
+    for decision in selection['selections']:
+        matches = repairs.get((decision['species'], decision['gene_id']), [])
+        if len(matches) != 1:
+            continue
+        row = matches[0]
+        proof = row['same_coordinate_source_repair']
+        if decision['candidate_id'] not in {proof['original_candidate_id'], row['candidate']['candidate_id']}:
+            continue
+        previous = copy.deepcopy(decision)
+        baseline = proof['baseline_candidate_id']
+        applied[decision['species'], decision['gene_id']] = {
+            'species': decision['species'], 'gene_id': decision['gene_id'],
+            'original_candidate_id': decision['candidate_id'],
+            'final_candidate_id': row['candidate']['candidate_id'],
+            'baseline_candidate_id': baseline, 'source_selected_flags': [],
+            'change_count_delta': (int(row['candidate']['candidate_id'] != baseline)
+                                   - int(decision['candidate_id'] != baseline))}
+        decision.update(candidate_id=row['candidate']['candidate_id'], status='sequence_repaired',
+                        reason='trusted_same_coordinate_genome_cds',
+                        source_correspondence_decision=previous,
+                        same_coordinate_source_repair=copy.deepcopy(proof),
+                        orthology='unassigned', expected_copy='unassigned')
+    if not applied:
+        return selection
+    # Retain only original flags for repaired loci, not a second scores table.
+    for score in selection.get('scores', []):
+        audit = applied.get((score['species'], score['gene_id']))
+        if audit is not None:
+            audit['source_selected_flags'].append(
+                {'candidate_id': score['candidate_id'], 'selected': score['selected']})
+            score['selected'] = score['candidate_id'] == audit['final_candidate_id']
+    if isinstance(selection.get('metrics'), dict):
+        selection['source_correspondence_metrics'] = dict(selection['metrics'])
+        selection['metrics'] = dict(selection['metrics'])
+        if 'changed_representatives' in selection['metrics']:
+            selection['metrics']['changed_representatives'] += sum(
+                audit['change_count_delta'] for audit in applied.values())
+        selection['metrics']['same_coordinate_sequence_repairs'] = len(applied)
+    selection['same_coordinate_repair_audit'] = list(applied.values())
+    return selection
+
+
 def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     """Require target ownership, intact genomic ORF and independent support."""
     rna_rows = rna_path_index(rna_rows)
@@ -800,6 +913,9 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
             problems.append('ambiguous_locus_coordinates')
         if m['gene_id'] in ambiguous_loci:
             problems.append('ambiguous_locus_correspondence')
+        source_repair_owner = same_coordinate_source_owner(m, g, catalog.get('genetic_code'))
+        if m.get('same_coordinate_repair_only') and source_repair_owner is None:
+            problems.append('same_coordinate_repair_required')
         if shape in original_shapes:
             problems.append('existing_coding_path')
         if candidate['strand'] != g['strand'] or candidate['seqid'] != g['seqid']:
@@ -833,6 +949,13 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         supported = not alignment_problems and 'untrusted_donor_correspondence' not in problems
         if supported:
             row['donors'].append(m['donor_species'])
+        if (supported and source_repair_owner is not None
+                and m['donor_species'] != catalog['species']
+                and 'minimum_identity' in params and 'minimum_coverage' in params
+                and m['identity'] >= params['minimum_identity']
+                and m['coverage'] >= params['minimum_coverage']):
+            row.setdefault('_same_coordinate_repair_support', []).append(
+                (m['donor_species'], source_repair_owner))
         row['alignments'].append({'donor_species': m['donor_species'], 'donor_candidate': m['donor_candidate'],
                                   'identity': m['identity'], 'coverage': m['coverage'],
                                   'supports_path': supported, 'problems': alignment_problems,
@@ -842,14 +965,44 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     result = []
     for row in grouped.values():
         row['donors'] = sorted(set(row['donors']))
+        repair_support = row.pop('_same_coordinate_repair_support', [])
+        external = sorted({donor for donor, _ in repair_support})
+        minimum = max(2, params['min_support'])
+        exceptional = {'existing_coding_path', 'unresolved_source_sequence_mismatch',
+                       'ambiguous_locus_correspondence'}
+        if (len(external) >= minimum and params['mode'] == 'conservative'
+                and params['policy'] == 'conserved'
+                and not set(row['problems']) - exceptional
+                and row['candidate']['quality'].get('valid_orf')
+                and row['candidate']['cds'] == repair_support[0][1]['cds']):
+            owner = repair_support[0][1]
+            row['same_coordinate_source_repair'] = {
+                'schema': 1, 'species': catalog['species'],
+                'original_candidate_id': owner['candidate_id'],
+                'baseline_candidate_id': _baseline(loci[row['gene_id']], loci[row['gene_id']]['candidates'])['candidate_id'],
+                'source_transcript_id': owner['source_transcript_id'],
+                'supplied_cds_sha256': hashlib.sha256(owner['source_cds'][0]['cds'].encode()).hexdigest(),
+                'genomic_cds_sha256': hashlib.sha256(row['candidate']['cds'].encode()).hexdigest(),
+                'assembly_sha256': genome_hash, 'minimum_external_species': minimum,
+                'genetic_code': catalog['genetic_code'], 'coding_key': row['candidate']['coding_key'],
+                'independent_external_species': external,
+                'correspondence_ambiguity': 'ambiguous_locus_correspondence' in row['problems'],
+                'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+            row['candidate']['source_transcript_id'] = owner['source_transcript_id']
+            row['candidate']['same_coordinate_source_repair'] = copy.deepcopy(row['same_coordinate_source_repair'])
+            row['candidate']['gene_id'] = row['gene_id']
+            row['problems'] = sorted(set(row['problems']) - exceptional)
         if not row['donors']:
             row['problems'].append('no_qualifying_donor_alignment')
         if len(row['donors']) < params['min_support'] and not row['rna_paths']:
             row['problems'].append('insufficient_independent_support')
         row['status'] = 'accepted' if not row['problems'] and params['mode'] == 'conservative' else 'proposal'
         valid_original = any(c['quality'].get('valid_orf') for c in loci[row['gene_id']]['candidates'])
-        row['change_type'] = 'isoform_addition' if valid_original else 'model_revision'
-        row['evidence_class'] = 'rna_path_supported' if row['rna_paths'] else 'homology_only_predicted'
+        row['change_type'] = ('model_revision' if row.get('same_coordinate_source_repair')
+                              else 'isoform_addition' if valid_original else 'model_revision')
+        row['evidence_class'] = ('homology_supported_same_coordinate_repair'
+                                 if row.get('same_coordinate_source_repair') else
+                                 'rna_path_supported' if row['rna_paths'] else 'homology_only_predicted')
         set_representative_admission(row, valid_original, params)
         row['candidate']['support'] = {'donors': row['donors'], 'rna_paths': row['rna_paths'], 'class': row['evidence_class']}
         result.append(row)
@@ -1013,7 +1166,15 @@ def predict_species(root, value, name, cpus=1):
                 donor = edge['species_' + donor_side]
                 target = loci[name, target_gene]
                 donor_locus = load_locus(connection, donor, edge['gene_' + donor_side])
-                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or decisions[name, target_gene]['status'] == 'ambiguous_correspondence' or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
+                target_decision = decisions[name, target_gene]
+                target_baseline = next(c for c in target['candidates']
+                                       if c['candidate_id'] == target_decision['candidate_id'])
+                repair_only = (target_decision['status'] == 'ambiguous_correspondence'
+                               and same_coordinate_source_owner(
+                                   {'seqid': target['seqid'], 'strand': target['strand'],
+                                    'cds': target_baseline['blocks'], 'sequence': target_baseline['cds']},
+                                   target, catalog.get('genetic_code')) is not None)
+                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or (target_decision['status'] == 'ambiguous_correspondence' and not repair_only) or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
                     proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
                     continue
                 if not any(c['cds'] and c['blocks'] for c in target['candidates']):
@@ -1050,7 +1211,8 @@ def predict_species(root, value, name, cpus=1):
                         continue
                     qid = 'q' + hashlib.sha256((target_gene + donor + candidate['candidate_id']).encode()).hexdigest()[:24]
                     region = {'id': qid, 'seqid': target['seqid'], 'start': start, 'end': end, 'query': candidate['candidate_id'],
-                              'donor': donor, 'gene_id': target_gene, 'donor_candidate': candidate['candidate_id']}
+                              'donor': donor, 'gene_id': target_gene, 'donor_candidate': candidate['candidate_id'],
+                              **({'same_coordinate_repair_only': True} if repair_only else {})}
                     queries[qid] = region
                     proteins.setdefault(donor, {})[candidate['candidate_id']] = candidate['protein']
                     windows[target['seqid'], start, end].append(region)
@@ -1077,6 +1239,8 @@ def predict_species(root, value, name, cpus=1):
                 model['seqid'] = region['seqid']
                 model['cds'] = [[a + region['start'], b + region['start'], p] for a, b, p in model['cds']]
                 model.update(gene_id=region['gene_id'], donor_species=region['donor'], donor_candidate=region['donor_candidate'])
+                if region.get('same_coordinate_repair_only'):
+                    model['same_coordinate_repair_only'] = True
                 checked = rescue.validate_model(model, genome, source['genetic_code'], params)
                 checked = rescue.complete_terminals(checked, genome, source['genetic_code'], params,
                     proteins[region['donor']][region['donor_candidate']], rescue.validate_model)
@@ -1534,13 +1698,13 @@ def finalize(root, value):
                     translation_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included' if admitted else 'excluded', json.dumps(candidate['quality'], sort_keys=True)))
                     if not exportable:
                         pass
-                    elif candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path'):
+                    elif candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path') or candidate.get('same_coordinate_source_repair'):
                         original_transcripts.add(candidate['source_transcript_id'])
                     else:
                         predicted_rows.append(candidate_gff(gene, candidate, name))
                     for c in candidates.values():
                         all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
-                        if c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path'):
+                        if c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
                             # Preserve the original gene and attach only new transcript/CDS rows.
                             lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
                                                   gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
@@ -1569,7 +1733,8 @@ def finalize(root, value):
         rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
         atomic_json(tmp / 'changes.json', changes)
         atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(selections),
-                                         'changed_representatives': sum(r['status'] == 'conserved' for r in selections),
+                                         'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired'} for r in selections),
+                                         'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in selections),
                                          'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes)})
     return stage(root, 'effective', {'dependencies': dependencies}, build)
 

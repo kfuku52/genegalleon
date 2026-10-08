@@ -141,3 +141,35 @@ was 66.0 MiB for full-document encoding and 38.8 MiB for buffered streaming;
 the loaded input itself used about 39 MiB. Median wall times were 0.238 s and
 0.247 s, so this benchmark demonstrates lower additional memory, not a timing
 speedup. The full-run peak is an observation, not a controlled comparison.
+
+## Streaming rescue audit tables
+
+The rescue producer writes `quality_flags.tsv` and `audit.tsv` from iterators
+instead of materialising another row list for each table. Model order, unresolved
+candidate order, columns and CSV quoting remain unchanged. The validated model
+collection still resides in memory; this change reduces table-writer overhead.
+
+A normal x86_64 SIF benchmark repeated 2,048 frozen Simmondsia records 128 times
+(262,144 model rows). One warmup and three alternating measured trials compared
+the exact production writer statements. Both complete output files were byte
+identical, including an unresolved fixture containing tabs, quotes and newlines.
+Median process peak RSS fell from 170.9 MiB to 56.8 MiB. The loaded sample is
+included in RSS, while input loading, AST extraction and process startup are
+outside writer wall time. Legacy wall times ranged from 5.55 to 7.21 seconds
+and streaming times from 4.90 to 5.78 seconds on the shared server. These
+measurements support a memory reduction for this serialization workload,
+without establishing whole-producer, cold-cache or 500-species performance.
+
+Use immutable source and sample directories and the sample's full SHA256:
+
+```bash
+GENEGALLEON_SIF_EXTRA_BINDS=$'/data/frozen_source\n/data/model_sample' \
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_rescue_tables.py \
+  --source /data/frozen_source --candidate "$PWD" \
+  --models /data/model_sample/models.json --sample-sha256 "$SAMPLE_SHA256" \
+  --repeat 128 --output workspace/output/rescue_table_benchmark
+```
+
+The output directory must be new. The benchmark retains implementation hashes,
+sample identity, commands, trial RSS and timing measurements, output hashes and
+row-count validation. A changed sample or different output bytes fails the run.

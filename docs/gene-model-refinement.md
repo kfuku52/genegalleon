@@ -106,6 +106,25 @@ therefore not automatically the chosen representative. True species-specific
 isoforms, pseudogene annotations, translation exceptions and genomic disruptions
 are protected.
 
+A supplied-CDS mismatch can be repaired without changing the coding coordinates
+when exactly one owned original path has an intact, strictly genome-valid ORF
+under a known genetic code, and at least two distinct trusted external donor
+species support that same path (or the configured higher minimum). Prediction
+coverage, identity, phase, splice, exception and collision checks still apply.
+Self support and two reference groups from one species do not count as two
+independent species. Unsupported mismatches, partial paths and normal source
+models retain their existing gates.
+
+This DNA consistency repair is counted as a model revision, including when the
+gene has another normal isoform. It preserves the gene and source transcript
+IDs and reuses the original structural transcript. Exact original CDS/GFF bytes
+remain archived. A repaired source representative is marked `sequence_repaired`;
+an already selected normal alternative is retained. Final selection flags and
+counts agree, while the original graph decision, metrics and affected selected
+flags remain in a separate audit. Repair does not resolve paralog correspondence,
+assign orthology or expected copy, or establish target RNA support. These remain
+unassigned when the graph is ambiguous; intact genomic DNA alone is insufficient.
+
 Translation follows GeneGalleon's existing context-free codon-table convention:
 alternative initiator codons retain their ordinary residue, such as TTG → L
 and GTG → V. This does not interpret complete-CDS initiation context. A path

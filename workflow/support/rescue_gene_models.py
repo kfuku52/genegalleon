@@ -1373,21 +1373,23 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
                   "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
                   "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"),
-                  [(m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
+                  ((m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
                     m["quality_evidence"]["terminal_alignment"]["n_aligned"],
                     m["quality_evidence"]["terminal_alignment"]["c_aligned"],
                     ",".join(m["quality_evidence"]["donor_species"]), ",".join(m["quality_evidence"]["flags"]),
                     m["quality_evidence"]["query_alignment"]["aligned_query_fraction"],
                     m["quality_evidence"]["query_alignment"]["internal_unaligned_query_fraction"])
-                   for m in models])
+                   for m in models))
         detected = {m["query"] for m in validated}
-        audit = [{"candidate": m["query"], "donor_gene": m["evidence"]["query"], "status": m["status"],
-                  "reasons": ",".join(m["problems"]), "coverage": m["coverage"], "identity": m["identity"],
-                  "model_id": m.get("model_id", "")} for m in models]
-        audit += [{"candidate": r["id"], "donor_gene": r["query"], "status": "unresolved", "reasons": "no_alignment",
-                   "coverage": "", "identity": "", "model_id": ""} for r in regions if r["id"] not in detected]
+        def audit_rows():
+            for m in models:
+                yield (m["query"], m["evidence"]["query"], m["status"], ",".join(m["problems"]),
+                       m["coverage"], m["identity"], m.get("model_id", ""))
+            for r in regions:
+                if r["id"] not in detected:
+                    yield (r["id"], r["query"], "unresolved", "no_alignment", "", "", "")
         write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
-                  [list(row.values()) for row in audit])
+                  audit_rows())
         # Huge indexes are execution scratch, not reusable unverified outputs.
         (tmp / "genome.mpi").unlink(missing_ok=True)
         (tmp / "genome.fa").unlink(missing_ok=True)

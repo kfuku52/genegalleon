@@ -346,6 +346,8 @@ def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models)
         assert list(iter_partial_models(b)) == json.loads((a / "partial_models.json").read_text())
         assert list(iter_revision_models(b)) == json.loads((a / "revision_candidates.json").read_text())
         assert (b / "model_store/manifest.json").is_file()
+        for filename in ("quality_flags.tsv", "audit.tsv"):
+            assert (a / filename).read_bytes() == (b / filename).read_bytes()
         assert not any((b / filename).exists() for filename in (
             "models.json", "partial_models.json", "revision_candidates.json", "regions.fa", "queries.fa",
             "genome.gff", "unresolved.fa", "unresolved.unique.fa", "genome.covered.unique.fa"))
