@@ -289,7 +289,10 @@ def test_finalize_exports_alternatives_under_one_gene_and_keeps_original_ids(tmp
     paths.resolve_coding_paths([primary, alternative])
     assert primary['path_selection']['representative_status'] == ('ambiguous' if fallback else 'supported_priority')
     (worker / 'models.json').write_text(json.dumps([primary, alternative]))
-    (worker / 'receipt.json').write_text('{}')
+    (worker / 'receipt.json').write_text(json.dumps({
+        'key': {'plan': 'frozen-plan', 'species': name},
+        'files': {'models.json': rescue.digest(worker / 'models.json')},
+    }))
     plan = {'species': [name], 'common_references': [], 'request': {'sources': {name: {
         'species': name, 'fasta': str(cds), 'gff': str(gff), 'genome': str(genome), 'genetic_code': 1,
         'quality': {'complete_pct': 90}}}}}
