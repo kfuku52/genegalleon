@@ -35,6 +35,11 @@ from format_species_annotation.organelle import fasta_header_is_organelle
 from gff_attribute_syntax import validate_gff
 
 SCHEMA_VERSION = 1
+SOURCE_RESCUE_LOCUS_ATTRIBUTES = (
+    ('source_rescue_representative_status', 'representative_status'),
+    ('source_rescue_representative_selection_policy', 'selection_policy'),
+    ('source_rescue_locus_independent_donor_species_count', 'locus_independent_donor_species_count'),
+    ('source_rescue_orthology', 'orthology'), ('source_rescue_expected_copy', 'expected_copy'))
 
 
 def source_signature(path):
@@ -505,6 +510,51 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                              "seqid": seqid, "strand": strand, "cds": sequence, "protein": "",
                              "blocks": blocks, "junctions": [], "quality": quality, "origin": "original",
                              "source_fasta_ids": [], "source_cds_sha256": [], "source_cds": []}
+                # Rescue can establish a locus while compatible isoforms still
+                # have no decisive representative rank. Preserve that evidence
+                # without changing translation quality or admission policy.
+                rescue_selection = {}
+                historical_rescue = {}
+                current_rescue_path = any(row['source'] == 'genegalleon_rescue'
+                                          for row in [*rows, *normaliser.nodes.get(transcript, [])])
+                for row in owned_rows:
+                    for attribute, name in SOURCE_RESCUE_LOCUS_ATTRIBUTES:
+                        if attribute in row['attributes']:
+                            value = row['attributes'][attribute]
+                            if name in historical_rescue and historical_rescue[name] != value:
+                                raise ValueError('Conflicting historical rescue locus provenance: ' + transcript)
+                            historical_rescue[name] = value
+                    if row['source'] != 'genegalleon_rescue':
+                        continue
+                    for attribute, name in (
+                            ('representative_status', 'representative_status'),
+                            ('representative_selection_policy', 'selection_policy'),
+                            ('locus_independent_donor_species_count', 'locus_independent_donor_species_count'),
+                            ('path_independent_donor_species_count', 'path_independent_donor_species_count'),
+                            ('rescue_orthology', 'orthology'), ('rescue_expected_copy', 'expected_copy')):
+                        if attribute in row['attributes']:
+                            value = row['attributes'][attribute]
+                            # An old rescue gene can own a newly refined path.
+                            # Its original ranking is historical locus evidence,
+                            # not the representative status of that new path.
+                            target = rescue_selection if current_rescue_path else historical_rescue
+                            if not current_rescue_path and name == 'path_independent_donor_species_count':
+                                continue
+                            if name in target and target[name] != value:
+                                raise ValueError('Conflicting rescue selection provenance: ' + transcript)
+                            target[name] = value
+                if rescue_selection:
+                    candidate['rescue_path_selection'] = rescue_selection
+                if historical_rescue:
+                    candidate['source_rescue_locus_provenance'] = historical_rescue
+                rescue_alternative = any(row['source'] == 'genegalleon_rescue'
+                                         and row['attributes'].get('support') == 'homology_coding_path'
+                                         for row in normaliser.nodes.get(transcript, []))
+                if rescue_alternative:
+                    candidate['origin'] = 'predicted'
+                    candidate['rescue_alternative_coding_path'] = True
+                    candidate['quality']['representative_eligible'] = False
+                    candidate['support'] = {'class': 'homology_only_predicted', 'source': 'missing_gene_rescue_alternative'}
                 candidate["quality"] = validate_candidate(candidate, genetic_code)
                 if not candidate["quality"]["phase_conflict"] and not candidate["quality"]["phase_unresolved"]:
                     candidate["junctions"] = _junctions(blocks, strand)
@@ -516,6 +566,12 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                                                   "candidates": [], "source_baseline_candidate_id": ""})
                 if (locus["seqid"], locus["strand"]) != (seqid, strand):
                     locus["ambiguous_coordinates"] = True
+                if historical_rescue:
+                    inherited = locus.setdefault('source_rescue_locus_provenance', {})
+                    for key, value in historical_rescue.items():
+                        if key in inherited and inherited[key] != value:
+                            raise ValueError('Conflicting historical rescue locus provenance: ' + source_gene)
+                        inherited[key] = value
                 locus["candidates"].append(candidate)
                 candidates[candidate_id] = candidate
                 for alias in (transcript, candidate_id):
@@ -630,6 +686,9 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                "usable_candidates": sum(candidate["quality"]["usable"] for candidate in candidates.values()),
                "coding_paths": len({candidate["coding_key"] for candidate in candidates.values()}),
                "fasta_mapping": dict(Counter(row["mapping_status"] for row in mapping))}
+    alternatives = sum(c.get('rescue_alternative_coding_path', False) for c in candidates.values())
+    if alternatives:
+        summary['rescue_alternative_coding_paths'] = alternatives
     if excluded_loci:
         summary.update(excluded_loci=len(excluded_loci),
                        excluded_candidates=sum(len(locus["candidates"]) for locus in excluded_loci.values()))

@@ -46,6 +46,7 @@ gene_model_rescue_guide_minimum_shared="${gene_model_rescue_guide_minimum_shared
 gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-}"
 gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
+gene_model_rescue_prediction_cache="${gene_model_rescue_prediction_cache:-}"
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
 gene_model_rescue_minimum_busco="${gene_model_rescue_minimum_busco:-90}"
@@ -57,6 +58,10 @@ gene_model_species_profiles="${gene_model_species_profiles:-}"
 gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
 [[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
+gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
+gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-2}"
+gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
+gene_model_rescue_terminal_max_unaligned_c_overhang="${gene_model_rescue_terminal_max_unaligned_c_overhang:-2}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
 gene_model_rescue_gemoma_java="${gene_model_rescue_gemoma_java:-java}"
 require_cds="${require_cds:-0}"
@@ -2519,7 +2524,12 @@ prepare_gene_model_rescue() {
     --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"
     --minimum-busco "${gene_model_rescue_minimum_busco}" --minimum-coverage "${gene_model_rescue_minimum_coverage}"
     --minimum-identity "${gene_model_rescue_minimum_identity}" --max-interval "${gene_model_rescue_max_interval}"
-    --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}")
+    --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}"
+    --max-genome-queries "${gene_model_rescue_max_genome_queries}"
+    --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
+    --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
+    --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
+  [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
   [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
     rescue_args+=(--genetic-codes "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv")

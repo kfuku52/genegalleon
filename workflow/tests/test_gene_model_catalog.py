@@ -41,6 +41,34 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.mark.parametrize('status,policy', [('ambiguous', 'longest_cds_then_coding_shape'),
+                                           ('supported_priority', 'validated_donor_rank')])
+def test_rescue_representative_provenance_keeps_locus_and_path_support_distinct(tmp_path, status, policy):
+    provenance = (f';representative_status={status};representative_selection_policy={policy}'
+                  ';locus_independent_donor_species_count=2;rescue_orthology=unassigned'
+                  ';rescue_expected_copy=unassigned')
+    annotations = row('gene', 1, 18, 'rescued').rstrip('\n') + provenance + '\n'
+    annotations += row('mRNA', 1, 18, 'primary', parent='rescued').rstrip('\n') + provenance
+    annotations += ';path_independent_donor_species_count=1\n' + row('CDS', 1, 18, 'c', parent='primary', phase='0')
+    annotations += row('mRNA', 1, 18, 'alternative', parent='rescued').rstrip('\n')
+    annotations += provenance + ';path_independent_donor_species_count=1;support=homology_coding_path\n'
+    annotations += row('CDS', 1, 6, 'c2', parent='alternative', phase='0')
+    annotations += row('CDS', 13, 18, 'c3', parent='alternative', phase='0')
+    annotations = annotations.replace('\ts\t', '\tgenegalleon_rescue\t')
+    paths = fixture(tmp_path, '>rescued\nATGAAACCCGGGCCCTAA\n', annotations, 'ATGAAACCCGGGCCCTAA')
+    value = MODULE.build_catalog('Species_target', *paths)
+    primary, = [c for c in value['loci'][0]['candidates'] if c['source_transcript_id'] == 'primary']
+    alternative, = [c for c in value['loci'][0]['candidates'] if c['source_transcript_id'] == 'alternative']
+    for candidate in (primary, alternative):
+        assert candidate['rescue_path_selection'] == {
+            'representative_status': status, 'selection_policy': policy,
+            'locus_independent_donor_species_count': '2', 'path_independent_donor_species_count': '1',
+            'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+        assert candidate['quality']['valid_orf'] and candidate['quality']['usable']
+    assert primary['origin'] == 'original'
+    assert alternative['origin'] == 'predicted' and not alternative['quality']['representative_eligible']
+
+
 @pytest.mark.parametrize("strand", ["+", "-"])
 @pytest.mark.parametrize("partial", [False, True])
 def test_annotated_five_prime_envelope_preserves_genomic_cds_and_raw_source(tmp_path, strand, partial):

@@ -292,21 +292,33 @@ def classify_rescue_support(models, species, rescued, plan):
             raise ValueError("Accepted rescue gene IDs differ from the source annotation: " + species)
         if gene in evidence:
             raise ValueError("Duplicate accepted rescue gene: " + identifier)
-        support = model.get("support")
-        if not isinstance(support, list) or not support:
-            raise ValueError("Accepted rescue gene lacks supporting donors: " + identifier)
         donors = set()
-        for entry in support:
-            donor = entry.get("donor")
-            if (entry.get("target") != species
-                    or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
-                raise ValueError("Rescue support donor/target differs from the frozen plan")
-            donors.add(donor)
+        paths = model.get("alternative_coding_paths", [])
+        if not isinstance(paths, list):
+            raise ValueError("Malformed rescued alternative coding paths")
+        path_support = {}
+        for path in [model, *paths]:
+            path_id = path.get("model_id")
+            support = path.get("support")
+            if not isinstance(support, list) or not support:
+                raise ValueError("Accepted rescue gene lacks supporting donors: " + identifier)
+            if not isinstance(path_id, str) or not path_id or path_id in path_support or path.get("problems"):
+                raise ValueError("Invalid or duplicate rescued coding path: " + identifier)
+            path_donors = set()
+            for entry in support:
+                donor = entry.get("donor")
+                if (entry.get("target") != species
+                        or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
+                    raise ValueError("Rescue support donor/target differs from the frozen plan")
+                path_donors.add(donor)
+            path_support[path_id] = sorted(path_donors)
+            donors.update(path_donors)
         near, common = bool(donors & nearest), bool(donors & balanced)
         category = "both" if near and common else "nearest_only" if near else "balanced_only" if common else "self_only"
         if category != "self_only":
             counts[category] += 1
-        evidence[gene] = {"source_model_id": identifier, "supporting_donors": sorted(donors), "category": category}
+        evidence[gene] = {"source_model_id": identifier, "supporting_donors": sorted(donors), "category": category,
+                          "coding_path_support": path_support}
     if set(evidence) != set(rescued):
         raise ValueError("Accepted rescue gene IDs differ from the source annotation: " + species)
     return counts, evidence
@@ -894,6 +906,7 @@ def plot_comparison(rows, output, model_changes=None):
              if staged else "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms.")
     if extra:
         note += "\nRescue counts are added gene loci; repair / isoform counts are accepted paths and may share a locus."
+        note += "\nRescue donors support retained paths within a locus; coding-path donor support is path-specific."
     if support_legend:
         if grouped_support:
             note += "\nDonor groups: self species, nearest relatives and phylogenetically balanced references. Target RNA is separate from self-species homology."
