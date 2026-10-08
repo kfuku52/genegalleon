@@ -186,12 +186,14 @@ def nominate_genome_only_candidates(root, plan, name, regions, params):
                                                 "reason": r["nomination"]["reason"], "priority": r["screen_priority"]} for r in deferred]}
 
 
-def reassess_unanchored_models(models, minimum_species=2):
+def reassess_unanchored_models(models, minimum_species=2, *, ownership=None):
     """Admit only intact, unique paths corroborated by independent species.
 
     Compatible coding paths may corroborate annotation placement. A donor
-    protein mapping to multiple genomic loci cannot corroborate uniqueness.
-    Placement remains explicitly unanchored, never an expected-copy assignment.
+    protein mapping to multiple unannotated loci cannot corroborate uniqueness.
+    Existing annotated placements retain the original all-loci assessment for
+    revision nominations. Missing-gene annotation uses unannotated loci only;
+    neither assessment assigns orthology or an expected copy.
     """
     if isinstance(minimum_species, bool) or not isinstance(minimum_species, int) or minimum_species < 2:
         raise ValueError("Unanchored placement needs at least two donor species")
@@ -210,41 +212,74 @@ def reassess_unanchored_models(models, minimum_species=2):
     for row in unique:
         row["start"] = min(e[0] for e in row["cds"])
         row["end"] = max(e[1] for e in row["cds"])
-    components = overlap_components(unique)
-    query_loci = defaultdict(set)
-    for locus, indexes in enumerate(components):
-        for index in indexes:
-            for row in shapes[coding_shape(unique[index])]["records"]:
-                evidence = row.get("evidence", {})
-                if evidence.get("donor") and evidence.get("query"):
-                    query_loci[evidence["donor"], evidence["query"]].add(locus)
-    counts = Counter()
-    for locus, indexes in enumerate(components):
-        paths = [unique[i] for i in indexes]
-        # Bridging/fusion paths must not join unrelated annotations through a
-        # chain of pairwise overlaps. Every pair must be frame-compatible.
-        # Placement is precisely the guard being reassessed here; retain hard
-        # QC in eligibility and evaluate primary verified alignment metrics.
-        clean = [{**path, "problems": [], "support": []} for path in paths]
-        coherent = all(compatible_paths(a, b) for i, a in enumerate(clean) for b in clean[i + 1:])
-        records = [m for path in paths for m in shapes[coding_shape(path)]["records"]]
-        support = set()
-        for model in records:
-            evidence = model.get("evidence", {})
-            key = evidence.get("donor"), evidence.get("query")
-            if (key[0] and key[1] and key[0] != evidence.get("target")
-                    and len(query_loci[key]) == 1):
-                support.add(key[0])
-        for model in records:
-            if not (set(model.get("problems", ())) & placement_problems):
-                continue
+    def assessments(paths):
+        components = overlap_components(paths)
+        query_loci = defaultdict(set)
+        for locus, indexes in enumerate(components):
+            for index in indexes:
+                for row in shapes[coding_shape(paths[index])]["records"]:
+                    evidence = row.get("evidence", {})
+                    if evidence.get("donor") and evidence.get("query"):
+                        query_loci[evidence["donor"], evidence["query"]].add(locus)
+        result = {}
+        for indexes in components:
+            component = [paths[i] for i in indexes]
+            # Every pair must be frame-compatible; a bridge cannot fuse loci.
+            # Only placement is reassessed, using verified primary alignment
+            # metrics. Per-path support and scores remain unchanged.
+            clean = [{**path, "problems": [], "support": []} for path in component]
+            coherent = all(compatible_paths(a, b) for i, a in enumerate(clean) for b in clean[i + 1:])
+            records = (m for path in component for m in shapes[coding_shape(path)]["records"])
+            support = set()
+            for model in records:
+                evidence = model.get("evidence", {})
+                key = evidence.get("donor"), evidence.get("query")
+                if (key[0] and key[1] and key[0] != evidence.get("target")
+                        and len(query_loci[key]) == 1):
+                    support.add(key[0])
             reason = "supported_unanchored_annotation" if coherent and len(support) >= minimum_species else \
                      "incompatible_unanchored_paths" if not coherent else "insufficient_unique_donor_support"
+            for path in component:
+                result[coding_shape(path)] = {"reason": reason, "independent_donor_species": sorted(support)}
+        return result
+    original = assessments(unique)
+    owners = ({coding_shape(path): ownership.overlapping(path) for path in unique} if ownership is not None else {})
+    unannotated = [path for path in unique if not owners.get(coding_shape(path))]
+    missing = assessments(unannotated) if ownership is not None else original
+    counts = Counter()
+    newly_supported = 0
+    for path in unique:
+        shape = coding_shape(path)
+        owned = bool(owners.get(shape))
+        decision = original[shape] if owned else missing[shape]
+        reason = decision["reason"]
+        for model in shapes[shape]["records"]:
+            if not (set(model.get("problems", ())) & placement_problems):
+                continue
             counts[reason] += 1
             model["placement_evidence"] = {"classification": "unanchored", "reason": reason,
-                                           "independent_donor_species": sorted(support),
+                                           "independent_donor_species": decision["independent_donor_species"],
                                            "minimum_species": minimum_species, "orthology": "unassigned",
                                            "expected_copy": "unassigned"}
+            if ownership is not None:
+                model["placement_evidence"].update({
+                    "uniqueness_scope": "all_coding_loci_for_existing_model_revision" if owned else "unannotated_coding_loci",
+                    "original_all_loci_assessment": original[shape],
+                    "counting_unit": "independent_donor_species"})
+                if owned:
+                    model["placement_evidence"]["original_annotation_owner_ids"] = sorted({
+                        row["gene_id"] for row in owners[shape] if row.get("gene_id")})
+                elif reason == "supported_unanchored_annotation" and original[shape]["reason"] != reason:
+                    model["placement_evidence"]["uniqueness_reason"] = "annotated_alternatives_excluded_from_missing_gene_uniqueness"
+                    newly_supported += 1
             if reason == "supported_unanchored_annotation":
                 model["problems"] = [p for p in model["problems"] if p not in placement_problems]
-    return {"minimum_species": minimum_species, "counts": dict(counts), "intact_unique_paths": len(unique)}
+    result = {"minimum_species": minimum_species, "counts": dict(counts), "intact_unique_paths": len(unique)}
+    if ownership is not None:
+        result["annotation_aware_uniqueness"] = {
+            "annotated_intact_coding_paths": len(unique) - len(unannotated),
+            "unannotated_intact_coding_paths": len(unannotated),
+            "newly_supported_missing_annotation_records": newly_supported,
+            "existing_model_revision_scoring": "original_all_coding_loci",
+            "orthology": "unassigned", "expected_copy": "unassigned"}
+    return result

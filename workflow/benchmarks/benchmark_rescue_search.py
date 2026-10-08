@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 import rescue_gene_models as rescue  # noqa: E402
+import rescue_prediction_cache as prediction_cache  # noqa: E402
 
 
 def signature(paths):
@@ -38,27 +39,123 @@ def measured(label, directory, operation, outputs):
 
 class FrozenEvidence:
     """Keep producer hashes immutable and account for every original interval."""
-    def __init__(self, root, species):
+    def __init__(self, root, species, *, export_directory=None, cpus=1):
+        root = Path(root).resolve()
+        if not species or Path(species).name != species or species in {".", ".."} or "\\" in species:
+            raise ValueError("Unsafe benchmark species")
+        self.root, self.species = root, species
         self.source = root / "rescued" / species
+        self.inputs = self.source
         self.hashes = {}
         self.plan = self.read_json(root / "plan.json")
+        self.parameters = rescue.parameters_for(self.plan["request"], species)
         self.receipt = self.read_json(self.source / "receipt.json")
         key = self.receipt["key"]
         if key.get("plan") != self.hashes[str(root / "plan.json")] or key.get("species") != species:
             raise ValueError("Producer receipt does not belong to this plan/species")
         self.files = self.receipt["files"]
+        for member in self.files:
+            prediction_cache._safe_member(self.source, member, resolve=False)
+        self.contract = prediction_cache._verified_search_contract(root, self.plan, species, self.receipt, self.expect)
+        if any(self.contract[kind] is None for kind in ("local", "genome")):
+            raise ValueError("Unknown producer prediction search contract")
+        if self.contract["local"] != prediction_cache.prediction_search_contract()["local"]:
+            raise ValueError("Recorded local search contract differs from the benchmark interval implementation")
+        self.metadata = None
+        if "search_inputs.json" in self.files:
+            self.metadata = self.read_json(self.checked(self.source / "search_inputs.json"))
+            if self.metadata.get("schema") != 1 or self.metadata.get("plan_sha256") != self.hashes[str(root / "plan.json")]:
+                raise ValueError("Search input metadata is not bound to its producer plan")
+        self.retention_free = self.metadata is not None and self.metadata.get("retained_search_inputs") is False
+        ids = self.interval_ids()
+        legacy = [name in self.files for name in ("unresolved.fa", "genome.gff")]
+        modern_names = ("genome_search_inputs.jsonl.gz", "genome_prediction_query_mapping.tsv", "genome.unique.gff")
+        modern = [name in self.files for name in modern_names]
+        if any(legacy) and not all(legacy):
+            raise ValueError("Incomplete fallback evidence in producer receipt")
+        if any(modern) and not all(modern):
+            raise ValueError("Incomplete fallback evidence in producer receipt")
+        self.fallback_recorded = all(legacy) or all(modern)
+        self.genome_gff_sha256 = self.files.get("genome.gff")
+        if all(modern):
+            for name in modern_names:
+                self.checked(self.source / name)
+            virtual = self.metadata.get("expanded_genome_gff_sha256") if self.metadata else None
+            if not isinstance(virtual, str) or not re.fullmatch(r"[0-9a-f]{64}", virtual):
+                raise ValueError("Modern fallback lacks frozen expanded GFF checksum")
+            if self.genome_gff_sha256 is not None and self.genome_gff_sha256 != virtual:
+                raise ValueError("Retained expanded GFF differs from its frozen stream")
+            self.genome_gff_sha256 = virtual
+        needs_export = any(f"intervals/{i}/region.fa" not in self.files for i in ids) or (all(modern) and not all(legacy))
+        if needs_export:
+            if not self.retention_free or export_directory is None:
+                raise ValueError("Missing retained predictor inputs cannot be treated as valid omission")
+            self._export(export_directory, cpus)
+        for name in ("unresolved.fa", "genome.gff"):
+            if (self.source / name).exists() and name not in self.files:
+                raise ValueError("Fallback evidence absent from producer receipt")
 
     def read_json(self, path):
         data = path.read_bytes()
-        self.hashes[str(path)] = hashlib.sha256(data).hexdigest()
+        digest = hashlib.sha256(data).hexdigest()
+        if str(path) in self.hashes and self.hashes[str(path)] != digest:
+            raise ValueError("Benchmark source changed: " + str(path))
+        self.hashes[str(path)] = digest
         return json.loads(data)
 
-    def checked(self, path):
-        relative = str(path.relative_to(self.source))
-        expected = self.files.get(relative)
-        if expected is None or not path.is_file() or rescue.digest(path) != expected:
-            raise ValueError("Benchmark source changed or absent from receipt: " + str(path))
+    def expect(self, path, expected):
+        path = Path(path)
+        if (not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or not path.is_file() or path.is_symlink() or rescue.digest(path) != expected):
+            raise ValueError("Benchmark source changed or missing: " + str(path))
         self.hashes[str(path)] = expected
+
+    def _export(self, destination, cpus):
+        destination = Path(destination).resolve()
+        if destination.is_relative_to(self.root):
+            raise ValueError("Benchmark export must be outside original evidence")
+        rescue.export_worker_inputs(self.root, self.plan, self.species, destination, combined=True, cpus=cpus)
+        self.export_receipt = self.read_json(destination / "export_receipt.json")
+        if (self.export_receipt.get("origin_receipt_sha256") != self.hashes[str(self.source / "receipt.json")]
+                or self.export_receipt.get("plan_sha256") != self.hashes[str(self.root / "plan.json")]
+                or self.export_receipt.get("local_windows") != len(self.interval_ids())
+                or self.export_receipt.get("combined_diagnostics") is not True
+                or self.export_receipt.get("prepared_receipts") != self.receipt["key"].get("prepared", {})):
+            raise ValueError("Regenerated predictor inputs have a foreign export receipt")
+        exported = self.export_receipt.get("files")
+        if not isinstance(exported, dict):
+            raise ValueError("Malformed predictor input export receipt")
+        for member, sha in exported.items():
+            path = prediction_cache._safe_member(destination, member)
+            self.expect(path, sha)
+        self.inputs = destination
+        for i in self.interval_ids():
+            for name in ("region.fa", "queries.fa"):
+                self.checked(destination / "intervals" / str(i) / name)
+        if self.fallback_recorded:
+            self.checked(destination / "unresolved.fa")
+            if rescue.digest(self.checked(destination / "genome.gff")) != self.genome_gff_sha256:
+                raise ValueError("Regenerated genome GFF differs from original evidence")
+        for path, sha in self.metadata.get("source_files", {}).items():
+            if self.plan["request"]["files"].get(path) != sha:
+                raise ValueError("Regenerated source is not bound to original plan")
+            self.hashes[str(Path(path))] = sha  # Exporter already verified before/after.
+        for donor, sha in self.export_receipt["prepared_receipts"].items():
+            folder = self.root / "prepared" / donor
+            self.expect(folder / "receipt.json", sha)
+            prepared = self.read_json(folder / "receipt.json")
+            self.hashes[str(folder / "genes.pep")] = prepared["files"]["genes.pep"]
+
+    def checked(self, path):
+        path = Path(path)
+        if path.is_relative_to(self.source):
+            relative, files, root = path.relative_to(self.source).as_posix(), self.files, self.source
+        elif self.inputs != self.source and path.is_relative_to(self.inputs):
+            relative, files, root = path.relative_to(self.inputs).as_posix(), self.export_receipt["files"], self.inputs
+        else:
+            raise ValueError("Benchmark input outside frozen evidence")
+        safe = prediction_cache._safe_member(root, relative)
+        self.expect(safe, files.get(relative))
         return path
 
     def interval_ids(self):
@@ -72,13 +169,21 @@ class FrozenEvidence:
         if sorted(ids) != list(range(1, len(ids) + 1)):
             raise ValueError("Noncontiguous intervals in producer receipt")
         directory = self.source / "intervals"
-        if not directory.is_dir() or {p.name for p in directory.iterdir()} != {str(i) for i in ids}:
+        if (directory.exists() and (not directory.is_dir() or {p.name for p in directory.iterdir()} != {str(i) for i in ids})) or (ids and not directory.is_dir()):
             raise ValueError("Original interval directories differ from producer receipt")
         for i in sorted(ids):
-            for name in ("region.fa", "queries.fa", "models.gff"):
+            for name in ("models.gff",):
                 relative = f"intervals/{i}/{name}"
                 if relative not in self.files or not (self.source / relative).is_file():
                     raise ValueError("Original interval file missing: " + relative)
+            retained = [f"intervals/{i}/{name}" in self.files for name in ("region.fa", "queries.fa")]
+            if any(retained) and not all(retained):
+                raise ValueError("Incomplete retained interval inputs")
+            if not all(retained) and (not getattr(self, "retention_free", False) or "local_search_inputs.jsonl.gz" not in self.files):
+                raise ValueError("Missing original interval inputs without reconstruction metadata")
+            if all(retained):
+                for name in ("region.fa", "queries.fa"):
+                    prediction_cache._safe_member(self.source, f"intervals/{i}/{name}")
         return sorted(ids)
 
     def recheck(self):
@@ -108,17 +213,19 @@ def main():
         parser.error("Counts must be positive")
     args.output = args.output.resolve()
     args.evidence = args.evidence.resolve()
+    if args.output.is_relative_to(args.evidence):
+        parser.error("Benchmark output must be outside original evidence")
     args.output.mkdir(parents=True, exist_ok=False)
-    evidence = FrozenEvidence(args.evidence, args.species)
+    evidence = FrozenEvidence(args.evidence, args.species, export_directory=args.output / "evidence_export", cpus=args.cpus)
     plan, source, receipt = evidence.plan, evidence.source, evidence.receipt
     count = len(evidence.interval_ids())
     selected = count if args.check_existing else min(count, args.interval_count)
     chosen = sorted({1 + int((count - 1) * i / max(1, selected - 1)) for i in range(selected)})
     windows, proteins, dna = {}, {"donor": {}}, {}
     for i in chosen:
-        directory = source / "intervals" / str(i)
+        directory = evidence.inputs / "intervals" / str(i)
         region, query = evidence.checked(directory / "region.fa"), evidence.checked(directory / "queries.fa")
-        evidence.checked(directory / "models.gff")
+        evidence.checked(source / "intervals" / str(i) / "models.gff")
         sequence = next(rescue.fasta_records(region))[2]
         dna[str(i)] = sequence
         regions = []
@@ -137,6 +244,8 @@ def main():
               "original_intervals": count, "skipped": {}, "genome_queries": 0, "unique_queries": 0,
               "tools": rescue.identities(), "samples": {"interval_serial": [], "interval_parallel": [],
                                                         "genome_full": [], "genome_unique": []}}
+    result["prediction_search_contract"] = evidence.contract
+    result["regenerated_inputs"] = str(evidence.inputs) if evidence.inputs != source else None
     result["check_existing"] = args.check_existing
     def interval_outputs(directory):
         return [directory / "intervals" / str(i) / "models.gff" for i in range(1, len(windows) + 1)]
@@ -149,7 +258,7 @@ def main():
             sample = measured(label, args.output / (label + "_" + str(trial)),
                               lambda d, workers=workers: rescue.search_intervals(d, windows, proteins, Genome(),
                                   plan["request"]["sources"][args.species]["genetic_code"],
-                                  plan["request"]["parameters"]["max_intron"], args.cpus, workers), interval_outputs)
+                                  evidence.parameters["max_intron"], args.cpus, workers), interval_outputs)
             pairs.append(sample)
             if trial or args.check_existing:
                 result["samples"][label].append(sample)
@@ -161,12 +270,7 @@ def main():
                                   f"Interval {original_index} differs")
         else:
             require_identical(pairs[0]["output_sha256"], pairs[1]["output_sha256"], "Interval outputs differ")
-    fallback = [name in receipt["files"] for name in ("unresolved.fa", "genome.gff")]
-    if any(fallback) and not all(fallback):
-        raise ValueError("Incomplete fallback evidence in producer receipt")
-    if not any(fallback):
-        if any((source / name).exists() for name in ("unresolved.fa", "genome.gff")):
-            raise ValueError("Fallback evidence absent from producer receipt")
+    if not evidence.fallback_recorded:
         result["skipped"]["genome"] = "No fallback search recorded by producer"
     else:
         benchmark_genome(args, evidence, result)
@@ -181,9 +285,9 @@ def main():
 
 
 def benchmark_genome(args, evidence, result):
-    plan, source, receipt = evidence.plan, evidence.source, evidence.receipt
-    unresolved = evidence.checked(source / "unresolved.fa")
-    evidence.checked(source / "genome.gff")
+    plan = evidence.plan
+    unresolved = evidence.checked(evidence.inputs / "unresolved.fa")
+    evidence.checked(evidence.inputs / "genome.gff")
     queries = list(itertools.islice(rescue.fasta_records(unresolved), None if args.check_existing else args.query_count))
     if not queries:
         raise ValueError("Recorded fallback search has no queries")
@@ -214,7 +318,9 @@ def benchmark_genome(args, evidence, result):
             raw = directory / "unique.gff"
         else:
             query, raw = full, directory / "models.gff"
-        rescue.run(["miniprot", "-u", "-t", args.cpus, "-G", plan["request"]["parameters"]["max_intron"],
+        rescue.run(["miniprot", "-u", "-t", args.cpus, "-G", evidence.parameters["max_intron"],
+                    "-N", evidence.contract["genome"]["max_secondary"],
+                    f"--outs={evidence.contract['genome']['output_score_ratio']}",
                     "--gff", index, query], directory, "map", raw)
         if dedup:
             rescue.expand_miniprot_queries(raw, directory / "models.gff", mapping)
@@ -231,7 +337,7 @@ def benchmark_genome(args, evidence, result):
             if trial or args.check_existing:
                 result["samples"][label].append(sample)
         if args.check_existing:
-            require_identical(rescue.digest(args.output / "genome_unique_0/models.gff"), receipt["files"]["genome.gff"],
+            require_identical(rescue.digest(args.output / "genome_unique_0/models.gff"), evidence.genome_gff_sha256,
                               "Full genome evidence differs")
         else:
             require_identical(pairs[0]["output_sha256"], pairs[1]["output_sha256"], "Genome outputs differ")

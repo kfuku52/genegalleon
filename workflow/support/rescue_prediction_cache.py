@@ -16,9 +16,13 @@ from pathlib import Path, PurePosixPath
 try:
     from fasta_sequence_store import fasta_records
     from input_generation_array_state import FreshDigestBatch
+    from rescue_model_store import frozen_model_store_key
+    from rescue_model_store import iter_models as iter_stored_models
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .input_generation_array_state import FreshDigestBatch
+    from .rescue_model_store import frozen_model_store_key
+    from .rescue_model_store import iter_models as iter_stored_models
 
 
 SEARCH_CONTRACT_FILE = "prediction_search_contract.json"
@@ -59,6 +63,31 @@ def _validated_search_contract(value):
                 or scope["max_secondary"] < 1):
             raise ValueError("Malformed prediction search contract scope")
     return value
+
+
+def _model_result_files(frozen):
+    """Identify raw-result members without dropping legacy frozen cache keys."""
+    files = frozen.get("files", {})
+    stored = frozen.get("model_store")
+    if stored is None:
+        if "models.json" not in files:
+            raise ValueError("Frozen prediction producer lacks model results")
+        return {"models.json": files["models.json"]}
+    if (not isinstance(stored, dict) or type(stored.get("schema")) is not int or stored.get("schema") != 1
+            or stored.get("format") != "gg_rescue_model_store_v1" or stored.get("kind") != "models"
+            or not isinstance(stored.get("files"), dict) or not stored["files"]
+            or stored["files"].get("model_store/manifest.json") != stored.get("manifest_sha256")
+            or stored.get("producer_receipt_sha256") != frozen.get("receipt_sha256")
+            or any(files.get(member) != value for member, value in stored["files"].items())):
+        raise ValueError("Malformed frozen prediction model store")
+    return stored["files"]
+
+
+def _verify_model_metadata(directory, frozen):
+    _model_result_files(frozen)
+    stored = frozen.get("model_store")
+    if stored is not None and frozen_model_store_key(directory, kind="models") != stored:
+        raise ValueError("Frozen prediction model-store membership changed")
 
 
 def _verified_search_contract(root, plan, name, receipt, expect, ancestors=None):
@@ -111,7 +140,8 @@ def _verified_search_contract(root, plan, name, receipt, expect, ancestors=None)
     frozen = parent["species"][name]
     if not isinstance(frozen, dict) or not isinstance(frozen.get("files"), dict):
         raise ValueError("Malformed frozen ancestor worker")
-    if not {"models.json", "candidates.json"} <= set(frozen["files"]):
+    _model_result_files(frozen)
+    if "candidates.json" not in frozen["files"]:
         raise ValueError("Frozen prediction ancestor lacks result digests")
     for member in frozen["files"]:
         _safe_member(directory, member, resolve=False)
@@ -120,6 +150,7 @@ def _verified_search_contract(root, plan, name, receipt, expect, ancestors=None)
     if (parent_receipt["key"].get("plan") != parent["plan_sha256"] or parent_receipt["key"].get("species") != name
             or any(parent_receipt["files"].get(member) != digest for member, digest in frozen["files"].items())):
         raise ValueError("Prediction ancestor worker differs from its frozen generation")
+    _verify_model_metadata(directory, frozen)
     inherited = _verified_search_contract(parent_root, parent_plan, name, parent_receipt, expect, ancestors)
     for kind in ("local", "genome"):
         if inherited[kind] != result[kind]:
@@ -188,7 +219,8 @@ def frozen_prediction_cache_key(root, names=None):
         receipt = _receipt(directory, receipt_data)
         if receipt["key"].get("species") != name or receipt["key"].get("plan") != plan_hash:
             raise ValueError("Prediction worker receipt is not bound to its original plan")
-        required = ("models.json", "candidates.json")
+        models_key = frozen_model_store_key(directory, kind="models")
+        required = (*models_key["files"], "candidates.json")
         if any(member not in receipt["files"] for member in required):
             raise ValueError("Prediction producer receipt lacks required result files")
         selected_files = {member: receipt["files"][member] for member in required}
@@ -197,6 +229,9 @@ def frozen_prediction_cache_key(root, names=None):
         if SEARCH_CONTRACT_FILE in receipt["files"]:
             selected_files[SEARCH_CONTRACT_FILE] = receipt["files"][SEARCH_CONTRACT_FILE]
         species[name] = {"receipt_sha256": receipt_hash, "files": selected_files}
+        if models_key["format"] == "gg_rescue_model_store_v1":
+            species[name]["model_store"] = models_key
+        _model_result_files(species[name])
     current = plan_path.stat()
     if plan_identity != (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns):
         raise OSError("Prediction plan changed while capturing worker metadata")
@@ -334,7 +369,10 @@ class VerifiedPredictionCache:
     def iter_models(self):
         self.check()
         hasher = hashlib.sha256()
-        for model in stream_json_array(self.directory / "models.json", hasher=hasher):
+        stored = self.frozen.get("model_store")
+        rows = (iter_stored_models(self.directory, frozen_key=stored, verify=False) if stored is not None
+                else stream_json_array(self.directory / "models.json", hasher=hasher))
+        for model in rows:
             if isinstance(model, dict) and model.get("search") == "genome_fallback":
                 if not self.genome_search_compatible:
                     continue
@@ -365,7 +403,7 @@ class VerifiedPredictionCache:
                 raw = _raw_prediction(model, self.regions)
                 if raw is not None:
                     yield raw
-        if hasher.hexdigest() != self.frozen["files"]["models.json"]:
+        if stored is None and hasher.hexdigest() != self.frozen["files"]["models.json"]:
             raise ValueError("Prediction model content changed after verification")
         self.check()
 
@@ -485,11 +523,13 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
     old_plan = json.loads((old_root / "plan.json").read_text())
     directory = old_root / "rescued" / name
     worker = frozen["species"][name]
+    _model_result_files(worker)
     expect(directory / "receipt.json", worker["receipt_sha256"])
     receipt = _receipt(directory)
     if (receipt["key"].get("plan") != frozen["plan_sha256"] or receipt["key"].get("species") != name
             or any(receipt["files"].get(p) != v for p, v in worker["files"].items())):
         raise ValueError("Cached worker is not bound to frozen plan/results")
+    _verify_model_metadata(directory, worker)
     for member, expected in worker["files"].items():
         expect(_safe_member(directory, member), expected)
     for tool in ("miniprot", "miniprot_sha256"):

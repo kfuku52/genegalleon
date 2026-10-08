@@ -28,12 +28,16 @@ try:
     from input_generation_array_state import atomic_json, digest
     from rescue_gene_models import require_same_key, stage
     from rescue_model_quality import model_quality
+    from rescue_model_store import frozen_model_store_key, iter_accepted_models, verify_model_store_key
+    from rescue_prediction_cache import stream_json_array
 except ImportError:
     from .fasta_sequence_store import fasta_records, open_text
     from .gff_attribute_syntax import validate_attributes
     from .input_generation_array_state import atomic_json, digest
     from .rescue_gene_models import require_same_key, stage
     from .rescue_model_quality import model_quality
+    from .rescue_model_store import frozen_model_store_key, iter_accepted_models, verify_model_store_key
+    from .rescue_prediction_cache import stream_json_array
 
 
 def json_array(path, chunk_size=1024 * 1024):
@@ -426,25 +430,32 @@ def audit(args):
     plan, plan_hash = read_json_snapshot(plan_path)
     source = plan["request"]["sources"][args.species]
     worker = root / "rescued" / args.species
-    models_path = worker / "models.json"
     receipt_path = worker / "receipt.json"
     frozen, receipt_hash = read_json_snapshot(receipt_path)
     if frozen.get("key", {}).get("plan") != plan_hash:
         raise ValueError("Models receipt belongs to another plan")
-    if frozen.get("files", {}).get("models.json") != digest(models_path):
+    models_key = frozen_model_store_key(worker, kind="accepted")
+    verify_model_store_key(worker, models_key)
+    if (models_key.get("producer_receipt_sha256", receipt_hash) != receipt_hash
+            or any(frozen.get("files", {}).get(member) != expected
+                   for member, expected in models_key["files"].items())):
         raise ValueError("Frozen models changed")
+    models_files = [worker / member for member in models_key["files"]]
     genome_hash = plan["request"]["files"][source["genome"]]
     if digest(source["genome"]) != genome_hash:
         raise ValueError("Frozen genome changed")
     snapshots = {str(plan_path): plan_hash, str(receipt_path): receipt_hash,
-                 str(models_path): frozen["files"]["models.json"], str(Path(source["genome"]).resolve()): genome_hash}
+                 **{str(worker / member): expected for member, expected in models_key["files"].items()},
+                 str(Path(source["genome"]).resolve()): genome_hash}
     manifest = None
     if args.evidence_manifest:
         manifest, manifest_hash = read_json_snapshot(args.evidence_manifest)
         snapshots[str(args.evidence_manifest.resolve())] = manifest_hash
     spec = manifest_spec(args.evidence_manifest, args.species, genome_hash, manifest=manifest)
-    files = [plan_path, models_path, receipt_path, Path(source["genome"]), Path(__file__),
-             *{Path(function.__code__.co_filename) for function in (model_quality, open_text, stage, atomic_json, validate_attributes)}]
+    files = [plan_path, *models_files, receipt_path, Path(source["genome"]), Path(__file__),
+             *{Path(function.__code__.co_filename) for function in
+               (model_quality, open_text, stage, atomic_json, validate_attributes,
+                frozen_model_store_key, iter_accepted_models, stream_json_array)}]
     if args.evidence_manifest:
         files.append(args.evidence_manifest)
     for kind in ("rna_junctions", "rna_transcripts", "repeats"):
@@ -489,9 +500,7 @@ def audit(args):
             records = []
             seen = set()
             try:
-                for model in json_array(models_path):
-                    if model.get("status") != "accepted":
-                        continue
+                for model in iter_accepted_models(worker, frozen_key=models_key, verify=False):
                     if model["model_id"] in seen:
                         raise ValueError("Duplicate accepted model identity")
                     seen.add(model["model_id"])

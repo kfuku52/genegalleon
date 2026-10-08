@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import time
 from collections import defaultdict
+from itertools import chain
 from pathlib import Path
 from urllib.parse import quote
 
@@ -41,6 +42,7 @@ try:
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from input_generation_array_state import atomic_json, digest, digest_paths
+    from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
 except ImportError:
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
@@ -58,6 +60,7 @@ except ImportError:
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from .input_generation_array_state import atomic_json, digest, digest_paths
+    from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
 
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
@@ -96,7 +99,8 @@ def implementation():
                     'representative_selection.py', 'rescue_anchor_admission.py', 'gene_model_species_profiles.py',
                     'format_species_writers.py', 'format_species_common.py', 'format_species_constants.py',
                     'format_species_provider_config.py', 'format_species_taxonomy.py',
-                    'rescue_terminal_completion.py', 'rescue_coding_paths.py')
+                    'rescue_terminal_completion.py', 'rescue_coding_paths.py',
+                    'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -112,6 +116,25 @@ def read_table(path):
     return rescue.table(path)
 
 
+def revision_worker(request, name):
+    """Resolve either frozen revision publication without inventing a JSON path."""
+    stored = request.get('revision_model_stores', {}).get(name)
+    if stored:
+        return Path(stored['directory'])
+    legacy = request.get('revision_candidates', {}).get(name)
+    return Path(legacy).parent if legacy else None
+
+
+def revision_models(request, name):
+    directory = revision_worker(request, name)
+    if directory is None:
+        return iter(())
+    stored = request.get('revision_model_stores', {}).get(name)
+    if stored:
+        return iter_revision_models(directory, frozen_key=stored['key'])
+    return iter_revision_models(directory)
+
+
 def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -124,7 +147,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             sources = copy.deepcopy(anchors['request']['sources'])
             files = [str(anchor_root / 'plan.json')]
             augmented = anchor_root / 'augmented'
-            revision_candidates, revision_donor_maps = {}, {}
+            revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if augmented.exists():
                 receipts = {}
                 for name in anchors['species']:
@@ -134,7 +157,12 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                     receipts[name] = digest(directory / 'receipt.json')
                     files.append(str(directory / 'receipt.json'))
                     revision_path = directory / 'revision_candidates.json'
-                    if revision_path.is_file():
+                    if (directory / 'model_store/manifest.json').is_file():
+                        stored_key = frozen_model_store_key(directory, kind='revision')
+                        verify_model_store_key(directory, stored_key)
+                        revision_model_stores[name] = {'directory': str(directory.resolve()), 'key': stored_key}
+                        files.extend(str((directory / member).resolve()) for member in stored_key['files'])
+                    elif revision_path.is_file():
                         worker_receipt = json.loads((directory / 'receipt.json').read_text())
                         if worker_receipt['files'].get('revision_candidates.json') != digest(revision_path):
                             raise ValueError('Rescue revisions are not a verified worker publication: ' + name)
@@ -153,11 +181,10 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                         source[role] = str((path if path.is_absolute() else augmented / path).resolve())
                 files += [str(augmented / 'receipt.json'), str(augmented / 'inputs.tsv')]
                 donors = set()
-                for path in revision_candidates.values():
-                    rows = json.loads(Path(path).read_text())
-                    if not isinstance(rows, list):
-                        raise ValueError('Rescue revision candidates must be a JSON list')
-                    for model in rows:
+                for name in sorted(set(revision_candidates) | set(revision_model_stores)):
+                    request_revisions = {'revision_candidates': revision_candidates,
+                                         'revision_model_stores': revision_model_stores}
+                    for model in revision_models(request_revisions, name):
                         donors.update(e['donor'] for e in [model.get('evidence', {}), *model.get('support', [])]
                                       if e.get('donor'))
                 for donor in sorted(donors):
@@ -172,7 +199,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                     files.extend(metadata.values())
         else:
             anchor_root = None
-            revision_candidates, revision_donor_maps = {}, {}
+            revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if not inputs:
                 raise ValueError('Provide --inputs or --rescue-output')
             sources = {}
@@ -216,6 +243,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'edges': str(Path(edges).resolve()) if edges else None,
                    'rna': str(Path(rna).resolve()) if rna else None, 'species_profiles': profiles,
                    'revision_candidates': revision_candidates,
+                   'revision_model_stores': revision_model_stores,
                    'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
         if not edges and not anchor_root:
@@ -269,7 +297,7 @@ def stage(root, relative, key, builder, names=None):
                       for name, expected in dependencies.get('predictions', {}).items()})
     if dependencies.get('rescue_workers'):
         request = json.loads((root / 'plan.json').read_text())['request']
-        snapshots.update({Path(request['revision_candidates'][name]).parent / 'receipt.json': expected
+        snapshots.update({revision_worker(request, name) / 'receipt.json': expected
                           for name, expected in dependencies['rescue_workers'].items()})
     snapshots = {str(path): expected for path, expected in snapshots.items()}
 
@@ -857,9 +885,9 @@ def predict_species(root, value, name, cpus=1):
     dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'correspondence': digest(corr / 'receipt.json'),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
-    revision_path = value['request'].get('revision_candidates', {}).get(name)
-    if revision_path:
-        dependencies['rescue_workers'] = {name: digest(Path(revision_path).parent / 'receipt.json')}
+    revision_directory = revision_worker(value['request'], name)
+    if revision_directory is not None:
+        dependencies['rescue_workers'] = {name: digest(revision_directory / 'receipt.json')}
     def build(tmp):
         if params['mode'] == 'off':
             atomic_json(tmp / 'predictions.json', [])
@@ -922,8 +950,15 @@ def predict_species(root, value, name, cpus=1):
                     windows[target['seqid'], start, end].append(region)
         validated = []
         # Nominate first: a species with no search windows needs no genome I/O.
-        revision_models = json.loads(Path(revision_path).read_text()) if revision_path else []
-        with indexed_genome(source['genome']) if windows or revision_models else contextlib.nullcontext() as genome:
+        revisions = iter(revision_models(value['request'], name))
+        first_revision = next(revisions, None)
+        revision_count = 0
+        def counted_revisions():
+            nonlocal revision_count
+            for model in chain((first_revision,), revisions):
+                revision_count += 1
+                yield model
+        with indexed_genome(source['genome']) if windows or first_revision is not None else contextlib.nullcontext() as genome:
             bounded = {}
             for (seqid, start, end), regions in windows.items():
                 end = min(end, genome.get_reference_length(seqid))
@@ -942,10 +977,10 @@ def predict_species(root, value, name, cpus=1):
                 if any(a < region['start'] or b > region['end'] for a, b, _ in checked['cds']):
                     checked['problems'].append('outside_search_window')
                 validated.append(checked)
-            if revision_models:
+            if first_revision is not None:
                 with store_connection(db) as connection:
                     imported, import_proposals = import_rescue_revisions(
-                        revision_models, catalog, edges, params, genome,
+                        counted_revisions(), catalog, edges, params, genome,
                         rescue_revision_donor_resolver(value['request'], connection))
                 validated.extend(imported)
                 proposals.extend(import_proposals)
@@ -954,7 +989,7 @@ def predict_species(root, value, name, cpus=1):
         atomic_json(tmp / 'predictions.json', predictions)
         atomic_json(tmp / 'nominations.json', {'queries': list(queries.values()), 'proposals': proposals})
         atomic_json(tmp / 'summary.json', {'queries': len(queries), 'windows': len(windows), 'alignments': len(validated),
-                                         'rescue_revision_models': len(revision_models),
+                                         'rescue_revision_models': revision_count,
                                          'accepted': sum(r['status'] == 'accepted' for r in predictions),
                                          'proposals': sum(r['status'] != 'accepted' for r in predictions) + len(proposals)})
     donor_names = {name}
@@ -1559,10 +1594,10 @@ def inspect_stages(root, value):
     prediction_dependencies = {'initial': receipt_hash(Path('selection_initial')), **selection_dependencies}
     for name in value['species']:
         dependencies = dict(prediction_dependencies)
-        revision_path = request.get('revision_candidates', {}).get(name)
-        if revision_path:
+        revision_directory = revision_worker(request, name)
+        if revision_directory is not None:
             try:
-                worker_hash = digest(Path(revision_path).parent / 'receipt.json')
+                worker_hash = digest(revision_directory / 'receipt.json')
             except OSError:
                 worker_hash = None
             dependencies['rescue_workers'] = {name: worker_hash}

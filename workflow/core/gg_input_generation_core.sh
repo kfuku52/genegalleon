@@ -47,6 +47,8 @@ gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-}"
 gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
 gene_model_rescue_prediction_cache="${gene_model_rescue_prediction_cache:-}"
+gene_model_rescue_model_storage="${gene_model_rescue_model_storage:-compact}"
+gene_model_rescue_retain_search_inputs="${gene_model_rescue_retain_search_inputs:-0}"
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
 gene_model_rescue_minimum_busco="${gene_model_rescue_minimum_busco:-90}"
@@ -207,6 +209,7 @@ for binary_flag_name in \
   run_gene_model_rescue \
   run_gene_model_rescue_swissprot \
   gene_model_rescue_genome_fallback \
+  gene_model_rescue_retain_search_inputs \
   run_multispecies_summary \
   run_generate_species_trait \
   strict \
@@ -2520,7 +2523,7 @@ prepare_gene_model_rescue() {
   }
   rescue_args=(plan "${rescue_args[@]}" --cds-dir "${species_cds_dir}" --gff-dir "${species_gff_dir}"
     --genome-dir "${species_genome_dir}" --busco-dir "${species_busco_short_dir}"
-    --tree "${rescue_tree}" --output "${gene_model_rescue_dir}"
+    --tree "${rescue_tree}" --output "${gene_model_rescue_dir}" --model-storage "${gene_model_rescue_model_storage}"
     --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"
     --minimum-busco "${gene_model_rescue_minimum_busco}" --minimum-coverage "${gene_model_rescue_minimum_coverage}"
     --minimum-identity "${gene_model_rescue_minimum_identity}" --max-interval "${gene_model_rescue_max_interval}"
@@ -2530,6 +2533,7 @@ prepare_gene_model_rescue() {
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
+  [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
   [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
     rescue_args+=(--genetic-codes "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv")

@@ -20,6 +20,7 @@ from busco_quality_metadata import parse_short_summary
 from dated_tree_presentation import STATUS, STATUS_COLOURS, STATUS_LABELS
 from gene_model_refinement import verify_inputs
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
+from rescue_model_store import frozen_model_store_key, iter_accepted_models
 from rescue_swissprot_evidence import COLOURS as SWISSPROT_COLOURS
 from rescue_swissprot_evidence import GROUPS as SWISSPROT_GROUPS
 from rescue_swissprot_evidence import LABELS as SWISSPROT_LABELS
@@ -90,8 +91,17 @@ def collect_rescue_repeat_evidence(changes, evidence_dir=None):
         key = receipt.get("key", {})
         inputs = key.get("inputs", {})
         selection = changes.get("rescue_reference_selection", {})
-        expected = {f"/rescued/{name}/models.json": source.get("rescue_models_sha256"),
-                    f"/rescued/{name}/receipt.json": source.get("rescue_receipt_sha256")}
+        model_members = source.get("rescue_model_members_sha256")
+        if model_members is None:
+            model_members = {"models.json": source.get("rescue_models_sha256")}
+        if not isinstance(model_members, dict) or not model_members:
+            raise ValueError("Repeat audit needs frozen rescue-model members: " + name)
+        if any(not isinstance(member, str) or not member or "\\" in member
+               or Path(member).is_absolute() or ".." in Path(member).parts
+               for member in model_members):
+            raise ValueError("Repeat audit has unsafe rescue-model members: " + name)
+        expected = {f"/rescued/{name}/{member}": sha for member, sha in model_members.items()}
+        expected[f"/rescued/{name}/receipt.json"] = source.get("rescue_receipt_sha256")
         if (key.get("schema") != 1 or key.get("species") != name or not isinstance(inputs, dict)
                 or receipt.get("files", {}).get("evidence.json") != records_hash
                 or any(wanted is None or [h for p, h in inputs.items() if p.endswith(suffix)] != [wanted]
@@ -575,7 +585,7 @@ def collect_model_changes(root, pairs, rescue_output=None):
             path_counts, path_support = classify_accepted_path_support(models, name, rescue_plan, set(request["sources"]))
             stats[name]["accepted_path_support_counts"] = path_counts
             evidence[name]["accepted_paths_support"] = path_support
-            from rescue_model_evidence import json_array, read_json_snapshot
+            from rescue_model_evidence import read_json_snapshot
             worker = rescue_root / "rescued" / name
             receipt, receipt_hash = read_json_snapshot(worker / "receipt.json")
             expected = request["files"].get(str(worker / "receipt.json"))
@@ -584,15 +594,22 @@ def collect_model_changes(root, pairs, rescue_output=None):
                     or (expected is not None and expected != receipt_hash)
                     or augmented["files"].get("species_gff/" + name + ".rescue.gff3") != source_hash):
                 raise ValueError("Rescue support publication differs from the source annotation: " + name)
-            hashes = batch.read([worker / "receipt.json", worker / "models.json"])
+            models_key = frozen_model_store_key(worker, kind="accepted")
+            hashes = batch.read([worker / "receipt.json", *[worker / member for member in models_key["files"]]])
             if (hashes[str(worker / "receipt.json")] != receipt_hash
-                    or hashes[str(worker / "models.json")] != receipt["files"]["models.json"]):
+                    or models_key.get("producer_receipt_sha256", receipt_hash) != receipt_hash
+                    or any(receipt["files"].get(member) != expected
+                           or hashes[str(worker / member)] != expected
+                           for member, expected in models_key["files"].items())):
                 raise ValueError("Frozen rescue models changed: " + name)
-            counts, support = classify_rescue_support(json_array(worker / "models.json"), name, rescued, rescue_plan)
+            counts, support = classify_rescue_support(
+                iter_accepted_models(worker, frozen_key=models_key, verify=False), name, rescued, rescue_plan)
             stats[name]["rescue_support_counts"] = counts
             stats[name]["rescue_self_only_loci"] = sum(s["category"] == "self_only" for s in support.values())
             evidence[name].update(rescue_receipt_sha256=receipt_hash,
-                                  rescue_models_sha256=receipt["files"]["models.json"], rescued_loci_support=support)
+                                  rescue_models_sha256=receipt["files"].get("models.json"),
+                                  rescue_model_members_sha256=models_key["files"],
+                                  rescue_model_store_key=models_key, rescued_loci_support=support)
     batch.check()
     if digest(root / "plan.json") != plan_hash:
         raise ValueError("Refinement plan changed while collecting model counts")

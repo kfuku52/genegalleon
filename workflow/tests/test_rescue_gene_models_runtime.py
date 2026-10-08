@@ -261,6 +261,10 @@ def test_admission_rejects_invalid_genome_and_leaves_no_source_index(tmp_path, i
 
 
 def cli(*args):
+    # Existing saved-array fixtures continue to exercise the explicit public
+    # legacy mode. Compact/default storage has a full parity test below.
+    if args[0] == "plan" and "--model-storage" not in args:
+        args = (*args, "--model-storage", "legacy", "--retain-search-inputs")
     result = subprocess.run([sys.executable, str(SCRIPT), *map(str, args)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     return result
@@ -314,12 +318,62 @@ def hidden_models(tmp_path):
     return tmp_path, species, cds
 
 
-def make_plan(fixture):
+def make_plan(fixture, *, model_storage="legacy", retain_search_inputs=True, directory_name="rescue"):
     root, species, cds = fixture
-    output = root / "rescue"
+    output = root / directory_name
+    storage_args = ["--model-storage", model_storage]
+    if retain_search_inputs:
+        storage_args.append("--retain-search-inputs")
     cli("plan", "--cds-dir", root / "cds", "--gff-dir", root / "gff", "--genome-dir", root / "genome",
-        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output)
+        "--busco-dir", root / "busco", "--tree", root / "tree.nwk", "--output", output, *storage_args)
     return output, species, cds
+
+
+def test_compact_pipeline_preserves_every_legacy_model_and_export(hidden_models):
+    from workflow.support.rescue_model_store import (
+        iter_models,
+        iter_partial_models,
+        iter_revision_models,
+    )
+    legacy, names, _ = make_plan(hidden_models, directory_name="legacy_storage")
+    compact, _, _ = make_plan(hidden_models, model_storage="compact", retain_search_inputs=False,
+                              directory_name="compact_storage")
+    for output in (legacy, compact):
+        cli("run", "--output", output, "--cpus", "4", "--interval-workers", "4")
+    for name in names:
+        a, b = legacy / "rescued" / name, compact / "rescued" / name
+        assert list(iter_models(b)) == json.loads((a / "models.json").read_text())
+        assert list(iter_partial_models(b)) == json.loads((a / "partial_models.json").read_text())
+        assert list(iter_revision_models(b)) == json.loads((a / "revision_candidates.json").read_text())
+        assert (b / "model_store/manifest.json").is_file()
+        assert not any((b / filename).exists() for filename in (
+            "models.json", "partial_models.json", "revision_candidates.json", "regions.fa", "queries.fa",
+            "genome.gff", "unresolved.fa", "unresolved.unique.fa", "genome.covered.unique.fa"))
+        assert not list((b / "intervals").glob("*/region.fa"))
+        assert not list((b / "intervals").glob("*/queries.fa"))
+        for folder, suffix in (("species_cds", ".rescue.cds.fa"), ("species_gff", ".rescue.gff3")):
+            assert (legacy / "augmented" / folder / (name + suffix)).read_bytes() == (
+                compact / "augmented" / folder / (name + suffix)).read_bytes()
+    target = names[0]
+    old_receipt = (compact / "rescued" / target / "receipt.json").read_bytes()
+    exported = compact.parent / "legacy_export"
+    cli("export-models", "--output", compact, "--task-index", "1", "--destination", exported, "--cpus", "4")
+    for filename in ("models.json", "partial_models.json", "revision_candidates.json"):
+        assert json.loads((exported / filename).read_text()) == json.loads((legacy / "rescued" / target / filename).read_text())
+    diagnostics = compact.parent / "diagnostic_export"
+    cli("export-search-inputs", "--output", compact, "--task-index", "1", "--destination", diagnostics,
+        "--combined", "--cpus", "4")
+    for path in (legacy / "rescued" / target / "intervals").glob("*/*.fa"):
+        assert (diagnostics / "intervals" / path.parent.name / path.name).read_bytes() == path.read_bytes()
+    for filename in ("regions.fa", "queries.fa", "unresolved.unique.fa", "unresolved.fa", "genome.gff"):
+        path = legacy / "rescued" / target / filename
+        if path.is_file():
+            assert (diagnostics / filename).read_bytes() == path.read_bytes()
+    assert (compact / "rescued" / target / "receipt.json").read_bytes() == old_receipt
+    # Restart reuses verified publications rather than running a new prediction.
+    result = cli("rescue", "--output", compact, "--task-index", "1", "--cpus", "4")
+    assert "Reused rescued/" in result.stdout
+    assert (compact / "rescued" / target / "receipt.json").read_bytes() == old_receipt
 
 
 def test_parallel_intervals_preserve_every_real_alignment_and_order(hidden_models):
@@ -577,8 +631,10 @@ def benchmark_evidence(fixture, intervals=2, fallback=True):
     source.mkdir(parents=True)
     genome = root / "genome" / (names[0] + ".genome.fa")
     plan = {"request": {"sources": {names[0]: {"genome": str(genome), "genetic_code": 1}},
-                        "files": {str(genome): rescue.digest(genome)}, "parameters": {"max_intron": 20000}}}
+                        "files": {str(genome): rescue.digest(genome)}, "parameters": {"max_intron": 20000},
+                        "tools": {"prediction_search_contract": rescue.prediction_search_contract()}}}
     rescue.atomic_json(evidence / "plan.json", plan)
+    rescue.atomic_json(source / rescue.SEARCH_CONTRACT_FILE, rescue.prediction_search_contract())
     dna = next(rescue.fasta_records(genome))[2]
     class Genome:
         def fetch(self, _, start, end):
@@ -589,11 +645,13 @@ def benchmark_evidence(fixture, intervals=2, fallback=True):
         start = i * (len(sequences[0]) + 60)
         windows[("chr1", start, start + len(sequences[i]))] = [
             {"id": f"query{i}", "donor": "donor", "query": f"query{i}"}]
-    rescue.search_intervals(source, windows, proteins, Genome(), 1, 20000, 2)
+    rescue.search_intervals(source, windows, proteins, Genome(), 1, 20000, 2, retain_inputs=True)
     if fallback:
         queries = source / "unresolved.fa"
         queries.write_text(">query9\n" + proteins["donor"]["query9"] + "\n")
-        rescue.run(["miniprot", "-u", "-t", 2, "-G", 20000, "--gff", genome, queries],
+        rescue.run(["miniprot", "-u", "-t", 2, "-G", 20000,
+                    "-N", rescue.MINIPROT_MAX_SECONDARY, f"--outs={rescue.MINIPROT_OUTPUT_SCORE_RATIO}",
+                    "--gff", genome, queries],
                    source, "map", source / "genome.gff")
     files = {str(p.relative_to(source)): rescue.digest(p) for p in source.rglob("*") if p.is_file()}
     rescue.atomic_json(source / "receipt.json", {"key": {"plan": rescue.digest(evidence / "plan.json"),
