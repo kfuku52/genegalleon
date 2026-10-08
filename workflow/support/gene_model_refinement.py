@@ -28,7 +28,14 @@ try:
     import rescue_gene_models as rescue
     from fasta_sequence_store import exclusive_lock, open_text
     from format_species_annotation.common import parse_gff_attributes
-    from gene_model_catalog import _formatted_id, build_catalog, indexed_genome, validate_candidate, write_catalog
+    from gene_model_catalog import (
+        SOURCE_RESCUE_LOCUS_ATTRIBUTES,
+        _formatted_id,
+        build_catalog,
+        indexed_genome,
+        validate_candidate,
+        write_catalog,
+    )
     from gene_model_selection import pair_score, select_representatives
     from gene_model_species_profiles import parameters_for, read_profiles
     from gene_model_store import _connection as store_connection
@@ -38,7 +45,14 @@ except ImportError:
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
     from .format_species_annotation.common import parse_gff_attributes
-    from .gene_model_catalog import _formatted_id, build_catalog, indexed_genome, validate_candidate, write_catalog
+    from .gene_model_catalog import (
+        SOURCE_RESCUE_LOCUS_ATTRIBUTES,
+        _formatted_id,
+        build_catalog,
+        indexed_genome,
+        validate_candidate,
+        write_catalog,
+    )
     from .gene_model_selection import pair_score, select_representatives
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gene_model_store import _connection as store_connection
@@ -950,6 +964,22 @@ def predict_species(root, value, name, cpus=1):
     return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, sorted(donor_names))
 
 
+def source_rescue_locus_provenance(gene):
+    """Preserve historical locus evidence without borrowing old path support."""
+    fields = {key for _, key in SOURCE_RESCUE_LOCUS_ATTRIBUTES}
+    result = {}
+    records = [gene.get('source_rescue_locus_provenance', {})]
+    for candidate in gene.get('candidates', ()):
+        records.extend((candidate.get('source_rescue_locus_provenance', {}), candidate.get('rescue_path_selection', {})))
+    for record in records:
+        for key in fields & record.keys():
+            value = str(record[key])
+            if key in result and result[key] != value:
+                raise ValueError('Conflicting historical rescue locus provenance: ' + gene['gene_id'])
+            result[key] = value
+    return result
+
+
 def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
     blocks = candidate['blocks']
     def attr(text):
@@ -960,7 +990,17 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
     seqid, strand = candidate.get('seqid', gene['seqid']), candidate.get('strand', gene['strand'])
     def row(kind, a, b, phase, attributes):
         return f'{seqid}\tGeneGalleon\t{kind}\t{a + 1}\t{b}\t.\t{strand}\t{phase}\t{attributes}\n'
-    lines = [row('gene', start, end, '.', 'ID=' + gid), row('mRNA', start, end, '.', f'ID={tid};Parent={gid};gene_id={token}')]
+    history = source_rescue_locus_provenance(gene)
+    historical_attributes = ''.join(f';{attribute}={attr(history[key])}' for attribute, key in SOURCE_RESCUE_LOCUS_ATTRIBUTES
+                                    if key in history)
+    path_attributes = ''
+    donors = candidate.get('support', {}).get('donors')
+    if donors is not None:
+        if not isinstance(donors, list) or any(not isinstance(donor, str) or not donor for donor in donors):
+            raise ValueError('Invalid current coding-path donor support: ' + candidate['candidate_id'])
+        path_attributes = ';path_independent_donor_species_count=' + str(len(set(donors) - {name}))
+    lines = [row('gene', start, end, '.', 'ID=' + gid + historical_attributes),
+             row('mRNA', start, end, '.', f'ID={tid};Parent={gid};gene_id={token}' + path_attributes)]
     for i, (a, b, phase) in enumerate(blocks, 1):
         lines += [row('exon', a, b, '.', f'ID={tid}.exon{i};Parent={tid}'),
                   row('CDS', a, b, phase, f'ID={tid}.cds{i};Parent={tid};gene_id={token}')]

@@ -21,6 +21,112 @@ except ImportError:
     from .input_generation_array_state import FreshDigestBatch
 
 
+SEARCH_CONTRACT_FILE = "prediction_search_contract.json"
+MINIPROT_OUTPUT_SCORE_RATIO = 0.5
+MINIPROT_MAX_SECONDARY = 30
+
+
+def prediction_search_contract():
+    """Effective output bounds; other defaults are bound to the miniprot SHA."""
+    scope = {"output_score_ratio": MINIPROT_OUTPUT_SCORE_RATIO, "max_secondary": MINIPROT_MAX_SECONDARY}
+    return {"schema": 1, "local": dict(scope), "genome": dict(scope)}
+
+
+# Repository-owned, archived source schemas, not upstream version pins. The
+# .172 source was verified byte-for-byte against its frozen producer-plan SHA.
+# .189 added verified inherited predictions; its cache-verifier SHA is bound
+# below, and its parent plan/worker receipt must prove the inherited contract.
+# Both explicitly searched local intervals at .5 and genome fallback at .99.
+LEGACY_DIRECT_IMPLEMENTATION = "608902a388c9c7a9530fce9371e01e7cbed24fa8428bca3e3bb9c457cf699e98"
+LEGACY_INHERITED_IMPLEMENTATION = "db0e6657b081331e0cdfef84e66b553517f5dfa3e87cdccf0fc7e3e75458a6d7"
+LEGACY_INHERITED_VERIFIER = "339c210589a679560520405d83e0fdd8fa27e1d11fd08a66bea45382767be111"
+# Those sources left -N at the executable default. The independently audited
+# historical executable has N=30; unknown executables cannot inherit that fact.
+LEGACY_MINIPROT_SHA256 = "f8822f41eceb53a6ca611bd6606faf035aeb913030d1dede7fd7889ab37d4f52"
+
+
+def _validated_search_contract(value):
+    if (not isinstance(value, dict) or set(value) != {"schema", "local", "genome"}
+            or type(value["schema"]) is not int or value["schema"] != 1):
+        raise ValueError("Malformed prediction search contract")
+    for kind in ("local", "genome"):
+        scope = value[kind]
+        if (not isinstance(scope, dict) or set(scope) != {"output_score_ratio", "max_secondary"}
+                or isinstance(scope["output_score_ratio"], bool)
+                or not isinstance(scope["output_score_ratio"], (int, float))
+                or not math.isfinite(scope["output_score_ratio"]) or not 0 < scope["output_score_ratio"] <= 1
+                or isinstance(scope["max_secondary"], bool) or not isinstance(scope["max_secondary"], int)
+                or scope["max_secondary"] < 1):
+            raise ValueError("Malformed prediction search contract scope")
+    return value
+
+
+def _verified_search_contract(root, plan, name, receipt, expect, ancestors=None):
+    """Prove legacy inherited flags using only frozen metadata, without logs.
+
+    Unknown implementations abstain. A forged or changed declared ancestor is
+    an integrity error, not a silently ignored cache miss. No ancestor models,
+    commands or scratch inputs are consumed by this contract proof.
+    """
+    root = Path(root)
+    ancestors = set() if ancestors is None else ancestors
+    token = (str(root.resolve(strict=True)), name)
+    if token in ancestors or len(ancestors) >= 64:
+        raise ValueError("Cyclic or excessive prediction cache ancestry")
+    ancestors = ancestors | {token}
+    tools = plan["request"]["tools"]
+    if SEARCH_CONTRACT_FILE in receipt["files"]:
+        path = _safe_member(root / "rescued" / name, SEARCH_CONTRACT_FILE)
+        expect(path, receipt["files"][SEARCH_CONTRACT_FILE])
+        declared = _validated_search_contract(json.loads(path.read_text()))
+        if tools.get("prediction_search_contract") != declared:
+            raise ValueError("Prediction search contract is not bound to its producer plan")
+        return declared
+    if "prediction_search_contract" in tools:
+        raise ValueError("Prediction producer omitted its frozen search contract")
+    implementation = tools.get("implementation")
+    if (implementation not in {LEGACY_DIRECT_IMPLEMENTATION, LEGACY_INHERITED_IMPLEMENTATION}
+            or tools.get("miniprot_sha256") != LEGACY_MINIPROT_SHA256):
+        return {"schema": 1, "local": None, "genome": None}
+    result = {"schema": 1, "local": {"output_score_ratio": 0.5, "max_secondary": 30},
+              "genome": {"output_score_ratio": 0.99, "max_secondary": 30}}
+    parent = plan["request"].get("prediction_cache")
+    if not parent:
+        return result
+    if implementation != LEGACY_INHERITED_IMPLEMENTATION or tools.get("verify_prediction_cache_implementation") != LEGACY_INHERITED_VERIFIER:
+        raise ValueError("Legacy inherited prediction verifier is unproven")
+    if (not isinstance(parent, dict) or parent.get("schema") != 1 or not isinstance(parent.get("species"), dict)
+            or not isinstance(parent.get("root"), str)):
+        raise ValueError("Malformed frozen prediction ancestor")
+    if name not in parent["species"]:
+        return result  # This worker had no inherited producer to reuse.
+    parent_root = Path(parent["root"])
+    if str(parent_root.resolve(strict=True)) != parent["root"]:
+        raise ValueError("Frozen prediction ancestor root differs")
+    expect(parent_root / "plan.json", parent.get("plan_sha256"))
+    parent_plan = json.loads((parent_root / "plan.json").read_text())
+    if name not in parent_plan["species"]:
+        raise ValueError("Prediction ancestor lacks its frozen worker species")
+    directory = parent_root / "rescued" / name
+    frozen = parent["species"][name]
+    if not isinstance(frozen, dict) or not isinstance(frozen.get("files"), dict):
+        raise ValueError("Malformed frozen ancestor worker")
+    if not {"models.json", "candidates.json"} <= set(frozen["files"]):
+        raise ValueError("Frozen prediction ancestor lacks result digests")
+    for member in frozen["files"]:
+        _safe_member(directory, member, resolve=False)
+    expect(directory / "receipt.json", frozen.get("receipt_sha256"))
+    parent_receipt = _receipt(directory)
+    if (parent_receipt["key"].get("plan") != parent["plan_sha256"] or parent_receipt["key"].get("species") != name
+            or any(parent_receipt["files"].get(member) != digest for member, digest in frozen["files"].items())):
+        raise ValueError("Prediction ancestor worker differs from its frozen generation")
+    inherited = _verified_search_contract(parent_root, parent_plan, name, parent_receipt, expect, ancestors)
+    for kind in ("local", "genome"):
+        if inherited[kind] != result[kind]:
+            result[kind] = None  # Mixed or unknown search scopes are not complete coverage.
+    return result
+
+
 def _safe_member(directory, member, *, resolve=True):
     if not isinstance(member, str):
         raise ValueError("Unsafe prediction cache member")
@@ -88,6 +194,8 @@ def frozen_prediction_cache_key(root, names=None):
         selected_files = {member: receipt["files"][member] for member in required}
         if "genome_query_mapping.tsv" in receipt["files"]:
             selected_files["genome_query_mapping.tsv"] = receipt["files"]["genome_query_mapping.tsv"]
+        if SEARCH_CONTRACT_FILE in receipt["files"]:
+            selected_files[SEARCH_CONTRACT_FILE] = receipt["files"][SEARCH_CONTRACT_FILE]
         species[name] = {"receipt_sha256": receipt_hash, "files": selected_files}
     current = plan_path.stat()
     if plan_identity != (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns):
@@ -211,6 +319,9 @@ class VerifiedPredictionCache:
     frozen: dict
     batch: FreshDigestBatch
     old_root: Path = None
+    local_search_compatible: bool = True
+    genome_search_compatible: bool = True
+    search_contract: dict = field(default_factory=dict)
     _candidate_ids: set = None
     _old_genome_regions: dict = field(default_factory=dict)
     _genome_mapping: dict = field(default_factory=dict)
@@ -225,6 +336,8 @@ class VerifiedPredictionCache:
         hasher = hashlib.sha256()
         for model in stream_json_array(self.directory / "models.json", hasher=hasher):
             if isinstance(model, dict) and model.get("search") == "genome_fallback":
+                if not self.genome_search_compatible:
+                    continue
                 if model.get("query") not in self._old_genome_regions:
                     raise ValueError("Cached genome prediction lacks searched-query provenance")
                 bindings = self._genome_bindings.get(model.get("query"), ())
@@ -247,6 +360,8 @@ class VerifiedPredictionCache:
                     row["prediction_cache_source_query"] = model["query"]
                     yield row
             else:
+                if not self.local_search_compatible:
+                    continue
                 raw = _raw_prediction(model, self.regions)
                 if raw is not None:
                     yield raw
@@ -260,16 +375,19 @@ class VerifiedPredictionCache:
         if self._candidate_ids is not None:
             return set(self._candidate_ids)
         ids = set()
+        seen = set()
         self._read_genome_mapping()
         for row in stream_json_array(self.directory / "candidates.json"):
             if not isinstance(row, dict) or not isinstance(row.get("id"), str):
                 raise ValueError("Malformed cached candidate")
+            if row["id"] in seen:
+                raise ValueError("Duplicate cached candidate")
+            seen.add(row["id"])
             if row["id"] in self.regions:
                 if row != self.regions[row["id"]]:
                     raise ValueError("Cached candidate definition changed")
-                if row["id"] in ids:
-                    raise ValueError("Duplicate cached candidate")
-                ids.add(row["id"])
+                if self.local_search_compatible and not row.get("genome_only"):
+                    ids.add(row["id"])
             if row["id"] in self._genome_mapping:
                 if row["id"] in self._old_genome_regions:
                     raise ValueError("Duplicate cached genome candidate")
@@ -283,6 +401,8 @@ class VerifiedPredictionCache:
     def genome_candidate_ids(self):
         """Old genome-search coverage, independently of its acceptance outcome."""
         self.check()
+        if not self.genome_search_compatible:
+            return set()
         if self.genome_reuse:
             return {candidate for bindings in self._genome_bindings.values() for candidate in bindings}
         return set(self._read_genome_mapping()) & set(self.regions)
@@ -315,6 +435,10 @@ class VerifiedPredictionCache:
     def bind_exact_genome_sequences(self):
         """Rebind only genome searches whose full prepared protein is identical."""
         self.candidate_ids()
+        if not self.genome_search_compatible:
+            self.genome_reuse = {"covered_current_queries": 0, "covered_unique_sequences": 0,
+                                 "new_genome_only_queries": 0, "policy": "search_contract_mismatch"}
+            return
         required = {}
         for row in [*self._old_genome_regions.values(), *self.regions.values()]:
             required.setdefault(row["donor"], set()).add(row["query"])
@@ -405,7 +529,12 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
     mapping = {row["id"]: row for row in regions}
     if len(mapping) != len(regions):
         raise ValueError("Duplicate current prediction candidate IDs")
-    result = VerifiedPredictionCache(directory, mapping, worker, batch, old_root=old_root)
+    old_contract = _verified_search_contract(old_root, old_plan, name, receipt, expect)
+    expected_contract = prediction_search_contract()
+    result = VerifiedPredictionCache(directory, mapping, worker, batch, old_root=old_root,
+                                     local_search_compatible=old_contract["local"] == expected_contract["local"],
+                                     genome_search_compatible=old_contract["genome"] == expected_contract["genome"],
+                                     search_contract=old_contract)
     result.candidate_ids()  # Validate every intersecting empty/aligned query.
     result.bind_exact_genome_sequences()
     result.check()

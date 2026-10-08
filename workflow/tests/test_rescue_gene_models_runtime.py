@@ -349,6 +349,182 @@ def test_parallel_intervals_preserve_every_real_alignment_and_order(hidden_model
         assert command[command.index("-t") + 1] == "1"
 
 
+def test_local_input_diagnostics_fetch_each_new_window_once(tmp_path):
+    class Genome:
+        fetched = []
+        def fetch(self, seqid, start, end):
+            self.fetched.append((seqid, start, end))
+            return "ACGT"[start:end]
+    genome = Genome()
+    proteins = {"donor": {"g1": "MK", "g2": "MP"}}
+    regions = [{"id": "q1", "donor": "donor", "query": "g1"},
+               {"id": "q2", "donor": "donor", "query": "g2"}]
+    rescue.write_local_search_inputs(tmp_path, {}, proteins, genome)
+    assert list(tmp_path.iterdir()) == [] and genome.fetched == []
+    rescue.write_local_search_inputs(tmp_path, {("chr1", 1, 4): regions}, proteins, genome)
+    assert genome.fetched == [("chr1", 1, 4)]
+    assert (tmp_path / "regions.fa").read_text() == ">q1\nCGT\n>q2\nCGT\n"
+    assert (tmp_path / "queries.fa").read_text() == ">q1\nMK\n>q2\nMP\n"
+
+
+def test_partial_local_cache_writes_only_new_queries_and_replays_empty_results(hidden_models, monkeypatch):
+    fixture, names, sequences = hidden_models
+    original, _, _ = make_plan(hidden_models)
+    plan = rescue.load(original)
+    plan["donors"][names[0]] = [names[1]]
+    plan["synteny_jobs"] = []
+    plan["request"]["parameters"]["genome_fallback"] = 0
+    rescue.atomic_json(original / "plan.json", plan)
+    old = []
+    for number, query in enumerate((8, 0)):
+        start = 8 * (len(sequences[0]) + 60) if number == 0 else len(sequences[0])
+        end = start + len(sequences[query]) if number == 0 else start + 60
+        old.append({"id": "old_" + str(number), "donor": names[1], "query": names[1] + f"_g{query}",
+                    "seqid": "chr1", "start": start, "end": end,
+                    "expected_start": start, "expected_end": end})
+    start = 11 * (len(sequences[0]) + 60) + 1
+    new = {"id": "new_local", "donor": names[1], "query": names[1] + "_g11", "seqid": "chr1",
+           "start": start, "end": start + len(sequences[11]),
+           "expected_start": start, "expected_end": start + len(sequences[11])}
+    monkeypatch.setattr(rescue, "candidates", lambda root, *_: copy.deepcopy(old if root == original else [*old, new]))
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
+    first = rescue.rescue(original, plan, names[0], 2)
+    assert "old_1" not in {m["query"] for m in json.loads((first / "models.json").read_text())}
+
+    def derivative(label, previous=None):
+        output = fixture / label
+        output.mkdir()
+        current = copy.deepcopy(plan)
+        if previous:
+            current["request"]["prediction_cache"] = rescue.frozen_prediction_cache_key(previous, [names[0]])
+        rescue.atomic_json(output / "plan.json", current)
+        return output, rescue.load(output)
+    fresh_root, fresh_plan = derivative("fresh")
+    fresh = rescue.rescue(fresh_root, fresh_plan, names[0], 2)
+    partial_root, partial_plan = derivative("partial", original)
+    partial = rescue.rescue(partial_root, partial_plan, names[0], 2)
+    assert [i for i, _, _ in rescue.fasta_records(fresh / "queries.fa")] == ["old_0", "old_1", "new_local"]
+    assert [i for i, _, _ in rescue.fasta_records(partial / "queries.fa")] == ["new_local"]
+    assert [i for i, _, _ in rescue.fasta_records(partial / "regions.fa")] == ["new_local"]
+    expected = json.loads((fresh / "models.json").read_text())
+    fields = ("query", "cds", "sequence", "problems", "status", "evidence", "coverage", "identity",
+              "terminal_completion", "model_id", "quality_evidence", "partial_evidence", "raw_prediction",
+              "search", "start", "end")
+    def scientific_rows(directory):
+        rows = []
+        for model in json.loads((directory / "models.json").read_text()):
+            row = {k: model.get(k) for k in fields}
+            row["raw_prediction"] = {k: v for k, v in row["raw_prediction"].items() if k != "id"}
+            rows.append(json.dumps(row, sort_keys=True))
+        return sorted(rows)
+    assert expected and scientific_rows(partial) == scientific_rows(fresh)
+    assert json.loads((partial / "prediction_reuse.json").read_text())["searched_local_windows"] == 1
+    replay_root, replay_plan = derivative("replay", partial_root)
+    def no_prediction(*args, **kwargs):
+        raise AssertionError("Verified local alignment or empty result was searched again")
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, "run", no_prediction)
+        replay = rescue.rescue(replay_root, replay_plan, names[0], 2)
+    assert scientific_rows(replay) == scientific_rows(fresh)
+    assert not (replay / "queries.fa").exists() and not (replay / "regions.fa").exists()
+    assert not (replay / "genome.fa").exists() and not (replay / "genome.mpi").exists()
+    reuse = json.loads((replay / "prediction_reuse.json").read_text())
+    assert reuse["cached_local_queries"] == 3 and reuse["searched_local_windows"] == 0
+    assert [r["id"] for r in json.loads((replay / "candidates.json").read_text())] == ["old_0", "old_1", "new_local"]
+
+
+def test_genome_only_search_uses_fallback_inputs_without_local_diagnostics(hidden_models, monkeypatch):
+    output, names, sequences = make_plan(hidden_models)
+    plan = rescue.load(output)
+    plan["donors"][names[0]] = [names[1]]
+    plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
+    region = {"id": "genome_only", "target": names[0], "donor": names[1], "query": names[1] + "_g8",
+              "comparison": "synthetic", "genome_only": True, "placement": "unanchored",
+              "nomination": {"reason": "no_target_match"}, "orthology": "unassigned", "expected_copy": "unassigned"}
+    monkeypatch.setattr(rescue, "candidates", lambda *_: [])
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([region], {"nominated": 1}))
+    directory = rescue.rescue(output, plan, names[0], 2)
+    assert not (directory / "regions.fa").exists() and not (directory / "queries.fa").exists()
+    assert [i for i, _, _ in rescue.fasta_records(directory / "unresolved.unique.fa")] == [region["id"]]
+    assert [row["candidate"] for row in rescue.table(directory / "genome_query_mapping.tsv")] == [region["id"]]
+    models = json.loads((directory / "models.json").read_text())
+    assert any(m["search"] == "genome_fallback" and m["sequence"] == sequences[8] for m in models)
+    assert all(m["status"] != "accepted" and "unanchored_genome_search" in m["problems"] for m in models)
+
+
+def test_broader_genome_contract_researches_cached_positive_and_empty_coverage(hidden_models, monkeypatch):
+    """Real miniprot, strict QC and two cache generations, without old decisions."""
+    fixture, names, sequences = hidden_models
+    original, _, _ = make_plan(hidden_models)
+    plan = rescue.load(original)
+    plan["donors"][names[0]] = [names[1]]
+    plan["synteny_jobs"] = []
+    old_contract = rescue.prediction_search_contract()
+    old_contract["genome"]["output_score_ratio"] = .99
+    plan["request"]["tools"]["prediction_search_contract"] = old_contract
+    rescue.atomic_json(original / "plan.json", plan)
+    # Local empty search; the hidden intact copy is elsewhere on this genome.
+    region = {"id": "negative_local", "donor": names[1], "query": names[1] + "_g8",
+              "seqid": "chr1", "start": len(sequences[0]), "end": len(sequences[0]) + 60,
+              "expected_start": len(sequences[0]), "expected_end": len(sequences[0]) + 60}
+    monkeypatch.setattr(rescue, "candidates", lambda *_: [copy.deepcopy(region)])
+    monkeypatch.setattr(rescue, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
+    original_run = rescue.run
+    def narrower(command, directory, label, stdout=None):
+        if label == "miniprot_genome":
+            command = ["--outs=0.99" if str(arg).startswith("--outs=") else arg for arg in command]
+        original_run(command, directory, label, stdout)
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, "prediction_search_contract", lambda: copy.deepcopy(old_contract))
+        patch.setattr(rescue, "run", narrower)
+        narrow = rescue.rescue(original, plan, names[0], 2)
+    assert json.loads((narrow / "models.json").read_text())  # A raw positive was produced.
+    assert (narrow / "genome_query_mapping.tsv").exists()  # The negative result was also fully covered.
+    assert not any(m["search"] == "synteny_interval" for m in json.loads((narrow / "models.json").read_text()))
+
+    def derivative(label, previous=None):
+        output = fixture / label
+        output.mkdir()
+        current = copy.deepcopy(plan)
+        current["request"]["tools"]["prediction_search_contract"] = rescue.prediction_search_contract()
+        if previous:
+            current["request"]["prediction_cache"] = rescue.frozen_prediction_cache_key(previous, [names[0]])
+        rescue.atomic_json(output / "plan.json", current)
+        return output, rescue.load(output)
+    fresh_root, fresh_plan = derivative("broader_fresh")
+    fresh = rescue.rescue(fresh_root, fresh_plan, names[0], 2)
+    current_root, current_plan = derivative("broader_cached", original)
+    calls = []
+    def counted(command, directory, label, stdout=None):
+        calls.append((label, list(map(str, command))))
+        original_run(command, directory, label, stdout)
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, "run", counted)
+        current = rescue.rescue(current_root, current_plan, names[0], 2)
+    assert [label for label, _ in calls] == ["miniprot_index", "miniprot_genome"]
+    command = calls[-1][1]
+    assert "--outs=0.5" in command and command[command.index("-N") + 1] == "30"
+    reuse = json.loads((current / "prediction_reuse.json").read_text())
+    assert reuse["cached_local_queries"] == 1 and reuse["searched_local_windows"] == 0
+    assert reuse["cached_genome_queries"] == 0 and reuse["cached_genome_search_compatible"] is False
+    assert not (current / "regions.fa").exists() and not (current / "queries.fa").exists()
+    fields = ("query", "cds", "sequence", "problems", "status", "evidence", "coverage", "identity",
+              "model_id", "quality_evidence", "search", "start", "end")
+    def scientific_rows(directory):
+        return sorted(json.dumps({k: m.get(k) for k in fields}, sort_keys=True)
+                      for m in json.loads((directory / "models.json").read_text()))
+    assert scientific_rows(current) == scientific_rows(fresh)
+    replay_root, replay_plan = derivative("broader_replay", current_root)
+    def no_search(*args, **kwargs):
+        raise AssertionError("The completed .5 search was repeated")
+    with monkeypatch.context() as patch:
+        patch.setattr(rescue, "run", no_search)
+        replay = rescue.rescue(replay_root, replay_plan, names[0], 2)
+    assert scientific_rows(replay) == scientific_rows(fresh)
+    assert json.loads((replay / "prediction_reuse.json").read_text())["cached_genome_queries"] == 1
+
+
 def test_genome_query_dedup_restores_exact_real_gff_and_each_candidate(hidden_models):
     root, names, sequences = hidden_models
     genome = root / "genome" / (names[0] + ".genome.fa")
@@ -1260,6 +1436,22 @@ def test_split_codon_splice_phase_and_assembly_gap_qc(tmp_path):
     assert "assembly_gap_within_model_span" in gap["problems"]
 
 
+@pytest.mark.parametrize("donor,acceptor,canonical", [("GT", "AG", True), ("GC", "AG", True),
+                                                      ("AT", "AC", True), ("AT", "AG", False)])
+def test_search_sensitivity_does_not_accept_noncanonical_at_ag_splice(tmp_path, donor, acceptor, canonical):
+    import pysam
+    coding = "ATGAAAGCCTAA"
+    path = tmp_path / "genome.fa"
+    path.write_text(">chr1\n" + coding[:4] + donor + "CCCC" + acceptor + coding[4:] + "\n")
+    pysam.faidx(str(path))
+    model = {"seqid": "chr1", "strand": "+", "cds": [[0, 4, 0], [12, 20, 2]],
+             "frameshift": False, "coverage": 1, "identity": 1}
+    with pysam.FastaFile(str(path)) as genome:
+        checked = rescue.validate_model(model, genome, 1, {"minimum_coverage": .95, "minimum_identity": .5})
+    assert checked["sequence"] == coding
+    assert checked["problems"] == ([] if canonical else ["noncanonical_splice"])
+
+
 def test_competing_models_and_existing_annotations_are_not_added():
     base = {"seqid": "chr1", "strand": "+", "problems": [], "query": "q", "evidence": {}, "cds": [[20, 80, 0]]}
     a = {**base, "problems": []}
@@ -1721,11 +1913,21 @@ def test_new_producer_predictions_can_be_reused_transitively_without_search(hidd
                 rescue.synteny(output, plan, job["index"], 2)
         def no_prediction(*args, **kwargs):
             raise AssertionError("A proven identical search was repeated")
+        original_symlink = Path.symlink_to
+        def no_predictor_genome(path, target, *args, original_symlink=original_symlink, **kwargs):
+            if path.name == "genome.fa":
+                raise AssertionError("A covered search materialized a predictor genome alias")
+            return original_symlink(path, target, *args, **kwargs)
         with monkeypatch.context() as patch:
             patch.setattr(rescue, "search_intervals", lambda *args, **kwargs: [] if not args[1] else no_prediction())
             patch.setattr(rescue, "run", no_prediction)
+            patch.setattr(Path, "symlink_to", no_predictor_genome)
             directory = rescue.rescue(output, plan, species[0], 2)
         actual = json.loads((directory / "models.json").read_text())
         assert checked_rows(actual) == checked_rows(expected)
         assert (directory / "genome_query_mapping.tsv").is_file()
+        assert not (directory / "queries.fa").exists() and not (directory / "regions.fa").exists()
+        assert not (directory / "genome.fa").exists() and not (directory / "genome.mpi").exists()
+        assert not (directory / "logs").exists()
+        assert json.loads((directory / "prediction_reuse.json").read_text())["searched_local_windows"] == 0
         previous = output

@@ -106,3 +106,24 @@ When the producer did not run an interval or fallback search, that phase is
 listed in `result.json` under `skipped`, with no timings or index build.
 Partially recorded or missing evidence fails the check. Output equivalence and
 input-change checks remain active under Python's `-O` option.
+
+Verified prediction reuse also avoids generating unused local-search inputs.
+Only uncached windows are fetched and written; a completely cached local search
+does not create `regions.fa` or `queries.fa`. Genome indexing and its mandatory
+input QC still run. A predictor-facing genome alias is created only when an
+actual genome-wide or GeMoMa search needs it.
+
+A bounded benchmark with 2,048 candidates sharing 64 windows used one warmup
+and three measured trials. With 99% cached candidates, local FASTA output fell
+from 67.5 MB to 0.659 MB, and median writing plus eight-thread hash verification
+fell from 0.754 s to 0.011 s. Complete reuse wrote no local-search FASTA bytes;
+uncached inputs retained identical bytes. These measurements cover input
+preparation, not alignment or total workflow runtime.
+
+Final CDS/GFF export likewise streams `models.json`, retaining accepted models
+only, while preserving producer-receipt and source verification. On a 4.76 GB
+Ancistrocladus result, every trial retained the same 379 models with identical
+canonical JSON SHA256. One warmup plus three alternating measured trials per
+method gave a median 42.7 s / 12.1 GiB peak RSS for full-array loading versus
+25.5 s / 38 MiB for streaming. These figures measure JSON loading/filtering,
+not the whole export, genome validation or alignment.

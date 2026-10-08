@@ -329,6 +329,27 @@ def test_rescue_support_classification_uses_all_support_and_frozen_overlap():
         busco.classify_rescue_support([model("x", [name])], name, {"x"}, plan)
 
 
+def test_rescue_locus_support_pools_retained_paths_without_inflating_path_support():
+    plan = {'nearest_references': {'Target': ['Near']}, 'common_references': ['Balanced'],
+            'donors': {'Target': ['Near', 'Balanced']}}
+    model = {'model_id': 'primary', 'status': 'accepted', 'problems': [],
+             'support': [{'target': 'Target', 'donor': 'Near'}],
+             'alternative_coding_paths': [{'model_id': 'alternative', 'problems': [],
+                                           'support': [{'target': 'Target', 'donor': 'Balanced'}]}]}
+    counts, evidence = busco.classify_rescue_support([model], 'Target', {'gene': {'primary'}}, plan)
+    assert counts == {'nearest_only': 0, 'balanced_only': 0, 'both': 1}
+    assert evidence['gene']['supporting_donors'] == ['Balanced', 'Near']
+    assert evidence['gene']['coding_path_support'] == {'primary': ['Near'], 'alternative': ['Balanced']}
+    assert model['support'] == [{'target': 'Target', 'donor': 'Near'}]
+    model['alternative_coding_paths'][0]['support'][0]['target'] = 'Another'
+    with pytest.raises(ValueError, match='donor/target differs'):
+        busco.classify_rescue_support([model], 'Target', {'gene': {'primary'}}, plan)
+    model['alternative_coding_paths'][0]['support'][0]['target'] = 'Target'
+    model['alternative_coding_paths'][0]['model_id'] = 'primary'
+    with pytest.raises(ValueError, match='duplicate rescued coding path'):
+        busco.classify_rescue_support([model], 'Target', {'gene': {'primary'}}, plan)
+
+
 def test_imported_rescue_support_verifies_receipts_models_and_gff(tmp_path):
     inputs, edges, sources = tiny_inputs(tmp_path)
     gff = Path(sources[0]["gff"])

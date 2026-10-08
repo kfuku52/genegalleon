@@ -201,7 +201,7 @@ def alignment_support(model):
         if 'coverage' not in metrics or 'identity' not in metrics:
             continue
         coverage, identity = metrics.get('coverage', 0), metrics.get('identity', 0)
-        if (metrics.get('problems') or not all(isinstance(v, (int, float)) and math.isfinite(v) and 0 <= v <= 1
+        if (metrics.get('problems') or not all(not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v) and 0 <= v <= 1
                                              for v in (coverage, identity))):
             continue
         result.append((donor, identity, coverage))
@@ -216,7 +216,12 @@ def path_rank(model, nearest=()):
 
 
 def resolve_coding_paths(models, nearest=()):
-    """Choose a supported representative and retain compatible alternatives."""
+    """Admit a supported locus separately from ranking its coding paths.
+
+    Callers must first validate each path's genomic CDS, donor alignment and
+    original annotation ownership. A canonical fallback establishes neither
+    translation initiation nor orthology; its support remains path-specific.
+    """
     for component in overlap_components(models):
         if len(component) < 2:
             continue
@@ -226,7 +231,8 @@ def resolve_coding_paths(models, nearest=()):
         # Coding-connected components contain at least one collision. A pair
         # with no shared coding bases also fails compatibility, so this tests
         # the same clique/fusion rule without storing O(n^2) pair objects.
-        if not all(compatible_paths(a, b) for i, a in enumerate(rows) for b in rows[i + 1:]):
+        if (not all(row.get('status') == 'accepted' and not row.get('problems') for row in rows)
+                or not all(compatible_paths(a, b) for i, a in enumerate(rows) for b in rows[i + 1:])):
             for row in rows:
                 row['status'] = 'unresolved'
                 row['problems'].append('competing_new_models')
@@ -235,16 +241,43 @@ def resolve_coding_paths(models, nearest=()):
         best, second = ranked[:2]
         first_rank, second_rank = path_rank(best, nearest), path_rank(second, nearest)
         decisive = first_rank[:2] > second_rank[:2] or first_rank[2] - second_rank[2] >= .10
+        # Distinct donor species corroborate existence of this coding locus.
+        # They do not corroborate every path in it. Self evidence cannot supply
+        # the independent cross-species support required for this fallback.
+        targets = {evidence['target'] for row in rows
+                   for evidence in [row.get('evidence', {}), *row.get('support', [])]
+                   if evidence.get('target')}
+        donors = sorted({donor for row in rows for donor, _, _ in alignment_support(row)} - targets)
         if not decisive:
-            for row in rows:
-                row['status'] = 'unresolved'
-                row['problems'].append('ambiguous_coding_path_representative')
-            continue
+            if len(donors) < 2:
+                for row in rows:
+                    row['status'] = 'unresolved'
+                    row['problems'].append('ambiguous_coding_path_representative')
+                continue
+            # A reproducible CDS choice is needed by downstream one-sequence
+            # inputs. Prefer the longest validated path without claiming it
+            # is the biologically preferred isoform. Tie-break on coordinates.
+            best = min(rows, key=lambda row: (-sum(e - s for s, e, *_ in row['cds']),
+                                              repr(coding_shape(row)), row['model_id']))
         alternatives = []
-        for row in ranked[1:]:
+        for row in ranked:
+            if row is best:
+                continue
             row['status'] = 'accepted_alternative_path'
             row['parent_model_id'] = best['model_id']
-            alternatives.append({k: row[k] for k in ('model_id', 'seqid', 'strand', 'cds', 'sequence', 'support', 'coverage', 'identity')})
+            alternatives.append({k: row[k] for k in ('model_id', 'seqid', 'strand', 'cds', 'sequence', 'support', 'coverage', 'identity',
+                                                    'evidence', 'placement_evidence', 'problems') if k in row})
         best['alternative_coding_paths'] = alternatives
-        best['path_selection'] = {'reason': 'supported_same_locus_coding_paths',
-                                  'rank': list(first_rank), 'alternative_paths': len(alternatives)}
+        best['locus_support'] = {'counting_unit': 'independent_donor_species',
+                                 'independent_donor_species': donors, 'minimum_species_for_fallback': 2,
+                                 'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+        best['path_selection'] = {
+            'reason': 'supported_same_locus_coding_paths' if decisive else 'compatible_locus_canonical_fallback',
+            'rank': list(path_rank(best, nearest)), 'alternative_paths': len(alternatives),
+            'representative_status': 'supported_priority' if decisive else 'ambiguous',
+            'selection_policy': 'validated_donor_rank' if decisive else 'longest_cds_then_coding_shape',
+            'ambiguity_reason': None if decisive else 'ambiguous_coding_path_representative',
+            'decisive_identity_margin': .10,
+            'ranked_paths': [{'model_id': row['model_id'], 'rank': list(path_rank(row, nearest)),
+                              'donor_species': sorted({donor for donor, _, _ in alignment_support(row)})}
+                             for row in ranked]}

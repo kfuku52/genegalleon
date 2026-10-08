@@ -226,6 +226,18 @@ balanced extra queue. The default is 20,000 extra queries per target, and deferr
 queries are explicitly recorded. Species profiles can set `max_genome_queries`
 without naming individual genes. See [nomination and verified prediction reuse](rescue-additional-candidates.md).
 
+Local and whole-genome miniprot searches explicitly use `--outs=0.5` and `-N30`.
+These bounds control discovery; every returned path still passes the independent
+coverage, identity, genomic ORF, splice and ownership checks. Each producer hashes
+`prediction_search_contract.json` in its receipt and binds it to the frozen plan.
+Older whole-genome searches at `--outs=0.99` supply neither positive predictions
+nor searched-empty coverage to a new search. Historical local-search reuse
+requires an audited repository implementation and executable hash, with the
+frozen parent plan and worker receipt checked recursively when predictions were
+inherited. Unknown legacy implementations abstain. Raw predictions are checked
+again under the current acceptance policy; previous acceptance and support
+decisions are never imported.
+
 An outside or unanchored hit can become an intact homologue annotation only with
 at least two independent donor species and compatible, unique coding-locus
 support. Two paralogs from one donor remain one species of support. These hits
@@ -240,11 +252,23 @@ structure and representative-adoption checks. Multi-owner split/merge ambiguity
 is withheld. Same-locus alternative paths require at least 80% overlap of the
 shorter CDS in the same frame. More nearest-species support, then more donor
 species, distinguishes a representative; with equal species support, an identity
-advantage of at least 0.10 is required. Ties and incompatible paths remain
-proposals. Compatible alternatives are additional transcripts under one gene,
+advantage of at least 0.10 is required. If that rank is tied but every path is
+compatible and the locus has validated support from at least two independent
+external donor species, the locus is retained with all paths. The longest CDS,
+then coding coordinates, supplies a deterministic primary; it remains explicitly
+`representative_status=ambiguous`. Locus support is recorded separately from
+each path's own donor support, coverage and identity, including in exported GFF
+attributes. Same-donor ties and
+incompatible paths remain proposals. Compatible alternatives are additional
+transcripts under one gene,
 with one primary CDS FASTA record. They are marked as homology predictions and
 pass the existing RNA/conservation adoption policy; they are not confirmed RNA
 isoforms. Conflicting predictions do not suppress optional refinement.
+If refinement later selects a new path, exported `source_rescue_*` gene attributes
+preserve the original locus evidence. The new transcript retains only its own
+path support; the old representative ambiguity is historical evidence and does
+not determine the new path's status. A subsequent catalog import keeps these
+two sources of evidence separate. Existing gene IDs are retained.
 Identical coordinates from multiple donors are consolidated with each donor's
 own coverage and identity. Accepted IDs are stable hashes of genomic exon
 coordinates; neither orthogroup IDs nor run order define them.

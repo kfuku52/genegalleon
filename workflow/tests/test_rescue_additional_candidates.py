@@ -14,7 +14,13 @@ from workflow.support.rescue_additional_candidates import (
     reassess_unanchored_models,
 )
 from workflow.support.rescue_prediction_cache import (
+    LEGACY_DIRECT_IMPLEMENTATION,
+    LEGACY_INHERITED_IMPLEMENTATION,
+    LEGACY_INHERITED_VERIFIER,
+    LEGACY_MINIPROT_SHA256,
+    SEARCH_CONTRACT_FILE,
     frozen_prediction_cache_key,
+    prediction_search_contract,
     stream_json_array,
     verify_prediction_cache,
 )
@@ -209,7 +215,8 @@ def cache_fixture(tmp_path):
         proteins(old, name, {name + "_q": 33})
         proteins(new, name, {name + "_q": 33})
     plan = {"species": ["T"], "request": {"sources": sources, "files": files, "parameters": PARAMS,
-                                              "tools": {"miniprot": "1", "miniprot_sha256": "a" * 64}}}
+                                              "tools": {"miniprot": "1", "miniprot_sha256": "a" * 64,
+                                                        "prediction_search_contract": prediction_search_contract()}}}
     (old / "plan.json").write_text(json.dumps(plan))
     plan_hash = sha(old / "plan.json")
     prepared = {}
@@ -225,8 +232,178 @@ def cache_fixture(tmp_path):
     (directory / "models.json").write_text(json.dumps([prediction]))
     (directory / "candidates.json").write_text(json.dumps([region]))
     (directory / "genome_query_mapping.tsv").write_text("candidate\trepresentative\nregion1\tregion1\n")
+    (directory / SEARCH_CONTRACT_FILE).write_text(json.dumps(prediction_search_contract()))
     write_receipt(directory, {"plan": plan_hash, "species": "T", "prepared": prepared})
     return old, new, plan, region
+
+
+def rebind_fixture_plan(root, update):
+    """Controlled synthetic producer change; recompute all fixture receipts."""
+    plan = json.loads((root / "plan.json").read_text())
+    update(plan)
+    (root / "plan.json").write_text(json.dumps(plan))
+    plan_hash = sha(root / "plan.json")
+    prepared = {}
+    for directory in (root / "prepared").iterdir():
+        write_receipt(directory, {"plan": plan_hash, "species": directory.name})
+        prepared[directory.name] = sha(directory / "receipt.json")
+    for directory in (root / "rescued").iterdir():
+        write_receipt(directory, {"plan": plan_hash, "species": directory.name, "prepared": prepared})
+    return plan
+
+
+def legacy_fixture(root, implementation=LEGACY_DIRECT_IMPLEMENTATION, parent=None):
+    (root / "rescued/T" / SEARCH_CONTRACT_FILE).unlink(missing_ok=True)
+    def update(plan):
+        tools = plan["request"]["tools"]
+        tools.pop("prediction_search_contract", None)
+        tools.update(implementation=implementation, miniprot="0.18-r281", miniprot_sha256=LEGACY_MINIPROT_SHA256)
+        if parent:
+            plan["request"]["prediction_cache"] = parent
+            tools["verify_prediction_cache_implementation"] = LEGACY_INHERITED_VERIFIER
+    return rebind_fixture_plan(root, update)
+
+
+def current_fixture_plan(plan):
+    result = copy.deepcopy(plan)
+    result["request"]["tools"]["prediction_search_contract"] = prediction_search_contract()
+    return result
+
+
+def test_search_contract_is_frozen_with_modern_predictions(tmp_path):
+    old, new, plan, region = cache_fixture(tmp_path)
+    frozen = frozen_prediction_cache_key(old)
+    assert frozen["species"]["T"]["files"][SEARCH_CONTRACT_FILE] == sha(old / "rescued/T" / SEARCH_CONTRACT_FILE)
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS, frozen)
+    assert cache.local_search_compatible and cache.genome_search_compatible
+    assert cache.search_contract == prediction_search_contract()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_narrow_genome_search_does_not_reuse_positive_or_empty_coverage(tmp_path, legacy):
+    old, new, plan, region = cache_fixture(tmp_path)
+    directory = old / "rescued/T"
+    predictions = json.loads((directory / "models.json").read_text())
+    predictions.append({**predictions[0], "search": "genome_fallback"})
+    (directory / "models.json").write_text(json.dumps(predictions))
+    if legacy:
+        plan = current_fixture_plan(legacy_fixture(old))
+    else:
+        contract = prediction_search_contract()
+        contract["genome"]["output_score_ratio"] = .99
+        (directory / SEARCH_CONTRACT_FILE).write_text(json.dumps(contract))
+        rebind_fixture_plan(old, lambda p: p["request"]["tools"].update(prediction_search_contract=contract))
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
+    assert cache.candidate_ids() == {"region1"}  # Positive/empty local searches are still reusable.
+    assert not cache.genome_candidate_ids()  # Even a completed empty genome search must be rerun.
+    assert not cache.genome_query_mapping()
+    rows = list(cache.iter_models())
+    assert [row["search"] for row in rows] == ["synteny_interval"]
+    assert {"status", "model_id", "support", "problems"}.isdisjoint(rows[0])
+    assert cache.genome_reuse["policy"] == "search_contract_mismatch"
+
+
+def test_legacy_empty_local_result_reuses_only_local_coverage_without_logs(tmp_path):
+    old, new, plan, region = cache_fixture(tmp_path)
+    (old / "rescued/T/models.json").write_text("[]")
+    plan = current_fixture_plan(legacy_fixture(old))
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
+    assert not (old / "rescued/T/logs").exists()
+    assert cache.candidate_ids() == {"region1"} and not cache.genome_candidate_ids()
+    assert list(cache.iter_models()) == []
+
+
+def inherited_fixture(tmp_path, *, parent_implementation=LEGACY_DIRECT_IMPLEMENTATION):
+    import shutil
+    old, new, _, region = cache_fixture(tmp_path)
+    ancestor = tmp_path / "ancestor"
+    shutil.copytree(old, ancestor)
+    legacy_fixture(ancestor, parent_implementation)
+    parent = frozen_prediction_cache_key(ancestor)
+    plan = current_fixture_plan(legacy_fixture(old, LEGACY_INHERITED_IMPLEMENTATION, parent))
+    return old, new, plan, region, ancestor
+
+
+def test_transitive_legacy_only_local_proof_needs_no_command_logs(tmp_path):
+    old, new, plan, region, ancestor = inherited_fixture(tmp_path)
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
+    assert cache.local_search_compatible and not cache.genome_search_compatible
+    assert cache.candidate_ids() == {"region1"}
+    assert not cache.genome_candidate_ids()
+    assert len(list(cache.iter_models())) == 1
+    assert not (ancestor / "rescued/T/logs").exists() and not (old / "rescued/T/logs").exists()
+    with (ancestor / "plan.json").open("a") as handle:
+        handle.write("\n")
+    with pytest.raises(OSError, match="changed"):
+        cache.check()
+
+
+@pytest.mark.parametrize("field", ["plan_sha256", "receipt_sha256", "models.json"])
+def test_forged_frozen_ancestor_is_an_integrity_error(tmp_path, field):
+    old, new, plan, region, _ = inherited_fixture(tmp_path)
+    def forge(producer):
+        parent = producer["request"]["prediction_cache"]
+        if field == "plan_sha256":
+            parent[field] = "0" * 64
+        elif field == "receipt_sha256":
+            parent["species"]["T"][field] = "0" * 64
+        else:
+            parent["species"]["T"]["files"][field] = "0" * 64
+    rebind_fixture_plan(old, forge)
+    with pytest.raises(ValueError, match="changed|differs"):
+        verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
+
+
+@pytest.mark.parametrize("unknown", ["implementation", "miniprot_sha256", "ancestor"])
+def test_unknown_legacy_scope_abstains_from_prediction_and_coverage_reuse(tmp_path, unknown):
+    if unknown == "ancestor":
+        old, new, plan, region, _ = inherited_fixture(tmp_path, parent_implementation="unknown")
+    else:
+        old, new, _, region = cache_fixture(tmp_path)
+        legacy_fixture(old)
+        legacy = rebind_fixture_plan(old, lambda p: p["request"]["tools"].update({unknown: "unknown"}))
+        plan = current_fixture_plan(legacy)
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
+    assert not cache.local_search_compatible and not cache.genome_search_compatible
+    assert not cache.candidate_ids() and not cache.genome_candidate_ids()
+    assert list(cache.iter_models()) == []
+
+
+def test_mixed_inherited_and_current_legacy_local_bounds_are_not_complete_coverage(tmp_path):
+    import shutil
+    old, new, _, region = cache_fixture(tmp_path)
+    ancestor = tmp_path / "ancestor"
+    shutil.copytree(old, ancestor)
+    contract = prediction_search_contract()
+    contract["local"]["output_score_ratio"] = .25
+    (ancestor / "rescued/T" / SEARCH_CONTRACT_FILE).write_text(json.dumps(contract))
+    rebind_fixture_plan(ancestor, lambda p: p["request"]["tools"].update(prediction_search_contract=contract))
+    plan = current_fixture_plan(legacy_fixture(old, LEGACY_INHERITED_IMPLEMENTATION, frozen_prediction_cache_key(ancestor)))
+    cache = verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
+    assert cache.search_contract["local"] is None and not cache.candidate_ids()
+    assert list(cache.iter_models()) == []
+
+
+@pytest.mark.parametrize("problem", ["missing", "unbound", "invalid_ratio", "invalid_secondary", "bool_schema"])
+def test_malformed_or_unbound_modern_contract_is_rejected(tmp_path, problem):
+    old, new, plan, region = cache_fixture(tmp_path)
+    path = old / "rescued/T" / SEARCH_CONTRACT_FILE
+    contract = prediction_search_contract()
+    if problem == "missing":
+        path.unlink()
+    else:
+        if problem == "unbound":
+            contract["local"]["output_score_ratio"] = .25
+        elif problem == "invalid_ratio":
+            contract["local"]["output_score_ratio"] = float("nan")
+        elif problem == "invalid_secondary":
+            contract["genome"]["max_secondary"] = True
+        else:
+            contract["schema"] = True
+        path.write_text(json.dumps(contract))
+    write_receipt(path.parent, json.loads((path.parent / "receipt.json").read_text())["key"])
+    with pytest.raises(ValueError, match="contract"):
+        verify_prediction_cache(old, new, plan, "T", [region], PARAMS)
 
 
 def test_verified_cache_reuses_predictions_not_acceptance(tmp_path):

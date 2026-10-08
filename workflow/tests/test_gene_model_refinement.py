@@ -1006,6 +1006,96 @@ def test_accepted_addition_expands_canonical_full_gtf_graph_without_changing_sou
     assert all(candidate["quality"]["usable"] for gene in recatalog["loci"] for candidate in gene["candidates"])
 
 
+def test_refined_representative_preserves_historical_rescue_locus_without_borrowing_old_path_support(tmp_path, monkeypatch):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target, name = rows[0], rows[0]['species']
+    gene_id = name + '_ggrescue_locus'
+    full_cds, old_cds = 'ATGAAAATGATGCCCTAA', 'ATGATGCCCTAA'
+    genome = 'C' * 94 + full_cds + 'C' * 20
+    history = {'representative_status': 'ambiguous', 'selection_policy': 'longest_cds_then_coding_shape',
+               'locus_independent_donor_species_count': '2', 'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+    source_attrs = (';representative_status=ambiguous;representative_selection_policy=longest_cds_then_coding_shape'
+                    ';locus_independent_donor_species_count=2;rescue_orthology=unassigned;rescue_expected_copy=unassigned')
+    source = ('##gff-version 3\n'
+              f'chr1\tgenegalleon_rescue\tgene\t101\t112\t.\t+\t.\tID={gene_id}{source_attrs}\n'
+              f'chr1\tgenegalleon_rescue\tmRNA\t101\t112\t.\t+\t.\tID=old_primary;Parent={gene_id}{source_attrs};path_independent_donor_species_count=1\n'
+              'chr1\tgenegalleon_rescue\tCDS\t101\t112\t.\t+\t0\tID=old_cds;Parent=old_primary\n'
+              f'chr1\tgenegalleon_rescue\tmRNA\t104\t112\t.\t+\t.\tID=old_alternative;Parent={gene_id}{source_attrs};path_independent_donor_species_count=1;support=homology_coding_path\n'
+              'chr1\tgenegalleon_rescue\tCDS\t104\t112\t.\t+\t0\tID=old_alt_cds;Parent=old_alternative\n')
+    Path(target['cds']).write_text(f'>{gene_id}\n{old_cds}\n')
+    Path(target['gff']).write_text(source)
+    for row in rows:
+        Path(row['genome']).write_text('>chr1\n' + genome + '\n')
+        if row is not target:
+            Path(row['cds']).write_text('>g\n' + full_cds + '\n')
+            Path(row['gff']).write_text('##gff-version 3\nchr1\ts\tgene\t95\t112\t.\t+\t.\tID=g\n'
+                                        'chr1\ts\tmRNA\t95\t112\t.\t+\t.\tID=t1;Parent=g\n'
+                                        'chr1\ts\tCDS\t95\t112\t.\t+\t0\tID=c1;Parent=t1\n')
+    links = refinement.read_table(edges)
+    for edge in links:
+        for side in ('a', 'b'):
+            if edge['species_' + side] == name:
+                edge['gene_' + side] = gene_id
+    write_tsv(edges, list(links[0]), links)
+    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus):
+        return [dict(query=region['id'], seqid=seqid, strand='+', cds=[[94 - start, 112 - start, 0]],
+                     frameshift=False, coverage=1., identity=1.)
+                for (seqid, start, _end), regions in windows.items() for region in regions]
+    monkeypatch.setattr(refinement.rescue, 'search_intervals', predicted_paths)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='conservative',
+                            isoform_adoption='conservation_supported', min_margin=.01)
+    effective = refinement.finalize(root, value)
+    chosen, = [r for r in refinement.read_table(effective / 'representative_map.tsv') if r['species'] == name]
+    assert chosen['gene_id'] == gene_id and '_ggrefine_' in chosen['candidate_id']
+    accepted, = [r for r in json.loads((root / 'predictions' / name / 'predictions.json').read_text()) if r['status'] == 'accepted']
+    assert accepted['candidate']['quality']['representative_eligible']
+    assert accepted['candidate']['quality']['representative_admission'] == 'conservation_supported'
+    assert len(accepted['candidate']['support']['donors']) == 2
+    assert (effective / 'source_annotation' / (name + '.gff3')).read_bytes() == source.encode()
+    assert list(refinement.rescue.fasta_records(effective / 'species_cds' / (name + '.fa'))) == [(gene_id, gene_id, full_cds)]
+    for role in ('species_gff', 'analysis_gff'):
+        gff = effective / role / (name + '.gff3')
+        records = [line.split('\t') for line in gff.read_text().splitlines() if '\t' in line]
+        gene_attrs, = [refinement.parse_gff_attributes(row[8]) for row in records if row[2] == 'gene']
+        path_attrs, = [refinement.parse_gff_attributes(row[8]) for row in records if row[2] == 'mRNA']
+        assert gene_attrs['ID'] == (gene_id,)
+        assert gene_attrs['source_rescue_representative_status'] == ('ambiguous',)
+        assert gene_attrs['source_rescue_locus_independent_donor_species_count'] == ('2',)
+        assert 'representative_status' not in path_attrs and 'source_rescue_representative_status' not in path_attrs
+        assert path_attrs['path_independent_donor_species_count'] == ('2',)
+        catalog = refinement.build_catalog(name, effective / 'species_cds' / (name + '.fa'), gff,
+                                           effective / 'species_genome' / (name + '.fa'))
+        assert catalog['loci'][0]['gene_id'] == gene_id
+        candidate, = catalog['loci'][0]['candidates']
+        assert candidate['source_rescue_locus_provenance'] == history
+        assert 'rescue_path_selection' not in candidate
+        assert catalog['loci'][0]['source_rescue_locus_provenance'] == history
+    full = effective / 'full_annotation' / (name + '.gff3')
+    full_catalog = refinement.build_catalog(name, effective / 'species_cds' / (name + '.fa'), full,
+                                          effective / 'species_genome' / (name + '.fa'))
+    selected_path, = [c for c in full_catalog['loci'][0]['candidates'] if c['source_transcript_id'] == chosen['source_transcript_id']]
+    assert selected_path['source_rescue_locus_provenance'] == history and 'rescue_path_selection' not in selected_path
+    assert 'ID=old_primary;' in full.read_text() and 'ID=old_alternative;' in full.read_text()
+
+
+def test_historical_rescue_locus_count_cannot_be_borrowed_as_new_path_support():
+    old = {'rescue_path_selection': {'representative_status': 'ambiguous', 'selection_policy': 'longest_cds_then_coding_shape',
+                                   'locus_independent_donor_species_count': '2', 'path_independent_donor_species_count': '1'}}
+    gene = {'gene_id': 'Target_ggrescue_locus', 'seqid': 'chr', 'strand': '+', 'candidates': [old]}
+    candidate = {'candidate_id': 'new', 'source_transcript_id': 'new', 'blocks': [[0, 12, 0]],
+                 'support': {'donors': ['Donor1', 'Donor2', 'Donor3', 'Target']}}
+    lines = refinement.candidate_gff(gene, candidate, 'Target').splitlines()
+    assert 'source_rescue_locus_independent_donor_species_count=2' in lines[0]
+    assert 'path_independent_donor_species_count=3' in lines[1]
+    assert 'representative_status=ambiguous' not in lines[1]
+    altered = copy.deepcopy(old)
+    altered['rescue_path_selection']['locus_independent_donor_species_count'] = '3'
+    gene['candidates'].append(altered)
+    with pytest.raises(ValueError, match='Conflicting historical rescue locus provenance'):
+        refinement.candidate_gff(gene, candidate, 'Target')
+
+
 @pytest.mark.parametrize("implicit", [False, True])
 def test_gtf_without_id_parent_reexports_exact_selected_path_and_metadata(tmp_path, implicit):
     inputs, edges, rows = tiny_inputs(tmp_path)
