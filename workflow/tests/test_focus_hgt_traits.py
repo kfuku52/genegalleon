@@ -17,6 +17,7 @@ def generate(*args, **kwargs):
     # Existing trait/context tests isolate that behavior from the additional
     # domain filter. Its enabled/default path has dedicated regressions below.
     kwargs.setdefault('require_shared_pfam', False)
+    kwargs.setdefault('require_length_ratio', False)
     return generate_filtered(*args, **kwargs)
 
 
@@ -1524,10 +1525,11 @@ def test_explicit_no_domain_exception_has_unmeasured_coverage(tmp_path):
     from focus_hgt_pfam import filter_events
     _, events, links = focused_node_source()
     saved_pfam(tmp_path, dict(D_gene=[], A_gene=[]))
-    selected, _, pairs, _, _ = filter_events(events, links, tmp_path, allow_both_no_pfam=True)
+    selected, audit, pairs, _, _ = filter_events(events, links, tmp_path, allow_both_no_pfam=True)
     assert selected and pairs[0]['coverage_status'] == 'explicit_bilateral_no_hit_exception'
     assert pairs[0]['donor_shared_pfam_query_coverage'] == ''
     assert pairs[0]['donor_shared_pfam_covered_aa'] == ''
+    assert audit[0]['pfam_coverage_passing_pair_count'] == 0
 
 
 def test_coverage_parameter_reaches_trait_tables_without_plotting(source):
@@ -1684,7 +1686,8 @@ def test_distribution_link_hit_cannot_override_an_explicit_native_no_hit(tmp_pat
 
 
 def test_focus_api_normalizes_disabled_pfam_flags_before_recording_the_manifest(source):
-    report = generate_filtered(*source, plots=False, require_shared_pfam='0', allow_both_no_pfam='false')
+    report = generate_filtered(*source, plots=False, require_shared_pfam='0', allow_both_no_pfam='false',
+                               require_length_ratio='false')
     assert report['require_shared_pfam'] is False
     assert report['allow_both_no_pfam'] is False
     assert 'pfam_pair_filter' not in report['filtering_order']
@@ -1692,7 +1695,7 @@ def test_focus_api_normalizes_disabled_pfam_flags_before_recording_the_manifest(
     assert len(read_tsv(source[-1]/'traits/binary/all_category1/events.tsv')[1]) == 3
 
 
-@pytest.mark.parametrize('name', ['require_shared_pfam', 'allow_both_no_pfam'])
+@pytest.mark.parametrize('name', ['require_shared_pfam', 'allow_both_no_pfam', 'require_length_ratio'])
 @pytest.mark.parametrize('value', [None, '', 'yes', 2, float('nan'), []])
 def test_focus_api_rejects_ambiguous_pfam_flags_before_writing(source, name, value):
     with pytest.raises(ValueError, match=name):
@@ -1763,3 +1766,141 @@ def test_unused_pfam_rows_still_receive_structural_validation(tmp_path):
         handle.write('unused\tmalformed\n')
     with pytest.raises(ValueError, match='Malformed saved Pfam RPS-BLAST row'):
         filter_events(events, links, tmp_path)
+
+
+@pytest.mark.parametrize('donor_length,recipient_length,passed', [(200, 100, True), (100, 200, True),
+                                                               (201, 100, False), (100, 201, False)])
+def test_protein_length_ratio_is_inclusive_and_default_on(tmp_path, donor_length, recipient_length, passed):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']))
+    fields, rows = read_tsv(path)
+    for row, length in zip(rows, (donor_length, recipient_length), strict=True):
+        row.update(qlen=str(length), qend=str(length))  # Both shared-domain coverages are 100%.
+    write_tsv(path, fields, rows)
+    selected, audit, pairs, _, _ = filter_events(events, links, tmp_path)
+    assert bool(selected) is passed
+    pair = pairs[0]
+    assert pair['protein_length_ratio'] == min(donor_length, recipient_length) / max(donor_length, recipient_length)
+    assert pair['passes_shared_pfam_filter'] == 'True'
+    assert pair['passes_length_ratio_filter'] == str(passed)
+    assert pair['passes_pair_filter'] == pair['passes_pfam_filter'] == str(passed)
+    assert audit[0]['length_ratio_filter_enabled'] == 'True'
+    assert audit[0]['pfam_filter_reason'] == ('' if passed else 'protein_length_ratio_below_minimum_or_unmeasured')
+    assert filter_events(events, links, tmp_path, require_length_ratio='0')[0]
+
+
+def test_length_and_pfam_cannot_be_satisfied_by_different_pairs(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    eid = events[0]['event_id']
+    links.append(supported_link(eid, 'recipient', 'A_other'))
+    path = saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053'], A_other=['PF00001']))
+    fields, rows = read_tsv(path)
+    for row in rows:
+        length = 201 if row['qacc'] == 'D_gene' else 100 if row['qacc'] == 'A_gene' else 201
+        row.update(qlen=str(length), qend=str(length))
+    write_tsv(path, fields, rows)
+    selected, audit, pairs, _, _ = filter_events(events, links, tmp_path)
+    assert not selected
+    assert audit[0]['pfam_coverage_passing_pair_count'] == audit[0]['length_ratio_passing_pair_count'] == 1
+    assert all(row['passes_pair_filter'] == 'False' for row in pairs)
+    assert filter_events(events, links, tmp_path, require_length_ratio=False)[0]
+    assert filter_events(events, links, tmp_path, require_shared_pfam=False)[0]
+
+
+def test_no_pfam_requirement_does_not_disable_length_or_allow_missing_lengths(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    # A recorded no-hit protein provides a length; a missing search does not.
+    saved_pfam(tmp_path, dict(D_gene=[], A_gene=[]))
+    selected, _, pairs, _, _ = filter_events(events, links, tmp_path, require_shared_pfam=False)
+    assert selected and pairs[0]['passes_shared_pfam_filter'] == 'False'
+    assert pairs[0]['protein_length_ratio'] == 1
+    saved_pfam(tmp_path, dict(D_gene=[]))
+    selected, _, pairs, _, _ = filter_events(events, links, tmp_path, require_shared_pfam=False, allow_both_no_pfam=True)
+    assert not selected and pairs[0]['protein_length_ratio'] == ''
+    assert pairs[0]['length_ratio_status'] == 'unmeasured'
+
+
+def test_no_domain_exception_cannot_bypass_length_threshold(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    path = saved_pfam(tmp_path, dict(D_gene=[], A_gene=[]))
+    fields, rows = read_tsv(path)
+    rows[0]['qlen'] = '201'
+    write_tsv(path, fields, rows)
+    selected, _, pairs, _, _ = filter_events(events, links, tmp_path, allow_both_no_pfam=True)
+    assert not selected and pairs[0]['passes_shared_pfam_filter'] == 'True'
+    assert filter_events(events, links, tmp_path, allow_both_no_pfam=True, require_length_ratio=False)[0]
+
+
+@pytest.mark.parametrize('minimum', [-.1, 1.1, float('nan'), float('inf'), None, 'bad'])
+def test_invalid_length_ratio_configuration_is_rejected_for_empty_cohort(minimum):
+    from focus_hgt_pfam import filter_events
+    with pytest.raises(ValueError, match='Protein length ratio must be a finite fraction'):
+        filter_events([], [], '', min_length_ratio=minimum)
+
+
+def test_pair_evidence_cache_keeps_each_event_identity_and_rows_independent(tmp_path):
+    from focus_hgt_pfam import filter_events
+    _, events, links = focused_node_source()
+    other = dict(events[0], event_id='OG1:3:2', event_index='2')
+    links += [dict(link, event_id=other['event_id'], event_index='2') for link in list(links)]
+    saved_pfam(tmp_path, dict(D_gene=['PF01053'], A_gene=['PF01053']))
+    _, _, pairs, _, _ = filter_events(events + [other], links, tmp_path)
+    assert [row['event_id'] for row in pairs] == [events[0]['event_id'], other['event_id']]
+    assert pairs[0] is not pairs[1]
+    pairs[0]['pair_attention_flags'] = 'test_mutation'
+    assert pairs[1]['pair_attention_flags'] == ''
+
+
+def test_length_only_mode_reaches_trait_tables_and_manifest(source):
+    _, links = read_tsv(source[1])
+    links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
+    write_tsv(source[1], list(links[0]), links)
+    root = source[0].parent / 'families'
+    saved_pfam(root, dict(D_gene=[], A_gene=[], B_gene=[], C_gene=[]))
+    report = generate_filtered(*source, plots=False, gene_family_root=root, require_shared_pfam='0')
+    assert report['require_length_ratio'] is True
+    assert report['pair_filter_criteria'] == ['protein_length_ratio']
+    assert report['pair_filter']['passed_event_count'] == 5
+    assert 'protein_length_pair_filter' in report['filtering_order']
+    assert all(row['passes_pair_filter'] == 'True' and row['passes_shared_pfam_filter'] == 'False'
+               for row in read_tsv(source[-1] / 'pfam_pair_audit.tsv')[1])
+    focused = read_tsv(source[-1] / 'traits/binary/all_category1/events.tsv')[1]
+    assert len(focused) == 3 and all(row['length_ratio_filter_enabled'] == 'True' for row in focused)
+
+
+def test_pair_flow_label_records_enabled_length_rule(tmp_path):
+    from focus_hgt_figures import export_filtering_flow
+    events = [dict(event_id='e1', orthogroup='OG1')]
+    export_filtering_flow(tmp_path, events, events, 'gall', pfam_selected=events,
+                          pair_filter_label='Event-pair length ratio >=0.5')
+    stages = read_tsv(tmp_path / 'filtering_flow.tsv')[1]
+    assert stages[-2]['stage'] == 'Event-pair length ratio >=0.5'
+
+
+def test_origin_source_changed_after_assessment_preserves_previous_bundle(source, monkeypatch):
+    import focus_hgt_traits
+    _, links = read_tsv(source[1])
+    links = [dict(supported_link(r['event_id'], r['side'], r['gene_id']), **r) for r in links]
+    write_tsv(source[1], list(links[0]), links)
+    root = source[0].parent / 'families'
+    saved_pfam(root, dict(D_gene=['PF01053'], A_gene=['PF01053'], B_gene=['PF01053'], C_gene=['PF01053']))
+    sequence = source[0].parent / 'mmseqs'
+    sequence.mkdir()
+    raw = sequence / 'D_mmseqs2taxonomy.tsv'
+    raw.write_text('D_gene\t11\tclass\tSaved donor class\t1\t1\t1\t1\t1;2;11\n')
+    generate_filtered(*source, plots=False, gene_family_root=root, mmseqs2_taxonomy_dir=sequence)
+    previous = (source[-1] / 'manifest.json').read_bytes()
+    original = focus_hgt_traits.export_bundle
+    def change_after_origin(*args, **kwargs):
+        result = original(*args, **kwargs)
+        with raw.open('a') as handle:
+            handle.write('unused\t11\tclass\tSaved donor class\t1\t1\t1\t1\t1;2;11\n')
+        return result
+    monkeypatch.setattr(focus_hgt_traits, 'export_bundle', change_after_origin)
+    with pytest.raises(ValueError, match='Origin taxonomy input changed'):
+        generate_filtered(*source, plots=False, gene_family_root=root, mmseqs2_taxonomy_dir=sequence)
+    assert (source[-1] / 'manifest.json').read_bytes() == previous

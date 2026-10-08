@@ -947,6 +947,8 @@ run_hgt_summary_for_source() {
   hgt_focus_require_shared_pfam="${hgt_summary_focus_require_shared_pfam:-1}" \
   hgt_focus_allow_both_no_pfam="${hgt_summary_focus_allow_both_no_pfam:-0}" \
   hgt_focus_min_shared_pfam_coverage="${hgt_summary_focus_min_shared_pfam_coverage:-0.5}" \
+  hgt_focus_require_length_ratio="${hgt_summary_focus_require_length_ratio:-1}" \
+  hgt_focus_min_length_ratio="${hgt_summary_focus_min_length_ratio:-0.5}" \
   hgt_focus_direction_filter="${hgt_summary_focus_direction_filter:-any}" \
   hgt_focus_species_taxonomy="${hgt_summary_focus_species_taxonomy:-auto}" \
   hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" \

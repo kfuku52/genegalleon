@@ -185,16 +185,33 @@ filtered project cohort, set `hgt_summary_focus_event_tsv` and optionally
 `hgt_summary_focus_event_gene_tsv` to its event and enriched link TSVs. Existing
 support, direction, scaffold, product-name and quality columns are preserved;
 category-1 focused results now also require a shared query Pfam in a bilateral
-scaffold-supported event-gene pair by default. The source cohort is preserved.
-`hgt_summary_focus_require_shared_pfam=0` reproduces the prior cohort;
+scaffold-supported event-gene pair, >=50% shared-Pfam coverage on both query
+proteins and a shorter/longer protein length ratio >=0.5 by default. One exact
+pair must satisfy both enabled criteria. The source cohort is preserved.
+`hgt_summary_focus_require_length_ratio=0` reproduces the preceding Pfam cohort;
+disable both this option and `hgt_summary_focus_require_shared_pfam` for the
+earlier scaffold-only cohort. Missing or nonpositive measured lengths cannot
+pass an enabled length rule. The length rule also works independently with
+Pfam disabled. Its inclusive threshold is `hgt_summary_focus_min_length_ratio`.
 `hgt_summary_focus_allow_both_no_pfam=1` additionally allows a pair where both
 genes have explicit searched/no-hit records. Missing records, one-sided no-hits
-and disjoint detected domains still fail. The filter reuses saved RPS-BLAST
+and disjoint detected domains still fail the Pfam requirement; the independent
+length rule still applies to a bilateral no-hit exception. The filter reuses saved RPS-BLAST
 records and runs even without plots; event/pair/gene audits retain failed
 evidence and source hashes. See the [Pfam contract](gene-structure-tree-plot.md#shared-pfam-filter-for-focused-hgt).
 Pfam is evaluated once across the input cohort, before each
 trait's category-1 recipients are selected. Bundle-root Pfam event,
 pair and gene audits retain the common decisions; per-trait audits are views.
+Origin-review audits separately compare each focal donor query's saved MMseqs2
+classification with its own host lineage and flag unresolved or conflicting
+classifications. A clear domain/kingdom mismatch is distinguished from a
+class-level mismatch. An ancestor donor branch containing the recipient clade
+is flagged as origin ambiguity. These are review annotations, not additional
+exclusion rules or proof of contamination; missing classifications remain
+unknown. Host-species taxonomy still determines modeled transfer direction,
+and Swiss-Prot best hits remain separate product annotations. Optional saved
+taxonomy/classification inputs participate in provenance even when plots are
+disabled; no new sequence search or gene-tree inference is run.
 Set `hgt_summary_focus_direction_filter=non_arthropoda_to_insecta` to insert a
 direction filter immediately after Pfam. The filtering-flow figure combines
 this direction rule and category-1 recipients into one final stage,

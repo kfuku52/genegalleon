@@ -54,7 +54,8 @@ def test_gene_evolution_records_the_same_arguments_it_renders_for_focused_replay
 def test_shared_query_pfam_filter_defaults_and_provenance_apply_without_plotting():
     entry, summary, hgt = [read_text(path) for path in (GENE_SUMMARY_ENTRYPOINT, GENE_SUMMARY_CORE, HGT_CORE)]
     forwarded = (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
-    for suffix, default in [('require_shared_pfam', '1'), ('allow_both_no_pfam', '0'), ('min_shared_pfam_coverage', '0.5')]:
+    for suffix, default in [('require_shared_pfam', '1'), ('allow_both_no_pfam', '0'), ('min_shared_pfam_coverage', '0.5'),
+                            ('require_length_ratio', '1'), ('min_length_ratio', '0.5')]:
         assert f'hgt_summary_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in entry
         assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
         assert f'--{suffix} "${{hgt_focus_{suffix}}}"' in hgt
@@ -64,6 +65,7 @@ def test_shared_query_pfam_filter_defaults_and_provenance_apply_without_plotting
     plotting = hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', pfam)
     assert pfam < plotting
     assert '--input "pfam_filter=${gg_support_dir}/focus_hgt_pfam.py"' in hgt
+    assert 'if [[ ${hgt_focus_require_shared_pfam} -eq 1 || ${hgt_focus_require_length_ratio} -eq 1 ]]; then' in hgt
 
 
 def test_species_direction_configuration_and_taxonomy_provenance_apply_without_plotting():
@@ -74,11 +76,22 @@ def test_species_direction_configuration_and_taxonomy_provenance_apply_without_p
         assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
         assert f'hgt_summary_focus_{suffix}' in forwarded
     assert '--direction_filter "${hgt_focus_direction_filter}"' in hgt
-    assert '--species_taxonomy "${hgt_focus_taxonomy_path}"' in hgt
+    assert '--species_taxonomy "${hgt_focus_existing_taxonomy}"' in hgt
+    assert '[[ -f "${hgt_focus_existing_taxonomy}" ]] || hgt_focus_existing_taxonomy=""' in hgt
     assert '--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}"' in hgt
     assert '--parameter "direction_filter=${hgt_focus_direction_filter}"' in hgt
     taxonomy = hgt.index('--input "direction_species_taxonomy=')
     assert taxonomy < hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', taxonomy)
+
+
+def test_origin_review_sources_invalidate_focus_even_without_plotting():
+    text = read_text(HGT_CORE)
+    origin = text.index('--input "origin_review_helper=${gg_support_dir}/focus_hgt_origin.py"')
+    plot_gate = text.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', origin)
+    for source in ('"origin_species_taxonomy" "${hgt_focus_taxonomy_path}"',
+                   '"context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"',
+                   '"context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"'):
+        assert origin < text.index(source, origin) < plot_gate
 
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
@@ -176,18 +189,37 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
 
 
 @pytest.mark.parametrize('coverage', ['0', '0.5', '0.95', '1'])
-def test_shared_pfam_coverage_scoped_override_is_forwarded_to_runtime(coverage):
+@pytest.mark.parametrize('suffix', ['min_shared_pfam_coverage', 'min_length_ratio'])
+def test_pair_filter_fraction_scoped_override_is_forwarded_to_runtime(coverage, suffix):
     support = REPO_ROOT/'workflow/support'
     script = (
         f"source {shlex.quote(str(support/'gg_util.sh'))}; "
         f"source {shlex.quote(str(support/'gg_entrypoint_config_vars.sh'))}; "
-        "hgt_summary_focus_min_shared_pfam_coverage=0.5; "
-        f"GG_GENE_SUMMARY_HGT_SUMMARY_FOCUS_MIN_SHARED_PFAM_COVERAGE={coverage}; "
+        f"hgt_summary_focus_{suffix}=0.5; "
+        f"GG_GENE_SUMMARY_HGT_SUMMARY_FOCUS_{suffix.upper()}={coverage}; "
         "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
         "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
-        'printf "%s\\n%s\\n%s\\n" "${hgt_summary_focus_min_shared_pfam_coverage}" '
-        '"${SINGULARITYENV_hgt_summary_focus_min_shared_pfam_coverage:-}" '
-        '"${APPTAINERENV_hgt_summary_focus_min_shared_pfam_coverage:-}"'
+        f'printf "%s\\n%s\\n%s\\n" "${{hgt_summary_focus_{suffix}}}" '
+        f'"${{SINGULARITYENV_hgt_summary_focus_{suffix}:-}}" '
+        f'"${{APPTAINERENV_hgt_summary_focus_{suffix}:-}}"'
     )
     result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
     assert result.stdout.splitlines() == [coverage] * 3
+
+
+@pytest.mark.parametrize('enabled', ['0', '1'])
+def test_length_ratio_switch_scoped_override_is_forwarded_to_runtime(enabled):
+    support = REPO_ROOT/'workflow/support'
+    script = (
+        f"source {shlex.quote(str(support/'gg_util.sh'))}; "
+        f"source {shlex.quote(str(support/'gg_entrypoint_config_vars.sh'))}; "
+        "hgt_summary_focus_require_length_ratio=1; "
+        f"GG_GENE_SUMMARY_HGT_SUMMARY_FOCUS_REQUIRE_LENGTH_RATIO={enabled}; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "%s\\n%s\\n%s\\n" "${hgt_summary_focus_require_length_ratio}" '
+        '"${SINGULARITYENV_hgt_summary_focus_require_length_ratio:-}" '
+        '"${APPTAINERENV_hgt_summary_focus_require_length_ratio:-}"'
+    )
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == [enabled] * 3

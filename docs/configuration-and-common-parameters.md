@@ -46,8 +46,9 @@ HGT summaries automatically return category-1 trait results with
 explicit paths preserve a previously filtered project cohort and enriched gene
 annotations as inputs. Focused results additionally apply the configured
 [shared query-Pfam pair filter](gene-structure-tree-plot.md#shared-pfam-filter-for-focused-hgt).
-Pfam filtering precedes trait selection, so multiple traits share the same
-passing cohort and Pfam-stage counts.
+Enabled Pfam and protein-length requirements are evaluated together on each
+exact bilateral event-gene pair before trait selection, so multiple traits
+share the same passing cohort and pair-stage counts.
 For non-Arthropoda donors into Insecta, set
 `hgt_summary_focus_direction_filter=non_arthropoda_to_insecta`. This additional
 species-branch filter follows the Pfam pair filter and precedes every trait's
@@ -452,20 +453,35 @@ candidate-free background, missing-data semantics, and counting units.
 - `hgt_summary_focus_require_shared_pfam` (default `1`): category-1 focused
   tables and figures require at least one retained event-linked donor/recipient
   gene pair sharing a query Pfam accession, with each gene individually passing
-  the existing class scaffold-background profile. Set `0` for the earlier
-  scaffold-only cohort. The input and global candidate tables are preserved.
+  the existing class scaffold-background profile. Set `0` to disable the Pfam
+  requirement; the independent protein-length rule remains enabled. Disable
+  both pair requirements for the earlier scaffold-only cohort. The input and
+  global candidate tables are preserved.
 - `hgt_summary_focus_min_shared_pfam_coverage` (default `0.5`): inclusive
   fraction required on **both proteins of the same event-gene pair**. Union
   overlapping saved query-domain intervals before dividing by that protein's
   length in amino acids. This measures shared-domain query coverage, not
   pairwise alignment coverage. Set `0` for any shared query Pfam. Review flags
-  for repeat/generic binding domains, differing domain sets, >2-fold query
-  length differences and proteins <100 aa do not exclude events.
+  for repeat/generic binding domains, differing domain sets and proteins
+  <100 aa do not exclude events. Length eligibility follows the separate
+  protein-length-ratio settings below.
+- `hgt_summary_focus_require_length_ratio` (default `1`): require measured,
+  positive protein lengths for the same exact bilateral event-gene pair that
+  meets any enabled Pfam criterion. This works even with the Pfam requirement
+  disabled. Set `0` to reproduce the preceding Pfam-only cohort.
+- `hgt_summary_focus_min_length_ratio` (default `0.5`): inclusive minimum of
+  `min(donor_length_aa, recipient_length_aa) / max(donor_length_aa,
+  recipient_length_aa)`, a finite fraction from `0` to `1`. Lengths come from
+  saved query-protein records; family averages, alignment lengths and best-hit
+  protein lengths are not substituted. Missing or nonpositive lengths cannot
+  pass an enabled rule, even at threshold `0`. Both enabled criteria must be
+  satisfied by one exact pair; different copies cannot rescue opposite sides.
 - `hgt_summary_focus_allow_both_no_pfam` (default `0`): when the Pfam filter is
   enabled, set `1` to also allow a pair whose two genes both have explicit
   searched/no-hit records. Missing records and one-sided no-hits still fail.
   This explicit opt-in bypasses unavailable domain coverage; coverage stays
-  unmeasured. No additional E-value threshold is imposed on saved Pfam hits.
+  unmeasured. The independently enabled length rule still applies to that pair.
+  No additional E-value threshold is imposed on saved Pfam hits.
   Saved query RPS-BLAST records are used; no additional search is run. Per-trait
   event/pair/gene audits retain exclusion reasons and source hashes, including
   when plotting is disabled.

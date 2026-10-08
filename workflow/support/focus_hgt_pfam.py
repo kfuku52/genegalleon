@@ -12,6 +12,7 @@ import math
 import re
 from collections import defaultdict
 from contextlib import nullcontext
+from functools import lru_cache
 from itertools import product
 
 from focus_hgt_gene_trees import background_supported, number, validate_link_identity
@@ -21,7 +22,10 @@ EVENT_FIELDS = ["pfam_filter_status", "pfam_filter_reason", "pfam_compared_pair_
                 "pfam_passing_pair_count", "pfam_shared_pair_count", "pfam_both_no_hit_pair_count",
                 "pfam_shared_accessions", "pfam_min_shared_query_coverage", "pfam_attention_flags",
                 "pfam_best_pair_donor_gene", "pfam_best_pair_recipient_gene",
-                "pfam_best_pair_donor_query_coverage", "pfam_best_pair_recipient_query_coverage"]
+                "pfam_best_pair_donor_query_coverage", "pfam_best_pair_recipient_query_coverage",
+                "pfam_filter_enabled", "length_ratio_filter_enabled", "minimum_protein_length_ratio",
+                "pfam_coverage_passing_pair_count", "length_ratio_passing_pair_count",
+                "pfam_best_pair_protein_length_ratio"]
 PAIR_FIELDS = ["event_id", "orthogroup", "branch_id", "node_name", "event_index", "generax_transfer",
                "generax_donor_node", "generax_recipient_node", "donor_gene_id", "recipient_gene_id",
                "donor_annotation_status", "recipient_annotation_status", "donor_pfam_accessions",
@@ -29,7 +33,8 @@ PAIR_FIELDS = ["event_id", "orthogroup", "branch_id", "node_name", "event_index"
                "donor_query_length_aa", "recipient_query_length_aa", "donor_shared_pfam_covered_aa",
                "recipient_shared_pfam_covered_aa", "donor_shared_pfam_query_coverage",
                "recipient_shared_pfam_query_coverage", "min_shared_pfam_query_coverage",
-               "coverage_status", "pair_attention_flags"]
+               "coverage_status", "pair_attention_flags", "protein_length_ratio", "min_protein_length_ratio",
+               "length_ratio_status", "passes_length_ratio_filter", "passes_shared_pfam_filter", "passes_pair_filter"]
 GENE_FIELDS = ["event_id", "orthogroup", "side", "gene_id", "query_length_aa",
                "annotation_status", "pfam_accessions", "source_rpsblast", "source_sha256", "gene_attention_flags"]
 
@@ -46,6 +51,13 @@ def validate_shared_pfam_coverage(value):
     if not math.isfinite(value) or not 0 <= value <= 1:
         raise ValueError("Shared Pfam query coverage must be a finite fraction from 0 to 1")
     return value
+
+
+def validate_length_ratio(value):
+    try:
+        return validate_shared_pfam_coverage(value)
+    except ValueError:
+        raise ValueError("Protein length ratio must be a finite fraction from 0 to 1") from None
 
 
 def covered_aa(record, accessions):
@@ -112,7 +124,8 @@ def binary_option(value, name):
     raise ValueError(name + ' must be a boolean or an explicit 0/1 flag')
 
 
-def filter_events(events, links, family_root, allow_both_no_pfam=False, min_shared_pfam_coverage=0.5):
+def filter_events(events, links, family_root, allow_both_no_pfam=False, min_shared_pfam_coverage=0.5,
+                  require_length_ratio=True, min_length_ratio=0.5, require_shared_pfam=True):
     """Keep an event if ANY exact, retained, scaffold-passing pair qualifies.
 
 Missing query/search records never qualify for the optional bilateral no-hit
@@ -120,9 +133,17 @@ exception. All eligible context genes remain linked to surviving events.
 Coverage is the union of saved shared-domain query intervals / protein length,
 required on both genes of the same pair. Explicit bilateral no-hit opt-in is an
 exception with unmeasured coverage, never a fabricated coverage of zero or one.
+Protein length ratio is min(lengths)/max(lengths), from the saved protein-query
+records of the SAME pair, inclusive. Missing lengths never satisfy an enabled
+length rule, including the no-domain exception. Pfam and length rules can be
+disabled independently. The legacy passes_pfam_filter column is the combined
+decision; passes_shared_pfam_filter records the domain-only decision.
 """
     minimum = validate_shared_pfam_coverage(min_shared_pfam_coverage)
+    minimum_length = validate_length_ratio(min_length_ratio)
     allow_both_no_pfam = binary_option(allow_both_no_pfam, 'allow_both_no_pfam')
+    require_length_ratio = binary_option(require_length_ratio, 'require_length_ratio')
+    require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
     if any(set(EVENT_FIELDS) & set(row) for row in events):
         raise ValueError("Reserved Pfam filter columns already exist in event input")
     ids = {row["event_id"]: row for row in events}
@@ -182,59 +203,100 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
                         if row["qacc"] in genes:
                             grouped[row["qacc"]].append(row)
                 for gene in genes:
-                    records[family, gene] = dict(query_record(grouped[gene]), source=logical,
-                                                sha256=sources.get(logical, ""))
+                    record = dict(query_record(grouped[gene]), source=logical, sha256=sources.get(logical, ""))
+                    record['accession_text'] = '; '.join(sorted(record['pfam']))
+                    record['short_flag'] = gene_flags(record)
+                    record['generic_accessions'] = frozenset(accession for accession, names in record['names'].items()
+                                                            if all(GENERIC_DOMAIN_NAME.match(name) for name in names))
+                    records[family, gene] = record
             for logical, expected in sources.items():
                 subdir, name = logical.split("/", 1)
                 with store.open_binary(subdir, name) as handle:
                     if hashlib.sha256(handle.read()).hexdigest() != expected:
                         raise ValueError("Pfam filtering input changed during generation")
 
+    # Interval unions also recur across different partner genes. Bound that
+    # smaller cache separately so unique-pair cohorts benefit without retaining
+    # a template for every combination.
+    @lru_cache(maxsize=32768)
+    def query_coverage(family, gene, shared):
+        return covered_aa(records[family, gene], shared)
+
+    signatures, cacheable_events = {}, set()
+    for event in events:
+        eid = event['event_id']
+        signature = (event['orthogroup'],
+                     tuple(sorted(link['gene_id'] for link in linked[eid, 'donor'])),
+                     tuple(sorted(link['gene_id'] for link in linked[eid, 'recipient'])))
+        if signature in signatures:
+            cacheable_events.update((eid, signatures[signature]))
+        else:
+            signatures[signature] = eid
+    del signatures
+
+    # Repeated events may compare the same exact pair. Keep a bounded cache of
+    # immutable evidence templates, never event-specific rows or decisions from
+    # another family. Unique-pair workloads cannot grow this cache without bound.
+    def pair_evidence(family, donor_gene, recipient_gene, result=None):
+        dr, rr = records[family, donor_gene], records[family, recipient_gene]
+        shared = frozenset(dr['pfam'] & rr['pfam'])
+        both_empty = dr['status'] == rr['status'] == 'searched_no_pfam_hit'
+        measured = bool(shared)
+        dc, rc = (query_coverage(family, gene, shared) for gene in (donor_gene, recipient_gene)) if shared else (0, 0)
+        dfrac, rfrac = (dc / dr['length'], rc / rr['length']) if measured else ('', '')
+        coverage_passes = measured and dfrac >= minimum and rfrac >= minimum
+        domain_passes = coverage_passes or (allow_both_no_pfam and both_empty)
+        ratio = min(dr['length'], rr['length']) / max(dr['length'], rr['length']) if dr['length'] and rr['length'] else ''
+        length_passes = ratio != '' and ratio >= minimum_length
+        passed = (not require_shared_pfam or domain_passes) and (not require_length_ratio or length_passes)
+        flags = []
+        if measured and shared <= dr['generic_accessions'] and shared <= rr['generic_accessions']:
+            flags.append('shared_repeat_or_generic_binding_domain_only')
+        if dr['pfam'] and rr['pfam'] and dr['pfam'] != rr['pfam']:
+            flags.append('pfam_domain_sets_differ_architecture_review')
+        if ratio != '' and ratio < .5:
+            flags.append('query_lengths_differ_over2fold')
+        for side, record in (('donor', dr), ('recipient', rr)):
+            if record['short_flag']:
+                flags.append(side + '_' + record['short_flag'])
+        status = ('shared_pfam_detected' if shared else
+                  'annotation_record_unavailable' if 'annotation_record_unavailable' in (dr['status'], rr['status']) else
+                  'both_searched_no_pfam_hit' if both_empty else
+                  'one_searched_no_pfam_hit' if not dr['pfam'] or not rr['pfam'] else
+                  'detected_pfam_sets_disjoint')
+        result = {} if result is None else result
+        result.update(donor_gene_id=donor_gene, recipient_gene_id=recipient_gene,
+                    donor_annotation_status=dr['status'], recipient_annotation_status=rr['status'],
+                    donor_pfam_accessions=dr['accession_text'], recipient_pfam_accessions=rr['accession_text'],
+                    shared_pfam_accessions='; '.join(sorted(shared)), pair_status=status,
+                    passes_pfam_filter=str(passed), passes_pair_filter=str(passed),
+                    passes_shared_pfam_filter=str(domain_passes), passes_length_ratio_filter=str(length_passes),
+                    donor_query_length_aa=dr['length'], recipient_query_length_aa=rr['length'],
+                    donor_shared_pfam_covered_aa=dc if measured else '',
+                    recipient_shared_pfam_covered_aa=rc if measured else '',
+                    donor_shared_pfam_query_coverage=dfrac, recipient_shared_pfam_query_coverage=rfrac,
+                    min_shared_pfam_query_coverage=minimum,
+                    coverage_status='passed' if coverage_passes else 'below_minimum' if measured else
+                    'explicit_bilateral_no_hit_exception' if allow_both_no_pfam and both_empty else 'unmeasured',
+                    pair_attention_flags='; '.join(flags), protein_length_ratio=ratio,
+                    min_protein_length_ratio=minimum_length,
+                    length_ratio_status='passed' if length_passes else 'below_minimum' if ratio != '' else 'unmeasured')
+        return result
+
+    cached_pair_evidence = lru_cache(maxsize=8192)(pair_evidence)
+
     selected, event_audit, pairs, genes = [], [], [], []
     for event in events:
         sides = {side: linked[event["event_id"], side] for side in ("donor", "recipient")}
         comparisons = []
         for donor, recipient in product(sides["donor"], sides["recipient"]):
-            dr, rr = [records[event["orthogroup"], link["gene_id"]] for link in (donor, recipient)]
-            shared = dr["pfam"] & rr["pfam"]
-            both_empty = dr["status"] == rr["status"] == "searched_no_pfam_hit"
-            dc, rc = (covered_aa(record, shared) for record in (dr, rr))
-            measured = bool(shared)
-            dfrac, rfrac = (dc / dr['length'], rc / rr['length']) if measured else ('', '')
-            coverage_passes = measured and dfrac >= minimum and rfrac >= minimum
-            flags = []
-            if measured and all(GENERIC_DOMAIN_NAME.match(name) for record in (dr, rr)
-                                for accession in shared for name in record['names'][accession]):
-                flags.append('shared_repeat_or_generic_binding_domain_only')
-            if dr['pfam'] and rr['pfam'] and dr['pfam'] != rr['pfam']:
-                flags.append('pfam_domain_sets_differ_architecture_review')
-            if dr['length'] and rr['length'] and min(dr['length'], rr['length']) / max(dr['length'], rr['length']) < .5:
-                flags.append('query_lengths_differ_over2fold')
-            for side, record in (('donor', dr), ('recipient', rr)):
-                if gene_flags(record):
-                    flags.append(side + '_' + gene_flags(record))
-            status = ("shared_pfam_detected" if shared else
-                      "annotation_record_unavailable" if "annotation_record_unavailable" in (dr["status"], rr["status"]) else
-                      "both_searched_no_pfam_hit" if both_empty else
-                      "one_searched_no_pfam_hit" if not dr["pfam"] or not rr["pfam"] else
-                      "detected_pfam_sets_disjoint")
             row = {field: event.get(field, "") for field in PAIR_FIELDS[:8]}
             row.update(branch_id=event.get("branch_id", event.get("gene_tree_branch_id", "")),
-                       node_name=event.get("node_name", event.get("gene_tree_node", "")),
-                       donor_gene_id=donor["gene_id"], recipient_gene_id=recipient["gene_id"],
-                       donor_annotation_status=dr["status"], recipient_annotation_status=rr["status"],
-                       donor_pfam_accessions="; ".join(sorted(dr["pfam"])),
-                       recipient_pfam_accessions="; ".join(sorted(rr["pfam"])),
-                       shared_pfam_accessions="; ".join(sorted(shared)), pair_status=status,
-                       passes_pfam_filter=str(coverage_passes or (allow_both_no_pfam and both_empty)),
-                       donor_query_length_aa=dr['length'], recipient_query_length_aa=rr['length'],
-                       donor_shared_pfam_covered_aa=dc if measured else '',
-                       recipient_shared_pfam_covered_aa=rc if measured else '',
-                       donor_shared_pfam_query_coverage=dfrac, recipient_shared_pfam_query_coverage=rfrac,
-                       min_shared_pfam_query_coverage=minimum,
-                       coverage_status='passed' if coverage_passes else 'below_minimum' if measured else
-                       'explicit_bilateral_no_hit_exception' if allow_both_no_pfam and both_empty else 'unmeasured',
-                       pair_attention_flags='; '.join(flags))
+                       node_name=event.get("node_name", event.get("gene_tree_node", "")))
+            if event['event_id'] in cacheable_events:
+                row.update(cached_pair_evidence(event['orthogroup'], donor['gene_id'], recipient['gene_id']))
+            else:
+                pair_evidence(event['orthogroup'], donor['gene_id'], recipient['gene_id'], row)
             pairs.append(row)
             comparisons.append(row)
         passing = [row for row in comparisons if row["passes_pfam_filter"] == "True"]
@@ -245,7 +307,9 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
         best = max(candidates, key=lambda row: min(row['donor_shared_pfam_query_coverage'],
                    row['recipient_shared_pfam_query_coverage']) if row['shared_pfam_accessions'] else -1) if candidates else {}
         reason = ("no_bilateral_scaffold_supported_gene_pair" if not comparisons else
-                  "shared_pfam_below_minimum_query_coverage" if shared_pairs and not passing else
+                  "protein_length_ratio_below_minimum_or_unmeasured" if not passing and require_length_ratio and
+                  any(not require_shared_pfam or row['passes_shared_pfam_filter'] == 'True' for row in comparisons) else
+                  "shared_pfam_below_minimum_query_coverage" if require_shared_pfam and shared_pairs and not passing else
                   "no_qualifying_pfam_pair" if not passing else "")
         annotated = dict(event, pfam_filter_status="passed" if passing else "withheld", pfam_filter_reason=reason,
                          pfam_compared_pair_count=len(comparisons), pfam_passing_pair_count=len(passing),
@@ -259,7 +323,12 @@ exception with unmeasured coverage, never a fabricated coverage of zero or one.
                          pfam_best_pair_donor_gene=best.get('donor_gene_id', ''),
                          pfam_best_pair_recipient_gene=best.get('recipient_gene_id', ''),
                          pfam_best_pair_donor_query_coverage=best.get('donor_shared_pfam_query_coverage', ''),
-                         pfam_best_pair_recipient_query_coverage=best.get('recipient_shared_pfam_query_coverage', ''))
+                         pfam_best_pair_recipient_query_coverage=best.get('recipient_shared_pfam_query_coverage', ''),
+                         pfam_filter_enabled=str(require_shared_pfam), length_ratio_filter_enabled=str(require_length_ratio),
+                         minimum_protein_length_ratio=minimum_length,
+                         pfam_coverage_passing_pair_count=sum(row['coverage_status'] == 'passed' for row in comparisons),
+                         length_ratio_passing_pair_count=sum(row['passes_length_ratio_filter'] == 'True' for row in comparisons),
+                         pfam_best_pair_protein_length_ratio=best.get('protein_length_ratio', ''))
         event_audit.append(annotated)
         if passing:
             selected.append(annotated)

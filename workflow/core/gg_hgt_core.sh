@@ -33,6 +33,8 @@ hgt_focus_context_annotations_tsv="${hgt_focus_context_annotations_tsv:-}"
 hgt_focus_require_shared_pfam="${hgt_focus_require_shared_pfam:-1}"
 hgt_focus_allow_both_no_pfam="${hgt_focus_allow_both_no_pfam:-0}"
 hgt_focus_min_shared_pfam_coverage="${hgt_focus_min_shared_pfam_coverage:-0.5}"
+hgt_focus_require_length_ratio="${hgt_focus_require_length_ratio:-1}"
+hgt_focus_min_length_ratio="${hgt_focus_min_length_ratio:-0.5}"
 hgt_focus_direction_filter="${hgt_focus_direction_filter:-any}"
 hgt_focus_species_taxonomy="${hgt_focus_species_taxonomy:-auto}"
 case "${hgt_focus_direction_filter}" in
@@ -84,16 +86,18 @@ if [[ "${hgt_use_taxonomy_db}" != "0" && "${hgt_use_taxonomy_db}" != "1" ]]; the
   echo "Invalid binary flag value: hgt_use_taxonomy_db=${hgt_use_taxonomy_db} (expected 0 or 1)"
   exit 1
 fi
-for hgt_focus_flag in hgt_focus_require_shared_pfam hgt_focus_allow_both_no_pfam; do
+for hgt_focus_flag in hgt_focus_require_shared_pfam hgt_focus_allow_both_no_pfam hgt_focus_require_length_ratio; do
   if [[ "${!hgt_focus_flag}" != "0" && "${!hgt_focus_flag}" != "1" ]]; then
     echo "Invalid binary flag value: ${hgt_focus_flag}=${!hgt_focus_flag} (expected 0 or 1)" >&2
     exit 1
   fi
 done
-if ! python -c 'import math, sys; c = float(sys.argv[1]); sys.exit(not (math.isfinite(c) and 0 <= c <= 1))' "${hgt_focus_min_shared_pfam_coverage}"; then
-  echo "Invalid hgt_focus_min_shared_pfam_coverage: ${hgt_focus_min_shared_pfam_coverage} (expected a finite fraction from 0 to 1)" >&2
-  exit 1
-fi
+for hgt_focus_fraction in hgt_focus_min_shared_pfam_coverage hgt_focus_min_length_ratio; do
+  if ! python -c 'import math, sys; c = float(sys.argv[1]); sys.exit(not (math.isfinite(c) and 0 <= c <= 1))' "${!hgt_focus_fraction}"; then
+    echo "Invalid ${hgt_focus_fraction}: ${!hgt_focus_fraction} (expected a finite fraction from 0 to 1)" >&2
+    exit 1
+  fi
+done
 if ! [[ "${hgt_taxonomy_flow_max_categories}" =~ ^[0-9]+$ ]]; then
   echo "Invalid hgt_taxonomy_flow_max_categories: ${hgt_taxonomy_flow_max_categories}"
   exit 1
@@ -570,6 +574,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --input "species_trait=${hgt_species_trait_path}"
       --input "focus_helper=${gg_support_dir}/focus_hgt_traits.py"
       --input "direction_helper=${gg_support_dir}/focus_hgt_direction.py"
+      --input "origin_review_helper=${gg_support_dir}/focus_hgt_origin.py"
       --input "pfam_filter=${gg_support_dir}/focus_hgt_pfam.py"
       --input "pfam_background_profile=${gg_support_dir}/focus_hgt_gene_trees.py"
       --input "family_store=${gg_support_dir}/gene_family_output_store.py"
@@ -584,12 +589,18 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --parameter "require_shared_pfam=${hgt_focus_require_shared_pfam}"
       --parameter "allow_both_no_pfam=${hgt_focus_allow_both_no_pfam}"
       --parameter "min_shared_pfam_coverage=${hgt_focus_min_shared_pfam_coverage}"
+      --parameter "require_length_ratio=${hgt_focus_require_length_ratio}"
+      --parameter "min_length_ratio=${hgt_focus_min_length_ratio}"
       --parameter "direction_filter=${hgt_focus_direction_filter}"
     )
     if [[ "${hgt_focus_direction_filter}" != "any" ]]; then
       hgt_focus_provenance_args+=(--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}")
+    else
+      gg_artifact_add_input_if_present hgt_focus_provenance_args "origin_species_taxonomy" "${hgt_focus_taxonomy_path}"
     fi
-    if [[ ${hgt_focus_require_shared_pfam} -eq 1 ]]; then
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"
+    if [[ ${hgt_focus_require_shared_pfam} -eq 1 || ${hgt_focus_require_length_ratio} -eq 1 ]]; then
       hgt_focus_provenance_args+=(
         --input-gene-family-subdir "pfam_query_hits=${dir_orthogroup}::rpsblast"
       )
@@ -610,8 +621,6 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         hgt_focus_provenance_args+=(--input-gene-family-subdir "focus_${hgt_focus_subdir}=${dir_orthogroup}::${hgt_focus_subdir}")
       done
       gg_artifact_add_input_if_present hgt_focus_provenance_args "gff_coordinates" "${gg_workspace_output_dir}/species_gff_info"
-      gg_artifact_add_input_if_present hgt_focus_provenance_args "context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"
-      gg_artifact_add_input_if_present hgt_focus_provenance_args "context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"
       gg_artifact_add_input_if_present hgt_focus_provenance_args "context_query_lineage_database" "${hgt_taxonomy_db_candidate}"
       if [[ -n "${hgt_focus_context_annotations_tsv}" ]]; then
         hgt_focus_provenance_args+=(--input "context_annotations=${hgt_focus_context_annotations_tsv}")
@@ -622,6 +631,8 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
     gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_metadata" "${hgt_species_trait_path}.metadata.json"
     gg_artifact_prepare_stage hgt_focus_needs_update run_hgt_focus "${hgt_focus_provenance_args[@]}" || exit $?
     if [[ ${hgt_focus_needs_update} -eq 1 ]]; then
+      hgt_focus_existing_taxonomy="${hgt_focus_taxonomy_path}"
+      [[ -f "${hgt_focus_existing_taxonomy}" ]] || hgt_focus_existing_taxonomy=""
       python "${gg_support_dir}/focus_hgt_traits.py" \
         --event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}" \
         --species_tree "${hgt_species_tree_path}" --species_trait "${hgt_species_trait_path}" \
@@ -636,8 +647,10 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --require_shared_pfam "${hgt_focus_require_shared_pfam}" \
         --allow_both_no_pfam "${hgt_focus_allow_both_no_pfam}" \
         --min_shared_pfam_coverage "${hgt_focus_min_shared_pfam_coverage}" \
+        --require_length_ratio "${hgt_focus_require_length_ratio}" \
+        --min_length_ratio "${hgt_focus_min_length_ratio}" \
         --direction_filter "${hgt_focus_direction_filter}" \
-        --species_taxonomy "${hgt_focus_taxonomy_path}" \
+        --species_taxonomy "${hgt_focus_existing_taxonomy}" \
         --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
       gg_artifact_record "${hgt_focus_provenance_args[@]}"
     fi

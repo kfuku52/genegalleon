@@ -4,7 +4,9 @@
 import argparse
 import csv
 import hashlib
+import inspect
 import json
+import math
 import os
 import platform
 import resource
@@ -84,8 +86,16 @@ def worker(args):
         events, links = fixture(args.worker, args.families, args.events_per_family)
         root = args.worker
     inputs = fingerprint((events, links))
+    parameters = set(inspect.signature(filter_events).parameters)
+    length_parameters = {'require_length_ratio', 'min_length_ratio'}
+    options = dict(allow_both_no_pfam=False, min_shared_pfam_coverage=0.5)
+    if length_parameters <= parameters:
+        options.update(require_length_ratio=args.require_length_ratio, min_length_ratio=args.min_length_ratio)
+    elif length_parameters & parameters or args.require_length_ratio:
+        raise ValueError('Selected support root does not support the requested protein length ratio filter; '
+                         'for an older implementation, specify --require-length-ratio 0')
     started = time.perf_counter()
-    selected, audit, pairs, genes, sources = filter_events(events, links, root)
+    selected, audit, pairs, genes, sources = filter_events(events, links, root, **options)
     seconds = time.perf_counter() - started
     assert fingerprint((events, links)) == inputs, 'Benchmark input records were mutated'
     print(json.dumps(dict(seconds=seconds, peak_rss_kib_linux=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
@@ -100,6 +110,10 @@ def main():
     parser.add_argument('--support-root', type=Path, default=Path(__file__).resolve().parents[1]/'support')
     parser.add_argument('--families', type=int, default=2048)
     parser.add_argument('--events-per-family', type=int, default=4)
+    parser.add_argument('--require-length-ratio', type=int, choices=(0, 1), default=1,
+                        help='Require the shorter/longer protein length ratio; use 0 for pre-filter comparisons')
+    parser.add_argument('--min-length-ratio', type=float, default=0.5,
+                        help='Inclusive minimum shorter/longer protein length ratio (default: 0.5)')
     parser.add_argument('--events', type=Path, help='Existing event TSV; saved Pfam decision columns are removed')
     parser.add_argument('--links', type=Path)
     parser.add_argument('--family-root', type=Path)
@@ -109,6 +123,8 @@ def main():
     args.support_root = args.support_root.resolve()
     if not 1 <= args.families <= 8192 or not 1 <= args.events_per_family <= 16:
         parser.error('Use 1..8192 families and 1..16 events per family')
+    if not math.isfinite(args.min_length_ratio) or not 0 <= args.min_length_ratio <= 1:
+        parser.error('--min-length-ratio must be a finite fraction from 0 to 1')
     if any((args.events, args.links, args.family_root)) and not all((args.events, args.links, args.family_root)):
         parser.error('--events, --links and --family-root must be supplied together')
     if args.worker:
@@ -120,7 +136,9 @@ def main():
                    command=[sys.executable, *sys.argv],
                    workload='existing_saved_results' if args.events else 'synthetic_multiple_families',
                    configuration=dict(families=args.families, events_per_family=args.events_per_family,
-                                      min_shared_pfam_coverage=0.5, allow_both_no_pfam=False),
+                                      min_shared_pfam_coverage=0.5, allow_both_no_pfam=False,
+                                      require_length_ratio=bool(args.require_length_ratio),
+                                      min_length_ratio=args.min_length_ratio),
                    inputs={name: str(path.resolve()) for name, path in
                            [('events', args.events), ('links', args.links), ('family_root', args.family_root)] if path},
                    samples=[])
@@ -131,7 +149,9 @@ def main():
             root.mkdir()
             command = [sys.executable, str(Path(__file__).resolve()), '--worker', str(root),
                        '--support-root', str(args.support_root), '--families', str(args.families),
-                       '--events-per-family', str(args.events_per_family)]
+                       '--events-per-family', str(args.events_per_family),
+                       '--require-length-ratio', str(args.require_length_ratio),
+                       '--min-length-ratio', str(args.min_length_ratio)]
             if args.events:
                 command += ['--events', str(args.events.resolve()), '--links', str(args.links.resolve()),
                             '--family-root', str(args.family_root.resolve())]

@@ -214,11 +214,19 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
                 context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
                 mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='any', species_taxonomy='', taxonomy_dbfile='',
-                min_shared_pfam_coverage=0.5):
-    from focus_hgt_pfam import binary_option, validate_link_identity, validate_shared_pfam_coverage
+                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5):
+    from focus_hgt_pfam import (
+        binary_option,
+        validate_length_ratio,
+        validate_link_identity,
+        validate_shared_pfam_coverage,
+    )
     require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
+    require_length_ratio = binary_option(require_length_ratio, 'require_length_ratio')
     allow_both_no_pfam = binary_option(allow_both_no_pfam, 'allow_both_no_pfam')
     min_shared_pfam_coverage = validate_shared_pfam_coverage(min_shared_pfam_coverage)
+    min_length_ratio = validate_length_ratio(min_length_ratio)
+    pair_filter_enabled = require_shared_pfam or require_length_ratio
     from focus_hgt_direction import DIRECTION_CHOICES
     from focus_hgt_direction import EVENT_FIELDS as DIRECTION_FIELDS
     if direction_filter not in DIRECTION_CHOICES:
@@ -259,28 +267,55 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         raise ValueError("Reserved focus columns already exist in event input")
     if set(DIRECTION_FIELDS) & set(fields):
         raise ValueError('Reserved direction filter columns already exist in event input')
+    from focus_hgt_origin import EVENT_FIELDS as ORIGIN_EVENT_FIELDS
+    from focus_hgt_origin import GENE_FIELDS as ORIGIN_GENE_FIELDS
+    from focus_hgt_origin import PAIR_FIELDS as ORIGIN_PAIR_FIELDS
+    from focus_hgt_origin import OriginEvidence, annotate_origin
+    if set(ORIGIN_EVENT_FIELDS) & set(fields):
+        raise ValueError('Reserved origin review columns already exist in event input')
     cohort, output_fields, pfam_report = events, fields, {}
-    if require_shared_pfam:
+    origin_evidence = OriginEvidence(links, mmseqs2_taxonomy_dir, scaffold_taxonomy_dir, species_taxonomy)
+    pairs, genes = [], []
+    if pair_filter_enabled:
         from focus_hgt_pfam import EVENT_FIELDS, GENE_FIELDS, PAIR_FIELDS, filter_events
         if set(EVENT_FIELDS) & set(fields):
             raise ValueError("Reserved Pfam filter columns already exist in event input")
-        # Trait-independent Pfam filtering is evaluated ONCE over the supplied cohort.
+        # Trait-independent pair filtering is evaluated ONCE over the supplied cohort.
         # Every trait then selects category-1 recipients from this same set.
         cohort, domain_events, pairs, genes, sources = filter_events(
             events, links, gene_family_root, allow_both_no_pfam=allow_both_no_pfam,
-            min_shared_pfam_coverage=min_shared_pfam_coverage)
-        output_fields = fields + EVENT_FIELDS
+            min_shared_pfam_coverage=min_shared_pfam_coverage,
+            require_shared_pfam=require_shared_pfam, require_length_ratio=require_length_ratio,
+            min_length_ratio=min_length_ratio)
+        domain_events, pairs, genes, origin_report = annotate_origin(
+            domain_events, pairs, genes, nodes, links=links, mmseqs2_taxonomy_dir=mmseqs2_taxonomy_dir,
+            scaffold_taxonomy_dir=scaffold_taxonomy_dir, species_taxonomy=species_taxonomy, evidence=origin_evidence)
+        output_fields = fields + EVENT_FIELDS + ORIGIN_EVENT_FIELDS
+        pair_fields, gene_fields = PAIR_FIELDS + ORIGIN_PAIR_FIELDS, GENE_FIELDS + ORIGIN_GENE_FIELDS
         write_tsv(stage / 'pfam_events.tsv', output_fields, cohort)
         write_tsv(stage / 'pfam_event_audit.tsv', output_fields, domain_events)
-        write_tsv(stage / 'pfam_pair_audit.tsv', PAIR_FIELDS, pairs)
-        write_tsv(stage / 'pfam_gene_audit.tsv', GENE_FIELDS, genes)
+        write_tsv(stage / 'pfam_pair_audit.tsv', pair_fields, pairs)
+        write_tsv(stage / 'pfam_gene_audit.tsv', gene_fields, genes)
         pfam_report = dict(input_event_count=len(events), passed_event_count=len(cohort),
                            passed_orthogroup_count=len({r['orthogroup'] for r in cohort}),
                            compared_pair_count=len(pairs), source_sha256=sources,
                            min_shared_pfam_coverage=min_shared_pfam_coverage,
+                           require_shared_pfam=require_shared_pfam, require_length_ratio=require_length_ratio,
+                           min_length_ratio=min_length_ratio,
+                           length_ratio_definition='shorter_query_protein_length_aa_divided_by_longer_query_protein_length_aa_on_same_pair',
                            coverage_definition='union_shared_query_domain_intervals_aa_divided_by_query_length_aa_on_both_genes_of_same_pair',
                            attention_flags_are_exclusion_criteria=False,
                            scope='shared_input_cohort_before_trait_selection')
+        origin_events = domain_events
+    else:
+        cohort, _, _, origin_report = annotate_origin(
+            cohort, pairs, genes, nodes, links=links, mmseqs2_taxonomy_dir=mmseqs2_taxonomy_dir,
+            scaffold_taxonomy_dir=scaffold_taxonomy_dir, species_taxonomy=species_taxonomy, evidence=origin_evidence)
+        output_fields = fields + ORIGIN_EVENT_FIELDS
+        origin_events = cohort
+    write_tsv(stage / 'origin_event_audit.tsv', fields + (EVENT_FIELDS if pair_filter_enabled else []) + ORIGIN_EVENT_FIELDS,
+              origin_events)
+    audit_fields = output_fields
     pfam_cohort = cohort
     direction_report = {}
     if direction_filter != 'any':
@@ -337,19 +372,19 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 continue
             withheld.append(dict(event_id=event["event_id"], reason=reason))
         write_tsv(root / "events_not_focused.tsv", ["event_id", "reason"], withheld)
-        if require_shared_pfam:
+        if pair_filter_enabled:
             # Keep the existing per-trait audit paths as a view of global
             # decisions, including failed events whose recipients have trait=1.
             trait_ids = {r['event_id'] for r in domain_events
                          if key(r['generax_recipient_node']) in selected_nodes}
-            write_tsv(root / 'pfam_event_audit.tsv', fields + EVENT_FIELDS + FOCUS_FIELDS,
+            write_tsv(root / 'pfam_event_audit.tsv', audit_fields + FOCUS_FIELDS,
                       [dict(r, focus_trait=trait, focus_category='1', focus_ancestral_state_inferred='0',
                             focus_recipient_basis='observed_tip_category1'
                             if key(r['generax_recipient_node']) in terminals
                             else 'all_descendant_tips_category1_no_ancestral_reconstruction')
                        for r in domain_events if r['event_id'] in trait_ids])
-            write_tsv(root / 'pfam_pair_audit.tsv', PAIR_FIELDS, [r for r in pairs if r['event_id'] in trait_ids])
-            write_tsv(root / 'pfam_gene_audit.tsv', GENE_FIELDS, [r for r in genes if r['event_id'] in trait_ids])
+            write_tsv(root / 'pfam_pair_audit.tsv', pair_fields, [r for r in pairs if r['event_id'] in trait_ids])
+            write_tsv(root / 'pfam_gene_audit.tsv', gene_fields, [r for r in genes if r['event_id'] in trait_ids])
             pfam_reports[trait] = dict(pfam_report, category1_input_event_count=len(trait_ids),
                                       category1_passed_event_count=sum(r['event_id'] in trait_ids for r in pfam_cohort))
         if direction_filter != 'any':
@@ -381,7 +416,12 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                                             [r for r in links if r['event_id'] in ids], tree, values,
                                             gene_family_root, trait, filter_audit=filter_audit,
                                             context_annotations=context_annotations,
-                                            pfam_selected=pfam_cohort if require_shared_pfam else None,
+                                            pfam_selected=pfam_cohort if pair_filter_enabled else None,
+                                            pair_filter_label=('Event-pair ' + ' & '.join(
+                                                ([f'Pfam >={100 * min_shared_pfam_coverage:g}% each query']
+                                                 if require_shared_pfam else []) +
+                                                ([f'length ratio >={min_length_ratio:g}'] if require_length_ratio else [])))
+                                            if pair_filter_enabled else None,
                                             direction_selected=cohort if direction_filter != 'any' else None,
                                             analyzed_orthogroups=analyzed if not inventory_missing else None)
             figures[trait]['analysis_inventory_missing_event_families'] = inventory_missing
@@ -408,17 +448,22 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "UFBoot is gene-tree branch support, not an HGT probability.\n"
         f"Require shared Pfam in a bilateral scaffold-supported event-gene pair: {require_shared_pfam}.\n"
         f"Minimum shared-Pfam query coverage on both genes of the same pair: {min_shared_pfam_coverage:g} (inclusive fraction).\n"
+        f"Require protein length ratio in that same exact pair: {require_length_ratio}; minimum {min_length_ratio:g} (inclusive).\n"
+        "Protein length ratio is shorter query length / longer query length in amino acids. Missing or nonpositive lengths cannot pass an enabled length rule.\n"
+        "The length rule is enabled by default and works independently of the Pfam requirement. Disable only require_length_ratio to reproduce the preceding Pfam cohort; disable both requirements for the scaffold-only cohort.\n"
         "Coverage is the union of saved query-domain intervals / protein length in amino acids, not pairwise alignment coverage.\n"
         "Overlapping intervals count once. No new Pfam E-value threshold is applied to saved hits.\n"
-        "Repeat/generic-binding-only, differing domain sets, >2-fold query length differences and proteins <100 aa receive review flags only.\n"
+        "Repeat/generic-binding-only matches, differing domain sets and proteins <100 aa receive review flags only; the configured length-ratio rule separately controls pair eligibility.\n"
         "Differing domain sets do not establish incorrect architecture; a short protein does not establish a partial gene model.\n"
         f"Allow both genes searched with no Pfam hits: {allow_both_no_pfam if require_shared_pfam else False}.\n"
-        "The explicit bilateral no-hit opt-in is a coverage exception; its coverage stays unmeasured.\n"
+        "The explicit bilateral no-hit opt-in is a coverage exception; its coverage stays unmeasured and it still requires measured lengths when the length rule is enabled.\n"
         "Pfam uses saved query RPS-BLAST accessions, never best-hit or neighbor annotations. Missing records cannot pass the no-hit exception.\n"
-        "Pfam is applied once to the shared input cohort, followed by the optional species-branch direction filter, then category-1 trait selection.\n"
+        "Enabled Pfam/length requirements are applied together to each exact pair once over the shared input cohort, followed by the optional species-branch direction filter, then category-1 trait selection.\n"
         f"Species-branch direction filter: {direction_filter}.\n"
         "non_arthropoda_to_insecta requires all donor descendant tips outside Arthropoda and all recipient tips within Insecta.\n"
         "Direction uses the analysis species tree and host-species taxonomy, never query MMseqs2 or best-hit proxies. Mixed, unknown and unmapped branches stay withheld.\n"
+        "origin_event_audit.tsv and the pair/gene audits flag focal donor/recipient classification mismatch or unresolved evidence, and ancestor-donor ambiguity. These review flags do not remove events.\n"
+        "Origin review compares the exact focal MMseqs2 query with host taxonomy; class-only and kingdom/domain mismatches remain distinct. Missing or higher-rank LCA evidence never counts as class agreement.\n"
         "Root direction event/branch audits retain classifications, excluded events and withholding reasons after Pfam.\n"
         "Root pfam_events.tsv and event/pair/gene audits preserve the shared decisions; per-trait audits are views of those decisions.\n"
         "Binary traits, categorical category 1, and schema-free observed 0/1 traits are selected automatically.\n"
@@ -436,14 +481,23 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "No additional UFB threshold is applied to the supplied cohort; missing support stays NA.\n"
         "See tree_plot/event_node_audit.tsv for every selected/withheld event and tree_plot/README.txt for the evidence profile.\n"
         "Scaffold background and shared-neighbor synteny are distinct evidence. Neither proves physical integration.\n")
+    # Verify focal sources after all traits and renderers have finished, so an
+    # early origin assessment cannot outlive its source snapshot unnoticed.
+    origin_report.update(origin_evidence.finalize_report())
     return dict(schema_version=VERSION, source_event_count=len(events), trait_contract=audit,
                 trait_selection=reports, result_index=index, plots=plots, transfer_arrow_alpha=arrow_alpha,
                 plot_scope="trait_aggregate_only", gene_tree_plots=gene_trees, summary_figures=figures,
                 require_shared_pfam=require_shared_pfam, allow_both_no_pfam=allow_both_no_pfam,
                 min_shared_pfam_coverage=min_shared_pfam_coverage,
+                require_length_ratio=require_length_ratio, min_length_ratio=min_length_ratio,
+                pair_filter_enabled=pair_filter_enabled, pair_filter=pfam_report,
+                origin_review=origin_report,
+                pair_filter_criteria=(['shared_query_pfam_coverage'] if require_shared_pfam else [])
+                + (['protein_length_ratio'] if require_length_ratio else []),
                 pfam_filter=pfam_reports, shared_pfam_filter=pfam_report,
                 direction_filter=direction_filter, shared_direction_filter=direction_report,
-                filtering_order=['input_cohort'] + (['pfam_pair_filter'] if require_shared_pfam else [])
+                filtering_order=['input_cohort'] + (['pfam_pair_filter'] if require_shared_pfam
+                                                    else ['protein_length_pair_filter'] if require_length_ratio else [])
                 + (['species_branch_direction_filter'] if direction_filter != 'any' else []) + ['trait_category1'])
 
 
@@ -451,16 +505,19 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
              arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
              context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
              mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='any', species_taxonomy='', taxonomy_dbfile='',
-             min_shared_pfam_coverage=0.5):
-    from focus_hgt_pfam import binary_option, validate_shared_pfam_coverage
+             min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5):
+    from focus_hgt_pfam import binary_option, validate_length_ratio, validate_shared_pfam_coverage
     require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
+    require_length_ratio = binary_option(require_length_ratio, 'require_length_ratio')
     allow_both_no_pfam = binary_option(allow_both_no_pfam, 'allow_both_no_pfam')
     min_shared_pfam_coverage = validate_shared_pfam_coverage(min_shared_pfam_coverage)
+    min_length_ratio = validate_length_ratio(min_length_ratio)
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
     if direction_filter != 'any':
         if not species_taxonomy:
             raise ValueError('Focused direction filtering requires existing species taxonomy')
+    if species_taxonomy:
         inputs.append(Path(species_taxonomy).resolve())
     if filter_audit and plots:
         inputs.append(Path(filter_audit).resolve())
@@ -474,7 +531,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
             inputs.append(sidecar.resolve())
     helper_root = Path(__file__).resolve().parent
     code = [helper_root / name for name in ("focus_hgt_traits.py", "plot_hgt_summary.py", "hgt_species_tree.py",
-                                            "species_trait_contract.py", "species_trait_schema.py", "focus_hgt_direction.py", "focus_hgt_pfam.py",
+                                            "species_trait_contract.py", "species_trait_schema.py", "focus_hgt_direction.py", "focus_hgt_pfam.py", "focus_hgt_origin.py",
                                             "focus_hgt_gene_trees.py", "gene_family_output_store.py")]
     if gene_family_root and plots:
         code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r',
@@ -503,6 +560,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                context_annotations=context_annotations, require_shared_pfam=require_shared_pfam,
                                allow_both_no_pfam=allow_both_no_pfam, mmseqs2_taxonomy_dir=mmseqs2_taxonomy_dir,
                                min_shared_pfam_coverage=min_shared_pfam_coverage,
+                               require_length_ratio=require_length_ratio, min_length_ratio=min_length_ratio,
                                scaffold_taxonomy_dir=scaffold_taxonomy_dir, direction_filter=direction_filter,
                                species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile)
         if any(digest(path) != before[str(path)] for path in inputs):
@@ -546,20 +604,24 @@ def main():
     parser.add_argument('--gff_info_root', default='', help='Existing per-species gff_info TSVs for context-page structures')
     parser.add_argument('--context_annotations_tsv', default='',
                         help='Existing per-gene product and best-hit taxonomy annotations for context pages')
-    parser.add_argument('--mmseqs2_taxonomy_dir', default='', help='Existing per-species raw MMseqs2 query classifications for context pages')
-    parser.add_argument('--scaffold_taxonomy_dir', default='', help='Existing per-gene host rank compatibility labels for context pages')
+    parser.add_argument('--mmseqs2_taxonomy_dir', default='', help='Existing raw MMseqs2 focal classifications for origin review and context pages')
+    parser.add_argument('--scaffold_taxonomy_dir', default='', help='Existing per-gene host rank labels for origin review and context pages')
     parser.add_argument('--taxonomy_dbfile', default='', help='Existing read-only ETE taxonomy database for MMseqs2 kingdom-to-genus names')
     parser.add_argument('--filter_audit_tsv', default='', help='Optional project event-level direction/support filtering audit (TSV or TSV.gz)')
     parser.add_argument('--require_shared_pfam', choices=('0', '1'), default='1',
                         help='Require a shared query Pfam in at least one bilateral scaffold-supported event-gene pair (default: 1)')
     parser.add_argument('--allow_both_no_pfam', choices=('0', '1'), default='0',
                         help='Allow a pair when both genes have explicit searched-no-hit records (default: 0; missing records never pass)')
-    from focus_hgt_pfam import validate_shared_pfam_coverage
+    from focus_hgt_pfam import validate_length_ratio, validate_shared_pfam_coverage
     parser.add_argument('--min_shared_pfam_coverage', type=validate_shared_pfam_coverage, default=0.5,
                         help='Inclusive shared-domain query coverage required on BOTH proteins of the same pair (fraction 0..1; default: 0.5; 0 restores any shared Pfam)')
+    parser.add_argument('--require_length_ratio', choices=('0', '1'), default='1',
+                        help='Require measured protein lengths with an inclusive shorter/longer ratio in the same bilateral event-gene pair (default: 1; independent of Pfam)')
+    parser.add_argument('--min_length_ratio', type=validate_length_ratio, default=0.5,
+                        help='Inclusive shorter/longer protein length ratio for the same pair (fraction 0..1; default: 0.5)')
     parser.add_argument('--direction_filter', choices=('any', 'non_arthropoda_to_insecta'), default='any',
                         help='Optional host-species branch direction filter, applied after Pfam and before trait selection')
-    parser.add_argument('--species_taxonomy', default='', help='Existing species_taxonomy.tsv for the direction filter')
+    parser.add_argument('--species_taxonomy', default='', help='Existing species_taxonomy.tsv for direction filtering and focal origin review')
     parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
                         default=DEFAULT_TRANSFER_ARROW_ALPHA)
     args = parser.parse_args()
@@ -569,6 +631,7 @@ def main():
                         context_annotations=args.context_annotations_tsv, require_shared_pfam=args.require_shared_pfam == '1',
                         allow_both_no_pfam=args.allow_both_no_pfam == '1', mmseqs2_taxonomy_dir=args.mmseqs2_taxonomy_dir,
                         min_shared_pfam_coverage=args.min_shared_pfam_coverage,
+                        require_length_ratio=args.require_length_ratio == '1', min_length_ratio=args.min_length_ratio,
                         scaffold_taxonomy_dir=args.scaffold_taxonomy_dir, taxonomy_dbfile=args.taxonomy_dbfile, direction_filter=args.direction_filter,
                         species_taxonomy=args.species_taxonomy)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],

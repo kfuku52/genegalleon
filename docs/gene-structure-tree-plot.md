@@ -158,8 +158,9 @@ explicit. Overlapping and intron-hosting genes are included in the bounded
 neighborhood. See [context inputs and provenance](host-scaffold-taxonomy.md).
 
 Focused category-1 HGT tables and plots now require at least one donor/recipient
-gene pair sharing an exact query Pfam accession and at least 50% shared-domain
-query coverage on each protein by default. Both genes must be retained
+gene pair sharing an exact query Pfam accession, at least 50% shared-domain
+query coverage on each protein, and a shorter/longer protein length ratio of
+at least 0.5 by default. Both genes must be retained
 descendants linked to the same modeled event and individually satisfy the
 existing class-level scaffold-background thresholds. One qualifying pair
 retains the event; other eligible descendants remain in its context tables.
@@ -172,9 +173,10 @@ own protein length. Overlaps count once. Coverage is not pairwise alignment
 coverage; separate pairs cannot supply separate sides of a passing decision.
 Event/pair audits retain both lengths, covered amino acids, coverage and a
 traceable best pair. Review flags identify repeat/generic-binding-only matches,
-differing domain sets, >2-fold length differences and proteins shorter than
-100 aa. These are attention flags, not exclusions or proof of a partial gene
-model. Domain-set differences alone do not establish incompatible architecture.
+differing domain sets and proteins shorter than 100 aa. These flags are not
+exclusions or proof of a partial gene model. The enabled protein-length-ratio
+criterion independently excludes pairs below its threshold. Domain-set
+differences alone do not establish incompatible architecture.
 For a passing event, the recorded best pair is selected from its passing pairs;
 a bilateral no-hit exception retains both gene IDs with unmeasured coverage.
 
@@ -185,17 +187,26 @@ equivalence, or run additional sequence searches. Exact Pfam sharing is an
 additional candidate criterion, not proof of HGT or complete sequence quality.
 
 In `gg_gene_summary`, `hgt_summary_focus_require_shared_pfam=1` enables the
-filter by default; set it to `0` to reproduce the earlier scaffold-only cohort.
+Pfam requirement by default. Independently,
+`hgt_summary_focus_require_length_ratio=1` requires positive measured lengths
+and `hgt_summary_focus_min_length_ratio=0.5` sets the inclusive shorter/longer
+ratio. Both enabled rules must pass for the same exact pair. Query-protein
+lengths are measured in amino acids; family statistics, best-hit lengths and
+alignment lengths are not substitutes. Missing lengths do not pass an enabled
+length rule. Disable only the length rule to reproduce the preceding Pfam-only
+cohort, or disable both requirements for the earlier scaffold-only cohort.
 `hgt_summary_focus_allow_both_no_pfam=0` excludes pairs without a shared hit.
 Setting this option to `1` additionally allows pairs where **both genes have
 explicit searched-no-hit rows**. A no-hit on only one side, disjoint detected
 domains, and missing search/query records still fail. These correspond to
 `focus_hgt_traits.py --require_shared_pfam 1 --allow_both_no_pfam 0`.
 The bilateral no-hit opt-in is an explicit exception to domain coverage;
-coverage stays unmeasured. Saved hits receive no additional E-value cutoff.
+coverage stays unmeasured, and the enabled length rule still applies. Saved
+hits receive no additional E-value cutoff.
 
-The Pfam step evaluates the shared input cohort once; the combined taxonomy/trait step selects each
-trait's category-1 recipients from that same Pfam-passing set. The bundle root
+The exact-pair step evaluates the shared input cohort once; the combined taxonomy/trait step selects each
+trait's category-1 recipients from that same passing set. Existing Pfam-named audit
+files retain their paths when only the length rule is enabled. The bundle root
 contains `pfam_events.tsv` and `pfam_event_audit.tsv`, `pfam_pair_audit.tsv` and
 `pfam_gene_audit.tsv`, recording all input events before trait selection, exact
 gene pairs, rejection reasons, detected accessions and source hashes.

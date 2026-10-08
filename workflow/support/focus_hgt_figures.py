@@ -4,6 +4,7 @@ import csv
 import gzip
 import io
 import math
+import textwrap
 from collections import Counter
 
 import numpy as np
@@ -169,8 +170,8 @@ def product_labels(families, links):
 
 def export_filtering_flow(directory, source_events, selected, trait, filter_audit='',
                           prefilter_selected=None, pfam_selected=None, direction_selected=None,
-                          support_filter_enabled=False, analyzed_orthogroups=None):
-    """Render shared Pfam followed by one combined taxonomy/trait stage."""
+                          support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None):
+    """Render the exact-pair criteria followed by one combined taxonomy/trait stage."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -190,10 +191,12 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
                        if r.get('pfam_min_shared_query_coverage') not in (None, '')}
     if len(coverage_values) > 1:
         raise ValueError('Mixed shared-Pfam coverage thresholds in filtering cohort')
-    if coverage_values:
-        minimum = coverage_values.pop()
-        for row in counts:
-            if row['stage'] == 'Event-gene pair Pfam filter':
+    for row in counts:
+        if row['stage'] == 'Event-gene pair Pfam filter':
+            if pair_filter_label is not None:
+                row['stage'] = pair_filter_label
+            elif coverage_values:
+                minimum = next(iter(coverage_values))
                 row['stage'] = f'Event-pair Pfam (>={100 * minimum:g}% each query)'
     trait_index = -1 if prefilter_selected is None else -2
     if filter_audit:
@@ -226,7 +229,8 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
         height = min(0.14, 0.72 / max(1, len(displayed) - 1))
         ax.add_patch(Rectangle((0.03, y - height / 2), 0.94, height, facecolor="#f0f4f7"))
         ax.text(0.06, y, row['step'], fontsize=16, color=color, va="center", weight="bold")
-        ax.text(0.16, y, row["stage"], fontsize=13, va="center")
+        label = textwrap.fill(row['stage'], width=43, break_long_words=False, break_on_hyphens=False)
+        ax.text(0.16, y, label, fontsize=11 if label.count('\n') > 2 else 13, va="center")
         event_label = f"{row['event_count']:,}" if isinstance(row['event_count'], int) else row['event_count']
         ax.text(0.76, y, event_label, ha="right", va="center", fontsize=20, color=color, weight="bold")
         ax.text(0.92, y, f"{row['orthogroup_count']:,}", ha="right", va="center", fontsize=15)
@@ -253,7 +257,7 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
 
 def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit="",
                    context_annotations='', prefilter_selected=None, pfam_selected=None, direction_selected=None,
-                   support_filter_enabled=False, analyzed_orthogroups=None):
+                   support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None):
     import hashlib
     import textwrap
 
@@ -277,7 +281,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     counts = export_filtering_flow(directory, source_events, selected, trait, filter_audit,
                                    prefilter_selected=prefilter_selected, pfam_selected=pfam_selected,
                                    direction_selected=direction_selected, support_filter_enabled=support_filter_enabled,
-                                   analyzed_orthogroups=analyzed_orthogroups)
+                                   analyzed_orthogroups=analyzed_orthogroups, pair_filter_label=pair_filter_label)
     families = sorted({r["orthogroup"] for r in selected})
     species = [tip.name for tip in tree.get_terminals()]
     membership = Counter()
