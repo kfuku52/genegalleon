@@ -42,6 +42,7 @@ try:
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from input_generation_array_state import atomic_json, digest, digest_paths
+    from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from rescue_prepared_snapshot import PreparedSnapshot
 except ImportError:
@@ -61,6 +62,7 @@ except ImportError:
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
     from .input_generation_array_state import atomic_json, digest, digest_paths
+    from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from .rescue_prepared_snapshot import PreparedSnapshot
 
@@ -74,6 +76,21 @@ DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_r
 # Invocation-local reuse avoids re-reading every catalog for every target worker.
 # Fresh CLI boundaries and each publication still verify frozen source bytes.
 _INVOCATION_CACHE = None
+_RECEIPT_SNAPSHOT = None
+
+
+@contextlib.contextmanager
+def invocation_context():
+    """Retain immutable dependency proofs only within an explicit command."""
+    global _INVOCATION_CACHE, _RECEIPT_SNAPSHOT
+    previous = _INVOCATION_CACHE, _RECEIPT_SNAPSHOT
+    snapshot = ReceiptSnapshot(rescue.verified)
+    _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = {}, snapshot
+    try:
+        with snapshot:
+            yield
+    finally:
+        _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = previous
 
 
 def invocation_cached(function):
@@ -103,7 +120,7 @@ def implementation():
                     'format_species_provider_config.py', 'format_species_taxonomy.py',
                     'rescue_terminal_completion.py', 'rescue_coding_paths.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
-                    'rescue_prepared_snapshot.py')
+                    'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -305,11 +322,15 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
     snapshots = {str(path): expected for path, expected in snapshots.items()}
     prepared_receipts = ({str(prepared_snapshot.root / 'prepared' / name / 'receipt.json'): name
                           for name in dependencies.get('prepared', {})} if prepared_snapshot else {})
+    ordinary = {path: expected for path, expected in snapshots.items() if path not in prepared_receipts}
+    receipt_snapshot = _RECEIPT_SNAPSHOT
 
     def guard():
         load(root, names)
-        ordinary = {path: expected for path, expected in snapshots.items() if path not in prepared_receipts}
-        rescue.require_same_key(ordinary, digest_paths(ordinary))
+        if receipt_snapshot is None:
+            rescue.require_same_key(ordinary, digest_paths(ordinary))
+        else:
+            receipt_snapshot.verify(ordinary)
         if prepared_snapshot is not None:
             try:
                 prepared_snapshot.check_all()
@@ -318,7 +339,7 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
             except (OSError, ValueError) as exc:
                 raise ValueError('Stage dependency content changed: prepared annotation') from exc
         for path in snapshots:
-            if path in prepared_receipts:
+            if path in prepared_receipts or receipt_snapshot is not None:
                 continue
             directory = Path(path).parent
             receipt = json.loads(Path(path).read_text())
@@ -339,13 +360,15 @@ def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
                     'child_lifetime_peak_rss_mib': children.ru_maxrss / rss_factor,
                     'note': 'Builder excludes source/receipt verification; RSS is a lifetime high-water mark, not an isolated stage peak.'})
     def publication_guard():
+        if receipt_snapshot is not None:
+            receipt_snapshot.check(ordinary)
         if prepared_snapshot is not None:
             try:
                 prepared_snapshot.check_all()
             except (OSError, ValueError) as exc:
                 raise ValueError('Stage dependency content changed: prepared annotation') from exc
 
-    publication = {'publication_guard': publication_guard} if prepared_snapshot else {}
+    publication = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot else {}
     return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **publication)
 
 
@@ -553,16 +576,48 @@ def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, p
             if len(neighbors[e['species_a'], e['gene_a'], e['species_b']]) > 1 or len(neighbors[e['species_b'], e['gene_b'], e['species_a']]) > 1:
                 e['ambiguous'] = True
         atomic_json(tmp / 'edges.json', edges)
+        atomic_json(tmp / 'donor_species.json', correspondence_donor_species(edges))
         atomic_json(tmp / 'summary.json', {'edges': len(edges), 'ambiguous': sum(e['ambiguous'] for e in edges)})
     return stage(root, 'correspondence', {'dependencies': dependencies}, build,
                  prepared_snapshot=prepared_snapshot)
+
+
+def correspondence_donor_species(edges):
+    """Project the final nonambiguous edges without changing source guards."""
+    donors = defaultdict(set)
+    for edge in edges:
+        if not edge['ambiguous']:
+            a, b = edge['species_a'], edge['species_b']
+            donors[a].add(b)
+            donors[b].add(a)
+    return {name: sorted(values) for name, values in sorted(donors.items())}
+
+
+def prediction_donor_names(directory, name, species):
+    """Use a verified additive projection; old publications retain edge scan."""
+    path = directory / 'receipt.json'
+    expected = digest(path)
+    if _RECEIPT_SNAPSHOT is not None:
+        present, donors = _RECEIPT_SNAPSHOT.read_json_member(path, expected, 'donor_species.json')
+    else:
+        # Outside an explicit command, keep ordinary full verification and
+        # discard this single-use read fence immediately.
+        with ReceiptSnapshot(rescue.verified) as proof:
+            present, donors = proof.read_json_member(path, expected, 'donor_species.json')
+    if not present:
+        donors = correspondence_donor_species(json.loads((directory / 'edges.json').read_text()))
+    if (not isinstance(donors, dict) or not set(donors) <= set(species)
+            or any(not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                   or values != sorted(set(values)) or not set(values) <= set(species)
+                   for values in donors.values())):
+        raise ValueError('Invalid correspondence donor species projection')
+    return sorted({name, *donors.get(name, [])})
 
 
 @invocation_cached
 def select(root, value, predictions=False):
     db = catalog_index(root, value, predictions)
     directory = correspondence(root, value)
-    edges = json.loads((directory / 'edges.json').read_text())
     params = value['request']['parameters']
     dependencies = {'correspondence': digest(directory / 'receipt.json'),
                     'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
@@ -570,6 +625,7 @@ def select(root, value, predictions=False):
     if predictions:
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
     def build(tmp):
+        edges = json.loads((directory / 'edges.json').read_text())
         selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
                                            min_support=params['min_support'], candidate_limit=params['candidate_limit'])
         atomic_json(tmp / 'selection.json', selection)
@@ -908,10 +964,8 @@ def predict_species(root, value, name, cpus=1):
     initial = select(root, value)
     cat_dir = catalog_species(root, value, name)
     db = catalog_index(root, value)
-    catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
-    catalog['loci'] = list(iter_loci(db, name))
     corr = correspondence(root, value)
-    edges = json.loads((corr / 'edges.json').read_text())
+    donor_names = prediction_donor_names(corr, name, value['species'])
     params, source = parameters_for(value['request'], name), value['request']['sources'][name]
     dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'correspondence': digest(corr / 'receipt.json'),
@@ -923,6 +977,9 @@ def predict_species(root, value, name, cpus=1):
         if params['mode'] == 'off':
             atomic_json(tmp / 'predictions.json', [])
             return
+        catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
+        catalog['loci'] = list(iter_loci(db, name))
+        edges = json.loads((corr / 'edges.json').read_text())
         catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         loci = {(name, g['gene_id']): g for g in catalog['loci']}
         decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
@@ -1023,11 +1080,7 @@ def predict_species(root, value, name, cpus=1):
                                          'rescue_revision_models': revision_count,
                                          'accepted': sum(r['status'] == 'accepted' for r in predictions),
                                          'proposals': sum(r['status'] != 'accepted' for r in predictions) + len(proposals)})
-    donor_names = {name}
-    for edge in edges:
-        if not edge['ambiguous'] and name in {edge['species_a'], edge['species_b']}:
-            donor_names.update((edge['species_a'], edge['species_b']))
-    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, sorted(donor_names))
+    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, donor_names)
 
 
 def source_rescue_locus_provenance(gene):
@@ -1665,9 +1718,7 @@ def parser():
     return p
 
 
-def main():
-    global _INVOCATION_CACHE
-    _INVOCATION_CACHE = {}
+def _main():
     args = parser().parse_args()
     if args.command == 'verify-inputs':
         result = verify_inputs(args.inputs, args.field)
@@ -1707,6 +1758,11 @@ def main():
             raise ValueError('Corrupt refinement stage or missing publication: ' + ', '.join(invalid))
         print(json.dumps(result, sort_keys=True))
     load(root)
+
+
+def main():
+    with invocation_context():
+        _main()
 
 
 if __name__ == '__main__':

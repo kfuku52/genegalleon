@@ -503,6 +503,24 @@ Run through `workflow/tests/run_in_runtime.sh` with the intended runtime.
 
 ## General limits
 
+Refinement commands retain an invocation-local proof for each completed stage
+dependency. The first use performs the ordinary full receipt/member SHA
+verification. Subsequent uses fence the receipt, members, permissions, resolved
+targets, symlinks and publication directory identities. A changed generation
+raises an error rather than refreshing the proof. Each stage checks only its
+dependencies immediately before publication; successful command exit checks all
+used dependencies. Proofs are discarded after success or failure, and library
+calls outside the explicit command context retain ordinary verification. This
+is separate from the source/prepared-input proof used by correspondence.
+Verified prediction/selection resume skips decoding unused catalog JSON/loci and
+correspondence JSON. New correspondence publications add a small, receipted
+`donor_species.json` projection of their final nonambiguous edges. It determines
+the same prediction source guard as the previous edge scan; old publications
+without this receipted member retain that scan. Biological output formats,
+identifiers, donor order and admission thresholds are unchanged. The new helper
+changes the implementation fingerprint and therefore requires a fresh plan;
+fresh commands still verify complete dependency bytes.
+
 These workloads do not establish whole-genome or hundreds-of-species runtime,
 annotation accuracy, or SIF compatibility. Local windows and prediction CPU
 limits bound predictor work; nomination rate, genome I/O, family size and protein
