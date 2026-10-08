@@ -484,7 +484,8 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
                         fontsize=11,
                     )
         fig.colorbar(im, ax=ax, shrink=0.75, label="Modeled events", ticks=range(maximum + 1), pad=0.02)
-    ax.set_yticks(range(len(donors)), donors, fontsize=9)
+    donor_labels = [textwrap.fill(d, width=35, break_long_words=False, break_on_hyphens=False) for d in donors]
+    ax.set_yticks(range(len(donors)), donor_labels, fontsize=9)
     recipient_labels = [
         r.replace("_", " ") if len(nodes.get(r, [])) <= 1 else r + ": " + " + ".join(s.split("_")[0] for s in nodes[r])
         for r in recipients
