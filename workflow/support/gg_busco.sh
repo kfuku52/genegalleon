@@ -117,10 +117,11 @@ gg_busco_metaeuk_thread_limit() {
 
   if [[ "${inherited_threads}" =~ ^[+]?0*([1-9][0-9]*)$ ]]; then
     inherited_threads="${BASH_REMATCH[1]}"
-    # Compare decimal strings without overflowing shell arithmetic.
+    # Compare decimal strings without overflowing shell arithmetic. The
+    # identical nonnumeric prefix makes the lexical comparison explicit.
     if [[ ${#inherited_threads} -lt ${#requested_threads} ||
           ( ${#inherited_threads} -eq ${#requested_threads} &&
-            "${inherited_threads}" < "${requested_threads}" ) ]]; then
+            "x${inherited_threads}" < "x${requested_threads}" ) ]]; then
       requested_threads="${inherited_threads}"
     fi
   fi
