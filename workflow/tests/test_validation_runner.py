@@ -28,7 +28,8 @@ def test_focused_validation_keeps_explicit_file_and_pytest_arguments():
 
 
 @pytest.mark.parametrize("suite", ["static", "fast"])
-def test_validation_loads_suite_options_without_an_explicit_test_path(tmp_path, suite):
+@pytest.mark.parametrize("shard", [None, "1/1"])
+def test_validation_loads_suite_options_without_an_explicit_test_path(tmp_path, suite, shard):
     # Exercise real testpaths/conftest discovery without importing the entire
     # scientific suite a second time inside this test.
     test_dir = tmp_path / "workflow/tests"
@@ -38,8 +39,11 @@ def test_validation_loads_suite_options_without_an_explicit_test_path(tmp_path, 
     shutil.copyfile(REPO_ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
     for lane in ("static", "fast"):
         (test_dir / f"test_sentinel_{lane}.py").write_text("def test_sentinel(): pass\n")
+    command = [sys.executable, str(test_dir / "run_checks.py"), suite, "--collect-only", "-p", "no:cacheprovider"]
+    if shard:
+        command += ["--gg-shard", shard]
     result = subprocess.run(
-        [sys.executable, str(test_dir / "run_checks.py"), suite, "--collect-only", "-p", "no:cacheprovider"],
+        command,
         cwd=tmp_path, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -127,6 +131,62 @@ def test_full_runtime_and_r_checks_include_every_r_test():
         assert all(command in commands for command in declared)
     assert "test_fractionation_bias_integration.py" in manifest["runtime_python_files"]
     assert manifest["environment"]["KFFRACTBIAS_RUN_INTEGRATION"] == "1"
+
+
+def test_split_runtime_commands_preserve_the_complete_validation_contract():
+    complete = run_checks.commands_for("runtime", "2", [])
+    python = run_checks.commands_for("runtime-python", "2", [])
+    extra = run_checks.commands_for("runtime-extra", "2", [])
+    r = run_checks.commands_for("r", "2", [])
+    assert python[0][python[0].index("-n"):python[0].index("-n") + 4] == ["-n", "2", "--dist", "load"]
+    serial_python = [argument for argument in python[0] if argument not in ("-n", "2", "--dist", "load")]
+    assert [serial_python] + extra + r == complete
+    assert run_checks.commands_for("runtime-python", "2", ["--gg-shard", "3/8"])[0] == (
+        python[0] + ["--gg-shard", "3/8"]
+    )
+
+
+def test_shards_partition_the_selected_lane_without_missing_or_repeating_cases(tmp_path):
+    test_dir = tmp_path / "workflow/tests"
+    test_dir.mkdir(parents=True)
+    for name in ("conftest.py", "validation_manifest.json"):
+        shutil.copyfile(REPO_ROOT / "workflow/tests" / name, test_dir / name)
+    (test_dir / "test_gift_retrieval.py").write_text(
+        'import pytest\n@pytest.mark.parametrize("case", range(64))\ndef test_case(case): pass\n'
+    )
+    (test_dir / "test_other.py").write_text('raise RuntimeError("wrong lane imported")\n')
+    command = [sys.executable, "-m", "pytest", "-q", "--collect-only", "--gg-suite=runtime",
+               "-c", str(REPO_ROOT / "pyproject.toml"), "--rootdir", str(tmp_path),
+               "--confcutdir", str(tmp_path), str(test_dir)]
+
+    def collect(extra):
+        result = subprocess.run(command + extra, cwd=tmp_path, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return {line for line in result.stdout.splitlines() if "::test_case[" in line}
+
+    complete = collect([])
+    partitions = [collect(["--gg-shard", f"{index}/4"]) for index in range(1, 5)]
+    assert len(complete) == 64
+    assert set.union(*partitions) == complete
+    assert sum(map(len, partitions)) == len(complete)
+    assert collect(["--gg-shard", "2/4"]) == partitions[1]
+
+
+@pytest.mark.parametrize("shard", ["0/8", "9/8", "1/0", "bad"])
+def test_invalid_shard_cannot_silently_run_partial_validation(tmp_path, shard):
+    test_dir = tmp_path / "workflow/tests"
+    test_dir.mkdir(parents=True)
+    for name in ("conftest.py", "validation_manifest.json"):
+        shutil.copyfile(REPO_ROOT / "workflow/tests" / name, test_dir / name)
+    (test_dir / "test_sentinel.py").write_text("def test_sentinel(): pass\n")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--gg-shard", shard,
+         "-c", str(REPO_ROOT / "pyproject.toml"), "--rootdir", str(tmp_path),
+         "--confcutdir", str(tmp_path), str(test_dir)],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 4
+    assert "--gg-shard must be INDEX/COUNT" in result.stderr
 
 
 @pytest.mark.parametrize("workers", [None, "2"])

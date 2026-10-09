@@ -1211,9 +1211,12 @@ def test_array_finalize_reuses_only_complete_current_qc(tmp_path, proof):
         assert "[Arabidopsis_thaliana] Longest CDS validation OK" in result.stdout
 
 
-@pytest.mark.parametrize("container_namespace", [False, True])
-@pytest.mark.parametrize("validation_proof", ["current", "obsolete", "absent"])
+@pytest.mark.parametrize("container_namespace,validation_proof", [
+    (False, "current"), (True, "current"), (False, "obsolete"), (True, "absent"),
+])
 def test_array_lineage_change_imports_only_current_validation(tmp_path, container_namespace, validation_proof):
+    # Cover both path namespaces on reuse and both rejection reasons without
+    # repeating each identical rejection through a second namespace.
     input_dir = _write_direct_species_fixture(tmp_path)
     source_workspace = tmp_path / "legacy_workspace"
     fake_bin = _install_fake_toolchain(tmp_path)

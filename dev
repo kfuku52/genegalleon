@@ -12,6 +12,7 @@ Commands:
   check smoke|fast|static|runtime       Run one focused test lane.
   check integration-download           Run provider/download integration tests.
   check integration-workflow           Run workflow integration tests.
+  check runtime-python|runtime-extra    Run a Python portion of runtime validation.
   check full                            Run all Python and declared R checks.
   check r                               Run all declared R checks in the runtime.
   lint                                  Run host syntax, Ruff, and config checks.
@@ -22,7 +23,7 @@ Commands:
   build                                 Build local/genegalleon:dev with development tools.
 
 Environment:
-  GG_PYTEST_WORKERS=N                   Parallel workers for fast/integration/full checks (default: 2).
+  GG_PYTEST_WORKERS=N                   Parallel workers for fast/integration/runtime-python/full (default: 2).
   GG_RUNTIME_FRESHNESS=daily|always|off Runtime/upstream freshness policy (default: daily).
   GG_RUNTIME_FRESHNESS_SCOPE=owned|all  Upstreams checked locally (default: owned).
   BUILD_TARGET=development|runtime     Target for dev build (default: development).

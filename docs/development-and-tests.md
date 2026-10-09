@@ -185,6 +185,20 @@ commits remain temporary build metadata, never repository defaults.
 The fast lane also installs Ubuntu's `seqkit` package for the real per-species
 genetic-code translation regression; these tool-dependent assertions remain enabled.
 
+Commit CI partitions fast tests across two jobs, workflow integrations across
+three, and SIF runtime Python tests across eight, with two pytest workers per job.
+`--gg-shard INDEX/COUNT`
+assigns each selected pytest node ID to exactly one partition using a stable hash;
+lane selection and explicit paths still apply first. Each job reports slow test
+durations so uneven partitions can be identified. R, extra runtime scenarios, and
+real 3Di predictor checks run independently alongside the SIF Python partitions.
+CI prepares the exact SIF once, then shares its runtime-input hash and either the
+validated cache or a one-day artifact. Every consumer verifies that identity.
+The aggregate SIF check fails if any partition fails or is incomplete, and only
+a complete trusted run can save a newly validated SIF. Container and release
+publication retain the complete validation command. Parallel CI targets short
+elapsed time with a prepared runtime; new builds and model downloads can take longer.
+
 ## Run all Python and R checks
 
 ```bash
@@ -212,6 +226,11 @@ To inspect the commands without starting a container:
 ```bash
 python3 workflow/tests/run_checks.py runtime --list
 ```
+
+`runtime-python` and `runtime-extra` expose the Python portions for CI partitioning;
+they retain strict integration/skip checks but do not append R commands. Use
+`runtime`, `full`, or the complete CI result as evidence for all required checks.
+Local `runtime` and `full` commands keep their existing complete coverage.
 
 For just the full Python suite, with the same mandatory integration policy:
 

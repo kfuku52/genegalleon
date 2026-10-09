@@ -13,6 +13,25 @@ inputs:
   validate-3di:
     description: Run independent real 3Di predictor integration tests in the verified SIF.
     default: "false"
+  validation-suite:
+    description: runtime (complete checks), prepare (identity only), runtime-python, runtime-extra, r, or 3di.
+    default: "runtime"
+  shard:
+    description: Optional INDEX/COUNT partition for runtime-python.
+    default: ""
+  prepared-runtime-input:
+    description: Exact runtime input prepared once by an earlier job in this run.
+    default: ""
+outputs:
+  runtime-input:
+    description: Exact runtime input shared by every validation job.
+    value: ${{ steps.runtime-input.outputs.value }}
+  cache-key:
+    description: Exact SIF cache key.
+    value: ${{ steps.sif-cache.outputs.cache-primary-key }}
+  cache-hit:
+    description: Whether a previously validated SIF was restored.
+    value: ${{ steps.sif-cache.outputs.cache-hit }}
 runs:
   using: composite
   steps:
@@ -23,8 +42,23 @@ runs:
         PREPARED_IMAGE_REF: ${{ inputs.image-ref }}
         PREPARED_RUNTIME_INPUT: ${{ inputs.runtime-input }}
         PREPARED_SECURITY_EPOCH: ${{ inputs.security-refresh-epoch }}
+        SHARED_RUNTIME_INPUT: ${{ inputs.prepared-runtime-input }}
+        VALIDATION_SUITE: ${{ inputs.validation-suite }}
       run: |
         set -euo pipefail
+        case "${VALIDATION_SUITE:-runtime}" in
+          runtime|prepare|runtime-python|runtime-extra|r|3di) ;;
+          *) echo "Unknown validation suite: ${VALIDATION_SUITE}"; exit 1 ;;
+        esac
+        if [[ -n "${SHARED_RUNTIME_INPUT:-}" ]]; then
+          if [[ ! "${SHARED_RUNTIME_INPUT}" =~ ^[0-9a-f]{64}$ \
+             || -n "${PREPARED_IMAGE_REF}${PREPARED_RUNTIME_INPUT}${PREPARED_SECURITY_EPOCH}" ]]; then
+            echo "Shared SIF validation requires only an exact runtime-input hash."
+            exit 1
+          fi
+          echo "value=${SHARED_RUNTIME_INPUT}" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
         if [[ -n "${PREPARED_IMAGE_REF}" ]]; then
           if [[ ! "${PREPARED_IMAGE_REF}" =~ ^ghcr\.io/[a-z0-9._/-]+:[A-Za-z0-9._-]+$ \
              || ! "${PREPARED_RUNTIME_INPUT}" =~ ^[0-9a-f]{64}$ \
@@ -79,8 +113,15 @@ runs:
         path: genegalleon.sif
         key: sif-runtime-${{ runner.os }}-${{ runner.arch }}-singularity-4.5.0-${{ steps.runtime-input.outputs.value }}
 
+    - name: Download SIF prepared in this run
+      if: inputs.prepared-runtime-input != '' && steps.sif-cache.outputs.cache-hit != 'true'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: validation-sif
+        path: .
+
     - name: Reclaim runner disk space for SIF conversion
-      if: steps.sif-cache.outputs.cache-hit != 'true'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -96,15 +137,15 @@ runs:
         df -h /
 
     - name: Set up Docker Buildx
-      if: steps.sif-cache.outputs.cache-hit != 'true'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
     - name: Expose GitHub runtime for BuildKit cache
-      if: steps.sif-cache.outputs.cache-hit != 'true'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4
 
     - name: Select published or local validation image
-      if: steps.sif-cache.outputs.cache-hit != 'true'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       id: validation-image
       shell: bash
       env:
@@ -146,7 +187,7 @@ runs:
         fi
 
     - name: Build current GeneGalleon image
-      if: steps.sif-cache.outputs.cache-hit != 'true' && steps.validation-image.outputs.source == 'local'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true' && steps.validation-image.outputs.source == 'local'
       shell: bash
       env:
         CACHE_FROM: type=gha,scope=container-linux-amd64
@@ -169,7 +210,7 @@ runs:
           bash ./gg_container_build_entrypoint.sh
 
     - name: Reclaim BuildKit cache before SIF conversion
-      if: steps.sif-cache.outputs.cache-hit != 'true'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -233,7 +274,7 @@ runs:
         echo "engine=singularity" >> "${GITHUB_OUTPUT}"
 
     - name: Build validation SIF from current image
-      if: steps.sif-cache.outputs.cache-hit != 'true'
+      if: inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         APPTAINER_CACHEDIR: ${{ runner.temp }}/apptainer-cache
@@ -285,7 +326,7 @@ runs:
           --expected-hash "${{ steps.runtime-input.outputs.value }}"
 
     - name: Report SIF conversion disk usage
-      if: always() && steps.sif-cache.outputs.cache-hit != 'true'
+      if: always() && inputs.prepared-runtime-input == '' && steps.sif-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -u
@@ -301,18 +342,33 @@ runs:
           2>/dev/null || true
 
     - name: Run SIF validation checks
+      if: inputs.validation-suite != 'prepare' && inputs.validation-suite != '3di'
       shell: bash
       env:
         # The preceding identity check used the exact resolved build input.
         # Do not re-resolve moving branches after preparing that snapshot.
         GG_RUNTIME_FRESHNESS: "off"
+        VALIDATION_SUITE: ${{ inputs.validation-suite }}
+        VALIDATION_SHARD: ${{ inputs.shard }}
       run: |
-        bash workflow/tests/run_in_sif.sh python workflow/tests/run_checks.py runtime
+        args=()
+        if [[ -n "${VALIDATION_SHARD}" ]]; then
+          if [[ "${VALIDATION_SUITE}" != "runtime-python" ]]; then
+            echo "Shards apply only to runtime-python; R and extra checks run separately."
+            exit 1
+          fi
+          args+=("--gg-shard=${VALIDATION_SHARD}")
+        fi
+        if [[ "${VALIDATION_SUITE}" != "r" ]]; then
+          args+=(--durations=25 --durations-min=0.5)
+        fi
+        bash workflow/tests/run_in_sif.sh python workflow/tests/run_checks.py \
+          "${VALIDATION_SUITE}" "${args[@]}"
 
     - name: Run real 3Di integration in SIF
       # A different runtime test must not hide this independent integration result.
       # Preserve the earlier failure and never run against an unverified SIF.
-      if: ${{ !cancelled() && inputs.validate-3di == 'true' && steps.sif-identity.outcome == 'success' }}
+      if: ${{ !cancelled() && (inputs.validate-3di == 'true' || inputs.validation-suite == '3di') && inputs.validation-suite != 'prepare' && steps.sif-identity.outcome == 'success' }}
       shell: bash
       env:
         GG_RUNTIME_FRESHNESS: "off"
@@ -322,11 +378,13 @@ runs:
           CSUBST_CACHE_DIR="${GITHUB_WORKSPACE}/.gg-validation/csubst" \
           HF_HOME="${GITHUB_WORKSPACE}/.gg-validation/huggingface" \
           python -m pytest -q --gg-strict-runtime \
-          workflow/tests/test_csubst_3di_runtime.py
+          workflow/tests/test_csubst_3di_runtime.py --durations=10 --durations-min=0.5
 
     - name: Save validated SIF by exact runtime input
       if: >-
         steps.sif-cache.outputs.cache-hit != 'true' &&
+        inputs.validation-suite == 'runtime' &&
+        inputs.prepared-runtime-input == '' &&
         github.event_name != 'pull_request' &&
         github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

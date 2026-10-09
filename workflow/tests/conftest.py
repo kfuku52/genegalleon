@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -49,6 +50,8 @@ def _test_lane(filename: str) -> str:
 
 
 def pytest_addoption(parser):
+    parser.addoption("--gg-shard", metavar="INDEX/COUNT",
+                     help="Run one deterministic, non-overlapping partition of the selected tests (1-based).")
     parser.addoption("--gg-strict-runtime", action="store_true",
                      help="Enable required integrations and fail on undeclared runtime skips")
     parser.addoption(
@@ -90,6 +93,16 @@ class RuntimeSkipGuard:
 
 
 def pytest_configure(config):
+    shard = config.getoption("--gg-shard")
+    config.gg_shard = None
+    if shard:
+        try:
+            index, count = map(int, shard.split("/"))
+            if not 1 <= index <= count:
+                raise ValueError
+        except ValueError as error:
+            raise pytest.UsageError("--gg-shard must be INDEX/COUNT with 1 <= INDEX <= COUNT") from error
+        config.gg_shard = (index - 1, count)
     if config.getoption("--gg-strict-runtime") or config.getoption("--gg-suite") == "runtime":
         os.environ.update(VALIDATION_MANIFEST["environment"])
         # Docker validation runs as the host UID, whose default HOME may not be
@@ -131,7 +144,11 @@ def pytest_collection_modifyitems(config, items):
 
         duplicate_smoke = suite in {"integration-download", "integration-workflow"} and item.nodeid in SMOKE_NODE_IDS
         missing_smoke = suite == "smoke" and item.nodeid not in SMOKE_NODE_IDS
-        if duplicate_smoke or missing_smoke:
+        shard = config.gg_shard
+        other_shard = shard is not None and int.from_bytes(
+            hashlib.sha256(item.nodeid.encode()).digest()[:8], "big"
+        ) % shard[1] != shard[0]
+        if duplicate_smoke or missing_smoke or other_shard:
             deselected.append(item)
         else:
             selected.append(item)

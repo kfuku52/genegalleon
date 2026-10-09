@@ -260,7 +260,7 @@ def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
 
 def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_current():
     jobs = load_workflow("tests.yml")["jobs"]
-    sif_job = jobs["sif-runtime-validation"]
+    sif_job = jobs["prepare-sif"]
     runtime_input = step_run(sif_job, "Resolve exact validation runtime input")
     restore_step = named_step(sif_job, "Restore exact validation SIF")
     selection_step = named_step(sif_job, "Select published or local validation image")
@@ -306,7 +306,7 @@ def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_cur
 
 
 def test_sif_runtime_validation_starts_after_fast_preflight_guards():
-    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    sif_job = load_workflow("tests.yml")["jobs"]["prepare-sif"]
 
     assert set(sif_job["needs"]) == {
         "python-smoke",
@@ -317,14 +317,63 @@ def test_sif_runtime_validation_starts_after_fast_preflight_guards():
 
 
 def test_sif_runtime_validation_builds_current_dependency_corrected_runtime():
-    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
-    validation = named_step(sif_job, "Validate exact runtime and reuse the shared SIF cache")
+    sif_job = load_workflow("tests.yml")["jobs"]["prepare-sif"]
+    validation = named_step(sif_job, "Prepare exact SIF once")
 
-    assert validation["with"] == {"validate-3di": "true"}
+    assert validation["with"] == {"validation-suite": "prepare"}
+
+
+def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
+    jobs = load_workflow("tests.yml")["jobs"]
+    prepare = jobs["prepare-sif"]
+    assert named_step(prepare, "Prepare exact SIF once")["with"]["validation-suite"] == "prepare"
+    share = named_step(prepare, "Share uncached SIF with validation partitions")
+    assert share["with"]["if-no-files-found"] == "error"
+    assert share["with"]["retention-days"] == "1"
+    assert jobs["sif-python"]["strategy"]["matrix"]["shard"] == [str(i) for i in range(1, 9)]
+    assert set(jobs["sif-other"]["strategy"]["matrix"]["suite"]) == {"runtime-extra", "r", "3di"}
+    for name, step in (("sif-python", "Validate SIF Python partition"),
+                       ("sif-other", "Validate independent SIF checks")):
+        job = jobs[name]
+        assert job["needs"] == ["prepare-sif"]
+        assert job["strategy"]["fail-fast"] == "false"
+        assert named_step(job, step)["with"]["prepared-runtime-input"] == (
+            "${{ needs.prepare-sif.outputs.runtime-input }}"
+        )
+        for build in ("Build current GeneGalleon image", "Build validation SIF from current image"):
+            assert "inputs.prepared-runtime-input == ''" in named_step(job, build)["if"]
+        assert named_step(job, "Download SIF prepared in this run")["with"]["name"] == share["with"]["name"]
+    aggregate = jobs["sif-runtime-validation"]
+    assert set(aggregate["needs"]) == {"prepare-sif", "sif-python", "sif-other"}
+    save = named_step(aggregate, "Save validated SIF by exact runtime input")
+    assert save["with"]["key"] == "${{ needs.prepare-sif.outputs.cache-key }}"
+    assert "github.event_name != 'pull_request'" in save["if"]
+    assert "github.event.repository.default_branch" in save["if"]
+    assert not any(status in save["if"] for status in ("always()", "failure()", "cancelled()"))
+    assert "inputs.validation-suite == 'runtime'" in named_step(
+        prepare, "Save validated SIF by exact runtime input"
+    )["if"]
+    fast = jobs["python-fast-shards"]
+    assert fast["strategy"]["matrix"]["shard"] == ["1", "2"]
+    assert jobs["python-fast"]["needs"] == ["python-fast-shards"]
+    workflow = [entry["partition"] for entry in jobs["python-heavy"]["strategy"]["matrix"]["shard"]
+                if entry["suite"] == "integration-workflow"]
+    assert set(workflow) == {"1/3", "2/3", "3/3"}
+
+
+@pytest.mark.parametrize("failed", [None, "PREPARE_RESULT", "PYTHON_RESULT", "OTHER_RESULT"])
+def test_sif_aggregate_rejects_failed_or_incomplete_partitions(tmp_path, failed):
+    job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    env = os.environ | {name: "success" for name in ("PREPARE_RESULT", "PYTHON_RESULT", "OTHER_RESULT")}
+    if failed:
+        env[failed] = "failure" if failed != "OTHER_RESULT" else "skipped"
+    result = subprocess.run(["bash", "-e", "-c", step_run(job, "Require every SIF validation partition")],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == (failed is None)
 
 
 def test_sif_runtime_validation_preserves_disk_headroom_for_conversion():
-    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    sif_job = load_workflow("tests.yml")["jobs"]["prepare-sif"]
     runner_cleanup = step_run(sif_job, "Reclaim runner disk space for SIF conversion")
     buildkit_cleanup = step_run(sif_job, "Reclaim BuildKit cache before SIF conversion")
     runtime_install = named_step(sif_job, "Install Singularity runtime")
@@ -426,22 +475,24 @@ def test_release_sif_is_published_early_as_durable_content_addressed_oci():
 def test_toolchain_dependent_r_integration_test_runs_in_sif_job():
     jobs = load_workflow("tests.yml")["jobs"]
     r_job = jobs["r-script-parse"]
-    sif_job = jobs["sif-runtime-validation"]
+    sif_job = jobs["sif-other"]
+    assert "r" in sif_job["strategy"]["matrix"]["suite"]
     r_commands = "\n".join(str(step.get("run", "")) for step in r_job["steps"])
     sif_commands = "\n".join(str(step.get("run", "")) for step in sif_job["steps"])
     integration_test = "workflow/tests/test_orthogroup_copy_number_trait_pgls.R"
 
     assert not any(str(step.get("uses", "")).startswith("actions/setup-python@") for step in r_job["steps"])
     assert integration_test not in r_commands
-    assert "run_in_sif.sh python workflow/tests/run_checks.py runtime" in sif_commands
+    assert "run_in_sif.sh python workflow/tests/run_checks.py" in sif_commands
     assert ["Rscript", integration_test] in validation_manifest()["r_commands"]
 
 
 def test_runtime_python_suite_runs_in_authoritative_sif_job():
-    sif_job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    sif_job = load_workflow("tests.yml")["jobs"]["sif-python"]
+    assert named_step(sif_job, "Validate SIF Python partition")["with"]["validation-suite"] == "runtime-python"
     commands = "\n".join(str(step.get("run", "")) for step in sif_job["steps"])
 
-    assert "run_in_sif.sh python workflow/tests/run_checks.py runtime" in commands
+    assert "run_in_sif.sh python workflow/tests/run_checks.py" in commands
 
 
 def test_runtime_suite_contains_real_owned_upstream_contracts():
@@ -459,10 +510,11 @@ def test_runtime_suite_guards_aster_and_ortools_loader_compatibility():
 def test_treevis_package_validation_runs_only_in_the_container_job():
     jobs = load_workflow("tests.yml")["jobs"]
     r_commands = "\n".join(str(step.get("run", "")) for step in jobs["r-script-parse"]["steps"])
-    sif_commands = "\n".join(str(step.get("run", "")) for step in jobs["sif-runtime-validation"]["steps"])
+    sif_commands = "\n".join(str(step.get("run", "")) for step in jobs["sif-other"]["steps"])
+    assert "r" in jobs["sif-other"]["strategy"]["matrix"]["suite"]
 
     assert "test_treevis_main.R" not in r_commands
-    assert "workflow/tests/run_checks.py runtime" in sif_commands
+    assert "workflow/tests/run_checks.py" in sif_commands
     assert ["bash", "workflow/tests/check_treevis_package.sh"] in validation_manifest()["r_commands"]
     assert ["Rscript", "workflow/tests/test_treevis_main.R"] in validation_manifest()["r_commands"]
 
@@ -563,7 +615,7 @@ def test_scheduled_container_build_compares_resolved_inputs_with_published_image
 def test_daily_publisher_primes_the_same_exact_sif_cache_used_by_commit_checks():
     daily = load_workflow("container-ghcr.yml")["jobs"]
     prime = daily["prime-sif-cache"]
-    commit = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    commit = load_workflow("tests.yml")["jobs"]["prepare-sif"]
     prepared = named_step(prime, "Prepare validated SIF for subsequent commit checks")
     assert prepared["uses"] == "./.github/actions/validate-sif"
     assert "immutable_tag" in prepared["with"]["image-ref"]
@@ -595,7 +647,7 @@ def test_parallel_python_lanes_install_the_same_prebuilt_offline_wheels():
     assert save["with"]["key"] == "${{ steps.wheels-cache.outputs.cache-primary-key }}"
     assert "event_name != 'pull_request'" in save["if"]
     assert "github.event.repository.default_branch" in save["if"]
-    for lane in ("python-fast", "python-heavy"):
+    for lane in ("python-fast-shards", "python-heavy"):
         assert "python-wheels" in jobs[lane]["needs"]
         download = named_step(jobs[lane], "Download exact test wheels")["with"]
         assert download["name"] == artifact["name"]
@@ -606,7 +658,7 @@ def test_parallel_python_lanes_install_the_same_prebuilt_offline_wheels():
         assert "git+" not in install
     assert "GG_SOURCE_KFFRACTBIAS_REPO_REF" in step_run(wheel_job, "Resolve moving test dependencies once")
     assert "--kffractbias-sha" in step_run(wheel_job, "Build missing test wheels")
-    sequence_tools = step_run(jobs["python-fast"], "Install required sequence tools")
+    sequence_tools = step_run(jobs["python-fast-shards"], "Install required sequence tools")
     assert "apt-get install -y seqkit" in sequence_tools
     assert "seqkit version" in sequence_tools
 
@@ -645,8 +697,32 @@ def test_prepared_sif_metadata_is_validated_without_resolving_new_upstream_tips(
         assert "published_tag=20260831-abcdef0-fedcba987654" in output.read_text()
 
 
+@pytest.mark.parametrize("invalid", [None, "hash", "mixed_metadata", "suite"])
+def test_shared_sif_snapshot_is_verified_without_resolving_new_sources(tmp_path, invalid):
+    job = load_workflow("tests.yml")["jobs"]["sif-python"]
+    output = tmp_path / "github-output"
+    env = os.environ | {
+        "SHARED_RUNTIME_INPUT": "a" * 64, "VALIDATION_SUITE": "runtime-python",
+        "PREPARED_IMAGE_REF": "", "PREPARED_RUNTIME_INPUT": "", "PREPARED_SECURITY_EPOCH": "",
+        "GITHUB_OUTPUT": str(output),
+    }
+    if invalid == "hash":
+        env["SHARED_RUNTIME_INPUT"] = "latest"
+    elif invalid == "mixed_metadata":
+        env["PREPARED_RUNTIME_INPUT"] = "b" * 64
+    elif invalid == "suite":
+        env["VALIDATION_SUITE"] = "unknown"
+    result = subprocess.run(["bash", "-c", step_run(job, "Resolve exact validation runtime input")],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == (invalid is None)
+    if invalid:
+        assert not output.exists()
+    else:
+        assert output.read_text() == "value=" + "a" * 64 + "\n"
+
+
 def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():
-    job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    job = load_workflow("tests.yml")["jobs"]["sif-python"]
     steps = job["steps"]
     identity = named_step(job, "Verify exact validation SIF identity")
     validate = named_step(job, "Run SIF validation checks")
@@ -656,15 +732,16 @@ def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():
 
 
 def test_real_3di_sif_check_remains_independent_of_other_runtime_failures():
-    job = load_workflow("tests.yml")["jobs"]["sif-runtime-validation"]
+    job = load_workflow("tests.yml")["jobs"]["sif-other"]
+    assert "3di" in job["strategy"]["matrix"]["suite"]
     identity = named_step(job, "Verify exact validation SIF identity")
     runtime = named_step(job, "Run SIF validation checks")
     integration = named_step(job, "Run real 3Di integration in SIF")
     save = named_step(job, "Save validated SIF by exact runtime input")
     assert identity["id"] == "sif-identity"
     assert integration["if"] == (
-        "${{ !cancelled() && inputs.validate-3di == 'true' "
-        "&& steps.sif-identity.outcome == 'success' }}"
+        "${{ !cancelled() && (inputs.validate-3di == 'true' || inputs.validation-suite == '3di') "
+        "&& inputs.validation-suite != 'prepare' && steps.sif-identity.outcome == 'success' }}"
     )
     assert "GG_TEST_CSUBST_3DI=1" in integration["run"]
     assert "--gg-strict-runtime" in integration["run"]
