@@ -72,11 +72,67 @@ gg_busco_hmmsearch_wrapper_path() {
   printf '%s\n' "${support_dir}/gg_wrapper_bin/hmmsearch"
 }
 
+# Metaeuk subcommands can omit --threads; constrain their inherited default
+# to this BUSCO invocation without changing BUSCO arguments or parent settings.
+gg_busco_metaeuk_thread_limit() {
+  local requested_threads=1
+  local inherited_threads="${MMSEQS_NUM_THREADS:-}"
+  local argument=""
+  local candidate=""
+  local cpu_pending=0
+  local LC_ALL=C
+
+  for argument in "$@"; do
+    if (( cpu_pending )); then
+      candidate="${argument}"
+      cpu_pending=0
+    else
+      case "${argument}" in
+        --)
+          break
+          ;;
+        --cpu|-c)
+          cpu_pending=1
+          continue
+          ;;
+        --cpu=*|-c=*)
+          candidate="${argument#*=}"
+          ;;
+        -c?*)
+          candidate="${argument#-c}"
+          ;;
+        *)
+          continue
+          ;;
+      esac
+    fi
+    # BUSCO validates the original arguments. A malformed CPU value cannot
+    # make an uncapped Metaeuk default run while BUSCO reports that error.
+    if [[ "${candidate}" =~ ^[+]?0*([1-9][0-9]*)$ ]]; then
+      requested_threads="${BASH_REMATCH[1]}"
+    else
+      requested_threads=1
+    fi
+  done
+
+  if [[ "${inherited_threads}" =~ ^[+]?0*([1-9][0-9]*)$ ]]; then
+    inherited_threads="${BASH_REMATCH[1]}"
+    # Compare decimal strings without overflowing shell arithmetic.
+    if [[ ${#inherited_threads} -lt ${#requested_threads} ||
+          ( ${#inherited_threads} -eq ${#requested_threads} &&
+            "${inherited_threads}" < "${requested_threads}" ) ]]; then
+      requested_threads="${inherited_threads}"
+    fi
+  fi
+  printf '%s\n' "${requested_threads}"
+}
+
 gg_run_busco_with_metaeuk_modified_fas_compat() {
   local wrapper_path=""
   local wrapper_dir=""
   local real_hmmsearch=""
   local wrapped_path=""
+  local metaeuk_thread_limit=""
   local -a busco_command=(busco "$@")
 
   wrapper_path="$(gg_busco_hmmsearch_wrapper_path)"
@@ -116,7 +172,10 @@ gg_run_busco_with_metaeuk_modified_fas_compat() {
     busco_command=(timeout --signal=TERM --kill-after=60s "${GG_BUSCO_TIMEOUT_SECONDS}" "${busco_command[@]}")
   fi
 
+  metaeuk_thread_limit="$(gg_busco_metaeuk_thread_limit "$@")"
+
   PATH="${wrapped_path}" \
+    MMSEQS_NUM_THREADS="${metaeuk_thread_limit}" \
     GG_REAL_HMMSEARCH="${real_hmmsearch}" \
     GG_BUSCO_METAEUK_MODIFIED_FAS_COMPAT=1 \
     "${busco_command[@]}"

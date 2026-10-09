@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from busco_quality_metadata import parse_short_summary
@@ -1197,7 +1197,27 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_change
         print(json.dumps({"species": pair["species"], "delta_complete": row["delta_complete"]}), flush=True)
         return row
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        rows = list(pool.map(one, pairs))
+        pending, rows = {}, []
+        iterator = enumerate(pairs)
+
+        def submit_available():
+            while len(pending) < jobs:
+                try:
+                    index, pair = next(iterator)
+                except StopIteration:
+                    break
+                rows.append(None)
+                pending[pool.submit(one, pair)] = index
+
+        submit_available()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            # Inspect every completed result before admitting replacements.
+            # On error the executor naturally drains all admitted species.
+            for future in sorted(done, key=pending.get):
+                index = pending.pop(future)
+                rows[index] = future.result()
+            submit_available()
     batch.check()
     atomic_json(report / "busco_comparison.json", {"contract": contract, "species": rows})
     with (report / "busco_comparison.tsv").open("w", newline="") as handle:

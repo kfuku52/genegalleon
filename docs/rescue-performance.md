@@ -7,6 +7,24 @@ to every original candidate before validation. The comparison cache binds
 actual BED/protein inputs, comparison options and the relevant toolchain.
 See [gene-model rescue](gene-model-rescue.md) for controls and cache guarantees.
 
+## BUSCO resource bounds
+
+The refinement comparison admits at most `--jobs` species at once. The first
+observed failure stops further admission and waits for admitted species to
+finish naturally. Successful results retain the original species order.
+
+The BUSCO compatibility helper sets the child's `MMSEQS_NUM_THREADS` to the
+requested `--cpu`/`-c` value, or one when it is absent, while retaining a positive
+lower inherited limit. MetaEuk subcommands that omit `--threads` can otherwise
+use the host's online CPU count. The helper preserves the parent environment,
+BUSCO arguments and exit status. These changes do not alter model selection or
+BUSCO scoring thresholds; no whole-workflow speedup is asserted.
+
+The ordinary comparison contract includes the evaluator and wrapper hashes.
+Upgrading these files requires a new report directory. Changing only `--jobs`
+keeps the existing contract; completed leaves still require their exact source,
+summary and full-table hashes before reuse.
+
 ## Baseline evidence
 
 The 2026-10-04/05 run used GeneGalleon 0.8.124, x86_64 SIF, miniprot
