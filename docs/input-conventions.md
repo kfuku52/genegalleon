@@ -603,8 +603,10 @@ Notes:
   and mRNA `product` numeric suffixes (for example `SULTR4;1` becomes
   `SULTR4%3B1`). This runs independently of gene-ID repair and rescue flags.
   The same audit covers chemical linkage lists, nucleosome assembly protein
-  suffixes and structured UniProt description continuations. Unknown orphan
-  attributes still fail.
+  suffixes and structured UniProt continuations in `description` and `Note`.
+  GWH EVM gene rows with an accession of the documented `GWHG…` form can
+  canonicalize their bare `HC` flag to `gwh_gene_confidence=HC`; this does not
+  alter gene IDs or parent relationships. Unknown orphan attributes still fail.
   Existing escapes, parent lists, IDs and coordinates are retained. The repair
   audit records each changed source line and attribute, with source/output SHA256.
   Unrecoverable attribute fragments fail with file/line context; rescue planning

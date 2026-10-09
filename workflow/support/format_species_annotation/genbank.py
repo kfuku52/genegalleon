@@ -19,13 +19,13 @@ from .common import (
     build_gff_genome_seqid_map,
     choose_first_gff_attribute,
     first_token,
-    load_genome_sequences,
     parse_gff_attributes,
     resolve_feature_gene_token,
     reverse_complement,
     sanitize_identifier,
     transcript_feature_gene_token,
 )
+from .genome_intervals import cds_intervals, genome_intervals
 from .grouping import build_gff_cds_grouping_index
 from .grouping_identity import (
     gff_authoritative_gene_token,
@@ -60,6 +60,24 @@ def iter_genbank_records(path):
     with open_text(path, "rt") as handle:
         for record in SeqIO.parse(handle, insdc_flatfile_format(path)):
             yield record
+
+
+def has_insdc_coding_features(path):
+    """Reject assembly-only flatfiles without constructing chromosome strings."""
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    before = tuple(getattr(path.stat(), key) for key in fields)
+    pattern = re.compile(r"(?m)^(?: {5}|FT {3})CDS\s")
+    found, tail = False, ""
+    with open_text(path, "rt") as handle:
+        while chunk := handle.read(1024 * 1024):
+            text = tail + chunk
+            if pattern.search(text):
+                found = True
+                break
+            tail = text[-128:]
+    if before != tuple(getattr(path.stat(), key) for key in fields):
+        raise OSError("INSDC source changed while checking coding annotations")
+    return found
 
 
 def choose_first_feature_qualifier(feature, keys):
@@ -479,131 +497,137 @@ def derive_cds_records_from_gff_and_genome(task):
         for feature in features:
             if not feature["gene_token"]:
                 feature["gene_token"] = inferred
-    genome_sequences = load_genome_sequences(genome_path)
-    rescued_gene_tokens = grouping_index["transcript_gene_tokens"]
-    required_gff_seqids = {
-        feature["seqid"]
-        for features in cds_features_by_transcript.values()
-        for feature in features
-        if str(feature.get("seqid", "") or "").strip() != ""
-    }
-    try:
-        genome_seqid_map, missing_seqids = build_gff_genome_seqid_map(
-            genome_sequences,
-            required_gff_seqids,
-        )
-    except ValueError as exc:
-        raise ValueError(
-            "Genome FASTA for {} has ambiguous sequence-ID aliases required by {}: {}".format(
-                task.get("species_key", ""),
-                gff_path,
-                exc,
+    factory = task.get("_genome_interval_context")
+    context = factory() if factory else genome_intervals(genome_path, cds_intervals(cds_features_by_transcript))
+    with context as genome_sequences:
+        rescued_gene_tokens = grouping_index["transcript_gene_tokens"]
+        required_gff_seqids = {
+            feature["seqid"]
+            for features in cds_features_by_transcript.values()
+            for feature in features
+            if str(feature.get("seqid", "") or "").strip() != ""
+        }
+        try:
+            genome_seqid_map, missing_seqids = build_gff_genome_seqid_map(
+                genome_sequences,
+                required_gff_seqids,
             )
-        ) from exc
-    if len(missing_seqids) > 0:
-        raise ValueError(
-            "Genome FASTA for {} is missing sequence(s) {} required by {}".format(
-                task.get("species_key", ""),
-                ",".join(missing_seqids[:5]),
-                gff_path,
-            )
-        )
-    for transcript_id in sorted(cds_features_by_transcript.keys()):
-        features = cds_features_by_transcript[transcript_id]
-        if len(features) == 0:
-            continue
-        if any(has_trans_splicing_exception(f["attributes"]) for f in features):
-            blocks, _mode = ordered_annotated_blocks(
-                ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in features),
-                transcript_id)
-            pieces = []
-            for seqid, block_strand, start, end in blocks:
-                sequence = genome_sequences[genome_seqid_map.get(seqid, seqid)]
-                if start < 1 or end > len(sequence):
-                    raise ValueError(f"Trans-spliced CDS outside genome bounds for {transcript_id}")
-                piece = sequence[start - 1:end]
-                pieces.append(reverse_complement(piece) if block_strand == "-" else piece)
-            gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
-            header = str(transcript_id)
-            if gene_token:
-                header += f" [gene={gene_token}]"
-            yield header, "".join(pieces)
-            continue
-        strands = sorted({feature["strand"] for feature in features})
-        if len(strands) > 1:
-            sys.stderr.write(
-                "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
-                    transcript_id,
+        except ValueError as exc:
+            raise ValueError(
+                "Genome FASTA for {} has ambiguous sequence-ID aliases required by {}: {}".format(
+                    task.get("species_key", ""),
                     gff_path,
-                    ",".join(strands),
+                    exc,
+                )
+            ) from exc
+        if len(missing_seqids) > 0:
+            raise ValueError(
+                "Genome FASTA for {} is missing sequence(s) {} required by {}".format(
+                    task.get("species_key", ""),
+                    ",".join(missing_seqids[:5]),
+                    gff_path,
                 )
             )
-            continue
-        strand = strands[0]
-        transcript_gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
-        # CDS coordinates define the candidate sequence. Contradictory UTR
-        # annotations must never silently delete coding bases.
-        trimmed_features = features
-        if len(trimmed_features) == 0:
-            continue
-        trimmed_strands = sorted({feature["strand"] for feature in trimmed_features})
-        if len(trimmed_strands) > 1:
-            sys.stderr.write(
-                "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
-                    transcript_id,
-                    gff_path,
-                    ",".join(trimmed_strands),
-                )
-            )
-            continue
-        blocks, _mode = ordered_annotated_blocks(
-            ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in trimmed_features),
-            transcript_id)
-        ordered = [{"seqid": seqid, "strand": block_strand, "start": start, "end": end,
-                    "gene_token": transcript_gene_token} for seqid, block_strand, start, end in blocks]
-        pieces = []
-        gene_token = ""
-        for feature in ordered:
-            if feature["strand"] != strand:
-                raise ValueError("Mixed-strand CDS features for transcript '{}' in {}".format(transcript_id, gff_path))
-            seqid = feature["seqid"]
-            fasta_seqid = genome_seqid_map.get(seqid, seqid)
-            genome_seq = genome_sequences.get(fasta_seqid, "")
-            if genome_seq == "":
-                raise ValueError(
-                    "Genome FASTA for {} is missing sequence '{}' required by {}".format(
-                        task.get("species_key", ""),
-                        seqid,
+        for transcript_id in sorted(cds_features_by_transcript.keys()):
+            features = cds_features_by_transcript[transcript_id]
+            if len(features) == 0:
+                continue
+            if any(has_trans_splicing_exception(f["attributes"]) for f in features):
+                blocks, _mode = ordered_annotated_blocks(
+                    ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in features),
+                    transcript_id)
+                pieces = []
+                for seqid, block_strand, start, end in blocks:
+                    sequence = genome_sequences[genome_seqid_map.get(seqid, seqid)]
+                    if start < 1 or end > len(sequence):
+                        raise ValueError(f"Trans-spliced CDS outside genome bounds for {transcript_id}")
+                    piece = sequence[start - 1:end]
+                    pieces.append(reverse_complement(piece) if block_strand == "-" else piece)
+                gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
+                header = str(transcript_id)
+                if gene_token:
+                    header += f" [gene={gene_token}]"
+                yield header, "".join(pieces)
+                continue
+            strands = sorted({feature["strand"] for feature in features})
+            if len(strands) > 1:
+                sys.stderr.write(
+                    "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
+                        transcript_id,
                         gff_path,
+                        ",".join(strands),
                     )
                 )
-            start_idx = feature["start"] - 1
-            end_idx = feature["end"]
-            piece = genome_seq[start_idx:end_idx]
-            # GFF3 phase annotates codon frame continuity; it does not indicate
-            # bases to trim from the CDS feature when reconstructing the spliced
-            # CDS sequence. We therefore concatenate the full CDS spans in
-            # transcript order and leave any frame repair to the final padding
-            # step used elsewhere in the pipeline.
-            if strand == "-":
-                piece = reverse_complement(piece)
-            if piece != "":
-                pieces.append(piece)
-            if gene_token == "":
-                gene_token = feature["gene_token"]
-        sequence = "".join(pieces)
-        if sequence == "":
-            continue
-        header = str(transcript_id or "").strip()
-        if gene_token != "":
-            header = "{} [gene={}]".format(header, gene_token)
-        yield header, sequence
+                continue
+            strand = strands[0]
+            transcript_gene_token = rescued_gene_tokens.get(transcript_id, "") or transcript_feature_gene_token(features)
+            # CDS coordinates define the candidate sequence. Contradictory UTR
+            # annotations must never silently delete coding bases.
+            trimmed_features = features
+            if len(trimmed_features) == 0:
+                continue
+            trimmed_strands = sorted({feature["strand"] for feature in trimmed_features})
+            if len(trimmed_strands) > 1:
+                sys.stderr.write(
+                    "Warning: skipping transcript '{}' in {} because CDS features use mixed strands: {}\n".format(
+                        transcript_id,
+                        gff_path,
+                        ",".join(trimmed_strands),
+                    )
+                )
+                continue
+            blocks, _mode = ordered_annotated_blocks(
+                ((f["seqid"], f["strand"], f["start"], f["end"], f["attributes"]) for f in trimmed_features),
+                transcript_id)
+            ordered = [{"seqid": seqid, "strand": block_strand, "start": start, "end": end,
+                        "gene_token": transcript_gene_token} for seqid, block_strand, start, end in blocks]
+            pieces = []
+            gene_token = ""
+            for feature in ordered:
+                if feature["strand"] != strand:
+                    raise ValueError("Mixed-strand CDS features for transcript '{}' in {}".format(transcript_id, gff_path))
+                seqid = feature["seqid"]
+                fasta_seqid = genome_seqid_map.get(seqid, seqid)
+                genome_seq = genome_sequences.get(fasta_seqid, "")
+                if genome_seq == "":
+                    raise ValueError(
+                        "Genome FASTA for {} is missing sequence '{}' required by {}".format(
+                            task.get("species_key", ""),
+                            seqid,
+                            gff_path,
+                        )
+                    )
+                start_idx = feature["start"] - 1
+                end_idx = feature["end"]
+                if not 0 <= start_idx < end_idx <= len(genome_seq):
+                    raise ValueError("CDS outside genome bounds for " + transcript_id)
+                piece = genome_seq[start_idx:end_idx]
+                # GFF3 phase annotates codon frame continuity; it does not indicate
+                # bases to trim from the CDS feature when reconstructing the spliced
+                # CDS sequence. We therefore concatenate the full CDS spans in
+                # transcript order and leave any frame repair to the final padding
+                # step used elsewhere in the pipeline.
+                if strand == "-":
+                    piece = reverse_complement(piece)
+                if piece != "":
+                    pieces.append(piece)
+                if gene_token == "":
+                    gene_token = feature["gene_token"]
+            sequence = "".join(pieces)
+            if sequence == "":
+                continue
+            header = str(transcript_id or "").strip()
+            if gene_token != "":
+                header = "{} [gene={}]".format(header, gene_token)
+            yield header, sequence
 
 
 def derive_cds_records_from_gbff(task):
     gbff_path = task.get("gbff_path")
     if gbff_path is None:
         raise ValueError("GBFF input is required to derive CDS for {}".format(task.get("species_key", "")))
+    if not has_insdc_coding_features(gbff_path):
+        return
     for _gene_entry, transcripts in iter_gbff_coding_entries(gbff_path):
         for transcript in transcripts:
             header = transcript["transcript_token"]

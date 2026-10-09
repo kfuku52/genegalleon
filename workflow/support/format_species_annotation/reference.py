@@ -21,6 +21,71 @@ class GenomeReferenceIndex(dict):
         self.canonical_ids = {}
 
 
+def genome_header_aliases(header):
+    normalized = apply_common_replacements(header.strip())
+    token = first_token(normalized)
+    aliases = {first_token(header), token, normalized}
+    original = re.search(r"(?:^|\s)OriSeqID=([^\s;]+)", header)
+    declared = None
+    if original:
+        aliases.update((original[1], apply_common_replacements(original[1])))
+        match = re.search(r"(?:^|\s)Len=(\d+)(?:\s|$)", header)
+        declared = int(match[1]) if match else None
+    return token, aliases, declared
+
+
+def add_genome_reference(index, seen, header, length):
+    token, aliases, declared = genome_header_aliases(header)
+    if not token or token in seen:
+        raise ValueError("Empty or duplicate genome FASTA ID: '{}'".format(token))
+    seen.add(token)
+    if declared is not None and declared != length:
+        raise ValueError("FASTA OriSeqID length disagrees with sequence for '{}'".format(token))
+    for alias in aliases:
+        previous = index.canonical_ids.get(alias)
+        if previous is not None and previous != token:
+            raise ValueError("Ambiguous genome FASTA alias: '{}'".format(alias))
+        index[alias] = length
+        index.canonical_ids[alias] = token
+
+
+def genome_fragments(path, chunk_bytes=1024 * 1024, *, strict=True):
+    """Yield bounded headers/sequence fragments, including unwrapped FASTA."""
+    for handle in genome_text_handles(Path(path)):
+        pending, line_start, have_header = "", True, False
+        while chunk := handle.read(chunk_bytes):
+            data, pending = pending + chunk, ""
+            positions = [0] if line_start and data.startswith(">") else []
+            offset = data.find("\n>")
+            while offset >= 0:
+                positions.append(offset + 1)
+                offset = data.find("\n>", offset + 2)
+            first = positions[0] if positions else len(data)
+            if text := "".join(data[:first].split()):
+                if not have_header:
+                    if strict:
+                        raise ValueError("Genome sequence precedes its FASTA header")
+                else:
+                    yield "sequence", text
+            for i, pos in enumerate(positions):
+                segment = data[pos:positions[i + 1] if i + 1 < len(positions) else len(data)]
+                newline = segment.find("\n")
+                if newline < 0:
+                    pending = segment
+                    break
+                if strict and newline > 1024 * 1024:
+                    raise ValueError("Genome FASTA header exceeds 1 MiB")
+                yield "header", segment[1:newline].rstrip("\r")
+                have_header = True
+                if text := "".join(segment[newline + 1:].split()):
+                    yield "sequence", text
+            if strict and len(pending) > 1024 * 1024:
+                raise ValueError("Genome FASTA header exceeds 1 MiB")
+            line_start = bool(pending) or data.endswith("\n")
+        if pending:
+            yield "header", pending[1:].rstrip("\r\n")
+
+
 def genome_text_handles(path):
     if any(path.name.lower().endswith(suffix) for suffix in FASTA_ARCHIVE_EXTENSIONS):
         with tarfile.open(path, "r:*") as archive:
@@ -49,40 +114,17 @@ def genome_reference_index(path):
     def finish():
         if header is None:
             return
-        normalized = apply_common_replacements(header)
-        token = first_token(normalized)
-        if not token or token in seen:
-            raise ValueError("Empty or duplicate genome FASTA ID: '{}'".format(token))
-        seen.add(token)
-        aliases = {first_token(header), token, normalized}
-        original = re.search(r"(?:^|\s)OriSeqID=([^\s;]+)", header)
-        if original:
-            aliases.update((original[1], apply_common_replacements(original[1])))
-            declared = re.search(r"(?:^|\s)Len=(\d+)(?:\s|$)", header)
-            if declared and int(declared[1]) != length:
-                raise ValueError("FASTA OriSeqID length disagrees with sequence for '{}'".format(token))
-        for alias in aliases:
-            previous = index.canonical_ids.get(alias)
-            if previous is not None and previous != token:
-                raise ValueError("Ambiguous genome FASTA alias: '{}'".format(alias))
-            index[alias] = length
-            index.canonical_ids[alias] = token
+        add_genome_reference(index, seen, header, length)
 
-    for handle in genome_text_handles(path):
-        line_start = True
-        for line in iter(lambda handle=handle: handle.readline(1024 * 1024), ""):
-            if line_start and line.startswith(">"):
-                if not line.endswith("\n") and len(line) == 1024 * 1024:
-                    raise ValueError("Genome FASTA header exceeds 1 MiB")
-                finish()
-                header, length = line[1:].strip(), 0
-            elif line.strip():
-                if header is None:
-                    raise ValueError("Genome sequence precedes its FASTA header")
-                length += len(re.sub(r"\s+", "", line))
-            line_start = line.endswith("\n")
-        finish()
-        header, length = None, 0
+    for kind, text in genome_fragments(path):
+        if kind == "header":
+            finish()
+            header, length = text.strip(), 0
+        elif text:
+            if header is None:
+                raise ValueError("Genome sequence precedes its FASTA header")
+            length += len(text)
+    finish()
     if before != tuple(getattr(path.stat(), field) for field in fields):
         raise OSError("Genome FASTA changed while reading reference names: " + str(path))
     if not seen:
@@ -90,7 +132,7 @@ def genome_reference_index(path):
     return index
 
 
-def gff_reference_mapping(gff_path, genome_path):
+def gff_reference_mapping(gff_path, genome_path, *, reference_index=None):
     if genome_path is None:
         return None
     seqids, declared = set(), set()
@@ -103,7 +145,7 @@ def gff_reference_mapping(gff_path, genome_path):
             directive = line.split()
             if len(directive) == 4 and directive[1] not in excluded:
                 declared.add(directive[1])
-    index = genome_reference_index(genome_path)
+    index = genome_reference_index(genome_path) if reference_index is None else reference_index
     mapping, missing = build_gff_genome_seqid_map(index, seqids)
     if missing:
         raise ValueError("GFF references absent from genome FASTA: " + ", ".join(missing[:20]))

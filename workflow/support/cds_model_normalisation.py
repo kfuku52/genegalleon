@@ -81,9 +81,10 @@ def ambiguity_to_n(sequence):
 
 class CdsModelNormaliser:
     def __init__(self, source, directory, side, *, genome_records=None, reference_mapping=None,
-                 gff_lines=None, attribute_parser=None, coding_only=False):
+                 gff_lines=None, attribute_parser=None, coding_only=False, genome_context=None):
         self.source, self.directory, self.side = source, Path(directory), side
         self.genome_records, self.reference_mapping = genome_records, reference_mapping
+        self.genome_context = genome_context
         self.corrected = {}
         self.rows, self.models, self.nodes = [], defaultdict(list), defaultdict(list)
         self.exons, self.features = defaultdict(list), []
@@ -207,6 +208,11 @@ class CdsModelNormaliser:
         return "".join(parts)
 
     def _open_genome(self):
+        if self.genome_context is not None:
+            self._genome_context = self.genome_context()
+            self.genome = self._genome_context.__enter__()
+            self.reference_lengths = dict(zip(self.genome.references, self.genome.lengths, strict=True))
+            return
         import pysam
         if self.genome_records is None:
             from gene_model_catalog import indexed_genome

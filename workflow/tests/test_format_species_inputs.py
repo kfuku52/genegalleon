@@ -238,16 +238,18 @@ def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path,
     monkeypatch.setenv("TMPDIR", str(runtime))
     monkeypatch.setattr(tempfile, "tempdir", None)
     selected = override if explicit else runtime
-    original = tempfile.TemporaryDirectory
+    original = tempfile.TemporaryFile
     created = []
+    handles = []
 
-    def temporary_directory(*args, **kwargs):
-        if kwargs.get("prefix") == ".anchor-genome-":
-            assert Path(kwargs["dir"]) == selected
-            created.append(Path(kwargs["dir"]))
-        return original(*args, **kwargs)
+    def temporary_file(*args, **kwargs):
+        assert Path(kwargs["dir"]) == selected
+        created.append(Path(kwargs["dir"]))
+        handle = original(*args, **kwargs)
+        handles.append(handle)
+        return handle
 
-    monkeypatch.setattr(cds_model_normalisation.tempfile, "TemporaryDirectory", temporary_directory)
+    monkeypatch.setattr(cds_model_normalisation.tempfile, "TemporaryFile", temporary_file)
     task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)]}])
     if explicit:
         task["_normalisation_scratch"] = override
@@ -256,6 +258,7 @@ def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path,
     result = module.format_cds(task, output, False, False)
     assert dict(module.iter_fasta_records(result["output_path"])) == {"Test_species_g1": "ATGAAACCCTAA"}
     assert created == [selected]
+    assert all(handle.closed for handle in handles)
     assert not list(selected.iterdir())
 
 
@@ -5046,10 +5049,10 @@ def test_annotation_only_gff_does_not_load_genome(tmp_path, monkeypatch):
     gff = tmp_path / "assembly.gff"
     gff.write_text("##gff-version 3\nchr1\t.\tregion\t1\t9\t.\t+\t.\tID=chr1\n")
 
-    def unexpected_load(path):
+    def unexpected_load(*args, **kwargs):
         pytest.fail("A GFF without nuclear CDS must not load the genome")
 
-    monkeypatch.setattr(genbank, "load_genome_sequences", unexpected_load)
+    monkeypatch.setattr(genbank, "genome_intervals", unexpected_load)
     task = {"provider": "direct", "species_key": "Species_a", "species_prefix": "Species_a",
             "gff_path": gff, "genome_path": tmp_path / "huge.fa"}
     assert list(genbank.derive_cds_records_from_gff_and_genome(task)) == []

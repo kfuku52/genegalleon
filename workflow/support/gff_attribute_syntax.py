@@ -10,15 +10,16 @@ import re
 import shlex
 from pathlib import Path
 
-GFF_ATTRIBUTE_SYNTAX_VERSION = 4
+GFF_ATTRIBUTE_SYNTAX_VERSION = 5
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
 # Chemical linkage lists in publisher descriptions, e.g. endo-1,3;1,4-beta.
 # Restrict repair to this complete lexical pattern, never arbitrary orphan text.
 LINKAGE_CONTINUATION = re.compile(r"\d+,\d+-[A-Za-z][^;=]*")
-NAP_CONTINUATION = re.compile(r"[124] isoform X\d+ \[[A-Za-z][A-Za-z .-]+\]")
-UNIPROT_CONTINUATION = re.compile(r" (?:AltName: Full=[^;=]+|Short=[^;=]+|Flags: (?:Precursor|Fragment)(?: \[[A-Za-z][A-Za-z .-]+\])?)")
+NAP_CONTINUATION = re.compile(r"[1-4](?:-like(?: isoform X\d+|, partial)?| isoform X\d+)? \[[A-Za-z][A-Za-z .-]+\]")
+UNIPROT_CONTINUATION = re.compile(r" (?:AltName: (?:Full|Allergen)=[^;=]+|Includes: RecName: Full=[^;=]+|Short=[^;=]+|Flags: (?:Precursor|Fragment)(?: \[[A-Za-z][A-Za-z .-]+\])?)")
+UNIPROT_METADATA = re.compile(r"^(?:description|Note)=(?:[A-Z0-9_]+ )?RecName: Full=")
 
 
 def file_sha256(path):
@@ -68,19 +69,24 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
             key, value = field.strip().split(":", 1)
             repaired.append(key + "=" + value.replace("=", "%3D").replace(",", "%2C"))
             previous_key = key
-        elif (previous_key == "description" and repaired[-1].startswith("description=RecName: Full=")
+        elif (previous_key in {"description", "Note"} and UNIPROT_METADATA.match(repaired[-1])
               and UNIPROT_CONTINUATION.fullmatch(field)):
             repaired[-1] += "%3B" + field.replace("=", "%3D").replace(",", "%2C")
         elif KEY_VALUE.match(field.strip()):
             repaired.append(field)
             previous_key = field.strip().split("=", 1)[0]
+        elif (source.lower() == "evm" and feature.lower() == "gene" and field == "HC"
+              and previous_key == "Accession"
+              and re.fullmatch(r"Accession=GWHG[A-Z]{4}\d+[.]\d+", repaired[-1])):
+            repaired.append("gwh_gene_confidence=HC")
+            previous_key = None
         else:
             pattern = None
-            if (previous_key == "description"
-                    and re.search(r"nucleosome assembly protein 1$", repaired[-1]) and NAP_CONTINUATION.fullmatch(field)):
+            if (previous_key in {"description", "Note"}
+                    and re.search(r"nucleosome (?:assembly|assly) protein 1$", repaired[-1]) and NAP_CONTINUATION.fullmatch(field)):
                 repaired[-1] += "%3B" + field.replace("=", "%3D").replace(",", "%2C")
                 continue
-            if (previous_key == "description" and re.search(r"\d+,\d+$", repaired[-1])
+            if (previous_key in {"description", "Note"} and re.search(r"\d+,\d+$", repaired[-1])
                     and LINKAGE_CONTINUATION.fullmatch(field)):
                 repaired[-1] = repaired[-1].replace(",", "%2C") + "%3B" + field.replace(",", "%2C")
                 previous_key = None
@@ -112,8 +118,11 @@ def normalise_line(line, path, line_number, changes):
         raise ValueError(f"{path}:{line_number}: {error}") from error
     if parts[8] == before:
         return line
-    reason = ("canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"
-              else "escaped_description_linkage_semicolon" if re.search(r"description=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
+    reason = ("canonicalised_gwh_confidence_flag" if "gwh_gene_confidence=HC" in parts[8] and re.search(r"(?:^|;)HC(?:;|$)", before)
+              else "escaped_NAP_metadata_semicolon" if re.search(r"(?:^|;)Note=[^;]*nucleosome", before) and "%3B" in parts[8]
+              else "escaped_uniprot_Note_semicolon" if re.search(r"(?:^|;)Note=[^;]*RecName: Full=", before)
+              else "canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"
+              else "escaped_description_linkage_semicolon" if re.search(r"(?:description|Note)=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
               else "escaped_description_metadata_semicolon" if "description=" in before and "description=" in parts[8]
               else "escaped_funannotate_metadata_semicolon")
     changes.append({"source_line": line_number, "before": before, "after": parts[8], "reason": reason})

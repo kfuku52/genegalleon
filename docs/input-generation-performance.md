@@ -63,6 +63,30 @@ keeps large cohorts below Apptainer's engine-configuration and environment limit
 without exposing additional paths. The writable target workspace, donor lock
 namespaces and conflicting explicit mounts are excluded from grouping.
 
+## Bounded genome reconstruction
+
+FASTA-backed GFF/CDS reconstruction scans the compressed genome in bounded
+fragments and copies only the union of declared CDS/exon intervals to private
+task scratch. It retains reference names and lengths, not chromosome strings or
+a full decompressed genome copy. Gene spans and introns are excluded. The same
+reader serves CDS extraction and normalization within one formatter invocation;
+reference mapping uses its already checked metadata. Scratch is closed on
+success and failure and follows the formatter's scratch directory or `TMPDIR`.
+
+Memory depends on annotation metadata, read buffers and the largest assembled
+CDS, rather than chromosome length. Scratch space depends on selected intervals.
+Sequence-ID aliases, duplicate/ambiguous names, declared lengths and coordinate
+bounds remain checked. Source identity fences and fresh provenance hashes remain
+required; there is no persistent index or checksum cache for mutable inputs.
+The entire gzip still needs to be scanned, and independent hashing/validation
+phases still read their inputs.
+
+Assembly-only GBFF/EMBL inputs are checked for coding features before Biopython
+constructs chromosome sequences. An absent nuclear annotation still fails with
+the existing missing-CDS error; this optimization does not infer genes.
+Genome FASTA formatting uses the same bounded parser while preserving sequence
+case conversion, 80-column output, organelle filtering and compression settings.
+
 ## Timing records
 
 Native input generation writes advisory JSONL under
@@ -145,6 +169,39 @@ caches, one warmup and three alternating trials gave these medians:
 The sum of phase medians fell by 65.1%, with two thirds fewer hashed bytes.
 This measures prepared-input reuse on warm local storage, not NAS throughput or
 whole-job elapsed time. Fresh content verification still reads all raw inputs.
+
+For genome reconstruction and formatting, the revision comparison harness uses
+one 256 MiB chromosome, 2,000 split CDS models on both strands, a reference alias
+and mixed-case sequence. It compares output SHA-256 and record counts before
+reporting results:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_genome_extraction.py \
+  --revision 4b5dee6 --mib 256 --genes 2000 --repeats 3
+
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_genome_extraction.py \
+  --revision 4b5dee6 --mib 256 --genes 2000 --repeats 3 --mode format
+```
+
+Run in a checkout with the baseline Git revision available. On 2026-10-09, a
+fresh qualified Docker runtime (Linux arm64, Python 3.12.15), one discarded
+warmup and three alternating measured trials gave these medians:
+
+| Operation | v0.8.210 (`4b5dee6`) | Bounded reader |
+| --- | ---: | ---: |
+| GFF-derived CDS extraction | 4.1268 s | 0.6642 s |
+| Extraction process peak RSS | 841.14 MiB | 62.43 MiB |
+| Genome FASTA formatting and output hashing | 1.7018 s | 1.4651 s |
+| Formatting process peak RSS | 52.11 MiB | 60.75 MiB |
+
+Extraction wall time fell by 83.9% and peak RSS by 92.6%, with identical 2,000
+records and output hashes. Genome formatting fell by 13.9%, with identical
+decompressed output; larger read buffers added about 8.6 MiB to its already
+bounded memory use. These are isolated synthetic measurements, not a
+whole-project completion estimate. Full source GFF syntax checks also passed
+for the affected GWH and Fragaria annotations; a real 2 MiB Paris genome prefix
+with two complete models passed extraction and normalization. A full Paris
+genome regeneration was not run as part of this software verification.
 
 On 2026-10-05, comparison with v0.8.132 in the same qualified Docker runtime
 (Linux arm64, Python 3.12.14) used a 1,024 MiB nominal synthetic genome, warm
