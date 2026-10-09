@@ -41,7 +41,7 @@ try:
     from gene_model_species_profiles import parameters_for, read_profiles
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
-    from input_generation_array_state import atomic_json, digest, digest_paths
+    from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from refinement_input_snapshot import RefinementInputSnapshot
     from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
@@ -63,7 +63,7 @@ except ImportError:
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
-    from .input_generation_array_state import atomic_json, digest, digest_paths
+    from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .refinement_input_snapshot import RefinementInputSnapshot
     from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
@@ -1308,8 +1308,8 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
     return ''.join(lines)
 
 
-def selected_gff_rows(original, transcript_ids, *, retain_all=False):
-    """Canonicalize source relationships, retaining selected or all features."""
+def _gff_source_graph(original):
+    """Parse source relationships once without retaining derived view edits."""
     records, parents, implicit = [], {}, {}
     for line in original.splitlines(keepends=True):
         if line.strip() == '##FASTA':
@@ -1361,6 +1361,12 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
                 fields[8] = fields[8].rstrip(';') + ';' + ';'.join(additions)
                 line = '\t'.join(fields) + '\n'
         records.append((line, fields, attributes, parent_ids))
+    return records, parents, implicit
+
+
+def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False):
+    """Render a selected or complete view without mutating the parsed graph."""
+    records, parents, implicit = source_graph
     if retain_all:
         transcript_ids = set(transcript_ids) | set(implicit)
     ancestors, pending = set(), list(transcript_ids)
@@ -1418,11 +1424,17 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
                 retained = [parent for parent in parent_ids if parent in (structural_parents if structural else descendants)]
                 if not retained:
                     continue
+                fields = fields[:]
                 parts = fields[8].split(';')
                 fields[8] = ';'.join('Parent=' + ','.join(quote(parent, safe='._-:') for parent in retained) if part.startswith('Parent=') else part for part in parts)
                 line = '\t'.join(fields) + '\n'
             lines.append(line)
     return ''.join(lines)
+
+
+def selected_gff_rows(original, transcript_ids, *, retain_all=False):
+    """Canonicalize source relationships, retaining selected or all features."""
+    return _selected_gff_source_rows(_gff_source_graph(original), transcript_ids, retain_all=retain_all)
 
 
 def extend_gene_bounds(original, bounds):
@@ -1635,20 +1647,24 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
 def finalize(root, value):
     final = select(root, value, predictions=True)
     db = catalog_index(root, value, predictions=True)
-    selections = json.loads((final / 'selection.json').read_text())['selections']
     dependencies = {'selection': digest(final / 'receipt.json'),
                     'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     def build(tmp):
+        selections = json.loads((final / 'selection.json').read_text())['selections']
+        selected_by_species = defaultdict(list)
+        for selected_row in selections:
+            selected_by_species[selected_row['species']].append(selected_row)
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates'):
             (tmp / role).mkdir()
         shutil.copyfile(final / 'representative_map.tsv', tmp / 'representative_map.tsv')
+        representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         for name in value['species']:
             catalog = json.loads((root / 'catalog' / name / 'catalog_metadata.json').read_text())
             catalog['loci'] = iter_loci(db, name)
             source = value['request']['sources'][name]
-            selected = {r['gene_id']: r for r in selections if r['species'] == name}
+            selected = {r['gene_id']: r for r in selected_by_species[name]}
             paths = {'cds': tmp / 'species_cds' / (name + '.fa'), 'protein': tmp / 'species_protein' / (name + '.fa'),
                      'gff': tmp / 'species_gff' / (name + '.gff3'), 'genome': tmp / 'species_genome' / (name + '.fa'),
                      'analysis_cds': tmp / 'analysis_cds' / (name + '.fa'), 'analysis_gff': tmp / 'analysis_gff' / (name + '.gff3')}
@@ -1667,7 +1683,7 @@ def finalize(root, value):
                 shutil.copyfile(source['gff'], source_annotation)
             original = source_annotation.read_bytes().decode('utf-8')
             directive = re.search(r'^##FASTA(?:\r?\n|$)', original, flags=re.MULTILINE)
-            before_fasta, sep, embedded = (original[:directive.start()], '##FASTA', original[directive.start() + len('##FASTA'):]) if directive else (original, '', '')
+            sep, embedded = ('##FASTA', original[directive.start() + len('##FASTA'):]) if directive else ('', '')
             additions, predicted_rows, original_transcripts, expanded_bounds, analysis_candidates = [], [], set(), {}, []
             with paths['cds'].open('w') as cds, paths['protein'].open('w') as pep, paths['gff'].open('w') as gff, \
                     paths['analysis_cds'].open('w') as analysis_cds, \
@@ -1713,14 +1729,17 @@ def finalize(root, value):
                             expanded_bounds[c['source_gene_id']] = min(old[0], start), max(old[1], end)
                             additions.extend(lines)
                     changes.append({**chosen, 'selected_origin': candidate['origin']})
-                gff.write(selected_gff_rows(original, original_transcripts) + ''.join(predicted_rows))
+                source_graph = _gff_source_graph(original)
+                gff.write(_selected_gff_source_rows(source_graph, original_transcripts) + ''.join(predicted_rows))
             paths['analysis_gff'].write_text(analysis_gff_rows(paths['gff'].read_text(), analysis_candidates))
-            derived_original, bound_changes = extend_gene_bounds(selected_gff_rows(before_fasta, set(), retain_all=True), expanded_bounds)
+            derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
             gene_bounds_audit.extend(dict(species=name, **row) for row in bound_changes)
             full_path.write_text(derived_original.rstrip() + '\n' + ''.join(additions) + (sep + embedded if sep else ''))
+            del source_graph
+            map_hashes = representative_map_proof.read([tmp / 'representative_map.tsv'])
             row = {'species': name, **{k: str((root / 'effective' / p.relative_to(tmp)).resolve()) for k, p in paths.items()},
                    'representative_map': str((root / 'effective' / 'representative_map.tsv').resolve()),
-                   'genetic_code': source['genetic_code'], 'representative_map_sha256': digest(tmp / 'representative_map.tsv')}
+                   'genetic_code': source['genetic_code'], 'representative_map_sha256': map_hashes[str(tmp / 'representative_map.tsv')]}
             for k, path in paths.items():
                 row[k + '_sha256'] = digest(path)
             rows.append(row)
@@ -1736,6 +1755,7 @@ def finalize(root, value):
                                          'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired'} for r in selections),
                                          'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in selections),
                                          'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes)})
+        representative_map_proof.check()
     return stage(root, 'effective', {'dependencies': dependencies}, build)
 
 

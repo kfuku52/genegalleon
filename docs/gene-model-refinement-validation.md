@@ -501,6 +501,41 @@ Reproduce the holdout component with
 optional `--species-profiles FILE` freezes explicitly chosen target thresholds.
 Run through `workflow/tests/run_in_runtime.sh` with the intended runtime.
 
+## Effective-view finalization
+
+Finalization partitions representative rows once while preserving species order,
+first gene insertion order and the last selection for a repeated gene. It parses
+each source GFF once for the selected and complete annotation views; filtering a
+shared Parent attribute does not modify the retained source graph. Analysis GFF
+construction remains separate. The copied common representative map receives
+one fresh full SHA check plus generation fences through publication. Source,
+dependency and output-byte verification remain unchanged. A verified effective
+resume avoids decoding unused selections.
+
+A bounded synthetic comparison used 3,000 original loci in each of three shapes:
+3 species with 2 coding isoforms, 12 species with 2 isoforms, and 3 species with
+8 isoforms. Each shape had two warmups followed by ABBAAB, three measured
+trials per implementation, on one CPU in the normal 0.8.210 SIF. Separate fresh
+children performed prerequisite setup, the complete normal finalize call, and
+ordinary baseline output verification. All 24 effective views had identical
+biological and audit bytes, and all 72 children exited normally.
+
+| Synthetic shape | Full finalize median, original to optimized | Measured ranges, original / optimized | Child lifetime peak RSS medians, original to optimized |
+| --- | --- | --- | --- |
+| 3 species, 2 isoforms | 2.505 to 2.324 s | 2.420–2.917 / 2.229–2.586 s | 82.6 to 89.7 MiB |
+| 12 species, 2 isoforms | 3.010 to 2.879 s | 2.967–3.908 / 2.837–3.229 s | 70.8 to 71.9 MiB |
+| 3 species, 8 isoforms | 4.467 to 3.698 s | 4.426–4.494 / 3.605–4.096 s | 103.6 to 108.9 MiB |
+
+The first two elapsed-time ranges overlap and include a slower optimized pair.
+The 8-isoform trials were faster in all three matched pairs, with a 17.2% lower
+elapsed median and 15.2% lower CPU median. Retaining the graph increased measured
+child RSS, rather than reducing it. Peak RSS includes module loading, initial
+input verification and end fences, but excludes the separate setup and verifier
+children. Primary timing includes the full finalize call, not just its builder:
+selection decoding moved across the builder boundary. Caches were not evicted,
+and shared machine I/O can affect elapsed time. These small component workloads
+do not establish whole-pipeline or hundreds-of-species performance.
+
 ## General limits
 
 Refinement commands retain an invocation-local proof for each completed stage

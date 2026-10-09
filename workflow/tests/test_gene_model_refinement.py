@@ -553,15 +553,29 @@ def test_competing_predictions_for_separate_loci_cannot_both_claim_new_interval(
     assert all(not row["candidate"]["quality"]["representative_eligible"] for row in result)
 
 
-def test_off_mode_stages_restart_and_effective_catalog_agrees_with_source_path(tmp_path):
+def test_off_mode_stages_restart_and_effective_catalog_agrees_with_source_path(tmp_path, monkeypatch):
     inputs, edges, rows = tiny_inputs(tmp_path)
+    for row in rows:
+        path = Path(row["gff"])
+        source = path.read_text()
+        path.write_text(source.replace("##gff-version 3\n", "##gff-version 3\n"
+                                      "chr1\ts\texon\t1\t6\t.\t+\t.\tID=shared;Parent=t1,t2;Note=provider\n"))
     root = tmp_path / "run"
     sources = {row[role]: Path(row[role]).read_bytes() for row in rows for role in ("cds", "gff", "genome")}
     value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
     assert refinement.plan(root, inputs=inputs, edges=edges, mode="off") == value
     effective = refinement.finalize(root, value)
     receipts = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("receipt.json")}
-    assert refinement.finalize(root, value) == effective
+    original_read = Path.read_text
+
+    def reject_unused_selection_decode(path, *args, **kwargs):
+        if path == root / "selection_final" / "selection.json":
+            raise AssertionError("Verified effective resume decoded unused selections")
+        return original_read(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", reject_unused_selection_decode)
+        assert refinement.finalize(root, value) == effective
     assert receipts == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("receipt.json")}
     manifest = refinement.verify_inputs(effective / "inputs.tsv")
     assert len(manifest) == 3
@@ -577,9 +591,69 @@ def test_off_mode_stages_restart_and_effective_catalog_agrees_with_source_path(t
         assert candidate["cds"] == "ATGAAACCCTAA"
         full = (effective / "full_annotation" / (row["species"] + ".gff3")).read_text()
         assert "ID=t1;Parent=g" in full and "ID=t2;Parent=g" in full
+        assert "ID=shared;Parent=t1,t2;Note=provider" in full
+        assert "ID=shared;Parent=t1;Note=provider" in Path(row["gff"]).read_text()
+        assert "ID=shared;Parent=t1;Note=provider" in Path(row["analysis_gff"]).read_text()
+        assert (effective / "source_annotation" / (row["species"] + ".gff3")).read_bytes() == sources[
+            str(tmp_path / (row["species"] + ".gff3"))]
+        assert row["representative_map_sha256"] == refinement.digest(effective / "representative_map.tsv")
     assert all(Path(path).read_bytes() == content for path, content in sources.items())
     expected = [row["source_transcript_id"] for row in refinement.read_table(effective / "representative_map.tsv")]
     assert expected == ["t1"] * 3
+
+
+@pytest.mark.parametrize("boundary", ["second_species", "after_summary"])
+def test_effective_rejects_common_map_changes_before_publication(tmp_path, monkeypatch, boundary):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    sources = {row[role]: Path(row[role]).read_bytes() for row in rows for role in ("cds", "gff", "genome")}
+    root = tmp_path / "run"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    refinement.select(root, value, predictions=True)
+    copied_map, coding_paths, changed = None, 0, False
+    original_copy = shutil.copyfile
+
+    def capture_copy(source, destination, *args, **kwargs):
+        nonlocal copied_map
+        result = original_copy(source, destination, *args, **kwargs)
+        if Path(destination).name == "representative_map.tsv":
+            copied_map = Path(destination)
+        return result
+
+    def change_map():
+        nonlocal changed
+        assert copied_map is not None
+        with copied_map.open("ab") as handle:
+            handle.write(b"# changed after initial representative-map proof\n")
+        changed = True
+
+    original_coding = refinement.analysis_coding_candidate
+
+    def change_between_species(*args, **kwargs):
+        nonlocal coding_paths
+        result = original_coding(*args, **kwargs)
+        coding_paths += 1
+        if boundary == "second_species" and coding_paths == 2:
+            change_map()
+        return result
+
+    state = import_module("input_generation_array_state")
+    original_replace = state.os.replace
+
+    def change_after_summary(source, destination, *args, **kwargs):
+        result = original_replace(source, destination, *args, **kwargs)
+        if copied_map is not None and Path(destination) == copied_map.parent / "summary.json" and boundary == "after_summary":
+            change_map()
+        return result
+
+    monkeypatch.setattr(shutil, "copyfile", capture_copy)
+    monkeypatch.setattr(refinement, "analysis_coding_candidate", change_between_species)
+    monkeypatch.setattr(state.os, "replace", change_after_summary)
+    with pytest.raises(OSError):
+        refinement.finalize(root, value)
+    assert changed
+    assert not (root / "effective" / "receipt.json").exists()
+    assert (root / "effective.failed").exists()
+    assert all(Path(path).read_bytes() == content for path, content in sources.items())
 
 
 def test_frozen_plan_rejects_parameter_or_input_mutation(tmp_path):
