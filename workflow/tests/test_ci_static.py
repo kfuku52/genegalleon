@@ -317,10 +317,20 @@ def test_sif_runtime_validation_starts_after_fast_preflight_guards():
 
 
 def test_sif_runtime_validation_builds_current_dependency_corrected_runtime():
-    sif_job = load_workflow("tests.yml")["jobs"]["prepare-sif"]
+    workflow = load_workflow("tests.yml")
+    sif_job = workflow["jobs"]["prepare-sif"]
     validation = named_step(sif_job, "Prepare exact SIF once")
 
-    assert validation["with"] == {"validation-suite": "prepare"}
+    assert validation["with"] == {
+        "validation-suite": "prepare",
+        "prepared-runtime-input": (
+            "${{ github.event_name == 'workflow_dispatch' && inputs.cached_runtime_input || '' }}"
+        ),
+    }
+    snapshot = workflow["on"]["workflow_dispatch"]["inputs"]["cached_runtime_input"]
+    assert snapshot["default"] == ""
+    assert snapshot["required"] == "false"
+    assert snapshot["type"] == "string"
 
 
 def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():

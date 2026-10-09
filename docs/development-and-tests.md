@@ -199,6 +199,14 @@ a complete trusted run can save a newly validated SIF. Container and release
 publication retain the complete validation command. Parallel CI targets short
 elapsed time with a prepared runtime; new builds and model downloads can take longer.
 
+For a one-off timing measurement or reproduction, manual `tests.yml` runs accept
+`cached_runtime_input`: the runtime-input hash of an already validated SIF cache.
+For example, with that hash in `RUNTIME_INPUT_HASH`, run
+`gh workflow run tests.yml --ref main -f cached_runtime_input="${RUNTIME_INPUT_HASH}"`.
+Every test still runs and verifies the selected SIF identity; an unavailable cache
+fails the run. Leaving the input empty, including all push and PR runs, resolves
+the current upstream branches as usual. Snapshot selections remain per-run metadata.
+
 ## Run all Python and R checks
 
 ```bash

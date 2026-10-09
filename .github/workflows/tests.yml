@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      cached_runtime_input:
+        description: "Validated SIF runtime-input hash for a one-off reproduction; empty follows current upstream branches"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -383,6 +389,7 @@ jobs:
         uses: ./.github/actions/validate-sif
         with:
           validation-suite: prepare
+          prepared-runtime-input: ${{ github.event_name == 'workflow_dispatch' && inputs.cached_runtime_input || '' }}
 
       - name: Share uncached SIF with validation partitions
         if: steps.sif.outputs.cache-hit != 'true'
