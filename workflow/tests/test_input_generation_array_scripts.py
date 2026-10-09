@@ -755,7 +755,7 @@ def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cac
     species = "Arabidopsis_thaliana"
     write_direct_species_fixture(raw, species)
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     manifest = tmp_path / "source.tsv"
     base = f"http://127.0.0.1:{server.server_port}/{species}/{species}"
@@ -952,7 +952,7 @@ def test_required_genome_rejects_partial_staged_download_without_receipt(tmp_pat
     write_direct_species_fixture(raw, species)
     (raw / species / f"{species}.genome.fa").unlink()
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"
@@ -989,7 +989,7 @@ def test_required_gff_rejects_partial_staged_download_without_receipt(tmp_path):
     write_direct_species_fixture(raw, species)
     (raw / species / f"{species}.gff").unlink()
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"

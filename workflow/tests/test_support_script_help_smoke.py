@@ -17,10 +17,13 @@ SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
 # fake the imports just to make --help succeed.
 RUNTIME_HELP_SCRIPTS = {"iqtree2mapnh.py", "orthogroup_statistics.py", "pairwise_synteny.py",
                         "rescue_gene_models.py", "rescue_model_evidence.py", "gene_model_refinement.py", "wgd_ssd.py"}
+# test_busco_support_imports.py already runs this exact CLI help command in a
+# fresh process and additionally rejects imports of the optional toolchain.
+COVERED_HELP_SCRIPTS = {"busco_guide_tree.py"}
 SMOKE_HELP_SCRIPTS = sorted(
     script.name
     for script in SUPPORT_DIR.glob("*.py")
-    if script.name not in RUNTIME_HELP_SCRIPTS
+    if script.name not in RUNTIME_HELP_SCRIPTS | COVERED_HELP_SCRIPTS
     and re.search(r"if\s+__name__\s*==\s*['\"]__main__['\"]", script.read_text(encoding="utf-8"))
 )
 

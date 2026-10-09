@@ -1223,7 +1223,7 @@ def test_download_manifest_retries_transient_http_errors(tmp_path):
             super().do_GET()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), FlakyHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"
@@ -1322,7 +1322,7 @@ def test_download_manifest_resumes_partial_http_download_with_range(tmp_path):
             self.wfile.write(response_payload)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), InterruptedRangeHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"
@@ -1406,7 +1406,7 @@ def test_download_manifest_uses_default_user_agent_for_direct_downloads(tmp_path
             super().do_GET()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), UserAgentHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"

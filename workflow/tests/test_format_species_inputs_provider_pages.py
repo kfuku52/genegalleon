@@ -141,7 +141,7 @@ def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path
             self.end_headers()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CoGeFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -242,7 +242,7 @@ def test_download_manifest_rejects_header_only_coge_gff_before_bundle_download(t
             self.end_headers()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _HeaderOnlyCoGeFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -378,7 +378,7 @@ def test_download_manifest_resolves_plantaedb_page_to_ncbi_bundle(tmp_path):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _PlantaeDbFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -524,7 +524,7 @@ def test_download_manifest_plantaedb_formats_after_download(tmp_path):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _PlantaeDbFormatFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -663,7 +663,7 @@ def test_download_manifest_resolves_citrusgenomedb_organism_page_to_public_bundl
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -750,7 +750,7 @@ def test_download_manifest_citrusgenomedb_analysis_page_derives_cds_from_gff_and
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -851,7 +851,7 @@ def test_download_manifest_citrusgenomedb_analysis_page_prefers_cds_over_cdna(tm
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -945,7 +945,7 @@ def test_download_manifest_citrusgenomedb_organism_page_prefers_assembly_bundle_
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1061,7 +1061,7 @@ def test_download_manifest_citrusgenomedb_analysis_page_follows_repository_index
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1149,7 +1149,7 @@ def test_download_manifest_figshare_article_resolves_requested_filenames(tmp_pat
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1259,7 +1259,7 @@ def test_download_manifest_figshare_article_supports_archive_members(tmp_path):
 
     handler = lambda *args, **kwargs: _FigshareFixtureHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1373,7 +1373,7 @@ def test_download_manifest_figshare_extracts_rar_member_from_extensionless_url(t
             super().do_GET()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FigshareRarFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1454,7 +1454,7 @@ def test_download_manifest_resolves_plantgarden_assembly_page_to_public_bundle(t
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1556,7 +1556,7 @@ def test_download_manifest_plantgarden_genome_list_page_falls_back_to_transcript
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1680,7 +1680,7 @@ def test_download_manifest_jgi_credentials_enable_protected_direct_download(tmp_
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _JgiFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1802,7 +1802,7 @@ def test_download_manifest_resolves_cngb_id_via_cnsa_then_ncbi(tmp_path):
 
     handler = lambda *args, **kwargs: _CngbNcbiFixtureHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1877,7 +1877,7 @@ def test_download_manifest_resolves_gwh_id_via_public_index(tmp_path):
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -2010,7 +2010,7 @@ def test_download_manifest_resolves_gwh_id_via_show_page_fallback(tmp_path):
 
     handler = lambda *args, **kwargs: _GwhShowHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:

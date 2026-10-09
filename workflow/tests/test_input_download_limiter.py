@@ -132,7 +132,7 @@ def test_http_redirect_and_retry_after_share_destination_bucket(tmp_path, monkey
         def log_message(self, *args):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         with guarded_urlopen("http://localhost:" + str(server.server_port) + "/redirect", timeout=3) as response:
@@ -191,7 +191,7 @@ def test_provider_cdn_redirect_keeps_logical_database_and_cooldown(tmp_path, mon
         def log_message(self, *args):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         with request_provider("refseq"):
@@ -234,7 +234,7 @@ def test_cross_origin_redirect_does_not_forward_credentials(tmp_path, monkeypatc
         def log_message(self, *args):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         request = Request(f"http://localhost:{server.server_port}/origin",

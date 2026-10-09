@@ -3404,7 +3404,10 @@ def test_gff_grouping_accepts_maker_gene_transcript_shared_id(tmp_path, transcri
 def test_gff_grouping_handles_deep_parent_graph_without_recursion(tmp_path):
     module = load_module()
     gff_path = tmp_path / "deep-parent-graph.gff3"
-    depth = 1500
+    # Still exceed the recursion limit, with a small graph instead of making
+    # every test run traverse 1,500 nested parents from each transcript.
+    recursion_limit = 200
+    depth = recursion_limit + 50
     rows = ["chr1\tsrc\tgene\t1\t9\t.\t+\t.\tID=gene-G;locus_tag=G"]
     for index in range(depth):
         parent = f"N{index + 1}" if index + 1 < depth else "gene-G"
@@ -3418,8 +3421,13 @@ def test_gff_grouping_handles_deep_parent_graph_without_recursion(tmp_path):
         "gene_grouping_mode": "strict",
     }
 
-    index = module.build_gff_cds_grouping_index(task)
-    resolved = module.resolve_cds_header_gff_gene(task, "N0", index)
+    previous_limit = sys.getrecursionlimit()
+    try:
+        sys.setrecursionlimit(recursion_limit)
+        index = module.build_gff_cds_grouping_index(task)
+        resolved = module.resolve_cds_header_gff_gene(task, "N0", index)
+    finally:
+        sys.setrecursionlimit(previous_limit)
 
     assert resolved["status"] == "mapped"
     assert resolved["gene_token"] == "G"

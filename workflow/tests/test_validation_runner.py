@@ -28,14 +28,24 @@ def test_focused_validation_keeps_explicit_file_and_pytest_arguments():
 
 
 @pytest.mark.parametrize("suite", ["static", "fast"])
-def test_validation_loads_suite_options_without_an_explicit_test_path(suite):
+def test_validation_loads_suite_options_without_an_explicit_test_path(tmp_path, suite):
+    # Exercise real testpaths/conftest discovery without importing the entire
+    # scientific suite a second time inside this test.
+    test_dir = tmp_path / "workflow/tests"
+    test_dir.mkdir(parents=True)
+    for name in ("conftest.py", "validation_manifest.json", "run_checks.py"):
+        shutil.copyfile(REPO_ROOT / "workflow/tests" / name, test_dir / name)
+    shutil.copyfile(REPO_ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    for lane in ("static", "fast"):
+        (test_dir / f"test_sentinel_{lane}.py").write_text("def test_sentinel(): pass\n")
     result = subprocess.run(
-        [sys.executable, str(Path(run_checks.__file__)), suite, "--collect-only", "-p", "no:cacheprovider"],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+        [sys.executable, str(test_dir / "run_checks.py"), suite, "--collect-only", "-p", "no:cacheprovider"],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ("workflow/tests/test_ci_static.py::" in result.stdout) == (suite == "static")
-    assert ("workflow/tests/test_generate_orthogroup_database.py::" in result.stdout) == (suite == "fast")
+    for lane in ("static", "fast"):
+        assert (f"workflow/tests/test_sentinel_{lane}.py::" in result.stdout) == (suite == lane)
+    assert "1 test collected" in result.stdout
 
 
 @pytest.mark.parametrize("suite", ["fast", "smoke"])

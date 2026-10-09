@@ -291,6 +291,14 @@ The fast and integration CI lanes use two pytest-xdist workers. `bash ./dev`
 uses the same default; override it with `GG_PYTEST_WORKERS=N` or
 `GG_PYTEST_WORKERS=auto`.
 
+For timing feedback, append `--durations=25 --durations-min=0.5` to a focused
+`dev check` command. Keep regression fixtures small while preserving the failure
+condition: the deep GFF-parent test temporarily lowers Python's recursion limit
+and still exceeds it. Suite-discovery tests use a small isolated test tree;
+dedicated CLI tests replace matching generic help checks. Loopback HTTP fixtures
+use a 0.01-second server shutdown poll interval. Retry, cooldown, response-timeout
+and process-liveness assertions retain their real waits.
+
 The runtime lane includes real integration contracts for repository-owned
 upstreams. In particular, core-species selection executes the installed
 `nwkit sample` command rather than a mock, and the test verifies that the
