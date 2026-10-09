@@ -63,9 +63,10 @@ def test_shared_cooldown_and_mismatched_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("GG_INPUT_DOWNLOAD_LIMIT_DIR", str(tmp_path))
     monkeypatch.setenv("GG_INPUT_REQUEST_INTERVAL_NCBI", "0")
     first = Admission("https://api.ncbi.nlm.nih.gov/").acquire()
+    # The cooldown deadline includes metadata saving and permit close time.
+    start = time.monotonic()
     first.cooldown(0.2)
     first.close()
-    start = time.monotonic()
     Admission("https://ftp.ncbi.nlm.nih.gov/").acquire().close()
     assert time.monotonic() - start >= 0.18
     monkeypatch.setenv("GG_INPUT_MAX_CONCURRENT_DOWNLOADS_NCBI", "7")
