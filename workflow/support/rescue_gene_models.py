@@ -1283,7 +1283,12 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 preview = consolidate(preview, existing, name, plan.get("nearest_references", {}).get(name, ()))
                 resolved = {m["query"] for m in preview if m["status"] in {"accepted", "duplicate_support", "accepted_alternative_path"}}
                 return [r for r in regions if r["id"] not in resolved]
-            unresolved = unresolved_regions()
+            # A verified whole-genome cache already covers these queries,
+            # including empty results. Without GeMoMa, this preview's unresolved
+            # set is immediately filtered to empty and has no consumer.
+            fully_cached_genome = cached is not None and all(r["id"] in cached_genome_ids for r in regions)
+            unresolved = ([] if fully_cached_genome and not plan["request"]["gemoma_jar"]
+                          else unresolved_regions())
             # Old local-search coverage and old whole-genome coverage are
             # separate, because acceptance can change under the new policy.
             unresolved = [r for r in unresolved if r["id"] not in cached_genome_ids]
@@ -1314,7 +1319,10 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     model["search"] = "genome_fallback"
                     validated.append(checked_prediction(model))
                 expanded_genome_sha256 = expanded_digest.hexdigest()
-                unresolved = unresolved_regions()
+                # Only optional GeMoMa consumes unresolved after genome search;
+                # final placement and coding-path admission still run below.
+                if plan["request"]["gemoma_jar"]:
+                    unresolved = unresolved_regions()
             if plan["request"]["gemoma_jar"] and unresolved:
                 # Selected transcript IDs and target coordinates constrain the
                 # optional refinement. Predictions still pass the same QC.

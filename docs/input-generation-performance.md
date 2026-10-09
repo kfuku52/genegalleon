@@ -299,6 +299,31 @@ after, with identical full model/coverage/identity results. That bounded check
 uses real FASTA parsing and Bio alignment with fake Java/model validation;
 no full GeMoMa runtime or memory improvement is claimed.
 
+### Unused rescue previews
+
+When verified whole-genome prediction coverage includes every current query,
+including empty results, rescue can omit the intermediate unresolved-model
+preview if GeMoMa is disabled. The preview after a new whole-genome search is
+also needed only by GeMoMa. Raw genomic validation, terminal completion,
+cache/source checks and final placement and coding-path decisions still run.
+Partial or local-only caches retain the initial preview.
+
+A focused 2026-10-09 comparison used the qualified v0.8.210 SIF on Linux x86-64,
+one CPU and one thread per library. Synthetic discovery/cache adapters supplied
+two donor species per locus; real genomic QC, model consolidation and compact
+publication ran. Each method had a discarded warmup, followed by alternating
+fresh processes. Every output file, receipt and biological audit matched.
+
+| Synthetic loci | Measured trials per method | Baseline median | Updated median |
+| --- | ---: | ---: | ---: |
+| 1,200 | 3 | 1.6718 s | 1.5743 s |
+| 3,000 | 6 | 4.3980 s | 4.1870 s |
+
+These observations do not establish a repeatable speedup: elapsed-time ranges
+overlapped and both methods drifted. Process peak RSS, which includes imports
+and fixture preparation, also overlapped. Timing covers the rescue call only;
+it does not measure production cache eligibility or whole-pipeline scaling.
+
 ## Refinement catalog storage and lookups
 
 Refinement catalogs and locus payloads use SQLite rowid tables. Their compact
