@@ -143,7 +143,7 @@ def _split_fields(record):
     return shared, context, list(record)
 
 
-def _pack(record):
+def _pack(record, *, _validate_envelope=True):
     if not isinstance(record, dict) or any(not isinstance(k, str) for k in record):
         raise ValueError("Model-store records must be JSON objects")
     shared, context, order = _split_fields(record)
@@ -158,8 +158,10 @@ def _pack(record):
     envelope = {"body": hashlib.sha256(body).hexdigest(), "context": context, "order": order}
     if raw_order is not None:
         envelope["raw_order"] = raw_order
-    # Validate candidate-only values now as well, including nonfinite numbers.
-    _json(envelope)
+    # Direct calls retain candidate-only validation, including nonfinite values.
+    # The writer validates the final stored envelope before any record writes.
+    if _validate_envelope:
+        _json(envelope)
     return body, envelope
 
 
@@ -232,9 +234,12 @@ def _overlay(path):
     return db
 
 
-def _add_overlay(db, ordinal, body, envelope, level, codec, cache=None):
+def _add_overlay(db, ordinal, body, envelope, level, codec, cache=None, *, _encoded_envelope=None):
     _insert_body(db, body, level, codec, cache)
-    db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_json(envelope), codec, level)))
+    if _encoded_envelope is None:
+        db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_json(envelope), codec, level)))
+    else:
+        db.execute("INSERT INTO entries VALUES (?,?)", (ordinal, _compress(_encoded_envelope, codec, level)))
 
 
 def write_model_store(directory, models, *, partial_models=None, revisions=None,
@@ -285,7 +290,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
         shards, shard_size, line, count, accepted_count, partial_count = [], 0, 0, 0, 0, 0
         partial_ordered, last_partial_ordinal = True, -1
         for ordinal, record in enumerate(models):
-            body, envelope = _pack(record)
+            body, envelope = _pack(record, _validate_envelope=False)
             if lookup_db is not None:
                 fingerprint = hashlib.sha256(_json(envelope)).digest()
             envelope["ordinal"] = ordinal
@@ -306,7 +311,8 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
                 lookup_db.execute("INSERT INTO model_refs VALUES (?,?,?,?)",
                                   (fingerprint, ordinal, len(shards) - 1, line))
             if record.get("status") == "accepted":
-                _add_overlay(accepted_db, ordinal, body, envelope, compression_level, codec, accepted_cache)
+                _add_overlay(accepted_db, ordinal, body, envelope, compression_level, codec, accepted_cache,
+                             _encoded_envelope=memoryview(packed)[:-1])
                 accepted_count += 1
             if partial_models is None and isinstance(record.get("partial_evidence"), dict) and record["partial_evidence"].get("partial"):
                 partial_db.execute("INSERT INTO refs VALUES (?,?,?,?)", (partial_count, ordinal, len(shards) - 1, line))
@@ -320,7 +326,7 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
             shard_handle = None
         if partial_models is not None:
             for record in partial_models:
-                body, envelope = _pack(record)
+                body, envelope = _pack(record, _validate_envelope=False)
                 fingerprint = hashlib.sha256(_json(envelope)).digest()
                 match = lookup_db.execute("SELECT ordinal,shard,line FROM model_refs WHERE fingerprint=? ORDER BY ordinal LIMIT 1", (fingerprint,)).fetchone()
                 if match is None:
@@ -337,9 +343,13 @@ def write_model_store(directory, models, *, partial_models=None, revisions=None,
             (tmp / ".lookup.sqlite").unlink()
         revision_count = 0
         for ordinal, record in enumerate(revisions or ()):
-            body, envelope = _pack(record)
+            body, envelope = _pack(record, _validate_envelope=False)
             envelope["ordinal"] = ordinal
-            _add_overlay(revision_db, ordinal, body, envelope, compression_level, codec, revision_cache)
+            # Candidate context must validate before body insertion/collisions.
+            packed = _json(envelope)
+            _add_overlay(revision_db, ordinal, body, envelope, compression_level, codec, revision_cache,
+                         _encoded_envelope=packed)
+            del packed
             revision_count += 1
         body_count = body_db.execute("SELECT COUNT(*) FROM bodies").fetchone()[0]
         partial_shards = [shards[r[0]]["path"] for r in partial_db.execute("SELECT DISTINCT shard FROM refs ORDER BY shard")]

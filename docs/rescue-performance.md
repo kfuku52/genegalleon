@@ -173,3 +173,34 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_rescu
 The output directory must be new. The benchmark retains implementation hashes,
 sample identity, commands, trial RSS and timing measurements, output hashes and
 row-count validation. A changed sample or different output bytes fails the run.
+
+## Compact model-store envelope encoding
+
+The compact writer validates and encodes each final candidate envelope once,
+then reuses the same immutable bytes for its accepted overlay. Explicit partial
+matching retains its distinct ordinal-free encoding. Direct helper validation,
+record bounds (including the JSONL newline), collision checks, output order,
+compression and verified reader contracts remain unchanged.
+
+A bounded normal x86_64 SIF benchmark used one CPU, 3,000 synthetic loci
+(6,000 donor-specific models), 750 accepted models and 150 revisions. Each
+condition had one warmup per method followed by six alternating trials, three
+per method. All published member bytes matched, including SQLite databases,
+compressed shards and manifests; an independent baseline reader restored every
+model, accepted path, partial record and revision.
+
+| Codec and partial mode | Previous median writer time | Single-pass median writer time | Observed reduction |
+|---|---:|---:|---:|
+| gzip, automatic | 1.182 s | 0.934 s | 20.9% |
+| zstd, automatic | 1.018 s | 0.891 s | 12.5% |
+| gzip, explicit reordered/repeated | 1.554 s | 1.263 s | 18.8% |
+| zstd, explicit reordered/repeated | 1.229 s | 1.100 s | 10.6% |
+
+Writer timing includes compression, SQLite, checksums, fsync and publication;
+input decoding, startup and readback validation are excluded. This is a storage
+component measurement on a shared server, with only three measured trials per
+method and condition. The zstd automatic ranges overlapped (previous
+0.949–1.047 s; single-pass 0.891–1.199 s). All process high-water memory readings
+were 153.3 MiB and already reached before the timed writer, so this measurement
+does not resolve writer memory differences or establish a memory reduction.
+These results do not predict whole-producer or 500-species runtime.
