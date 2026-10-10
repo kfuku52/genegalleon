@@ -443,6 +443,21 @@ def test_validate_cds_gff_mapping_accepts_gwh_accession_attributes(tmp_path):
     assert "[Artemisia_argyi] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
 
 
+def test_mapping_accepts_gwh_capitalized_gene_without_rna_rows(tmp_path):
+    cds_dir, gff_dir = tmp_path / "species_cds", tmp_path / "species_gff"
+    cds_dir.mkdir()
+    gff_dir.mkdir()
+    write_gzip_text(cds_dir / "Lagerstroemia_indica_demo.fa.gz",
+                    ">Lagerstroemia_indica_GWHGCAXI000001\nATGAAACCC\n")
+    write_gzip_text(gff_dir / "Lagerstroemia_indica_demo.gff.gz",
+                    "chr1\tEVM\tGene\t1\t12\t.\t+\t.\tID=Lin_chr1_0001;Accession=GWHGCAXI000001;;transl_table=1\n"
+                    "chr1\tEVM\tCDS\t1\t3\t.\t+\t0\tParent=Lin_chr1_0001;Parent_Accession=GWHTCAXI000001;Protein_Accession=GWHPCAXI000001;ID=Lin_chr1_0001_CDS0\n"
+                    "chr1\tEVM\tCDS\t7\t12\t.\t+\t0\tParent=Lin_chr1_0001;Parent_Accession=GWHTCAXI000001;Protein_Accession=GWHPCAXI000001;ID=Lin_chr1_0001_CDS1\n")
+    completed = run_script("--species-cds-dir", str(cds_dir), "--species-gff-dir", str(gff_dir))
+    assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
+    assert "[Lagerstroemia_indica] CDS-to-GFF mapping OK: 1/1 IDs" in completed.stdout
+
+
 def test_validate_cds_gff_mapping_ignores_extra_trailing_gff_columns(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

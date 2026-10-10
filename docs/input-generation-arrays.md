@@ -219,6 +219,10 @@ locks to prevent simultaneous publication or cleanup.
 
 ### Resume completed worker stages
 
+GWH annotations with capitalized `Gene` and no RNA rows are supported. Mapping
+retains case-sensitive identifiers, and an explicit `Parent_Accession` groups
+CDS segments into the declared transcript before longest-transcript selection.
+
 With `overwrite=0`, workers retain independent successful formatting and
 CDS/GFF-validation checkpoints under `tmp/stage_checkpoints/`. A BUSCO failure
 does not invalidate those upstream stages. On retry, fresh content hashes of
