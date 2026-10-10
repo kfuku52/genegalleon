@@ -10,7 +10,11 @@ SUPPORT = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(SUPPORT))
 from format_species_annotation.common import parse_gff_attributes, reverse_complement  # noqa: E402
 from format_species_annotation.locus_identity import LocusIdentityError, suffix  # noqa: E402
-from format_species_annotation.source_identity import locus_identity_audit, source_annotation_path, task_annotation_path  # noqa: E402
+from format_species_annotation.source_identity import (  # noqa: E402
+    locus_identity_audit,
+    source_annotation_path,
+    task_annotation_path,
+)
 from format_species_discovery import format_cds, format_gff  # noqa: E402
 from validate_cds_gff_mapping import validate_single_species  # noqa: E402
 from validate_longest_cds_selection import collect_expected_longest_records  # noqa: E402
