@@ -127,6 +127,7 @@ def capabilities(_args):
         "verify": "family-provenance-v1", "runtime": "registered-config-v1",
         "errors": "owned-boundary-codes-v1",
         "progress": "step-progress-v1",
+        "input_inventory": "input-generation-receipt-inventory-v1",
     }, provenance_schema_versions=[provenance.SCHEMA_VERSION],
         verify_workspace_relocation="explicit-recorded-workspace-root-v1",
         verify_profiles=["gene-evolution-terminal-v1"],
@@ -636,6 +637,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("capabilities").set_defaults(handler=capabilities)
+    input_parser = commands.add_parser("input-inventory")
+    input_parser.add_argument("--request-json", required=True)
+    def input_inventory(args):
+        from input_generation_inventory import inspect
+        return envelope("input-inventory", complete=True, execution_authorized=False,
+                        inventory=inspect(strict_json_loads(args.request_json)))
+    input_parser.set_defaults(handler=input_inventory)
     status_parser = commands.add_parser("status")
     status_parser.add_argument("--directory", type=Path, required=True)
     cursor_source = status_parser.add_mutually_exclusive_group()

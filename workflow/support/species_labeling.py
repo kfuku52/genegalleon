@@ -298,6 +298,11 @@ def species_prefix_token_count(parts):
         return 3
     if third in TAXONOMIC_INFRASPECIFIC_RANKS:
         return 4 if len(normalized) >= 4 else 3
+    # NCBI uses a terminal rank for rice subgroups, including two-word names.
+    for count in (4, 5):
+        if (len(normalized) >= count and normalized[count - 1] == "subgroup"
+                and all(re.fullmatch(r"[a-z][a-z-]*", token) for token in normalized[2:count - 1])):
+            return count
     # Cultivar Groups put the rank after its name (e.g. Indica Group), unlike
     # "subsp. indica". The capitalized terminal rank is an explicit boundary.
     if (len(normalized) >= 4 and normalized[3] == "Group"

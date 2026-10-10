@@ -187,11 +187,21 @@ def build_task_from_summary_row(row):
 
     gff_input_path = str(row.get("gff_input_path") or "").strip()
     if gff_input_path != "":
-        task["gff_path"] = Path(gff_input_path).expanduser().resolve()
+        if gff_input_path.endswith(" (derived GFF)"):
+            source = Path(gff_input_path[:-len(" (derived GFF)")]).expanduser().resolve()
+            if source != task.get("gbff_path"):
+                raise ValueError("Derived GFF description does not match the raw GBFF source")
+        else:
+            task["gff_path"] = Path(gff_input_path).expanduser().resolve()
 
     genome_input_path = str(row.get("genome_input_path") or "").strip()
     if genome_input_path != "":
-        task["genome_path"] = Path(genome_input_path).expanduser().resolve()
+        if genome_input_path.endswith(" (derived genome)"):
+            source = Path(genome_input_path[:-len(" (derived genome)")]).expanduser().resolve()
+            if source != task.get("gbff_path"):
+                raise ValueError("Derived genome description does not match the raw GBFF source")
+        else:
+            task["genome_path"] = Path(genome_input_path).expanduser().resolve()
 
     return task
 

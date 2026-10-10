@@ -131,6 +131,15 @@ def test_cultivar_group_prefix_is_preserved_and_distinct():
     assert mod.first_nonmatching_prefix([species + "_gene1"], "Oryza_sativa")
 
 
+@pytest.mark.parametrize('species', ['Oryza_sativa_tropical_japonica_subgroup', 'Oryza_sativa_aus_subgroup'])
+def test_terminal_subgroup_prefix_is_preserved_and_distinct(species):
+    mod = load_module()
+    assert mod.species_prefix_from_name(species + '_repair.cds.fa.gz') == species
+    assert mod.first_nonmatching_prefix([species + '_Os01g000010'], species) == ''
+    assert mod.first_nonmatching_prefix([species + '_Os01g000010'], 'Oryza_sativa')
+    assert mod.first_nonmatching_prefix(['Oryza_sativa_indica_subgroup_Os01g000010'], species)
+
+
 def test_validate_cds_gff_mapping_passes_on_matching_ids(tmp_path):
     cds_dir = tmp_path / "species_cds"
     gff_dir = tmp_path / "species_gff"

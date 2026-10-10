@@ -59,23 +59,27 @@ def observe_files():
         _OBSERVED_PATHS.reset(token)
 
 
-def read_regular_json(path, limit=8 * 1024 * 1024):
+def read_regular_bytes(path, limit=8 * 1024 * 1024):
     path = Path(path)
     observe_path(path)
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as handle:
         before = os.fstat(handle.fileno())
         if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f"JSON must be a regular file: {path}")
+            raise ValueError(f"Input must be a regular file: {path}")
         raw = handle.read(limit + 1)
         after = os.fstat(handle.fileno())
     def signature(value):
         return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
     if signature(before) != signature(after) or signature(after) != signature(path.lstat()):
-        raise ValueError(f"JSON changed during observation: {path}")
+        raise ValueError(f"Input changed during observation: {path}")
     if len(raw) > limit:
-        raise ValueError(f"JSON exceeds {limit} bytes: {path}")
-    return strict_json_loads(raw)
+        raise ValueError(f"Input exceeds {limit} bytes: {path}")
+    return raw
+
+
+def read_regular_json(path, limit=8 * 1024 * 1024):
+    return strict_json_loads(read_regular_bytes(path, limit))
 
 
 def strict_json_loads(raw):

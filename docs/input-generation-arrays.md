@@ -1,5 +1,14 @@
 # Input generation with species arrays
 
+The read-only `workflow/support/workflow_api.py input-inventory --request-json`
+command counts publication receipts over a fixed species cohort. Its request
+binds `cohort` and `sources` lists of absolute task-plan paths and SHA-256 values,
+plus the BUSCO `lineage`. Species updates and retries are deduplicated; sources
+using another lineage are excluded. A subset finalizer cannot mark the entire
+cohort finalized. Receipt counts do not certify output checksums or workflow
+completion: `checksum_verified` and `workflow_verified` remain false. Use the
+normal native verification operations before consuming scientific outputs.
+
 `array_prepare` is one download/prepare job: it freezes a species task plan,
 downloads manifest inputs with database-specific parallel queues, hashes the
 local files, and prepares shared taxonomy/BUSCO resources. Existing gzip
