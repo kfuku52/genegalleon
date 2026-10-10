@@ -15,9 +15,9 @@ from .genome_intervals import genome_intervals
 from .grouping import extract_cds_header_alias_tiers, resolve_cds_header_gff_gene
 from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
-from .source_identity import source_annotation_path
+from .source_identity import task_annotation_path
 
-VERSION = 1
+VERSION = 2
 
 
 def audit_path(cds_path):
@@ -37,6 +37,7 @@ def signature(path):
 
 def contract(task):
     return {"version": VERSION, "genetic_code": int(task.get("genetic_code", 1)),
+            "gff_repair_mode": str(task.get("gff_repair_mode", "safe")),
             "implementation": signature(__file__)["sha256"],
             "evidence_implementation": signature(__import__(CdsModelNormaliser.__module__, fromlist=[""]).__file__)["sha256"],
             "inputs": {key: signature(task[key]) for key in ("cds_path", "gff_path", "genome_path", "gbff_path") if task.get(key)}}
@@ -130,7 +131,7 @@ def iter_normalised_cds_records(task, state=None):
     def attribute_parser(text):
         return {key: ",".join(values) for key, values in parse_gff_attributes(text).items()}
     def gff_lines():
-        for line in iter_non_organelle_gff_lines(source_annotation_path(task["gff_path"])):
+        for line in iter_non_organelle_gff_lines(task_annotation_path(task)):
             if line.startswith("#") or len(line.rstrip("\r\n").split("\t")) == 9:
                 yield line
     normaliser = CdsModelNormaliser(

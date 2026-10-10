@@ -171,6 +171,20 @@ evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
 
+With `gff_repair_mode=safe` or `strict`, reused IDs on distinct coding loci are
+disambiguated only when explicit local gene/RNA parents uniquely assign every
+affected child. Gene, transcript and CDS IDs receive deterministic `.locus...`
+suffixes; parent references and identity attributes are updated together before
+CDS extraction and longest-isoform selection. Supplied CDS records must identify
+one copy through an unambiguous alias or exact source location. A reused FASTA ID
+alone never selects a copy. Normal multipart CDS, shared physical features and
+explicitly ordered fragments/trans-splicing keep their identities. `off` disables
+this repair. Missing parents, conflicting geometry, cycles or generated-ID
+collisions stop formatting; no parent rows, coding coordinates or biological
+exceptions are invented. Successful mapping is recorded under `locus_identity`
+in the CDS/GFF audits; blocked formatting writes `.locus-identity.json` beside
+the planned CDS output. Original source files remain unchanged.
+
 Prefer one annotation source per species. Where a workflow retains multiple
 sources, `gg_gene_evolution` passes its read-only FASTA sequence store to
 `gff2genestat.py --sequence-store`. The requested identifier and sequence must

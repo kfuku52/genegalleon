@@ -23,7 +23,7 @@ def aliases(value):
 
 
 class SourceGeneSelection:
-    def __init__(self, gff_path):
+    def __init__(self, gff_path, *, repair_locus_ids=False):
         self.active = gff_path is not None
         self.parents = defaultdict(set)
         self.genes = set()
@@ -39,7 +39,7 @@ class SourceGeneSelection:
             return
         declared_nodes = set()
         missing_parent_axes = defaultdict(set)
-        with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
+        with open_text(source_annotation_path(gff_path, repair_locus_ids=repair_locus_ids), "rt", errors="replace") as handle:
             for line in handle:
                 if line.startswith("##FASTA"):
                     break

@@ -78,7 +78,7 @@ from format_species_writers import (
 )
 from gff_attribute_syntax import syntax_audit, validate_gff, validated_lines
 
-CDS_GFF_GROUPING_AUDIT_VERSION = 15
+CDS_GFF_GROUPING_AUDIT_VERSION = 16
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 ANONYMOUS_NCBI_CDS_TOKEN_RE = re.compile(r"^lcl(?:[|_]).+_cds_[0-9]+$")
@@ -154,6 +154,8 @@ def cds_gff_grouping_audit_matches(audit, task, output_path, strict_mode):
     if str(audit.get("gene_grouping_mode", "") or "") != str(task.get("gene_grouping_mode", "strict") or "strict"):
         return False
     if bool(audit.get("format_strict", False)) != bool(strict_mode):
+        return False
+    if audit.get("gff_repair_mode") != gff_repair_mode_for_task(task):
         return False
     if task.get("cds_path") is None or task.get("gff_path") is None:
         return False
@@ -239,6 +241,7 @@ def write_cds_gff_grouping_audit(task, output_path, audit_rows, payload, strict_
                 "species_prefix": task["species_prefix"],
                 "gene_grouping_mode": task.get("gene_grouping_mode", "strict"),
                 "format_strict": bool(strict_mode),
+                "gff_repair_mode": gff_repair_mode_for_task(task),
                 "cds_input": cds_gff_source_signature(task["cds_path"]),
                 "gff_input": cds_gff_source_signature(task["gff_path"]),
                 "output_path": str(Path(output_path).expanduser().resolve()),
@@ -697,7 +700,15 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     aggregated_away = 0
     first_sequence_name = ""
     records_by_gene = {}
-    cds_task = prepare_cds_identifier_task(task)
+    from format_species_annotation.locus_identity import LocusIdentityError
+    from format_species_annotation.source_identity import locus_identity_audit
+    try:
+        identity_audit = locus_identity_audit(task)
+        cds_task = prepare_cds_identifier_task(task)
+    except LocusIdentityError as exc:
+        if not dry_run:
+            write_json_atomic(Path(str(output_path) + ".locus-identity.json"), exc.audit)
+        raise
     grouping_index = cds_task.get("_gff_cds_grouping_index")
     mapping_counts = {
         "mapped": 0,
@@ -709,7 +720,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
     transcript_source_ids = {}
     structured_gene_sources = {}
     audit_rows = []
-    normalisation_state = {"dry_run": dry_run}
+    normalisation_state = {"dry_run": dry_run, "locus_identity": identity_audit}
     for header, sequence, decision in iter_normalised_cds_records(cds_task, normalisation_state):
         before_count += 1
         transcript_id = build_formatted_cds_id(cds_task, header)
@@ -732,6 +743,12 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         if is_unlinkable_anonymous_ncbi_cds(cds_task, header, mapping_status):
             mapping_status = "excluded_anonymous_unmapped"
             exclusion_reason = "anonymous_ncbi_cds_without_gff_link"
+        if identity_audit["mappings"] and mapping_status in {"unmapped", "ambiguous"}:
+            if not dry_run:
+                blocked = {**identity_audit, "status": "blocked", "problems": [
+                    {"source_id": first_token(header), "reason": mapping_status + " supplied CDS identity"}]}
+                write_json_atomic(Path(str(output_path) + ".locus-identity.json"), blocked)
+            raise ValueError("CDS source ID cannot identify one repaired GFF locus: " + first_token(header))
         if mapping_status in mapping_counts:
             mapping_counts[mapping_status] += 1
         if mapping_status == "mapped":
@@ -888,6 +905,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
         grouping_source = "gff"
     audit_payload = {
         "grouping_source": grouping_source,
+        "locus_identity": identity_audit,
         "rna_conversion": cds_task.get("_rna_conversion_audit", {}),
         "before_count": before_count,
         "after_count": after_count,
@@ -1114,16 +1132,19 @@ def format_gff(
             line_count = int(audit.get("line_count", 0) or 0)
             repair_fields = repair_result_fields(audit, output_path)
         else:
+            from format_species_annotation.source_identity import locus_identity_audit, task_annotation_path
+            annotation_path = task_annotation_path(task)
             attribute_changes = []
             line_count, _feature_count = write_gff_lines_gzip(
                 output_path,
                 validated_lines(normalize_gff_reference_lines(
-                    iter_non_organelle_gff_lines(gff_path, attribute_changes=attribute_changes),
-                    gff_reference_mapping(gff_path, task.get("genome_path")),
+                    iter_non_organelle_gff_lines(annotation_path, attribute_changes=attribute_changes),
+                    gff_reference_mapping(annotation_path, task.get("genome_path")),
                 ), output_path),
             )
             write_json_atomic(gff_repair_audit_path(output_path),
-                              {"attribute_syntax": syntax_audit(gff_path, output_path, attribute_changes)})
+                              {"attribute_syntax": syntax_audit(gff_path, output_path, attribute_changes),
+                               "locus_identity": locus_identity_audit(task)})
             repair_fields = repair_result_fields(None, output_path)
             repair_fields["repair_mode"] = repair_mode
             repair_fields["repair_status"] = "not_applied"

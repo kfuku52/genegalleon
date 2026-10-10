@@ -31,7 +31,7 @@ from .grouping_identity import (
     gff_authoritative_gene_token,
 )
 from .organelle import gff_organelle_seqids
-from .source_identity import source_annotation_path
+from .source_identity import source_annotation_path, task_annotation_path
 
 
 def iter_genome_records_from_gbff(path):
@@ -380,9 +380,10 @@ def derive_cds_records_from_gff_and_genome(task):
     gene_cache = {}
     coge_features, coge_names = {}, {}
     coge_models = defaultdict(lambda: defaultdict(list))
-    organelle_seqids = gff_organelle_seqids(gff_path)
+    annotation_path = task_annotation_path(task)
+    organelle_seqids = gff_organelle_seqids(annotation_path)
 
-    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
+    with open_text(annotation_path, "rt", errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.rstrip("\n\r")
             if line == "":

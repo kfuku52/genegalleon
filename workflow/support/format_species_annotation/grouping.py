@@ -45,7 +45,7 @@ from .grouping_identity import (
     strip_gff_feature_prefix,
 )
 from .organelle import gff_organelle_seqids
-from .source_identity import source_annotation_path
+from .source_identity import locus_identity_audit, task_annotation_path
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 
@@ -236,7 +236,8 @@ def build_gff_cds_grouping_index(task):
     gene_alias_to_gene_tokens = defaultdict(set)
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
     cds_features_by_transcript = defaultdict(list)
-    organelle_seqids = gff_organelle_seqids(gff_path)
+    annotation_path = task_annotation_path(task)
+    organelle_seqids = gff_organelle_seqids(annotation_path)
     organelle_cds_features = 0
     organelle_aliases = set()
     coge_features, coge_names = {}, {}
@@ -247,7 +248,7 @@ def build_gff_cds_grouping_index(task):
         from .genbank import _coge_export_transcript, duplicate_coge_model_ids
         coge_duplicate_features = duplicate_coge_model_ids(gff_path)
 
-    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
+    with open_text(annotation_path, "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
             if raw_line.startswith("##FASTA"):
                 break
@@ -622,6 +623,7 @@ def build_gff_cds_grouping_index(task):
     )
     return {
         "gff_path": str(gff_path),
+        "locus_identity": locus_identity_audit(task),
         "explicit_missing_parent_gene_tokens": tuple(sorted(
             strip_gff_feature_prefix(parent) for parent in missing_parent_children)),
         "alias_to_gene_tokens": {

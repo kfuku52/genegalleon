@@ -34,10 +34,10 @@ from .organelle import (
     iter_non_organelle_gff_lines,
 )
 from .reference import genome_reference_index, gff_reference_mapping, normalize_gff_reference_lines
-from .source_identity import source_annotation_path
+from .source_identity import locus_identity_audit, source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 19
+GFF_REPAIR_VERSION = 20
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -531,16 +531,18 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     source_fingerprint = file_fingerprint(gff_path)
     cds_fingerprint = file_fingerprint(cds_path)
     encoding_audit = inspect_invalid_utf8(gff_path, stop_at_fasta=True)
-    organelle_seqids = gff_organelle_seqids(gff_path)
-    organelle_features_excluded = count_organelle_gff_features(gff_path, organelle_seqids)
+    identity_audit = locus_identity_audit({**(source_task or {}), "gff_path": gff_path, "gff_repair_mode": mode})
+    annotation_path = source_annotation_path(gff_path, repair_locus_ids=mode != "off")
+    organelle_seqids = gff_organelle_seqids(annotation_path)
+    organelle_features_excluded = count_organelle_gff_features(annotation_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
     overlap_inputs = source_overlap_input_fingerprints(source_task)
-    reference_mapping = gff_reference_mapping(gff_path, (source_task or {}).get("genome_path"))
-    gene_references = gene_reference_repairs(gff_path, (source_task or {}).get("genome_path")) if mode != "off" else {}
+    reference_mapping = gff_reference_mapping(annotation_path, (source_task or {}).get("genome_path"))
+    gene_references = gene_reference_repairs(annotation_path, (source_task or {}).get("genome_path")) if mode != "off" else {}
     normalisation = paired_audit(source_task, cds_path) if source_task else None
     cds_updates = (normalisation or {}).get("gff_updates", {})
-    confirmed_overlaps, overlap_audit = audit_source_overlaps(gff_path, source_task or {})
-    plan = choose_gene_id_repairs(gff_path, cds_gene_ids) if mode != "off" else {
+    confirmed_overlaps, overlap_audit = audit_source_overlaps(annotation_path, source_task or {})
+    plan = choose_gene_id_repairs(annotation_path, cds_gene_ids) if mode != "off" else {
         "id_mapping": {},
         "repairs": [],
         "ambiguous": [],
@@ -590,7 +592,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
         validated_lines(normalize_gff_reference_lines(iter_repaired_gff_lines(
-            gff_path, plan["id_mapping"], counters, confirmed_overlaps,
+            annotation_path, plan["id_mapping"], counters, confirmed_overlaps,
             coge=mode != "off" and (source_task or {}).get("provider") == "coge",
             rescued_genes=rescued_genes,
             cds_updates=cds_updates,
@@ -602,6 +604,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "repaired"
         if (
             len(attribute_changes) > 0
+            or identity_audit["status"] == "repaired"
             or len(gene_references) > 0
             or len(cds_updates) > 0
             or len(plan["id_mapping"]) > 0
@@ -619,6 +622,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "status": status,
         "species_prefix": species_prefix,
         "source_fingerprint": source_fingerprint,
+        "locus_identity": identity_audit,
         "source_overlap_input_fingerprints": overlap_inputs,
         "source_overlap": overlap_audit,
         "genome_reference_mapping": reference_mapping,

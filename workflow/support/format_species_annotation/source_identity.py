@@ -40,10 +40,41 @@ def attributes_text(attrs):
                     for key, values in attrs.items() if values)
 
 
-def source_annotation_path(path):
+def source_annotation_path(path, *, repair_locus_ids=False):
     source = Path(path).resolve()
     stat = source.stat()
-    return _annotation_view(str(source), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    view = _annotation_view(str(source), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    if repair_locus_ids:
+        return _locus_view(view)[0]
+    return view
+
+
+def task_annotation_path(task):
+    return source_annotation_path(task["gff_path"],
+        repair_locus_ids=str(task.get("gff_repair_mode", "safe")).strip().lower() != "off")
+
+
+def locus_identity_audit(task):
+    if not task.get("gff_path") or str(task.get("gff_repair_mode", "safe")).strip().lower() == "off":
+        return {"version": 1, "status": "off", "mappings": [], "problems": []}
+    return _locus_view(source_annotation_path(task["gff_path"]))[1]
+
+
+def _locus_view(source):
+    source = Path(source)
+    stat = source.stat()
+    return _cached_locus_view(str(source), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+@lru_cache(maxsize=4)
+def _cached_locus_view(source, _size, _mtime, _ctime):
+    from .locus_identity import normalise_locus_ids
+    try:
+        return normalise_locus_ids(source, _scratch.name)
+    finally:
+        stat = Path(source).stat()
+        if (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns) != (_size, _mtime, _ctime):
+            raise OSError("GFF changed during locus identity repair: " + str(source))
 
 
 @lru_cache(maxsize=4)

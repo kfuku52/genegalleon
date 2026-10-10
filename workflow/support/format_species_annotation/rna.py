@@ -6,7 +6,7 @@ from collections import defaultdict
 from format_species_writers import open_text
 
 from .common import first_token, merge_coordinate_intervals, parse_gff_attributes
-from .source_identity import source_annotation_path
+from .source_identity import source_annotation_path, task_annotation_path
 
 
 def build_rna_coding_index(gff_path):
@@ -92,7 +92,7 @@ def extract_input_cds(task, header, sequence):
         if not task.get("gff_path"):
             raise ValueError("Transcript FASTA requires GFF coding annotations: " + identifier)
         if "_rna_coding_index" not in task:
-            task["_rna_coding_index"] = build_rna_coding_index(task["gff_path"])
+            task["_rna_coding_index"] = build_rna_coding_index(task_annotation_path(task))
         index = task["_rna_coding_index"]
         hits = index["aliases"].get(identifier, ())
         if len(hits) != 1:
