@@ -611,6 +611,9 @@ Notes:
   audit records each changed source line and attribute, with source/output SHA256.
   Unrecoverable attribute fragments fail with file/line context; rescue planning
   validates frozen GFF inputs and directs invalid legacy inputs back to formatting,
+- empty columns after the ninth GFF column are removed during formatting and
+  recorded in the syntax audit; nonempty extra columns remain errors. CDS model
+  extraction uses the same canonical rows while leaving downloaded files intact,
 - GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
   interpreted as authoritative gene boundaries and emitted as standard
   `ID`/`Parent` plus `gene_id` attributes,

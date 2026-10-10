@@ -254,3 +254,32 @@ def test_busco_import_rejects_a_source_change_during_copy(busco_pair, monkeypatc
     with pytest.raises(OSError, match="File changed"):
         resume.import_busco(donor, target, "S", source_cds, target_cds, source_settings, target_settings)
     assert not (target / "artifact_provenance/busco.S.json").exists()
+
+
+@pytest.mark.parametrize("extra", ["\t", "\t\t\t"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
+def test_empty_trailing_gff_columns_preserve_features_and_audit(tmp_path, extra, ending):
+    from format_species_annotation.organelle import iter_non_organelle_gff_lines
+    from gff_attribute_syntax import validated_lines
+
+    feature = "Chr10\tEVM\tCDS\t1029939\t1030655\t.\t-\t0\tID=cds.CcoG0000001.1;Parent=CcoG0000001.1;"
+    raw = feature + extra + ending
+    changes = []
+    fixed = normalise_line(raw, "Cornus.gff", 1, changes)
+    assert fixed == feature + ending
+    assert changes == [{"source_line": 1, "before": feature + extra,
+                        "after": feature, "reason": "removed_empty_trailing_columns"}]
+    assert list(validated_lines([fixed], "formatted.gff")) == [fixed]
+    with pytest.raises(ValueError, match="nine GFF columns"):
+        list(validated_lines([raw], "unformatted.gff"))
+    source = tmp_path / "Cornus.gff"
+    source.write_bytes(raw.encode())
+    assert list(iter_non_organelle_gff_lines(source, seqids=())) == [feature + ("\n" if ending else "")]
+    assert source.read_bytes() == raw.encode()
+
+
+@pytest.mark.parametrize("extra", ["\tvalue", "\t ", "\tvalue\t", "\t\tvalue"])
+def test_nonempty_extra_gff_columns_remain_rejected(extra):
+    feature = "chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=t"
+    with pytest.raises(ValueError, match="nine GFF columns"):
+        normalise_line(feature + extra + "\n", "source.gff", 1, [])

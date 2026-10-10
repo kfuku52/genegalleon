@@ -10,7 +10,7 @@ import re
 import shlex
 from pathlib import Path
 
-GFF_ATTRIBUTE_SYNTAX_VERSION = 5
+GFF_ATTRIBUTE_SYNTAX_VERSION = 6
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
@@ -109,6 +109,9 @@ def normalise_line(line, path, line_number, changes):
     if not line.strip() or line.startswith("#"):
         return line
     parts = line.rstrip("\r\n").split("\t")
+    trailing_empty = len(parts) > 9 and all(value == "" for value in parts[9:])
+    if trailing_empty:
+        parts = parts[:9]
     if len(parts) != 9:
         raise ValueError(f"{path}:{line_number}: Expected nine GFF columns")
     before = parts[8]
@@ -116,7 +119,7 @@ def normalise_line(line, path, line_number, changes):
         parts[8] = normalise_attributes(before, parts[1], parts[2], allow_bare=True)
     except ValueError as error:
         raise ValueError(f"{path}:{line_number}: {error}") from error
-    if parts[8] == before:
+    if parts[8] == before and not trailing_empty:
         return line
     reason = ("canonicalised_gwh_confidence_flag" if "gwh_gene_confidence=HC" in parts[8] and re.search(r"(?:^|;)HC(?:;|$)", before)
               else "escaped_NAP_metadata_semicolon" if re.search(r"(?:^|;)Note=[^;]*nucleosome", before) and "%3B" in parts[8]
@@ -125,8 +128,12 @@ def normalise_line(line, path, line_number, changes):
               else "escaped_description_linkage_semicolon" if re.search(r"(?:description|Note)=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
               else "escaped_description_metadata_semicolon" if "description=" in before and "description=" in parts[8]
               else "escaped_funannotate_metadata_semicolon")
-    changes.append({"source_line": line_number, "before": before, "after": parts[8], "reason": reason})
-    return "\t".join(parts) + line[len(line.rstrip("\r\n")):]
+    output = "\t".join(parts) + line[len(line.rstrip("\r\n")):]
+    changes.append({"source_line": line_number,
+                    "before": line.rstrip("\r\n") if trailing_empty else before,
+                    "after": output.rstrip("\r\n") if trailing_empty else parts[8],
+                    "reason": "removed_empty_trailing_columns" if trailing_empty else reason})
+    return output
 
 
 def validated_lines(lines, path):

@@ -5763,3 +5763,28 @@ def test_streamed_genome_read_failure_preserves_published_output(tmp_path, monke
         module.format_genome(task, out, True, False)
     assert result["output_path"].read_bytes() == published
     assert list(out.iterdir()) == [result["output_path"]]
+
+
+@pytest.mark.parametrize("supplied_cds", [False, True])
+def test_empty_trailing_gff_columns_keep_cds_models_and_paired_outputs(tmp_path, supplied_cds):
+    module = load_module()
+    from gff_attribute_syntax import validate_gff
+
+    raw, genome, cds = tmp_path / "source.gff", tmp_path / "genome.fa", tmp_path / "cds.fa"
+    rows = ["chr1\tEVM\tgene\t1\t12\t.\t+\t.\tID=g1;\t\n",
+            "chr1\tEVM\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g1;\t\n",
+            "chr1\tEVM\tCDS\t1\t12\t.\t+\t0\tID=cds.t1;Parent=t1;\t\n"]
+    raw.write_text("".join(rows))
+    genome.write_text(">chr1\nATGAAACCCTAA\n")
+    cds.write_text(">t1\nATGAAACCCTAA\n")
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=raw, genome_path=genome, cds_path=cds if supplied_cds else None,
+                gff_repair_mode="safe", gene_grouping_mode="rescue_overlap")
+    formatted_cds = module.format_cds(task, tmp_path, False, False)
+    assert gzip.open(formatted_cds["output_path"], "rt").read() == ">Test_species_g1\nATGAAACCCTAA\n"
+    formatted_gff = module.format_gff(task, tmp_path, False, False,
+                                     formatted_cds_path=formatted_cds["output_path"])
+    validate_gff(formatted_gff["output_path"])
+    with gzip.open(formatted_gff["output_path"], "rt") as handle:
+        assert all(len(line.rstrip("\n").split("\t")) == 9 for line in handle if not line.startswith("#"))
+    assert raw.read_text() == "".join(rows)
