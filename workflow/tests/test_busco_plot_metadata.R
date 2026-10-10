@@ -31,6 +31,11 @@ check_summary_producer <- function(with_lineage=TRUE) {
     for (species in c('A_a', 'B_b')) {
         writeLines(lines, file.path(input, paste0(species, '.busco.full.tsv')))
     }
+    # Native BUSCO exports keep reusable single-copy records beside the tables.
+    # A directory must never enter the table reader, even with a table suffix.
+    dir.create(file.path(input, 'single_copy'))
+    writeLines('{}', file.path(input, 'single_copy', 'A_a.json.gz'))
+    dir.create(file.path(input, 'C_c.busco.full.tsv'))
     previous <- getwd()
     on.exit(setwd(previous), add=TRUE)
     setwd(fixture)
@@ -39,6 +44,7 @@ check_summary_producer <- function(with_lineage=TRUE) {
           paste0('--dir_species_cds_busco=', shQuote(input)), '--min_og_species=auto'),
         stdout=TRUE, stderr=TRUE)
     if (!is.null(attr(output, 'status'))) stop(paste(output, collapse='\n'))
+    stopifnot(any(grepl('Number of BUSCO full tables: 2', output, fixed=TRUE)))
     summary <- read.delim('annotation_summary.tsv', check.names=FALSE)
     stopifnot(nrow(summary) == 2L, all(summary$busco_cds_total == 4L), all(summary$busco_cds_single == 1L))
     if (with_lineage) stopifnot(all(summary$busco_cds_lineage == 'embryophyta_odb12'))

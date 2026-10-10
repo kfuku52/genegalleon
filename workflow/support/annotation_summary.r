@@ -179,6 +179,7 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
         return(df_out)
     }    
     files = list.files(dir_busco)
+    files = files[file_test('-f', file.path(dir_busco, files))]
     cat(paste0('Number of BUSCO full tables: ', length(files), '\n'))
     if (length(files)==0) {
         cat('Skipping the analysis of BUSCO tables.\n')
