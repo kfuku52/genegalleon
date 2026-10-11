@@ -97,6 +97,10 @@ def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path
 
         def do_GET(self):
             parsed = urlparse(self.path)
+            if parsed.path == "/coge/api/v1/genomes/24739":
+                self._send_json({"id": 24739, "restricted": False,
+                                 "organism": {"name": "Arabidopsis thaliana"}})
+                return
             if parsed.path == "/coge/api/v1/genomes/search/arabidopsis_thaliana_v1/":
                 self._send_json(
                     {
@@ -223,6 +227,9 @@ def test_download_manifest_rejects_header_only_coge_gff_before_bundle_download(t
         def do_GET(self):
             parsed = urlparse(self.path)
             requested_paths.append(parsed.path)
+            if parsed.path == "/coge/api/v1/genomes/69349":
+                self._send_json({"id": 69349, "restricted": False})
+                return
             if parsed.path == "/coge/GenomeInfo.pl" and parse_qs(parsed.query).get("fname") == ["get_gff"]:
                 self._send_json(
                     {
@@ -2070,3 +2077,33 @@ def test_download_manifest_resolves_gwh_id_via_show_page_fallback(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_coge_resolver_requires_matching_public_metadata(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    from format_species_providers import catalogs
+
+    calls = []
+    metadata = {"id": 64491, "restricted": False, "organism": {"name": "Gelsemium elegans"}}
+    monkeypatch.setattr(catalogs, "resolve_coge_api_base_url", lambda: "https://example.test/coge/api/v1")
+    monkeypatch.setattr(catalogs, "fetch_json_with_headers", lambda *args: calls.append(args) or metadata)
+    assert catalogs.resolve_coge_genome_from_source_id("64491", 7, {"User-Agent": "fixture"}) == ("64491", metadata)
+    assert calls == [("https://example.test/coge/api/v1/genomes/64491", 7, {"User-Agent": "fixture"})]
+
+
+@pytest.mark.parametrize("metadata", [
+    {}, {"id": 64491}, {"id": 64491, "restricted": True},
+    {"id": 64491, "restricted": "false"}, {"id": 64491, "restricted": 0},
+    {"id": 64492, "restricted": False}, {"id": 64491, "restricted": False, "deleted": True},
+    [],
+])
+def test_coge_rejects_private_unknown_or_mismatched_metadata(monkeypatch, metadata):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    from format_species_providers import catalogs
+
+    calls = []
+    monkeypatch.setattr(catalogs, "fetch_json_with_headers", lambda *_: metadata)
+    monkeypatch.setattr(catalogs, "coge_export_url_has_feature", lambda *_: calls.append("export") or True)
+    with pytest.raises(ValueError, match="not verified public"):
+        catalogs.resolve_coge_download_urls_from_id("64491", "Gelsemium_elegans", 1, {})
+    assert not calls

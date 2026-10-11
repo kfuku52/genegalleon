@@ -92,7 +92,14 @@ def resolve_coge_genome_from_source_id(source_id, timeout, headers):
     gid = extract_coge_gid_candidate(source_id)
     if gid == "":
         raise ValueError("CoGe id must be genome_id (numeric gid). got '{}'".format(source_id))
-    return gid, {"id": int(gid)}
+    url = "{}/genomes/{}".format(resolve_coge_api_base_url(), gid)
+    metadata = fetch_json_with_headers(url, timeout, headers)
+    if (not isinstance(metadata, dict)
+            or str(metadata.get("id", "")) != gid
+            or metadata.get("restricted") is not False
+            or metadata.get("deleted")):
+        raise ValueError("CoGe genome {} is not verified public: matching metadata with restricted=false is required".format(gid))
+    return gid, metadata
 
 
 def coge_gff_line_is_feature(raw_line):

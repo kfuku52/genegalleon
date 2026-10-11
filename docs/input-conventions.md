@@ -157,7 +157,8 @@ they must not multiply rows in the downstream branch table.
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
 coordinates and other columns retain their usual type and missing-value handling.
-Input generation canonicalizes exact source `OriSeqID` and unique `lcl|` aliases
+Input generation canonicalizes exact source `OriSeqID`, unique `lcl|` aliases,
+and single-field CoGe `gi|chromosome` wrappers (not multi-field NCBI GI headers)
 to the exported genome FASTA IDs, including `##sequence-region` directives.
 It rejects unresolved or ambiguous reference aliases; final validation also
 checks reference IDs, coordinate bounds, and explicit gene/RNA parent reference
@@ -718,6 +719,7 @@ Manifest required columns:
   - for `provider=ddbj`, `id` can be a DDBJ BioProject accession (for example `PRJDB15739`), a WGS master accession (for example `BAAHMP000000000`), or a DDBJ BioProject URL.
     - the resolver follows the public DDBJ Search API to find the `insdc-master` accession, then downloads the anonymous-FTP WGS flatfile (`GBFF`) and derives genome/GFF/CDS from it.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
+    - automatic URL resolution requires matching genome metadata with `restricted=false`; private, missing, mismatched or deleted records stop before annotation/sequence exports.
     - parentless exported CDS fragments are joined using their stable `coge_fid` and exact source `Name`; conflicting names, chromosomes or strands are rejected. Safe GFF formatting normalizes their `Name` and `CDS` aliases with the same identifier rules as the derived CDS; collisions after normalization are rejected.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`), a GWH assembly show URL, or a GWH folder/index URL.

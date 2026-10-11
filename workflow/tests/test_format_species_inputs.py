@@ -5788,3 +5788,50 @@ def test_empty_trailing_gff_columns_keep_cds_models_and_paired_outputs(tmp_path,
     with gzip.open(formatted_gff["output_path"], "rt") as handle:
         assert all(len(line.rstrip("\n").split("\t")) == 9 for line in handle if not line.startswith("#"))
     assert raw.read_text() == "".join(rows)
+
+
+def test_coge_gi_chromosome_alias_is_shared_by_reference_and_interval_readers(tmp_path):
+    module = load_module()
+    from format_species_annotation.genome_intervals import genome_intervals
+    from format_species_annotation.reference import genome_reference_index
+
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">gi|1\nATGAAATTT\n>gi|ContigUN\nATGCCCTTT\n", encoding="utf-8")
+    expected = {"1": "gi|1", "ContigUN": "gi|ContigUN"}
+    sequences = module.load_genome_sequences(genome)
+    index = genome_reference_index(genome)
+    with genome_intervals(genome, [("1", 0, 9), ("ContigUN", 0, 9)]) as intervals:
+        for reader in (sequences, index, intervals):
+            assert module.build_gff_genome_seqid_map(reader, expected) == (expected, ())
+        assert intervals.fetch("1", 0, 9) == sequences["1"] == "ATGAAATTT"
+        assert intervals.fetch("ContigUN", 0, 9) == sequences["ContigUN"] == "ATGCCCTTT"
+        with pytest.raises(ValueError, match="both resolve"):
+            module.build_gff_genome_seqid_map(intervals, {"1", "gi|1"})
+
+
+def test_coge_gi_alias_does_not_guess_multi_field_ncbi_gi_headers(tmp_path):
+    module = load_module()
+    genome = tmp_path / "genome.fa"
+    genome.write_text(">gi|1|ref|ACC.1|\nATGAAATTT\n", encoding="utf-8")
+    reader = module.load_genome_sequences(genome)
+    assert module.build_gff_genome_seqid_map(reader, {"1", "ACC.1"}) == ({}, ("1", "ACC.1"))
+
+
+@pytest.mark.parametrize("records", [
+    ">gi|1\nATGAAATTT\n>1\nATGCCCTTT\n",
+    ">1\nATGCCCTTT\n>gi|1\nATGAAATTT\n",
+])
+def test_coge_gi_alias_rejects_a_distinct_matching_canonical_record(tmp_path, records):
+    module = load_module()
+    from format_species_annotation.genome_intervals import genome_intervals
+    from format_species_annotation.reference import genome_reference_index
+
+    genome = tmp_path / "genome.fa"
+    genome.write_text(records, encoding="utf-8")
+    with pytest.raises(ValueError, match="alias"):
+        module.load_genome_sequences(genome)
+    with pytest.raises(ValueError, match="alias"):
+        genome_reference_index(genome)
+    with pytest.raises(ValueError, match="alias"):
+        with genome_intervals(genome, [("1", 0, 9)]):
+            pass

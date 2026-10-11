@@ -297,20 +297,16 @@ class GenomeSequenceIndex(dict):
 
 
 def load_genome_sequences(path):
+    from .reference import genome_header_aliases
+
     sequences = GenomeSequenceIndex()
     for header, sequence in iter_fasta_records(path):
-        full_name = apply_common_replacements(str(header or "").strip())
-        token = first_token(full_name)
+        token, aliases, declared_length = genome_header_aliases(str(header or ""))
         seq = re.sub(r"\s+", "", str(sequence or "")).upper()
         if token == "":
             continue
-        aliases = {token, full_name}
-        original_id = re.search(r"(?:^|\s)OriSeqID=([^\s;]+)", full_name)
-        if original_id is not None:
-            declared_length = re.search(r"(?:^|\s)Len=(\d+)(?:\s|$)", full_name)
-            if declared_length is not None and int(declared_length.group(1)) != len(seq):
-                raise ValueError("FASTA OriSeqID length disagrees with sequence for '{}'".format(token))
-            aliases.add(original_id.group(1))
+        if declared_length is not None and declared_length != len(seq):
+            raise ValueError("FASTA OriSeqID length disagrees with sequence for '{}'".format(token))
         for alias in aliases:
             previous = sequences.canonical_ids.get(alias)
             if previous is not None and previous != token:

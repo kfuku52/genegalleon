@@ -25,6 +25,11 @@ def genome_header_aliases(header):
     normalized = apply_common_replacements(header.strip())
     token = first_token(normalized)
     aliases = {first_token(header), token, normalized}
+    # CoGe whole-genome sequence exports wrap the chromosome name in gi|.
+    # Do not interpret multi-field NCBI GI/accession headers as this wrapper.
+    wrapped = re.fullmatch(r"gi\|([^|\s]+)", token)
+    if wrapped:
+        aliases.add(wrapped[1])
     original = re.search(r"(?:^|\s)OriSeqID=([^\s;]+)", header)
     declared = None
     if original:
