@@ -137,7 +137,7 @@ def test_container_build_paths_share_python_compatibility_constraints():
     ):
         assert f"{package}==" in requirements
     assert "pypdf>=6.19.0" in requirements
-    assert "setuptools<83" in requirements
+    assert "setuptools<82" in requirements
 
 
 def test_container_build_paths_refresh_system_security_packages_daily():
