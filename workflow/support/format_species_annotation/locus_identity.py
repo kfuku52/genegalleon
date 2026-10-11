@@ -14,7 +14,7 @@ from format_species_writers import open_text
 
 from .common import parse_gff_attributes
 
-VERSION = 1
+VERSION = 2
 ANCHORS = frozenset({"gene", "pseudogene", "mrna", "rna", "transcript", "primary_transcript"})
 REFERENCES = frozenset({"Parent", "Derives_from", "gene_id", "gene", "locus_tag", "transcript_id"})
 MARKER = "##genegalleon-locus-identity version="
@@ -116,6 +116,29 @@ def normalise_locus_ids(source, scratch):
         item = dict(source_id=identifier, line=number, reason=reason)
         if item not in problems:
             problems.append(item)
+
+    # EVM-prefixed and unprefixed author IDs can become identical after the
+    # supported EVM prefix removal. Keep their explicit coding models separate
+    # using the same audited locus namespace as repeated raw IDs. Restrict
+    # comparisons to the same feature type: a gene and its RNA may legitimately
+    # share an identifier. All ancestry and coding proofs below still apply.
+    formatted_anchors = defaultdict(set)
+    for identifier, models in anchors.items():
+        for scope in models:
+            formatted_anchors[(scope[0], identifier.replace("evm.model.", ""))].add(identifier)
+    for (kind, _formatted), identifiers in formatted_anchors.items():
+        if len(identifiers) < 2:
+            continue
+        for identifier in identifiers:
+            for scope, number in anchors[identifier].items():
+                if scope[0] != kind:
+                    continue
+                if identifier in protected:
+                    problem(identifier, number, "ordered model has a formatted identity collision")
+                    continue
+                changes[(identifier, scope)] = dict(source_id=identifier,
+                    target_id=suffix(identifier, scope), feature_type=scope[0],
+                    seqid=scope[1][0], strand=scope[1][1], start=scope[1][2], end=scope[1][3], line=number)
 
     for identifier, models in anchors.items():
         if len(models) < 2 or identifier in protected:

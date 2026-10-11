@@ -204,3 +204,30 @@ def test_unassignable_identity_attribute_is_rejected_before_any_view_is_written(
 def test_source_id_is_part_of_the_suffix_namespace():
     scope = ("gene", ("chr1", "+", 1, 18), ())
     assert suffix("g-a", scope).split(".locus")[1] != suffix("g_a", scope).split(".locus")[1]
+
+
+@pytest.mark.parametrize("identifiers", [("Pm01.1066", "evm.model.Pm01.1066")])
+@pytest.mark.parametrize("provided", [False, True])
+def test_distinct_author_ids_survive_formatted_identity_collision(tmp_path, identifiers, provided):
+    genome, gff, fasta = (tmp_path / name for name in ("genome.fa", "models.gff", "cds.fa"))
+    genome.write_text(">chr1\nATGAAATAA\n>chr2\nATGCCCTAA\n")
+    gff.write_text("".join(
+        f"chr{copy}\ts\tmRNA\t1\t9\t.\t+\t.\tID={identifier}\n"
+        f"chr{copy}\ts\tCDS\t1\t9\t.\t+\t0\tParent={identifier};protein_id=P{copy}\n"
+        for copy, identifier in enumerate(identifiers, 1)))
+    task = dict(provider="direct", species_key="Test_species", species_prefix="Test_species",
+                gff_path=gff, genome_path=genome, format_strict=True, gff_repair_mode="safe")
+    if provided:
+        fasta.write_text(">P1\nATGAAATAA\n>P2\nATGCCCTAA\n")
+        task["cds_path"] = fasta
+    original = gff.read_bytes()
+    cds = format_cds(task, tmp_path, False, False)
+    assert (cds["before_count"], cds["after_count"]) == (2, 2)
+    formatted = format_gff(task, tmp_path, False, False, formatted_cds_path=cds["output_path"])
+    expected, _proof = collect_expected_longest_records(task)
+    assert len(expected) == 2
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=cds["output_path"], gff_file=formatted["output_path"], genome_file=genome, strict=True), 10)
+    assert mapping["ok"], mapping.get("error")
+    assert gff.read_bytes() == original
+    assert locus_identity_audit(task)["status"] == "repaired"

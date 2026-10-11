@@ -172,7 +172,8 @@ evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
 
-With `gff_repair_mode=safe` or `strict`, reused IDs on distinct coding loci are
+With `gff_repair_mode=safe` or `strict`, reused IDs on distinct coding loci and
+distinct author gene/RNA IDs that collide after supported `evm.model.` prefix removal are
 disambiguated only when explicit local gene/RNA parents uniquely assign every
 affected child. Gene, transcript and CDS IDs receive deterministic `.locus...`
 suffixes; parent references and identity attributes are updated together before
