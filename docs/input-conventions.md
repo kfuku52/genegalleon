@@ -601,6 +601,15 @@ Notes:
   comparing coding models. Block IDs such as `.CDS2` never become separate
   transcript or gene representatives. GFF-derived headers retain this model's
   resolved owner instead of reapplying the legacy provided-CDS header map,
+- CoGe orphan CDS aliases retain a unique declared RNA-to-gene owner when
+  all blocks fit that gene's sequence, strand and bounds. Multiple internal
+  feature IDs can form one transcript only when every block names the same
+  exact RNA ID in `Alias`, fits that RNA, has consistent metadata, and does
+  not overlap another block. Ambiguous aliases remain errors,
+- safe GFF normalization omits a length-zero `intergenic_region` only when
+  two unique declared genes end and begin at its adjacent boundaries and no
+  child references that placeholder. Gene, exon and CDS rows remain intact;
+  the source line and flanking gene IDs are recorded in the repair audit,
 - rescued GFF gene ownership follows the same historical ID replacements as
   emitted GFF text (including literal or percent-escaped `evm.model.`). A collision between distinct
   normalized owners fails rather than losing the selected longest model,

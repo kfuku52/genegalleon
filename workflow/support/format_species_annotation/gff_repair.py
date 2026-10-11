@@ -38,7 +38,7 @@ from .reference import genome_reference_index, gff_reference_mapping, normalize_
 from .source_identity import coding_coordinate_audit, locus_identity_audit, source_annotation_path, task_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 22
+GFF_REPAIR_VERSION = 23
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -456,8 +456,48 @@ def gene_reference_repairs(gff_path, genome_path):
     return repairs
 
 
+def empty_intergenic_regions(gff_path):
+    """Qualify nonexistent spacers only between two uniquely declared adjacent genes."""
+    starts, ends = defaultdict(set), defaultdict(set)
+    referenced, candidates = set(), []
+    with open_text(gff_path, "rt", errors="replace") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if line.startswith("##FASTA"):
+                break
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = apply_common_replacements(line.rstrip("\r\n")).split("\t")
+            if len(parts) != 9:
+                continue
+            attrs = parse_gff_attributes(parts[8])
+            for key in ("Parent", "Derives_from", "derives_from"):
+                referenced.update(attrs.get(key, ()))
+            try:
+                start, end = int(parts[3]), int(parts[4])
+            except ValueError:
+                continue
+            ids = attrs.get("ID", ())
+            if parts[2].lower() == "gene" and len(ids) == 1 and 1 <= start <= end:
+                starts[(parts[0], start)].add(ids[0])
+                ends[(parts[0], end)].add(ids[0])
+            elif (parts[2].lower() == "intergenic_region" and start == end + 1 and end >= 1
+                  and not attrs.get("Parent") and not attrs.get("Derives_from")):
+                candidates.append((line_number, parts, ids))
+    qualified = {}
+    for line_number, parts, ids in candidates:
+        left = ends[(parts[0], int(parts[4]))]
+        right = starts[(parts[0], int(parts[3]))]
+        if len(left) == len(right) == 1 and left != right and not referenced.intersection(ids):
+            key = (parts[0], parts[3], parts[4], parts[8])
+            qualified[key] = {"source_line": line_number, "reference": parts[0],
+                              "start": int(parts[3]), "end": int(parts[4]), "feature_ids": list(ids),
+                              "left_gene": next(iter(left)), "right_gene": next(iter(right)),
+                              "reason": "empty_interval_between_adjacent_declared_genes"}
+    return qualified
+
+
 def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(), coge=False, rescued_genes=None,
-                            cds_updates=None, attribute_changes=None, gene_references=None):
+                            cds_updates=None, attribute_changes=None, gene_references=None, empty_intergenic=()):
     coge_features, coge_names = {}, {}
     duplicate_features = duplicate_coge_model_ids(gff_path) if coge else set()
     for line in normalise_gff_lines(iter_non_organelle_gff_lines(
@@ -472,6 +512,9 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
             yield line
             continue
         feature_type = parts[2].strip().lower()
+        if feature_type == "intergenic_region" and (parts[0], parts[3], parts[4], parts[8]) in empty_intergenic:
+            counters["empty_intergenic_regions_removed"] = counters.get("empty_intergenic_regions_removed", 0) + 1
+            continue
         if feature_type == "gene" and gene_references:
             identifiers = parse_gff_attributes(parts[8]).get("ID", ())
             repairs = [gene_references[identifier] for identifier in identifiers if identifier in gene_references]
@@ -563,6 +606,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         )
 
     rescued_genes = {}
+    coge_alias_owners = {}
     if mode != "off" and source_task is not None:
         index = build_gff_cds_grouping_index(source_task)
         if index is not None:
@@ -573,6 +617,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             rescued_owners = set(index["rescued_transcript_gene_tokens"].values())
             rescued_owners.update(index["suffix_inferred_transcript_gene_tokens"].values())
             rescued_owners.update(index["explicit_missing_parent_gene_tokens"])
+            rescued_owners.update(index.get("coge_alias_gene_tokens", {}).values())
+            coge_alias_owners = dict(index.get("coge_alias_gene_tokens", {}))
             for transcript, gene in index["transcript_gene_tokens"].items():
                 owner = sanitize_identifier(gene)
                 if gene not in rescued_owners or owner not in cds_gene_ids:
@@ -591,6 +637,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "normalized_bare_attribute_lines": 0,
     }
     attribute_changes = []
+    empty_intergenic = empty_intergenic_regions(annotation_path) if mode != "off" else {}
     line_count, _feature_count = write_gff_lines_gzip(
         Path(output_path),
         validated_lines(normalize_gff_reference_lines(iter_repaired_gff_lines(
@@ -600,6 +647,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             cds_updates=cds_updates,
             attribute_changes=attribute_changes,
             gene_references=gene_references,
+            empty_intergenic=empty_intergenic,
         ), reference_mapping), output_path),
     )
     status = (
@@ -608,6 +656,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
             len(attribute_changes) > 0
             or identity_audit["status"] == "repaired"
             or len(gene_references) > 0
+            or counters.get("empty_intergenic_regions_removed", 0) > 0
             or len(cds_updates) > 0
             or len(plan["id_mapping"]) > 0
             or counters["changed_values"] > 0
@@ -630,6 +679,9 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "source_overlap": overlap_audit,
         "genome_reference_mapping": reference_mapping,
         "gene_reference_repairs": gene_references,
+        "coge_alias_gene_owners": coge_alias_owners,
+        "empty_intergenic_regions": list(empty_intergenic.values()),
+        "empty_intergenic_regions_removed": counters.get("empty_intergenic_regions_removed", 0),
         "cds_normalisation": {"updated_cds_rows": len(cds_updates), "counts": (normalisation or {}).get("counts", {})},
         "cds_normalisation_fingerprint": file_fingerprint(cds_normalisation_audit_path(cds_path)) if normalisation else None,
         "cds_fingerprint": cds_fingerprint,

@@ -22,6 +22,108 @@ VALIDATE_LONGEST_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" /
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
+@pytest.mark.parametrize("mutation", ["", "missing_alias", "overlap", "other_gene", "different_metadata"])
+def test_coge_split_feature_ids_require_one_explicit_rna(tmp_path, mutation):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "source.gff"
+    genome.write_text(">chr1\nATGAAACCCTAA\n")
+    lines = [
+        "chr1\tCoGe\tgene\t1\t12\t.\t+\t.\tID=G",
+        "chr1\tCoGe\tmRNA\t1\t12\t.\t+\t.\tID=G.mRNA1;Parent=G;Alias=T",
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t0\tID=T;Name=T;CDS=T;Alias=T,G.mRNA1;coge_fid=10",
+        "chr1\tCoGe\tCDS\t10\t12\t.\t+\t0\tID=T.CDS2;Name=T;CDS=T;Alias=T,G.mRNA1;coge_fid=11",
+    ]
+    if mutation == "missing_alias":
+        lines[-1] = lines[-1].replace("Alias=T,G.mRNA1", "Alias=T")
+    elif mutation == "overlap":
+        lines[-1] = lines[-1].replace("\t10\t12\t", "\t3\t12\t")
+    elif mutation == "other_gene":
+        lines += ["chr1\tCoGe\tgene\t1\t12\t.\t+\t.\tID=H",
+                  "chr1\tCoGe\tmRNA\t1\t12\t.\t+\t.\tID=H.mRNA1;Parent=H;Alias=T"]
+    elif mutation == "different_metadata":
+        lines[-1] += ";gene_id=another_gene"
+    gff.write_text("\n".join(lines) + "\n")
+    task = dict(provider="coge", species_key="Test_species", species_prefix="Test_species",
+                genome_path=genome, gff_path=gff)
+    if mutation:
+        with pytest.raises(ValueError, match="CoGe CDS"):
+            list(mod.derive_cds_records_from_gff_and_genome(task))
+    else:
+        assert list(mod.derive_cds_records_from_gff_and_genome(task)) == [("T [gene=G]", "ATGTAA")]
+        out = tmp_path / "output"
+        out.mkdir()
+        cds = mod.format_cds(task, out, False, False)
+        formatted = mod.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+        with gzip.open(formatted["output_path"], "rt") as stream:
+            text = stream.read()
+        assert text.count("\tCDS\t") == 2
+        assert "coge_fid=10" in text and "coge_fid=11" in text
+        assert text.count("gene_id=G") >= 2
+
+
+def test_coge_parentless_isoform_aliases_keep_longest_per_declared_gene(tmp_path):
+    mod = load_module()
+    genome, gff = tmp_path / "genome.fa", tmp_path / "source.gff"
+    genome.write_text(">chr1\nATGAAACCCGGGTAA\n")
+    gff.write_text(
+        "chr1\tCoGe\tgene\t1\t15\t.\t+\t.\tID=G;Name=G\n"
+        "chr1\tCoGe\tmRNA\t1\t15\t.\t+\t.\tID=G.mRNA1;Parent=G;Name=G;Alias=T1,T2\n"
+        "chr1\tCoGe\tmRNA\t1\t6\t.\t+\t.\tID=G.mRNA2;Parent=G;Name=G;Alias=T1\n"
+        "chr1\tCoGe\tCDS\t1\t6\t.\t+\t0\tID=T1;Parent=G.mRNA1;Name=T1;coge_fid=10\n"
+        "chr1\tCoGe\tCDS\t1\t3\t.\t+\t0\tID=T2;Name=T2;CDS=T2;coge_fid=11\n"
+        "chr1\tCoGe\tCDS\t10\t15\t.\t+\t0\tID=T2.CDS2;Name=T2;CDS=T2;coge_fid=11\n"
+    )
+    out = tmp_path / "output"
+    out.mkdir()
+    task = dict(provider="coge", species_key="Test_species", species_prefix="Test_species",
+                genome_path=genome, gff_path=gff)
+    cds = mod.format_cds(task, out, False, False)
+    with gzip.open(cds["output_path"], "rt") as stream:
+        assert stream.read() == ">Test_species_G\nATGGGGTAA\n"
+    from validate_longest_cds_selection import collect_expected_longest_records
+    expected, stats = collect_expected_longest_records(task)
+    assert set(expected) == {"Test_species_G"}
+    assert stats["source_gene_retained_isoform_groups"] == 0
+    formatted = mod.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    from validate_cds_gff_mapping import validate_single_species
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+                                          cds_file=cds["output_path"], gff_file=formatted["output_path"], strict=True), 10)
+    assert mapping["ok"], mapping
+
+
+@pytest.mark.parametrize("mutation", ["", "gap", "referenced", "ambiguous_boundary", "invalid_gene"])
+def test_empty_intergenic_normalization_preserves_coding_models(tmp_path, mutation):
+    mod = load_module()
+    gff, cds, target = tmp_path / "source.gff", tmp_path / "cds.fa", tmp_path / "result.gff.gz"
+    lines = [
+        "chr1\tsrc\tgene\t1\t3\t.\t+\t.\tID=left",
+        "chr1\tsrc\tgene\t4\t6\t.\t-\t.\tID=right",
+        "chr1\tsrc\tCDS\t1\t3\t.\t+\t0\tID=c1;Parent=left",
+        "chr1\tsrc\tCDS\t4\t6\t.\t-\t0\tID=c2;Parent=right",
+        "chr1\tsrc\tintergenic_region\t4\t3\t.\t.\t.\tID=spacer",
+    ]
+    if mutation == "gap":
+        lines[1] = lines[1].replace("\t4\t6\t", "\t5\t6\t")
+    elif mutation == "referenced":
+        lines += ["chr1\tsrc\texon\t4\t6\t.\t-\t.\tID=e;Parent=spacer"]
+    elif mutation == "ambiguous_boundary":
+        lines += ["chr1\tsrc\tgene\t4\t6\t.\t+\t.\tID=another"]
+    elif mutation == "invalid_gene":
+        lines[1] = lines[1].replace("\t4\t6\t", "\t4\t3\t")
+    gff.write_text("\n".join(lines) + "\n")
+    cds.write_text(">Test_species_left\nATG\n>Test_species_right\nTAA\n")
+    audit = mod.write_repaired_gff(gff, cds, target, "Test_species", "safe")
+    with gzip.open(target, "rt") as stream:
+        text = stream.read()
+    assert text.count("\tgene\t") == (3 if mutation == "ambiguous_boundary" else 2)
+    assert text.count("\tCDS\t") == 2
+    assert ("intergenic_region" not in text) == (not mutation)
+    assert audit["empty_intergenic_regions_removed"] == (0 if mutation else 1)
+    if not mutation:
+        assert audit["status"] == "repaired"
+        assert audit["empty_intergenic_regions"][0]["left_gene"] == "left"
+
+
 @pytest.mark.parametrize("strand,expected", [("+", "ATGAAATAA"), ("-", "TTATTTCAT")])
 def test_normalisation_indexes_reference_lengths_once(tmp_path, monkeypatch, strand, expected):
     load_module()

@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover - runtime without biopython
 
 
 
+from .coge_identity import coge_identity_evidence
 from .common import (
     build_gff_genome_seqid_map,
     choose_first_gff_attribute,
@@ -331,18 +332,20 @@ def _coge_model_signature(seqid, strand, start, end, phase, attrs):
     )))
 
 
-def _duplicate_coge_model_ids(models):
+def _duplicate_coge_model_ids(models, split_transcripts=()):
     duplicates = set()
     for transcript, features in models.items():
         signatures = [tuple(sorted(rows)) for rows in features.values()]
         if any(signature != signatures[0] for signature in signatures[1:]):
+            if transcript in split_transcripts:
+                continue
             raise ValueError("Conflicting CoGe CDS feature identity: " + transcript)
         duplicates.update(list(features)[1:])
     return duplicates
 
 
 def duplicate_coge_model_ids(gff_path):
-    """Prove complete equality before discarding repeated CoGe export models."""
+    """Discard identical exports; permit split features only with explicit RNA proof."""
     models = defaultdict(lambda: defaultdict(list))
     features, names = {}, {}
     with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
@@ -361,7 +364,8 @@ def duplicate_coge_model_ids(gff_path):
             models[transcript][attrs["coge_fid"][0]].append(
                 _coge_model_signature(parts[0], parts[6], parts[3], parts[4], parts[7], attrs)
             )
-    return _duplicate_coge_model_ids(models)
+    return _duplicate_coge_model_ids(models, coge_identity_evidence(
+        source_annotation_path(gff_path))["split_transcripts"])
 
 
 def derive_cds_records_from_gff_and_genome(task):
@@ -479,11 +483,15 @@ def derive_cds_records_from_gff_and_genome(task):
             )))
         # CoGe can export the same complete model under two internal feature
         # IDs. Only identical models may share an exact source transcript name;
-        # a partial, coordinate, phase or gene mismatch remains an error.
+        # Otherwise only disjoint pieces tied to one explicit RNA Alias can
+        # form one model; a coordinate, phase or gene mismatch remains an error.
         if any(signature != signatures[0] for signature in signatures[1:]):
-            raise ValueError("Conflicting CoGe CDS feature identity: " + transcript)
-        first_model = next(iter(models.values()))
-        cds_features_by_transcript[transcript].extend(f for f, _signature in first_model)
+            if transcript not in coge_identity_evidence(annotation_path)["split_transcripts"]:
+                raise ValueError("Conflicting CoGe CDS feature identity: " + transcript)
+            selected = [row for rows in models.values() for row in rows]
+        else:
+            selected = next(iter(models.values()))
+        cds_features_by_transcript[transcript].extend(f for f, _signature in selected)
 
     # Assembly-only and organelle-only GFFs cannot provide nuclear CDS. Keep
     # the existing empty-result contract without loading a huge genome first.
