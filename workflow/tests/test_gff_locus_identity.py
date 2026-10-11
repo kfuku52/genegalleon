@@ -103,6 +103,36 @@ def test_off_preserves_source_identifiers(tmp_path):
     assert locus_identity_audit(task)["status"] == "off"
 
 
+def test_independent_intergenic_regions_get_unique_ids_without_coding_parents(tmp_path):
+    task = bundle(tmp_path, provided=True)
+    intervals = [("chr1", 20, 24), ("chr1", 35, 44), ("chr2", 20, 24)]
+    with task["gff_path"].open("a") as handle:
+        for seqid, start, end in intervals:
+            handle.write(f"{seqid}\tsource\tintergenic_region\t{start}\t{end}\t.\t.\t.\tID=inter:first;Name=first\n")
+    original = task["gff_path"].read_bytes()
+    cds = format_cds(task, tmp_path, False, False)
+    assert cds["after_count"] == 2
+    gff = format_gff(task, tmp_path, False, False, formatted_cds_path=cds["output_path"])
+    with gzip.open(gff["output_path"], "rt") as handle:
+        regions = [line.rstrip().split("\t") for line in handle if "\tintergenic_region\t" in line]
+    attributes = [parse_gff_attributes(row[8]) for row in regions]
+    assert len({item["ID"][0] for item in attributes}) == 3
+    assert all(item["gg_original_id"] == ("inter:first",) and "Parent" not in item for item in attributes)
+    assert {(row[0], int(row[3]), int(row[4])) for row in regions} == set(intervals)
+    assert task["gff_path"].read_bytes() == original
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=cds["output_path"], gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert mapping["ok"], mapping.get("error")
+
+
+@pytest.mark.parametrize("kind", ["CDS", "exon", "three_prime_UTR"])
+def test_parentless_coding_model_children_remain_blocked(tmp_path, kind):
+    source = tmp_path / "source.gff"
+    source.write_text("".join(f"{seqid}\ts\t{kind}\t1\t9\t.\t+\t0\tID=child\n" for seqid in ("chr1", "chr2")))
+    with pytest.raises(LocusIdentityError, match="missing, nonlocal or ambiguous parent model"):
+        source_annotation_path(source, repair_locus_ids=True)
+
+
 def test_ambiguous_supplied_cds_id_is_not_assigned_to_a_copy(tmp_path):
     task = bundle(tmp_path, provided=True)
     task["cds_path"].write_text(">r1\nATGAAATAA\n")

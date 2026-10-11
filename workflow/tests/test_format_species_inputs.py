@@ -189,6 +189,36 @@ def normalisation_bundle(tmp_path, models, *, provided=True, code=1):
                 gene_grouping_mode="strict", genetic_code=code)
 
 
+@pytest.mark.parametrize("provided", [False, True])
+def test_paired_cds_normalisation_preserves_gtf_coding_attribute_syntax(tmp_path, provided):
+    module = load_module()
+    task = normalisation_bundle(tmp_path, [{"blocks": [("TAAT", 1), ("GAAACCCTAAC", 2)]}], provided=provided)
+    rows = []
+    for line in task["gff_path"].read_text().splitlines():
+        fields = line.split("\t")
+        if len(fields) == 9 and fields[2] not in {"gene", "mRNA"}:
+            fields[8] = 'transcript_id "t1"; gene_id "g1";'
+            line = "\t".join(fields)
+        rows.append(line)
+    task["gff_path"].write_text("\n".join(rows) + "\n")
+    original = task["gff_path"].read_bytes()
+    output = tmp_path / "output"
+    output.mkdir()
+    cds = module.format_cds(task, output, False, False)
+    assert dict(module.iter_fasta_records(cds["output_path"])) == {"Test_species_g1": "ATGAAACCCTAA"}
+    gff = module.format_gff(task, output, False, False, formatted_cds_path=cds["output_path"])
+    with gzip.open(gff["output_path"], "rt") as handle:
+        coding = [line.rstrip().split("\t") for line in handle if "\tCDS\t" in line]
+    attributes = [module.parse_gff_attributes(row[8]) for row in coding]
+    assert all(item["gene_id"] == ("g1",) and item["transcript_id"] == ("t1",) for item in attributes)
+    assert any("gg_cds_normalisation" in item for item in attributes)
+    assert task["gff_path"].read_bytes() == original
+    from validate_cds_gff_mapping import validate_single_species
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=cds["output_path"], gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert mapping["ok"], mapping.get("error")
+
+
 @pytest.mark.parametrize("strand", ["+", "-"])
 @pytest.mark.parametrize("provided", [False, True])
 def test_formatting_normalises_partial_cds_and_paired_gff_without_rescue_flag(tmp_path, strand, provided, monkeypatch):

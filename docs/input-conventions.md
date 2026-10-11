@@ -184,7 +184,11 @@ explicitly ordered fragments/trans-splicing keep their identities. `off` disable
 this repair. Missing parents, conflicting geometry, cycles or generated-ID
 collisions stop formatting; no parent rows, coding coordinates or biological
 exceptions are invented. Successful mapping is recorded under `locus_identity`
-in the CDS/GFF audits; blocked formatting writes `.locus-identity.json` beside
+in the CDS/GFF audits. Repeated standalone `intergenic_region` IDs receive
+separate interval-based IDs without inventing coding parents; parentless CDS,
+exons and UTRs still fail when their identity is ambiguous. Paired CDS repairs
+preserve quoted GTF attributes when recording their audit markers. Blocked
+formatting writes `.locus-identity.json` beside
 the planned CDS output. Original source files remain unchanged.
 
 Prefer one annotation source per species. Where a workflow retains multiple

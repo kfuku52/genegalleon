@@ -14,7 +14,7 @@ from format_species_writers import open_text
 
 from .common import parse_gff_attributes
 
-VERSION = 2
+VERSION = 3
 ANCHORS = frozenset({"gene", "pseudogene", "mrna", "rna", "transcript", "primary_transcript"})
 REFERENCES = frozenset({"Parent", "Derives_from", "gene_id", "gene", "locus_tag", "transcript_id"})
 MARKER = "##genegalleon-locus-identity version="
@@ -42,6 +42,13 @@ def rows(path):
 
 def geometry(fields):
     return fields[0], fields[6], int(fields[3]), int(fields[4])
+
+
+def leaf_geometry(fields, attrs):
+    # A standalone intergenic region has its own interval, not a coding
+    # parent's multipart identity. Never extend this to unparented CDS/UTRs.
+    standalone = fields[2].lower() == "intergenic_region" and not any(attrs.get(key) for key in REFERENCES)
+    return geometry(fields) if standalone else geometry(fields)[:2]
 
 
 def contains(parent, child):
@@ -96,7 +103,7 @@ def normalise_locus_ids(source, scratch):
             scope = (fields[2].lower(), geometry(fields), tuple(sorted(attrs.get("Parent", ()))))
             anchors[values[0]].setdefault(scope, number)
         elif len(values) == 1:
-            coarse_leaves[values[0]].add((fields[2].lower(), geometry(fields)[:2],
+            coarse_leaves[values[0]].add((fields[2].lower(), leaf_geometry(fields, attrs),
                                         tuple(sorted(attrs.get("Parent", ())))))
 
     while True:
@@ -188,7 +195,7 @@ def normalise_locus_ids(source, scratch):
         values = attrs.get("ID", ())
         if len(values) != 1 or fields[2].lower() in ANCHORS:
             continue
-        scope = (fields[2].lower(), geometry(fields)[:2], bound)
+        scope = (fields[2].lower(), leaf_geometry(fields, attrs), bound)
         record = leaves[values[0]].setdefault(scope, dict(line=number, start=int(fields[3]), end=int(fields[4]), blocks=set()))
         record["start"], record["end"] = min(record["start"], int(fields[3])), max(record["end"], int(fields[4]))
         record["blocks"].add((int(fields[3]), int(fields[4]), fields[7]))
@@ -200,7 +207,8 @@ def normalise_locus_ids(source, scratch):
         if len(physical_models) == 1:
             continue  # A single physical feature may have multiple parents.
         for scope, record in models.items():
-            if not scope[2] or any(parent_model is None for _parent, parent_model in scope[2]):
+            standalone = scope[0] == "intergenic_region" and len(scope[1]) == 4 and not scope[2]
+            if not standalone and (not scope[2] or any(parent_model is None for _parent, parent_model in scope[2])):
                 problem(identifier, record["line"], "missing, nonlocal or ambiguous parent model")
                 continue
             changes[(identifier, scope)] = dict(source_id=identifier,
@@ -245,7 +253,7 @@ def normalise_locus_ids(source, scratch):
             identifier = values[0]
             scope = ((fields[2].lower(), geometry(fields), tuple(sorted(attrs.get("Parent", ()))))
                      if fields[2].lower() in ANCHORS else
-                     (fields[2].lower(), geometry(fields)[:2], bound))
+                     (fields[2].lower(), leaf_geometry(fields, attrs), bound))
             item = changes.get((identifier, scope))
             if item:
                 result[identifier] = item["target_id"]

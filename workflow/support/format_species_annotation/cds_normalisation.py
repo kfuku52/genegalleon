@@ -5,19 +5,18 @@ import json
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
-from urllib.parse import quote
 
 from Bio.Data import CodonTable
 from cds_model_normalisation import CdsModelNormaliser
 
-from .common import first_token, parse_gff_attributes
+from .common import append_gff_attribute, first_token, parse_gff_attributes
 from .genome_intervals import genome_intervals
 from .grouping import extract_cds_header_alias_tiers, resolve_cds_header_gff_gene
 from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
 from .source_identity import task_annotation_path
 
-VERSION = 2
+VERSION = 3
 
 
 def audit_path(cds_path):
@@ -210,5 +209,5 @@ def normalise_gff_lines(lines, updates):
             continue
         fields = line.rstrip("\r\n").split("\t")
         fields[3], fields[4], fields[7] = str(update["start"] + 1), str(update["end"]), update["phase"]
-        fields[8] += ";gg_cds_normalisation=" + quote(update["reason"], safe="")
+        fields[8] = append_gff_attribute(fields[8], "gg_cds_normalisation", update["reason"])
         yield "\t".join(fields) + "\n"

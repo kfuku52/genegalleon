@@ -6,7 +6,7 @@ import shlex
 import tarfile
 from collections import defaultdict
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from format_species_provider_config import ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
 from format_species_writers import apply_common_replacements, open_text
@@ -227,6 +227,15 @@ def normalize_gff_attribute_value(raw_value):
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
         value = value[1:-1]
     return unquote(value.strip())
+
+
+def append_gff_attribute(attributes, key, value, *, safe=""):
+    """Keep GTF quoted attributes and GFF3 encoded attributes in their syntax."""
+    text = str(attributes).rstrip().rstrip(";")
+    if re.match(r"^\s*[^\s=;]+\s+", text):
+        value = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return text + '; ' + key + ' "' + value + '";'
+    return text + ";" + key + "=" + quote(str(value), safe=safe)
 
 
 def parse_gff_attributes(attr_text):

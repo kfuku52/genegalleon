@@ -19,6 +19,7 @@ from .cds_normalisation import audit_path as cds_normalisation_audit_path
 from .cds_normalisation import current_audit as current_cds_normalisation_audit
 from .cds_normalisation import normalise_gff_lines, paired_audit
 from .common import (
+    append_gff_attribute,
     first_token,
     iter_fasta_records,
     normalize_gff_attribute_value,
@@ -37,7 +38,7 @@ from .reference import genome_reference_index, gff_reference_mapping, normalize_
 from .source_identity import locus_identity_audit, source_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 20
+GFF_REPAIR_VERSION = 21
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -496,7 +497,7 @@ def iter_repaired_gff_lines(gff_path, id_mapping, counters, confirmed_overlaps=(
                 if existing and existing != (owner,):
                     raise ValueError("Rescued GFF gene conflicts with explicit gene_id: " + parts[8])
                 if not existing:
-                    parts[8] = parts[8].rstrip(";") + ";gene_id=" + quote(owner, safe="._:-|")
+                    parts[8] = append_gff_attribute(parts[8], "gene_id", owner, safe="._:-|")
                     rescued_changes = 1
                     counters["rescued_gene_annotations"] = counters.get("rescued_gene_annotations", 0) + 1
         if feature_type == "cds":
