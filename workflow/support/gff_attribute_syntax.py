@@ -10,7 +10,7 @@ import re
 import shlex
 from pathlib import Path
 
-GFF_ATTRIBUTE_SYNTAX_VERSION = 6
+GFF_ATTRIBUTE_SYNTAX_VERSION = 7
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
@@ -72,6 +72,12 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
         elif (previous_key in {"description", "Note"} and UNIPROT_METADATA.match(repaired[-1])
               and UNIPROT_CONTINUATION.fullmatch(field)):
             repaired[-1] += "%3B" + field.replace("=", "%3D").replace(",", "%2C")
+        elif (source == "." and feature.lower() == "misc_feature" and previous_key == "note"
+              and re.fullmatch(r"note=Geneious type: Repeat(?: Region|_Regiion)(?:%3B IRa)?", repaired[-1])
+              and field in {" IRa", " Geneious type: repeat_region"}):
+            # These exact Geneious repeat notes contain literal semicolons.
+            # Keep the description intact; never consume structural fields.
+            repaired[-1] += "%3B" + field
         elif KEY_VALUE.match(field.strip()):
             repaired.append(field)
             previous_key = field.strip().split("=", 1)[0]
@@ -122,6 +128,7 @@ def normalise_line(line, path, line_number, changes):
     if parts[8] == before and not trailing_empty:
         return line
     reason = ("canonicalised_gwh_confidence_flag" if "gwh_gene_confidence=HC" in parts[8] and re.search(r"(?:^|;)HC(?:;|$)", before)
+              else "escaped_geneious_repeat_note_semicolon" if "note=Geneious type: Repeat" in before and parts[2].lower() == "misc_feature"
               else "escaped_NAP_metadata_semicolon" if re.search(r"(?:^|;)Note=[^;]*nucleosome", before) and "%3B" in parts[8]
               else "escaped_uniprot_Note_semicolon" if re.search(r"(?:^|;)Note=[^;]*RecName: Full=", before)
               else "canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"

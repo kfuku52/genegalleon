@@ -50,8 +50,17 @@ def source_annotation_path(path, *, repair_locus_ids=False):
 
 
 def task_annotation_path(task):
-    return source_annotation_path(task["gff_path"],
+    from .coding_coordinates import coding_view
+    view = source_annotation_path(task["gff_path"],
         repair_locus_ids=str(task.get("gff_repair_mode", "safe")).strip().lower() != "off")
+    return coding_view(task, view)[0]
+
+
+def coding_coordinate_audit(task):
+    from .coding_coordinates import coding_view
+    view = source_annotation_path(task["gff_path"],
+        repair_locus_ids=str(task.get("gff_repair_mode", "safe")).strip().lower() != "off")
+    return coding_view(task, view)[1]
 
 
 def locus_identity_audit(task):

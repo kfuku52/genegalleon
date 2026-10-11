@@ -172,6 +172,20 @@ evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
 
+For a gene/exon-only GFF supplied with a genome and published CDS, safe/strict
+formatting can reconstruct coding bounds when gene, exon-parent and CDS IDs
+match completely one-to-one. Each CDS must occur exactly once in its own
+strand-aware spliced exons. Unknown `N` bases must also leave only one possible
+alignment; a literal match alone is insufficient. The formatter retains exon
+and UTR bounds, creates an explicit RNA and phased CDS blocks, and records input
+hashes and model counts under `coding_coordinates` in the GFF repair audit.
+Missing, conflicting or ambiguous evidence stops reconstruction. `off` keeps
+the original annotation. The original source files are never modified.
+
+The source syntax adapter also escapes literal semicolons in the observed
+Geneious `misc_feature` repeat notes. This preserves description text and does
+not consume unknown fragments or structural attributes.
+
 With `gff_repair_mode=safe` or `strict`, reused IDs on distinct coding loci and
 distinct author gene/RNA IDs that collide after supported `evm.model.` prefix removal are
 disambiguated only when explicit local gene/RNA parents uniquely assign every

@@ -35,10 +35,10 @@ from .organelle import (
     iter_non_organelle_gff_lines,
 )
 from .reference import genome_reference_index, gff_reference_mapping, normalize_gff_reference_lines
-from .source_identity import locus_identity_audit, source_annotation_path
+from .source_identity import coding_coordinate_audit, locus_identity_audit, source_annotation_path, task_annotation_path
 from .source_overlap import audit_source_overlaps, mark_source_overlap, source_overlap_key
 
-GFF_REPAIR_VERSION = 21
+GFF_REPAIR_VERSION = 22
 GFF_REPAIR_MODES = ("off", "safe", "strict")
 GENE_ALIAS_KEYS = ("Name", "Alias", "gene", "gene_id", "locus_tag", "geneName", "ID")
 GENE_REFERENCE_KEYS = frozenset(("Parent", "Derives_from", "gene", "gene_id"))
@@ -533,7 +533,8 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
     cds_fingerprint = file_fingerprint(cds_path)
     encoding_audit = inspect_invalid_utf8(gff_path, stop_at_fasta=True)
     identity_audit = locus_identity_audit({**(source_task or {}), "gff_path": gff_path, "gff_repair_mode": mode})
-    annotation_path = source_annotation_path(gff_path, repair_locus_ids=mode != "off")
+    annotation_task = {**(source_task or {}), "gff_path": gff_path, "gff_repair_mode": mode}
+    annotation_path = task_annotation_path(annotation_task)
     organelle_seqids = gff_organelle_seqids(annotation_path)
     organelle_features_excluded = count_organelle_gff_features(annotation_path, organelle_seqids)
     cds_gene_ids = read_formatted_cds_gene_ids(cds_path, species_prefix)
@@ -624,6 +625,7 @@ def write_repaired_gff(gff_path, cds_path, output_path, species_prefix, mode, so
         "species_prefix": species_prefix,
         "source_fingerprint": source_fingerprint,
         "locus_identity": identity_audit,
+        "coding_coordinates": coding_coordinate_audit(annotation_task),
         "source_overlap_input_fingerprints": overlap_inputs,
         "source_overlap": overlap_audit,
         "genome_reference_mapping": reference_mapping,

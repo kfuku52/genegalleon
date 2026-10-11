@@ -16,6 +16,33 @@ from gff2genestat import read_gff_table
 from gff_attribute_syntax import normalise_attributes, normalise_line
 
 
+@pytest.mark.parametrize("note", [
+    "Geneious type: Repeat Region; Geneious type: repeat_region",
+    "Geneious type: Repeat_Regiion; IRa; Geneious type: repeat_region",
+])
+def test_geneious_organelle_repeat_notes_preserve_literal_semicolons(note):
+    from urllib.parse import unquote
+    raw = "ID=repeat;note=" + note + ";standard_name=IRb Repeat region;transl_table=11"
+    fixed = normalise_attributes(raw, ".", "misc_feature")
+    assert unquote(fixed) == raw
+    assert normalise_attributes(fixed, ".", "misc_feature") == fixed
+    changes = []
+    normalise_line("organelle\t.\tmisc_feature\t1\t50\t.\t+\t.\t" + raw + "\n", "source", 1, changes)
+    assert changes[0]["reason"] == "escaped_geneious_repeat_note_semicolon"
+
+
+@pytest.mark.parametrize("attrs,source,feature", [
+    ("note=Geneious type: Repeat Region;Parent:t", ".", "misc_feature"),
+    ("note=Geneious type: Repeat Region; IRa; arbitrary", ".", "misc_feature"),
+    ("note=Geneious type: Repeat Region; Geneious type: repeat_region", ".", "gene"),
+    ("note=Geneious type: Repeat Region; Geneious type: repeat_region", "other", "misc_feature"),
+    ("Note=Geneious type: Repeat Region; Geneious type: repeat_region", ".", "misc_feature"),
+])
+def test_geneious_repair_rejects_ambiguous_or_structural_fragments(attrs, source, feature):
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        normalise_attributes(attrs, source, feature)
+
+
 def test_description_linkage_separator_is_encoded_and_audited():
     raw = "ID=Sb01g07380;description=PREDICTED: endo-1,3;1,4-beta-D-glucanase-like [Sesamum indicum];transl_table=1"
     expected = raw.replace("1,3;1,4-", "1%2C3%3B1%2C4-")

@@ -16,7 +16,7 @@ from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
 from .source_identity import task_annotation_path
 
-VERSION = 3
+VERSION = 4
 
 
 def audit_path(cds_path):
