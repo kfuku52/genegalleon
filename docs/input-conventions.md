@@ -653,6 +653,9 @@ Notes:
   ends the attribute; incomplete descriptions and orphan `key:value` fields
   are rejected. Numeric NAP1/HKT1 separators require matching parenthesized
   aliases. Formatting preserves the complete description and gene model.
+  Independent source-gene validation treats `ID` as one opaque value while
+  retaining `Parent` lists; comma-decorated author IDs cannot invent shared
+  description nodes or merge unrelated gene ancestries.
   GWH EVM gene rows with an accession of the documented `GWHG…` form can
   canonicalize their bare `HC` flag to `gwh_gene_confidence=HC`; this does not
   alter gene IDs or parent relationships. Unknown orphan attributes still fail.

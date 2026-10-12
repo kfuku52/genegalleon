@@ -8,6 +8,44 @@ import validate_longest_cds_selection as longest
 from validate_source_gene_selection import SourceGeneSelection
 
 
+def test_comma_decorated_ids_keep_unique_explicit_name_and_parent_ancestry(tmp_path):
+    path = tmp_path / "source.gff"
+    path.write_text(
+        "chr1\tHelixer\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+        "chr1\tHelixer\tgene\t20\t28\t.\t+\t.\tID=g2\n"
+        "chr1\tHelixer\tmRNA\t1\t9\t.\t+\t.\tID=t1,shared description;Parent=g1;Name=t1\n"
+        "chr1\tHelixer\tmRNA\t20\t28\t.\t+\t.\tID=t2,shared description;Parent=g2;Name=t2\n"
+        "chr1\tHelixer\tCDS\t1\t9\t.\t+\t0\tParent=t1\n"
+        "chr1\tHelixer\tCDS\t20\t28\t.\t+\t0\tParent=t2\n")
+    check = SourceGeneSelection(path)
+    assert check.header_roots("t1") == {"g1"}
+    assert check.header_roots("t2") == {"g2"}
+    assert "shared description" not in check.parents
+    check.observe("t1", "one", True)
+    check.observe("t2", "two", True)
+    assert check.validate()["source_gene_complete"]
+    check.observe("t2", "one", False)
+    with pytest.raises(ValueError, match="distinct_source_gene_merges=1"):
+        check.validate()
+
+
+@pytest.mark.parametrize("attributes", [
+    "ID=t1;Parent=g1,g2",
+    "ID=t1%2Cshared;Parent=g1,g2;Name=t1",
+])
+def test_single_id_parsing_keeps_genuine_multiple_gene_parents_ambiguous(tmp_path, attributes):
+    path = tmp_path / "source.gff"
+    path.write_text(
+        "chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+        "chr1\ts\tgene\t1\t9\t.\t+\t.\tID=g2\n"
+        "chr1\ts\tmRNA\t1\t9\t.\t+\t.\t" + attributes + "\n")
+    check = SourceGeneSelection(path)
+    assert check.header_roots("t1") == {"g1", "g2"}
+    check.observe("t1", "one", True)
+    assert not check.validate()["source_gene_complete"]
+    assert check.validate()["source_gene_unresolved_selected_records"] == 1
+
+
 @pytest.fixture
 def annotation(tmp_path):
     path = tmp_path / "source.gff"

@@ -52,7 +52,11 @@ class SourceGeneSelection:
                 for item in fields[8].split(";"):
                     if "=" in item:
                         key, values = item.split("=", 1)
-                        attrs[key.lower()].extend(unquote(value) for value in values.split(","))
+                        # GFF ID is one opaque identity. Splitting an author's
+                        # comma-decorated ID invents shared description nodes
+                        # and falsely joins otherwise distinct RNA ancestries.
+                        items = [values] if key.lower() == "id" else values.split(",")
+                        attrs[key.lower()].extend(unquote(value) for value in items)
                 ids = attrs.get("id", [])
                 parents = set(attrs.get("parent", []))
                 kind = fields[2].lower()
