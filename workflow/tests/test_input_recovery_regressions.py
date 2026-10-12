@@ -17,6 +17,78 @@ from gff_attribute_syntax import normalise_attributes, normalise_line
 
 
 @pytest.mark.parametrize("note", [
+    "Retrovirus-related Pol polyprotein [Includes: Protease (EC 3.4.23.-); Reverse transcriptase (EC 2.7.7.49); Endonuclease]",
+    "Alpha-mannosidase [Cleaved into: Alpha-mannosidase, heavy subunit; Alpha-mannosidase, light subunit]",
+    "Aquaporin (TIP1;1) (rTIP1)",
+    "Cysteine synthase (ARAth-Bsas4;1) (AtcysD1)",
+    "Protein [Cleaved into: Subunit alpha; Subunit beta] [Includes: Enzyme A; Enzyme B]",
+    "literal%253B (A;B) [Includes: C;D]",
+    "Nucleosome assembly protein 1;2 (NtNAP1;2) (Nucleosome assembly protein 1-like 2) (NtNAP1_L2)",
+    "Cation transporter HKT1;3 (OsHKT1;3) (Cation transporter HKT6) (OsHKT6)",
+])
+def test_maker_note_balanced_separators_preserve_description_and_identity(note):
+    from urllib.parse import unquote
+    raw = "ID=t;Parent=g;Name=t;Note=" + note + ";Dbxref=PFAM:PF00001;transl_table=1"
+    expected = raw.replace(note, note.replace(";", "%3B").replace(",", "%2C"))
+    fixed = normalise_attributes(raw, "maker", "mRNA")
+    assert fixed == expected
+    assert unquote(fixed) == unquote(raw)
+    assert normalise_attributes(fixed, "maker", "mRNA") == fixed
+    changes = []
+    normalise_line("chr1\tmaker\tmRNA\t1\t9\t.\t+\t.\t" + raw + "\n", "source", 1, changes)
+    assert changes[0]["reason"] == "escaped_maker_note_balanced_semicolon"
+
+
+@pytest.mark.parametrize("attrs,source,feature", [
+    ("ID=t;Parent=g;Note=protein (alpha;Parent:g)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha;unknown:key)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; b;Parent=g)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta]", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha;; beta)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein [Includes: alpha; beta];unknown", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta)", "other", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta)", "maker", "gene"),
+    ("ID=t;Parent=g (alpha; beta)", "maker", "mRNA"),
+    ("Note=Nucleosome assembly protein 1;2 (NtNAP1;3)", "maker", "mRNA"),
+    ("Note=Cation transporter HKT1;3 (NtNAP1;3)", "maker", "mRNA"),
+    ("Note=unknown protein 1;2 (NtNAP1;2)", "maker", "mRNA"),
+])
+def test_maker_note_repair_rejects_structural_unknown_and_incomplete_boundaries(attrs, source, feature):
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        normalise_attributes(attrs, source, feature)
+
+
+@pytest.mark.parametrize("mode", ["off", "safe", "strict"])
+@pytest.mark.parametrize("paired", [False, True])
+def test_maker_note_is_repaired_before_full_gff_formatting_without_model_changes(tmp_path, mode, paired):
+    import format_species_discovery as formatting
+    from gff_attribute_syntax import validate_gff
+
+    note = "Polyprotein [Includes: Protease; Reverse transcriptase; Endonuclease] (TIP1;1)"
+    raw = tmp_path / "raw.gff3"
+    text = ("##gff-version 3\nchr1\tmaker\tgene\t1\t12\t.\t+\t.\tID=g1;Name=g1\n"
+            "chr1\tmaker\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g1;Name=t1;Note=" + note + "\n"
+            "chr1\tmaker\tCDS\t1\t12\t.\t+\t0\tParent=t1\n")
+    raw.write_text(text)
+    cds = tmp_path / "Species_one.cds.fa"
+    cds.write_text(">Species_one_g1\nATGAAACCCTAA\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    task = {"provider": "local", "species_key": "Species_one", "species_prefix": "Species_one",
+            "gff_path": raw, "gff_repair_mode": mode}
+    result = formatting.format_gff(task, output, overwrite=False, dry_run=False,
+                                   formatted_cds_path=cds if paired else None)
+    validate_gff(result["output_path"])
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.read() == text.replace(note, note.replace(";", "%3B"))
+    audit = json.loads(Path(str(result["output_path"]) + ".repair.json").read_text())["attribute_syntax"]
+    assert audit["changed_rows"] == 1 and audit["changes"][0]["source_line"] == 3
+    assert audit["changes"][0]["reason"] == "escaped_maker_note_balanced_semicolon"
+    assert raw.read_text() == text
+
+
+@pytest.mark.parametrize("note", [
     "Geneious type: Repeat Region; Geneious type: repeat_region",
     "Geneious type: Repeat_Regiion; IRa; Geneious type: repeat_region",
 ])

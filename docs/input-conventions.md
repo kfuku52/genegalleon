@@ -647,6 +647,12 @@ Notes:
   `SULTR4%3B1`). This runs independently of gene-ID repair and rescue flags.
   The same audit covers chemical linkage lists, nucleosome assembly protein
   suffixes and structured UniProt continuations in `description` and `Note`.
+  MAKER mRNA `Note` descriptions can also escape literal delimiters inside
+  balanced parentheses or square brackets, such as `(TIP1;1)` or
+  `[Includes: Protease; Reverse transcriptase]`. A `key=value` boundary always
+  ends the attribute; incomplete descriptions and orphan `key:value` fields
+  are rejected. Numeric NAP1/HKT1 separators require matching parenthesized
+  aliases. Formatting preserves the complete description and gene model.
   GWH EVM gene rows with an accession of the documented `GWHG…` form can
   canonicalize their bare `HC` flag to `gwh_gene_confidence=HC`; this does not
   alter gene IDs or parent relationships. Unknown orphan attributes still fail.

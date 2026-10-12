@@ -1,8 +1,8 @@
 """Conservative attribute syntax repair at formatting, validation at consumption.
 
-Recover numeric continuations in funannotate metadata and the observed AUGUSTUS
-gene Name / mRNA Blast2Go colon separators. Structural attributes are never
-joined. Work on encoded text so existing escapes stay unchanged.
+Recover numeric continuations in funannotate metadata, balanced MAKER mRNA
+Notes, and observed AUGUSTUS metadata separators. Structural attributes are
+never joined. Work on encoded text so existing escapes stay unchanged.
 """
 import gzip
 import hashlib
@@ -10,7 +10,7 @@ import re
 import shlex
 from pathlib import Path
 
-GFF_ATTRIBUTE_SYNTAX_VERSION = 7
+GFF_ATTRIBUTE_SYNTAX_VERSION = 8
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
@@ -20,6 +20,64 @@ LINKAGE_CONTINUATION = re.compile(r"\d+,\d+-[A-Za-z][^;=]*")
 NAP_CONTINUATION = re.compile(r"[1-4](?:-like(?: isoform X\d+|, partial)?| isoform X\d+)? \[[A-Za-z][A-Za-z .-]+\]")
 UNIPROT_CONTINUATION = re.compile(r" (?:AltName: (?:Full|Allergen)=[^;=]+|Includes: RecName: Full=[^;=]+|Short=[^;=]+|Flags: (?:Precursor|Fragment)(?: \[[A-Za-z][A-Za-z .-]+\])?)")
 UNIPROT_METADATA = re.compile(r"^(?:description|Note)=(?:[A-Z0-9_]+ )?RecName: Full=")
+
+
+def _description_brackets(value):
+    stack = []
+    for character in value:
+        if character in "([":
+            stack.append(character)
+        elif character in ")]":
+            if not stack or stack.pop() != {")": "(", "]": "["}[character]:
+                return None
+    return stack
+
+
+def _escape_maker_note_delimiters(text, source, feature):
+    """Preserve literal separators inside complete parenthesized MAKER Notes.
+
+    Only mRNA Note values with balanced parentheses/brackets qualify. A real
+    key=value boundary always ends the attribute; orphan key:value fragments
+    and incomplete descriptions remain errors rather than absorbing identity.
+    """
+    if source.lower() != "maker" or feature.lower() != "mrna":
+        return text
+    fields, output = text.split(";"), []
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if not field.strip().startswith("Note="):
+            output.append(field)
+            continue
+        value = field.split("=", 1)[1]
+        fragments = [value]
+        stack = _description_brackets(value)
+        if not stack and index + 1 < len(fields):
+            # These UniProt names repeat their literal numeric separator in
+            # a parenthesized alias, proving the continuation independently.
+            alias = re.fullmatch(r"([1-4]) \(((?:Nt|Os)NAP1|OsHKT1)", fields[index])
+            if (alias and fields[index + 1].startswith(alias[1] + ")")
+                    and ((value == "Nucleosome assembly protein 1" and alias[2].endswith("NAP1"))
+                         or (value == "Cation transporter HKT1" and alias[2] == "OsHKT1"))):
+                fragments.append(fields[index])
+                index += 1
+                stack = _description_brackets(";".join(fragments))
+        while stack and index < len(fields):
+            continuation = fields[index]
+            if not continuation or KEY_VALUE.match(continuation.strip()):
+                break
+            if "=" in continuation or re.match(r"\s*[\w.-]+\s*:", continuation):
+                raise ValueError("Unrecoverable GFF attribute fragment: " + repr(continuation))
+            fragments.append(continuation)
+            index += 1
+            stack = _description_brackets(";".join(fragments))
+        if len(fragments) > 1:
+            if stack != [] or "=" in value:
+                raise ValueError("Unrecoverable GFF attribute fragment in incomplete MAKER Note")
+            field = field.split("=", 1)[0] + "=" + ";".join(fragments).replace(";", "%3B").replace(",", "%2C")
+        output.append(field)
+    return ";".join(output)
 
 
 def file_sha256(path):
@@ -57,6 +115,7 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
     if not KEY_VALUE.match(text.strip()):
         validate_attributes(text)
         return text
+    text = _escape_maker_note_delimiters(text, source, feature)
     repaired = []
     previous_key = None
     for field in text.split(";"):
@@ -134,6 +193,7 @@ def normalise_line(line, path, line_number, changes):
               else "canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"
               else "escaped_description_linkage_semicolon" if re.search(r"(?:description|Note)=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
               else "escaped_description_metadata_semicolon" if "description=" in before and "description=" in parts[8]
+              else "escaped_maker_note_balanced_semicolon" if parts[1].lower() == "maker" and parts[2].lower() == "mrna"
               else "escaped_funannotate_metadata_semicolon")
     output = "\t".join(parts) + line[len(line.rstrip("\r\n")):]
     changes.append({"source_line": line_number,
