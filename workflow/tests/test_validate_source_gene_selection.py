@@ -8,6 +8,48 @@ import validate_longest_cds_selection as longest
 from validate_source_gene_selection import SourceGeneSelection
 
 
+def test_source_check_retains_ownership_with_padded_gff_attributes(tmp_path):
+    path = tmp_path / "padded.gff"
+    path.write_text(
+        "chr1\tEVM\tgene\t1\t9\t.\t+\t.\t ID=g1 ; Name=LOC1 \n"
+        "chr1\tEVM\tmRNA\t1\t9\t.\t+\t.\tID=t1; Name=t1; Parent= g1 \n"
+        "chr1\tEVM\tCDS\t1\t9\t.\t+\t0\tID=c1; Name=c1; Parent= t1 \n"
+    )
+    check = SourceGeneSelection(path)
+    assert check.header_roots("t1") == {"g1"}
+    assert check.header_roots("c1") == {"g1"}
+    check.observe("t1", "selected", True)
+    stats = check.validate()
+    assert stats["source_gene_complete"]
+    assert stats["source_gene_unresolved_records"] == 0
+
+
+def test_padded_attributes_do_not_hide_multiple_explicit_parents(tmp_path):
+    path = tmp_path / "ambiguous.gff"
+    path.write_text(
+        "chr1\tEVM\tgene\t1\t9\t.\t+\t.\tID=g1\n"
+        "chr1\tEVM\tgene\t1\t9\t.\t+\t.\tID=g2\n"
+        "chr1\tEVM\tmRNA\t1\t9\t.\t+\t.\tID=t1; Parent= g1, g2 \n"
+    )
+    check = SourceGeneSelection(path)
+    assert check.header_roots("t1") == {"g1", "g2"}
+    check.observe("t1", "selected", True)
+    assert not check.validate()["source_gene_complete"]
+
+
+def test_attribute_padding_preserves_encoded_spaces_and_opaque_id_commas(tmp_path):
+    path = tmp_path / "opaque.gff"
+    path.write_text(
+        "chr1\tEVM\tgene\t1\t9\t.\t+\t.\t ID=gene%20one \n"
+        "chr1\tEVM\tmRNA\t1\t9\t.\t+\t.\t ID=t1,description ; Parent=gene%20one \n"
+        "chr1\tEVM\tCDS\t1\t9\t.\t+\t0\tID=c1; Parent=t1%2Cdescription\n"
+    )
+    check = SourceGeneSelection(path)
+    assert check.header_roots("t1,description") == {"gene one"}
+    assert check.header_roots("c1") == {"gene one"}
+    assert "description" not in check.nodes_by_alias
+
+
 def test_comma_decorated_ids_keep_unique_explicit_name_and_parent_ancestry(tmp_path):
     path = tmp_path / "source.gff"
     path.write_text(
