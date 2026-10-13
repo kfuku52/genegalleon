@@ -38,6 +38,7 @@
     "test_native_tree_dating.py",
     "test_native_ou_shift.py",
     "test_synteny_search_integration.py",
+    "test_synteny_neighbor_thread_budget_runtime.py",
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",
     "test_owned_runtime_contracts.py",
