@@ -15,6 +15,7 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -25,6 +26,7 @@ OFFICIAL_REPOSITORY = "https://github.com/xjtu-omics/ANNEVO"
 SCHEMA_VERSION = 1
 DEFAULT_PART_BYTES = 1024 ** 3
 ARCHITECTURES = {"x86_64": "amd64", "aarch64": "arm64"}
+SHARED_OPENMP_FILES = {"lib/libiomp5.so", "lib/libomptarget.so"}
 
 
 class BundleError(ValueError):
@@ -154,9 +156,59 @@ def inspect_environment(prefix, source, base_abi, staging):
     return observed
 
 
-def pack_environment(prefix, output, conda_pack):
+def preserved_shared_files(prefix):
+    """Preserve the effective prefix for the two demonstrated OpenMP collisions."""
+    prefix = Path(prefix).resolve()
+    owners = {}
+    for path in sorted((prefix / "conda-meta").glob("*.json")):
+        metadata = json.loads(path.read_text())
+        for name in metadata.get("files", []):
+            owners.setdefault(name, []).append((path, metadata))
+    result = {}
+    for name, providers in owners.items():
+        if len(providers) < 2:
+            continue
+        if (name not in SHARED_OPENMP_FILES or len(providers) != 2
+                or {item[1].get("name") for item in providers} != {"intel-openmp", "llvm-openmp"}):
+            raise BundleError("Unrecognized managed-file overlap: " + name)
+        path = prefix / name
+        details = path.lstat()
+        mode = stat.S_IMODE(details.st_mode)
+        if not stat.S_ISREG(details.st_mode) or mode not in {0o644, 0o664, 0o755, 0o775} or details.st_size > 32 * 1024 ** 2:
+            raise BundleError("Unrecognized shared-library physical type/mode/size: " + name)
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        proof = []
+        for metadata_path, metadata in providers:
+            entries = [entry for entry in metadata.get("paths_data", {}).get("paths", []) if entry.get("_path") == name]
+            if len(entries) != 1:
+                raise BundleError("Shared-library provider lacks exact path metadata: " + name)
+            entry = entries[0]
+            expected_type = "hardlink" if metadata["name"] == "intel-openmp" else "softlink"
+            if (entry.get("path_type") != expected_type or entry.get("file_mode") is not None
+                    or entry.get("prefix_placeholder") or not re.fullmatch(r"[0-9a-f]{64}", entry.get("sha256_in_prefix", ""))):
+                raise BundleError("Unrecognized shared-library provider type or prefix placeholder: " + name)
+            proof.append({"name": metadata["name"], "version": metadata["version"], "build": metadata["build"],
+                          "metadata_sha256": sha256(metadata_path), "path_record": entry})
+        if digest not in {provider["path_record"]["sha256_in_prefix"] for provider in proof}:
+            raise BundleError("Physical shared-library SHA does not match a managed provider: " + name)
+        if (str(prefix).encode() in data or b"_h_env_placehold" in data
+                or b"/opt/anaconda1anaconda2anaconda3" in data):
+            raise BundleError("Retained shared-library contains a prefix placeholder: " + name)
+        if sha256(path) != digest or stat.S_IMODE(path.lstat().st_mode) != mode:
+            raise BundleError("Physical shared-library changed during qualification: " + name)
+        result[name] = {"sha256": digest, "size": len(data), "mode": mode, "providers": proof,
+                        "matches_providers": [p["name"] for p in proof if p["path_record"]["sha256_in_prefix"] == digest]}
+    return result
+
+
+def pack_environment(prefix, output, conda_pack, exclude_files=()):
     argv = [conda_pack, "--prefix", str(Path(prefix).resolve()), "--output", str(output),
             "--format", "tar.gz", "--n-threads", "1"]
+    for name in sorted(exclude_files):
+        if name not in SHARED_OPENMP_FILES:
+            raise BundleError("Only the demonstrated managed OpenMP collisions can be excluded")
+        argv += ["--exclude", name]
     version = checked_run([conda_pack, "--version"], timeout=60)
     # Conda-pack creates a temporary archive before atomic publication. Keep it
     # beside the output on the qualified storage, away from contained /tmp RAM.
@@ -189,15 +241,15 @@ def environment_members(archive):
         raise BundleError("Relocatable Conda archive must contain bin/python and bin/conda-unpack")
 
 
-def add_bytes(archive, name, data):
+def add_bytes(archive, name, data, mode=0o644):
     member = tarfile.TarInfo(name)
     member.size = len(data)
-    member.mode = 0o644
+    member.mode = mode
     archive.addfile(member, io.BytesIO(data))
     return {"path": name, "type": "file", "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "mode": member.mode}
 
 
-def write_payload(env_archive, source, source_info, dependencies, pack_info, output):
+def write_payload(env_archive, source, source_info, dependencies, pack_info, output, prefix=None, shared_files=None):
     inventory = []
     emitted = {}
     with output.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
@@ -218,11 +270,21 @@ def write_payload(env_archive, source, source_info, dependencies, pack_info, out
                     inventory.append({"path": path, "type": "directory", "mode": 0o755})
                     emitted[path] = "directory"
 
-            def add_record(name, data):
+            def add_record(name, data, mode=0o644):
                 ensure_parents(name)
-                record = add_bytes(target, name, data)
+                record = add_bytes(target, name, data, mode)
                 emitted[name] = "file"
                 return record
+
+            for name, proof in sorted((shared_files or {}).items()):
+                path = Path(prefix) / name
+                if (path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) != proof["mode"]
+                        or path.stat().st_size != proof["size"]):
+                    raise BundleError("Retained shared-library input identity changed: " + name)
+                data = path.read_bytes()
+                if hashlib.sha256(data).hexdigest() != proof["sha256"]:
+                    raise BundleError("Retained shared-library input SHA changed: " + name)
+                inventory.append(add_record("environment/" + name, data, 0o755 if proof["mode"] & 0o111 else 0o644))
 
             for member, original in environment_members(environment):
                 ensure_parents(member.name)
@@ -314,10 +376,14 @@ def build_bundle(prefix, source, output, base_abi, profile, source_ref="main", c
     with tempfile.TemporaryDirectory(prefix=".annevo-build-", dir=output.parent) as directory:
         staging = Path(directory)
         dependencies = inspect_environment(prefix, source, base_abi, staging)
+        shared_files = preserved_shared_files(prefix)
         env_archive = staging / "environment.tar.gz"
-        pack_info = pack_environment(prefix, env_archive, conda_pack)
+        pack_info = (pack_environment(prefix, env_archive, conda_pack, exclude_files=shared_files)
+                     if shared_files else pack_environment(prefix, env_archive, conda_pack))
+        pack_info["effective_prefix_shared_files"] = shared_files
         payload = staging / "payload.tar.gz"
-        dependency_record, payload_record, uncompressed_size = write_payload(env_archive, source, source_info, dependencies, pack_info, payload)
+        dependency_record, payload_record, uncompressed_size = write_payload(
+            env_archive, source, source_info, dependencies, pack_info, payload, prefix=prefix, shared_files=shared_files)
         digest = sha256(payload)
         name = f"annevo-runtime-{digest}.tar.gz"
         payload.rename(staging / name)

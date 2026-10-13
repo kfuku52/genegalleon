@@ -39,6 +39,18 @@ CPU fallback. If an old environment was modified by pip and its Conda metadata
 is inconsistent, recreate the dedicated environment from the resolved build
 profile. Do not weaken packaging checks or modify the original sealed runtime.
 
+The current official profile makes Intel and LLVM OpenMP packages both own
+`lib/libiomp5.so` and `lib/libomptarget.so`. Conda-pack reads their distinct
+package-cache copies, which would create conflicting archive entries. For only
+these two demonstrated collisions, the producer retains the effective physical
+prefix files once, after their SHA matches a recorded provider and their type,
+mode and absence of relocation placeholders pass verification. Conda-pack's
+ordinary metadata checks still run before excluding those duplicate names;
+provider/package metadata, licenses and the complete conflict proof are retained.
+Unknown overlaps and conflicting entries remain errors. Remove this handling
+when the official profile or upstream packaging no longer has these collisions,
+after verifying ordinary strict packaging preserves the effective prefix.
+
 For a private qualification copy, use a fresh target directory and regular
 copies/reflinks, never hardlinks that share mutable inodes. Keep the original
 inventory and all source bytes read-only. A copied old Conda environment still

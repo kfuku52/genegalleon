@@ -44,6 +44,100 @@ def environment_archive(path, extra=None):
             archive.addfile(extra)
 
 
+def shared_fixture(tmp_path):
+    loaded = module()
+    prefix = tmp_path / "environment"
+    (prefix / "lib").mkdir(parents=True)
+    (prefix / "conda-meta").mkdir()
+    names = sorted(loaded.SHARED_OPENMP_FILES)
+    for index, name in enumerate(names):
+        path = prefix / name
+        path.write_bytes(b"\x7fELF OFFLINE physical native library " + name.encode())
+        path.chmod(0o644 if index == 0 else 0o755)
+    for owner in ("intel-openmp", "llvm-openmp"):
+        paths = [{"_path": name, "path_type": "hardlink" if owner == "intel-openmp" else "softlink",
+                  "sha256_in_prefix": loaded.sha256(prefix / name) if owner == "intel-openmp" else "b" * 64}
+                 for name in names]
+        data = {"name": owner, "version": "OFFLINE", "build": "fixture", "files": names,
+                "paths_data": {"paths": paths}}
+        (prefix / "conda-meta" / (owner + ".json")).write_text(json.dumps(data))
+    return loaded, prefix
+
+
+def test_only_effective_prefix_library_bytes_are_preserved_once_with_conflict_proof(tmp_path, monkeypatch):
+    loaded, prefix = shared_fixture(tmp_path)
+    preserved = loaded.preserved_shared_files(prefix)
+    assert set(preserved) == loaded.SHARED_OPENMP_FILES
+    assert all(value["matches_providers"] == ["intel-openmp"] for value in preserved.values())
+    assert all(len(value["providers"]) == 2 for value in preserved.values())
+    source = official_fixture(tmp_path)
+    source_info, _ = loaded.inspect_source(source, "main")
+    calls = []
+    monkeypatch.setattr(loaded, "checked_run", lambda argv, **kwargs: calls.append(argv) or "fixture")
+    loaded.pack_environment(prefix, tmp_path / "packed.tar.gz", "conda-pack", exclude_files=preserved)
+    assert calls[-1].count("--exclude") == 2
+    assert not {"--ignore-missing-files", "--ignore-editable-packages"} & set(calls[-1])
+    env, payload = tmp_path / "packed.tar.gz", tmp_path / "payload.tar.gz"
+    environment_archive(env)
+    loaded.write_payload(env, source, source_info, {}, {"effective_prefix_shared_files": preserved}, payload,
+                         prefix=prefix, shared_files=preserved)
+    with tarfile.open(payload, "r:gz") as archive:
+        for name, proof in preserved.items():
+            full = "environment/" + name
+            assert archive.getnames().count(full) == 1
+            assert loaded.hashlib.sha256(archive.extractfile(full).read()).hexdigest() == proof["sha256"]
+        pack = json.load(archive.extractfile("provenance/conda-pack.json"))
+        assert pack["effective_prefix_shared_files"] == preserved
+        assert "environment/lib/retained-license" in archive.getnames() and "source/LICENSE" in archive.getnames()
+
+
+@pytest.mark.parametrize("failure", ["unmatched_SHA", "metadata_placeholder", "physical_placeholder", "provider", "mode", "type", "extra_overlap"])
+def test_shared_library_preservation_rejects_unqualified_prefix_changes(tmp_path, failure):
+    loaded, prefix = shared_fixture(tmp_path)
+    name = "lib/libiomp5.so"
+    physical = prefix / name
+    metadata_path = prefix / "conda-meta/intel-openmp.json"
+    metadata = json.loads(metadata_path.read_text())
+    if failure == "unmatched_SHA":
+        physical.write_bytes(b"unknown physical bytes")
+    elif failure == "metadata_placeholder":
+        metadata["paths_data"]["paths"][0]["prefix_placeholder"] = "/old/prefix"
+    elif failure == "physical_placeholder":
+        physical.write_bytes(b"\x7fELF " + str(prefix).encode())
+        metadata["paths_data"]["paths"][0]["sha256_in_prefix"] = loaded.sha256(physical)
+    elif failure == "provider":
+        metadata["name"] = "unrecognized-openmp"
+    elif failure == "mode":
+        physical.chmod(0o4777)
+    elif failure == "type":
+        physical.unlink()
+        physical.symlink_to("libomptarget.so")
+    else:
+        for file in (prefix / "conda-meta").glob("*.json"):
+            data = json.loads(file.read_text())
+            data["files"].append("lib/unrecognized_overlap.so")
+            file.write_text(json.dumps(data))
+        metadata["files"].append("lib/unrecognized_overlap.so")
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(loaded.BundleError):
+        loaded.preserved_shared_files(prefix)
+
+
+@pytest.mark.parametrize("failure", ["conflicting_archive_entry", "physical_drift"])
+def test_shared_library_preservation_never_accepts_conflicting_archive_entries_or_changed_bytes(tmp_path, failure):
+    loaded, prefix = shared_fixture(tmp_path)
+    preserved = loaded.preserved_shared_files(prefix)
+    source = official_fixture(tmp_path)
+    source_info, _ = loaded.inspect_source(source, "main")
+    extra = tarfile.TarInfo("lib/libiomp5.so") if failure == "conflicting_archive_entry" else None
+    env = tmp_path / "packed.tar.gz"
+    environment_archive(env, extra)
+    if failure == "physical_drift":
+        (prefix / "lib/libiomp5.so").write_bytes(b"changed after qualification")
+    with pytest.raises(loaded.BundleError):
+        loaded.write_payload(env, source, source_info, {}, {}, tmp_path / "payload.tar.gz", prefix=prefix, shared_files=preserved)
+
+
 def test_bundle_excludes_models_training_and_examples_and_binds_official_model(tmp_path, monkeypatch):
     loaded = module()
     source = official_fixture(tmp_path)
