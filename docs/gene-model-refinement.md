@@ -10,6 +10,13 @@ The scientific design and related methods are described in the
 experimental conservative annotation aid. Its score cutoffs are ranking rules,
 not calibrated probabilities or estimates of annotation accuracy.
 
+Prediction homology uses the rescue coverage/identity policy by default:
+90% coverage with 50% identity, or 70% coverage with 70% identity. The configured
+hard coverage/identity floors remain binding. This does not change RNA adoption,
+independent donor, copy/span, score-margin or positive-gain gates for replacing a
+representative. See [rescue homology support](gene-model-rescue.md) for fixed
+cutoff compatibility and the separate coding-path integration criterion.
+
 ## Workflow
 
 ```mermaid

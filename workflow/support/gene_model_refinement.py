@@ -44,6 +44,7 @@ try:
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from refinement_input_snapshot import RefinementInputSnapshot
     from refinement_receipt_snapshot import ReceiptSnapshot
+    from rescue_homology_policy import homology_supported
     from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from rescue_prediction_cache import stream_json_array
     from rescue_prepared_snapshot import PreparedSnapshot
@@ -66,6 +67,7 @@ except ImportError:
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .refinement_input_snapshot import RefinementInputSnapshot
     from .refinement_receipt_snapshot import ReceiptSnapshot
+    from .rescue_homology_policy import homology_supported
     from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
     from .rescue_prediction_cache import stream_json_array
     from .rescue_prepared_snapshot import PreparedSnapshot
@@ -73,7 +75,8 @@ except ImportError:
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
 DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_required', min_margin=0.10, min_support=2,
-                minimum_coverage=0.95, minimum_identity=0.50, max_intron=20000,
+                minimum_coverage=0.70, minimum_identity=0.50, minimum_broad_coverage=0.90,
+                minimum_lower_coverage_identity=0.70, max_intron=20000,
                 padding=2000, max_interval=200000, candidate_limit=32)
 
 
@@ -126,6 +129,7 @@ def implementation():
                     'format_species_writers.py', 'format_species_common.py', 'format_species_constants.py',
                     'format_species_provider_config.py', 'format_species_taxonomy.py',
                     'rescue_terminal_completion.py', 'rescue_coding_paths.py',
+                    'rescue_homology_policy.py', 'rescue_path_compatibility.py', 'rescue_boundary_revalidation.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
                     'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
                     'refinement_input_snapshot.py')
@@ -255,7 +259,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         if params['isoform_adoption'] == 'conservation_supported' and params['policy'] != 'conserved':
             raise ValueError('Conservation-supported isoform adoption requires the conserved selection policy')
         if any(not math.isfinite(float(params[k])) or not 0 <= float(params[k]) <= 1
-               for k in ('min_margin', 'minimum_coverage', 'minimum_identity')):
+               for k in ('min_margin', 'minimum_coverage', 'minimum_identity', 'minimum_broad_coverage',
+                         'minimum_lower_coverage_identity')):
             raise ValueError('Invalid probability/margin')
         if any(int(params[k]) < 1 for k in ('min_support', 'max_intron', 'max_interval', 'candidate_limit')) or params['padding'] < 0:
             raise ValueError('Invalid resource/evidence bound')
@@ -952,8 +957,7 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         if (supported and source_repair_owner is not None
                 and m['donor_species'] != catalog['species']
                 and 'minimum_identity' in params and 'minimum_coverage' in params
-                and m['identity'] >= params['minimum_identity']
-                and m['coverage'] >= params['minimum_coverage']):
+                and homology_supported(m['coverage'], m['identity'], params)):
             row.setdefault('_same_coordinate_repair_support', []).append(
                 (m['donor_species'], source_repair_owner))
         row['alignments'].append({'donor_species': m['donor_species'], 'donor_candidate': m['donor_candidate'],
@@ -1191,7 +1195,7 @@ def predict_species(root, value, name, cpus=1):
                     discrepancy = not baseline['quality'].get('valid_orf') or len(target['candidates']) < len(donor_locus['candidates']) or abs(len(candidate['protein']) - len(baseline['protein'])) > max(3, len(candidate['protein']) * .05)
                     if not discrepancy:
                         score = pair_score(baseline, candidate)
-                        discrepancy = not score.bounded and score.identity >= params['minimum_identity'] and (min(score.coverage_a, score.coverage_b) < params['minimum_coverage'] or (len(baseline['blocks']) > 1 and len(candidate['blocks']) > 1 and score.junction_similarity < 0.8))
+                        discrepancy = not score.bounded and score.identity >= params['minimum_identity'] and (not homology_supported(min(score.coverage_a, score.coverage_b), score.identity, params) or (len(baseline['blocks']) > 1 and len(candidate['blocks']) > 1 and score.junction_similarity < 0.8))
                     if not discrepancy:
                         continue
                     represented = False
@@ -1199,7 +1203,7 @@ def predict_species(root, value, name, cpus=1):
                         if not known['quality'].get('valid_orf'):
                             continue
                         match = pair_score(known, candidate)
-                        if not match.bounded and min(match.coverage_a, match.coverage_b) >= params['minimum_coverage'] and match.identity >= params['minimum_identity'] and match.junction_similarity >= 0.95:
+                        if not match.bounded and homology_supported(min(match.coverage_a, match.coverage_b), match.identity, params) and match.junction_similarity >= 0.95:
                             represented = True
                             break
                     if represented:

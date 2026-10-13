@@ -13,7 +13,7 @@ import struct
 import sys
 from collections import OrderedDict
 
-DNA_FIELDS = ("cds", "sequence", "assembly_ambiguous_bases", "problems")
+DNA_FIELDS = ("cds", "sequence", "genetic_code", "assembly_ambiguous_bases", "problems")
 
 
 def _metric(value):

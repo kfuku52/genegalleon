@@ -203,8 +203,15 @@ configurable. A large/rearranged/poorly anchored region can remain unexamined.
 No candidate or no alignment therefore does not imply gene loss.
 
 The default engine is [miniprot](https://github.com/lh3/miniprot), including its
-embedded PAF evidence. Automatic acceptance requires at least 95% donor protein
-coverage and 50% identity, an intact start and terminal stop, consistent CDS
+embedded PAF evidence. Default homology support requires either at least 90%
+donor protein coverage and 50% identity, or at least 70% coverage and 70%
+identity. A hard `minimum_coverage` floor (default 0.70) and the configured
+`minimum_identity` still apply. `minimum_broad_coverage=0.90` and
+`minimum_lower_coverage_identity=0.70` define the stronger identity requirement
+below broad coverage; setting broad coverage to zero restores a fixed cutoff.
+An explicit coverage floor of 0.95 remains strict. Frozen legacy requests
+without these new fields retain their fixed cutoffs when revalidated.
+Automatic annotation additionally requires an intact start and terminal stop, consistent CDS
 phases, canonical GT–AG/GC–AG/AT–AC splice junctions, and no assembly ambiguities,
 frameshifts or internal stops. If the predictor omits the terminal stop from CDS,
 the actual next genomic stop is added. Incomplete termini may additionally undergo
@@ -217,7 +224,12 @@ models are reconstructed in transcription order. Coverage is the fraction of
 donor residues aligned to genomic residues, including split codons, excluding
 query insertions; an alignment spanning both ends is insufficient. Both the
 aligned fraction and query-span fraction are retained in model evidence. These are conservative
-defaults, not calibrated species-independent sensitivity estimates.
+defaults, not calibrated species-independent sensitivity estimates. Coverage
+and identity are separate from genomic integrity: lower donor coverage does
+not permit frameshifts, internal stops or unsupported coding boundaries.
+`presence_evidence` retains intact homologue support when placement, ownership
+or representative choice remains unresolved. Verified ambiguous boundary paths
+can support presence without resolving the chosen annotation.
 
 Unresolved queries optionally receive a whole-genome search. Selected donor genes
 without a two-anchor nomination are also screened against the existing protein
@@ -239,8 +251,8 @@ again under the current acceptance policy; previous acceptance and support
 decisions are never imported.
 
 An outside or unanchored hit can become an intact homologue annotation only with
-at least two independent donor species and compatible, unique coding-locus
-support. Two paralogs from one donor remain one species of support. These hits
+at least one independent external donor species and compatible, unique coding-locus
+support by default. A stricter two-species threshold remains available. Two paralogs from one donor remain one species of support. These hits
 retain `orthology=unassigned` and `expected_copy=unassigned`; annotation is not
 evidence that an expected lost copy was recovered. Incompatible or ambiguous
 placements remain proposals. No genomic disruption is repaired or masked.
@@ -264,8 +276,17 @@ overlap does not by itself veto an intact coding model. A single existing owner
 receives revision nominations (direct compact access or legacy
 `revision_candidates.json`) for the refinement stage's normal donor,
 structure and representative-adoption checks. Multi-owner split/merge ambiguity
-is withheld. Same-locus alternative paths require at least 80% overlap of the
-shorter CDS in the same frame. More nearest-species support, then more donor
+is withheld. Same-locus alternative paths require shared coding bases in the
+same frame. At least 80% overlap of the shorter CDS remains a sufficient
+structural condition. Lower overlap can qualify when a whole-protein alignment
+has at least 90% coverage on both sides and 50% identity, and every shared
+complete genomic codon maps to a homologous protein position. The start or
+first exon need not be shared. Unknown/unsupported genetic codes, inconsistent
+optimal projections and exceeded comparison budgets abstain. Distinct original
+annotation owners cannot be merged by this similarity rule. Pairwise
+compatibility across the entire coding-connected component still prevents
+bridging fusions. These thresholds govern path integration separately from
+donor homology support. More nearest-species support, then more donor
 species, distinguishes a representative; with equal species support, an identity
 advantage of at least 0.10 is required. If that rank is tied but every path is
 compatible and the locus has validated support from at least two independent
@@ -559,3 +580,28 @@ for _ in range(3):
            'sha256': hashlib.sha256(json.dumps(output, sort_keys=True).encode()).hexdigest()})
 PY
 ```
+
+### Nearby coding-boundary revalidation
+
+Strong predictions that still lack a coding terminus or have a noncanonical
+splice are rechecked against the original genome after terminal completion.
+The bounded search examines canonical splice boundaries within 30 nt and
+uses the existing terminal extension bound (300 nt by default), with at most
+128 strict-QC passing CDS paths (up to 4,096 genomic hypotheses). Failed
+genomic hypotheses are rejected before donor alignment. It reconstructs phases
+and the complete genomic CDS,
+then requires the unchanged strict ORF, splice, genetic-code, coverage and
+identity checks plus reciprocal donor-protein coverage. A fully aligned donor
+permits at most the existing two-residue genomic C-terminal overhang.
+
+Multiple optimal donor alignments to one identical genomic CDS do not create
+multiple CDS paths. Different genomic paths within the existing score margin
+remain unresolved. Independently verified intact paths still supply presence
+evidence from a single external donor. Checked alignments retain this evidence
+even when additional optimal tracebacks exceed the alignment budget, while
+annotation selection remains unresolved. This does not assign orthology or
+a representative CDS. Frame disruptions, assembly ambiguity and unsupported long
+tails remain failures. The original predictor coordinates and PAF are retained;
+`boundary_revalidation` records attempted paths and the admission decision.
+Prediction-cache replay rechecks raw predictions with the current implementation.
+This step does not assign orthology or relax coding-path compatibility.

@@ -47,6 +47,7 @@ def signature(call):
     {"strand": "?"}, {"strand": []}, {"cds": [[0, 3]]}, {"cds": [[-1, 9, 0]]},
     {"cds": [[0, 10, 0]]}, {"frameshift": 1},
     {"sequence": "old", "problems": ["old"], "assembly_ambiguous_bases": 123},
+    {"genetic_code": 2},
 ])
 def test_full_validator_output_order_and_exceptions(changes):
     genome = Genome()
