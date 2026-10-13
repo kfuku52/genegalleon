@@ -45,7 +45,7 @@
 #PBS -V
 
 # Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):
-# N = Number of fasta files in workspace/input/species_cds
+# N = Number of FASTA files in species_cds, or species_genome for the ANNEVO backend.
 
 set -euo pipefail
 
@@ -113,6 +113,12 @@ run_annotation=0 # Combine GFF, UniProt, domain, taxonomy, and sequence-derived 
 run_wgd_ksd=0 # WGD inference by dS distribution
 
 # Genome workflow flags
+genome_annotation_backend="none" # none|annevo; annevo predicts from species_genome without replacing curated inputs.
+annevo_model_profile="Magnoliopsida" # Native flowering-plant model profile.
+annevo_runtime_manifest="" # Optional qualified runtime manifest locator; blank uses the public registry on first use.
+annevo_no_download=0 # Set 1 to require an already verified local ANNEVO runtime and model cache.
+annevo_batch_size=32 # Native prediction batch size used by the qualified GPU profile.
+annevo_sequence_threshold=25 # Native sequence-group threshold in Mb; preserves complete contigs.
 run_busco_genome=0 # BUSCO completeness analysis on genome assembly inputs.
 run_subphaser=0 # Subgenome structure inference
 run_genome_fx2tab=0 # Sequence-length and composition stats for genome assembly FASTA files.
@@ -154,6 +160,27 @@ gg_apply_registered_env_overrides "${gg_entrypoint_name}" "delete_tmp_dir"
 forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then
   exit 1
+fi
+if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+  # Request only the scheduler-visible GPU; the Docker shim translates --nv.
+  annotation_gpu_devices="${CUDA_VISIBLE_DEVICES:-${GG_CONTAINER_DOCKER_GPU_DEVICES:-}}"
+  if [[ -z "${annotation_gpu_devices}" || "${annotation_gpu_devices}" == ,* || "${annotation_gpu_devices}" == *, || "${annotation_gpu_devices}" == *,,* ]]; then
+    echo "ANNEVO requires an explicit allocated CUDA_VISIBLE_DEVICES selection." >&2
+    exit 1
+  fi
+  IFS=',' read -r -a annotation_gpu_device_list <<< "${annotation_gpu_devices}"
+  for annotation_gpu_device in "${annotation_gpu_device_list[@]}"; do
+    if [[ ! "${annotation_gpu_device}" =~ ^[0-9]+$ && ! "${annotation_gpu_device}" =~ ^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+      echo "Invalid allocated CUDA GPU device: ${annotation_gpu_device}" >&2
+      exit 1
+    fi
+  done
+  export CUDA_VISIBLE_DEVICES="${annotation_gpu_devices}"
+  export SINGULARITYENV_CUDA_VISIBLE_DEVICES="${annotation_gpu_devices}" APPTAINERENV_CUDA_VISIBLE_DEVICES="${annotation_gpu_devices}"
+  case "$(declare -p singularity_command)" in
+    declare\ -a*) singularity_command+=(--nv) ;;
+    *) singularity_command="${singularity_command} --nv" ;;
+  esac
 fi
 gg_entrypoint_activate_container_runtime
 

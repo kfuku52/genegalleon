@@ -15,6 +15,12 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
+genome_annotation_backend="${genome_annotation_backend:-none}"
+annevo_model_profile="${annevo_model_profile:-Magnoliopsida}"
+annevo_runtime_manifest="${annevo_runtime_manifest:-}"
+annevo_no_download="${annevo_no_download:-0}"
+annevo_batch_size="${annevo_batch_size:-32}"
+annevo_sequence_threshold="${annevo_sequence_threshold:-25}"
 contamination_removal_rank="${contamination_removal_rank:-domain}"
 contamination_removal_target_taxon="${contamination_removal_target_taxon:-}"
 cdskit_localize_model="${cdskit_localize_model:-latest}"
@@ -52,7 +58,10 @@ resolve_species_file() {
   local species_prefix=$2
   local label=$3
   local required=${4:-0}
+  local file_type=${5:-all}
   local matches=()
+  local typed_matches=()
+  local match
   if [[ ! -d "${search_dir}" ]]; then
     if [[ ${required} -eq 1 ]]; then
       echo "${label} directory not found: ${search_dir}. Exiting." >&2
@@ -62,6 +71,21 @@ resolve_species_file() {
     return
   fi
   mapfile -t matches < <(gg_find_species_files_by_label "${search_dir}" "${species_prefix}")
+  # Formatted role directories also contain provenance/audit sidecars.
+  # Legacy callers retain their existing all-files discovery contract.
+  case "${file_type}" in
+    all) ;;
+    fasta|gff)
+      for match in "${matches[@]}"; do
+        case "${file_type}:${match}" in
+          fasta:*.fa|fasta:*.fa.gz|fasta:*.fas|fasta:*.fas.gz|fasta:*.fasta|fasta:*.fasta.gz|fasta:*.fna|fasta:*.fna.gz|gff:*.gff|gff:*.gff.gz|gff:*.gff3|gff:*.gff3.gz)
+            typed_matches+=("${match}") ;;
+        esac
+      done
+      matches=("${typed_matches[@]}")
+      ;;
+    *) echo "Unknown species input file type: ${file_type}" >&2; return 1 ;;
+  esac
   if [[ ${#matches[@]} -eq 0 ]]; then
     if [[ ${required} -eq 1 ]]; then
       echo "No ${label} file matched species label '${species_prefix}' in: ${search_dir}. Exiting." >&2
@@ -78,6 +102,170 @@ resolve_species_file() {
   echo "${matches[0]}"
 }
 
+gg_validate_genome_annotation_backend() {
+  case "${genome_annotation_backend}" in
+    none) return 0 ;;
+    annevo) ;;
+    *) echo "genome_annotation_backend must be none or annevo." >&2; return 1 ;;
+  esac
+  if [[ -n "${representative_inputs}" ]]; then
+    echo "ANNEVO prediction cannot replace a verified representative_inputs view." >&2
+    return 1
+  fi
+  if [[ "${annevo_model_profile}" != "Magnoliopsida" ]]; then
+    echo "annevo_model_profile must be the qualified Magnoliopsida profile." >&2
+    return 1
+  fi
+  if [[ "${annevo_no_download}" != 0 && "${annevo_no_download}" != 1 ]]; then
+    echo "annevo_no_download must be 0 or 1." >&2
+    return 1
+  fi
+  if [[ ! "${annevo_batch_size}" =~ ^[1-9][0-9]*$ || ! "${annevo_sequence_threshold}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "annevo_batch_size and annevo_sequence_threshold must be positive integers." >&2
+    return 1
+  fi
+}
+
+gg_annevo_format_generation_key() {
+  python - "$1" "$2" "${genetic_code}" "${gg_support_dir}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+digest = hashlib.sha256()
+digest.update(("annevo-formatted-inputs-v1\0" + sys.argv[3]).encode())
+support = Path(sys.argv[4])
+files = [Path(sys.argv[1]), Path(sys.argv[2])]
+files += sorted(support.glob("format_species*.py"))
+for package in ("format_species_annotation", "format_species_download"):
+    files += sorted((support / package).rglob("*.py"))
+for path in files:
+    digest.update(str(path).encode())
+    digest.update(b"\0")
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+gg_check_annevo_cds_directory() {
+  local files=()
+  mapfile -t files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
+  if [[ ${#files[@]} -ne 1 || "${files[0]:-}" != "${file_sp_cds}" ]]; then
+    echo "ANNEVO formatted CDS directory must contain exactly the selected species FASTA." >&2
+    return 1
+  fi
+}
+
+gg_generate_annevo_annotation() {
+  # The species lock also serializes publication and formatter checkpoints.
+  # Everything is generated under output; curated input files remain intact.
+  local prediction_dir="${gg_workspace_output_dir}/genome_prediction/annevo/${sp_ub}"
+  local cache_root="${gg_workspace_downloads_dir}/annotation/annevo"
+  local selected_inputs="${dir_sp_tmp}/annevo.selected_inputs.tsv"
+  local native_gff="${prediction_dir}/${sp_ub}.gff3"
+  local native_receipt="${prediction_dir}/native_prediction.json"
+  local runtime_receipt="${cache_root}/selected/${annevo_model_profile}.json"
+  local extra=""
+  (
+    local prediction_lock="${prediction_dir}.lock"
+    gg_shared_lock_acquire "${prediction_lock}" "ANNEVO species prediction" || exit 1
+    gg_shared_lock_start_heartbeat "${prediction_lock}" || exit 1
+    local prediction_heartbeat_pid="${GG_SHARED_LOCK_HEARTBEAT_PID:-}"
+    cleanup_annevo_prediction_lock() {
+      gg_shared_lock_stop_heartbeat "${prediction_heartbeat_pid}"
+      gg_shared_lock_release "${prediction_lock}"
+    }
+    trap cleanup_annevo_prediction_lock EXIT
+    local -a prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${annevo_model_profile}" --receipt "${runtime_receipt}")
+    [[ -z "${annevo_runtime_manifest}" ]] || prepare_args+=(--runtime-manifest "${annevo_runtime_manifest}")
+    [[ "${annevo_no_download}" != 1 ]] || prepare_args+=(--no-download)
+    python "${gg_support_dir}/annevo_runtime.py" "${prepare_args[@]}" || exit $?
+
+    local prediction_needs_update=0
+    local run_annevo_prediction=1
+    local -a prediction_provenance_args=()
+    gg_artifact_contract_init prediction_provenance_args "genome_annotation_annevo_prediction" "${sp_ub}" "${prediction_dir}/prediction.provenance.json"
+    prediction_provenance_args+=(
+      --input "genome=${file_sp_genome}"
+      --input "runtime_receipt=${runtime_receipt}"
+      --input "runner=${gg_support_dir}/annevo_runtime.py"
+      --output "gff=${native_gff}"
+      --output "native_receipt=${native_receipt}"
+      --parameter "model_profile=${annevo_model_profile}"
+      --parameter "batch_size=${annevo_batch_size}"
+      --parameter "sequence_threshold=${annevo_sequence_threshold}"
+      --parameter "threads=${GG_TASK_CPUS}"
+      --parameter "require_gpu=1"
+    )
+    gg_artifact_prepare_stage prediction_needs_update run_annevo_prediction "${prediction_provenance_args[@]}" || exit $?
+    if [[ ${prediction_needs_update} -eq 1 ]]; then
+      gg_step_start "ANNEVO native genome prediction"
+      python "${gg_support_dir}/annevo_runtime.py" run \
+        --receipt "${runtime_receipt}" --genome "${file_sp_genome}" --output "${native_gff}" \
+        --model-profile "${annevo_model_profile}" --threads "${GG_TASK_CPUS}" \
+        --batch-size "${annevo_batch_size}" --sequence-threshold "${annevo_sequence_threshold}" \
+        --output-receipt "${native_receipt}" || exit $?
+      gg_artifact_record "${prediction_provenance_args[@]}" || exit $?
+    else
+      gg_step_skip "ANNEVO native genome prediction"
+    fi
+
+    local format_key
+    format_key=$(gg_annevo_format_generation_key "${file_sp_genome}" "${native_gff}") || exit $?
+    local format_dir="${prediction_dir}/formatted/${format_key}"
+    local format_needs_update=0
+    local run_annevo_format=1
+    local -a format_provenance_args=()
+    gg_artifact_contract_init format_provenance_args "genome_annotation_annevo_format" "${sp_ub}" "${prediction_dir}/format.provenance.json"
+    format_provenance_args+=(
+      --input "genome=${file_sp_genome}" --input "gff=${native_gff}" --input "native_receipt=${native_receipt}"
+      --output "formatted=${format_dir}" --parameter "generation=${format_key}"
+      --parameter "genetic_code=${genetic_code}" --parameter "gene_grouping_mode=rescue_overlap" --parameter "gff_repair_mode=safe"
+    )
+    gg_artifact_prepare_stage format_needs_update run_annevo_format "${format_provenance_args[@]}" || exit $?
+    if [[ ${format_needs_update} -eq 1 ]]; then
+      ensure_dir "${format_dir}"
+      python - "${format_dir}/source.tsv" "${sp_ub}" "${file_sp_genome}" "${native_gff}" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+with Path(sys.argv[1]).open("w", newline="") as handle:
+    writer = csv.writer(handle, delimiter="\t")
+    writer.writerow(["provider", "id", "species_key", "local_genome_path", "local_gff_path", "bind_local_sources", "genome_filename", "gff_filename"])
+    # Role-specific cache names prevent a plain <species>.fa genome from being
+    # classified as a provided CDS by local directory discovery.
+    genome_name = sys.argv[2] + ".genome.fa" + (".gz" if sys.argv[3].endswith(".gz") else "")
+    writer.writerow(["local", sys.argv[2], sys.argv[2], sys.argv[3], sys.argv[4], "1", genome_name, sys.argv[2] + ".gff3"])
+PY
+      python "${gg_support_dir}/format_species_inputs.py" \
+        --provider local --download-manifest "${format_dir}/source.tsv" --download-dir "${format_dir}/raw" \
+        --species-cds-dir "${format_dir}/species_cds" --species-gff-dir "${format_dir}/species_gff" \
+        --species-genome-dir "${format_dir}/species_genome" --genetic-code "${genetic_code}" \
+        --species-summary-output "${format_dir}/species.tsv" --stats-output "${format_dir}/format.stats.json" \
+        --resolved-manifest-output "${format_dir}/source.resolved.tsv" --strict --jobs 1 || exit $?
+      # Check all three outputs before recording a complete formatting artifact.
+      resolve_species_file "${format_dir}/species_cds" "${sp_ub}" "predicted CDS" 1 fasta >/dev/null || exit 1
+      resolve_species_file "${format_dir}/species_gff" "${sp_ub}" "predicted GFF" 1 gff >/dev/null || exit 1
+      resolve_species_file "${format_dir}/species_genome" "${sp_ub}" "formatted genome" 1 fasta >/dev/null || exit 1
+      gg_artifact_record "${format_provenance_args[@]}" || exit $?
+    fi
+    local selected_cds selected_gff selected_genome
+    selected_cds=$(resolve_species_file "${format_dir}/species_cds" "${sp_ub}" "predicted CDS" 1 fasta) || exit 1
+    selected_gff=$(resolve_species_file "${format_dir}/species_gff" "${sp_ub}" "predicted GFF" 1 gff) || exit 1
+    selected_genome=$(resolve_species_file "${format_dir}/species_genome" "${sp_ub}" "formatted genome" 1 fasta) || exit 1
+    printf '%s\t%s\t%s\n' "${selected_cds}" "${selected_gff}" "${selected_genome}" > "${selected_inputs}" || exit 1
+  ) || return $?
+  IFS=$'\t' read -r file_sp_cds file_sp_gff file_sp_genome extra < "${selected_inputs}" || return 1
+  if [[ -n "${extra}" || ! -s "${file_sp_cds}" || ! -s "${file_sp_gff}" || ! -s "${file_sp_genome}" ]]; then
+    echo "ANNEVO formatting did not produce a complete genome/GFF/CDS bundle." >&2
+    return 1
+  fi
+  dir_sp_cds=$(dirname "${file_sp_cds}")
+}
+
 gg_genome_annotation_main() {
 gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 0 1
 # shellcheck disable=SC1090
@@ -89,6 +277,7 @@ contamination_removal_rank_for_remove_contaminated_sequences="$(
 )"
 
 enable_all_run_flags_for_debug_mode
+gg_validate_genome_annotation_backend || exit 1
 uniprot_annotation_method=$(echo "${uniprot_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 if [[ "${uniprot_annotation_method}" != "blastp" && "${uniprot_annotation_method}" != "mmseqs2" ]]; then
   echo "Invalid uniprot_annotation_method: ${uniprot_annotation_method}"
@@ -121,14 +310,22 @@ dir_sp_dnaseq="${gg_workspace_input_dir}/species_dnaseq"
 dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 dir_tmp="${gg_workspace_output_dir}/tmp"
 
+infiles=()
+if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+  if [[ ! -d "${dir_sp_genome}" ]]; then
+    echo "Genome input directory not found: ${dir_sp_genome}. Exiting." >&2
+    exit 1
+  fi
+  mapfile -t infiles < <(find -H "${dir_sp_genome}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+else
 if [[ ! -d "${dir_sp_cds}" ]]; then
   echo "Input directory not found: ${dir_sp_cds}. Exiting."
   exit 1
 fi
-infiles=()
 mapfile -t infiles < <(find -H "${dir_sp_cds}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fa" -o -name "*.fa.gz" -o -name "*.fas" -o -name "*.fas.gz" -o -name "*.fasta" -o -name "*.fasta.gz" -o -name "*.fna" -o -name "*.fna.gz" \) | sort)
+fi
 if [[ ${#infiles[@]} -eq 0 ]]; then
-  echo "No input fasta files were detected in: ${dir_sp_cds}. Exiting."
+  echo "No input fasta files were detected for genome_annotation_backend=${genome_annotation_backend}. Exiting."
   exit 1
 fi
 if [[ ! "${GG_ARRAY_TASK_ID}" =~ ^[0-9]+$ ]] || [[ ${GG_ARRAY_TASK_ID} -lt 1 ]]; then
@@ -140,8 +337,10 @@ if [[ ${task_index} -lt 0 || ${task_index} -ge ${#infiles[@]} ]]; then
   echo "GG_ARRAY_TASK_ID=${GG_ARRAY_TASK_ID} is out of range for ${#infiles[@]} input fasta files. Exiting."
   exit 1
 fi
-file_sp_cds="${infiles[${task_index}]}"
-sp_ub=$(gg_species_name_from_path "${file_sp_cds}")
+file_annotation_input="${infiles[${task_index}]}"
+file_sp_cds="${file_annotation_input}"
+[[ "${genome_annotation_backend}" != "annevo" ]] || file_sp_cds=""
+sp_ub=$(gg_species_name_from_path "${file_annotation_input}")
 if [[ -n "${file_representative_genetic_code}" ]]; then
   genetic_code=$(python - "${file_representative_genetic_code}" "${sp_ub}" <<'PY'
 import csv
@@ -156,8 +355,8 @@ PY
 ) || exit 1
 fi
 dir_sp_tmp=$(gg_task_tmp_path "${dir_tmp}/${GG_ARRAY_TASK_ID}_${sp_ub}") || exit 1
-echo "${#infiles[@]} input fasta files were detected in: ${dir_sp_cds}"
-echo "Processing ${GG_ARRAY_TASK_ID}th file: ${file_sp_cds}"
+echo "${#infiles[@]} input fasta files were detected for backend ${genome_annotation_backend}"
+echo "Processing ${GG_ARRAY_TASK_ID}th file: ${file_annotation_input}"
 echo "Scientific name: ${sp_ub}"
 echo "Working directory: ${dir_sp_tmp}"
 
@@ -165,6 +364,9 @@ file_orthogroup="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.
 file_sp_expression="$(resolve_species_file "${gg_workspace_input_dir}/species_expression" "${sp_ub}" "expression")"
 file_sp_gff="$(resolve_species_file "${dir_sp_gff}" "${sp_ub}" "gff")"
 file_sp_genome="$(resolve_species_file "${dir_sp_genome}" "${sp_ub}" "genome")"
+if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+  file_sp_genome="${file_annotation_input}"
+fi
 file_sp_subphaser_cfg="$(resolve_species_file "${gg_workspace_input_dir}/species_genome_subphaser_cfg" "${sp_ub}" "subphaser cfg")"
 if [[ -s "${file_sp_cds}" ]]; then echo "CDS file found: ${file_sp_cds}"; else echo "CDS file not found."; fi
 if [[ -s "${file_sp_expression}" ]]; then echo "Expression file found: ${file_sp_expression}"; else echo "Expression file not found."; fi
@@ -215,8 +417,13 @@ gff_info_provenance_file="${annotation_provenance_dir}/${sp_ub}.gff_info.json"
 ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
 ensure_dir "${dir_tmp}"
+species_cds_validation_inputs=("${infiles[@]}")
+if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+  gg_generate_annevo_annotation || exit $?
+  species_cds_validation_inputs=("${file_sp_cds}")
+fi
 species_cds_validation_signature=$(
-  python - "${infiles[@]}" <<'PY'
+  python - "${species_cds_validation_inputs[@]}" <<'PY'
 import hashlib
 import sys
 from pathlib import Path
@@ -247,8 +454,12 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
     trap cleanup_species_cds_validation_lock EXIT
     if [[ ! -s "${species_cds_validation_stamp}" ]]; then
       check_species_cds_dir "${dir_sp_cds%/}/."
-      check_if_species_files_unique "${dir_sp_cds%/}/."
-      touch "${species_cds_validation_stamp}"
+      if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+        gg_check_annevo_cds_directory || exit 1
+      else
+        check_if_species_files_unique "${dir_sp_cds%/}/."
+      fi
+      printf '%s\n' "${species_cds_validation_signature}" > "${species_cds_validation_stamp}"
     fi
   ) || exit 1
 fi

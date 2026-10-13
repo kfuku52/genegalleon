@@ -320,6 +320,12 @@ EOF
     gg_genome_annotation_entrypoint.sh)
       cat <<'EOF'
 representative_inputs
+genome_annotation_backend
+annevo_model_profile
+annevo_runtime_manifest
+annevo_no_download
+annevo_batch_size
+annevo_sequence_threshold
 busco_lineage
 scaffold_host_taxid
 contamination_removal_rank

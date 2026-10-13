@@ -202,6 +202,7 @@ Notable defaults:
 Purpose:
 
 - per-species CDS/genome annotation and QC,
+- optional [ANNEVO genome prediction](annevo-genome-annotation.md), with first-use runtime/model preparation and generated inputs kept under output,
 - BUSCO (CDS/genome),
 - UniProt annotation (`blastp` or `mmseqs2`),
 - `cdskit localize` targeting-peptide and peroxisome localization prediction (enabled by default),

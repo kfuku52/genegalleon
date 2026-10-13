@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""Build a relocatable, source-bound ANNEVO environment artifact without weights.
+
+Build inside the target GeneGalleon Linux/architecture/base-ABI container. The
+input environment is read-only to this producer. conda-pack's strict checks are
+required; a publisher supplies real public locators only after publication.
+"""
+import argparse
+import copy
+import gzip
+import hashlib
+import io
+import json
+import os
+import posixpath
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
+
+OFFICIAL_REPOSITORY = "https://github.com/xjtu-omics/ANNEVO"
+SCHEMA_VERSION = 1
+DEFAULT_PART_BYTES = 1024 ** 3
+ARCHITECTURES = {"x86_64": "amd64", "aarch64": "arm64"}
+
+
+class BundleError(ValueError):
+    pass
+
+
+def sha256(path):
+    path = Path(path)
+    before = path.stat()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+        raise BundleError(f"Input changed during hashing: {path}")
+    return digest.hexdigest()
+
+
+def json_bytes(value):
+    return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+
+
+def checked_run(argv, **kwargs):
+    result = subprocess.run(argv, check=False, capture_output=True, text=True, **kwargs)
+    if result.returncode:
+        raise BundleError(f"Command failed ({result.returncode}): {argv!r}\n{result.stderr}")
+    return result.stdout.strip()
+
+
+def safe_name(name):
+    name = name.removeprefix("./").rstrip("/")
+    path = PurePosixPath(name)
+    if not name or path.is_absolute() or ".." in path.parts or "\x00" in name or "\\" in name:
+        raise BundleError(f"Unsafe archive/source path: {name!r}")
+    return str(path)
+
+
+def inspect_source(source, source_ref):
+    source = Path(source).resolve()
+    origin = checked_run(["git", "-C", str(source), "remote", "get-url", "origin"])
+    if origin.removesuffix(".git") != OFFICIAL_REPOSITORY:
+        raise BundleError("Source origin must be the public official ANNEVO repository")
+    if checked_run(["git", "-C", str(source), "status", "--porcelain"]):
+        raise BundleError("Official source checkout must have no tracked or untracked changes")
+    commit = checked_run(["git", "-C", str(source), "rev-parse", "HEAD"])
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        raise BundleError("Source commit is not a complete Git revision")
+    tracked = checked_run(["git", "-C", str(source), "ls-files", "-z"]).split("\x00")
+    tracked = [safe_name(name) for name in tracked if name]
+    entrypoints = {"annotation.py", "prediction.py", "decoding.py"}
+    notices = {name for name in tracked if "/" not in name and name.upper().startswith(("LICENSE", "COPYING", "NOTICE"))}
+    if "LICENSE" not in notices or not entrypoints <= set(tracked):
+        raise BundleError("Official source is missing its native entrypoints or LICENSE")
+    selected = sorted(entrypoints | notices | {name for name in tracked if name.startswith("src/") and name.endswith(".py")})
+    paths = {}
+    for name in selected:
+        path = source / name
+        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(source):
+            raise BundleError(f"Native source must be a regular contained file: {name}")
+        paths[name] = {"sha256": sha256(path), "size": path.stat().st_size}
+    models = {}
+    for name in sorted(tracked):
+        match = re.fullmatch(r"saved_model/ANNEVO_([A-Za-z0-9_]+)\.pt", name)
+        if not match:
+            continue
+        path = source / name
+        if path.is_symlink() or not path.is_file():
+            raise BundleError(f"Official model is not a regular file: {name}")
+        blob_size = int(checked_run(["git", "-C", str(source), "cat-file", "-s", f"HEAD:{name}"]))
+        blob = checked_run(["git", "-C", str(source), "show", f"HEAD:{name}"], encoding="utf-8", errors="replace") if blob_size < 1024 else ""
+        if blob.startswith("version https://git-lfs.github.com/spec/v1"):
+            raise BundleError(f"Git LFS model contents must be materialized before packaging metadata: {name}")
+        lineage = match.group(1)
+        models[lineage] = {"official_url": f"https://raw.githubusercontent.com/xjtu-omics/ANNEVO/{commit}/{name}",
+                           "path": "source/" + name, "sha256": sha256(path), "size": path.stat().st_size}
+    if not models:
+        raise BundleError("No materialized official model metadata was found")
+    tree_digest = hashlib.sha256(json_bytes(paths)).hexdigest()
+    return {"repository": OFFICIAL_REPOSITORY, "ref": source_ref, "commit": commit,
+            "native_tree_sha256": tree_digest, "files": paths}, models
+
+
+ENVIRONMENT_PROBE = r'''
+import importlib.metadata as metadata,json,platform,sys,torch
+assert not torch.cuda.is_available(), 'builder metadata probe must be CPU-hidden'
+print(json.dumps({'system':platform.system(),'machine':platform.machine(),
+ 'libc':{'name':platform.libc_ver()[0],'version':platform.libc_ver()[1]},
+ 'python':platform.python_version(),'python_prefix':sys.prefix,
+ 'torch_version':torch.__version__,'compiled_cuda':torch.version.cuda,
+ 'packages':sorted([{'name':d.metadata['Name'],'version':d.version} for d in metadata.distributions()],key=lambda d:d['name'].lower())}))
+'''
+
+
+def inspect_environment(prefix, source, base_abi, staging):
+    prefix = Path(prefix).resolve()
+    if not (prefix / "conda-meta").is_dir() or not (prefix / "bin/python").is_file():
+        raise BundleError("Input must be a complete Conda environment")
+    env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME", "LD_PRELOAD"}}
+    env.update({"CUDA_VISIBLE_DEVICES": "-1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
+                "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+                "NUMBA_CACHE_DIR": str(staging / "numba-cache"), "TORCH_HOME": str(staging / "torch-cache"),
+                "XDG_CACHE_HOME": str(staging / "xdg-cache")})
+    python = [str(prefix / "bin/python"), "-E", "-s", "-B"]
+    observed = json.loads(checked_run(python + ["-c", ENVIRONMENT_PROBE], env=env, cwd=staging, timeout=120))
+    expected = {key: base_abi.get(key) for key in ("system", "machine", "libc")}
+    if expected != {key: observed[key] for key in expected} or observed["system"] != "Linux":
+        raise BundleError(f"Environment probe does not match target GG Linux/base ABI: {expected!r}, {observed!r}")
+    if observed["machine"] not in ARCHITECTURES or not observed["compiled_cuda"]:
+        raise BundleError("A supported Linux architecture and CUDA-built torch are required; no CPU fallback")
+    if Path(observed["python_prefix"]).resolve() != prefix:
+        raise BundleError("Metadata probe escaped its dedicated Conda prefix")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", base_abi.get("image_digest", "")):
+        raise BundleError("base_abi.image_digest must identify the qualified GG base image")
+    for name in ("annotation.py", "prediction.py", "decoding.py"):
+        checked_run(python + [str(Path(source).resolve() / name), "--help"], env=env, cwd=staging, timeout=120)
+    packages = []
+    for path in sorted((prefix / "conda-meta").glob("*.json")):
+        record = json.loads(path.read_text())
+        package = {key: record.get(key) for key in ("name", "version", "build", "channel", "url", "sha256", "md5")}
+        for key in ("url", "channel"):
+            value = package[key]
+            if isinstance(value, str) and (urlsplit(value).username or urlsplit(value).password or "/t/" in value):
+                raise BundleError("Credential-bearing package locators cannot enter a public bundle")
+        packages.append(package)
+    observed["conda_packages"] = packages
+    return observed
+
+
+def pack_environment(prefix, output, conda_pack):
+    argv = [conda_pack, "--prefix", str(Path(prefix).resolve()), "--output", str(output),
+            "--format", "tar.gz", "--n-threads", "1"]
+    version = checked_run([conda_pack, "--version"], timeout=60)
+    checked_run(argv, timeout=3600)
+    return {"argv": argv, "version": version, "strict_missing_files": True,
+            "strict_editable_packages": True, "fixed_destination_prefix": False}
+
+
+def environment_members(archive):
+    seen = set()
+    for original in archive:
+        if original.name.rstrip("/") in {"", "."}:
+            continue
+        name = safe_name(original.name)
+        if name in seen:
+            raise BundleError(f"Duplicate environment archive path: {name}")
+        seen.add(name)
+        member = copy.copy(original)
+        member.name = "environment/" + name
+        if member.issym():
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
+            if member.linkname.startswith("/") or target == ".." or target.startswith("../"):
+                raise BundleError(f"Environment symlink escapes its prefix: {name}")
+        elif member.islnk():
+            member.linkname = "environment/" + safe_name(member.linkname)
+        elif not (member.isfile() or member.isdir()):
+            raise BundleError(f"Special file in environment archive: {name}")
+        yield member, original
+    if "bin/conda-unpack" not in seen or "bin/python" not in seen:
+        raise BundleError("Relocatable Conda archive must contain bin/python and bin/conda-unpack")
+
+
+def add_bytes(archive, name, data):
+    member = tarfile.TarInfo(name)
+    member.size = len(data)
+    member.mode = 0o644
+    archive.addfile(member, io.BytesIO(data))
+    return {"path": name, "type": "file", "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), "mode": member.mode}
+
+
+def write_payload(env_archive, source, source_info, dependencies, pack_info, output):
+    inventory = []
+    emitted = {}
+    with output.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode="w|") as target, tarfile.open(env_archive, "r:gz") as environment:
+            def ensure_parents(name):
+                for parent in reversed(PurePosixPath(name).parents):
+                    path = str(parent)
+                    if path == ".":
+                        continue
+                    if path in emitted:
+                        if emitted[path] != "directory":
+                            raise BundleError("Archive parent is not a physical directory: " + path)
+                        continue
+                    directory = tarfile.TarInfo(path)
+                    directory.type = tarfile.DIRTYPE
+                    directory.mode = 0o755
+                    target.addfile(directory)
+                    inventory.append({"path": path, "type": "directory", "mode": 0o755})
+                    emitted[path] = "directory"
+
+            def add_record(name, data):
+                ensure_parents(name)
+                record = add_bytes(target, name, data)
+                emitted[name] = "file"
+                return record
+
+            for member, original in environment_members(environment):
+                ensure_parents(member.name)
+                if member.isdir() and emitted.get(member.name) == "directory":
+                    continue
+                if member.name in emitted:
+                    raise BundleError("Duplicate emitted payload path")
+                if member.islnk() and emitted.get(member.linkname) not in {"file", "hardlink"}:
+                    raise BundleError("Hardlink target must precede its link in the packed environment")
+                member.uid = member.gid = member.mtime = 0
+                member.uname = member.gname = ""
+                member.mode = 0o755 if (member.isdir() or member.mode & 0o111) else 0o644
+                record = {"path": member.name, "mode": member.mode}
+                if member.isfile():
+                    stream = environment.extractfile(original)
+                    if stream is None:
+                        raise BundleError("Missing packed member bytes")
+                    # Spool only one member; CUDA shared libraries can exceed memory limits.
+                    with tempfile.TemporaryFile() as spool:
+                        digest = hashlib.sha256()
+                        for block in iter(lambda stream=stream: stream.read(8 * 1024 * 1024), b""):
+                            digest.update(block)
+                            spool.write(block)
+                        if spool.tell() != member.size:
+                            raise BundleError("Packed member size mismatch")
+                        spool.seek(0)
+                        target.addfile(member, spool)
+                    record.update(type="file", sha256=digest.hexdigest(), size=member.size)
+                else:
+                    target.addfile(member)
+                    record.update(type="directory" if member.isdir() else ("symlink" if member.issym() else "hardlink"))
+                    if member.issym() or member.islnk():
+                        record["target"] = member.linkname
+                inventory.append(record)
+                emitted[member.name] = record["type"]
+            for name, expected in source_info["files"].items():
+                path = Path(source) / name
+                if sha256(path) != expected["sha256"] or path.stat().st_size != expected["size"]:
+                    raise BundleError("Official source changed during packing")
+                inventory.append(add_record("source/" + name, path.read_bytes()))
+            dependency_record = add_record("provenance/dependencies.json", json_bytes(dependencies))
+            inventory.append(dependency_record)
+            inventory.append(add_record("provenance/source.json", json_bytes(source_info)))
+            inventory.append(add_record("provenance/conda-pack.json", json_bytes(pack_info)))
+            payload_record = add_record("provenance/payload-manifest.json", json_bytes({"schema_version": 1, "entries": inventory}))
+    uncompressed_size = sum(record.get("size", 0) for record in inventory) + payload_record["size"]
+    return dependency_record, payload_record, uncompressed_size
+
+
+def split_archive(archive, destination, part_bytes):
+    if not isinstance(part_bytes, int) or not 1 <= part_bytes < 2 * 1024 ** 3:
+        raise BundleError("Each public part must be positive and strictly smaller than 2 GiB")
+    parts = []
+    with archive.open("rb") as stream:
+        index = 0
+        while True:
+            block = stream.read(min(part_bytes, 8 * 1024 * 1024))
+            if not block:
+                break
+            name = archive.name + f".part{index:04d}"
+            path = destination / name
+            digest = hashlib.sha256()
+            size = 0
+            with path.open("xb") as output:
+                while block:
+                    output.write(block)
+                    digest.update(block)
+                    size += len(block)
+                    if size == part_bytes:
+                        break
+                    block = stream.read(min(part_bytes - size, 8 * 1024 * 1024))
+            parts.append({"name": name, "sha256": digest.hexdigest(), "size": size})
+            index += 1
+    return parts
+
+
+def build_bundle(prefix, source, output, base_abi, profile, source_ref="main", conda_pack="conda-pack", part_bytes=DEFAULT_PART_BYTES):
+    output = Path(output).resolve()
+    if output.is_relative_to(Path(prefix).resolve()) or output.is_relative_to(Path(source).resolve()):
+        raise BundleError("Output must remain outside the read-only source and environment")
+    output.mkdir(parents=True, exist_ok=True)
+    if any(output.iterdir()):
+        raise BundleError("Output directory must be empty; existing published bundle bytes are never overwritten")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", profile):
+        raise BundleError("Profile must be a bounded identifier")
+    if not isinstance(source_ref, str) or not source_ref.strip() or len(source_ref) > 256:
+        raise BundleError("Source ref must be a bounded nonempty build metadata string")
+    source_info, models = inspect_source(source, source_ref)
+    with tempfile.TemporaryDirectory(prefix=".annevo-build-", dir=output.parent) as directory:
+        staging = Path(directory)
+        dependencies = inspect_environment(prefix, source, base_abi, staging)
+        env_archive = staging / "environment.tar.gz"
+        pack_info = pack_environment(prefix, env_archive, conda_pack)
+        payload = staging / "payload.tar.gz"
+        dependency_record, payload_record, uncompressed_size = write_payload(env_archive, source, source_info, dependencies, pack_info, payload)
+        digest = sha256(payload)
+        name = f"annevo-runtime-{digest}.tar.gz"
+        payload.rename(staging / name)
+        archive = staging / name
+        # Partial construction stays outside the publication directory until all checks finish.
+        parts = split_archive(archive, staging, part_bytes)
+        license_record = source_info["files"]["LICENSE"]
+        manifest = {"schema_version": SCHEMA_VERSION, "kind": "genegalleon-annevo-runtime", "format": "tar.gz",
+                    "profile": profile, "platform": "linux/" + ARCHITECTURES[dependencies["machine"]],
+                    "base_abi": base_abi, "source": {key: value for key, value in source_info.items() if key != "files"},
+                    "models": models, "cuda_profile": {"torch_version": dependencies["torch_version"], "compiled_cuda": dependencies["compiled_cuda"]},
+                    "bundle": {"name": name, "sha256": digest, "size": archive.stat().st_size}, "parts": parts,
+                    "payload_uncompressed_size": uncompressed_size,
+                    "dependency_manifest": dependency_record, "payload_manifest": payload_record,
+                    "license": {"path": "source/LICENSE", **license_record},
+                    "relocation": {"environment": "environment", "python": "environment/bin/python",
+                                   "unpack": "environment/bin/conda-unpack", "rename_after_unpack": False},
+                    "qualification": {"CPU_hidden_metadata_native_help": "passed", "GPU_inference": "not_performed"}}
+        for part in parts:
+            shutil.move(str(staging / part["name"]), output / part["name"])
+        manifest_path = output / (name + ".manifest.json")
+        manifest_path.write_bytes(json_bytes(manifest))
+        (output / (manifest_path.name + ".sha256")).write_text(sha256(manifest_path) + "  " + manifest_path.name + "\n")
+    return manifest_path, manifest
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--environment", required=True, type=Path)
+    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--source-ref", default="main", help="Moving official branch resolved by the caller; one-off overrides are build metadata")
+    parser.add_argument("--base-abi-json", required=True, type=Path)
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--conda-pack", default="conda-pack", help="Builder-side executable; never install packaging tools into the input runtime")
+    parser.add_argument("--part-bytes", type=int, default=DEFAULT_PART_BYTES)
+    args = parser.parse_args(argv)
+    try:
+        path, manifest = build_bundle(args.environment, args.source, args.output, json.loads(args.base_abi_json.read_text()),
+                                      args.profile, args.source_ref, args.conda_pack, args.part_bytes)
+    except (BundleError, OSError, json.JSONDecodeError) as error:
+        parser.exit(1, str(error) + "\n")
+    print(json.dumps({"manifest": str(path), "manifest_sha256": sha256(path), "bundle": manifest["bundle"], "parts": len(manifest["parts"])}))
+
+
+if __name__ == "__main__":
+    main()
