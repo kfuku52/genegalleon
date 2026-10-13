@@ -220,7 +220,8 @@ def fetch_verified(url, destination, expected_sha, expected_size, *, headers=Non
             raise ValueError("Invalid ANNEVO asset URL")
         warnings = []
         try:
-            download_url_to_file(url, destination, headers or {}, 1800, False, False, 86400, warnings, "ANNEVO optional runtime")
+            download_url_to_file(url, destination, headers or {}, 1800, False, False, 86400, warnings, "ANNEVO optional runtime",
+                                 expected_sha256=expected_sha, expected_size=expected_size)
         finally:
             import sys
             for warning in warnings:

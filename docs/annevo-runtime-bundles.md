@@ -101,7 +101,12 @@ and [anonymous public GHCR pulls](https://docs.github.com/en/packages/working-wi
 ## Install at its final address
 
 Verify the manifest, part hashes, whole archive and raw payload before executing
-anything. Extract directly into the final private cache directory. Run that
+anything. The transport verifies each opaque part against its declared SHA-256
+and byte count, including reused and resumed files. A gzip prefix in a split
+part does not make that part a complete gzip document. This explicit byte
+contract never decompresses or normalizes part bytes; ordinary scientific
+downloads retain their structural gzip/ZIP and HTML validation. Extract directly
+into the final private cache directory. Run that
 directory's Python with `environment/bin/conda-unpack`, then verify native
 imports and metadata. Write readiness atomically only after verification; update
 a small active pointer to publish it. **Never rename the runtime directory after

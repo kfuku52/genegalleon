@@ -20,6 +20,34 @@ download = importlib.import_module('annevo_runtime_download')
 runtime = importlib.import_module('annevo_runtime')
 
 
+def test_actual_cli_cold_offline_prepare_reports_original_error_without_network(tmp_path, monkeypatch, capsys):
+    command = [str(SUPPORT / 'annevo_runtime.py'), 'prepare', '--cache-root', str(tmp_path / 'cli-cache'), '--no-download']
+    result = subprocess.run([sys.executable, '-E', '-s', '-B', *command], capture_output=True, text=True, timeout=15)
+    expected = 'ANNEVO: ANNEVO runtime manifest is not cached and downloads are disabled\n'
+    assert result.returncode == 1
+    assert result.stdout == '' and result.stderr == expected
+    assert not list((tmp_path / 'cli-cache').rglob('READY.json'))
+
+    # The same unmodified CLI path must reject before its resolver can access
+    # the registry, even though the default locator names a public OCI artifact.
+    monkeypatch.setattr(cache, 'resolve_manifest', lambda *a: pytest.fail('offline CLI touched the network resolver'))
+    monkeypatch.setattr(sys, 'argv', [*command[:3], str(tmp_path / 'in-process-cache'), '--no-download'])
+    assert runtime.main() == 1
+    assert capsys.readouterr().err == expected
+
+
+@pytest.mark.parametrize('failure', [OSError('native download failed'), tarfile.ReadError('invalid runtime archive')])
+def test_cli_reports_prepare_io_and_tar_failures_without_replacing_them(tmp_path, monkeypatch, capsys, failure):
+    def fail(*a, **kwargs):
+        raise failure
+    monkeypatch.setattr(runtime, 'prepare', fail)
+    monkeypatch.setattr(sys, 'argv', [str(SUPPORT / 'annevo_runtime.py'), 'prepare', '--cache-root', str(tmp_path / 'cache')])
+    assert runtime.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == 'ANNEVO: ' + str(failure) + '\n'
+
+
 def bundle(tmp_path, monkeypatch):
     builder_spec = importlib.util.spec_from_file_location('bundle_builder_fixture', SUPPORT.parents[1] / 'container/scripts/build_annevo_runtime_bundle.py')
     builder = importlib.util.module_from_spec(builder_spec)

@@ -219,7 +219,7 @@ def main():
                             receipt_path=args.receipt, no_download=args.no_download, refresh=args.refresh)
         else:
             value = run(args)
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tarfile.Error) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as exc:
         print("ANNEVO: " + str(exc), file=sys.stderr)
         return 1
     print(json.dumps(value, sort_keys=True))
