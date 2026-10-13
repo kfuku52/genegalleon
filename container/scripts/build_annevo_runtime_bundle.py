@@ -158,7 +158,9 @@ def pack_environment(prefix, output, conda_pack):
     argv = [conda_pack, "--prefix", str(Path(prefix).resolve()), "--output", str(output),
             "--format", "tar.gz", "--n-threads", "1"]
     version = checked_run([conda_pack, "--version"], timeout=60)
-    checked_run(argv, timeout=3600)
+    # Conda-pack creates a temporary archive before atomic publication. Keep it
+    # beside the output on the qualified storage, away from contained /tmp RAM.
+    checked_run(argv, env={**os.environ, "TMPDIR": str(Path(output).resolve().parent)}, timeout=3600)
     return {"argv": argv, "version": version, "strict_missing_files": True,
             "strict_editable_packages": True, "fixed_destination_prefix": False}
 
@@ -239,7 +241,7 @@ def write_payload(env_archive, source, source_info, dependencies, pack_info, out
                     if stream is None:
                         raise BundleError("Missing packed member bytes")
                     # Spool only one member; CUDA shared libraries can exceed memory limits.
-                    with tempfile.TemporaryFile() as spool:
+                    with tempfile.TemporaryFile(dir=Path(output).resolve().parent) as spool:
                         digest = hashlib.sha256()
                         for block in iter(lambda stream=stream: stream.read(8 * 1024 * 1024), b""):
                             digest.update(block)

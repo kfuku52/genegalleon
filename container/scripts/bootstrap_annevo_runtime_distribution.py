@@ -50,8 +50,9 @@ def resolve_source(source_ref):
 
 INNER = r'''
 set -euo pipefail
-mkdir -p /work/home
+mkdir -p /work/home /work/tmp
 export HOME=/work/home MAMBA_ROOT_PREFIX=/work/mamba CONDA_PKGS_DIRS=/work/mamba/pkgs
+export TMPDIR=/work/tmp
 export CUDA_VISIBLE_DEVICES=-1 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
 git clone --no-checkout https://github.com/xjtu-omics/ANNEVO.git /work/source
 git -C /work/source checkout --detach "${ANNEVO_RESOLVED_COMMIT}"

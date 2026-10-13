@@ -127,11 +127,13 @@ def test_model_and_native_source_git_binding_rejects_dirty_or_wrong_origin(tmp_p
 def test_conda_pack_never_weakens_validation_or_bakes_install_prefix(tmp_path, monkeypatch):
     loaded = module()
     calls = []
-    monkeypatch.setattr(loaded, "checked_run", lambda argv, **kwargs: calls.append(argv) or "fixture")
+    options = []
+    monkeypatch.setattr(loaded, "checked_run", lambda argv, **kwargs: calls.append(argv) or options.append(kwargs) or "fixture")
     loaded.pack_environment(tmp_path / "read-only-env", tmp_path / "env.tar.gz", "conda-pack")
     argv = calls[-1]
     assert "--prefix" in argv and "--format" in argv
     assert not {"--ignore-missing-files", "--ignore-editable-packages", "--dest-prefix"} & set(argv)
+    assert options[-1]["env"]["TMPDIR"] == str(tmp_path)
 
 
 def test_existing_bundle_output_is_not_overwritten(tmp_path):
@@ -145,13 +147,20 @@ def test_existing_bundle_output_is_not_overwritten(tmp_path):
     assert existing.read_bytes() == b"retain"
 
 
-def test_manifest_and_archive_headers_do_not_contain_model_bytes(tmp_path):
+def test_manifest_and_archive_headers_do_not_contain_model_bytes(tmp_path, monkeypatch):
     loaded = module()
     source = official_fixture(tmp_path)
     info, _ = loaded.inspect_source(source, "main")
     env = tmp_path / "environment.tar.gz"
     environment_archive(env)
     output = tmp_path / "payload.tar.gz"
+    original = loaded.tempfile.TemporaryFile
+
+    def require_bound_storage(*args, **kwargs):
+        assert kwargs["dir"] == tmp_path  # RAM-backed default /tmp is never used for CUDA libraries.
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(loaded.tempfile, "TemporaryFile", require_bound_storage)
     loaded.write_payload(env, source, info, {}, {}, output)
     assert output.read_bytes()[4:8] == b"\0" * 4  # normalized gzip mtime
     assert b"saved_model" not in gzip.decompress(output.read_bytes())

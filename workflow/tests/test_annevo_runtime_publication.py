@@ -255,3 +255,4 @@ def test_bootstrap_resolves_a_single_native_amd64_digest_without_changing_source
     assert digest == "sha256:" + "a" * 64
     assert "--ignore-missing-files" not in module.INNER and "--ignore-editable-packages" not in module.INNER
     assert "--file /work/source/ANNEVO.yml" in module.INNER
+    assert "export TMPDIR=/work/tmp" in module.INNER

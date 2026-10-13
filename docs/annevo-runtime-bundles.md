@@ -14,6 +14,8 @@ override only for a one-off reproduction. Do not save resolved upstream commits
 or dependency versions as repository defaults. Build the dedicated environment
 inside the target GeneGalleon Linux architecture/base-ABI container. Packaging
 tools belong to the builder, never to the sealed input environment.
+Temporary archives and CUDA-library spooling use the bound build storage;
+contained `/tmp` may be a small RAM filesystem and is not a bundle staging area.
 
 The base ABI JSON records `system`, `machine`, `libc: {name, version}` and the
 qualified GeneGalleon `image_digest`. The producer requires the environment's
