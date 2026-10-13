@@ -58,6 +58,42 @@ def run_bash(cmd: str, cwd: Path):
     )
 
 
+@pytest.mark.parametrize("cache_enabled", [True, False])
+def test_transcriptome_cache_bind_survives_container_runtime_reset(tmp_path, cache_enabled):
+    entrypoint = (WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh").read_text()
+    start = entrypoint.index('if [[ -n "${transcriptome_getfastq_cache_dir}" ]]; then')
+    end = entrypoint.index("gg_entrypoint_enter_workspace", start)
+    cache = tmp_path / "persistent cache"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(GG_UTIL_PATH))}
+gg_scheduler_runtime_prelude() {{ :; }}
+gg_normalize_scheduler_env() {{ :; }}
+set_singularity_command() {{ singularity_command=(singularity exec); }}
+gg_entrypoint_activate_container_runtime() {{
+  gg_add_container_bind_mount "${{gg_workspace_dir}}:/workspace"
+  printf 'observed_bind=%s\\n' "${{SINGULARITY_BINDPATH:-}}"
+}}
+gg_entrypoint_name=gg_transcriptome_generation_entrypoint.sh
+gg_workspace_dir={shlex.quote(str(workspace))}
+transcriptome_getfastq_cache_dir={shlex.quote(str(cache) if cache_enabled else '')}
+{entrypoint[start:end]}
+"""
+    result = run_bash(script, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    observed = next(line.removeprefix("observed_bind=") for line in result.stdout.splitlines()
+                    if line.startswith("observed_bind="))
+    assert f"{workspace}:/workspace" in observed
+    if cache_enabled:
+        assert f"{cache}:/gg_transcriptome_getfastq_cache" in observed
+        assert cache.is_dir()
+    else:
+        assert "/gg_transcriptome_getfastq_cache" not in observed
+        assert not cache.exists()
+
+
 def test_transcriptome_metadata_cohort_uses_main_output_without_changing_task_member(tmp_path):
     workspace = tmp_path / "workspace"
     main_input = workspace / "input" / "amalgkit_metadata"
