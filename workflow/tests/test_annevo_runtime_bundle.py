@@ -184,6 +184,131 @@ def test_bundle_excludes_models_training_and_examples_and_binds_official_model(t
     assert manifest["relocation"]["rename_after_unpack"] is False
 
 
+def test_input_pax_long_paths_and_link_targets_roundtrip_through_actual_consumer(tmp_path, monkeypatch):
+    loaded = module()
+    source = official_fixture(tmp_path)
+    long_name = "lib/" + "long_native_library_" * 7 + ".so"
+    data = b"OFFLINE fixture: native library bytes must survive PAX relocation"
+    abi = {"system": "Linux", "machine": "x86_64", "libc": {"name": "glibc", "version": "2.39"},
+           "image_digest": "sha256:" + "a" * 64}
+    monkeypatch.setattr(loaded, "inspect_environment", lambda *a: {"machine": "x86_64", "torch_version": "fixture", "compiled_cuda": "fixture"})
+
+    def fixture_pack(prefix, output, executable):
+        with tarfile.open(output, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+            for name in ["bin/python", "bin/conda-unpack", long_name]:
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                member.mode = 0o755
+                member.pax_headers = {"path": name, "mtime": "1774882182.0684626", "uid": "123", "uname": "old-owner"}
+                archive.addfile(member, io.BytesIO(data))
+            for name, kind, link in [("lib/hardlink", tarfile.LNKTYPE, long_name),
+                                     ("lib/symlink", tarfile.SYMTYPE, long_name.removeprefix("lib/")),
+                                     ("lib/rootlink", tarfile.SYMTYPE, "..")]:
+                member = tarfile.TarInfo(name)
+                member.type, member.linkname = kind, link
+                member.pax_headers = {"path": name, "linkpath": link, "mtime": "1774882182.0684626"}
+                archive.addfile(member)
+        return {"strict_missing_files": True}
+
+    monkeypatch.setattr(loaded, "pack_environment", fixture_pack)
+    _, manifest = loaded.build_bundle(tmp_path / "env", source, tmp_path / "out", abi, "offline-pax-fixture")
+    archive_path = tmp_path / "joined.tar.gz"
+    archive_path.write_bytes(b"".join((tmp_path / "out" / p["name"]).read_bytes() for p in manifest["parts"]))
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = archive.getmembers()
+        assert len({member.name for member in members}) == len(members)
+        assert all(Path(member.name).parts[0] in {"environment", "source", "provenance"} for member in members)
+        for member in members:
+            assert (member.uid, member.gid, member.mtime, member.uname, member.gname) == (0, 0, 0, "", "")
+        hardlink = archive.getmember("environment/lib/hardlink")
+        assert hardlink.linkname == "environment/" + long_name
+        assert hardlink.pax_headers["linkpath"] == hardlink.linkname
+        assert archive.getmember("environment/" + long_name).pax_headers["path"] == "environment/" + long_name
+        assert archive.getmember("environment/lib/symlink").linkname == long_name.removeprefix("lib/")
+    consumer_path = SCRIPT.parents[2] / "workflow/support/annevo_runtime_cache.py"
+    monkeypatch.syspath_prepend(str(consumer_path.parent))
+    consumer_spec = spec_from_file_location("pax_consumer_fixture", consumer_path)
+    consumer = module_from_spec(consumer_spec)
+    consumer_spec.loader.exec_module(consumer)
+    installed = tmp_path / "unpacked"
+    installed.mkdir()
+    consumer._safe_extract(archive_path, installed, manifest["payload_uncompressed_size"])
+    consumer._check_payload(installed, manifest)
+    assert (installed / "environment" / long_name).read_bytes() == data
+    assert (installed / "environment/lib/hardlink").samefile(installed / "environment" / long_name)
+    assert (installed / "environment/lib/symlink").resolve() == installed / "environment" / long_name
+    assert (installed / "environment/lib/rootlink").resolve() == installed / "environment"
+
+
+@pytest.mark.parametrize("pax_name", ["../outside", "/outside"])
+def test_input_pax_path_overrides_are_validated_before_rewriting(tmp_path, pax_name):
+    loaded = module()
+    path = tmp_path / "bad-pax.tar.gz"
+    with tarfile.open(path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+        member = tarfile.TarInfo("lib/apparently-safe")
+        member.pax_headers = {"path": pax_name}
+        archive.addfile(member)
+    with tarfile.open(path, "r:gz") as archive, pytest.raises(loaded.BundleError, match="Unsafe"):
+        list(loaded.environment_members(archive))
+
+
+@pytest.mark.parametrize("failure", ["pax_path", "duplicate", "mode", "bytes", "escaping_link", "special_type", "owner", "total"])
+def test_serialized_payload_preflight_rejects_header_or_inventory_drift(tmp_path, failure):
+    loaded = module()
+    source = official_fixture(tmp_path)
+    source_info, _ = loaded.inspect_source(source, "main")
+    environment = tmp_path / "environment.tar.gz"
+    environment_archive(environment)
+    payload = tmp_path / "payload.tar.gz"
+    _, inventory, total = loaded.write_payload(environment, source, source_info, {}, {}, payload)
+    loaded.verify_serialized_payload(payload, inventory, total)
+    changed = tmp_path / "changed.tar.gz"
+    with tarfile.open(payload, "r:gz") as original, tarfile.open(changed, "w:gz", format=tarfile.PAX_FORMAT) as target:
+        for member in original:
+            data = original.extractfile(member).read() if member.isfile() else None
+            if member.name == "environment/bin/python":
+                if failure == "pax_path":
+                    member.pax_headers = {"path": "bin/python"}
+                elif failure == "mode":
+                    member.mode = 0o700
+                elif failure == "bytes":
+                    data = b"X" + data[1:]
+                elif failure == "escaping_link":
+                    member.type, member.size, member.linkname, data = tarfile.SYMTYPE, 0, "../../../outside", None
+                elif failure == "special_type":
+                    member.type, member.size, data = tarfile.CHRTYPE, 0, None
+                elif failure == "owner":
+                    member.pax_headers = {"uid": "123"}
+                target.addfile(member, io.BytesIO(data) if data is not None else None)
+                if failure == "duplicate":
+                    target.addfile(member, io.BytesIO(data))
+            else:
+                target.addfile(member, io.BytesIO(data) if data is not None else None)
+    with pytest.raises(loaded.BundleError):
+        loaded.verify_serialized_payload(changed, inventory, total + 1 if failure == "total" else total)
+
+
+def test_failed_serialized_payload_preflight_publishes_no_parts(tmp_path, monkeypatch):
+    loaded = module()
+    source = official_fixture(tmp_path)
+    abi = {"system": "Linux", "machine": "x86_64", "libc": {"name": "glibc", "version": "2.39"},
+           "image_digest": "sha256:" + "a" * 64}
+    monkeypatch.setattr(loaded, "inspect_environment", lambda *a: {"machine": "x86_64", "torch_version": "fixture", "compiled_cuda": "fixture"})
+
+    def pack(prefix, output, executable):
+        environment_archive(output)
+        return {}
+
+    def fail(*a):
+        raise loaded.BundleError("serialized fixture rejected")
+
+    monkeypatch.setattr(loaded, "pack_environment", pack)
+    monkeypatch.setattr(loaded, "verify_serialized_payload", fail)
+    with pytest.raises(loaded.BundleError, match="serialized fixture rejected"):
+        loaded.build_bundle(tmp_path / "env", source, tmp_path / "out", abi, "fixture")
+    assert list((tmp_path / "out").iterdir()) == []
+
+
 @pytest.mark.parametrize("kind", ["absolute", "parent", "symlink", "device", "hardlink"])
 def test_packed_environment_rejects_unsafe_members(tmp_path, kind):
     loaded = module()

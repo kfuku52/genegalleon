@@ -64,6 +64,12 @@ commit metadata, original license notices, and a complete pre-relocation payload
 manifest. Unsafe paths, escaping links and special files are rejected. Each
 public part defaults to 1 GiB; the manifest binds both every part and the complete
 joined archive. OCI layer digests and sizes preserve these exact part identities.
+Input PAX path/link overrides are validated before relocation; emitted PAX
+headers are regenerated from the final names and normalized metadata. Before
+publishing parts, the producer reads back every serialized header and file hash
+and checks the exact inventory, links, modes and declared size. A private full
+consumer extraction and CPU relocation check must pass before a new candidate's
+GPU qualification; construction alone does not verify relocated imports.
 
 The builder emits no speculative download URLs. A publisher adds real locators
 only after durable upload and anonymous download/hash verification. The

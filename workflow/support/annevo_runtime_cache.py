@@ -126,8 +126,10 @@ def _safe_extract(archive, destination, maximum=16 * 1024 ** 3):
             path = Path(member.name)
             if (not path.parts or path.is_absolute() or ".." in path.parts
                     or path.parts[0] not in {"environment", "source", "provenance"}
-                    or path.as_posix() in seen or member.size < 0):
-                raise RuntimeError("Unsafe or duplicate ANNEVO archive member")
+                    or member.size < 0):
+                raise RuntimeError(f"Unsafe ANNEVO archive member: name={member.name!r}, normalized={path.as_posix()!r}")
+            if path.as_posix() in seen:
+                raise RuntimeError(f"Duplicate ANNEVO archive member: name={member.name!r}, normalized={path.as_posix()!r}")
             seen.add(path.as_posix())
             total += member.size
             if total > maximum or len(seen) > 200000 or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):

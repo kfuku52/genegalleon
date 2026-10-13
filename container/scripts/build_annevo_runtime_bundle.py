@@ -38,7 +38,7 @@ def sha256(path):
     before = path.stat()
     digest = hashlib.sha256()
     with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+        for block in iter(lambda stream=stream: stream.read(8 * 1024 * 1024), b""):
             digest.update(block)
     after = path.stat()
     if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
@@ -60,7 +60,7 @@ def checked_run(argv, **kwargs):
 def safe_name(name):
     name = name.removeprefix("./").rstrip("/")
     path = PurePosixPath(name)
-    if not name or path.is_absolute() or ".." in path.parts or "\x00" in name or "\\" in name:
+    if not name or not path.parts or path.is_absolute() or ".." in path.parts or "\x00" in name or "\\" in name:
         raise BundleError(f"Unsafe archive/source path: {name!r}")
     return str(path)
 
@@ -227,6 +227,11 @@ def environment_members(archive):
             raise BundleError(f"Duplicate environment archive path: {name}")
         seen.add(name)
         member = copy.copy(original)
+        # TarInfo has already applied the input PAX overrides. Reusing them
+        # would override our rewritten name/linkname and normalized metadata
+        # when the output is read. The writer generates new long-path/link
+        # headers from the validated attributes instead.
+        member.pax_headers = {}
         member.name = "environment/" + name
         if member.issym():
             target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
@@ -334,6 +339,68 @@ def write_payload(env_archive, source, source_info, dependencies, pack_info, out
     return dependency_record, payload_record, uncompressed_size
 
 
+def verify_serialized_payload(archive, payload_record, maximum):
+    """Read actual tar headers/bytes back before any distribution parts exist."""
+    records = {}
+    total = 0
+    document = None
+    with tarfile.open(archive, "r:gz") as packed:
+        for member in packed:
+            name = safe_name(member.name)
+            if (name != member.name or PurePosixPath(name).parts[0] not in {"environment", "source", "provenance"}
+                    or name in records or member.size < 0):
+                raise BundleError(f"Unsafe or duplicate serialized payload member: {member.name!r}")
+            total += member.size
+            if total > maximum or len(records) >= 200000:
+                raise BundleError("Serialized payload exceeds its declared bounds")
+            if (member.uid, member.gid, member.mtime, member.uname, member.gname) != (0, 0, 0, "", ""):
+                raise BundleError("Serialized payload metadata was not normalized: " + name)
+            row = {"path": name, "mode": member.mode}
+            if member.isfile():
+                stream = packed.extractfile(member)
+                digest = hashlib.sha256()
+                size = 0
+                inventory_bytes = bytearray() if name == payload_record["path"] else None
+                if inventory_bytes is not None and member.size > 64 * 1024 ** 2:
+                    raise BundleError("Payload inventory exceeds its supported size")
+                for block in iter(lambda stream=stream: stream.read(8 * 1024 * 1024), b""):
+                    digest.update(block)
+                    size += len(block)
+                    if inventory_bytes is not None:
+                        inventory_bytes.extend(block)
+                if size != member.size:
+                    raise BundleError("Serialized payload file size changed: " + name)
+                row.update(type="file", sha256=digest.hexdigest(), size=size)
+                if inventory_bytes is not None:
+                    if row != payload_record:
+                        raise BundleError("Serialized payload inventory identity changed")
+                    document = json.loads(inventory_bytes)
+            elif member.isdir():
+                row.update(type="directory")
+            elif member.issym() or member.islnk():
+                if member.issym():
+                    target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
+                    parts = PurePosixPath(target).parts
+                    if member.linkname.startswith("/") or not parts or parts[0] != "environment":
+                        raise BundleError("Serialized payload symlink escapes its environment: " + name)
+                    row.update(type="symlink", target=member.linkname)
+                else:
+                    target = safe_name(member.linkname)
+                    if target != member.linkname or records.get(target, {}).get("type") not in {"file", "hardlink"}:
+                        raise BundleError("Serialized payload hardlink target changed: " + name)
+                    row.update(type="hardlink", target=member.linkname)
+            else:
+                raise BundleError("Unsupported serialized payload member: " + name)
+            records[name] = row
+    if total != maximum or not isinstance(document, dict) or document.get("schema_version") != 1:
+        raise BundleError("Serialized payload inventory or total size changed")
+    entries = document.get("entries", [])
+    declared = {row["path"]: row for row in entries}
+    actual = {name: row for name, row in records.items() if name != payload_record["path"]}
+    if len(declared) != len(entries) or declared != actual:
+        raise BundleError("Serialized payload differs from its complete inventory")
+
+
 def split_archive(archive, destination, part_bytes):
     if not isinstance(part_bytes, int) or not 1 <= part_bytes < 2 * 1024 ** 3:
         raise BundleError("Each public part must be positive and strictly smaller than 2 GiB")
@@ -384,6 +451,7 @@ def build_bundle(prefix, source, output, base_abi, profile, source_ref="main", c
         payload = staging / "payload.tar.gz"
         dependency_record, payload_record, uncompressed_size = write_payload(
             env_archive, source, source_info, dependencies, pack_info, payload, prefix=prefix, shared_files=shared_files)
+        verify_serialized_payload(payload, payload_record, uncompressed_size)
         digest = sha256(payload)
         name = f"annevo-runtime-{digest}.tar.gz"
         payload.rename(staging / name)
@@ -401,7 +469,8 @@ def build_bundle(prefix, source, output, base_abi, profile, source_ref="main", c
                     "license": {"path": "source/LICENSE", **license_record},
                     "relocation": {"environment": "environment", "python": "environment/bin/python",
                                    "unpack": "environment/bin/conda-unpack", "rename_after_unpack": False},
-                    "qualification": {"CPU_hidden_metadata_native_help": "passed", "GPU_inference": "not_performed"}}
+                    "qualification": {"CPU_hidden_metadata_native_help": "passed", "serialized_payload_readback": "passed",
+                                      "GPU_inference": "not_performed"}}
         for part in parts:
             shutil.move(str(staging / part["name"]), output / part["name"])
         manifest_path = output / (name + ".manifest.json")

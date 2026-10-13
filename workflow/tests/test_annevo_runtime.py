@@ -127,6 +127,28 @@ def test_runtime_modification_and_redirected_manifest_are_rejected(tmp_path, mon
         cache.prepare(root, 'Magnoliopsida', str(path))
 
 
+@pytest.mark.parametrize('failure', ['stale_pax_path', 'normalized_duplicate'])
+def test_archive_rejection_identifies_actual_member_without_accepting_malformed_payload(tmp_path, failure):
+    archive = tmp_path / 'malformed.tar.gz'
+    with tarfile.open(archive, 'w:gz', format=tarfile.PAX_FORMAT) as stream:
+        if failure == 'stale_pax_path':
+            member = tarfile.TarInfo('environment/lib/original.so')
+            member.pax_headers = {'path': 'lib/original.so'}
+            stream.addfile(member)
+        else:
+            stream.addfile(tarfile.TarInfo('source/a'))
+            stream.addfile(tarfile.TarInfo('source/./a'))
+    output = tmp_path / 'unpacked'
+    output.mkdir()
+    with pytest.raises(RuntimeError) as error:
+        cache._safe_extract(archive, output)
+    if failure == 'stale_pax_path':
+        assert str(error.value) == "Unsafe ANNEVO archive member: name='lib/original.so', normalized='lib/original.so'"
+        assert not list(output.iterdir())
+    else:
+        assert str(error.value) == "Duplicate ANNEVO archive member: name='source/./a', normalized='source/a'"
+
+
 @pytest.mark.parametrize('name,link', [('../escape', None), ('source/escape', '../../outside'), ('source/a/../b', None)])
 def test_archive_traversal_and_external_links_are_rejected(tmp_path, name, link):
     archive = tmp_path/'bad.tar.gz'
