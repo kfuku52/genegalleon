@@ -41,6 +41,8 @@ def test_batch_render_matches_cli_and_recovers_from_one_family_error(tmp_path):
     stale.write_bytes(b'preserve existing failed output')
     jobs = [{'id':str(i), 'cwd':str(tmp_path), 'args':args, 'output':str(tmp_path/f'{i}.pdf')} for i in (0,2)]
     jobs[0]['args'] = rich
+    jobs[0]['check_ggimage'] = False  # Focused replay preserves its direct CLI dependency policy.
+    jobs[1]['check_ggimage'] = True   # A later standard job must retain its own policy.
     jobs.insert(1, {'id':'bad', 'cwd':str(tmp_path), 'args':['--stat_branch='+str(tmp_path/'missing.tsv')],
                     'output':str(stale)})
     plan = tmp_path/'plan.json'

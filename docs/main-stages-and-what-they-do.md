@@ -598,6 +598,13 @@ Purpose:
 - optionally build the selected source's `gg_orthogroup.db`,
 - optionally run HGT and convergent-site summaries against the selected source.
 
+HGT candidate summarization also writes `hgt_transfer_events.tsv` (individual
+GeneRax events with bilateral scaffold context) and `hgt_transfer_event_genes.tsv`
+(traceable donor/recipient gene links). These reuse existing reconciliations
+and measurements without rerunning inference or applying filtering thresholds.
+See [host-scaffold context](host-scaffold-taxonomy.md#event-resolved-donor-and-recipient-context)
+for role mapping, missingness, and ancestral-branch proxy semantics.
+
 Main Gene-Family Source:
 
 - `gene_family_source="query2family"` or `gene_family_source="orthogroup"`

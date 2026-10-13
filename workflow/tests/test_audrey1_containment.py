@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from shell_static_helpers import WORKFLOW_DIR
 
-from workflow.support.local_input_manifest_binds import source_files
+from workflow.support.local_input_manifest_binds import coalesce_project_sources, source_files
 
 UTIL = WORKFLOW_DIR / "support" / "gg_util.sh"
 
@@ -161,3 +161,67 @@ def test_large_source_manifest_uses_arguments_without_environment_overflow(tmp_p
     assert result.returncode == 0, result.stderr
     assert f"argument_count={3 + 2 * source_count}" in result.stdout
     assert f"bind_env_bytes={2 * len(str(root)) + 1}" in result.stdout
+
+
+def test_native_cache_generation_is_one_read_only_bind(tmp_path):
+    root = tmp_path / "project"
+    workspace = root / "work"
+    workspace.mkdir(parents=True)
+    cache = root / "donor" / "input_download_cache" / "staged" / ("a" * 64)
+    manifest = workspace / "sources.tsv"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(["cds_url"])
+        for index in range(1406):
+            source = cache / str(index) / ("x" * 160 + ".fa")
+            source.parent.mkdir(parents=True)
+            source.write_text(">seq\nATG\n")
+            writer.writerow([source.as_uri()])
+    setup = (f"gg_workspace_dir={shlex.quote(str(workspace))}; "
+             "export GG_INPUT_INPUT_GENERATION_MODE=array_prepare GG_INPUT_DOWNLOAD_MANIFEST=/workspace/sources.tsv; ")
+    result = run_site_command(tmp_path, f"{root}:{root}", setup)
+    assert result.returncode == 0, result.stderr
+    assert f"--bind {cache}:{cache}:ro" in result.stdout
+    assert result.stdout.count("--bind ") == 1
+    assert f"bind={root}:{root}" in result.stdout
+
+
+def test_coalescing_preserves_external_sources_workspace_and_donor_locks(tmp_path):
+    root = tmp_path / "project"
+    workspace = root / "work"
+    workspace.mkdir(parents=True)
+    cache = root / "donor" / "input_download_cache" / "staged" / ("a" * 64)
+    source = cache / "species" / "input.fa"
+    source.parent.mkdir(parents=True)
+    source.touch()
+    external = tmp_path / "input" / "external.fa"
+    external.parent.mkdir()
+    external.touch()
+    output = workspace / "output.fa"
+    output.touch()
+    lock = root / "donor" / "task_plan.json.locks" / "1.lock"
+    lock.parent.mkdir()
+    lock.touch()
+    paths = [source, external, output, lock]
+    assert coalesce_project_sources(paths, root, workspace) == sorted([cache, external, output, lock])
+    assert coalesce_project_sources(paths, root, workspace, [source]) == sorted(paths)
+    assert coalesce_project_sources(paths, root, workspace, [cache / "other"]) == sorted(paths)
+    assert coalesce_project_sources([source], root, root) == [source]
+
+
+def test_flat_input_groups_require_safe_read_only_leaf_directories(tmp_path):
+    root = tmp_path / "project"
+    workspace = root / "work"
+    workspace.mkdir(parents=True)
+    raw = root / "input" / "reference"
+    raw.mkdir(parents=True)
+    paths = [raw / "cds.fa", raw / "genome.fa"]
+    for path in paths:
+        path.touch()
+    assert coalesce_project_sources(paths, root, workspace) == [raw]
+    lock = raw / ".lock"
+    lock.touch()
+    assert coalesce_project_sources(paths, root, workspace) == sorted(paths)
+    lock.unlink()
+    (raw / "nested").mkdir()
+    assert coalesce_project_sources(paths, root, workspace) == sorted(paths)

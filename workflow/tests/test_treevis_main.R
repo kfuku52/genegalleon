@@ -6,6 +6,58 @@ suppressPackageStartupMessages(library(genegalleon.treevis))
 # Plotting helpers may open the default device during this test. Keep it off disk.
 pdf(NULL)
 
+# Focused transfer marks use exact internal nodes, with no family-wide marking.
+focus_marker <- getFromNamespace('add_focused_hgt_node_marks', 'genegalleon.treevis')
+focus_plot <- ggplot(data.frame(x=c(1,2,3), y=c(1,2,3), isTip=c(TRUE,FALSE,FALSE),
+                              hgtfocus_event_count=c(0,1,0), hgtfocus_node_label=c('', 'HGT1 UFB=90', '')))
+marked <- focus_marker(focus_plot, list(font_size=6, font_size_factor=0.352777778))
+marked_layers <- ggplot_build(marked)$data
+if (nrow(marked_layers[[1]]) != 1 || marked_layers[[1]]$x != 2) stop('Focused HGT marker mapped to wrong node.')
+if (marked_layers[[1]]$colour != '#b34d00' || marked_layers[[1]]$shape != 23) stop('Focused HGT marker style is incorrect.')
+if (marked_layers[[2]]$label != 'HGT1 UFB=90') stop('Focused HGT label lost exact branch support.')
+if (marked$scales$get_scales('shape')$name != 'UFB = Ultrafast bootstrap') stop('Focused HGT legend must spell out UFB.')
+if (marked_layers[[2]]$fill != 'white') stop('Focused HGT label needs an opaque background over branch lines.')
+unmarked <- focus_plot
+unmarked$data$hgtfocus_event_count <- 0
+if (length(focus_marker(unmarked, list())$layers) != 0) stop('Empty focused cohort should not add marks.')
+focus_plot$data$isTip[[2]] <- TRUE
+if (!inherits(try(focus_marker(focus_plot, list()), silent=TRUE), 'try-error')) stop('Terminal focused HGT node was accepted.')
+
+# The focused diamond must not recolor the existing branching-event legend keys.
+legend_fixture <- data.frame(x=1:3, y=1:3, isTip=FALSE,
+                            node_category=c('D', 'H', 'S'),
+                            hgtfocus_event_count=c(0, 1, 0))
+event_plot <- ggplot(legend_fixture, aes(x=x, y=y)) +
+  geom_point(aes(colour=node_category), show.legend=TRUE) +
+  scale_colour_manual(values=c(D='red', H='darkturquoise', S='blue'),
+                      labels=c(D='Duplication', H='Transfer', S='Speciation'),
+                      name='Branching event')
+grob_descendants <- function(g) {
+  nested <- c(g$grobs, as.list(g$children))
+  c(list(g), unlist(lapply(nested, grob_descendants), recursive=FALSE))
+}
+legend_point_colors <- function(plot, title) {
+  descendants <- grob_descendants(ggplotGrob(plot))
+  guides <- Filter(function(g) {
+    inherits(g, 'gtable') && any(grepl('^key-', g$layout$name)) &&
+      any(vapply(grob_descendants(g),
+                 function(child) inherits(child, 'text') && identical(child$label, title), logical(1)))
+  }, descendants)
+  if (length(guides) != 1) stop('Could not identify the requested legend guide.')
+  points <- Filter(function(g) inherits(g, 'points'), grob_descendants(guides[[1]]))
+  unname(vapply(points, function(g) g$gp$col, character(1)))
+}
+baseline_keys <- legend_point_colors(event_plot, 'Branching event')
+focused_legend_plot <- focus_marker(event_plot, list())
+focused_keys <- legend_point_colors(focused_legend_plot, 'Branching event')
+if (length(baseline_keys) != 3 || !identical(focused_keys, baseline_keys)) {
+  stop('Focused HGT overlay changed the branching-event legend keys.')
+}
+focus_keys <- legend_point_colors(focused_legend_plot, 'Focused HGT node')
+if (!any(vapply(focus_keys, function(colour) identical(col2rgb(colour), col2rgb('#b34d00')), logical(1)))) {
+  stop('Focused HGT diamond lost its own orange legend key.')
+}
+
 # 1) tidy_df_tip: group order and tip order are stable and numeric conversion works.
 df_tip <- data.frame(
   label = c("g2", "g1"),
@@ -240,6 +292,40 @@ if (length(unique(cluster_variants('black',3))) != 3 ||
     length(unique(cluster_variants('white',3))) != 3) {
   stop('Black and white species labels should also produce distinct cluster shades.')
 }
+# Real family plots can contain dozens of multi-gene clusters per species.
+# Shades must not converge to repeated white/black or the singleton gray key.
+for (base_color in c('black','white','#16A085','#b34d00')) {
+  many_colors <- cluster_variants(base_color,62)
+  singleton_rgb <- as.numeric(grDevices::col2rgb('gray90'))
+  color_rgb <- grDevices::col2rgb(many_colors)
+  contrast <- sqrt(colSums((color_rgb-singleton_rgb)^2))
+  stopifnot(length(unique(tolower(many_colors))) == 62,
+            !any(tolower(many_colors) == '#ffffff'), all(contrast > 25))
+}
+
+# Missing coordinates must remain blank rather than corrupt nearby clusters.
+missing_cluster <- df_tip_cluster
+missing_cluster$start[2] <- NA
+missing_cluster$chromosome[4] <- NA
+missing_cluster$taxon[8] <- NA
+missing_result <- add_gene_cluster_membership(missing_cluster, 100)
+stopifnot(all(missing_result$cluster_membership[c(2,4,8)] == ''),
+          missing_result$cluster_membership[3] == missing_result$cluster_membership[6])
+
+# Nested intervals must not manufacture a gap inside an overlapping cluster.
+# Reversed coordinates and input order must leave the interval partition intact.
+nested_cluster <- data.frame(
+  so_event='L', taxon='Sp one', chromosome='chr1',
+  label=c('long','nested','overlap','boundary','far'),
+  start=c(100,200,900,1100,1301), end=c(1000,250,950,1200,1400))
+nested_result <- add_gene_cluster_membership(nested_cluster,100)
+stopifnot(length(unique(nested_result$cluster_membership[1:4])) == 1L,
+          nested_result$cluster_membership[4] != nested_result$cluster_membership[5])
+reversed_cluster <- nested_cluster[c(5,3,1,4,2),]
+reversed_cluster[c('start','end')] <- reversed_cluster[c('end','start')]
+reversed_result <- add_gene_cluster_membership(reversed_cluster,100)
+stopifnot(identical(nested_result$cluster_membership,
+                   reversed_result$cluster_membership[match(nested_result$label,reversed_result$label)]))
 
 # 6) add_complete_overlap_groups: fully overlapping motifs are merged.
 df_fimo_overlap <- data.frame(
@@ -623,10 +709,36 @@ plot_script <- file.path(repo_root, 'workflow/support/stat_branch2tree_plot.r')
 reader_env <- new.env(parent=globalenv())
 for (expr in parse(plot_script)) {
   if (is.call(expr) && is.symbol(expr[[1]]) && as.character(expr[[1]]) %in% c('=', '<-') &&
-      is.symbol(expr[[2]]) && as.character(expr[[2]]) %in% c('plot_input_cache', 'plot_input_signature', 'read_plot_input')) {
+      is.symbol(expr[[2]]) && as.character(expr[[2]]) %in% c('plot_input_cache', 'plot_input_signature', 'read_plot_input',
+                                                          'place_tree_legend', 'measure_tree_legend_height_mm')) {
     eval(expr, envir=reader_env)
   }
 }
+# The public driver keeps ordinary/focused tree guides outside the data panel
+# and grows the page by their actual physical height, preserving leaf density.
+outside_height_mm <- function(plot) {
+  gt <- ggplotGrob(plot)
+  panel <- gt$layout[gt$layout$name == 'panel', , drop=FALSE]
+  rows <- setdiff(seq_along(gt$heights), seq.int(panel$t, panel$b))
+  sum(grid::convertHeight(gt$heights[rows], 'mm', valueOnly=TRUE))
+}
+for (plot in list(event_plot, focused_legend_plot)) {
+  inside <- plot + theme(legend.position='inside', legend.position.inside=c(0, 1),
+                         legend.justification=c(0, 1))
+  outside <- reader_env$place_tree_legend(inside)
+  stopifnot(identical(outside$theme$legend.position, 'top'),
+            identical(outside$theme$legend.justification, 'left'),
+            identical(outside$theme$legend.box, 'vertical'))
+  stopifnot(!is.null(cowplot::get_legend(outside, legend='top')),
+            is.null(cowplot::get_legend(outside, legend='inside')))
+  legend_height <- reader_env$measure_tree_legend_height_mm(outside)
+  before_panel_height <- 76.2 - outside_height_mm(inside)
+  after_panel_height <- 76.2 + legend_height - outside_height_mm(outside)
+  stopifnot(abs(before_panel_height - after_panel_height) < 1e-7,
+            identical(ggplot_build(inside)$data, ggplot_build(outside)$data))
+}
+empty_legend_plot <- reader_env$place_tree_legend(ggplot() + geom_blank())
+stopifnot(identical(reader_env$measure_tree_legend_height_mm(empty_legend_plot), 0))
 reader_dir <- tempfile('treevis-reader-')
 dir.create(reader_dir)
 domain_file <- file.path(reader_dir, 'domain.tsv')
@@ -1129,7 +1241,55 @@ if (!identical(domain_order, alignment_order)) {
   stop("Protein domain and alignment overlap stacks should use the same bottom-to-top domain order.")
 }
 
+# Gap-separated runs retain endpoints, stacking order and integer split IDs.
+# An all-gap tip keeps its backbone, and a tip without domains keeps its fill.
+gap_tree <- list(tree=list(data=data.frame(isTip=TRUE, label=c('g1','gap','plain'),
+                                         y=1:3, tiplab_color='black')))
+gap_sequences <- list(g1=c('01','01','04','01','01','04','01','01','04','01','01','01'),
+                      gap=rep('04',12), plain=rep('01',12))
+gap_plot <- add_alignment_column(gap_tree,args_align,gap_sequences,
+                                df_rpsblast=df_rps_overlap,seqs_untrim=gap_sequences)$alignment
+gap_rectangles <- gap_plot$layers[[2]]$data
+focal_rectangles <- gap_rectangles[gap_rectangles$label == 'g1',,drop=FALSE]
+stopifnot(identical(focal_rectangles$xmin,c(0,3,4,4,6,6,9)),
+          identical(focal_rectangles$xmax,c(1,3,4,4,7,7,11)),
+          identical(as.character(focal_rectangles$fill),
+                    c('Domain_A','Domain_A','Domain_A','Domain_B','Domain_A','Domain_B','Domain_B')),
+          identical(focal_rectangles$split_index,c(1L,1L,1L,2L,1L,2L,1L)),
+          identical(focal_rectangles$split_total,c(1L,1L,2L,2L,2L,2L,1L)),
+          !any(gap_rectangles$label == 'gap'),
+          sum(gap_rectangles$label == 'plain') == 1L,
+          as.character(gap_rectangles$fill[gap_rectangles$label == 'plain']) == '__non_domain__',
+          identical(as.character(gap_plot$layers[[1]]$data$label),c('g1','gap','plain')))
+
+# Domain intervals retain the complete occurrence order and exact schema.
+domain_complete <- get_df_domain(df_rps_overlap_ready)
+stopifnot(identical(domain_complete$xmin,c(0,1,1,2)),
+          identical(domain_complete$xmax,c(1,2,2,2)),
+          identical(as.character(domain_complete$sacc),c('Domain_A','Domain_A','Domain_B','Domain_B')),
+          identical(domain_complete$label,rep('g1',4)))
+
 cat("genegalleon.treevis package tests passed.\n")
+
+# Stable sweep semantics include simultaneous boundaries, repeated labels,
+# clipping, missing domains and first-row validation of missing query IDs.
+domain_edge <- data.frame(qacc=c('b','','a','b','a','b',NA,'invalid','outside'),
+                         sacc=c('B','A','A','B',NA,'C','A','A','A'),
+                         qlen=c(rep(10,7),NA,10),qstart=c(3,1,1,4,5,6,1,1,12),
+                         qend=c(5,10,7,9,8,10,10,10,11),ymin=0,ymax=0.75)
+domain_edge_result <- get_df_domain(domain_edge)
+domain_edge_expected <- data.frame(xmin=c(2,3,5,9,0,0),xmax=c(3,5,9,9,9,7),
+                                  ymin=0,ymax=0.75,
+                                  sacc=factor(c('B','B','C','C','A','A'),levels=c('A','B','C')),
+                                  label=c(rep('b',4),'','a'))
+stopifnot(identical(domain_edge_result,domain_edge_expected),
+          identical(get_df_domain(transform(domain_edge,qacc=factor(qacc),sacc=factor(sacc))),
+                    domain_edge_expected))
+domain_empty <- get_df_domain(domain_edge[c(7,1:6,8:9),])
+stopifnot(nrow(domain_empty)==0L,
+          identical(names(domain_empty),c('xmin','xmax','ymin','ymax','sacc','label')),
+          is.character(domain_empty$sacc),is.double(domain_empty$xmin),
+          identical(get_df_domain(transform(domain_edge,sacc=NA_character_)),domain_empty))
 
 
 # Tip labels reserve rendered glyph width and scale with font size.

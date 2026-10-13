@@ -721,7 +721,7 @@ def test_download_manifest_supports_direct_with_explicit_urls(tmp_path):
     assert (out_genome / (species_key + "_direct.genome.fa.gz")).exists()
     with open(str(formatted_cds) + ".gff-grouping.json", "rt", encoding="utf-8") as handle:
         audit = json.load(handle)
-    assert audit["version"] == 15
+    assert audit["version"] == 17
     assert audit["grouping_source"] == "gff"
     assert audit["stats"]["mapped"] == 2
     assert audit["stats"]["unmapped"] == 0
@@ -1223,7 +1223,7 @@ def test_download_manifest_retries_transient_http_errors(tmp_path):
             super().do_GET()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), FlakyHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"
@@ -1322,7 +1322,7 @@ def test_download_manifest_resumes_partial_http_download_with_range(tmp_path):
             self.wfile.write(response_payload)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), InterruptedRangeHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"
@@ -1406,7 +1406,7 @@ def test_download_manifest_uses_default_user_agent_for_direct_downloads(tmp_path
             super().do_GET()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), UserAgentHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"

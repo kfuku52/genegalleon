@@ -157,7 +157,8 @@ they must not multiply rows in the downstream branch table.
 GFF sequence names are literal contig identifiers: `001`, `NA`, `NULL`, and `nan`
 remain unchanged when read and must match the reference FASTA headers. Numeric
 coordinates and other columns retain their usual type and missing-value handling.
-Input generation canonicalizes exact source `OriSeqID` and unique `lcl|` aliases
+Input generation canonicalizes exact source `OriSeqID`, unique `lcl|` aliases,
+and single-field CoGe `gi|chromosome` wrappers (not multi-field NCBI GI headers)
 to the exported genome FASTA IDs, including `##sequence-region` directives.
 It rejects unresolved or ambiguous reference aliases; final validation also
 checks reference IDs, coordinate bounds, and explicit gene/RNA parent reference
@@ -170,6 +171,39 @@ consistent exon/UTR coordinates on that reference. Missing or conflicting
 evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
+
+For a gene/exon-only GFF supplied with a genome and published CDS, safe/strict
+formatting can reconstruct coding bounds when gene, exon-parent and CDS IDs
+match completely one-to-one. Each CDS must occur exactly once in its own
+strand-aware spliced exons. Unknown `N` bases must also leave only one possible
+alignment; a literal match alone is insufficient. The formatter retains exon
+and UTR bounds, creates an explicit RNA and phased CDS blocks, and records input
+hashes and model counts under `coding_coordinates` in the GFF repair audit.
+Missing, conflicting or ambiguous evidence stops reconstruction. `off` keeps
+the original annotation. The original source files are never modified.
+
+The source syntax adapter also escapes literal semicolons in the observed
+Geneious `misc_feature` repeat notes. This preserves description text and does
+not consume unknown fragments or structural attributes.
+
+With `gff_repair_mode=safe` or `strict`, reused IDs on distinct coding loci and
+distinct author gene/RNA IDs that collide after supported `evm.model.` prefix removal are
+disambiguated only when explicit local gene/RNA parents uniquely assign every
+affected child. Gene, transcript and CDS IDs receive deterministic `.locus...`
+suffixes; parent references and identity attributes are updated together before
+CDS extraction and longest-isoform selection. Supplied CDS records must identify
+one copy through an unambiguous alias or exact source location. A reused FASTA ID
+alone never selects a copy. Normal multipart CDS, shared physical features and
+explicitly ordered fragments/trans-splicing keep their identities. `off` disables
+this repair. Missing parents, conflicting geometry, cycles or generated-ID
+collisions stop formatting; no parent rows, coding coordinates or biological
+exceptions are invented. Successful mapping is recorded under `locus_identity`
+in the CDS/GFF audits. Repeated standalone `intergenic_region` IDs receive
+separate interval-based IDs without inventing coding parents; parentless CDS,
+exons and UTRs still fail when their identity is ambiguous. Paired CDS repairs
+preserve quoted GTF attributes when recording their audit markers. Blocked
+formatting writes `.locus-identity.json` beside
+the planned CDS output. Original source files remain unchanged.
 
 Prefer one annotation source per species. Where a workflow retains multiple
 sources, `gg_gene_evolution` passes its read-only FASTA sequence store to
@@ -567,6 +601,15 @@ Notes:
   comparing coding models. Block IDs such as `.CDS2` never become separate
   transcript or gene representatives. GFF-derived headers retain this model's
   resolved owner instead of reapplying the legacy provided-CDS header map,
+- CoGe orphan CDS aliases retain a unique declared RNA-to-gene owner when
+  all blocks fit that gene's sequence, strand and bounds. Multiple internal
+  feature IDs can form one transcript only when every block names the same
+  exact RNA ID in `Alias`, fits that RNA, has consistent metadata, and does
+  not overlap another block. Ambiguous aliases remain errors,
+- safe GFF normalization omits a length-zero `intergenic_region` only when
+  two unique declared genes end and begin at its adjacent boundaries and no
+  child references that placeholder. Gene, exon and CDS rows remain intact;
+  the source line and flanking gene IDs are recorded in the repair audit,
 - rescued GFF gene ownership follows the same historical ID replacements as
   emitted GFF text (including literal or percent-escaped `evm.model.`). A collision between distinct
   normalized owners fails rather than losing the selected longest model,
@@ -603,12 +646,26 @@ Notes:
   and mRNA `product` numeric suffixes (for example `SULTR4;1` becomes
   `SULTR4%3B1`). This runs independently of gene-ID repair and rescue flags.
   The same audit covers chemical linkage lists, nucleosome assembly protein
-  suffixes and structured UniProt description continuations. Unknown orphan
-  attributes still fail.
+  suffixes and structured UniProt continuations in `description` and `Note`.
+  MAKER mRNA `Note` descriptions can also escape literal delimiters inside
+  balanced parentheses or square brackets, such as `(TIP1;1)` or
+  `[Includes: Protease; Reverse transcriptase]`. A `key=value` boundary always
+  ends the attribute; incomplete descriptions and orphan `key:value` fields
+  are rejected. Numeric NAP1/HKT1 separators require matching parenthesized
+  aliases. Formatting preserves the complete description and gene model.
+  Independent source-gene validation treats `ID` as one opaque value while
+  retaining `Parent` lists; comma-decorated author IDs cannot invent shared
+  description nodes or merge unrelated gene ancestries.
+  GWH EVM gene rows with an accession of the documented `GWHG…` form can
+  canonicalize their bare `HC` flag to `gwh_gene_confidence=HC`; this does not
+  alter gene IDs or parent relationships. Unknown orphan attributes still fail.
   Existing escapes, parent lists, IDs and coordinates are retained. The repair
   audit records each changed source line and attribute, with source/output SHA256.
   Unrecoverable attribute fragments fail with file/line context; rescue planning
   validates frozen GFF inputs and directs invalid legacy inputs back to formatting,
+- empty columns after the ninth GFF column are removed during formatting and
+  recorded in the syntax audit; nonempty extra columns remain errors. CDS model
+  extraction uses the same canonical rows while leaving downloaded files intact,
 - GFACS/TreeGenes-style GTF rows whose ninth column is a lone model ID are
   interpreted as authoritative gene boundaries and emitted as standard
   `ID`/`Parent` plus `gene_id` attributes,
@@ -699,6 +756,7 @@ Manifest required columns:
   - for `provider=ddbj`, `id` can be a DDBJ BioProject accession (for example `PRJDB15739`), a WGS master accession (for example `BAAHMP000000000`), or a DDBJ BioProject URL.
     - the resolver follows the public DDBJ Search API to find the `insdc-master` accession, then downloads the anonymous-FTP WGS flatfile (`GBFF`) and derives genome/GFF/CDS from it.
   - for `provider=coge`, `id` must be CoGe `genome_id` (numeric `gid`), and CDS/GFF/Genome URLs are auto-built.
+    - automatic URL resolution requires matching genome metadata with `restricted=false`; private, missing, mismatched or deleted records stop before annotation/sequence exports.
     - parentless exported CDS fragments are joined using their stable `coge_fid` and exact source `Name`; conflicting names, chromosomes or strands are rejected. Safe GFF formatting normalizes their `Name` and `CDS` aliases with the same identifier rules as the derived CDS; collisions after normalization are rejected.
   - for `provider=cngb`, built-in inference resolves CNGB assembly IDs (`CNA...`, `cngb:...`) or linked `GCA/GCF` accessions and maps to downloadable assembly files.
   - for `provider=gwh`, `id` can be a `GWH...` accession (for example `GWHIGRM00000000.1`), a GWH assembly show URL, or a GWH folder/index URL.

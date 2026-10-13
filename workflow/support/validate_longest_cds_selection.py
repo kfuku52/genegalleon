@@ -168,6 +168,7 @@ def build_task_from_summary_row(row):
         "species_key": species_key,
         "species_prefix": species_prefix,
         "gene_grouping_mode": formatter.normalize_gene_grouping_mode(row.get("gene_grouping_mode", "strict")),
+        "gff_repair_mode": formatter.normalize_gff_repair_mode(row.get("gff_repair_mode", "safe")),
         "genetic_code": int(row.get("cds_genetic_code") or 1),
         "cds_path": None,
         "gff_path": None,
@@ -187,11 +188,21 @@ def build_task_from_summary_row(row):
 
     gff_input_path = str(row.get("gff_input_path") or "").strip()
     if gff_input_path != "":
-        task["gff_path"] = Path(gff_input_path).expanduser().resolve()
+        if gff_input_path.endswith(" (derived GFF)"):
+            source = Path(gff_input_path[:-len(" (derived GFF)")]).expanduser().resolve()
+            if source != task.get("gbff_path"):
+                raise ValueError("Derived GFF description does not match the raw GBFF source")
+        else:
+            task["gff_path"] = Path(gff_input_path).expanduser().resolve()
 
     genome_input_path = str(row.get("genome_input_path") or "").strip()
     if genome_input_path != "":
-        task["genome_path"] = Path(genome_input_path).expanduser().resolve()
+        if genome_input_path.endswith(" (derived genome)"):
+            source = Path(genome_input_path[:-len(" (derived genome)")]).expanduser().resolve()
+            if source != task.get("gbff_path"):
+                raise ValueError("Derived genome description does not match the raw GBFF source")
+        else:
+            task["genome_path"] = Path(genome_input_path).expanduser().resolve()
 
     return task
 
@@ -272,7 +283,8 @@ def collect_expected_longest_records(task):
     transcripts_by_gene = defaultdict(int)
     transcript_total = 0
     cds_identifier_task = formatter.prepare_cds_identifier_task(task)
-    source_check = SourceGeneSelection(task.get("gff_path"))
+    source_check = SourceGeneSelection(task.get("gff_path"),
+        repair_locus_ids=formatter.gff_repair_mode_for_task(task) != "off")
 
     for header, sequence, _decision in formatter.iter_normalised_cds_records(cds_identifier_task):
         transcript_total += 1

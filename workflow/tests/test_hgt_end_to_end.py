@@ -1,4 +1,5 @@
 import gzip
+import json
 import os
 import shutil
 import sqlite3
@@ -448,6 +449,8 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     branch_tsv = hgt_root / "hgt_branch_candidates.tsv"
     gene_tsv = hgt_root / "hgt_gene_candidates.tsv"
     orthogroup_tsv = hgt_root / "hgt_orthogroup_summary.tsv"
+    event_tsv = hgt_root / "hgt_transfer_events.tsv"
+    event_gene_tsv = hgt_root / "hgt_transfer_event_genes.tsv"
     readme_md = hgt_root / "README.md"
     overview_pdf = hgt_root / "plots" / "hgt_branch_overview.pdf"
     taxonomy_flow_pdf = hgt_root / "plots" / "hgt_taxonomy_flow.pdf"
@@ -459,6 +462,8 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
         branch_tsv,
         gene_tsv,
         orthogroup_tsv,
+        event_tsv,
+        event_gene_tsv,
         readme_md,
         overview_pdf,
         taxonomy_flow_pdf,
@@ -484,6 +489,27 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     branch_df = pandas.read_csv(branch_tsv, sep="\t")
     gene_df = pandas.read_csv(gene_tsv, sep="\t")
     orthogroup_df = pandas.read_csv(orthogroup_tsv, sep="\t")
+    events = pandas.read_csv(event_tsv, sep="\t")
+    assert events.shape[0] == 1
+    assert events.loc[0, "event_id"] == "OG0001:3:1"
+    assert events.loc[0, "mapping_reason"] == "missing_generax_xml"
+    assert pandas.isna(events.loc[0, "donor_scaffold_count"])
+    assert pandas.read_csv(event_gene_tsv, sep="\t").empty
+    # Focus is enabled by default but unresolved reconciliation is not certified.
+    focus_root = hgt_root / "trait_focus"
+    focus_index = pandas.read_csv(focus_root / "index.tsv", sep="\t")
+    assert set(focus_index["target"]) == {"ALL_CATEGORY1", "Arabidopsis_thaliana"}
+    assert focus_index["event_count"].sum() == 0
+    assert json.loads((focus_root / "manifest.json").read_text())["source_event_count"] == 1
+    focused = focus_root / 'traits/test_trait/all_category1'
+    assert not (focused / 'transfer_tree.pdf').exists()
+    for name in ['filtering_flow','orthogroup_species_distribution','donor_recipient_counts']:
+        assert (focused / 'plots' / (name+'.pdf')).is_file()
+    assert not list((focused / 'tree_plot').glob('*.pdf'))  # Unresolved event cannot become a supported tree.
+    recipient_result = focus_root / "traits/test_trait/tips/Arabidopsis_thaliana"
+    assert not (recipient_result / "transfer_tree.pdf").exists()
+    assert (recipient_result / "transfer_edges.tsv").is_file()
+    assert (recipient_result / "events.tsv").is_file()
 
     assert branch_df.shape[0] == 1
     assert branch_df.loc[0, "orthogroup"] == "OG0001"

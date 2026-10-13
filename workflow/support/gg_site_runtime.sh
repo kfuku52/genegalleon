@@ -203,7 +203,7 @@ gg_bind_native_array_sources() {
   local mode=${GG_INPUT_INPUT_GENERATION_MODE:-}
   local source_path="" kind="" source_list="" source_file="" quoted_bind=""
   local mount_entry="" destination="" filtered_mounts="" matched=""
-  local -a source_files=() existing_mounts=()
+  local -a source_files=() existing_mounts=() source_list_args=()
   gg_set_command_array "${bind_args_var}" || return 1
   case "${mode}" in
     array_prepare)
@@ -222,8 +222,17 @@ gg_bind_native_array_sources() {
   if [[ "${source_path}" == /workspace/* ]]; then
     source_path="${gg_workspace_dir}/${source_path#/workspace/}"
   fi
+  gg_sync_container_bind_envs || return 1
+  source_list_args=( "${kind}" "${source_path}" --workspace "${gg_workspace_dir}"
+    --coalesce-project-sources "${GG_CONTAINER_PROJECT_ROOT_BIND%%:*}" )
+  IFS=',' read -r -a existing_mounts <<< "${GG_CONTAINER_BIND_MOUNTS:-}"
+  for mount_entry in "${existing_mounts[@]}"; do
+    destination=${mount_entry#*:}
+    destination=${destination%%:*}
+    [[ -z "${destination}" ]] || source_list_args+=( --existing-bind-destination "${destination}" )
+  done
   source_list=$(python "${BASH_SOURCE[0]%/*}/local_input_manifest_binds.py" \
-    "${kind}" "${source_path}" --workspace "${gg_workspace_dir}") || return 1
+    "${source_list_args[@]}") || return 1
   while IFS= read -r source_file; do
     [[ -n "${source_file}" ]] || continue
     source_files+=( "${source_file}" )

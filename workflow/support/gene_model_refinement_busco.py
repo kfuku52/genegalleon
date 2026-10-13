@@ -13,13 +13,14 @@ import re
 import shutil
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from busco_quality_metadata import parse_short_summary
 from dated_tree_presentation import STATUS, STATUS_COLOURS, STATUS_LABELS
 from gene_model_refinement import verify_inputs
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
+from rescue_model_store import frozen_model_store_key, iter_accepted_models
 from rescue_swissprot_evidence import COLOURS as SWISSPROT_COLOURS
 from rescue_swissprot_evidence import GROUPS as SWISSPROT_GROUPS
 from rescue_swissprot_evidence import LABELS as SWISSPROT_LABELS
@@ -38,7 +39,7 @@ PATH_SUPPORT_LABELS = (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL, "Other intersp
 # support types, including self support in a mixed donor set.
 SUPPORT_GROUPS = ("self_only", "relative_only", "phylogenetic_only", "multiple")
 SUPPORT_GROUP_COLOURS = (RESCUE_SELF_COLOUR, *RESCUE_SUPPORT_COLOURS)
-SUPPORT_GROUP_LABELS = ("S only (self)", "R only (relatives)", "P only (phylogenetic)", "Multiple (at least two of S/R/P)")
+SUPPORT_GROUP_LABELS = ("Self species only", "Nearest relatives only", "Phylogenetically balanced references only", "Multiple groups (at least two)")
 PATH_SUPPORT_GROUPS = (*SUPPORT_GROUPS, "other_interspecies")
 PATH_SUPPORT_GROUP_COLOURS = (*SUPPORT_GROUP_COLOURS, "#8a929b")
 PATH_SUPPORT_GROUP_LABELS = (*SUPPORT_GROUP_LABELS, "Other interspecies only")
@@ -90,8 +91,17 @@ def collect_rescue_repeat_evidence(changes, evidence_dir=None):
         key = receipt.get("key", {})
         inputs = key.get("inputs", {})
         selection = changes.get("rescue_reference_selection", {})
-        expected = {f"/rescued/{name}/models.json": source.get("rescue_models_sha256"),
-                    f"/rescued/{name}/receipt.json": source.get("rescue_receipt_sha256")}
+        model_members = source.get("rescue_model_members_sha256")
+        if model_members is None:
+            model_members = {"models.json": source.get("rescue_models_sha256")}
+        if not isinstance(model_members, dict) or not model_members:
+            raise ValueError("Repeat audit needs frozen rescue-model members: " + name)
+        if any(not isinstance(member, str) or not member or "\\" in member
+               or Path(member).is_absolute() or ".." in Path(member).parts
+               for member in model_members):
+            raise ValueError("Repeat audit has unsafe rescue-model members: " + name)
+        expected = {f"/rescued/{name}/{member}": sha for member, sha in model_members.items()}
+        expected[f"/rescued/{name}/receipt.json"] = source.get("rescue_receipt_sha256")
         if (key.get("schema") != 1 or key.get("species") != name or not isinstance(inputs, dict)
                 or receipt.get("files", {}).get("evidence.json") != records_hash
                 or any(wanted is None or [h for p, h in inputs.items() if p.endswith(suffix)] != [wanted]
@@ -191,10 +201,10 @@ def regroup_model_support(changes):
     for species, value in updates.items():
         changes["species"][species].update(value)
     changes["support_group_classification"] = (
-        "S = self-species homology; R = nearest relatives; P = phylogenetically balanced references. "
-        "Only means exactly one of S/R/P; multiple means at least two of these support types, not two donor species. "
-        "A donor in both frozen R/P lists supplies both types. Other interspecies only means no S/R/P support; "
-        "additional unselected donors remain in per-model evidence. Target RNA is separate from S."
+        "Donor groups are self species, nearest relatives and phylogenetically balanced references. "
+        "Only means exactly one of these groups; multiple means at least two groups, not two donor species. "
+        "A donor in both frozen reference lists supplies both reference groups. Other interspecies only means support outside these three groups; "
+        "additional unselected donors remain in per-model evidence. Target RNA is separate from self-species homology."
     )
     return changes
 
@@ -292,21 +302,33 @@ def classify_rescue_support(models, species, rescued, plan):
             raise ValueError("Accepted rescue gene IDs differ from the source annotation: " + species)
         if gene in evidence:
             raise ValueError("Duplicate accepted rescue gene: " + identifier)
-        support = model.get("support")
-        if not isinstance(support, list) or not support:
-            raise ValueError("Accepted rescue gene lacks supporting donors: " + identifier)
         donors = set()
-        for entry in support:
-            donor = entry.get("donor")
-            if (entry.get("target") != species
-                    or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
-                raise ValueError("Rescue support donor/target differs from the frozen plan")
-            donors.add(donor)
+        paths = model.get("alternative_coding_paths", [])
+        if not isinstance(paths, list):
+            raise ValueError("Malformed rescued alternative coding paths")
+        path_support = {}
+        for path in [model, *paths]:
+            path_id = path.get("model_id")
+            support = path.get("support")
+            if not isinstance(support, list) or not support:
+                raise ValueError("Accepted rescue gene lacks supporting donors: " + identifier)
+            if not isinstance(path_id, str) or not path_id or path_id in path_support or path.get("problems"):
+                raise ValueError("Invalid or duplicate rescued coding path: " + identifier)
+            path_donors = set()
+            for entry in support:
+                donor = entry.get("donor")
+                if (entry.get("target") != species
+                        or (donor not in allowed and not (donor == species and entry.get("comparison") in self_comparisons))):
+                    raise ValueError("Rescue support donor/target differs from the frozen plan")
+                path_donors.add(donor)
+            path_support[path_id] = sorted(path_donors)
+            donors.update(path_donors)
         near, common = bool(donors & nearest), bool(donors & balanced)
         category = "both" if near and common else "nearest_only" if near else "balanced_only" if common else "self_only"
         if category != "self_only":
             counts[category] += 1
-        evidence[gene] = {"source_model_id": identifier, "supporting_donors": sorted(donors), "category": category}
+        evidence[gene] = {"source_model_id": identifier, "supporting_donors": sorted(donors), "category": category,
+                          "coding_path_support": path_support}
     if set(evidence) != set(rescued):
         raise ValueError("Accepted rescue gene IDs differ from the source annotation: " + species)
     return counts, evidence
@@ -563,7 +585,7 @@ def collect_model_changes(root, pairs, rescue_output=None):
             path_counts, path_support = classify_accepted_path_support(models, name, rescue_plan, set(request["sources"]))
             stats[name]["accepted_path_support_counts"] = path_counts
             evidence[name]["accepted_paths_support"] = path_support
-            from rescue_model_evidence import json_array, read_json_snapshot
+            from rescue_model_evidence import read_json_snapshot
             worker = rescue_root / "rescued" / name
             receipt, receipt_hash = read_json_snapshot(worker / "receipt.json")
             expected = request["files"].get(str(worker / "receipt.json"))
@@ -572,15 +594,22 @@ def collect_model_changes(root, pairs, rescue_output=None):
                     or (expected is not None and expected != receipt_hash)
                     or augmented["files"].get("species_gff/" + name + ".rescue.gff3") != source_hash):
                 raise ValueError("Rescue support publication differs from the source annotation: " + name)
-            hashes = batch.read([worker / "receipt.json", worker / "models.json"])
+            models_key = frozen_model_store_key(worker, kind="accepted")
+            hashes = batch.read([worker / "receipt.json", *[worker / member for member in models_key["files"]]])
             if (hashes[str(worker / "receipt.json")] != receipt_hash
-                    or hashes[str(worker / "models.json")] != receipt["files"]["models.json"]):
+                    or models_key.get("producer_receipt_sha256", receipt_hash) != receipt_hash
+                    or any(receipt["files"].get(member) != expected
+                           or hashes[str(worker / member)] != expected
+                           for member, expected in models_key["files"].items())):
                 raise ValueError("Frozen rescue models changed: " + name)
-            counts, support = classify_rescue_support(json_array(worker / "models.json"), name, rescued, rescue_plan)
+            counts, support = classify_rescue_support(
+                iter_accepted_models(worker, frozen_key=models_key, verify=False), name, rescued, rescue_plan)
             stats[name]["rescue_support_counts"] = counts
             stats[name]["rescue_self_only_loci"] = sum(s["category"] == "self_only" for s in support.values())
             evidence[name].update(rescue_receipt_sha256=receipt_hash,
-                                  rescue_models_sha256=receipt["files"]["models.json"], rescued_loci_support=support)
+                                  rescue_models_sha256=receipt["files"].get("models.json"),
+                                  rescue_model_members_sha256=models_key["files"],
+                                  rescue_model_store_key=models_key, rescued_loci_support=support)
     batch.check()
     if digest(root / "plan.json") != plan_hash:
         raise ValueError("Refinement plan changed while collecting model counts")
@@ -597,12 +626,56 @@ def collect_model_changes(root, pairs, rescue_output=None):
     return regroup_model_support(result)
 
 
+def _place_legends_below_plots(fig, axes, legend_columns, note_artist):
+    """Keep full legend labels beneath their plots and clear of footer notes."""
+    figure_height = fig.get_figheight()
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_heights = {legend: legend.get_window_extent(renderer).height / fig.dpi
+                      for _, legends in legend_columns for legend in legends}
+    label_depth = max((ax.bbox.y0 - ax.get_tightbbox(renderer).y0) / fig.dpi for ax in axes)
+    column_height = max(sum(legend_heights[legend] for legend in legends) + .18 * (len(legends) - 1)
+                        for _, legends in legend_columns)
+    note_height = note_artist.get_window_extent(renderer).height / fig.dpi
+    plot_height = axes[0].get_position().height * figure_height
+    footer_height = .25 + note_height + .25 + column_height + .20 + label_depth
+    figure_height = (plot_height + footer_height) / fig.subplotpars.top
+    fig.set_size_inches(fig.get_figwidth(), figure_height)
+    fig.subplots_adjust(bottom=footer_height / figure_height)
+    for ax, legends in legend_columns:
+        top = ax.get_position().y0 - (label_depth + .20) / figure_height
+        for legend in legends:
+            legend.set_bbox_to_anchor((ax.get_position().x0, top))
+            top -= (legend_heights[legend] + .18) / figure_height
+    note_artist.set_position((note_artist.get_position()[0], .25 / figure_height))
+
+
+def _draw_three_stage_busco(axis, rows):
+    """Three thin bars per species, ordered top to bottom after y inversion."""
+    for phase, offset in (("pre_rescue", -.26), ("before", 0), ("after", .26)):
+        for i, row in enumerate(rows):
+            result, left = row[phase + "_result"], 0
+            for category, colour in zip(STATUS, STATUS_COLOURS, strict=True):
+                value = 100 * result[category] / result["total"]
+                axis.barh(i + offset, value, left=left, height=.18, color=colour)
+                left += value
+            axis.text(101, i + offset, f'{100 * result["complete"] / result["total"]:.2f}',
+                      va="center", fontsize=7)
+
+
 def plot_comparison(rows, output, model_changes=None):
+    from textwrap import fill
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from matplotlib.ticker import MaxNLocator
+
+    diagnostic_view = model_changes is not None and any(
+        v.get("rescue_no_support_reasons") is not None for v in model_changes["species"].values())
+    if diagnostic_view:
+        _validate_swissprot_diagnostics(rows, model_changes)
 
     stacked_rescue = stacked_paths = grouped_support = False
     swissprot_view = False
@@ -677,21 +750,34 @@ def plot_comparison(rows, output, model_changes=None):
                     if (not isinstance(groups, dict) or set(groups) != set(categories)
                             or any(type(c) is not int or c < 0 for c in groups.values()) or sum(groups.values()) != total):
                         raise ValueError("S/R/P support groups must sum to the source model count")
+    staged = any("pre_rescue_result" in row for row in rows)
+    if staged:
+        if not all("pre_rescue_result" in row for row in rows):
+            raise ValueError("Three-stage BUSCO requires all three phases for every species")
+        for row in rows:
+            staged_result({k: v for k, v in row.items() if not k.endswith("_result")},
+                          row["before_result"], row["after_result"], row["pre_rescue_result"])
     extra = model_changes is not None
     support_legend = stacked_rescue or stacked_paths
     margin_left = .20 if extra else .24
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11 if extra else 10, "svg.fonttype": "none"})
     support_note_space = 1.5 if swissprot_view else 0
     figure_height = max(8, .52 * len(rows) + 5) + support_note_space if extra else max(6, .43 * len(rows) + 2)
-    fig, axes = plt.subplots(1, 5 if extra else 3, figsize=(25 if extra else 19, figure_height),
-                             gridspec_kw={"width_ratios": [1, 1, .65, .75, .9] if extra else [1, 1, .65],
-                                          "wspace": .16 if extra else .12}, sharey=True)
+    ratios = ([1.65, .65, .75, .9] if extra else [1.65, .8]) if staged else ([1, 1, .65, .75, .9] if extra else [1, 1, .65])
+    fig, axes = plt.subplots(1, len(ratios), figsize=(25 if extra else 19, figure_height),
+                             gridspec_kw={"width_ratios": ratios, "wspace": .16 if extra else .12}, sharey=True)
+    busco_axes = axes[:1] if staged else axes[:2]
+    delta_axis = axes[len(busco_axes)]
+    evidence_axes = axes[len(busco_axes) + 1:]
+    rescue_axis, path_axis = evidence_axes if extra else (None, None)
+    if staged:
+        _draw_three_stage_busco(busco_axes[0], rows)
     colors = STATUS_COLOURS
     for i, row in enumerate(rows):
         if row["refinement_status"] == "not_analysed":
             for ax in axes:
                 ax.axhspan(i - .48, i + .48, color="#eef0f3", zorder=0)
-        for j, phase in enumerate(("before", "after")):
+        for j, phase in enumerate(() if staged else ("before", "after")):
             result, left = row[phase + "_result"], 0
             for category, color in zip(STATUS, colors, strict=True):
                 value = 100 * result[category] / result["total"]
@@ -699,13 +785,13 @@ def plot_comparison(rows, output, model_changes=None):
                 left += value
             axes[j].text(101, i, f'{100 * result["complete"] / result["total"]:.2f}', va="center", fontsize=9)
         delta = row["delta_complete_pp"]
-        axes[2].barh(i, delta, color="#2a8d75" if delta >= 0 else "#b85250", height=.65)
-        axes[2].text(.98, i, f'{row["delta_complete"]:+d} ({delta:+.2f} pp)',
-                     transform=axes[2].get_yaxis_transform(), ha="right", va="center", fontsize=9)
+        delta_axis.barh(i, delta, color="#2a8d75" if delta >= 0 else "#b85250", height=.65)
+        delta_axis.text(.98, i, f'{row["delta_complete"]:+d} ({delta:+.2f} pp)',
+                     transform=delta_axis.get_yaxis_transform(), ha="right", va="center", fontsize=9)
         if extra:
             value = stats[row["species"]]
             if row["refinement_status"] == "not_analysed":
-                for ax in axes[3:]:
+                for ax in evidence_axes:
                     ax.text(.03, i, "Not analysed", transform=ax.get_yaxis_transform(), va="center", color="#657585", fontsize=9)
             else:
                 rescued = value["prior_rescued_loci"]
@@ -719,11 +805,11 @@ def plot_comparison(rows, output, model_changes=None):
                     group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
                     for category, color in zip(categories, group_colors, strict=True):
                         count = support[category]
-                        axes[3].barh(rescue_y, count, left=offset, color=color, height=.32)
+                        rescue_axis.barh(rescue_y, count, left=offset, color=color, height=.32)
                         offset += count
                 else:
-                    axes[3].barh(rescue_y, rescued, color="#5275b5", height=.32)
-                axes[3].annotate(str(rescued), (rescued, rescue_y),
+                    rescue_axis.barh(rescue_y, rescued, color="#5275b5", height=.32)
+                rescue_axis.annotate(str(rescued), (rescued, rescue_y),
                                  xytext=(4, 0), textcoords="offset points", va="center", fontsize=9)
                 lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
                 lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
@@ -731,16 +817,16 @@ def plot_comparison(rows, output, model_changes=None):
                     **dict.fromkeys(lower_groups, 0), "not_assessed": rescued}
                 offset = 0
                 for category, color in zip(lower_groups, lower_colours, strict=True):
-                    axes[3].barh(i + .20, repeats[category], left=offset, color=color, height=.32,
+                    rescue_axis.barh(i + .20, repeats[category], left=offset, color=color, height=.32,
                                  hatch="///" if category == "not_assessed" else None)
                     offset += repeats[category]
-                axes[3].annotate(str(rescued), (rescued, i + .20), xytext=(4, 0),
+                rescue_axis.annotate(str(rescued), (rescued, i + .20), xytext=(4, 0),
                                  textcoords="offset points", va="center", fontsize=9)
                 type_y = i - .20 if stacked_paths else i
                 height = .32 if stacked_paths else .7
-                axes[4].barh(type_y, repair, color="#187d97", height=height)
-                axes[4].barh(type_y, isoform, left=repair, color="#d38b21", height=height)
-                axes[4].annotate(f"{repair} / {isoform}", (repair + isoform, type_y), xytext=(4, 0),
+                path_axis.barh(type_y, repair, color="#187d97", height=height)
+                path_axis.barh(type_y, isoform, left=repair, color="#d38b21", height=height)
+                path_axis.annotate(f"{repair} / {isoform}", (repair + isoform, type_y), xytext=(4, 0),
                                  textcoords="offset points", va="center", fontsize=9)
                 if stacked_paths:
                     offset = 0
@@ -749,14 +835,16 @@ def plot_comparison(rows, output, model_changes=None):
                     group_colors = PATH_SUPPORT_GROUP_COLOURS if grouped_support else PATH_SUPPORT_COLOURS
                     for category, color in zip(categories, group_colors, strict=True):
                         count = support[category]
-                        axes[4].barh(i + .20, count, left=offset, color=color, height=.32)
+                        path_axis.barh(i + .20, count, left=offset, color=color, height=.32)
                         offset += count
-                    axes[4].annotate(str(offset), (offset, i + .20), xytext=(4, 0),
+                    path_axis.annotate(str(offset), (offset, i + .20), xytext=(4, 0),
                                      textcoords="offset points", va="center", fontsize=9)
     labels = [r["species"].replace("_", " ") + ("  [not analysed]" if r["refinement_status"] == "not_analysed" else "") for r in rows]
     axes[0].set_yticks(range(len(rows)), labels)
     axes[0].invert_yaxis()
-    titles = ["Before refinement", "After refinement", "Change in complete BUSCOs"]
+    titles = (["BUSCO: before rescue / after rescue /\nafter refinement (top to bottom)",
+               "Refinement change\nin Complete BUSCOs"] if staged else
+              ["Before refinement", "After refinement", "Change in complete BUSCOs"])
     if extra:
         titles += ["Missing-gene rescue", "Accepted coding paths"]
     for ax, title in zip(axes, titles, strict=True):
@@ -765,73 +853,86 @@ def plot_comparison(rows, output, model_changes=None):
         ax.grid(axis="x", alpha=.15)
         ax.set_axisbelow(True)
         ax.tick_params(axis="y", length=0)
-    for ax in axes[:2]:
+    for ax in busco_axes:
         ax.set_xlim(0, 116)
         ax.set_xticks([0, 25, 50, 75, 100])
         ax.set_xlabel("BUSCO groups (%)     C (%) at right")
     limit = max(1, max(abs(r["delta_complete_pp"]) for r in rows) * 1.2)
-    axes[2].set_xlim(-limit, limit * 2.5)
-    axes[2].axvline(0, color="#647383", linewidth=.7)
-    axes[2].set_xlabel("Percentage points (pp)")
+    delta_axis.set_xlim(-limit, limit * 2.5)
+    delta_axis.axvline(0, color="#647383", linewidth=.7)
+    delta_axis.set_xlabel("Percentage points (pp)")
     if extra:
         rescued_max = max((v["prior_rescued_loci"] or 0) for v in stats.values())
         paths_max = max((v["accepted_repair_paths"] or 0) + (v["accepted_isoform_paths"] or 0) for v in stats.values())
-        axes[3].set_xlim(0, max(1, rescued_max) * 1.25)
-        axes[4].set_xlim(0, max(1, paths_max) * 1.65)
-        for ax in axes[3:]:
+        rescue_axis.set_xlim(0, max(1, rescued_max) * 1.25)
+        path_axis.set_xlim(0, max(1, paths_max) * 1.65)
+        for ax in evidence_axes:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=4, integer=True))
-        axes[3].set_xlabel(("Upper: donors; lower: Swiss-Prot" if swissprot_view else "Upper: support; lower: repeats")
+        rescue_axis.set_xlabel(("Upper: donors; lower: Swiss-Prot" if swissprot_view else "Upper: support; lower: repeats")
                           + "\nPreviously rescued gene loci")
-        axes[4].set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
+        path_axis.set_xlabel("Upper: repair / isoform; lower: support" if stacked_paths else "Accepted paths; labels: repair / isoform")
     # Reserve footer space in inches so legends/notes stay separated for both
     # small cohorts and whole-dataset figures.
-    fig.subplots_adjust(left=margin_left, right=.98, top=.90, bottom=(4.6 + support_note_space) / figure_height if extra else .14)
+    fig.subplots_adjust(left=margin_left, right=.98, top=.86 if staged else .90,
+                        bottom=(4.6 + support_note_space) / figure_height if extra else .14)
     fig.suptitle("Representative CDS completeness and gene-model improvement" if extra else
                  "Representative CDS completeness before and after refinement", x=margin_left, ha="left", y=.98, fontsize=17, fontweight="bold")
     identity = rows[0]["before_result"]
     fig.text(margin_left, .94, f'BUSCO {identity["busco_version"]}; {identity["lineage"]} ({identity["lineage_creation_date"]}); '
              f'n = {identity["total"]}; transcriptome mode; one representative per locus', fontsize=10)
-    fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
-               loc="lower left", bbox_to_anchor=(margin_left, (3.25 + support_note_space) / figure_height if extra else .065), ncol=4, frameon=False)
-    if support_legend:
-        if grouped_support:
-            group_colors = PATH_SUPPORT_GROUP_COLOURS if stacked_paths else SUPPORT_GROUP_COLOURS
-            group_labels = PATH_SUPPORT_GROUP_LABELS if stacked_paths else SUPPORT_GROUP_LABELS
+    legend_columns = []
+    if extra:
+        def local_legend(ax, handles, labels, title, ncol=1):
+            legend = fig.legend(handles, [fill(label, 30) for label in labels], title=fill(title, 30),
+                                loc="upper left", bbox_to_anchor=(ax.get_position().x0, .5),
+                                ncol=ncol, frameon=False, borderaxespad=0, fontsize=10, title_fontsize=10)
+            return legend
+
+        legend_columns.append((axes[0], [local_legend(axes[0], [Patch(facecolor=c) for c in colors],
+                                                     STATUS_LABELS, "BUSCO status", ncol=2)]))
+        rescue_legends = []
+        if stacked_rescue:
+            group_colors = SUPPORT_GROUP_COLOURS if grouped_support else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
+            group_labels = SUPPORT_GROUP_LABELS if grouped_support else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
+            rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor=c) for c in group_colors], group_labels,
+                                                "Supporting donor groups (upper rescue bars)"))
         else:
-            group_colors = PATH_SUPPORT_COLOURS if stacked_paths else (*RESCUE_SUPPORT_COLOURS, RESCUE_SELF_COLOUR)
-            group_labels = PATH_SUPPORT_LABELS if stacked_paths else (*RESCUE_SUPPORT_LABELS, RESCUE_SELF_LABEL)
-        fig.legend([Patch(facecolor=c) for c in group_colors], group_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, (2.4 + support_note_space) / figure_height), ncol=3, frameon=False,
-                   title="Supporting donor groups (upper rescue and lower coding-path bars)")
-        fig.legend([Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
-                   ["Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(.70, (3.25 + support_note_space) / figure_height), ncol=2, frameon=False)
-    elif extra:
-        fig.legend([Patch(facecolor=c) for c in ("#5275b5", "#187d97", "#d38b21")],
-                   ["Previously rescued gene loci", "Repair coding paths", "Additional isoform paths"],
-                   loc="lower left", bbox_to_anchor=(margin_left, (2.4 + support_note_space) / figure_height), ncol=3, frameon=False)
+            rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor="#5275b5")],
+                                                ["Previously rescued gene loci"], "Upper rescue bars"))
+        path_legends = [local_legend(path_axis, [Patch(facecolor=c) for c in ("#187d97", "#d38b21")],
+                                    ["Repair coding paths", "Additional isoform paths"], "Coding-path type (upper bars)")]
+        if stacked_paths:
+            group_colors = PATH_SUPPORT_GROUP_COLOURS if grouped_support else PATH_SUPPORT_COLOURS
+            group_labels = PATH_SUPPORT_GROUP_LABELS if grouped_support else PATH_SUPPORT_LABELS
+            path_legends.append(local_legend(path_axis, [Patch(facecolor=c) for c in group_colors], group_labels,
+                                              "Supporting donor groups (lower coding-path bars)"))
+        legend_columns.extend(((rescue_axis, rescue_legends), (path_axis, path_legends)))
+    else:
+        fig.legend([Patch(facecolor=c) for c in colors], STATUS_LABELS,
+                   loc="lower left", bbox_to_anchor=(margin_left, .065), ncol=4, frameon=False)
     if extra:
         lower_groups = SWISSPROT_GROUPS if swissprot_view else REPEAT_GROUPS
         lower_colours = SWISSPROT_COLOURS if swissprot_view else REPEAT_GROUP_COLOURS
         lower_labels = SWISSPROT_LABELS if swissprot_view else REPEAT_GROUP_LABELS
-        fig.legend([Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
-                    for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
-                   loc="lower left", bbox_to_anchor=(margin_left, (1.65 + support_note_space) / figure_height), ncol=3 if swissprot_view else 2, frameon=False,
-                   title="Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
-                         "Repeat annotation (lower rescue bars; any CDS overlap)")
+        rescue_legends.append(local_legend(rescue_axis, [Patch(facecolor=c, hatch="///" if k == "not_assessed" else None)
+                              for k, c in zip(lower_groups, lower_colours, strict=True)], lower_labels,
+                              "Swiss-Prot protein support (lower rescue bars)" if swissprot_view else
+                              "Repeat annotation (lower rescue bars; any CDS overlap)"))
     note = "Grey rows: excluded from structural refinement; unchanged CDS are still evaluated by BUSCO.\n"
-    note += "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms."
+    note += ("Within each species, top to bottom: before rescue; after missing-gene rescue; after refinement. Values at right: Complete (%)."
+             if staged else "Before = refinement source CDS (including earlier rescued genes); after = selected DNA CDS, not all isoforms.")
     if extra:
-        note += "\nRescue counts are gene loci already in Before; repair / isoform counts are accepted paths and may share a locus."
+        note += "\nRescue counts are added gene loci; repair / isoform counts are accepted paths and may share a locus."
+        note += "\nRescue donors support retained paths within a locus; coding-path donor support is path-specific."
     if support_legend:
         if grouped_support:
-            note += "\nS = self-species homology; R = nearest relatives; P = phylogenetically balanced references. Target RNA is separate from S."
-            note += "\nMultiple = at least two support types among S/R/P; a donor in both frozen R/P lists supplies both types."
+            note += "\nDonor groups: self species, nearest relatives and phylogenetically balanced references. Target RNA is separate from self-species homology."
+            note += "\nMultiple = at least two support types; a donor in both frozen reference lists supplies both reference groups."
         else:
             note += "\nBoth = support from both frozen reference groups; a donor belonging to both lists also qualifies."
             note += "\nSelf-species only = no interspecies support; mixed self/interspecies support uses the interspecies group."
     if stacked_paths:
-        note += ("\nOnly = exactly one of S/R/P; donor other-only = no S/R/P donor. Additional unselected donors remain in the evidence."
+        note += ("\nOnly = exactly one donor group; other interspecies only = support outside all three groups. Additional unselected donors remain in the evidence."
                  if grouped_support else
                  "\nLower bars count each accepted path once by donor-group membership; other-only = no selected-group donor. Target RNA is separate.")
     elif stacked_rescue:
@@ -855,55 +956,47 @@ def plot_comparison(rows, output, model_changes=None):
         note += ("\nSwiss-Prot support is advisory; other support does not establish host function; no support does not exclude TE origin."
                  if swissprot_view else
                  "\nRepeat overlap is advisory, not proof of TE origin; no hit does not establish a true gene. Missing annotation = not assessed.")
-    fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
+    note_artist = fig.text(margin_left, .25 / figure_height if extra else .025, note, fontsize=10)
+    if extra:
+        _place_legends_below_plots(fig, axes, legend_columns, note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_comparison." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
     if any("pre_rescue_result" in row for row in rows):
         plot_three_stage(rows, output)
-    if model_changes is not None and any(v.get("rescue_no_support_reasons") is not None
-                                         for v in model_changes["species"].values()):
+    if diagnostic_view:
         plot_swissprot_diagnostics(rows, output, model_changes)
 
 
 def plot_three_stage(rows, output):
-    """Keep rescue gains separate from representative/refinement effects."""
+    import matplotlib
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
-    palette = dict(zip(STATUS, STATUS_COLOURS, strict=True))
+
     if not all("pre_rescue_result" in row for row in rows):
         raise ValueError("Three-stage BUSCO requires all three phases for every species")
     for row in rows:
         staged_result({k: v for k, v in row.items() if not k.endswith("_result")},
                       row["before_result"], row["after_result"], row["pre_rescue_result"])
-    height = max(7, .36 * len(rows) + 3)
-    fig, axes = plt.subplots(1, 4, figsize=(18, height), sharey=True,
-                             gridspec_kw={"width_ratios": [1, 1, 1, .85]})
+    height = max(7, .48 * len(rows) + 3)
+    fig, axes = plt.subplots(1, 2, figsize=(13, height), sharey=True,
+                             gridspec_kw={"width_ratios": [2.3, 1]})
     y = list(range(len(rows)))
-    for axis, phase, title in zip(axes[:3], ("pre_rescue", "before", "after"),
-                                  ("Before rescue", "After missing-gene rescue", "After refinement"), strict=True):
-        left = [0.] * len(rows)
-        for key in ("single", "duplicated", "fragmented", "missing"):
-            values = [100 * r[phase + "_result"][key] / r[phase + "_result"]["total"] for r in rows]
-            axis.barh(y, values, left=left, height=.68, color=palette[key])
-            left = [a + b for a, b in zip(left, values, strict=True)]
-        for i, row in enumerate(rows):
-            result = row[phase + "_result"]
-            axis.text(101, i, f'{100 * result["complete"] / result["total"]:.1f}%', va="center", fontsize=8)
-        axis.set_xlim(0, 118)
-        axis.set_xticks([0, 50, 100])
-        axis.set_title(title, fontsize=11)
-        axis.set_xlabel("BUSCO (%)")
+    _draw_three_stage_busco(axes[0], rows)
+    axes[0].set_xlim(0, 118)
+    axes[0].set_xticks([0, 25, 50, 75, 100])
+    axes[0].set_title("Before rescue / After rescue / After refinement\nTop to bottom within each species", fontsize=11)
+    axes[0].set_xlabel("BUSCO (%)     Complete (%) at right")
     axes[0].set_yticks(y, [r["species"].replace("_", " ") +
                          (" (not analysed)" if r["refinement_status"] == "not_analysed" else "") for r in rows], fontsize=9)
     axes[0].invert_yaxis()
     for offset, key, label, colour in ((-.17, "delta_rescue_complete", "Rescue", "#37956f"),
                                        (.17, "delta_complete", "Refinement", "#5275b5")):
-        axes[3].barh([i + offset for i in y], [r[key] for r in rows], height=.28, label=label, color=colour)
-    axes[3].axvline(0, color="#777777", linewidth=.7)
-    axes[3].set_title("Change in complete groups", fontsize=11)
-    axes[3].set_xlabel("BUSCO group count")
-    axes[3].legend(loc="lower right", fontsize=8)
+        axes[1].barh([i + offset for i in y], [r[key] for r in rows], height=.28, label=label, color=colour)
+    axes[1].axvline(0, color="#777777", linewidth=.7)
+    axes[1].set_title("Change in complete groups", fontsize=11)
+    axes[1].set_xlabel("BUSCO group count")
     for axis in axes:
         axis.spines[["top", "right"]].set_visible(False)
         for i, row in enumerate(rows):
@@ -912,14 +1005,47 @@ def plot_three_stage(rows, output):
     fig.suptitle("BUSCO across gene-model improvement stages", fontsize=16, y=.975)
     identity = rows[0]["before_result"]
     fig.text(.03, .93, f'BUSCO {identity["busco_version"]}; {identity["lineage"]}; '
-             f'{identity["total"]} groups. Every phase uses the same frozen lineage, tools and predictor parameters.', fontsize=9)
-    fig.legend([Patch(color=c) for c in STATUS_COLOURS], STATUS_LABELS,
-               loc="lower center", bbox_to_anchor=(.6, .035), ncol=4, frameon=False, fontsize=9)
-    fig.text(.03, .015, "Grey rows: structure improvement not analysed; CDS retained unchanged and included in BUSCO.", fontsize=9)
-    fig.subplots_adjust(left=.26, right=.97, bottom=.12, top=.87, wspace=.28)
+             f'{identity["total"]} groups. Same frozen lineage, tools and predictor parameters in every phase.', fontsize=9)
+    fig.subplots_adjust(left=.34, right=.97, bottom=.12, top=.87, wspace=.28)
+    status_legend = fig.legend([Patch(color=c) for c in STATUS_COLOURS], STATUS_LABELS,
+                              loc="upper left", bbox_to_anchor=(.34, .5), ncol=2, frameon=False, fontsize=9, borderaxespad=0)
+    change_legend = fig.legend(*axes[1].get_legend_handles_labels(), loc="upper left",
+                              bbox_to_anchor=(axes[1].get_position().x0, .5), frameon=False, fontsize=9, borderaxespad=0)
+    note_artist = fig.text(.03, .015, "Grey rows: structure improvement not analysed; CDS retained unchanged and included in BUSCO.", fontsize=9)
+    _place_legends_below_plots(fig, axes, [(axes[0], [status_legend]), (axes[1], [change_legend])], note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("busco_three_stage." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
+
+
+def _validate_swissprot_diagnostics(rows, changes):
+    from rescue_swissprot_evidence import NO_SUPPORT_REASONS
+
+    stats = changes["species"]
+    if not rows or len(rows) != len(stats) or {r["species"] for r in rows} != set(stats):
+        raise ValueError("Swiss-Prot diagnostic species membership differs")
+    fields = (("rescue_partial_te_groups", ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")),
+              ("rescue_no_support_reasons", NO_SUPPORT_REASONS), ("rescue_swissprot_groups", SWISSPROT_GROUPS))
+    for row in rows:
+        value = stats[row["species"]]
+        if value.get("refinement_status") != row["refinement_status"]:
+            raise ValueError("Swiss-Prot diagnostic analysis status differs")
+        if row["refinement_status"] == "not_analysed":
+            if value.get("prior_rescued_loci") is not None or any(value.get(field) is not None for field, _ in fields):
+                raise ValueError("Unanalysed Swiss-Prot diagnostics must be unavailable")
+            continue
+        for field, keys in fields:
+            counts = value.get(field)
+            if (not isinstance(counts, dict) or set(counts) != set(keys)
+                    or any(type(c) is not int or c < 0 for c in counts.values())):
+                raise ValueError("Incomplete or invalid Swiss-Prot diagnostic counts: " + row["species"])
+        groups, reasons, proteins = (value[field] for field, _ in fields)
+        total = value.get("prior_rescued_loci")
+        if (type(total) is not int or total < 0 or sum(groups.values()) != total or sum(proteins.values()) != total
+                or sum(reasons.values()) != proteins["no_informative_hit"]
+                or groups["primary_te_support"] != proteins["te_only"] + proteins["both"]
+                or groups["not_assessed"] != proteins["not_assessed"]):
+            raise ValueError("Swiss-Prot diagnostic counts disagree with rescued loci: " + row["species"])
 
 
 def plot_swissprot_diagnostics(rows, output, changes):
@@ -927,6 +1053,7 @@ def plot_swissprot_diagnostics(rows, output, changes):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from rescue_swissprot_evidence import NO_SUPPORT_REASONS
+    _validate_swissprot_diagnostics(rows, changes)
     groups = ("primary_te_support", "partial_te_only", "no_te_support", "not_assessed")
     labels = ("Primary TE support", "Partial TE flag only", "No TE support / flag", "Translation not assessed")
     colours = ("#b45158", "#d99843", "#477b80", "#d6dbe1")
@@ -956,9 +1083,11 @@ def plot_swissprot_diagnostics(rows, output, changes):
     axes[0].set_yticks(range(len(rows)), [r["species"].replace("_", " ") for r in rows], fontsize=9)
     axes[0].invert_yaxis()
     fig.suptitle("Swiss-Prot evidence diagnostics for missing-gene rescue", fontsize=16, y=.985)
-    for x, keys, palette in ((.36, labels, colours), (.78, reason_labels, reason_colours)):
-        fig.legend([Patch(color=c) for c in palette], keys, loc="upper center",
-                   bbox_to_anchor=(x, .92), ncol=1, fontsize=8, frameon=False)
+    legend_columns = []
+    for ax, keys, palette in ((axes[0], labels, colours), (axes[1], reason_labels, reason_colours)):
+        legend = fig.legend([Patch(color=c) for c in palette], keys, loc="upper left",
+                            bbox_to_anchor=(ax.get_position().x0, .5), ncol=1, fontsize=9, frameon=False, borderaxespad=0)
+        legend_columns.append((ax, [legend]))
     p = changes["swissprot_evidence"]["parameters"]
     note = (f'Primary TE support: E <= {p["evalue"]:g}; paired residues >= {p["minimum_alignment"]:g} aa; '
             f'query/target coverage >= {100*p["query_coverage"]:g}%/{100*p["target_coverage"]:g}%; '
@@ -970,8 +1099,9 @@ def plot_swissprot_diagnostics(rows, output, changes):
             'Per locus, the most informative coding-sequence reason takes priority (annotation unknown > partial > short > weak > no hit).\n'
             f'MMseqs2: search E <= {p.get("search_evalue", p["evalue"]):g}; sensitivity {p["sensitivity"]:g}; '
             f'max hits {p["max_hits"]:g}. No identity cutoff; short-protein thresholds are unchanged. Grey rows were not analysed.')
-    fig.text(.03, .025, note, fontsize=9, linespacing=1.5)
-    fig.subplots_adjust(left=.24, right=.97, bottom=.2, top=.77, wspace=.24)
+    note_artist = fig.text(.03, .025, note, fontsize=9, linespacing=1.5)
+    fig.subplots_adjust(left=.24, right=.97, bottom=.2, top=.90, wspace=.24)
+    _place_legends_below_plots(fig, axes, legend_columns, note_artist)
     for suffix in ("png", "svg"):
         fig.savefig(output / ("rescue_swissprot_diagnostics." + suffix), dpi=180, facecolor="white")
     plt.close(fig)
@@ -979,27 +1109,43 @@ def plot_swissprot_diagnostics(rows, output, changes):
 
 def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=None, rescue_swissprot_dir=None):
     """Redraw a historical evaluation without executing its predictor again."""
+    boundary = FreshDigestBatch()
+    boundary.read([report / "busco_comparison.json", report / "contract.json"])
     value = json.loads((report / "busco_comparison.json").read_text())
     frozen = json.loads((report / "contract.json").read_text())
     pairs = {p["species"]: p for p in frozen["pairs"]}
     rows = value["species"]
-    if (value["contract"] != frozen["contract"] or len(pairs) != len(frozen["pairs"])
+    if (not rows or value["contract"] != frozen["contract"] or len(pairs) != len(frozen["pairs"])
             or len(rows) != len(pairs) or {r["species"] for r in rows} != set(pairs)):
         raise ValueError("Comparison contract or species membership changed")
+    paths = [report / "busco_comparison.json", report / "contract.json"]
+    for pair in pairs.values():
+        for phase in phases(pair):
+            directory = report / "runs" / pair["species"] / phase
+            paths.extend([pair[phase], directory / "receipt.json", directory / "summary.txt"])
+            if (directory / "full_table.tsv").is_file():
+                paths.append(directory / "full_table.tsv")
+    hashes = boundary.read(paths)
     verified_tables = 0
     for row in rows:
         pair = pairs[row["species"]]
         for phase in phases(pair):
             directory = report / "runs" / pair["species"] / phase
             saved = json.loads((directory / "receipt.json").read_text())
+            current_result = read_result(directory / "summary.txt")
+            original_result = row[phase + "_result"]
+            # The original source path remains provenance in the saved rows.
+            # A relocated report has the same scores, bound by the summary hash.
+            current_scores = {k: v for k, v in current_result.items() if k != "source"}
+            original_scores = {k: v for k, v in original_result.items() if k != "source"}
             if (saved["key"]["contract"] != frozen["contract"]
-                    or saved["key"]["source_sha256"] != digest(pair[phase])
-                    or saved["summary_sha256"] != digest(directory / "summary.txt")
-                    or read_result(directory / "summary.txt") != row[phase + "_result"]):
+                    or saved["key"]["source_sha256"] != hashes[str(pair[phase])]
+                    or saved["summary_sha256"] != hashes[str(directory / "summary.txt")]
+                    or current_scores != original_scores):
                 raise ValueError("Comparison input or score changed")
             # Summary-only historical publications remain renderable as such.
             if "full_table_sha256" in saved:
-                if digest(directory / "full_table.tsv") != saved["full_table_sha256"]:
+                if hashes.get(str(directory / "full_table.tsv")) != saved["full_table_sha256"]:
                     raise ValueError("Comparison full table changed")
                 verified_tables += 1
         if staged_result(pair, row["before_result"], row["after_result"], row.get("pre_rescue_result")) != row:
@@ -1008,10 +1154,13 @@ def render_existing(report, root=None, rescue_output=None, rescue_evidence_dir=N
     if changes is not None:
         collect_rescue_repeat_evidence(changes, rescue_evidence_dir)
         collect_rescue_swissprot_evidence(changes, rescue_swissprot_dir)
+        boundary.check()
         atomic_json(report / "model_change_summary.json", changes)
+    boundary.check()
     plot_comparison(rows, report, changes)
+    boundary.check()
     atomic_json(report / "rendering_provenance.json", {
-        "comparison_sha256": digest(report / "busco_comparison.json"),
+        "comparison_sha256": hashes[str(report / "busco_comparison.json")],
         "evaluation_contract": frozen["contract"], "renderer_sha256": digest(Path(__file__)),
         "verified_full_tables": verified_tables, "predictor_executed": False,
         "model_change_summary_sha256": digest(report / "model_change_summary.json") if changes is not None else None,
@@ -1048,7 +1197,27 @@ def evaluate(pairs, report, lineage, download_path, cpus=4, jobs=1, model_change
         print(json.dumps({"species": pair["species"], "delta_complete": row["delta_complete"]}), flush=True)
         return row
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        rows = list(pool.map(one, pairs))
+        pending, rows = {}, []
+        iterator = enumerate(pairs)
+
+        def submit_available():
+            while len(pending) < jobs:
+                try:
+                    index, pair = next(iterator)
+                except StopIteration:
+                    break
+                rows.append(None)
+                pending[pool.submit(one, pair)] = index
+
+        submit_available()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            # Inspect every completed result before admitting replacements.
+            # On error the executor naturally drains all admitted species.
+            for future in sorted(done, key=pending.get):
+                index = pending.pop(future)
+                rows[index] = future.result()
+            submit_available()
     batch.check()
     atomic_json(report / "busco_comparison.json", {"contract": contract, "species": rows})
     with (report / "busco_comparison.tsv").open("w", newline="") as handle:
@@ -1082,21 +1251,22 @@ def main():
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--jobs", type=int, default=1, help="Total CPU budget = jobs times cpus")
     args = parser.parse_args()
+    root = args.output.resolve() if args.output else None
+    report = args.report.resolve()
+    if root is not None and (root == report or root in report.parents or report in root.parents):
+        parser.error("Report must be separate from the immutable refinement tree")
     if (args.rescue_output or args.rescue_evidence_dir or args.rescue_swissprot_dir) and not args.output:
         parser.error("Rescue support/evidence requires --output to bind it to the source annotation")
     if args.plot_only:
         if args.lineage or args.download_path or args.cds_dir:
             parser.error("--plot-only uses the saved evaluation; do not supply new inputs or lineage settings")
-        render_existing(args.report.resolve(), args.output.resolve() if args.output else None, args.rescue_output,
+        render_existing(report, root, args.rescue_output,
                         args.rescue_evidence_dir, args.rescue_swissprot_dir)
         return
     if not args.output or not args.lineage or not args.download_path:
         parser.error("--output, --lineage and --download-path are required for evaluation")
-    root, report = args.output.resolve(), args.report.resolve()
     if args.cpus < 1 or args.jobs < 1:
         parser.error("CPU and job counts must be positive")
-    if root == report or root in report.parents or report in root.parents:
-        parser.error("Report must be separate from the immutable refinement tree")
     pairs = input_pairs(root, args.cds_dir)
     changes = collect_model_changes(root, pairs, args.rescue_output)
     if args.three_stage:

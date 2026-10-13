@@ -23,6 +23,7 @@ run_csubst_scan_aa_change_summary="${run_csubst_scan_aa_change_summary:-0}"
 run_csubst_scan_candidate_sites="${run_csubst_scan_candidate_sites:-0}"
 run_hgt_candidate_summary="${run_hgt_candidate_summary:-0}"
 run_hgt_summary_plots="${run_hgt_summary_plots:-0}"
+run_hgt_trait_focus="${run_hgt_trait_focus:-1}"
 run_csubst_site_convergence_summary="${run_csubst_site_convergence_summary:-0}"
 csubst_site_nonsyn_recode=$(echo "${csubst_site_nonsyn_recode:-${GG_COMMON_CSUBST_NONSYN_RECODE:-no}}" | tr '[:upper:]' '[:lower:]')
 csubst_scan_summary_min_unit_support="${csubst_scan_summary_min_unit_support:-2}"
@@ -37,6 +38,7 @@ presence_absence_include_incomplete="${presence_absence_include_incomplete:-0}"
 presence_absence_heatmap_value=$(echo "${presence_absence_heatmap_value:-presence}" | tr '[:upper:]' '[:lower:]')
 presence_absence_evidence_layout=$(echo "${presence_absence_evidence_layout:-band}" | tr '[:upper:]' '[:lower:]')
 presence_absence_ortholog_basis=$(echo "${presence_absence_ortholog_basis:-reference_species}" | tr '[:upper:]' '[:lower:]')
+presence_absence_dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold:-0}"
 presence_absence_species_tree="${presence_absence_species_tree:-auto}"
 presence_absence_species_tree_ci="${presence_absence_species_tree_ci:-auto}"
 presence_absence_species_tree_support="${presence_absence_species_tree_support:-auto}"
@@ -70,6 +72,16 @@ if [[ "${presence_absence_query_selection}" == "closest" && ( -z "${presence_abs
   echo 'closest requires presence_absence_target_species and query_gene/both ortholog basis' >&2
   exit 1
 fi
+python - "${presence_absence_dup_conf_score_threshold}" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    sys.exit("presence_absence_dup_conf_score_threshold must be a finite number between 0 and 1")
+if not math.isfinite(value) or not 0 <= value <= 1:
+    sys.exit("presence_absence_dup_conf_score_threshold must be a finite number between 0 and 1")
+PY
 summary_output_dir="${summary_output_dir:-auto}"
 hgt_summary_output_dir="${hgt_summary_output_dir:-auto}"
 csubst_site_output_dir="${csubst_site_output_dir:-auto}"
@@ -116,6 +128,7 @@ validate_binary_flag "run_csubst_scan_aa_change_summary" "${run_csubst_scan_aa_c
 validate_binary_flag "run_csubst_scan_candidate_sites" "${run_csubst_scan_candidate_sites}"
 validate_binary_flag "run_hgt_candidate_summary" "${run_hgt_candidate_summary}"
 validate_binary_flag "run_hgt_summary_plots" "${run_hgt_summary_plots}"
+validate_binary_flag "run_hgt_trait_focus" "${run_hgt_trait_focus}"
 validate_binary_flag "run_csubst_site_convergence_summary" "${run_csubst_site_convergence_summary}"
 validate_binary_flag "presence_absence_include_incomplete" "${presence_absence_include_incomplete}"
 
@@ -620,6 +633,7 @@ run_presence_absence_summary_for_source() {
       local file_reference_tree="${summary_output_dir}/query2family_reference_gene_orthologs.tree.tsv"
       local file_reference_synteny="${summary_output_dir}/query2family_reference_gene_orthologs.synteny.tsv"
       local file_reference_ufboot="${summary_output_dir}/query2family_reference_gene_orthologs.ufboot.tsv"
+      local file_reference_dup_conf="${summary_output_dir}/query2family_reference_gene_orthologs.dup_conf.tsv"
       local file_reference_pdf="${summary_output_dir}/query2family_reference_gene_orthologs.pdf"
       local file_reference_svg="${summary_output_dir}/query2family_reference_gene_orthologs.svg"
 
@@ -629,6 +643,8 @@ run_presence_absence_summary_for_source() {
         --dir_query_gene "${dir_query_gene}" \
         --family_file "${file_selection}" \
         --reference_species "${reference_species_resolved}" \
+        --dup_conf_score_threshold "${presence_absence_dup_conf_score_threshold}" \
+        --out_dup_conf "${file_reference_dup_conf}" \
         --out_columns "${file_reference_columns}" \
         --out_glyphs "${file_reference_glyphs}" \
         --out_tree "${file_reference_tree}" \
@@ -644,9 +660,11 @@ run_presence_absence_summary_for_source() {
           --ortholog_tree_table="${file_reference_tree}"
           --ortholog_synteny_table="${file_reference_synteny}"
           --ortholog_ufboot_table="${file_reference_ufboot}"
+          --ortholog_dup_conf_table="${file_reference_dup_conf}"
           --species_mapping_tree="${file_species_mapping_tree}"
           --ortholog_basis=reference_species
           --reference_species="${reference_species_resolved}"
+          --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
           --evidence_layout="${presence_absence_evidence_layout}"
           --value=presence
           --width="${presence_absence_plot_width}"
@@ -677,6 +695,7 @@ run_presence_absence_summary_for_source() {
       local file_query_tree="${summary_output_dir}/query2family_query_gene_orthologs.tree.tsv"
       local file_query_synteny="${summary_output_dir}/query2family_query_gene_orthologs.synteny.tsv"
       local file_query_ufboot="${summary_output_dir}/query2family_query_gene_orthologs.ufboot.tsv"
+      local file_query_dup_conf="${summary_output_dir}/query2family_query_gene_orthologs.dup_conf.tsv"
       local file_query_map="${summary_output_dir}/query2family_query_gene_orthologs.query_map.tsv"
       local file_query_pdf="${summary_output_dir}/query2family_query_gene_orthologs.pdf"
       local file_query_svg="${summary_output_dir}/query2family_query_gene_orthologs.svg"
@@ -692,6 +711,8 @@ run_presence_absence_summary_for_source() {
         --out_selection "${summary_output_dir}/query2family_query_gene_orthologs.selection.tsv"
         --out_overlap "${summary_output_dir}/query2family_query_gene_orthologs.overlap.tsv"
         --out_long "${file_query_long}"
+        --dup_conf_score_threshold "${presence_absence_dup_conf_score_threshold}"
+        --out_dup_conf "${file_query_dup_conf}"
       )
 
       python "${gg_support_dir}/query_gene_orthologs.py" \
@@ -714,8 +735,10 @@ run_presence_absence_summary_for_source() {
           --ortholog_column_table="${file_query_columns}"
           --ortholog_glyph_table="${file_query_glyphs}"
           --ortholog_tree_table="${file_query_tree}"
+          --dup_conf_score_threshold="${presence_absence_dup_conf_score_threshold}"
           --ortholog_synteny_table="${file_query_synteny}"
           --ortholog_ufboot_table="${file_query_ufboot}"
+          --ortholog_dup_conf_table="${file_query_dup_conf}"
           --species_mapping_tree="${file_species_mapping_tree}"
           --ortholog_basis=query_gene
           --evidence_layout="${presence_absence_evidence_layout}"
@@ -910,13 +933,26 @@ run_hgt_summary_for_source() {
   hgt_output_dir="${hgt_summary_output_dir}" \
   run_hgt_eval="${run_hgt_candidate_summary}" \
   run_hgt_plot="${run_hgt_summary_plots}" \
+  run_hgt_focus="${run_hgt_trait_focus}" \
   hgt_use_taxonomy_db="${hgt_summary_use_taxonomy_db:-1}" \
   hgt_contamination_dir="${hgt_summary_contamination_dir:-}" \
   hgt_taxonomy_flow_rank="${hgt_summary_taxonomy_flow_rank:-phylum}" \
   hgt_taxonomy_flow_max_categories="${hgt_summary_taxonomy_flow_max_categories:-12}" \
   hgt_species_tree="${hgt_summary_species_tree:-auto}" \
   hgt_species_trait="${hgt_summary_species_trait:-auto}" \
+  hgt_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}" \
+  hgt_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}" \
+  hgt_focus_filter_audit_tsv="${hgt_summary_focus_filter_audit_tsv:-}" \
+  hgt_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}" \
+  hgt_focus_require_shared_pfam="${hgt_summary_focus_require_shared_pfam:-1}" \
+  hgt_focus_allow_both_no_pfam="${hgt_summary_focus_allow_both_no_pfam:-0}" \
+  hgt_focus_min_shared_pfam_coverage="${hgt_summary_focus_min_shared_pfam_coverage:-0.5}" \
+  hgt_focus_require_length_ratio="${hgt_summary_focus_require_length_ratio:-1}" \
+  hgt_focus_min_length_ratio="${hgt_summary_focus_min_length_ratio:-0.5}" \
+  hgt_focus_direction_filter="${hgt_summary_focus_direction_filter:-any}" \
+  hgt_focus_species_taxonomy="${hgt_summary_focus_species_taxonomy:-auto}" \
   hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" \
+  hgt_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" \
   hgt_tree_width_mm="${hgt_summary_tree_width_mm:-60}" \
   hgt_promoter_bp="${hgt_summary_promoter_bp:-2000}" \
   hgt_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" \

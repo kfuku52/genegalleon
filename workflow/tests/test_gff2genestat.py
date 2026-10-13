@@ -580,6 +580,40 @@ def test_extract_by_ids_resolves_exact_parent_chain_via_gene_feature():
     assert out.iloc[0]["gene_id"] == "Arabidopsis_thaliana_gene1"
 
 
+@pytest.mark.parametrize("gene_feature", ["Gene", "gene", "GENE"])
+def test_gwh_direct_gene_accession_preserves_all_cds_segments(gene_feature):
+    identifier = "Lagerstroemia_indica_GWHGCAXI000001"
+    gff = pandas.DataFrame([
+        ["chr1", gene_feature, 1, 368, "+", "ID=Lin_chr1_0001;Accession=GWHGCAXI000001"],
+        ["chr1", "CDS", 1, 66, "+", "ID=Lin_chr1_0001_CDS0;Parent=Lin_chr1_0001;Parent_Accession=GWHTCAXI000001;Protein_Accession=GWHPCAXI000001"],
+        ["chr1", "CDS", 261, 368, "+", "ID=Lin_chr1_0001_CDS1;Parent=Lin_chr1_0001;Parent_Accession=GWHTCAXI000001;Protein_Accession=GWHPCAXI000001"],
+        ["chr1", "CDS", 1, 66, "+", "ID=short_CDS0;Parent=Lin_chr1_0001;Parent_Accession=GWHTCAXI000002;Protein_Accession=GWHPCAXI000002"],
+    ], columns=["sequence", "feature", "start", "end", "strand", "attributes"])
+    selected = extract_by_ids(gff, pandas.Series([identifier]), "CDS", "longest")
+    summary = summarize_gene_features(selected, OUT_COLS)
+    assert selected.gene_id.tolist() == [identifier, identifier]
+    assert selected.selected_transcript.unique().tolist() == ["GWHTCAXI000001"]
+    assert summary.iloc[0].feature_size == 174
+    assert summary.iloc[0].feature_blocks == "1-66;261-368"
+    gene = extract_by_ids(gff, pandas.Series([identifier]), "gene", "longest")
+    assert gene.gene_id.tolist() == [identifier]
+    assert gene.feature.tolist() == [gene_feature]
+
+
+def test_gwh_direct_gene_rejects_ambiguous_transcript_accession():
+    gff = pandas.DataFrame({"feature": ["Gene", "CDS"], "attributes": [
+        "ID=source1;Accession=GWHG1", "ID=part1;Parent=source1;Parent_Accession=tx1,tx2"]})
+    with pytest.raises(ValueError, match="Ambiguous direct-gene CDS transcript accession"):
+        extract_by_ids(gff, pandas.Series(["Species_a_GWHG1"]), "CDS", "longest")
+
+
+def test_case_insensitive_gene_features_preserve_ambiguous_identifier_rejection():
+    gff = pandas.DataFrame({"feature": ["Gene", "CDS"], "attributes": [
+        "ID=source1;Accession=g1", "ID=part1;Parent=source1"]})
+    selected = extract_by_ids(gff, pandas.Series(["Species_a_src1_g1", "Species_a_src2_g1"]), "CDS", "longest")
+    assert selected.empty
+
+
 def test_extract_by_ids_resolves_missing_merged_parent_by_exact_id():
     gff = pandas.DataFrame(
         {

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_owned_runtime_contracts import EXPECTED_SOURCES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROGRAM_SHA_VARS = (
@@ -30,6 +31,15 @@ def declared_context_inputs():
     return subprocess.check_output(
         [sys.executable, str(REPO_ROOT / "container/scripts/list_build_inputs.py")], text=True
     ).splitlines()
+
+
+def test_installed_source_manifest_matches_runtime_revision_contract():
+    installer = (REPO_ROOT / "container/scripts/install_source_artifacts.sh").read_text(encoding="utf-8")
+    declared_sources = re.search(r"^sources=\(([^)]+)\)$", installer, re.MULTILINE)
+    assert declared_sources is not None
+    sources = declared_sources.group(1).split()
+    assert len(sources) == len(set(sources)), "Source manifest must not contain duplicate entries"
+    assert set(sources) == EXPECTED_SOURCES
 
 
 def test_native_mul_reconciliation_replaces_grampa_container_requirements():
@@ -127,7 +137,7 @@ def test_container_build_paths_share_python_compatibility_constraints():
     ):
         assert f"{package}==" in requirements
     assert "pypdf>=6.19.0" in requirements
-    assert "setuptools<83" in requirements
+    assert "setuptools<82" in requirements
 
 
 def test_container_build_paths_refresh_system_security_packages_daily():

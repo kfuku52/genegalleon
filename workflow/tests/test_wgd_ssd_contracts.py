@@ -614,10 +614,15 @@ def test_classification_accepts_explicit_roots_without_reorientation(tmp_path, s
     rows = read_table(args.output / "duplication_origins.tsv")
     assert len(rows) == 1 and rows[0]["classification"] == "SSD-supported"
     annotated = (args.output / "classified_gene_tree.nhx").read_text()
-    if gene_text.startswith("[&R]"):
-        assert annotated.startswith("[&R]")
-    else:
-        assert "nwkit_rooted=yes" in annotated
+    from nwkit.rooting_state import require_rooted
+    from nwkit.util import read_tree
+    # Rooting tokens are off by default; the rooted topology and annotations
+    # must survive the actual writer/reader round trip for both input forms.
+    assert not annotated.startswith("[&R]")
+    tree = read_tree(str(args.output / "classified_gene_tree.nhx"), "auto", True, rooted="auto")
+    require_rooted(tree, "classification round trip")
+    assert [(leaf.name, leaf.dist) for leaf in tree.leaves()] == [("A_a", 1.0), ("A_b", 1.0)]
+    assert tree.props["duplication_origin"] == "SSD-supported"
 
 
 @pytest.mark.parametrize("text", (

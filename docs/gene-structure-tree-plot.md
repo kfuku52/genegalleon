@@ -1,5 +1,10 @@
 # CDS and intron structure in tree plots
 
+The standard tree column places branching-event and focused-HGT legends in an
+external strip above the tree, aligned left. Its actual legend height is measured
+with the PDF's font metrics and added to the page height, preserving leaf-row
+spacing and keeping the legend clear of branches and support labels.
+
 The default gene-family tree plot includes a structure column between the intron
 count and protein domains when GFF-derived block coordinates are available.
 Boxes show CDS in the tip-label color and explicitly annotated UTRs in a
@@ -36,6 +41,23 @@ coordinates for sequence and scaffold analyses but are omitted from the
 ordinary exon/intron drawing, because repeated genomic bases do not define a
 single linear genomic geometry. They are reported as excluded diagnostics
 when intron correspondence is requested.
+
+## Gene cluster membership
+
+The membership column has a graphical legend: colored circles and connecting
+lines mark clusters containing at least two tips from this gene family; pale
+gray circles mark singletons. Clusters are formed separately within each species
+and chromosome/scaffold, splitting when the gap from the rightmost covered
+coordinate to the next gene exceeds the displayed maximum distance in bp.
+Overlapping and nested intervals remain together; a chain can span more than
+the maximum gap. Different clusters within a species use
+different shades of its tip-label color, within bounded lightness ranges so
+large cluster counts do not collapse to repeated white/black symbols. Very pale
+tip colors start from a darker shade to distinguish clusters from singletons.
+A thin pale gray background line joins
+the species' tips across cluster boundaries. Missing taxon, coordinates, or
+scaffold assignments remain blank. These symbols describe family-gene proximity,
+not HGT direction, conserved gene order, or host-scaffold background support.
 
 ## Intron correspondence within the structure column
 
@@ -131,3 +153,79 @@ classify each join as a cis intron, `num_intron` is missing and
 reports `trans_splicing` explicitly rather than treating them as intron-free.
 CDS length checks still apply. Trans-spliced transcripts with explicit UTRs are
 rejected until their UTR order can also be represented unambiguously.
+
+## Shared Pfam filter for focused HGT
+
+The focused HGT PDF's second page compares each focal and displayed neighbor
+gene's saved MMseqs2 LCA classification/host match with its separate Swiss-Prot
+best-hit product and taxonomy. Missing and unresolved classifications remain
+explicit. Overlapping and intron-hosting genes are included in the bounded
+neighborhood. See [context inputs and provenance](host-scaffold-taxonomy.md).
+
+Focused category-1 HGT tables and plots now require at least one donor/recipient
+gene pair sharing an exact query Pfam accession, at least 50% shared-domain
+query coverage on each protein, and a shorter/longer protein length ratio of
+at least 0.5 by default. Both genes must be retained
+descendants linked to the same modeled event and individually satisfy the
+existing class-level scaffold-background thresholds. One qualifying pair
+retains the event; other eligible descendants remain in its context tables.
+Events, genes and independent orthogroups are counted separately.
+
+`hgt_summary_focus_min_shared_pfam_coverage=0.5` sets this inclusive fraction;
+`0` restores any shared query Pfam. For each exact pair, take the union of saved
+query amino-acid intervals for its shared accessions and divide by each query's
+own protein length. Overlaps count once. Coverage is not pairwise alignment
+coverage; separate pairs cannot supply separate sides of a passing decision.
+Event/pair audits retain both lengths, covered amino acids, coverage and a
+traceable best pair. Review flags identify repeat/generic-binding-only matches,
+differing domain sets and proteins shorter than 100 aa. These flags are not
+exclusions or proof of a partial gene model. The enabled protein-length-ratio
+criterion independently excludes pairs below its threshold. Domain-set
+differences alone do not establish incompatible architecture.
+For a passing event, the recorded best pair is selected from its passing pairs;
+a bilateral no-hit exception retains both gene IDs with unmeasured coverage.
+
+The filter reads saved `rpsblast/<OG>_rpsblast.tsv` (also the existing
+`<OG>.rpsblast.tsv` convention), including ZIP-backed families. It does not
+use best-hit `pfam_ids`, borrow neighbor domains, infer domain architecture
+equivalence, or run additional sequence searches. Exact Pfam sharing is an
+additional candidate criterion, not proof of HGT or complete sequence quality.
+
+In `gg_gene_summary`, `hgt_summary_focus_require_shared_pfam=1` enables the
+Pfam requirement by default. Independently,
+`hgt_summary_focus_require_length_ratio=1` requires positive measured lengths
+and `hgt_summary_focus_min_length_ratio=0.5` sets the inclusive shorter/longer
+ratio. Both enabled rules must pass for the same exact pair. Query-protein
+lengths are measured in amino acids; family statistics, best-hit lengths and
+alignment lengths are not substitutes. Missing lengths do not pass an enabled
+length rule. Disable only the length rule to reproduce the preceding Pfam-only
+cohort, or disable both requirements for the earlier scaffold-only cohort.
+`hgt_summary_focus_allow_both_no_pfam=0` excludes pairs without a shared hit.
+Setting this option to `1` additionally allows pairs where **both genes have
+explicit searched-no-hit rows**. A no-hit on only one side, disjoint detected
+domains, and missing search/query records still fail. These correspond to
+`focus_hgt_traits.py --require_shared_pfam 1 --allow_both_no_pfam 0`.
+The bilateral no-hit opt-in is an explicit exception to domain coverage;
+coverage stays unmeasured, and the enabled length rule still applies. Saved
+hits receive no additional E-value cutoff.
+
+The exact-pair step evaluates the shared input cohort once. An optional taxonomy
+step then evaluates the modeled donor and recipient species branches; each
+trait's separate category-1 step selects recipients from that passing set.
+The filtering-flow figure reports each step's event and orthogroup counts.
+Existing Pfam-named audit
+files retain their paths when only the length rule is enabled. The bundle root
+contains `pfam_events.tsv` and `pfam_event_audit.tsv`, `pfam_pair_audit.tsv` and
+`pfam_gene_audit.tsv`, recording all input events before trait selection, exact
+gene pairs, rejection reasons, detected accessions and source hashes.
+Per-trait audit paths are retained as trait-specific views of those shared decisions.
+Selected event tables add `pfam_*` decision/count columns; per-tip tables, native tree
+PDFs and the three aggregate figures use the same filtered event set. This
+filter also runs when plotting is disabled. Missing evidence remains unknown
+and does not qualify through the bilateral no-hit option.
+
+Python callers may supply booleans or explicit `0`/`1` (`false`/`true`) flags;
+ambiguous flag values fail before output generation. Direct native-tree and
+summary exporters also validate event IDs, exact event-gene identities and
+retained lineage eligibility. Summary product labels use only selected events,
+and an explicit native no-hit record cannot be overridden by a stale link hit.

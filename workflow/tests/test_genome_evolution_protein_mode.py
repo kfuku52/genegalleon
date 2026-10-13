@@ -2467,9 +2467,41 @@ def test_genome_evolution_recovers_legacy_mcmctree_before_required_output_check(
     assert before == {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
 
 
+def _tree_semantic_contract(text):
+    from nwkit.rooting_state import ROOTING_PROPERTIES, get_rooting_info
+    from nwkit.util import read_tree
+
+    tree = read_tree(text, "auto", True, quiet=True)
+    # Declaration provenance differs between ON/OFF. Compare its interpreted
+    # state explicitly, and retain every other node attribute and root split.
+    return {
+        "rooting": get_rooting_info(tree).state,
+        "root_clades": sorted(tuple(sorted(child.leaf_names())) for child in tree.children),
+        "nodes": sorted(
+            (tuple(sorted(node.leaf_names())),
+             tuple(sorted((key, str(value)) for key, value in node.props.items()
+                          if key not in ROOTING_PROPERTIES)))
+            for node in tree.traverse()
+        ),
+    }
+
+
+@pytest.mark.parametrize("changed", [
+    "(a:0.1,(b:0.2,c:0.31):0.4);",
+    "(b:0.2,(a:0.1,c:0.3):0.4);",
+    "[&U](a:0.1,(b:0.2,c:0.3):0.4);",
+    "(a:0.1,(b:0.2,d:0.3):0.4);",
+    "(a:0.1,(b:0.2,c:0.3)[&&NHX:support=80]:0.4);",
+])
+def test_conversion_semantic_contract_rejects_branch_root_species_or_support_changes(changed):
+    assert _tree_semantic_contract(changed) != _tree_semantic_contract("(a:0.1,(b:0.2,c:0.3):0.4);")
+
+
 @pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
 @pytest.mark.parametrize("native", [False, True])
 def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(tmp_path, native):
+    from nwkit.convert import convert_tree_text
+
     workspace = tmp_path / "workspace"
     species_cds = workspace / "input" / "species_cds"
     directory = workspace / "output" / "species_tree" / "mcmctree_main"
@@ -2490,7 +2522,15 @@ def test_genome_evolution_recovers_conversion_sidecars_without_rerunning_dating(
     })
     assert result.returncode == 0, result.stdout + result.stderr
     assert (directory / "dated_species_tree.nwk").read_text() == dated
-    assert (directory / "mcmctree_95CI.nhx").read_text() == ("[&R]" if native else "") + "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    actual = (directory / "mcmctree_95CI.nhx").read_text()
+    # Standalone NHX uses the approved default OFF. Native NEXUS input keeps
+    # its original declaration; explicit ON remains an available output API.
+    assert actual == "(a:0.1,(b:0.2,c:0.3):0.4);\n"
+    assert (directory / "FigTree.tre").read_text() == figtree
+    for enabled in (False, True):
+        converted = convert_tree_text(figtree, target="nhx", rooting_token=enabled)
+        assert converted == ("[&R]" if enabled else "") + actual
+        assert _tree_semantic_contract(converted) == _tree_semantic_contract(actual)
     assert (directory / "mcmctree_no95CI.nwk").is_file()
     summary = directory.parent / "species_tree_summary" / "dated_species_tree.nwk"
     assert summary.read_text() == dated

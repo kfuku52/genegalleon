@@ -5,7 +5,7 @@ from pathlib import Path
 
 FIELDS = {"max_intron": int, "max_interval": int, "padding": int,
           "minimum_coverage": float, "minimum_identity": float,
-          "min_support": int, "candidate_limit": int}
+          "min_support": int, "candidate_limit": int, "max_genome_queries": int}
 
 
 def read_profiles(path, species):
@@ -27,7 +27,8 @@ def read_profiles(path, species):
                 if not (row.get(key) or "").strip():
                     continue
                 value = converter(row[key])
-                valid = (0 <= value <= 1 if key.startswith("minimum_") else value >= 0 if key == "padding" else value >= 1)
+                valid = (0 <= value <= 1 if key.startswith("minimum_") else
+                         value >= 0 if key in {"padding", "max_genome_queries"} else value >= 1)
                 if not math.isfinite(value) or not valid:
                     raise ValueError("Invalid species profile: " + name + " / " + key)
                 values[key] = value

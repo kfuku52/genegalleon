@@ -3,6 +3,7 @@
 import gzip
 import json
 import os
+import shutil
 import subprocess
 from importlib import import_module
 from pathlib import Path
@@ -34,7 +35,37 @@ Dependencies and versions:
 """
 
 
-def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette(tmp_path):
+@pytest.mark.parametrize("species_count", [1, 24])
+def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette(tmp_path, monkeypatch, species_count):
+    from matplotlib.figure import Figure
+    original_save = Figure.savefig
+    def save(fig, *args, **kwargs):
+        fig.canvas.draw()
+        assert len(fig.axes) == 2
+        # Each species has exactly three four-category stacks. Check phase
+        # order and percentages, rather than only the presence of SVG colours.
+        patches = fig.axes[0].patches[:12 * species_count]
+        assert len(patches) == 12 * species_count
+        for phase_index, (phase, offset) in enumerate((("pre_rescue", -.26), ("before", 0), ("after", .26))):
+            for i, row in enumerate(rows):
+                stack = patches[(phase_index * species_count + i) * 4:(phase_index * species_count + i + 1) * 4]
+                assert sum(p.get_width() for p in stack) == pytest.approx(100)
+                for patch, category in zip(stack, busco.STATUS, strict=True):
+                    assert patch.get_height() == pytest.approx(.18)
+                    assert patch.get_y() + patch.get_height() / 2 == pytest.approx(i + offset)
+                    assert patch.get_width() == pytest.approx(100 * row[phase + "_result"][category] / row[phase + "_result"]["total"])
+        renderer = fig.canvas.get_renderer()
+        assert all(ax.get_legend() is None for ax in fig.axes)
+        assert len(fig.legends) == 2
+        for legend in fig.legends:
+            bounds = legend.get_window_extent(renderer)
+            assert all(not bounds.overlaps(ax.bbox) for ax in fig.axes)
+            assert all(not bounds.overlaps(ax.xaxis.label.get_window_extent(renderer)) for ax in fig.axes)
+            assert not bounds.overlaps(fig.texts[-1].get_window_extent(renderer))
+            start, end = (0, 0) if "Single-copy" in [t.get_text() for t in legend.get_texts()] else (1, 1)
+            assert fig.axes[start].bbox.x0 - 1 <= bounds.x0 < bounds.x1 <= fig.axes[end].bbox.x1 + 1
+        return original_save(fig, *args, **kwargs)
+    monkeypatch.setattr(Figure, "savefig", save)
     summaries = []
     for i, complete in enumerate((7, 9, 8)):
         path = tmp_path / f"s{i}.txt"
@@ -45,16 +76,34 @@ def test_three_stage_busco_separates_rescue_and_refinement_and_preserves_palette
             "refinement_status": "not_analysed", "reason": "No genome"}
     row = busco.staged_result(pair, summaries[1], summaries[2], summaries[0])
     assert (row["delta_rescue_complete"], row["delta_complete"], row["delta_total_complete"]) == (2, -1, 1)
-    busco.plot_three_stage([row], tmp_path)
+    rows = [dict(row, species=f"Species_{i}", refinement_status="analysed") for i in range(species_count - 1)] + [row]
+    busco.plot_three_stage(rows, tmp_path)
     svg = (tmp_path / "busco_three_stage.svg").read_text()
     assert "Drosophyllum lusitanicum (not analysed)" in svg
     assert all(c.lower() in svg.lower() for c in busco.STATUS_COLOURS)
+    assert "Top to bottom within each species" in svg
     summaries[0]["lineage"] = "insecta_odb12"
     with pytest.raises(ValueError, match="Noncomparable"):
         busco.staged_result(pair, summaries[1], summaries[2], summaries[0])
 
 
-def test_swissprot_diagnostic_plot_records_thresholds_and_excluded_species(tmp_path):
+def test_swissprot_diagnostic_plot_records_thresholds_and_excluded_species(tmp_path, monkeypatch):
+    import copy
+
+    from matplotlib.figure import Figure
+    original_save = Figure.savefig
+    def save(fig, *args, **kwargs):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        assert len(fig.legends) == 2
+        for ax, legend in zip(fig.axes, fig.legends, strict=True):
+            bounds = legend.get_window_extent(renderer)
+            assert ax.bbox.x0 - 1 <= bounds.x0 < bounds.x1 <= ax.bbox.x1 + 1
+            assert all(not bounds.overlaps(a.bbox) for a in fig.axes)
+            assert not bounds.overlaps(ax.xaxis.label.get_window_extent(renderer))
+            assert not bounds.overlaps(fig.texts[-1].get_window_extent(renderer))
+        return original_save(fig, *args, **kwargs)
+    monkeypatch.setattr(Figure, "savefig", save)
     path = tmp_path / "summary.txt"
     path.write_text(summary())
     result = busco.read_result(path)
@@ -62,16 +111,36 @@ def test_swissprot_diagnostic_plot_records_thresholds_and_excluded_species(tmp_p
             busco.paired_result({"species": "Drosophyllum_lusitanicum", "refinement_status": "not_analysed", "reason": ""}, result, result)]
     from rescue_swissprot_evidence import DEFAULTS, NO_SUPPORT_REASONS
     changes = {"swissprot_evidence": {"parameters": DEFAULTS}, "species": {
-        "Species_a": {"rescue_partial_te_groups": dict(zip(("primary_te_support", "partial_te_only", "no_te_support", "not_assessed"),
+        "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 6,
+                      "rescue_swissprot_groups": dict(zip(busco.SWISSPROT_GROUPS, (1, 0, 0, 5, 0), strict=True)),
+                      "rescue_partial_te_groups": dict(zip(("primary_te_support", "partial_te_only", "no_te_support", "not_assessed"),
                                                          (1, 2, 3, 0), strict=True)),
                       "rescue_no_support_reasons": dict.fromkeys(NO_SUPPORT_REASONS, 1)},
-        "Drosophyllum_lusitanicum": {}}}
+        "Drosophyllum_lusitanicum": {"refinement_status": "not_analysed", "prior_rescued_loci": None}}}
     busco.plot_swissprot_diagnostics(rows, tmp_path, changes)
     svg = (tmp_path / "rescue_swissprot_diagnostics.svg").read_text()
     assert "Partial TE flag only" in svg
     assert "without a competing-score filter" in svg
     assert "short-protein thresholds are unchanged" in svg
     assert "Not analysed" in svg
+    for field, replacement in (
+        ("rescue_partial_te_groups", None),
+        ("rescue_no_support_reasons", {}),
+        ("rescue_swissprot_groups", dict(zip(busco.SWISSPROT_GROUPS, (0, 1, 0, 5, 0), strict=True))),
+        ("prior_rescued_loci", 7),
+    ):
+        broken = copy.deepcopy(changes)
+        broken["species"]["Species_a"][field] = replacement
+        with pytest.raises(ValueError, match="Swiss-Prot diagnostic"):
+            busco.plot_swissprot_diagnostics(rows, tmp_path, broken)
+    broken = copy.deepcopy(changes)
+    broken["species"]["Species_a"]["rescue_no_support_reasons"]["no_returned_hits"] = -1
+    with pytest.raises(ValueError, match="invalid Swiss-Prot diagnostic"):
+        busco.plot_swissprot_diagnostics(rows, tmp_path, broken)
+    broken = copy.deepcopy(changes)
+    broken["species"]["Drosophyllum_lusitanicum"]["rescue_no_support_reasons"] = dict.fromkeys(NO_SUPPORT_REASONS, 0)
+    with pytest.raises(ValueError, match="Unanalysed Swiss-Prot diagnostics"):
+        busco.plot_swissprot_diagnostics(rows, tmp_path, broken)
 
 
 def test_all_species_coverage_marks_cds_only_species_unassessed(tmp_path):
@@ -260,6 +329,27 @@ def test_rescue_support_classification_uses_all_support_and_frozen_overlap():
         busco.classify_rescue_support([model("x", [name])], name, {"x"}, plan)
 
 
+def test_rescue_locus_support_pools_retained_paths_without_inflating_path_support():
+    plan = {'nearest_references': {'Target': ['Near']}, 'common_references': ['Balanced'],
+            'donors': {'Target': ['Near', 'Balanced']}}
+    model = {'model_id': 'primary', 'status': 'accepted', 'problems': [],
+             'support': [{'target': 'Target', 'donor': 'Near'}],
+             'alternative_coding_paths': [{'model_id': 'alternative', 'problems': [],
+                                           'support': [{'target': 'Target', 'donor': 'Balanced'}]}]}
+    counts, evidence = busco.classify_rescue_support([model], 'Target', {'gene': {'primary'}}, plan)
+    assert counts == {'nearest_only': 0, 'balanced_only': 0, 'both': 1}
+    assert evidence['gene']['supporting_donors'] == ['Balanced', 'Near']
+    assert evidence['gene']['coding_path_support'] == {'primary': ['Near'], 'alternative': ['Balanced']}
+    assert model['support'] == [{'target': 'Target', 'donor': 'Near'}]
+    model['alternative_coding_paths'][0]['support'][0]['target'] = 'Another'
+    with pytest.raises(ValueError, match='donor/target differs'):
+        busco.classify_rescue_support([model], 'Target', {'gene': {'primary'}}, plan)
+    model['alternative_coding_paths'][0]['support'][0]['target'] = 'Target'
+    model['alternative_coding_paths'][0]['model_id'] = 'primary'
+    with pytest.raises(ValueError, match='duplicate rescued coding path'):
+        busco.classify_rescue_support([model], 'Target', {'gene': {'primary'}}, plan)
+
+
 def test_imported_rescue_support_verifies_receipts_models_and_gff(tmp_path):
     inputs, edges, sources = tiny_inputs(tmp_path)
     gff = Path(sources[0]["gff"])
@@ -401,7 +491,8 @@ def test_srp_regrouping_preserves_legacy_counts_and_requires_complete_evidence()
 
 @pytest.mark.parametrize("grouped", [False, True])
 @pytest.mark.parametrize("swissprot", [False, True])
-def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped, swissprot):
+@pytest.mark.parametrize("staged", [False, True])
+def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(tmp_path, monkeypatch, grouped, swissprot, staged):
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
     original_barh = Axes.barh
@@ -413,13 +504,27 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     monkeypatch.setattr(Axes, "barh", barh)
     def save(fig, *args, **kwargs):
         fig.canvas.draw()
+        if len(fig.axes) == 2:  # Separate three-stage figure has its own geometry check.
+            return original_save(fig, *args, **kwargs)
+        assert len(fig.axes) == (4 if staged else 5)
         renderer = fig.canvas.get_renderer()
         legends = [legend.get_window_extent(renderer) for legend in fig.legends]
+        if staged:
+            assert all(not ax.title.get_window_extent(renderer).overlaps(text.get_window_extent(renderer))
+                       for ax in fig.axes for text in fig.texts[:2])
         labels = [ax.xaxis.label.get_window_extent(renderer) for ax in fig.axes]
         note = fig.texts[-1].get_window_extent(renderer)
         assert all(not a.overlaps(b) for a in legends for b in labels)
         assert all(not a.overlaps(note) for a in legends)
         assert all(not a.overlaps(b) for i, a in enumerate(legends) for b in legends[i + 1:])
+        for legend, bounds in zip(fig.legends, legends, strict=True):
+            title = legend.get_title().get_text().replace("\n", " ")
+            if title == "BUSCO status":
+                left, right = fig.axes[0].bbox.x0, fig.axes[0 if staged else 1].bbox.x1
+            else:
+                ax = fig.axes[-1] if "coding-path" in title or "Coding-path" in title else fig.axes[-2]
+                left, right = ax.bbox.x0, ax.bbox.x1
+            assert left - 1 <= bounds.x0 < bounds.x1 <= right + 1
         return original_save(fig, *args, **kwargs)
     monkeypatch.setattr(Figure, "savefig", save)
     path = tmp_path / "summary.txt"
@@ -427,6 +532,9 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     result = busco.read_result(path)
     rows = [busco.paired_result({"species": n, "refinement_status": status}, result, result)
             for n, status in [("Species_a", "analysed"), ("Drosophyllum_lusitanicum", "not_analysed")]]
+    if staged:
+        rows = [busco.staged_result({k: v for k, v in row.items() if not k.endswith("_result")}, result, result, result)
+                for row in rows]
     changes = {"species": {
         "Species_a": {"refinement_status": "analysed", "prior_rescued_loci": 11, "accepted_repair_paths": 2,
                       "accepted_isoform_paths": 3, "rescue_self_only_loci": 1,
@@ -449,13 +557,17 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         }}
     busco.plot_comparison(rows, tmp_path, changes)
     svg = (tmp_path / "busco_comparison.svg").read_text()
+    from xml.etree import ElementTree
+    displayed = " ".join(" ".join(ElementTree.fromstring(svg).itertext()).split())
     for color in (*busco.RESCUE_SUPPORT_COLOURS, busco.RESCUE_SELF_COLOUR):
         assert color in svg
     for label in busco.SUPPORT_GROUP_LABELS if grouped else (*busco.RESCUE_SUPPORT_LABELS, busco.RESCUE_SELF_LABEL):
-        assert label in svg
-    assert ("at least two support types among S/R/P" if grouped else "donor belonging to both lists") in svg
+        assert label in displayed
+    assert ("at least two support types" if grouped else "donor belonging to both lists") in svg
+    if grouped:
+        assert "S/R/P" not in svg
     assert ">11<" in svg
-    assert ("Target RNA is separate from S" if grouped else "mixed self/interspecies support uses the interspecies group") in svg
+    assert ("Target RNA is separate from self-species homology" if grouped else "mixed self/interspecies support uses the interspecies group") in svg
     self_bar = next(b for b in bars if b[3] == busco.RESCUE_SELF_COLOUR)
     assert self_bar[1:3] == (1, 0 if grouped else 10)
     rescue_bars = [b for b in bars if b[0] is self_bar[0]]
@@ -466,7 +578,7 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [2, 3, 4, 2])
     assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 2, 5, 9])
     for label in busco.SWISSPROT_LABELS if swissprot else busco.REPEAT_GROUP_LABELS:
-        assert label in svg
+        assert label in displayed
     assert ("Upper: donors; lower: Swiss-Prot" if swissprot else "Upper: support; lower: repeats") in svg
     assert ("no support does not exclude TE origin" if swissprot else "no hit does not establish a true gene") in svg
     if swissprot:
@@ -607,6 +719,28 @@ def test_plot_only_verifies_historical_scores_and_rejects_tampering(tmp_path, mo
     assert busco.render_existing(tmp_path)[0]["delta_complete"] == 1
     provenance = json.loads((tmp_path / "rendering_provenance.json").read_text())
     assert not provenance["predictor_executed"] and provenance["verified_full_tables"] == 0
+    relocated = tmp_path / "relocated_report"
+    relocated.mkdir()
+    shutil.copytree(tmp_path / "runs", relocated / "runs")
+    for name in ("busco_comparison.json", "contract.json"):
+        shutil.copyfile(tmp_path / name, relocated / name)
+    original_comparison_hash = busco.digest(relocated / "busco_comparison.json")
+    assert busco.render_existing(relocated) == [row]
+    assert busco.digest(relocated / "busco_comparison.json") == original_comparison_hash
+    assert row["before_result"]["source"] == str(tmp_path / "runs/Species_a/before/summary.txt")
+    original_read = busco.read_result
+    before_source = Path(pair["before"])
+    before_bytes = before_source.read_bytes()
+    def mutate_earlier_input(path):
+        result = original_read(path)
+        if path == tmp_path / "runs/Species_a/after/summary.txt":
+            before_source.write_text(">a\nATGTTTTAA\n")
+        return result
+    with monkeypatch.context() as patch:
+        patch.setattr(busco, "read_result", mutate_earlier_input)
+        with pytest.raises(OSError, match="File changed while hashing"):
+            busco.render_existing(tmp_path)
+    before_source.write_bytes(before_bytes)
     row["delta_complete"] = 99
     busco.atomic_json(tmp_path / "busco_comparison.json", value)
     with pytest.raises(ValueError, match="delta changed"):
@@ -616,6 +750,28 @@ def test_plot_only_verifies_historical_scores_and_rejects_tampering(tmp_path, mo
     Path(pair["after"]).write_text(">a\nATGTTTTAA\n")
     with pytest.raises(ValueError, match="input or score changed"):
         busco.render_existing(tmp_path)
+
+
+@pytest.mark.parametrize("relation", ["same", "report_inside_output", "output_inside_report"])
+@pytest.mark.parametrize("plot_only", [False, True])
+def test_busco_cli_keeps_reports_outside_immutable_publications(tmp_path, monkeypatch, capsys, relation, plot_only):
+    import sys
+    root, report = tmp_path / "refinement", tmp_path / "refinement"
+    if relation == "report_inside_output":
+        report /= "review"
+    elif relation == "output_inside_report":
+        root /= "effective"
+    args = ["gene_model_refinement_busco.py", "--output", str(root), "--report", str(report)]
+    args += ["--plot-only"] if plot_only else ["--lineage", "/lineage", "--download-path", "/db"]
+    monkeypatch.setattr(sys, "argv", args)
+    def fail(*args, **kwargs):
+        raise AssertionError("Unsafe report path must fail before reading or writing a publication")
+    monkeypatch.setattr(busco, "render_existing", fail)
+    monkeypatch.setattr(busco, "input_pairs", fail)
+    with pytest.raises(SystemExit) as exc:
+        busco.main()
+    assert exc.value.code == 2
+    assert "Report must be separate from the immutable refinement tree" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("enabled", [0, 1])

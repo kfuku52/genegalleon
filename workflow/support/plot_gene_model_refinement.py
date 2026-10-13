@@ -56,7 +56,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
             "accepted_repair_paths": sum(r["change_type"] == "model_revision" for r in accepted),
             "accepted_isoform_paths": sum(r["change_type"] == "isoform_addition" for r in accepted),
             "accepted_loci": len({r["gene_id"] for r in accepted}),
-            "changed_representatives": sum(r["status"] == "conserved" for r in selected),
+            "changed_representatives": sum(r["status"] in {"conserved", "sequence_repaired"} for r in selected),
             "predicted_representatives": sum(r["selected_origin"] == "predicted" for r in selected),
             "proposed_paths": len(models) - len(accepted),
             "selection_status": dict(Counter(r["status"] for r in selected)),
@@ -64,7 +64,7 @@ def collect(root, max_loci=200, preferred_species="", cds_dir=None):
             "source_fasta_mapping": metadata["summary"]["fasta_mapping"],
         }
         detail_keys.update((name, r["gene_id"]) for r in accepted)
-        detail_keys.update((name, r["gene_id"]) for r in selected if r["status"] == "conserved")
+        detail_keys.update((name, r["gene_id"]) for r in selected if r["status"] in {"conserved", "sequence_repaired"})
     for r in table(root / "effective" / "effective_exclusions.tsv"):
         stats[r["species"]].setdefault("effective_exclusions", 0)
         stats[r["species"]]["effective_exclusions"] += 1

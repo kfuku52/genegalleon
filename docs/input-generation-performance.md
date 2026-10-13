@@ -7,6 +7,28 @@ already imported checkpoints remain usable. `input_generation_stage_resume.py
 import` without `--task-index` still imports the whole cohort; `check-source`
 checks the donor contract without copying species outputs.
 
+To resume downloaded inputs in a new workspace, export native staging evidence:
+
+```bash
+python workflow/support/input_generation_array_state.py export-staged-manifest \
+  --task-plan /data/source/output/input_generation/tmp/task_plan.json \
+  --staged-donor-plan /data/corrected/output/input_generation/tmp/task_plan.json \
+  --outfile /data/private/download_plan.tsv
+```
+
+The primary plan fixes species and order. Optional prepared donors replace only
+matching species' input rows, preserving their curation and staging evidence.
+The exporter checks prepared metadata in each donor's own namespace. Planning
+reads the sealed metadata instead of rehashing raw inputs; staging still freshly
+hashes every raw input and fences those files through receipt publication.
+Missing, changed or mismatched evidence stops export/reuse. This does not reuse
+incompatible formatter or validation contracts.
+
+Existing BUSCO full/short results keep their verified two-output provenance
+contract. New or rebuilt runs also preserve exact single-copy proteins. A
+three-output contract with a missing protein archive remains invalid; legacy
+table-only results cannot satisfy a guide-tree request requiring those proteins.
+
 Imports use the workflow's shared-filesystem namespace locks: a shared donor
 phase lock excludes prepare/finalize, and a shared donor task lock excludes
 writers of that species. Different species can import concurrently. The target
@@ -33,6 +55,37 @@ For bound local staging, the binding step uses the current invocation's full
 preflight read with file-identity fences. Gzip validation still runs, and
 publication independently rehashes the inputs after intervening work. No
 persistent size/mtime checksum cache certifies mutable research inputs.
+
+Contained native arrays bind declared external sources as individual read-only
+files. Within an explicitly bound project, native staged-cache generations and
+flat raw `input` directories can use one read-only bind per directory. This
+keeps large cohorts below Apptainer's engine-configuration and environment limits
+without exposing additional paths. The writable target workspace, donor lock
+namespaces and conflicting explicit mounts are excluded from grouping.
+
+## Bounded genome reconstruction
+
+FASTA-backed GFF/CDS reconstruction scans the compressed genome in bounded
+fragments and copies only the union of declared CDS/exon intervals to private
+task scratch. It retains reference names and lengths, not chromosome strings or
+a full decompressed genome copy. Gene spans and introns are excluded. The same
+reader serves CDS extraction and normalization within one formatter invocation;
+reference mapping uses its already checked metadata. Scratch is closed on
+success and failure and follows the formatter's scratch directory or `TMPDIR`.
+
+Memory depends on annotation metadata, read buffers and the largest assembled
+CDS, rather than chromosome length. Scratch space depends on selected intervals.
+Sequence-ID aliases, duplicate/ambiguous names, declared lengths and coordinate
+bounds remain checked. Source identity fences and fresh provenance hashes remain
+required; there is no persistent index or checksum cache for mutable inputs.
+The entire gzip still needs to be scanned, and independent hashing/validation
+phases still read their inputs.
+
+Assembly-only GBFF/EMBL inputs are checked for coding features before Biopython
+constructs chromosome sequences. An absent nuclear annotation still fails with
+the existing missing-CDS error; this optimization does not infer genes.
+Genome FASTA formatting uses the same bounded parser while preserving sequence
+case conversion, 80-column output, organelle filtering and compression settings.
 
 ## Timing records
 
@@ -98,6 +151,57 @@ them as disjoint I/O. Fingerprints exclude lock-owner diagnostics. Genome indexe
 already live in task scratch and are reused within a normalizer. Broader index
 sharing should follow measurements of the new indexing phase rather than
 changing independent gene-selection parsers.
+
+For an already prepared native donor, compare ordinary bound-local planning and
+staging with `--compare-staged-reuse` in the staging harness. This includes native
+manifest export in planning and checks equivalent staged inputs/settings; only
+the additive staging-proof metadata differs. On 2026-10-08, the same qualified
+Docker runtime (Linux arm64, Python 3.12.15), a 256 MiB nominal genome, warm
+caches, one warmup and three alternating trials gave these medians:
+
+| Operation | Ordinary bound local | Native staged reuse |
+| --- | ---: | ---: |
+| Manifest planning/export | 0.1165 s | 0.0019 s |
+| Input staging | 0.2358 s | 0.1210 s |
+| SHA-256 bytes, planning + staging | 807,926,147 | 269,316,994 |
+| Process peak RSS | 69.37 MB | 69.33 MB |
+
+The sum of phase medians fell by 65.1%, with two thirds fewer hashed bytes.
+This measures prepared-input reuse on warm local storage, not NAS throughput or
+whole-job elapsed time. Fresh content verification still reads all raw inputs.
+
+For genome reconstruction and formatting, the revision comparison harness uses
+one 256 MiB chromosome, 2,000 split CDS models on both strands, a reference alias
+and mixed-case sequence. It compares output SHA-256 and record counts before
+reporting results:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_genome_extraction.py \
+  --revision 4b5dee6 --mib 256 --genes 2000 --repeats 3
+
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_genome_extraction.py \
+  --revision 4b5dee6 --mib 256 --genes 2000 --repeats 3 --mode format
+```
+
+Run in a checkout with the baseline Git revision available. On 2026-10-09, a
+fresh qualified Docker runtime (Linux arm64, Python 3.12.15), one discarded
+warmup and three alternating measured trials gave these medians:
+
+| Operation | v0.8.210 (`4b5dee6`) | Bounded reader |
+| --- | ---: | ---: |
+| GFF-derived CDS extraction | 4.1268 s | 0.6642 s |
+| Extraction process peak RSS | 841.14 MiB | 62.43 MiB |
+| Genome FASTA formatting and output hashing | 1.7018 s | 1.4651 s |
+| Formatting process peak RSS | 52.11 MiB | 60.75 MiB |
+
+Extraction wall time fell by 83.9% and peak RSS by 92.6%, with identical 2,000
+records and output hashes. Genome formatting fell by 13.9%, with identical
+decompressed output; larger read buffers added about 8.6 MiB to its already
+bounded memory use. These are isolated synthetic measurements, not a
+whole-project completion estimate. Full source GFF syntax checks also passed
+for the affected GWH and Fragaria annotations; a real 2 MiB Paris genome prefix
+with two complete models passed extraction and normalization. A full Paris
+genome regeneration was not run as part of this software verification.
 
 On 2026-10-05, comparison with v0.8.132 in the same qualified Docker runtime
 (Linux arm64, Python 3.12.14) used a 1,024 MiB nominal synthetic genome, warm
@@ -194,6 +298,31 @@ two-query comparison with v0.8.140 read the FASTA six times before and once
 after, with identical full model/coverage/identity results. That bounded check
 uses real FASTA parsing and Bio alignment with fake Java/model validation;
 no full GeMoMa runtime or memory improvement is claimed.
+
+### Unused rescue previews
+
+When verified whole-genome prediction coverage includes every current query,
+including empty results, rescue can omit the intermediate unresolved-model
+preview if GeMoMa is disabled. The preview after a new whole-genome search is
+also needed only by GeMoMa. Raw genomic validation, terminal completion,
+cache/source checks and final placement and coding-path decisions still run.
+Partial or local-only caches retain the initial preview.
+
+A focused 2026-10-09 comparison used the qualified v0.8.210 SIF on Linux x86-64,
+one CPU and one thread per library. Synthetic discovery/cache adapters supplied
+two donor species per locus; real genomic QC, model consolidation and compact
+publication ran. Each method had a discarded warmup, followed by alternating
+fresh processes. Every output file, receipt and biological audit matched.
+
+| Synthetic loci | Measured trials per method | Baseline median | Updated median |
+| --- | ---: | ---: | ---: |
+| 1,200 | 3 | 1.6718 s | 1.5743 s |
+| 3,000 | 6 | 4.3980 s | 4.1870 s |
+
+These observations do not establish a repeatable speedup: elapsed-time ranges
+overlapped and both methods drifted. Process peak RSS, which includes imports
+and fixture preparation, also overlapped. Timing covers the rescue call only;
+it does not measure production cache eligibility or whole-pipeline scaling.
 
 ## Refinement catalog storage and lookups
 

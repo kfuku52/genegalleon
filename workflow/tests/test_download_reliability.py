@@ -25,7 +25,8 @@ def server(reply):
         def log_message(self, *args):
             pass
     http = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    # Avoid the default half-second shutdown poll on every fault-injection case.
+    thread = threading.Thread(target=http.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield f'http://127.0.0.1:{http.server_port}/data'
@@ -487,7 +488,9 @@ def test_archive_member_validation_keeps_existing_destination(tmp_path):
     assert target.read_bytes() == previous
 
 
-@pytest.mark.parametrize('body', [b'\xef\xbb\xbf<!--error--><html>failure</html>', gzip.compress(b'<html>error</html>')])
+# A timestamp in the gzip header otherwise changes xdist's collected node IDs.
+@pytest.mark.parametrize('body', [b'\xef\xbb\xbf<!--error--><html>failure</html>',
+                                gzip.compress(b'<html>error</html>', mtime=0)])
 def test_disguised_html_is_not_data(tmp_path, body):
     def reply(h):
         h.send_response(200)

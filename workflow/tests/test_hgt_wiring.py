@@ -1,5 +1,8 @@
+import shlex
+import subprocess
 from pathlib import Path
 
+import pytest
 from shell_static_helpers import read_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -9,6 +12,87 @@ GENE_SUMMARY_ENTRYPOINT = REPO_ROOT / "workflow" / "gg_gene_summary_entrypoint.s
 GENE_SUMMARY_CORE = REPO_ROOT / "workflow" / "core" / "gg_gene_summary_core.sh"
 GENOME_ANNOTATION_CORE = REPO_ROOT / "workflow" / "core" / "gg_genome_annotation_core.sh"
 HGT_CORE = REPO_ROOT / "workflow" / "core" / "gg_hgt_core.sh"
+
+
+def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
+    entry = GENE_SUMMARY_ENTRYPOINT.read_text()
+    core = read_text(GENE_SUMMARY_CORE)
+    hgt = read_text(HGT_CORE)
+    assert 'run_hgt_trait_focus="${run_hgt_trait_focus:-1}"' in entry
+    assert 'run_hgt_focus="${run_hgt_trait_focus}"' in core
+    assert 'hgt_focus_event_tsv="${hgt_summary_focus_event_tsv:-auto}"' in core
+    assert 'hgt_focus_event_gene_tsv="${hgt_summary_focus_event_gene_tsv:-auto}"' in core
+    assert 'python "${gg_support_dir}/focus_hgt_traits.py"' in hgt
+    assert '--event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}"' in hgt
+    assert '--output "result_bundle=${dir_hgt_trait_focus}"' in hgt
+    assert '--parameter "plots=${run_hgt_plot}"' in hgt
+    assert '--gene_family_root "${dir_orthogroup}"' in hgt
+    assert '--input-gene-family-subdir "gene_tree_stats=${dir_orthogroup}::stat_branch"' in hgt
+    assert '--input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"' in hgt
+    assert '--gff_info_root "${gg_workspace_output_dir}/species_gff_info"' in hgt
+    assert '--filter_audit_tsv "${hgt_focus_filter_audit_tsv}"' in hgt
+    assert 'hgt_summary_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}"' in entry
+    assert 'hgt_focus_context_annotations_tsv="${hgt_summary_focus_context_annotations_tsv:-}"' in core
+    assert '--context_annotations_tsv "${hgt_focus_context_annotations_tsv}"' in hgt
+    assert '--input "context_annotations=${hgt_focus_context_annotations_tsv}"' in hgt
+    assert '--input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"' in hgt
+    assert '--mmseqs2_taxonomy_dir "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"' in hgt
+    assert '--scaffold_taxonomy_dir "${gg_workspace_output_dir}/species_scaffold_taxonomy"' in hgt
+    assert '"context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"' in hgt
+    assert '"context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"' in hgt
+    assert 'hgt_summary_focus_context_annotations_tsv' in (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
+
+
+def test_gene_evolution_records_the_same_arguments_it_renders_for_focused_replay():
+    text = read_text(GENE_EVOLUTION_CORE)
+    assert 'tree_plot_render_args=(' in text
+    assert '--species-parser "${species_label_parser}" -- "${tree_plot_render_args[@]}"' in text
+    assert 'Rscript "${gg_support_dir}/stat_branch2tree_plot.r" "${tree_plot_render_args[@]}"' in text
+    assert '--output "tree_plot_arguments=${file_og_tree_plot_args}"' in text
+
+
+def test_shared_query_pfam_filter_defaults_and_provenance_apply_without_plotting():
+    entry, summary, hgt = [read_text(path) for path in (GENE_SUMMARY_ENTRYPOINT, GENE_SUMMARY_CORE, HGT_CORE)]
+    forwarded = (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
+    for suffix, default in [('require_shared_pfam', '1'), ('allow_both_no_pfam', '0'), ('min_shared_pfam_coverage', '0.5'),
+                            ('require_length_ratio', '1'), ('min_length_ratio', '0.5')]:
+        assert f'hgt_summary_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in entry
+        assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
+        assert f'--{suffix} "${{hgt_focus_{suffix}}}"' in hgt
+        assert f'--parameter "{suffix}=${{hgt_focus_{suffix}}}"' in hgt
+        assert f'hgt_summary_focus_{suffix}' in forwarded
+    pfam = hgt.index('--input-gene-family-subdir "pfam_query_hits=')
+    plotting = hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', pfam)
+    assert pfam < plotting
+    assert '--input "pfam_filter=${gg_support_dir}/focus_hgt_pfam.py"' in hgt
+    assert 'if [[ ${hgt_focus_require_shared_pfam} -eq 1 || ${hgt_focus_require_length_ratio} -eq 1 ]]; then' in hgt
+
+
+def test_species_direction_configuration_and_taxonomy_provenance_apply_without_plotting():
+    entry, summary, hgt = [read_text(path) for path in (GENE_SUMMARY_ENTRYPOINT, GENE_SUMMARY_CORE, HGT_CORE)]
+    forwarded = (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
+    for suffix, default in [('direction_filter', 'any'), ('species_taxonomy', 'auto')]:
+        assert f'hgt_summary_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in entry
+        assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
+        assert f'hgt_summary_focus_{suffix}' in forwarded
+    assert '--direction_filter "${hgt_focus_direction_filter}"' in hgt
+    assert '--species_taxonomy "${hgt_focus_existing_taxonomy}"' in hgt
+    assert '[[ -f "${hgt_focus_existing_taxonomy}" ]] || hgt_focus_existing_taxonomy=""' in hgt
+    assert '--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}"' in hgt
+    assert '--parameter "direction_filter=${hgt_focus_direction_filter}"' in hgt
+    assert 'any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda)' in hgt
+    taxonomy = hgt.index('--input "direction_species_taxonomy=')
+    assert taxonomy < hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', taxonomy)
+
+
+def test_origin_review_sources_invalidate_focus_even_without_plotting():
+    text = read_text(HGT_CORE)
+    origin = text.index('--input "origin_review_helper=${gg_support_dir}/focus_hgt_origin.py"')
+    plot_gate = text.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', origin)
+    for source in ('"origin_species_taxonomy" "${hgt_focus_taxonomy_path}"',
+                   '"context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"',
+                   '"context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"'):
+        assert origin < text.index(source, origin) < plot_gate
 
 
 def test_gene_evolution_core_passes_uniprot_metadata_and_synteny_to_summary():
@@ -61,6 +145,7 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert '--species_trait "${hgt_species_trait_path}"' in core_text
     assert 'species_trait.tsv' in core_text
     assert 'hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}"' in entrypoint_text
+    assert 'hgt_summary_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}"' in entrypoint_text
     assert 'hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}"' in entrypoint_text
     assert "hgt_min_branch_score" not in entrypoint_text
     assert 'bash "${gg_core_dir}/gg_hgt_core.sh"' in summary_core_text
@@ -69,10 +154,12 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert 'hgt_contamination_dir="${hgt_summary_contamination_dir:-}"' in summary_core_text
     assert 'hgt_species_tree="${hgt_summary_species_tree:-auto}"' in summary_core_text
     assert 'hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}"' in summary_core_text
+    assert 'hgt_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}"' in summary_core_text
     assert 'run_hgt_plot="${run_hgt_plot:-1}"' in core_text
     assert 'hgt_tree_width_mm="${hgt_tree_width_mm:-60}"' in core_text
     assert 'hgt_species_tree="${hgt_species_tree:-auto}"' in core_text
     assert 'hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"' in core_text
+    assert 'hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"' in core_text
     assert 'hgt_contamination_dir="${hgt_contamination_dir:-}"' in core_text
     assert 'default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contamination_removal_tsv"' in core_text
     assert 'file_hgt_readme="${dir_hgt}/README.md"' in core_text
@@ -88,6 +175,8 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert '--transfer_edges_tsv "${file_hgt_transfer_edges}"' in core_text
     assert '--species_tree "${hgt_species_tree_path}"' in core_text
     assert '--transfer_tree_max_edges "${hgt_transfer_tree_max_edges}"' in core_text
+    assert core_text.count('--transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"') == 2
+    assert core_text.count('--parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"') == 2
     assert 'python "${gg_support_dir}/write_hgt_output_readme.py"' in core_text
     assert '--output "${file_hgt_readme}"' in core_text
     assert 'python "${gg_support_dir}/annotate_hgt_tree_plot.py"' in core_text
@@ -98,3 +187,40 @@ def test_hgt_core_uses_optional_direct_contamination_input_directory():
     assert '--panel8="categorical,besthit_lca_rank_display,Hit LCA,-"' in core_text
     assert '--panel9="signal_peptide"' in core_text
     assert '--panel10="transmembrane_domain"' in core_text
+
+
+@pytest.mark.parametrize('coverage', ['0', '0.5', '0.95', '1'])
+@pytest.mark.parametrize('suffix', ['min_shared_pfam_coverage', 'min_length_ratio'])
+def test_pair_filter_fraction_scoped_override_is_forwarded_to_runtime(coverage, suffix):
+    support = REPO_ROOT/'workflow/support'
+    script = (
+        f"source {shlex.quote(str(support/'gg_util.sh'))}; "
+        f"source {shlex.quote(str(support/'gg_entrypoint_config_vars.sh'))}; "
+        f"hgt_summary_focus_{suffix}=0.5; "
+        f"GG_GENE_SUMMARY_HGT_SUMMARY_FOCUS_{suffix.upper()}={coverage}; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        f'printf "%s\\n%s\\n%s\\n" "${{hgt_summary_focus_{suffix}}}" '
+        f'"${{SINGULARITYENV_hgt_summary_focus_{suffix}:-}}" '
+        f'"${{APPTAINERENV_hgt_summary_focus_{suffix}:-}}"'
+    )
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == [coverage] * 3
+
+
+@pytest.mark.parametrize('enabled', ['0', '1'])
+def test_length_ratio_switch_scoped_override_is_forwarded_to_runtime(enabled):
+    support = REPO_ROOT/'workflow/support'
+    script = (
+        f"source {shlex.quote(str(support/'gg_util.sh'))}; "
+        f"source {shlex.quote(str(support/'gg_entrypoint_config_vars.sh'))}; "
+        "hgt_summary_focus_require_length_ratio=1; "
+        f"GG_GENE_SUMMARY_HGT_SUMMARY_FOCUS_REQUIRE_LENGTH_RATIO={enabled}; "
+        "gg_apply_registered_env_overrides gg_gene_summary_entrypoint.sh; "
+        "forward_config_vars_to_container_env gg_gene_summary_entrypoint.sh; "
+        'printf "%s\\n%s\\n%s\\n" "${hgt_summary_focus_require_length_ratio}" '
+        '"${SINGULARITYENV_hgt_summary_focus_require_length_ratio:-}" '
+        '"${APPTAINERENV_hgt_summary_focus_require_length_ratio:-}"'
+    )
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+    assert result.stdout.splitlines() == [enabled] * 3

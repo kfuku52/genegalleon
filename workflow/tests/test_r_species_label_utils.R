@@ -4,7 +4,11 @@ stopifnot(
   identical(gg_species_label_from_filename("Oryza_sativa_Indica_Group_repair.cds.fa.gz"),
             "Oryza_sativa_Indica_Group"),
   identical(gg_species_label_from_filename("Oryza_sativa_Japonica_Group_gene1"),
-            "Oryza_sativa_Japonica_Group")
+            "Oryza_sativa_Japonica_Group"),
+  identical(gg_species_label_from_filename("Oryza_sativa_tropical_japonica_subgroup_repair.cds.fa.gz"),
+            "Oryza_sativa_tropical_japonica_subgroup"),
+  identical(gg_species_label_from_text("Oryza_sativa_aus_subgroup_Os01g000010"),
+            "Oryza_sativa_aus_subgroup")
 )
 
 labels <- c(

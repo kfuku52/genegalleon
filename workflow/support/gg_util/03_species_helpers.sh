@@ -560,17 +560,37 @@ gg_fetch_latest_busco_mapping_odb_version() {
   fi
 
   "${py_exec}" - <<'PY'
+import csv
+import datetime
+import io
 import re
 import urllib.request
 
-base_url = "https://busco-data.ezlab.org/v5/data/placement_files/"
-html = urllib.request.urlopen(base_url, timeout=120).read().decode("utf-8", "replace")
+# BUSCO publishes dates/checksums in this manifest. S3 directory markers can
+# return HTTP 200 with an empty body; they are not an archive listing.
+manifest_url = "https://busco-data.ezlab.org/v5/data/file_versions.tsv"
+manifest = urllib.request.urlopen(manifest_url, timeout=120).read().decode("utf-8", "replace")
 pattern = re.compile(
-    r"mapping_taxids-busco_dataset_name\.(archaea|bacteria|eukaryota)_odb(\d+)\.\d{4}-\d{2}-\d{2}\.txt\.tar\.gz"
+    r"mapping_taxids-busco_dataset_name\.(archaea|bacteria|eukaryota)_odb(\d+)\.txt"
 )
 required_domains = {"archaea", "bacteria", "eukaryota"}
 versions = {}
-for domain, version in pattern.findall(html):
+records = {}
+for row in csv.reader(io.StringIO(manifest), delimiter="\t"):
+    if not row or not (match := pattern.fullmatch(row[0])):
+        continue
+    if (len(row) != 5 or row[4] != "placement_files"
+            or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", row[1])
+            or not re.fullmatch(r"[0-9a-f]{32}", row[2])):
+        raise SystemExit(f"Invalid BUSCO placement manifest record: {row[0]}")
+    try:
+        datetime.date.fromisoformat(row[1])
+    except ValueError:
+        raise SystemExit(f"Invalid BUSCO placement manifest date: {row[0]}") from None
+    if row[0] in records and records[row[0]] != row:
+        raise SystemExit(f"Conflicting BUSCO placement manifest record: {row[0]}")
+    records[row[0]] = row
+    domain, version = match.groups()
     versions.setdefault(int(version), set()).add(domain)
 
 eligible = [version for version, domains in versions.items() if required_domains.issubset(domains)]

@@ -222,9 +222,7 @@ if [[ -n "${transcriptome_getfastq_cache_dir}" ]]; then
     echo "Refusing an unsafe transcriptome getfastq cache directory: ${transcriptome_getfastq_cache_dir_host}" >&2
     exit 1
   fi
-  gg_add_container_bind_mount "${transcriptome_getfastq_cache_dir_host}:/gg_transcriptome_getfastq_cache"
   transcriptome_getfastq_cache_dir="/gg_transcriptome_getfastq_cache"
-  echo "Persistent transcriptome getfastq cache bind: ${transcriptome_getfastq_cache_dir_host} -> ${transcriptome_getfastq_cache_dir}"
 fi
 
 # Forward config variables (including external overrides) into container environment.
@@ -234,6 +232,10 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir" \
   "transcriptome_tmp_max_bytes" "transcriptome_tmp_max_files"
 if ! gg_entrypoint_prepare_container_runtime 0; then
   exit 1
+fi
+if [[ -n "${transcriptome_getfastq_cache_dir_host:-}" ]]; then
+  gg_add_container_bind_mount "${transcriptome_getfastq_cache_dir_host}:/gg_transcriptome_getfastq_cache"
+  echo "Persistent transcriptome getfastq cache bind: ${transcriptome_getfastq_cache_dir_host} -> ${transcriptome_getfastq_cache_dir}"
 fi
 gg_entrypoint_activate_container_runtime
 

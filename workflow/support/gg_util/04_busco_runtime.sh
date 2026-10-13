@@ -17,6 +17,9 @@ _download_busco_dataset_mapping_files_locked() {
     GG_BUSCO_MAPPING_STAMP="${stamp_file}" \
     GG_BUSCO_MAPPING_ODB_VERSION="${odb_version}" \
     "${py_exec}" - <<'PY'
+import csv
+import datetime
+import hashlib
 import io
 import os
 import re
@@ -24,7 +27,7 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-base_url = "https://busco-data.ezlab.org/v5/data/placement_files/"
+base_url = "https://busco-data.ezlab.org/v5/data/"
 mapping_dir = Path(os.environ.get("GG_BUSCO_MAPPING_DIR", "").strip())
 stamp_file = Path(os.environ.get("GG_BUSCO_MAPPING_STAMP", "").strip())
 odb_version = os.environ.get("GG_BUSCO_MAPPING_ODB_VERSION", "").strip()
@@ -36,18 +39,35 @@ if not odb_version:
     raise SystemExit("GG_BUSCO_MAPPING_ODB_VERSION is empty.")
 
 mapping_dir.mkdir(parents=True, exist_ok=True)
-html = urllib.request.urlopen(base_url, timeout=120).read().decode("utf-8", "replace")
+manifest = urllib.request.urlopen(base_url + "file_versions.tsv", timeout=120).read().decode("utf-8", "replace")
+pattern = re.compile(r"mapping_taxids-busco_dataset_name\.(archaea|bacteria|eukaryota)_odb(\d+)\.txt")
+records = {}
+for row in csv.reader(io.StringIO(manifest), delimiter="\t"):
+    if not row or not pattern.fullmatch(row[0]):
+        continue
+    if (len(row) != 5 or row[4] != "placement_files"
+            or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", row[1])
+            or not re.fullmatch(r"[0-9a-f]{32}", row[2])):
+        raise SystemExit(f"Invalid BUSCO placement manifest record: {row[0]}")
+    try:
+        datetime.date.fromisoformat(row[1])
+    except ValueError:
+        raise SystemExit(f"Invalid BUSCO placement manifest date: {row[0]}") from None
+    if row[0] in records and records[row[0]] != row:
+        raise SystemExit(f"Conflicting BUSCO placement manifest record: {row[0]}")
+    records[row[0]] = row
 selected = []
 for domain in ("archaea", "bacteria", "eukaryota"):
-    pattern = re.compile(
-        rf'mapping_taxids-busco_dataset_name\.{domain}_odb{re.escape(odb_version)}\.[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}\.txt\.tar\.gz'
-    )
-    matches = sorted(set(pattern.findall(html)))
-    if not matches:
+    basename = f"mapping_taxids-busco_dataset_name.{domain}_odb{odb_version}.txt"
+    row = records.get(basename)
+    if row is None:
         raise SystemExit(f"BUSCO placement mapping for domain/version not found: {domain}, odb{odb_version}")
-    archive_name = matches[-1]
-    archive_url = base_url + archive_name
+    archive_name = basename[:-4] + f".{row[1]}.txt.tar.gz"
+    archive_url = base_url + "placement_files/" + archive_name
     archive_bytes = urllib.request.urlopen(archive_url, timeout=120).read()
+    # Match BUSCO's published archive checksum before exposing mapping data.
+    if hashlib.md5(archive_bytes).hexdigest() != row[2]:
+        raise SystemExit(f"BUSCO placement mapping checksum mismatch: {archive_name}")
     with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
         members = [member for member in tar.getmembers() if member.isfile() and member.name.endswith(".txt")]
         if not members:
@@ -92,7 +112,7 @@ ensure_busco_dataset_mapping_files() {
   ensure_dir "${dir_db}/locks"
   ensure_dir "${mapping_dir}"
 
-  if remote_odb_version=$(gg_fetch_latest_busco_mapping_odb_version 2>/dev/null); then
+  if remote_odb_version=$(gg_fetch_latest_busco_mapping_odb_version); then
     odb_version="${remote_odb_version}"
   else
     odb_version=$(gg_latest_busco_mapping_odb_version_from_dir "${mapping_dir}" || true)

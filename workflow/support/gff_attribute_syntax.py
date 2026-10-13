@@ -1,8 +1,8 @@
 """Conservative attribute syntax repair at formatting, validation at consumption.
 
-Recover numeric continuations in funannotate metadata and the observed AUGUSTUS
-gene Name / mRNA Blast2Go colon separators. Structural attributes are never
-joined. Work on encoded text so existing escapes stay unchanged.
+Recover numeric continuations in funannotate metadata, balanced MAKER mRNA
+Notes, and observed AUGUSTUS metadata separators. Structural attributes are
+never joined. Work on encoded text so existing escapes stay unchanged.
 """
 import gzip
 import hashlib
@@ -10,15 +10,74 @@ import re
 import shlex
 from pathlib import Path
 
-GFF_ATTRIBUTE_SYNTAX_VERSION = 4
+GFF_ATTRIBUTE_SYNTAX_VERSION = 8
 KEY_VALUE = re.compile(r"^[^\s=;]+=")
 NAME_CONTINUATION = re.compile(r"\d+(?:_\d+)?")
 PRODUCT_CONTINUATION = re.compile(r"\d+(?:_\d+)?(?:,\s*variant\s+\d+)?")
 # Chemical linkage lists in publisher descriptions, e.g. endo-1,3;1,4-beta.
 # Restrict repair to this complete lexical pattern, never arbitrary orphan text.
 LINKAGE_CONTINUATION = re.compile(r"\d+,\d+-[A-Za-z][^;=]*")
-NAP_CONTINUATION = re.compile(r"[124] isoform X\d+ \[[A-Za-z][A-Za-z .-]+\]")
-UNIPROT_CONTINUATION = re.compile(r" (?:AltName: Full=[^;=]+|Short=[^;=]+|Flags: (?:Precursor|Fragment)(?: \[[A-Za-z][A-Za-z .-]+\])?)")
+NAP_CONTINUATION = re.compile(r"[1-4](?:-like(?: isoform X\d+|, partial)?| isoform X\d+)? \[[A-Za-z][A-Za-z .-]+\]")
+UNIPROT_CONTINUATION = re.compile(r" (?:AltName: (?:Full|Allergen)=[^;=]+|Includes: RecName: Full=[^;=]+|Short=[^;=]+|Flags: (?:Precursor|Fragment)(?: \[[A-Za-z][A-Za-z .-]+\])?)")
+UNIPROT_METADATA = re.compile(r"^(?:description|Note)=(?:[A-Z0-9_]+ )?RecName: Full=")
+
+
+def _description_brackets(value):
+    stack = []
+    for character in value:
+        if character in "([":
+            stack.append(character)
+        elif character in ")]":
+            if not stack or stack.pop() != {")": "(", "]": "["}[character]:
+                return None
+    return stack
+
+
+def _escape_maker_note_delimiters(text, source, feature):
+    """Preserve literal separators inside complete parenthesized MAKER Notes.
+
+    Only mRNA Note values with balanced parentheses/brackets qualify. A real
+    key=value boundary always ends the attribute; orphan key:value fragments
+    and incomplete descriptions remain errors rather than absorbing identity.
+    """
+    if source.lower() != "maker" or feature.lower() != "mrna":
+        return text
+    fields, output = text.split(";"), []
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if not field.strip().startswith("Note="):
+            output.append(field)
+            continue
+        value = field.split("=", 1)[1]
+        fragments = [value]
+        stack = _description_brackets(value)
+        if not stack and index + 1 < len(fields):
+            # These UniProt names repeat their literal numeric separator in
+            # a parenthesized alias, proving the continuation independently.
+            alias = re.fullmatch(r"([1-4]) \(((?:Nt|Os)NAP1|OsHKT1)", fields[index])
+            if (alias and fields[index + 1].startswith(alias[1] + ")")
+                    and ((value == "Nucleosome assembly protein 1" and alias[2].endswith("NAP1"))
+                         or (value == "Cation transporter HKT1" and alias[2] == "OsHKT1"))):
+                fragments.append(fields[index])
+                index += 1
+                stack = _description_brackets(";".join(fragments))
+        while stack and index < len(fields):
+            continuation = fields[index]
+            if not continuation or KEY_VALUE.match(continuation.strip()):
+                break
+            if "=" in continuation or re.match(r"\s*[\w.-]+\s*:", continuation):
+                raise ValueError("Unrecoverable GFF attribute fragment: " + repr(continuation))
+            fragments.append(continuation)
+            index += 1
+            stack = _description_brackets(";".join(fragments))
+        if len(fragments) > 1:
+            if stack != [] or "=" in value:
+                raise ValueError("Unrecoverable GFF attribute fragment in incomplete MAKER Note")
+            field = field.split("=", 1)[0] + "=" + ";".join(fragments).replace(";", "%3B").replace(",", "%2C")
+        output.append(field)
+    return ";".join(output)
 
 
 def file_sha256(path):
@@ -56,6 +115,7 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
     if not KEY_VALUE.match(text.strip()):
         validate_attributes(text)
         return text
+    text = _escape_maker_note_delimiters(text, source, feature)
     repaired = []
     previous_key = None
     for field in text.split(";"):
@@ -68,19 +128,30 @@ def normalise_attributes(text, source, feature, *, allow_bare=False):
             key, value = field.strip().split(":", 1)
             repaired.append(key + "=" + value.replace("=", "%3D").replace(",", "%2C"))
             previous_key = key
-        elif (previous_key == "description" and repaired[-1].startswith("description=RecName: Full=")
+        elif (previous_key in {"description", "Note"} and UNIPROT_METADATA.match(repaired[-1])
               and UNIPROT_CONTINUATION.fullmatch(field)):
             repaired[-1] += "%3B" + field.replace("=", "%3D").replace(",", "%2C")
+        elif (source == "." and feature.lower() == "misc_feature" and previous_key == "note"
+              and re.fullmatch(r"note=Geneious type: Repeat(?: Region|_Regiion)(?:%3B IRa)?", repaired[-1])
+              and field in {" IRa", " Geneious type: repeat_region"}):
+            # These exact Geneious repeat notes contain literal semicolons.
+            # Keep the description intact; never consume structural fields.
+            repaired[-1] += "%3B" + field
         elif KEY_VALUE.match(field.strip()):
             repaired.append(field)
             previous_key = field.strip().split("=", 1)[0]
+        elif (source.lower() == "evm" and feature.lower() == "gene" and field == "HC"
+              and previous_key == "Accession"
+              and re.fullmatch(r"Accession=GWHG[A-Z]{4}\d+[.]\d+", repaired[-1])):
+            repaired.append("gwh_gene_confidence=HC")
+            previous_key = None
         else:
             pattern = None
-            if (previous_key == "description"
-                    and re.search(r"nucleosome assembly protein 1$", repaired[-1]) and NAP_CONTINUATION.fullmatch(field)):
+            if (previous_key in {"description", "Note"}
+                    and re.search(r"nucleosome (?:assembly|assly) protein 1$", repaired[-1]) and NAP_CONTINUATION.fullmatch(field)):
                 repaired[-1] += "%3B" + field.replace("=", "%3D").replace(",", "%2C")
                 continue
-            if (previous_key == "description" and re.search(r"\d+,\d+$", repaired[-1])
+            if (previous_key in {"description", "Note"} and re.search(r"\d+,\d+$", repaired[-1])
                     and LINKAGE_CONTINUATION.fullmatch(field)):
                 repaired[-1] = repaired[-1].replace(",", "%2C") + "%3B" + field.replace(",", "%2C")
                 previous_key = None
@@ -103,6 +174,9 @@ def normalise_line(line, path, line_number, changes):
     if not line.strip() or line.startswith("#"):
         return line
     parts = line.rstrip("\r\n").split("\t")
+    trailing_empty = len(parts) > 9 and all(value == "" for value in parts[9:])
+    if trailing_empty:
+        parts = parts[:9]
     if len(parts) != 9:
         raise ValueError(f"{path}:{line_number}: Expected nine GFF columns")
     before = parts[8]
@@ -110,14 +184,23 @@ def normalise_line(line, path, line_number, changes):
         parts[8] = normalise_attributes(before, parts[1], parts[2], allow_bare=True)
     except ValueError as error:
         raise ValueError(f"{path}:{line_number}: {error}") from error
-    if parts[8] == before:
+    if parts[8] == before and not trailing_empty:
         return line
-    reason = ("canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"
-              else "escaped_description_linkage_semicolon" if re.search(r"description=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
+    reason = ("canonicalised_gwh_confidence_flag" if "gwh_gene_confidence=HC" in parts[8] and re.search(r"(?:^|;)HC(?:;|$)", before)
+              else "escaped_geneious_repeat_note_semicolon" if "note=Geneious type: Repeat" in before and parts[2].lower() == "misc_feature"
+              else "escaped_NAP_metadata_semicolon" if re.search(r"(?:^|;)Note=[^;]*nucleosome", before) and "%3B" in parts[8]
+              else "escaped_uniprot_Note_semicolon" if re.search(r"(?:^|;)Note=[^;]*RecName: Full=", before)
+              else "canonicalised_augustus_metadata_separator" if parts[1].lower() == "augustus"
+              else "escaped_description_linkage_semicolon" if re.search(r"(?:description|Note)=[^;]*\d+,\d+;\d+,\d+-[A-Za-z]", before)
               else "escaped_description_metadata_semicolon" if "description=" in before and "description=" in parts[8]
+              else "escaped_maker_note_balanced_semicolon" if parts[1].lower() == "maker" and parts[2].lower() == "mrna"
               else "escaped_funannotate_metadata_semicolon")
-    changes.append({"source_line": line_number, "before": before, "after": parts[8], "reason": reason})
-    return "\t".join(parts) + line[len(line.rstrip("\r\n")):]
+    output = "\t".join(parts) + line[len(line.rstrip("\r\n")):]
+    changes.append({"source_line": line_number,
+                    "before": line.rstrip("\r\n") if trailing_empty else before,
+                    "after": output.rstrip("\r\n") if trailing_empty else parts[8],
+                    "reason": "removed_empty_trailing_columns" if trailing_empty else reason})
+    return output
 
 
 def validated_lines(lines, path):

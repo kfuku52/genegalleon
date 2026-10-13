@@ -24,6 +24,7 @@ input_generation_mode="${input_generation_mode:-single}"
 run_gene_model_refinement="${run_gene_model_refinement:-0}"
 gene_model_refinement_dir="${gene_model_refinement_dir:-}"
 gene_model_refinement_policy="${gene_model_refinement_policy:-conserved}"
+gene_model_refinement_isoform_adoption="${gene_model_refinement_isoform_adoption:-rna_required}"
 gene_model_refinement_mode="${gene_model_refinement_mode:-conservative}"
 gene_model_refinement_inputs="${gene_model_refinement_inputs:-}"
 gene_model_refinement_edges="${gene_model_refinement_edges:-}"
@@ -45,6 +46,9 @@ gene_model_rescue_guide_minimum_shared="${gene_model_rescue_guide_minimum_shared
 gene_model_rescue_guide_dir="${gene_model_rescue_guide_dir:-}"
 gene_model_rescue_guide_cache="${gene_model_rescue_guide_cache:-}"
 gene_model_rescue_dir="${gene_model_rescue_dir:-}"
+gene_model_rescue_prediction_cache="${gene_model_rescue_prediction_cache:-}"
+gene_model_rescue_model_storage="${gene_model_rescue_model_storage:-compact}"
+gene_model_rescue_retain_search_inputs="${gene_model_rescue_retain_search_inputs:-0}"
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
 gene_model_rescue_minimum_busco="${gene_model_rescue_minimum_busco:-90}"
@@ -56,6 +60,10 @@ gene_model_species_profiles="${gene_model_species_profiles:-}"
 gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
 [[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
+gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
+gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-2}"
+gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
+gene_model_rescue_terminal_max_unaligned_c_overhang="${gene_model_rescue_terminal_max_unaligned_c_overhang:-2}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
 gene_model_rescue_gemoma_java="${gene_model_rescue_gemoma_java:-java}"
 require_cds="${require_cds:-0}"
@@ -117,7 +125,7 @@ gbif_taxon_map="${gbif_taxon_map:-}"
 gbif_download_metadata="${gbif_download_metadata:-}"
 gene_grouping_mode="${gene_grouping_mode:-rescue_overlap}"
 gff_repair_mode="${gff_repair_mode:-safe}"
-format_contract_version=24
+format_contract_version=29
 
 run_species_taxonomy="${run_species_taxonomy:-1}"
 taxonomy_species_tree="${taxonomy_species_tree:-auto}"
@@ -201,6 +209,7 @@ for binary_flag_name in \
   run_gene_model_rescue \
   run_gene_model_rescue_swissprot \
   gene_model_rescue_genome_fallback \
+  gene_model_rescue_retain_search_inputs \
   run_multispecies_summary \
   run_generate_species_trait \
   strict \
@@ -1539,6 +1548,7 @@ run_species_busco_for_one_file() {
   local busco_input_fasta=""
   local busco_output_dir=""
   local busco_needs_update=0
+  local busco_requires_single_copy=1
   local -a busco_provenance_args=()
 
   seq_file=$(basename "${seq_full}")
@@ -1556,17 +1566,23 @@ run_species_busco_for_one_file() {
   fi
 
   gg_artifact_contract_init busco_provenance_args "input_generation_species_busco" "${species_name}" "${input_generation_provenance_dir}/busco.${species_name}.json"
+  # Retain a verified legacy full/short contract. It cannot provide the exact
+  # BUSCO proteins required by the optional guide-tree stage; new runs do.
+  if [[ ${overwrite} -ne 1 ]]; then
+    busco_requires_single_copy=$(python "${gg_support_dir}/busco_guide_tree.py" output-contract \
+      --manifest "${input_generation_provenance_dir}/busco.${species_name}.json" --species "${species_name}") || return $?
+  fi
   busco_provenance_args+=(
     --input "species_cds=${seq_full}"
     --output "busco_full=${file_sp_busco_full}"
     --output "busco_short=${file_sp_busco_short}"
-    --output "busco_single_copy=${file_sp_busco_proteins}"
     --parameter "busco_lineage_request=${busco_lineage}"
     --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
     --parameter "busco_mode=transcriptome"
     --parameter "evalue=1e-03"
     --parameter "limit=20"
   )
+  [[ ${busco_requires_single_copy} -ne 1 ]] || busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   if [[ ${overwrite} -eq 1 ]]; then
     busco_needs_update=1
   else
@@ -1575,6 +1591,10 @@ run_species_busco_for_one_file() {
   if [[ ${busco_needs_update} -ne 1 || ${run_species_busco} -ne 1 ]]; then
     echo "Skipped BUSCO: ${seq_file}"
     return 0
+  fi
+  # A rebuilt legacy run produces the complete current contract as well.
+  if [[ ${busco_requires_single_copy} -ne 1 ]]; then
+    busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   fi
   remove_busco_outputs_for_species "${species_busco_full_dir}" "${species_name}" "*busco.full.tsv"
   remove_busco_outputs_for_species "${species_busco_short_dir}" "${species_name}" "*busco.short.txt"
@@ -2373,9 +2393,12 @@ run_array_worker_mode() {
     receipt_cmd+=(--file "${species_cds_fx2tab_dir}/${species_prefix}_fx2tab_cds.tsv")
   fi
   if [[ ${run_species_busco} -eq 1 ]]; then
-    receipt_cmd+=(--file "${species_busco_full_dir}/single_copy/${species_prefix}.json.gz"
-      --file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
+    receipt_cmd+=(--file "${species_busco_full_dir}/${species_prefix}.busco.full.tsv"
       --file "${species_busco_short_dir}/${species_prefix}.busco.short.txt")
+    local busco_requires_single_copy
+    busco_requires_single_copy=$(python "${gg_support_dir}/busco_guide_tree.py" output-contract \
+      --manifest "${input_generation_provenance_dir}/busco.${species_prefix}.json" --species "${species_prefix}") || exit $?
+    [[ ${busco_requires_single_copy} -ne 1 ]] || receipt_cmd+=(--file "${species_busco_full_dir}/single_copy/${species_prefix}.json.gz")
   fi
   "${receipt_cmd[@]}"
 }
@@ -2514,11 +2537,17 @@ prepare_gene_model_rescue() {
   }
   rescue_args=(plan "${rescue_args[@]}" --cds-dir "${species_cds_dir}" --gff-dir "${species_gff_dir}"
     --genome-dir "${species_genome_dir}" --busco-dir "${species_busco_short_dir}"
-    --tree "${rescue_tree}" --output "${gene_model_rescue_dir}"
+    --tree "${rescue_tree}" --output "${gene_model_rescue_dir}" --model-storage "${gene_model_rescue_model_storage}"
     --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"
     --minimum-busco "${gene_model_rescue_minimum_busco}" --minimum-coverage "${gene_model_rescue_minimum_coverage}"
     --minimum-identity "${gene_model_rescue_minimum_identity}" --max-interval "${gene_model_rescue_max_interval}"
-    --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}")
+    --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}"
+    --max-genome-queries "${gene_model_rescue_max_genome_queries}"
+    --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
+    --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
+    --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
+  [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
+  [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
   [[ ! -s "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv" ]] || \
     rescue_args+=(--genetic-codes "${gg_workspace_input_dir}/species_genetic_code/species_genetic_code.tsv")
@@ -2585,6 +2614,7 @@ finish_gene_model_rescue() {
 prepare_gene_model_refinement() {
   local -a refinement_args=(plan --output "${gene_model_refinement_dir}"
     --policy "${gene_model_refinement_policy}" --mode "${gene_model_refinement_mode}"
+    --isoform-adoption "${gene_model_refinement_isoform_adoption}"
     --min-margin "${gene_model_refinement_min_margin}" --min-support "${gene_model_refinement_min_support}"
     --candidate-limit "${gene_model_refinement_candidate_limit}" --padding "${gene_model_refinement_padding}"
     --minimum-coverage "${gene_model_rescue_minimum_coverage}" --minimum-identity "${gene_model_rescue_minimum_identity}"

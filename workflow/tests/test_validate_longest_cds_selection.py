@@ -447,3 +447,40 @@ def test_validate_longest_cds_selection_reuses_coge_gff_gene_mapping(tmp_path):
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
     assert "[Gilia_yorkii] Longest CDS validation OK:" in completed.stdout
+
+
+def test_gbff_derived_summary_is_revalidated_from_original_genbank(tmp_path):
+    """Formatter display descriptions are not literal GFF/genome filenames."""
+    gbff = tmp_path / 'Test_species.gbff'
+    gbff.write_text('''LOCUS       chr1                       9 bp    DNA     linear   PLN 01-JAN-2000
+DEFINITION  test.
+ACCESSION   chr1
+VERSION     chr1
+FEATURES             Location/Qualifiers
+     gene            1..9
+                     /locus_tag="gene1"
+     CDS             1..9
+                     /locus_tag="gene1"
+                     /protein_id="gene1.t1"
+ORIGIN
+        1 atgaaattt
+//
+''')
+    cds_dir = tmp_path / 'species_cds'
+    cds_dir.mkdir()
+    output = cds_dir / 'Test_species.fa.gz'
+    write_gzip_text(output, '>Test_species_gene1\nATGAAATTT\n')
+    summary = tmp_path / 'summary.tsv'
+    row = dict(provider='direct', species_key='Test_species', species_prefix='Test_species',
+               cds_input_path=f'{gbff} (derived CDS)', gff_input_path=f'{gbff} (derived GFF)',
+               genome_input_path=f'{gbff} (derived genome)', cds_output_path=str(output),
+               cds_sequences_before=1, cds_sequences_after=1, aggregated_cds_removed=0)
+    write_species_summary(summary, [row])
+    result = run_script('--species-cds-dir', str(cds_dir), '--species-summary', str(summary), '--nthreads', '1')
+    assert result.returncode == 0, result.stdout + result.stderr
+    # A different raw source must still fail, rather than silently reuse the GBFF.
+    row['gff_input_path'] = f'{tmp_path / "other.gbff"} (derived GFF)'
+    write_species_summary(summary, [row])
+    result = run_script('--species-cds-dir', str(cds_dir), '--species-summary', str(summary), '--nthreads', '1')
+    assert result.returncode != 0
+    assert 'does not match the raw GBFF source' in result.stdout + result.stderr

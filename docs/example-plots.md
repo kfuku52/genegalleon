@@ -27,6 +27,11 @@ with a current GeneGalleon runtime and host `pdftoppm`, run:
 bash docs/assets/example-plots/generate_readme_plots.sh
 ```
 
+The ortholog summary bars count original species-overlap D nodes with displayed
+genes in both child subtrees. See [duplication bar interpretation](presence-absence.md#interpret-duplication-bars)
+and [additional ortholog candidates](presence-absence.md#flag-candidates-across-low-confidence-duplication-nodes)
+for the scope and optional score threshold.
+
 In the README AHA plot, thin gray lines connect genes from the same species
 across clusters; colored lines join members of a distance-defined cluster.
 Cluster colors follow the species label hue, with shade variations when a

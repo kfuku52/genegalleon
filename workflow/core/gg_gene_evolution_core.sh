@@ -1902,6 +1902,7 @@ file_og_stat_tree="${dir_output_active}/stat_tree/${og_id}_stat.tree.tsv"
 file_og_alignment_stats_original="${dir_output_active}/alignment_stats_original/${og_id}_alignment_stats.original.tsv"
 file_og_alignment_stats_cleaned="${dir_output_active}/alignment_stats_cleaned/${og_id}_alignment_stats.cleaned.tsv"
 file_og_tree_plot="${dir_output_active}/tree_plot/${og_id}_tree_plot.pdf"
+file_og_tree_plot_args="${dir_output_active}/artifact_provenance/${og_id}.tree_plot.args.json"
 file_og_synteny="${dir_output_active}/synteny/${og_id}_synteny.tsv"
 # Pruned datasets
 file_og_untrimmed_aln_pruned="${dir_output_active}/pruned_untrimmed_alignment/${og_id}_cds.untrimmed.pruned.fa.gz"
@@ -6834,6 +6835,9 @@ tree_plot_provenance_args=(
   --logical-root "${dir_output_active}"
   --workspace-root "${gg_workspace_dir}"
   --output "tree_plot=${file_og_tree_plot}"
+  --output "tree_plot_arguments=${file_og_tree_plot_args}"
+  --input "tree_plot_argument_recorder=${gg_support_dir}/gene_tree_plot_config.py"
+  --parameter "renderer_argument_contract=1"
   --parameter "column_layout=physical-mm-v3-square-expression"
   --parameter "localization_layout=paired-squares-v3-black-labels"
   --parameter "domain_intron_marks=no"
@@ -6863,6 +6867,7 @@ tree_plot_provenance_args=(
   --parameter "query_marker=${treevis_query_marker}"
   --parameter "retrotransposition_delta_intron=${treevis_retrotransposition_delta_intron}"
   --parameter "clade_ortholog=${treevis_clade_ortholog}"
+  --parameter "clade_ortholog_prefix=${treevis_clade_ortholog_prefix}"
   --parameter "event_method=${treevis_event_method}"
   --parameter "pie_chart_value_transformation=${treevis_pie_chart_value_transformation}"
   --parameter "long_branch_display=${treevis_long_branch_display}"
@@ -7033,8 +7038,7 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     tree_plot_panel_args+=("--panel${panel_index}=sequence_similarity,${file_og_trimmed_aln_analysis},${input_sequence_mode},${treevis_sequence_similarity_width_mm},${genetic_code}")
   fi
 
-  if GG_TREE_PLOT_CHECK_GGIMAGE=1 TREEVIS_SPECIES_PARSER="${species_label_parser}" \
-  Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
+  tree_plot_render_args=(
     --stat_branch="${file_og_stat_branch}" \
     --max_delta_intron_present="${treevis_retrotransposition_delta_intron}" \
     --panel_widths_mm="tree:60" \
@@ -7049,7 +7053,13 @@ if [[ ${tree_plot_needs_update} -eq 1 && ${run_tree_plot} -eq 1 ]]; then
     --long_branch_cap_ratio="${treevis_long_branch_cap_ratio}" \
     --long_branch_tail_shrink="${treevis_long_branch_tail_shrink}" \
     --long_branch_max_fraction="${treevis_long_branch_max_fraction}" \
-    --protein_convergence="100,100,yes,3-${csubst_max_arity},${cb_path},${csubst_cutoff_stat}"; then
+    --protein_convergence="100,100,yes,3-${csubst_max_arity},${cb_path},${csubst_cutoff_stat}"
+  )
+  python "${gg_support_dir}/gene_tree_plot_config.py" \
+    --output "${file_og_tree_plot_args}" --family-root "${dir_output_active}" \
+    --species-parser "${species_label_parser}" -- "${tree_plot_render_args[@]}"
+  if GG_TREE_PLOT_CHECK_GGIMAGE=1 TREEVIS_SPECIES_PARSER="${species_label_parser}" \
+  Rscript "${gg_support_dir}/stat_branch2tree_plot.r" "${tree_plot_render_args[@]}"; then
 
     if [[ -e "df_fimo.tsv" ]]; then
       mv_out "df_fimo.tsv" "${file_og_fimo_collapsed}"

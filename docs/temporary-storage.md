@@ -1,19 +1,30 @@
 # Temporary computation storage
 
 `GG_COMMON_TMP_ROOT` selects disposable workflow scratch storage. The default is
-`/tmp` on every site, including NIG, Shirokane and audrey1. No hostname-based
-scratch override is applied. This keeps large intermediate computation off the
-repository workspace and its quota. Set `GG_COMMON_TMP_ROOT=workspace` when a
-run must retain its intermediate files after the compute node is released. With
-workspace storage, paths are below `<repository>/workspace/output`; an explicit
-`gg_workspace_dir` changes that workspace root.
+`auto`: NIG execution nodes use their independent `/data1` filesystem; all other
+environments, including Shirokane and audrey1, use workspace storage. Selection
+happens on the execution host before container launch, and the requested and
+selected values are logged. NIG detection requires an explicit
+`GG_SITE_PROFILE=nig`, or a recognized NIG node name together with the NIG Lustre
+home layout. A hostname beginning with `m` alone is insufficient. NIG `auto`
+fails if `/data1` is unavailable, unwritable, or on the operating-system
+filesystem; it does not silently consume workspace quota or system `/tmp`.
+Set `GG_COMMON_TMP_ROOT=workspace` explicitly when workspace storage is intended.
+
+Workspace computation paths remain below `<repository>/workspace/output`; an
+explicit `gg_workspace_dir` changes that workspace root. Auxiliary tool
+`TMPDIR`, `TMP`, `TEMP` and Python bytecode caches use a private
+`.genegalleon-runtime-<uid>` directory in the selected storage, including
+workspace mode. External task supervisors further isolate tool temporary files
+by run. These auxiliary directories are caches, not scientific checkpoints.
 
 | Value | Location |
 | --- | --- |
-| `/tmp` (default) | Private GeneGalleon directories inside host `/tmp` |
+| `auto` (default) | NIG `/data1`; otherwise workspace |
 | `workspace` | Existing workflow-specific output `tmp` directories |
 | `/scratch/user` | Private GeneGalleon directories inside that existing directory |
 | `env` | Execution host's `TMPDIR`, resolved immediately before container launch |
+| `/tmp` | Explicit opt-in; check its filesystem and capacity first |
 
 For example, in a job script running on the compute node:
 

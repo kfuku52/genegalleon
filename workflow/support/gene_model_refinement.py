@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import time
 from collections import defaultdict
+from itertools import chain
 from pathlib import Path
 from urllib.parse import quote
 
@@ -28,26 +29,50 @@ try:
     import rescue_gene_models as rescue
     from fasta_sequence_store import exclusive_lock, open_text
     from format_species_annotation.common import parse_gff_attributes
-    from gene_model_catalog import build_catalog, indexed_genome, validate_candidate, write_catalog
-    from gene_model_selection import pair_score, select_representatives
+    from gene_model_catalog import (
+        SOURCE_RESCUE_LOCUS_ATTRIBUTES,
+        _formatted_id,
+        build_catalog,
+        indexed_genome,
+        validate_candidate,
+        write_catalog,
+    )
+    from gene_model_selection import _baseline, pair_score, select_representatives
     from gene_model_species_profiles import parameters_for, read_profiles
     from gene_model_store import _connection as store_connection
     from gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
-    from input_generation_array_state import atomic_json, digest, digest_paths
+    from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
+    from refinement_input_snapshot import RefinementInputSnapshot
+    from refinement_receipt_snapshot import ReceiptSnapshot
+    from rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
+    from rescue_prediction_cache import stream_json_array
+    from rescue_prepared_snapshot import PreparedSnapshot
 except ImportError:
     from . import rescue_gene_models as rescue
     from .fasta_sequence_store import exclusive_lock, open_text
     from .format_species_annotation.common import parse_gff_attributes
-    from .gene_model_catalog import build_catalog, indexed_genome, validate_candidate, write_catalog
-    from .gene_model_selection import pair_score, select_representatives
+    from .gene_model_catalog import (
+        SOURCE_RESCUE_LOCUS_ATTRIBUTES,
+        _formatted_id,
+        build_catalog,
+        indexed_genome,
+        validate_candidate,
+        write_catalog,
+    )
+    from .gene_model_selection import _baseline, pair_score, select_representatives
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gene_model_store import _connection as store_connection
     from .gene_model_store import build_store, iter_loci, iter_locus_keys, load_locus, select_from_store
-    from .input_generation_array_state import atomic_json, digest, digest_paths
+    from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
+    from .refinement_input_snapshot import RefinementInputSnapshot
+    from .refinement_receipt_snapshot import ReceiptSnapshot
+    from .rescue_model_store import frozen_model_store_key, iter_revision_models, verify_model_store_key
+    from .rescue_prediction_cache import stream_json_array
+    from .rescue_prepared_snapshot import PreparedSnapshot
 
 SCHEMA = 1
 MAP_FIELDS = ('species', 'gene_id', 'candidate_id', 'source_transcript_id', 'status', 'score', 'margin', 'reason')
-DEFAULTS = dict(policy='conserved', mode='conservative', min_margin=0.10, min_support=2,
+DEFAULTS = dict(policy='conserved', mode='conservative', isoform_adoption='rna_required', min_margin=0.10, min_support=2,
                 minimum_coverage=0.95, minimum_identity=0.50, max_intron=20000,
                 padding=2000, max_interval=200000, candidate_limit=32)
 
@@ -55,6 +80,24 @@ DEFAULTS = dict(policy='conserved', mode='conservative', min_margin=0.10, min_su
 # Invocation-local reuse avoids re-reading every catalog for every target worker.
 # Fresh CLI boundaries and each publication still verify frozen source bytes.
 _INVOCATION_CACHE = None
+_RECEIPT_SNAPSHOT = None
+_INPUT_SNAPSHOT = None
+
+
+@contextlib.contextmanager
+def invocation_context():
+    """Retain immutable dependency proofs only within an explicit command."""
+    global _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
+    previous = _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT
+    snapshot = ReceiptSnapshot(rescue.verified)
+    inputs = RefinementInputSnapshot()
+    _INVOCATION_CACHE, _RECEIPT_SNAPSHOT = {}, snapshot
+    _INPUT_SNAPSHOT = inputs
+    try:
+        with inputs, snapshot:
+            yield
+    finally:
+        _INVOCATION_CACHE, _RECEIPT_SNAPSHOT, _INPUT_SNAPSHOT = previous
 
 
 def invocation_cached(function):
@@ -81,7 +124,11 @@ def implementation():
                     'fasta_sequence_store.py', 'species_labeling.py', 'pairwise_synteny.py',
                     'representative_selection.py', 'rescue_anchor_admission.py', 'gene_model_species_profiles.py',
                     'format_species_writers.py', 'format_species_common.py', 'format_species_constants.py',
-                    'format_species_provider_config.py', 'format_species_taxonomy.py')
+                    'format_species_provider_config.py', 'format_species_taxonomy.py',
+                    'rescue_terminal_completion.py', 'rescue_coding_paths.py',
+                    'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
+                    'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
+                    'refinement_input_snapshot.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -97,6 +144,25 @@ def read_table(path):
     return rescue.table(path)
 
 
+def revision_worker(request, name):
+    """Resolve either frozen revision publication without inventing a JSON path."""
+    stored = request.get('revision_model_stores', {}).get(name)
+    if stored:
+        return Path(stored['directory'])
+    legacy = request.get('revision_candidates', {}).get(name)
+    return Path(legacy).parent if legacy else None
+
+
+def revision_models(request, name):
+    directory = revision_worker(request, name)
+    if directory is None:
+        return iter(())
+    stored = request.get('revision_model_stores', {}).get(name)
+    if stored:
+        return iter_revision_models(directory, frozen_key=stored['key'])
+    return iter_revision_models(directory)
+
+
 def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -109,6 +175,7 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             sources = copy.deepcopy(anchors['request']['sources'])
             files = [str(anchor_root / 'plan.json')]
             augmented = anchor_root / 'augmented'
+            revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if augmented.exists():
                 receipts = {}
                 for name in anchors['species']:
@@ -117,6 +184,18 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                         raise ValueError('Missing-gene rescue incomplete or corrupt: ' + name)
                     receipts[name] = digest(directory / 'receipt.json')
                     files.append(str(directory / 'receipt.json'))
+                    revision_path = directory / 'revision_candidates.json'
+                    if (directory / 'model_store/manifest.json').is_file():
+                        stored_key = frozen_model_store_key(directory, kind='revision')
+                        verify_model_store_key(directory, stored_key)
+                        revision_model_stores[name] = {'directory': str(directory.resolve()), 'key': stored_key}
+                        files.extend(str((directory / member).resolve()) for member in stored_key['files'])
+                    elif revision_path.is_file():
+                        worker_receipt = json.loads((directory / 'receipt.json').read_text())
+                        if worker_receipt['files'].get('revision_candidates.json') != digest(revision_path):
+                            raise ValueError('Rescue revisions are not a verified worker publication: ' + name)
+                        revision_candidates[name] = str(revision_path.resolve())
+                        files.append(str(revision_path.resolve()))
                 augmented_key = {'plan': digest(anchor_root / 'plan.json'), 'rescue_receipts': receipts}
                 if not rescue.verified(augmented, augmented_key):
                     raise ValueError('Augmented rescue inputs incomplete or corrupt')
@@ -129,8 +208,26 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                         path = Path(row[field])
                         source[role] = str((path if path.is_absolute() else augmented / path).resolve())
                 files += [str(augmented / 'receipt.json'), str(augmented / 'inputs.tsv')]
+                donors = set()
+                for name in sorted(set(revision_candidates) | set(revision_model_stores)):
+                    request_revisions = {'revision_candidates': revision_candidates,
+                                         'revision_model_stores': revision_model_stores}
+                    for model in revision_models(request_revisions, name):
+                        donors.update(e['donor'] for e in [model.get('evidence', {}), *model.get('support', [])]
+                                      if e.get('donor'))
+                for donor in sorted(donors):
+                    if donor not in sources:
+                        raise ValueError('Rescue revision donor is absent from the frozen cohort: ' + donor)
+                    directory = anchor_root / 'prepared' / donor
+                    if not rescue.verified(directory, {'plan': digest(anchor_root / 'plan.json'), 'species': donor}):
+                        raise ValueError('Rescue revision donor preparation is incomplete: ' + donor)
+                    metadata = {role: str((directory / filename).resolve()) for role, filename in
+                                (('mapping', 'genes.id_map.tsv'), ('protein', 'genes.pep'), ('receipt', 'receipt.json'))}
+                    revision_donor_maps[donor] = metadata
+                    files.extend(metadata.values())
         else:
             anchor_root = None
+            revision_candidates, revision_model_stores, revision_donor_maps = {}, {}, {}
             if not inputs:
                 raise ValueError('Provide --inputs or --rescue-output')
             sources = {}
@@ -149,9 +246,14 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             files = [str(Path(inputs).resolve())]
         if not sources:
             raise ValueError('No species')
-        params = {**DEFAULTS, **parameters}
+        inherited = {k: v for k, v in anchors['request']['parameters'].items() if k.startswith('terminal_')} if anchor_root else {}
+        params = {**DEFAULTS, **inherited, **parameters}
         if params['policy'] not in {'longest', 'conserved'} or params['mode'] not in {'off', 'audit', 'conservative'}:
             raise ValueError('Unknown selection policy/refinement mode')
+        if params['isoform_adoption'] not in {'rna_required', 'conservation_supported'}:
+            raise ValueError('Unknown isoform adoption policy')
+        if params['isoform_adoption'] == 'conservation_supported' and params['policy'] != 'conserved':
+            raise ValueError('Conservation-supported isoform adoption requires the conserved selection policy')
         if any(not math.isfinite(float(params[k])) or not 0 <= float(params[k]) <= 1
                for k in ('min_margin', 'minimum_coverage', 'minimum_identity')):
             raise ValueError('Invalid probability/margin')
@@ -168,6 +270,9 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
                    'edges': str(Path(edges).resolve()) if edges else None,
                    'rna': str(Path(rna).resolve()) if rna else None, 'species_profiles': profiles,
+                   'revision_candidates': revision_candidates,
+                   'revision_model_stores': revision_model_stores,
+                   'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
         if not edges and not anchor_root:
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
@@ -186,7 +291,14 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
 
 def load(root, names=None):
     root = Path(root)
-    value = json.loads((root / 'plan.json').read_text())
+    try:
+        value = json.loads((root / 'plan.json').read_text())
+    except (OSError, ValueError) as exc:
+        if _INPUT_SNAPSHOT is not None:
+            _INPUT_SNAPSHOT.reject_plan_read(exc)
+        raise
+    if _INPUT_SNAPSHOT is not None:
+        _INPUT_SNAPSHOT.verify_plan(root, value)
     request = value['request']
     if request['schema'] != SCHEMA or request['implementation'] != implementation() or request['dependencies'] != dependency_identities():
         raise ValueError('Refinement implementation changed; use a new output directory')
@@ -194,15 +306,18 @@ def load(root, names=None):
     files = request['files'] if names is None else {p: value for p, value in request['files'].items() if p not in species_paths}
     if names is not None:
         files.update({request['sources'][n][k]: request['files'][request['sources'][n][k]] for n in names for k in ('fasta', 'gff', 'genome')})
-    if digest_paths(files) != files:
-        raise ValueError('Frozen refinement input changed')
+    if _INPUT_SNAPSHOT is None:
+        if digest_paths(files) != files:
+            raise ValueError('Frozen refinement input changed')
+    else:
+        _INPUT_SNAPSHOT.verify_files(files)
     tool = request['miniprot']
     if tool and digest(tool['path']) != tool['sha256']:
         raise ValueError('Frozen predictor changed')
     return value
 
 
-def stage(root, relative, key, builder, names=None):
+def stage(root, relative, key, builder, names=None, prepared_snapshot=None):
     dependencies = key.get('dependencies', {})
     snapshots = {root / 'catalog' / name / 'receipt.json': expected
                  for name, expected in dependencies.get('catalog', {}).items()}
@@ -218,12 +333,32 @@ def stage(root, relative, key, builder, names=None):
                               for name, expected in dependencies.get(field, {}).items()})
     snapshots.update({root / 'predictions' / name / 'receipt.json': expected
                       for name, expected in dependencies.get('predictions', {}).items()})
+    if dependencies.get('rescue_workers'):
+        request = json.loads((root / 'plan.json').read_text())['request']
+        snapshots.update({revision_worker(request, name) / 'receipt.json': expected
+                          for name, expected in dependencies['rescue_workers'].items()})
     snapshots = {str(path): expected for path, expected in snapshots.items()}
+    prepared_receipts = ({str(prepared_snapshot.root / 'prepared' / name / 'receipt.json'): name
+                          for name in dependencies.get('prepared', {})} if prepared_snapshot else {})
+    ordinary = {path: expected for path, expected in snapshots.items() if path not in prepared_receipts}
+    receipt_snapshot = _RECEIPT_SNAPSHOT
 
     def guard():
         load(root, names)
-        rescue.require_same_key(snapshots, digest_paths(snapshots))
+        if receipt_snapshot is None:
+            rescue.require_same_key(ordinary, digest_paths(ordinary))
+        else:
+            receipt_snapshot.verify(ordinary)
+        if prepared_snapshot is not None:
+            try:
+                prepared_snapshot.check_all()
+                for path, name in prepared_receipts.items():
+                    rescue.require_same_key(snapshots[path], prepared_snapshot.receipt_digest(name))
+            except (OSError, ValueError) as exc:
+                raise ValueError('Stage dependency content changed: prepared annotation') from exc
         for path in snapshots:
+            if path in prepared_receipts or receipt_snapshot is not None:
+                continue
             directory = Path(path).parent
             receipt = json.loads(Path(path).read_text())
             if not rescue.verified(directory, receipt['key']):
@@ -242,7 +377,19 @@ def stage(root, relative, key, builder, names=None):
                     'process_lifetime_peak_rss_mib': self_usage.ru_maxrss / rss_factor,
                     'child_lifetime_peak_rss_mib': children.ru_maxrss / rss_factor,
                     'note': 'Builder excludes source/receipt verification; RSS is a lifetime high-water mark, not an isolated stage peak.'})
-    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard)
+    def publication_guard():
+        if _INPUT_SNAPSHOT is not None:
+            load(root, names)
+        if receipt_snapshot is not None:
+            receipt_snapshot.check(ordinary)
+        if prepared_snapshot is not None:
+            try:
+                prepared_snapshot.check_all()
+            except (OSError, ValueError) as exc:
+                raise ValueError('Stage dependency content changed: prepared annotation') from exc
+
+    publication = {'publication_guard': publication_guard} if prepared_snapshot or receipt_snapshot or _INPUT_SNAPSHOT else {}
+    return rescue.stage(root, Path(relative), {'plan': digest(root / 'plan.json'), **key}, measured, guard, **publication)
 
 
 @invocation_cached
@@ -257,6 +404,13 @@ def catalog_species(root, value, name):
                     paths = rna_support(candidate, name, rna)
                     candidate['quality']['rna_supported'] = bool(paths)
                     candidate.setdefault('support', {})['rna_paths'] = paths
+        params = parameters_for(value['request'], name)
+        for gene in catalog['loci']:
+            for candidate in gene['candidates']:
+                if candidate.get('rescue_alternative_coding_path'):
+                    paths = candidate.get('support', {}).get('rna_paths', [])
+                    status = 'accepted' if candidate['quality'].get('valid_orf') else 'proposal'
+                    set_representative_admission({'candidate': candidate, 'rna_paths': paths, 'status': status}, True, params)
         write_catalog(catalog, tmp)
         # The integration contract is independent of catalog writer filenames.
         atomic_json(tmp / 'catalog.json', catalog)
@@ -344,24 +498,30 @@ def infer_flanked_loci(db, species_a, species_b, anchor_pairs, position_index, p
 def correspondence(root, value, cpus=1, comparison_cache=None):
     db = catalog_index(root, value)
     request = value['request']
+    anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
+    if anchor_root and not request['edges']:
+        anchor_plan = rescue.load(anchor_root)
+        with PreparedSnapshot(anchor_root, anchor_plan, rescue) as snapshot:
+            return _correspondence(root, value, db, cpus, comparison_cache, anchor_plan, snapshot)
+    return _correspondence(root, value, db, cpus, comparison_cache)
+
+
+def _correspondence(root, value, db, cpus, comparison_cache, anchor_plan=None, prepared_snapshot=None):
+    request = value['request']
     dependencies = {'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     jobs = []
-    anchor_plan = None
     if anchor_root and not request['edges']:
-        anchor_plan = rescue.load(anchor_root)
         jobs = [j for j in anchor_plan['synteny_jobs'] if j['a'] != j['b']]
         for job in jobs:
-            rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache)
+            rescue.synteny(anchor_root, anchor_plan, job['index'], cpus, comparison_cache,
+                           prepared_snapshot=prepared_snapshot)
         dependencies['anchors'] = {j['id']: digest(anchor_root / 'synteny' / j['id'] / 'receipt.json') for j in jobs}
         dependencies['prepared'] = {}
-        anchor_hash = digest(anchor_root / 'plan.json')
         for name in value['species']:
-            directory = rescue.prepared(anchor_root, anchor_plan, name)
-            if not rescue.verified(directory, {'plan': anchor_hash, 'species': name}):
-                raise ValueError('Prepared annotation incomplete or corrupted: ' + name)
-            dependencies['prepared'][name] = digest(directory / 'receipt.json')
+            prepared_snapshot.prepared(name)
+            dependencies['prepared'][name] = prepared_snapshot.receipt_digest(name)
     def build(tmp):
         edges = []
         valid = defaultdict(set)
@@ -381,6 +541,7 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
         else:
             aliases = {}
             for n in value['species']:
+                prepared_snapshot.check([n])
                 lookup = {}
                 for g in iter_loci(db, n):
                     for token in {g['gene_id'], g['gene_id'].removeprefix(n + '_'),
@@ -404,7 +565,7 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
                 position_index[n] = positions, {seqid: ([g['start'] for g in genes], genes) for seqid, genes in ordered.items()}
             with store_connection(db) as connection:
                 for job in jobs:
-                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job)):
+                    if not rescue.verified(anchor_root / 'synteny' / job['id'], rescue.comparison_key(anchor_root, job, prepared_snapshot)):
                         raise ValueError('Unverified synteny comparison')
                     blocks = json.loads((anchor_root / 'synteny' / job['id'] / 'blocks.json').read_text())
                     for block in blocks:
@@ -435,15 +596,48 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
             if len(neighbors[e['species_a'], e['gene_a'], e['species_b']]) > 1 or len(neighbors[e['species_b'], e['gene_b'], e['species_a']]) > 1:
                 e['ambiguous'] = True
         atomic_json(tmp / 'edges.json', edges)
+        atomic_json(tmp / 'donor_species.json', correspondence_donor_species(edges))
         atomic_json(tmp / 'summary.json', {'edges': len(edges), 'ambiguous': sum(e['ambiguous'] for e in edges)})
-    return stage(root, 'correspondence', {'dependencies': dependencies}, build)
+    return stage(root, 'correspondence', {'dependencies': dependencies}, build,
+                 prepared_snapshot=prepared_snapshot)
+
+
+def correspondence_donor_species(edges):
+    """Project the final nonambiguous edges without changing source guards."""
+    donors = defaultdict(set)
+    for edge in edges:
+        if not edge['ambiguous']:
+            a, b = edge['species_a'], edge['species_b']
+            donors[a].add(b)
+            donors[b].add(a)
+    return {name: sorted(values) for name, values in sorted(donors.items())}
+
+
+def prediction_donor_names(directory, name, species):
+    """Use a verified additive projection; old publications retain edge scan."""
+    path = directory / 'receipt.json'
+    expected = digest(path)
+    if _RECEIPT_SNAPSHOT is not None:
+        present, donors = _RECEIPT_SNAPSHOT.read_json_member(path, expected, 'donor_species.json')
+    else:
+        # Outside an explicit command, keep ordinary full verification and
+        # discard this single-use read fence immediately.
+        with ReceiptSnapshot(rescue.verified) as proof:
+            present, donors = proof.read_json_member(path, expected, 'donor_species.json')
+    if not present:
+        donors = correspondence_donor_species(json.loads((directory / 'edges.json').read_text()))
+    if (not isinstance(donors, dict) or not set(donors) <= set(species)
+            or any(not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                   or values != sorted(set(values)) or not set(values) <= set(species)
+                   for values in donors.values())):
+        raise ValueError('Invalid correspondence donor species projection')
+    return sorted({name, *donors.get(name, [])})
 
 
 @invocation_cached
 def select(root, value, predictions=False):
     db = catalog_index(root, value, predictions)
     directory = correspondence(root, value)
-    edges = json.loads((directory / 'edges.json').read_text())
     params = value['request']['parameters']
     dependencies = {'correspondence': digest(directory / 'receipt.json'),
                     'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
@@ -451,8 +645,14 @@ def select(root, value, predictions=False):
     if predictions:
         dependencies['predictions'] = {n: digest(root / 'predictions' / n / 'receipt.json') for n in value['species']}
     def build(tmp):
+        edges = json.loads((directory / 'edges.json').read_text())
         selection = select_from_store(db, edges, policy=params['policy'], min_margin=params['min_margin'],
                                            min_support=params['min_support'], candidate_limit=params['candidate_limit'])
+        if predictions:
+            repairs = (row for name in value['species']
+                       for row in stream_json_array(root / 'predictions' / name / 'predictions.json')
+                       if row.get('same_coordinate_source_repair'))
+            selection = apply_same_coordinate_repairs(selection, repairs)
         atomic_json(tmp / 'selection.json', selection)
         rescue.write_tsv(tmp / 'representative_map.tsv', MAP_FIELDS,
                          [[r.get(k, '') for k in MAP_FIELDS] for r in selection['selections']])
@@ -505,12 +705,148 @@ def annotation_ownership_spans(gff_path, catalog):
                     or any(token in owners for token in declared)):
                 fallback = attr.get('gene_id') or next(iter(parsed.get('Parent', ())), identifier)
                 owner = owners.get(identifier) or next((owners[p] for p in declared if p in owners), 'annotation:' + fallback)
-                key = f[0], owner
+                # Opposite-strand annotation is not ownership of this coding
+                # path. Unknown strand retains the conservative span gate.
+                strand = f[6] if f[6] in {'+', '-'} else '.'
+                key = f[0], owner, strand
                 start, end = int(f[3]) - 1, int(f[4])
                 previous = spans.get(key, (start, end))
                 spans[key] = min(previous[0], start), max(previous[1], end)
-    return [{'seqid': seqid, 'start': start, 'end': end, 'gene_id': owner}
-            for (seqid, owner), (start, end) in sorted(spans.items())]
+    coding = defaultdict(list)
+    for gene in catalog['loci']:
+        if gene.get('ambiguous_coordinates') or any(c.get('quality', {}).get('structure_problem') for c in gene['candidates']):
+            continue
+        for candidate in gene['candidates']:
+            coding[gene['gene_id'], candidate.get('seqid', gene['seqid']),
+                   candidate.get('strand', gene['strand'])].extend(candidate['blocks'])
+    result = []
+    for (seqid, owner, strand), (start, end) in sorted(spans.items()):
+        row = {'seqid': seqid, 'start': start, 'end': end, 'gene_id': owner, 'strand': strand}
+        # For a reconstructed coding locus, an intron/UTR overlap alone does
+        # not fuse coding models. Noncoding or unbound owners keep full spans.
+        blocks = coding.get((owner, seqid, strand), []) if strand != '.' else []
+        if blocks:
+            row['cds_blocks'] = sorted({tuple(b[:2]) for b in blocks})
+        result.append(row)
+    return result
+
+
+def set_representative_admission(row, valid_original, params):
+    """Set the independent adoption gate without changing prediction evidence."""
+    conservation_adoption = (valid_original and not row['rna_paths']
+                             and params.get('isoform_adoption', 'rna_required') == 'conservation_supported'
+                             and params['policy'] == 'conserved')
+    quality = row['candidate']['quality']
+    quality['representative_eligible'] = row['status'] == 'accepted' and (bool(row['rna_paths']) or not valid_original or conservation_adoption)
+    quality.pop('representative_admission', None)
+    if conservation_adoption:
+        quality['representative_admission'] = 'conservation_supported'
+
+
+def same_coordinate_source_owner(model, gene, genetic_code):
+    """Identify one source-invalid, otherwise complete exact genomic path."""
+    if gene.get('ambiguous_coordinates') or not isinstance(genetic_code, int) or isinstance(genetic_code, bool):
+        return None
+    shape = (model['seqid'], model['strand'], tuple(tuple(b) for b in model['cds']))
+    matches = [c for c in gene['candidates'] if
+               (c.get('seqid', gene['seqid']), c.get('strand', gene['strand']),
+                tuple(tuple(b) for b in c['blocks'])) == shape]
+    if len(matches) != 1:
+        return None
+    original = matches[0]
+    quality = original.get('quality', {})
+    sources = original.get('source_cds', [])
+    if (original.get('origin') != 'original' or not quality.get('sequence_mismatch')
+            or original.get('cds') != model.get('sequence') or len(sources) != 1
+            or not sources[0].get('cds') or sources[0].get('sequence_agreement') is not False
+            or sources[0]['cds'] == original['cds']):
+        return None
+    prohibited = ('partial', 'annotated_partial', 'phase_conflict', 'phase_unknown',
+                  'phase_unresolved', 'internal_stop', 'ambiguous', 'invalid_base',
+                  'incomplete_codon', 'translation_uncertain', 'structure_problem',
+                  'annotated_exception', 'annotated_pseudogene', 'translation_exception',
+                  'sequence_exception', 'frameshift', 'ownership_conflict')
+    if any(quality.get(flag) for flag in prohibited):
+        return None
+    probe = copy.deepcopy(original)
+    probe['quality']['sequence_mismatch'] = False
+    try:
+        fresh = validate_candidate(probe, genetic_code)
+    except (TypeError, ValueError):
+        return None
+    if not fresh.get('valid_orf') or any(fresh.get(flag) for flag in prohibited):
+        return None
+    return original
+
+
+def apply_same_coordinate_repairs(selection, prediction_rows):
+    """Update a newly built selection in place, retaining bounded graph audit."""
+    repairs = defaultdict(list)
+    for row in prediction_rows:
+        proof = row.get('same_coordinate_source_repair')
+        candidate = row.get('candidate', {})
+        if (row.get('status') != 'accepted' or not isinstance(proof, dict)
+                or proof.get('schema') != 1 or not proof.get('baseline_candidate_id')
+                or proof.get('minimum_external_species', 0) < 2
+                or len(set(proof.get('independent_external_species', []))) < proof['minimum_external_species']
+                or not candidate.get('quality', {}).get('valid_orf')
+                or not candidate.get('quality', {}).get('representative_eligible')
+                or hashlib.sha256(candidate.get('cds', '').encode()).hexdigest() != proof.get('genomic_cds_sha256')
+                or candidate.get('source_transcript_id') != proof.get('source_transcript_id')):
+            continue
+        shape = (candidate.get('seqid'), candidate.get('strand'),
+                 tuple(tuple(b) for b in candidate.get('blocks', [])))
+        if hashlib.sha256(json.dumps(shape).encode()).hexdigest() != proof.get('coding_key'):
+            continue
+        probe = copy.deepcopy(candidate)
+        try:
+            fresh = validate_candidate(probe, proof.get('genetic_code'))
+        except (TypeError, ValueError):
+            continue
+        if not fresh.get('valid_orf') or not fresh.get('usable'):
+            continue
+        repairs[proof['species'], row['gene_id']].append(row)
+    applied = {}
+    for decision in selection['selections']:
+        matches = repairs.get((decision['species'], decision['gene_id']), [])
+        if len(matches) != 1:
+            continue
+        row = matches[0]
+        proof = row['same_coordinate_source_repair']
+        if decision['candidate_id'] not in {proof['original_candidate_id'], row['candidate']['candidate_id']}:
+            continue
+        previous = copy.deepcopy(decision)
+        baseline = proof['baseline_candidate_id']
+        applied[decision['species'], decision['gene_id']] = {
+            'species': decision['species'], 'gene_id': decision['gene_id'],
+            'original_candidate_id': decision['candidate_id'],
+            'final_candidate_id': row['candidate']['candidate_id'],
+            'baseline_candidate_id': baseline, 'source_selected_flags': [],
+            'change_count_delta': (int(row['candidate']['candidate_id'] != baseline)
+                                   - int(decision['candidate_id'] != baseline))}
+        decision.update(candidate_id=row['candidate']['candidate_id'], status='sequence_repaired',
+                        reason='trusted_same_coordinate_genome_cds',
+                        source_correspondence_decision=previous,
+                        same_coordinate_source_repair=copy.deepcopy(proof),
+                        orthology='unassigned', expected_copy='unassigned')
+    if not applied:
+        return selection
+    # Retain only original flags for repaired loci, not a second scores table.
+    for score in selection.get('scores', []):
+        audit = applied.get((score['species'], score['gene_id']))
+        if audit is not None:
+            audit['source_selected_flags'].append(
+                {'candidate_id': score['candidate_id'], 'selected': score['selected']})
+            score['selected'] = score['candidate_id'] == audit['final_candidate_id']
+    if isinstance(selection.get('metrics'), dict):
+        selection['source_correspondence_metrics'] = dict(selection['metrics'])
+        selection['metrics'] = dict(selection['metrics'])
+        if 'changed_representatives' in selection['metrics']:
+            selection['metrics']['changed_representatives'] += sum(
+                audit['change_count_delta'] for audit in applied.values())
+        selection['metrics']['same_coordinate_sequence_repairs'] = len(applied)
+    selection['same_coordinate_repair_audit'] = list(applied.values())
+    return selection
 
 
 def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
@@ -533,25 +869,31 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     for g in loci.values():
         blocks = [b for c in g['candidates'] for b in c['blocks']]
         if blocks:
-            spans.append((g['seqid'], min(b[0] for b in blocks), max(b[1] for b in blocks), g['gene_id']))
-    spans.extend((r['seqid'], r['start'], r['end'], r['gene_id']) for r in catalog.get('annotation_spans', []))
+            spans.append((g['seqid'], min(b[0] for b in blocks), max(b[1] for b in blocks), g['gene_id'],
+                          '.' if g.get('ambiguous_coordinates') else g.get('strand', '.'), (() if g.get('ambiguous_coordinates') or
+                            any(c.get('quality', {}).get('structure_problem') for c in g['candidates'])
+                            else tuple(tuple(b[:2]) for b in blocks))))
+    spans.extend((r['seqid'], r['start'], r['end'], r['gene_id'], r.get('strand', '.'),
+                  tuple(tuple(b[:2]) for b in r.get('cds_blocks', ()))) for r in catalog.get('annotation_spans', []))
     tracks = defaultdict(list)
-    for seqid, start, end, owner in spans:
-        tracks[seqid].append((start, end, owner))
+    for seqid, start, end, owner, strand, blocks in spans:
+        tracks[seqid].append((start, end, owner, strand, blocks))
     indexes = {}
     for seqid, rows in tracks.items():
         ordered = sorted(rows)
         maxima, maximum = [], 0
-        for _, end, _ in ordered:
+        for _, end, *_ in ordered:
             maximum = max(maximum, end)
             maxima.append(maximum)
         indexes[seqid] = [r[0] for r in ordered], ordered, maxima
-    def foreign_overlap(seqid, start, end, owner):
+    def foreign_overlap(seqid, strand, blocks, start, end, owner):
         starts, rows, maxima = indexes.get(seqid, ([], [], []))
         i = bisect.bisect_left(starts, end) - 1
         while i >= 0 and maxima[i] > start:
-            a, b, gene = rows[i]
-            if gene != owner and a < end and b > start:
+            a, b, gene, other_strand, other_blocks = rows[i]
+            if (gene != owner and a < end and b > start and (other_strand not in {'+', '-'} or other_strand == strand)
+                    and (other_strand not in {'+', '-'} or not other_blocks
+                         or any(x[0] < y[1] and x[1] > y[0] for x in blocks for y in other_blocks))):
                 return True
             i -= 1
         return False
@@ -571,12 +913,15 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
             problems.append('ambiguous_locus_coordinates')
         if m['gene_id'] in ambiguous_loci:
             problems.append('ambiguous_locus_correspondence')
+        source_repair_owner = same_coordinate_source_owner(m, g, catalog.get('genetic_code'))
+        if m.get('same_coordinate_repair_only') and source_repair_owner is None:
+            problems.append('same_coordinate_repair_required')
         if shape in original_shapes:
             problems.append('existing_coding_path')
         if candidate['strand'] != g['strand'] or candidate['seqid'] != g['seqid']:
             problems.append('wrong_locus_strand')
         start, end = min((b[0] for b in m['cds']), default=0), max((b[1] for b in m['cds']), default=0)
-        if foreign_overlap(m['seqid'], start, end, m['gene_id']):
+        if foreign_overlap(m['seqid'], m['strand'], m['cds'], start, end, m['gene_id']):
             problems.append('overlap_other_locus')
         owners = [c for c in g['candidates'] if any(a[0] < b[1] and a[1] > b[0] for a in c['blocks'] for b in m['cds'])]
         if not owners:
@@ -604,22 +949,61 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         supported = not alignment_problems and 'untrusted_donor_correspondence' not in problems
         if supported:
             row['donors'].append(m['donor_species'])
+        if (supported and source_repair_owner is not None
+                and m['donor_species'] != catalog['species']
+                and 'minimum_identity' in params and 'minimum_coverage' in params
+                and m['identity'] >= params['minimum_identity']
+                and m['coverage'] >= params['minimum_coverage']):
+            row.setdefault('_same_coordinate_repair_support', []).append(
+                (m['donor_species'], source_repair_owner))
         row['alignments'].append({'donor_species': m['donor_species'], 'donor_candidate': m['donor_candidate'],
                                   'identity': m['identity'], 'coverage': m['coverage'],
-                                  'supports_path': supported, 'problems': alignment_problems})
+                                  'supports_path': supported, 'problems': alignment_problems,
+                                  **({'terminal_completion': m['terminal_completion']} if m.get('terminal_completion') else {}),
+                                  **({'rescue_revision_model_id': m['rescue_revision_model_id']} if m.get('rescue_revision_model_id') else {})})
         row['problems'] = sorted(set(row['problems'] + problems))
     result = []
     for row in grouped.values():
         row['donors'] = sorted(set(row['donors']))
+        repair_support = row.pop('_same_coordinate_repair_support', [])
+        external = sorted({donor for donor, _ in repair_support})
+        minimum = max(2, params['min_support'])
+        exceptional = {'existing_coding_path', 'unresolved_source_sequence_mismatch',
+                       'ambiguous_locus_correspondence'}
+        if (len(external) >= minimum and params['mode'] == 'conservative'
+                and params['policy'] == 'conserved'
+                and not set(row['problems']) - exceptional
+                and row['candidate']['quality'].get('valid_orf')
+                and row['candidate']['cds'] == repair_support[0][1]['cds']):
+            owner = repair_support[0][1]
+            row['same_coordinate_source_repair'] = {
+                'schema': 1, 'species': catalog['species'],
+                'original_candidate_id': owner['candidate_id'],
+                'baseline_candidate_id': _baseline(loci[row['gene_id']], loci[row['gene_id']]['candidates'])['candidate_id'],
+                'source_transcript_id': owner['source_transcript_id'],
+                'supplied_cds_sha256': hashlib.sha256(owner['source_cds'][0]['cds'].encode()).hexdigest(),
+                'genomic_cds_sha256': hashlib.sha256(row['candidate']['cds'].encode()).hexdigest(),
+                'assembly_sha256': genome_hash, 'minimum_external_species': minimum,
+                'genetic_code': catalog['genetic_code'], 'coding_key': row['candidate']['coding_key'],
+                'independent_external_species': external,
+                'correspondence_ambiguity': 'ambiguous_locus_correspondence' in row['problems'],
+                'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+            row['candidate']['source_transcript_id'] = owner['source_transcript_id']
+            row['candidate']['same_coordinate_source_repair'] = copy.deepcopy(row['same_coordinate_source_repair'])
+            row['candidate']['gene_id'] = row['gene_id']
+            row['problems'] = sorted(set(row['problems']) - exceptional)
         if not row['donors']:
             row['problems'].append('no_qualifying_donor_alignment')
         if len(row['donors']) < params['min_support'] and not row['rna_paths']:
             row['problems'].append('insufficient_independent_support')
         row['status'] = 'accepted' if not row['problems'] and params['mode'] == 'conservative' else 'proposal'
         valid_original = any(c['quality'].get('valid_orf') for c in loci[row['gene_id']]['candidates'])
-        row['change_type'] = 'isoform_addition' if valid_original else 'model_revision'
-        row['evidence_class'] = 'rna_path_supported' if row['rna_paths'] else 'homology_only_predicted'
-        row['candidate']['quality']['representative_eligible'] = row['status'] == 'accepted' and (bool(row['rna_paths']) or not valid_original)
+        row['change_type'] = ('model_revision' if row.get('same_coordinate_source_repair')
+                              else 'isoform_addition' if valid_original else 'model_revision')
+        row['evidence_class'] = ('homology_supported_same_coordinate_repair'
+                                 if row.get('same_coordinate_source_repair') else
+                                 'rna_path_supported' if row['rna_paths'] else 'homology_only_predicted')
+        set_representative_admission(row, valid_original, params)
         row['candidate']['support'] = {'donors': row['donors'], 'rna_paths': row['rna_paths'], 'class': row['evidence_class']}
         result.append(row)
     active = []
@@ -631,7 +1015,8 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         start, end = min(b[0] for b in c['blocks']), max(b[1] for b in c['blocks'])
         active = [(s, e, other) for s, e, other in active if other['candidate']['seqid'] == c['seqid'] and e > start]
         for _, _, other in active:
-            if other['gene_id'] != row['gene_id']:
+            if (other['gene_id'] != row['gene_id'] and other['candidate']['strand'] == c['strand']
+                    and any(a[0] < b[1] and a[1] > b[0] for a in c['blocks'] for b in other['candidate']['blocks'])):
                 for conflicting in (row, other):
                     conflicting['status'] = 'proposal'
                     if 'competing_predictions_overlap' not in conflicting['problems']:
@@ -641,23 +1026,131 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
     return sorted(result, key=lambda r: (r['gene_id'], r['candidate']['candidate_id']))
 
 
+def rescue_revision_donor_resolver(request, connection):
+    """Resolve a frozen rescue protein query to its exact catalog locus/path."""
+    lookups, proteins, resolved = {}, {}, {}
+    def resolve(donor, query):
+        key = donor, query
+        if key in resolved:
+            return resolved[key]
+        metadata = request.get('revision_donor_maps', {}).get(donor)
+        if not metadata:
+            return None
+        if donor not in lookups:
+            lookups[donor] = {row['jcvi_id']: row for row in read_table(metadata['mapping']) if row['status'] == 'selected'}
+            proteins[donor] = {identifier: sequence for identifier, _, sequence in rescue.fasta_records(Path(metadata['protein']))}
+        row = lookups[donor].get(query)
+        reference = proteins[donor].get(query)
+        found = {}
+        if row and reference:
+            for token in {row.get('locus_id', ''), row.get('original_id', '')} - {''}:
+                try:
+                    locus = load_locus(connection, donor, _formatted_id(donor, token))
+                except KeyError:
+                    continue
+                found[locus['gene_id']] = locus
+        result = None
+        if len(found) == 1:
+            locus = next(iter(found.values()))
+            agreeing = [c for c in locus['candidates'] if c['quality'].get('usable') and c.get('protein') == reference]
+            bound = [c for c in agreeing if row['original_id'] in c.get('source_fasta_ids', [])]
+            agreeing = bound or agreeing
+            baseline = locus.get('source_baseline_candidate_id') or locus.get('source_baseline_coding_candidate_id')
+            selected = next((c for c in agreeing if c['candidate_id'] == baseline), None)
+            if selected is None and agreeing and len({c['coding_key'] for c in agreeing}) == 1:
+                selected = min(agreeing, key=lambda c: c['candidate_id'])
+            if selected is not None and not locus.get('ambiguous_coordinates'):
+                result = locus['gene_id'], selected['candidate_id']
+        resolved[key] = result
+        return result
+    return resolve
+
+
+def import_rescue_revisions(models, catalog, edges, params, genome, resolve_donor):
+    """Nominate existing loci without converting missing-gene support to trust.
+
+    Only the original ownership-routing decision is removed. The current
+    genome, protected annotations, correspondence, donor-specific alignment
+    metrics and ordinary refinement acceptance/adoption gates still apply.
+    """
+    owners = defaultdict(set)
+    for gene in catalog['loci']:
+        for token in {gene['gene_id'], gene.get('source_gene_id', ''), gene.get('gene_token', ''),
+                      *(c.get('source_gene_id', '') for c in gene['candidates']),
+                      *(c.get('gene_token', '') for c in gene['candidates'])} - {''}:
+            owners[token].add(gene['gene_id'])
+    trusted = defaultdict(set)
+    for edge in edges:
+        if edge.get('ambiguous'):
+            continue
+        for side, other in (('a', 'b'), ('b', 'a')):
+            if edge['species_' + side] == catalog['species']:
+                trusted[edge['gene_' + side], edge['species_' + other]].add(edge['gene_' + other])
+    validated, proposals = [], []
+    for raw in models:
+        nomination = {'model_id': raw.get('model_id', ''), 'status': 'rescue_revision_nomination',
+                      'revision_owner_ids': raw.get('revision_owner_ids', [])}
+        declared = raw.get('revision_owner_ids', [])
+        mapped = set().union(*(owners.get(token, set()) for token in declared)) if declared else set()
+        if len(declared) != 1 or len(mapped) != 1:
+            proposals.append({**nomination, 'reason': 'ambiguous_or_absent_rescue_revision_owner'})
+            continue
+        gene_id = next(iter(mapped))
+        original_problems = set(raw.get('problems', [])) - {'overlap_existing_annotation', 'low_coverage', 'low_identity'}
+        evidence_rows = [(raw.get('evidence', {}), raw)]
+        primary = raw.get('evidence', {})
+        for evidence in raw.get('support', []):
+            if (evidence.get('donor'), evidence.get('query')) == (primary.get('donor'), primary.get('query')):
+                continue
+            metrics = evidence.get('alignment', evidence)
+            if not all(key in metrics for key in ('coverage', 'identity', 'problems')):
+                proposals.append({**nomination, 'gene_id': gene_id, 'donor': evidence.get('donor'),
+                                  'reason': 'rescue_support_without_alignment_metrics'})
+                continue
+            evidence_rows.append((evidence, metrics))
+        for evidence, metrics in evidence_rows:
+            donor, query = evidence.get('donor'), evidence.get('query')
+            correspondence = resolve_donor(donor, query) if donor and query else None
+            if correspondence is None or correspondence[0] not in trusted[gene_id, donor]:
+                proposals.append({**nomination, 'gene_id': gene_id, 'donor': donor, 'query': query,
+                                  'reason': 'untrusted_rescue_donor_query_correspondence'})
+                continue
+            model = copy.deepcopy(raw)
+            model.update(gene_id=gene_id, donor_species=donor, donor_candidate=correspondence[1],
+                         coverage=metrics['coverage'], identity=metrics['identity'])
+            # Reconstruct from this genome even when the rescue publication
+            # already recorded successful QC. Do not accept supplied DNA.
+            checked = rescue.validate_model(model, genome, catalog.get('genetic_code', 1), params)
+            preserved = original_problems | (set(metrics.get('problems', [])) - {'overlap_existing_annotation'})
+            if raw.get('sequence') != checked['sequence']:
+                preserved.add('imported_rescue_sequence_mismatch')
+            checked['problems'] = sorted(set(checked['problems']) | preserved)
+            checked['rescue_revision_model_id'] = raw.get('model_id', '')
+            validated.append(checked)
+    return validated, proposals
+
+
 @invocation_cached
 def predict_species(root, value, name, cpus=1):
     initial = select(root, value)
     cat_dir = catalog_species(root, value, name)
     db = catalog_index(root, value)
-    catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
-    catalog['loci'] = list(iter_loci(db, name))
     corr = correspondence(root, value)
-    edges = json.loads((corr / 'edges.json').read_text())
+    donor_names = prediction_donor_names(corr, name, value['species'])
     params, source = parameters_for(value['request'], name), value['request']['sources'][name]
     dependencies = {'initial': digest(initial / 'receipt.json'), 'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'correspondence': digest(corr / 'receipt.json'),
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
+    revision_directory = revision_worker(value['request'], name)
+    if revision_directory is not None:
+        dependencies['rescue_workers'] = {name: digest(revision_directory / 'receipt.json')}
     def build(tmp):
         if params['mode'] == 'off':
             atomic_json(tmp / 'predictions.json', [])
             return
+        catalog = json.loads((cat_dir / 'catalog_metadata.json').read_text())
+        catalog['loci'] = list(iter_loci(db, name))
+        edges = json.loads((corr / 'edges.json').read_text())
         catalog['annotation_spans'] = annotation_ownership_spans(source['gff'], catalog)
         loci = {(name, g['gene_id']): g for g in catalog['loci']}
         decisions = {(r['species'], r['gene_id']): r for r in json.loads((initial / 'selection.json').read_text())['selections']}
@@ -673,7 +1166,15 @@ def predict_species(root, value, name, cpus=1):
                 donor = edge['species_' + donor_side]
                 target = loci[name, target_gene]
                 donor_locus = load_locus(connection, donor, edge['gene_' + donor_side])
-                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or decisions[name, target_gene]['status'] == 'ambiguous_correspondence' or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
+                target_decision = decisions[name, target_gene]
+                target_baseline = next(c for c in target['candidates']
+                                       if c['candidate_id'] == target_decision['candidate_id'])
+                repair_only = (target_decision['status'] == 'ambiguous_correspondence'
+                               and same_coordinate_source_owner(
+                                   {'seqid': target['seqid'], 'strand': target['strand'],
+                                    'cds': target_baseline['blocks'], 'sequence': target_baseline['cds']},
+                                   target, catalog.get('genetic_code')) is not None)
+                if target.get('ambiguous_coordinates') or donor_locus.get('ambiguous_coordinates') or (target_decision['status'] == 'ambiguous_correspondence' and not repair_only) or decisions[donor, donor_locus['gene_id']]['status'] == 'ambiguous_correspondence':
                     proposals.append({'gene_id': target_gene, 'status': 'ambiguous_locus_ownership', 'donor': donor})
                     continue
                 if not any(c['cds'] and c['blocks'] for c in target['candidates']):
@@ -710,13 +1211,22 @@ def predict_species(root, value, name, cpus=1):
                         continue
                     qid = 'q' + hashlib.sha256((target_gene + donor + candidate['candidate_id']).encode()).hexdigest()[:24]
                     region = {'id': qid, 'seqid': target['seqid'], 'start': start, 'end': end, 'query': candidate['candidate_id'],
-                              'donor': donor, 'gene_id': target_gene, 'donor_candidate': candidate['candidate_id']}
+                              'donor': donor, 'gene_id': target_gene, 'donor_candidate': candidate['candidate_id'],
+                              **({'same_coordinate_repair_only': True} if repair_only else {})}
                     queries[qid] = region
                     proteins.setdefault(donor, {})[candidate['candidate_id']] = candidate['protein']
                     windows[target['seqid'], start, end].append(region)
         validated = []
         # Nominate first: a species with no search windows needs no genome I/O.
-        with indexed_genome(source['genome']) if windows else contextlib.nullcontext() as genome:
+        revisions = iter(revision_models(value['request'], name))
+        first_revision = next(revisions, None)
+        revision_count = 0
+        def counted_revisions():
+            nonlocal revision_count
+            for model in chain((first_revision,), revisions):
+                revision_count += 1
+                yield model
+        with indexed_genome(source['genome']) if windows or first_revision is not None else contextlib.nullcontext() as genome:
             bounded = {}
             for (seqid, start, end), regions in windows.items():
                 end = min(end, genome.get_reference_length(seqid))
@@ -729,22 +1239,46 @@ def predict_species(root, value, name, cpus=1):
                 model['seqid'] = region['seqid']
                 model['cds'] = [[a + region['start'], b + region['start'], p] for a, b, p in model['cds']]
                 model.update(gene_id=region['gene_id'], donor_species=region['donor'], donor_candidate=region['donor_candidate'])
+                if region.get('same_coordinate_repair_only'):
+                    model['same_coordinate_repair_only'] = True
                 checked = rescue.validate_model(model, genome, source['genetic_code'], params)
+                checked = rescue.complete_terminals(checked, genome, source['genetic_code'], params,
+                    proteins[region['donor']][region['donor_candidate']], rescue.validate_model)
                 if any(a < region['start'] or b > region['end'] for a, b, _ in checked['cds']):
                     checked['problems'].append('outside_search_window')
                 validated.append(checked)
+            if first_revision is not None:
+                with store_connection(db) as connection:
+                    imported, import_proposals = import_rescue_revisions(
+                        counted_revisions(), catalog, edges, params, genome,
+                        rescue_revision_donor_resolver(value['request'], connection))
+                validated.extend(imported)
+                proposals.extend(import_proposals)
         rna = read_table(value['request']['rna']) if value['request']['rna'] else []
         predictions = classify_predictions(validated, catalog, edges, params, rna, value['request']['files'][source['genome']])
         atomic_json(tmp / 'predictions.json', predictions)
         atomic_json(tmp / 'nominations.json', {'queries': list(queries.values()), 'proposals': proposals})
         atomic_json(tmp / 'summary.json', {'queries': len(queries), 'windows': len(windows), 'alignments': len(validated),
+                                         'rescue_revision_models': revision_count,
                                          'accepted': sum(r['status'] == 'accepted' for r in predictions),
                                          'proposals': sum(r['status'] != 'accepted' for r in predictions) + len(proposals)})
-    donor_names = {name}
-    for edge in edges:
-        if not edge['ambiguous'] and name in {edge['species_a'], edge['species_b']}:
-            donor_names.update((edge['species_a'], edge['species_b']))
-    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, sorted(donor_names))
+    return stage(root, Path('predictions') / name, {'dependencies': dependencies}, build, donor_names)
+
+
+def source_rescue_locus_provenance(gene):
+    """Preserve historical locus evidence without borrowing old path support."""
+    fields = {key for _, key in SOURCE_RESCUE_LOCUS_ATTRIBUTES}
+    result = {}
+    records = [gene.get('source_rescue_locus_provenance', {})]
+    for candidate in gene.get('candidates', ()):
+        records.extend((candidate.get('source_rescue_locus_provenance', {}), candidate.get('rescue_path_selection', {})))
+    for record in records:
+        for key in fields & record.keys():
+            value = str(record[key])
+            if key in result and result[key] != value:
+                raise ValueError('Conflicting historical rescue locus provenance: ' + gene['gene_id'])
+            result[key] = value
+    return result
 
 
 def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
@@ -757,15 +1291,25 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
     seqid, strand = candidate.get('seqid', gene['seqid']), candidate.get('strand', gene['strand'])
     def row(kind, a, b, phase, attributes):
         return f'{seqid}\tGeneGalleon\t{kind}\t{a + 1}\t{b}\t.\t{strand}\t{phase}\t{attributes}\n'
-    lines = [row('gene', start, end, '.', 'ID=' + gid), row('mRNA', start, end, '.', f'ID={tid};Parent={gid};gene_id={token}')]
+    history = source_rescue_locus_provenance(gene)
+    historical_attributes = ''.join(f';{attribute}={attr(history[key])}' for attribute, key in SOURCE_RESCUE_LOCUS_ATTRIBUTES
+                                    if key in history)
+    path_attributes = ''
+    donors = candidate.get('support', {}).get('donors')
+    if donors is not None:
+        if not isinstance(donors, list) or any(not isinstance(donor, str) or not donor for donor in donors):
+            raise ValueError('Invalid current coding-path donor support: ' + candidate['candidate_id'])
+        path_attributes = ';path_independent_donor_species_count=' + str(len(set(donors) - {name}))
+    lines = [row('gene', start, end, '.', 'ID=' + gid + historical_attributes),
+             row('mRNA', start, end, '.', f'ID={tid};Parent={gid};gene_id={token}' + path_attributes)]
     for i, (a, b, phase) in enumerate(blocks, 1):
         lines += [row('exon', a, b, '.', f'ID={tid}.exon{i};Parent={tid}'),
                   row('CDS', a, b, phase, f'ID={tid}.cds{i};Parent={tid};gene_id={token}')]
     return ''.join(lines)
 
 
-def selected_gff_rows(original, transcript_ids, *, retain_all=False):
-    """Canonicalize source relationships, retaining selected or all features."""
+def _gff_source_graph(original):
+    """Parse source relationships once without retaining derived view edits."""
     records, parents, implicit = [], {}, {}
     for line in original.splitlines(keepends=True):
         if line.strip() == '##FASTA':
@@ -817,6 +1361,12 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
                 fields[8] = fields[8].rstrip(';') + ';' + ';'.join(additions)
                 line = '\t'.join(fields) + '\n'
         records.append((line, fields, attributes, parent_ids))
+    return records, parents, implicit
+
+
+def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False):
+    """Render a selected or complete view without mutating the parsed graph."""
+    records, parents, implicit = source_graph
     if retain_all:
         transcript_ids = set(transcript_ids) | set(implicit)
     ancestors, pending = set(), list(transcript_ids)
@@ -874,11 +1424,17 @@ def selected_gff_rows(original, transcript_ids, *, retain_all=False):
                 retained = [parent for parent in parent_ids if parent in (structural_parents if structural else descendants)]
                 if not retained:
                     continue
+                fields = fields[:]
                 parts = fields[8].split(';')
                 fields[8] = ';'.join('Parent=' + ','.join(quote(parent, safe='._-:') for parent in retained) if part.startswith('Parent=') else part for part in parts)
                 line = '\t'.join(fields) + '\n'
             lines.append(line)
     return ''.join(lines)
+
+
+def selected_gff_rows(original, transcript_ids, *, retain_all=False):
+    """Canonicalize source relationships, retaining selected or all features."""
+    return _selected_gff_source_rows(_gff_source_graph(original), transcript_ids, retain_all=retain_all)
 
 
 def extend_gene_bounds(original, bounds):
@@ -1091,20 +1647,24 @@ def analysis_gff_rows(selected_gff_text, analysis_candidates):
 def finalize(root, value):
     final = select(root, value, predictions=True)
     db = catalog_index(root, value, predictions=True)
-    selections = json.loads((final / 'selection.json').read_text())['selections']
     dependencies = {'selection': digest(final / 'receipt.json'),
                     'catalog': {n: digest(root / 'catalog' / n / 'receipt.json') for n in value['species']},
                     'index': {db.parent.name: digest(db.parent / 'receipt.json')}}
     def build(tmp):
+        selections = json.loads((final / 'selection.json').read_text())['selections']
+        selected_by_species = defaultdict(list)
+        for selected_row in selections:
+            selected_by_species[selected_row['species']].append(selected_row)
         for role in ('species_cds', 'species_protein', 'species_gff', 'species_genome', 'analysis_cds', 'analysis_gff', 'full_annotation', 'source_annotation', 'source_cds', 'all_candidates'):
             (tmp / role).mkdir()
         shutil.copyfile(final / 'representative_map.tsv', tmp / 'representative_map.tsv')
+        representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
         for name in value['species']:
             catalog = json.loads((root / 'catalog' / name / 'catalog_metadata.json').read_text())
             catalog['loci'] = iter_loci(db, name)
             source = value['request']['sources'][name]
-            selected = {r['gene_id']: r for r in selections if r['species'] == name}
+            selected = {r['gene_id']: r for r in selected_by_species[name]}
             paths = {'cds': tmp / 'species_cds' / (name + '.fa'), 'protein': tmp / 'species_protein' / (name + '.fa'),
                      'gff': tmp / 'species_gff' / (name + '.gff3'), 'genome': tmp / 'species_genome' / (name + '.fa'),
                      'analysis_cds': tmp / 'analysis_cds' / (name + '.fa'), 'analysis_gff': tmp / 'analysis_gff' / (name + '.gff3')}
@@ -1123,7 +1683,7 @@ def finalize(root, value):
                 shutil.copyfile(source['gff'], source_annotation)
             original = source_annotation.read_bytes().decode('utf-8')
             directive = re.search(r'^##FASTA(?:\r?\n|$)', original, flags=re.MULTILINE)
-            before_fasta, sep, embedded = (original[:directive.start()], '##FASTA', original[directive.start() + len('##FASTA'):]) if directive else (original, '', '')
+            sep, embedded = ('##FASTA', original[directive.start() + len('##FASTA'):]) if directive else ('', '')
             additions, predicted_rows, original_transcripts, expanded_bounds, analysis_candidates = [], [], set(), {}, []
             with paths['cds'].open('w') as cds, paths['protein'].open('w') as pep, paths['gff'].open('w') as gff, \
                     paths['analysis_cds'].open('w') as analysis_cds, \
@@ -1154,13 +1714,13 @@ def finalize(root, value):
                     translation_audit.append((name, gene['gene_id'], candidate['candidate_id'], 'included' if admitted else 'excluded', json.dumps(candidate['quality'], sort_keys=True)))
                     if not exportable:
                         pass
-                    elif candidate['origin'] == 'original':
+                    elif candidate['origin'] == 'original' or candidate.get('rescue_alternative_coding_path') or candidate.get('same_coordinate_source_repair'):
                         original_transcripts.add(candidate['source_transcript_id'])
                     else:
                         predicted_rows.append(candidate_gff(gene, candidate, name))
                     for c in candidates.values():
                         all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
-                        if c['origin'] == 'predicted':
+                        if c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
                             # Preserve the original gene and attach only new transcript/CDS rows.
                             lines = candidate_gff(gene, c, name, gene_id=c['source_gene_id'],
                                                   gene_token=c.get('gene_token', gene.get('gene_token', gene['gene_id']))).splitlines(keepends=True)[1:]
@@ -1169,14 +1729,17 @@ def finalize(root, value):
                             expanded_bounds[c['source_gene_id']] = min(old[0], start), max(old[1], end)
                             additions.extend(lines)
                     changes.append({**chosen, 'selected_origin': candidate['origin']})
-                gff.write(selected_gff_rows(original, original_transcripts) + ''.join(predicted_rows))
+                source_graph = _gff_source_graph(original)
+                gff.write(_selected_gff_source_rows(source_graph, original_transcripts) + ''.join(predicted_rows))
             paths['analysis_gff'].write_text(analysis_gff_rows(paths['gff'].read_text(), analysis_candidates))
-            derived_original, bound_changes = extend_gene_bounds(selected_gff_rows(before_fasta, set(), retain_all=True), expanded_bounds)
+            derived_original, bound_changes = extend_gene_bounds(_selected_gff_source_rows(source_graph, set(), retain_all=True), expanded_bounds)
             gene_bounds_audit.extend(dict(species=name, **row) for row in bound_changes)
             full_path.write_text(derived_original.rstrip() + '\n' + ''.join(additions) + (sep + embedded if sep else ''))
+            del source_graph
+            map_hashes = representative_map_proof.read([tmp / 'representative_map.tsv'])
             row = {'species': name, **{k: str((root / 'effective' / p.relative_to(tmp)).resolve()) for k, p in paths.items()},
                    'representative_map': str((root / 'effective' / 'representative_map.tsv').resolve()),
-                   'genetic_code': source['genetic_code'], 'representative_map_sha256': digest(tmp / 'representative_map.tsv')}
+                   'genetic_code': source['genetic_code'], 'representative_map_sha256': map_hashes[str(tmp / 'representative_map.tsv')]}
             for k, path in paths.items():
                 row[k + '_sha256'] = digest(path)
             rows.append(row)
@@ -1189,8 +1752,10 @@ def finalize(root, value):
         rescue.write_tsv(tmp / 'inputs.tsv', fields, [[r[k] for k in fields] for r in rows])
         atomic_json(tmp / 'changes.json', changes)
         atomic_json(tmp / 'summary.json', {'species': len(rows), 'loci': len(selections),
-                                         'changed_representatives': sum(r['status'] == 'conserved' for r in selections),
+                                         'changed_representatives': sum(r['status'] in {'conserved', 'sequence_repaired'} for r in selections),
+                                         'same_coordinate_sequence_repairs': sum(r['status'] == 'sequence_repaired' for r in selections),
                                          'predicted_selected': sum(r['selected_origin'] == 'predicted' for r in changes)})
+        representative_map_proof.check()
     return stage(root, 'effective', {'dependencies': dependencies}, build)
 
 
@@ -1314,7 +1879,16 @@ def inspect_stages(root, value):
                               'index': initial_index}
     expected['selection_initial'] = {'dependencies': selection_dependencies}
     prediction_dependencies = {'initial': receipt_hash(Path('selection_initial')), **selection_dependencies}
-    expected.update({str(Path('predictions') / name): {'dependencies': prediction_dependencies} for name in value['species']})
+    for name in value['species']:
+        dependencies = dict(prediction_dependencies)
+        revision_directory = revision_worker(request, name)
+        if revision_directory is not None:
+            try:
+                worker_hash = digest(revision_directory / 'receipt.json')
+            except OSError:
+                worker_hash = None
+            dependencies['rescue_workers'] = {name: worker_hash}
+        expected[str(Path('predictions') / name)] = {'dependencies': dependencies}
     expected['catalog_index_final'] = {'dependencies': {'catalog': catalogs, 'predictions': predictions}}
     expected['selection_final'] = {'dependencies': {**selection_dependencies, 'predictions': predictions, 'index': final_index}}
     expected['effective'] = {'dependencies': {'selection': receipt_hash(Path('selection_final')), 'catalog': catalogs,
@@ -1347,9 +1921,7 @@ def parser():
     return p
 
 
-def main():
-    global _INVOCATION_CACHE
-    _INVOCATION_CACHE = {}
+def _main():
     args = parser().parse_args()
     if args.command == 'verify-inputs':
         result = verify_inputs(args.inputs, args.field)
@@ -1389,6 +1961,11 @@ def main():
             raise ValueError('Corrupt refinement stage or missing publication: ' + ', '.join(invalid))
         print(json.dumps(result, sort_keys=True))
     load(root)
+
+
+def main():
+    with invocation_context():
+        _main()
 
 
 if __name__ == '__main__':

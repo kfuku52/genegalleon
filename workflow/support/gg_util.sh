@@ -16,6 +16,8 @@ if [[ -n "${gg_util_dir}" && -s "${gg_util_dir}/gg_shared_lock.sh" ]]; then
   # shellcheck disable=SC1090
   source "${gg_util_dir}/gg_shared_lock.sh"
 fi
+# shellcheck disable=SC1090
+source "${gg_util_dir}/gg_tmp_storage.sh"
 for gg_util_module in \
   01_runtime_config.sh \
   02_container_scheduler.sh \

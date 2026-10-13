@@ -13,6 +13,28 @@ import plot_hgt_summary as plotter  # noqa: E402
 SCRIPT_PATH = SUPPORT_DIR / "plot_hgt_summary.py"
 
 
+def test_cli_transfer_event_table_selects_tree_input_without_changing_overview(tmp_path, monkeypatch):
+    branch = tmp_path / "branches.tsv"
+    gene = tmp_path / "genes.tsv"
+    event = tmp_path / "events.tsv"
+    pandas.DataFrame([dict(orthogroup="OG1", branch_id=3, generax_transfer="Y@A@B")]).to_csv(branch, sep="\t", index=False)
+    pandas.DataFrame(columns=["orthogroup", "gene_id"]).to_csv(gene, sep="\t", index=False)
+    pandas.DataFrame([dict(event_id="OG1:3:2", orthogroup="OG1", generax_transfer="Y@C@B")]).to_csv(event, sep="\t", index=False)
+    captured = {}
+    monkeypatch.setattr(plotter, "plot_overview", lambda df, path: captured.update(overview=df))
+    monkeypatch.setattr(plotter, "plot_taxonomy_flow", lambda **kwargs: None)
+    monkeypatch.setattr(plotter, "plot_transfer_tree", lambda **kwargs: captured.update(tree=kwargs["branch_df"]))
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT_PATH), "--branch_tsv", str(branch), "--gene_tsv", str(gene),
+                         "--transfer_event_tsv", str(event), "--overview_pdf", str(tmp_path / "overview.pdf"),
+                         "--taxonomy_flow_pdf", str(tmp_path / "flow.pdf"), "--transfer_tree_pdf", str(tmp_path / "tree.pdf")])
+    plotter.main()
+    assert captured["overview"].iloc[0].generax_transfer == "Y@A@B"
+    assert captured["tree"].iloc[0].generax_transfer == "Y@C@B"
+    pandas.concat([pandas.read_csv(event, sep="\t")] * 2).to_csv(event, sep="\t", index=False)
+    with pytest.raises(ValueError, match="duplicate transfer event_id"):
+        plotter.main()
+
+
 def test_transfer_tree_preserves_numeric_internal_branch_labels(tmp_path):
     path = tmp_path / "tree.nwk"
     path.write_text("((A:1,B:1)42:1,C:2)99;")
@@ -62,9 +84,51 @@ def test_self_transfer_has_visible_loop_and_one_arrow(tmp_path, monkeypatch):
     edges = tmp_path / "edges.tsv"
     plotter.plot_transfer_tree(pandas.DataFrame({"generax_transfer": ["Y@A@A"]}),
                               str(tmp_path / "plot.pdf"), str(path), str(edges))
-    assert [item["arrowstyle"] for item in captured] == ["-", "-|>"]
+    assert [item["arrowstyle"] for item in captured] == ["-|>"]
     assert all(numpy.ptp(item["path"].vertices[:, 0]) > 0 for item in captured)
     assert pandas.read_csv(edges, sep="\t").iloc[0].hgt_event_count == 1
+
+
+@pytest.mark.parametrize("alpha", [plotter.DEFAULT_TRANSFER_ARROW_ALPHA, 0, 0.3, 1])
+def test_full_directional_arrows_have_constant_width_and_configurable_alpha(tmp_path, monkeypatch, alpha):
+    import numpy
+    from matplotlib.patches import FancyArrowPatch
+
+    captured = []
+    original = FancyArrowPatch.__init__
+
+    def record(self, *args, **kwargs):
+        if "path" in kwargs:
+            captured.append(kwargs)
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(FancyArrowPatch, "__init__", record)
+    tree_path = tmp_path / "tree.nwk"
+    tree_path.write_text("(A:1,B:1,C:1)root;")
+    frame = pandas.DataFrame({"generax_transfer": ["Y@A@B"] * 8 + ["Y@B@A"]})
+    edge_path = tmp_path / "edges.tsv"
+    plotter.plot_transfer_tree(frame, str(tmp_path / "plot.pdf"), str(tree_path), str(edge_path),
+                              max_edges=1, arrow_alpha=alpha)
+    # Exactly one full path and one linewidth per direction, including a rare reverse direction.
+    assert len(captured) == 2
+    assert {item["linewidth"] for item in captured} == {5.0, 0.625}
+    assert all(item["alpha"] == alpha and item["arrowstyle"] == "-|>" for item in captured)
+    forward, reverse = (item["path"].vertices for item in captured)
+    numpy.testing.assert_allclose(forward[0], reverse[-1])
+    numpy.testing.assert_allclose(forward[-1], reverse[0])
+    assert not numpy.allclose(forward[1], reverse[1])  # Opposite curves preserve separate counts.
+    saved = pandas.read_csv(edge_path, sep="\t")
+    assert sorted(saved.hgt_event_count) == [1, 8]
+    assert saved.displayed.eq(1).all()
+
+
+@pytest.mark.parametrize("alpha", [-0.01, 1.01, float("nan"), float("inf")])
+def test_invalid_arrow_alpha_does_not_write_outputs(tmp_path, alpha):
+    out = tmp_path / "plot.pdf"
+    edges = tmp_path / "edges.tsv"
+    with pytest.raises(ValueError, match="finite and between 0 and 1"):
+        plotter.plot_transfer_tree(pandas.DataFrame(), str(out), edges_tsv=str(edges), arrow_alpha=alpha)
+    assert not out.exists() and not edges.exists()
 
 
 def test_plot_hgt_summary_generates_overview_and_taxonomy_flow_pdfs(tmp_path: Path):
@@ -354,3 +418,89 @@ def test_transfer_traits_preserve_zero_unknown_and_tip_order(tmp_path):
     path.write_text("species\tgall\nA species\t1\nA_species\t0\n")
     with pytest.raises(ValueError, match="unique"):
         plotter.read_transfer_traits(str(path))
+
+
+def test_trait_highlight_clades_require_every_descendant_to_be_observed_positive(tmp_path):
+    tree_path = tmp_path / "tree.nwk"
+    tree_path.write_text("(((A:1,B:1)0042:1,C:2)mixed:1,(D:1,E:1)unknown:1)root;")
+    tree, *_ = plotter.load_species_tree_layout(str(tree_path))
+    traits = pandas.DataFrame({'gall': [1, 1, 0, 1, float('nan')]}, index=['A', 'B', 'C', 'D', 'E'])
+    highlighted = plotter.trait_highlight_clades(tree, traits, 'gall')
+    assert {c.name for c in tree.find_clades() if id(c) in highlighted} == {'A', 'B', 'D', '0042'}
+    assert plotter.trait_highlight_clades(tree, traits.drop(index='E'), 'gall') == highlighted
+    with pytest.raises(ValueError, match='not found'):
+        plotter.trait_highlight_clades(tree, traits, 'absent')
+    with pytest.raises(ValueError, match='binary'):
+        plotter.trait_highlight_clades(tree, traits.assign(gall=2), 'gall')
+
+
+def test_trait_highlight_colors_tree_and_incoming_arrows_above_other_directions(tmp_path, monkeypatch):
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import FancyArrowPatch
+
+    tree_path = tmp_path / 'tree.nwk'
+    tree_path.write_text('((A:1,B:1)0042:1,C:2)root;')
+    trait_path = tmp_path / 'trait.tsv'
+    trait_path.write_text('species\tgall\nA\t1\nB\t1\nC\t0\n')
+    captured = {}
+
+    def capture(self, fig, **kwargs):
+        ax = fig.axes[0]
+        captured['labels'] = {t.get_text(): t.get_color() for t in ax.texts}
+        captured['patches'] = [p for p in ax.patches if isinstance(p, FancyArrowPatch)]
+        captured['branches'] = [line.get_color() for line in ax.lines]
+        captured['colorbar_axes'] = len(ax.child_axes)
+
+    monkeypatch.setattr(PdfPages, 'savefig', capture)
+    data = pandas.DataFrame({'generax_transfer': ['Y@C@0042', 'Y@0042@C', 'Y@C@A', 'Y@A@C']})
+    edge_path = tmp_path / 'edges.tsv'
+    plotter.plot_transfer_tree(data, str(tmp_path / 'highlight.pdf'), str(tree_path), str(edge_path),
+                              species_trait_path=str(trait_path), highlight_trait='gall')
+    color = plotter.TRAIT_HIGHLIGHT_COLOR
+    assert captured['labels']['A'] == captured['labels']['B'] == captured['labels']['0042'] == color
+    assert captured['labels']['C'] != color
+    assert color in captured['branches']
+    patches = captured['patches']
+    # Each full directional arrow inherits its recipient's color.
+    positive = [p for p in patches if p.get_edgecolor() == to_rgba(color, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)]
+    ordinary = [p for p in patches if p.get_edgecolor() != to_rgba(color, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)]
+    assert len(positive) == 2 and len(ordinary) == 2
+    assert all(p.get_edgecolor() == to_rgba(plotter.TRANSFER_EDGE_COLOR, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)
+               for p in ordinary)
+    assert captured['colorbar_axes'] == 0
+    assert all(p.get_alpha() == plotter.DEFAULT_TRANSFER_ARROW_ALPHA for p in patches)
+    assert min(p.get_zorder() for p in positive) > max(p.get_zorder() for p in ordinary)
+    assert patches[-len(positive):] == positive
+    saved = pandas.read_csv(edge_path, sep='\t')
+    assert saved.hgt_event_count.sum() == 4 and len(saved) == 4
+    assert saved.loc[saved.recipient_node.eq('C'), 'phylogenetic_distance'].nunique() == 2
+    assert saved.displayed.eq(1).all()
+
+
+def test_unhighlighted_arrows_use_one_color_at_different_distances(tmp_path, monkeypatch):
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import FancyArrowPatch
+    from matplotlib.text import Text
+
+    tree_path = tmp_path / "tree.nwk"
+    tree_path.write_text("((A:1,B:2)n1:3,C:10)root;")
+    captured = {}
+
+    def capture(self, fig, **kwargs):
+        ax = fig.axes[0]
+        captured["colors"] = {p.get_edgecolor() for p in ax.patches if isinstance(p, FancyArrowPatch)}
+        captured["child_axes"] = ax.child_axes
+        captured["text"] = [text.get_text() for text in fig.findobj(match=Text)]
+
+    monkeypatch.setattr(PdfPages, "savefig", capture)
+    edges = tmp_path / "edges.tsv"
+    plotter.plot_transfer_tree(pandas.DataFrame({"generax_transfer": ["Y@A@B", "Y@A@C"]}),
+                              str(tmp_path / "plot.pdf"), str(tree_path), str(edges))
+    assert captured["colors"] == {to_rgba(plotter.TRANSFER_EDGE_COLOR, plotter.DEFAULT_TRANSFER_ARROW_ALPHA)}
+    assert not captured["child_axes"]
+    assert not any("Endpoint-node distance" in text or "darker blue" in text for text in captured["text"])
+    saved = pandas.read_csv(edges, sep="\t")
+    assert saved.phylogenetic_distance.nunique() == 2
+    assert saved.hgt_event_count.sum() == 2 and saved.displayed.eq(1).all()

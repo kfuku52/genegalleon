@@ -110,7 +110,7 @@ def test_bien_no_data_through_real_guarded_http_path(tmp_path, monkeypatch, payl
         def log_message(self, *args):
             pass
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     source = {'uri': f'http://127.0.0.1:{server.server_port}/api/download/traits'}
     try:
@@ -159,7 +159,7 @@ def test_generator_dispatches_and_publishes_schema(tmp_path):
     from functools import partial
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(tmp_path)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / 'manifest.tsv'

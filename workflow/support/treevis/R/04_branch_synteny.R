@@ -102,14 +102,17 @@ add_gene_cluster_membership = function(df_tip, max_bp_membership) {
     is_annotated_leaf = (df_tip[['so_event']]=='L')
     is_annotated_leaf = is_annotated_leaf & (!is.na(df_tip[['start']]))
     is_annotated_leaf = is_annotated_leaf & (!is.na(df_tip[['end']]))
+    is_annotated_leaf = is_annotated_leaf & (!is.na(df_tip[['taxon']])) & (df_tip[['taxon']] != '')
+    is_annotated_leaf[is.na(is_annotated_leaf)] = FALSE
     spp = unique(df_tip[is_annotated_leaf, 'taxon', drop = FALSE][['taxon']])
     for (sp in spp) {
         sp_ub = sub(' ', '_', sp)
         gene_membership_counter = 0
-        is_sp = ((df_tip[['so_event']]=='L')&(df_tip[['taxon']]==sp))
+        is_sp = is_annotated_leaf & (df_tip[['taxon']]==sp)
+        is_sp[is.na(is_sp)] = FALSE
         df_tip[is_sp,'species'] = sp_ub
         chromosome_names = unique(df_tip[is_sp, 'chromosome', drop = FALSE][['chromosome']])
-        chromosome_names = chromosome_names[chromosome_names!='']
+        chromosome_names = chromosome_names[!is.na(chromosome_names) & chromosome_names!='']
         for (chromosome_name in chromosome_names) {
             is_chromosome = ((is_sp)&(df_tip[['chromosome']]==chromosome_name))
             is_chromosome[is.na(is_chromosome)] = FALSE
@@ -130,7 +133,10 @@ add_gene_cluster_membership = function(df_tip, max_bp_membership) {
             if (nrow(b_cr) == 1) {
                 cluster_ids = gene_membership_counter
             } else {
-                intergenic = b_cr[['start']][-1] - b_cr[['end']][-nrow(b_cr)]
+                # A nested feature must not hide the right edge of an overlapping
+                # interval and create a spurious gap within the same cluster.
+                covered_end = cummax(b_cr[['end']])
+                intergenic = b_cr[['start']][-1] - covered_end[-nrow(b_cr)]
                 is_new_cluster = c(TRUE, intergenic > max_bp_membership)
                 cluster_ids = (gene_membership_counter - 1L) + cumsum(is_new_cluster)
                 gene_membership_counter = max(cluster_ids)
@@ -144,16 +150,20 @@ add_gene_cluster_membership = function(df_tip, max_bp_membership) {
 
 treevis_cluster_color_variants = function(base_color, n) {
     if (n == 0) return(character(0))
-    variants = rep(base_color, n)
     rgb = as.numeric(grDevices::col2rgb(base_color)) / 255
     luminance = sum(rgb * c(0.2126, 0.7152, 0.0722))
+    # Very pale tip colors need a darker starting shade to remain visible and
+    # distinct from the gray90 singleton key on a white page.
+    if (luminance > 0.82) base_color = colorspace::darken(base_color, amount=0.25)
+    variants = rep(base_color, n)
     if (n > 1) for (i in seq.int(2L, n)) {
         if (luminance < 0.18 || luminance > 0.82) {
-            amount = 1 - 0.8^(i - 1)
+            amount = 0.65 * (i - 1) / (n - 1)
             use_light = luminance < 0.18
         } else {
-            amount = 1 - 0.8^ceiling((i - 1) / 2)
             use_light = (i %% 2 == 1)
+            steps = if (use_light) floor((n - 1) / 2) else ceiling((n - 1) / 2)
+            amount = (if (use_light) 0.45 else 0.65) * ceiling((i - 1) / 2) / steps
         }
         if (use_light) {
             variants[[i]] = colorspace::lighten(base_color, amount=amount)
@@ -196,21 +206,33 @@ add_cluster_membership_column = function(g, args, gname, max_bp_membership){
         if (is.na(base_color) || !nzchar(base_color)) base_color = 'black'
         cluster_palette[ids] = treevis_cluster_color_variants(base_color, length(ids))
     }
+    # Semantic keys explain the encoding without listing every cluster ID.
+    # NA positions train the guide without adding points to the data panel.
+    legend_ids = c('.treevis_multi', '.treevis_single', '.treevis_species')
+    example_color = if (length(cluster_palette)) unname(cluster_palette[[1]]) else 'black'
+    legend_colors = setNames(c(example_color, 'gray90', 'gray90'), legend_ids)
+    legend_data = data.frame(species=df_tip[['species']][[1]], y=NA_real_,
+                             key=legend_ids)
 
     g[[gname]] = ggplot(mapping=aes(x=species, y=y)) +
         geom_blank(data=df_tip, aes(y=label)) + 
         geom_line(data=df_species, mapping=aes(group=species),
                   color='gray90', linewidth=0.2) +
         geom_point(data=df_single, color='gray90', alpha=1) +
-        geom_line(data=df_multi, mapping=aes(group=cluster_membership, color=cluster_membership), alpha=0.5) +
-        geom_point(data=df_multi, mapping=aes(color=cluster_membership), alpha=1) +
+        geom_line(data=df_multi, mapping=aes(group=cluster_membership, color=cluster_membership), alpha=0.5, show.legend=TRUE) +
+        geom_point(data=df_multi, mapping=aes(color=cluster_membership), alpha=1, show.legend=TRUE) +
+        geom_point(data=legend_data, mapping=aes(color=key), na.rm=TRUE, show.legend=TRUE) +
         #aplot::ylim2(gg=g[['tree']]) +
         #ylim(c(1, max(df_tip[['y']]))) +
         xlab(paste0('Gene cluster\nmembership\n(max dist =\n', max_bp_membership, ' bp)')) +
         theme_void() +
-        guides(
-            fill=guide_legend(title=NULL, nrow=6, byrow=FALSE)
-        ) +
+        labs(caption='Blank: location unavailable') +
+        scale_color_manual(values=c(cluster_palette, legend_colors),
+                           limits=c(names(cluster_palette), legend_ids), breaks=legend_ids,
+                           labels=c('Multi-gene cluster', 'Singleton', 'Same species')) +
+        guides(color=guide_legend(title=NULL, ncol=1,
+            override.aes=list(shape=c(16,16,NA), linetype=c(1,0,1),
+                              linewidth=c(0.5,0,0.2), alpha=1))) +
         coord_cartesian(clip = "off") +
         theme(
             axis.text=element_blank(),
@@ -220,15 +242,13 @@ add_cluster_membership_column = function(g, args, gname, max_bp_membership){
             axis.ticks.y=element_blank(),
             axis.text.x=element_blank(),
             legend.title=element_blank(),
-            legend.text=element_blank(),
-            legend.position="none",
+            legend.text=element_text(size=font_size),
+            legend.position="bottom",
             legend.key.size=unit(0.4, 'lines'),
             legend.box.just='center',
+            plot.caption=element_text(size=font_size, hjust=0.5),
             plot.margin=unit(args[['margins']], "cm")
         )
-    if (length(cluster_palette)) {
-        g[[gname]] = g[[gname]] + scale_color_manual(values=cluster_palette)
-    }
   return(g)
 }
 
@@ -497,4 +517,3 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
         )
     return(g)
 }
-

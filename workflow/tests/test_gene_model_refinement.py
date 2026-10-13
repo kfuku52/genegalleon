@@ -437,6 +437,36 @@ def test_homology_addition_to_intact_gene_requires_target_path_for_representativ
     assert row["evidence_class"] == "homology_only_predicted"
 
 
+def test_conservation_supported_adoption_changes_only_the_independent_gate():
+    catalog, models, edges = classification_fixture(valid_original=True)
+    baseline = classify(catalog, models, edges)[0]
+    relaxed = classify(catalog, models, edges, isoform_adoption="conservation_supported")[0]
+    expected = copy.deepcopy(baseline)
+    expected["candidate"]["quality"].update(representative_eligible=True,
+                                           representative_admission="conservation_supported")
+    assert relaxed == expected
+    assert relaxed["evidence_class"] == "homology_only_predicted"
+    assert not relaxed["candidate"]["quality"]["rna_supported"]
+
+
+@pytest.mark.parametrize("problem", ["frameshift", "internal_stop", "invalid_phase"])
+def test_relaxing_rna_adoption_does_not_admit_failed_predictions(problem):
+    catalog, models, edges = classification_fixture(valid_original=True)
+    for model in models:
+        model["problems"] = [problem]
+    row = classify(catalog, models, edges, isoform_adoption="conservation_supported")[0]
+    assert row["status"] == "proposal"
+    assert not row["candidate"]["quality"]["representative_eligible"]
+
+
+@pytest.mark.parametrize("policy,adoption", [("conserved", "unknown"), ("longest", "conservation_supported")])
+def test_invalid_isoform_adoption_configuration_is_rejected(tmp_path, policy, adoption):
+    inputs, edges, _ = tiny_inputs(tmp_path)
+    with pytest.raises(ValueError, match="(?i)(adoption|conservation)"):
+        refinement.plan(tmp_path / "run", inputs=inputs, edges=edges, mode="off",
+                        policy=policy, isoform_adoption=adoption)
+
+
 @pytest.mark.parametrize("case,problem", [
     ("other_locus", "overlap_other_locus"),
     ("unowned", "no_overlap_owned_locus"),
@@ -501,7 +531,7 @@ def test_exon_only_gtf_noncoding_owner_protects_the_entire_declared_locus(tmp_pa
                       'chr1\tprovider\texon\t171\t180\t.\t+\t.\tgene_id "nc"; transcript_id "nct1";\n'
                       'chr1\tprovider\texon\t151\t160\t.\t+\t.\tgene_id "nc"; transcript_id "nct2";\n')
     catalog["annotation_spans"] = refinement.annotation_ownership_spans(source, catalog)
-    assert catalog["annotation_spans"] == [{"seqid": "chr1", "start": 140, "end": 180, "gene_id": "annotation:nc"}]
+    assert catalog["annotation_spans"] == [{"seqid": "chr1", "start": 140, "end": 180, "gene_id": "annotation:nc", "strand": "+"}]
     row = classify(catalog, models, edges)[0]
     assert row["status"] == "proposal"
     assert "overlap_other_locus" in row["problems"]
@@ -523,15 +553,29 @@ def test_competing_predictions_for_separate_loci_cannot_both_claim_new_interval(
     assert all(not row["candidate"]["quality"]["representative_eligible"] for row in result)
 
 
-def test_off_mode_stages_restart_and_effective_catalog_agrees_with_source_path(tmp_path):
+def test_off_mode_stages_restart_and_effective_catalog_agrees_with_source_path(tmp_path, monkeypatch):
     inputs, edges, rows = tiny_inputs(tmp_path)
+    for row in rows:
+        path = Path(row["gff"])
+        source = path.read_text()
+        path.write_text(source.replace("##gff-version 3\n", "##gff-version 3\n"
+                                      "chr1\ts\texon\t1\t6\t.\t+\t.\tID=shared;Parent=t1,t2;Note=provider\n"))
     root = tmp_path / "run"
     sources = {row[role]: Path(row[role]).read_bytes() for row in rows for role in ("cds", "gff", "genome")}
     value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
     assert refinement.plan(root, inputs=inputs, edges=edges, mode="off") == value
     effective = refinement.finalize(root, value)
     receipts = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("receipt.json")}
-    assert refinement.finalize(root, value) == effective
+    original_read = Path.read_text
+
+    def reject_unused_selection_decode(path, *args, **kwargs):
+        if path == root / "selection_final" / "selection.json":
+            raise AssertionError("Verified effective resume decoded unused selections")
+        return original_read(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", reject_unused_selection_decode)
+        assert refinement.finalize(root, value) == effective
     assert receipts == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in root.rglob("receipt.json")}
     manifest = refinement.verify_inputs(effective / "inputs.tsv")
     assert len(manifest) == 3
@@ -547,9 +591,69 @@ def test_off_mode_stages_restart_and_effective_catalog_agrees_with_source_path(t
         assert candidate["cds"] == "ATGAAACCCTAA"
         full = (effective / "full_annotation" / (row["species"] + ".gff3")).read_text()
         assert "ID=t1;Parent=g" in full and "ID=t2;Parent=g" in full
+        assert "ID=shared;Parent=t1,t2;Note=provider" in full
+        assert "ID=shared;Parent=t1;Note=provider" in Path(row["gff"]).read_text()
+        assert "ID=shared;Parent=t1;Note=provider" in Path(row["analysis_gff"]).read_text()
+        assert (effective / "source_annotation" / (row["species"] + ".gff3")).read_bytes() == sources[
+            str(tmp_path / (row["species"] + ".gff3"))]
+        assert row["representative_map_sha256"] == refinement.digest(effective / "representative_map.tsv")
     assert all(Path(path).read_bytes() == content for path, content in sources.items())
     expected = [row["source_transcript_id"] for row in refinement.read_table(effective / "representative_map.tsv")]
     assert expected == ["t1"] * 3
+
+
+@pytest.mark.parametrize("boundary", ["second_species", "after_summary"])
+def test_effective_rejects_common_map_changes_before_publication(tmp_path, monkeypatch, boundary):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    sources = {row[role]: Path(row[role]).read_bytes() for row in rows for role in ("cds", "gff", "genome")}
+    root = tmp_path / "run"
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode="off")
+    refinement.select(root, value, predictions=True)
+    copied_map, coding_paths, changed = None, 0, False
+    original_copy = shutil.copyfile
+
+    def capture_copy(source, destination, *args, **kwargs):
+        nonlocal copied_map
+        result = original_copy(source, destination, *args, **kwargs)
+        if Path(destination).name == "representative_map.tsv":
+            copied_map = Path(destination)
+        return result
+
+    def change_map():
+        nonlocal changed
+        assert copied_map is not None
+        with copied_map.open("ab") as handle:
+            handle.write(b"# changed after initial representative-map proof\n")
+        changed = True
+
+    original_coding = refinement.analysis_coding_candidate
+
+    def change_between_species(*args, **kwargs):
+        nonlocal coding_paths
+        result = original_coding(*args, **kwargs)
+        coding_paths += 1
+        if boundary == "second_species" and coding_paths == 2:
+            change_map()
+        return result
+
+    state = import_module("input_generation_array_state")
+    original_replace = state.os.replace
+
+    def change_after_summary(source, destination, *args, **kwargs):
+        result = original_replace(source, destination, *args, **kwargs)
+        if copied_map is not None and Path(destination) == copied_map.parent / "summary.json" and boundary == "after_summary":
+            change_map()
+        return result
+
+    monkeypatch.setattr(shutil, "copyfile", capture_copy)
+    monkeypatch.setattr(refinement, "analysis_coding_candidate", change_between_species)
+    monkeypatch.setattr(state.os, "replace", change_after_summary)
+    with pytest.raises(OSError):
+        refinement.finalize(root, value)
+    assert changed
+    assert not (root / "effective" / "receipt.json").exists()
+    assert (root / "effective.failed").exists()
+    assert all(Path(path).read_bytes() == content for path, content in sources.items())
 
 
 def test_frozen_plan_rejects_parameter_or_input_mutation(tmp_path):
@@ -976,6 +1080,96 @@ def test_accepted_addition_expands_canonical_full_gtf_graph_without_changing_sou
     assert all(candidate["quality"]["usable"] for gene in recatalog["loci"] for candidate in gene["candidates"])
 
 
+def test_refined_representative_preserves_historical_rescue_locus_without_borrowing_old_path_support(tmp_path, monkeypatch):
+    inputs, edges, rows = tiny_inputs(tmp_path)
+    target, name = rows[0], rows[0]['species']
+    gene_id = name + '_ggrescue_locus'
+    full_cds, old_cds = 'ATGAAAATGATGCCCTAA', 'ATGATGCCCTAA'
+    genome = 'C' * 94 + full_cds + 'C' * 20
+    history = {'representative_status': 'ambiguous', 'selection_policy': 'longest_cds_then_coding_shape',
+               'locus_independent_donor_species_count': '2', 'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+    source_attrs = (';representative_status=ambiguous;representative_selection_policy=longest_cds_then_coding_shape'
+                    ';locus_independent_donor_species_count=2;rescue_orthology=unassigned;rescue_expected_copy=unassigned')
+    source = ('##gff-version 3\n'
+              f'chr1\tgenegalleon_rescue\tgene\t101\t112\t.\t+\t.\tID={gene_id}{source_attrs}\n'
+              f'chr1\tgenegalleon_rescue\tmRNA\t101\t112\t.\t+\t.\tID=old_primary;Parent={gene_id}{source_attrs};path_independent_donor_species_count=1\n'
+              'chr1\tgenegalleon_rescue\tCDS\t101\t112\t.\t+\t0\tID=old_cds;Parent=old_primary\n'
+              f'chr1\tgenegalleon_rescue\tmRNA\t104\t112\t.\t+\t.\tID=old_alternative;Parent={gene_id}{source_attrs};path_independent_donor_species_count=1;support=homology_coding_path\n'
+              'chr1\tgenegalleon_rescue\tCDS\t104\t112\t.\t+\t0\tID=old_alt_cds;Parent=old_alternative\n')
+    Path(target['cds']).write_text(f'>{gene_id}\n{old_cds}\n')
+    Path(target['gff']).write_text(source)
+    for row in rows:
+        Path(row['genome']).write_text('>chr1\n' + genome + '\n')
+        if row is not target:
+            Path(row['cds']).write_text('>g\n' + full_cds + '\n')
+            Path(row['gff']).write_text('##gff-version 3\nchr1\ts\tgene\t95\t112\t.\t+\t.\tID=g\n'
+                                        'chr1\ts\tmRNA\t95\t112\t.\t+\t.\tID=t1;Parent=g\n'
+                                        'chr1\ts\tCDS\t95\t112\t.\t+\t0\tID=c1;Parent=t1\n')
+    links = refinement.read_table(edges)
+    for edge in links:
+        for side in ('a', 'b'):
+            if edge['species_' + side] == name:
+                edge['gene_' + side] = gene_id
+    write_tsv(edges, list(links[0]), links)
+    def predicted_paths(_tmp, windows, _proteins, _genome, _code, _max_intron, _cpus):
+        return [dict(query=region['id'], seqid=seqid, strand='+', cds=[[94 - start, 112 - start, 0]],
+                     frameshift=False, coverage=1., identity=1.)
+                for (seqid, start, _end), regions in windows.items() for region in regions]
+    monkeypatch.setattr(refinement.rescue, 'search_intervals', predicted_paths)
+    root = tmp_path / 'run'
+    value = refinement.plan(root, inputs=inputs, edges=edges, mode='conservative',
+                            isoform_adoption='conservation_supported', min_margin=.01)
+    effective = refinement.finalize(root, value)
+    chosen, = [r for r in refinement.read_table(effective / 'representative_map.tsv') if r['species'] == name]
+    assert chosen['gene_id'] == gene_id and '_ggrefine_' in chosen['candidate_id']
+    accepted, = [r for r in json.loads((root / 'predictions' / name / 'predictions.json').read_text()) if r['status'] == 'accepted']
+    assert accepted['candidate']['quality']['representative_eligible']
+    assert accepted['candidate']['quality']['representative_admission'] == 'conservation_supported'
+    assert len(accepted['candidate']['support']['donors']) == 2
+    assert (effective / 'source_annotation' / (name + '.gff3')).read_bytes() == source.encode()
+    assert list(refinement.rescue.fasta_records(effective / 'species_cds' / (name + '.fa'))) == [(gene_id, gene_id, full_cds)]
+    for role in ('species_gff', 'analysis_gff'):
+        gff = effective / role / (name + '.gff3')
+        records = [line.split('\t') for line in gff.read_text().splitlines() if '\t' in line]
+        gene_attrs, = [refinement.parse_gff_attributes(row[8]) for row in records if row[2] == 'gene']
+        path_attrs, = [refinement.parse_gff_attributes(row[8]) for row in records if row[2] == 'mRNA']
+        assert gene_attrs['ID'] == (gene_id,)
+        assert gene_attrs['source_rescue_representative_status'] == ('ambiguous',)
+        assert gene_attrs['source_rescue_locus_independent_donor_species_count'] == ('2',)
+        assert 'representative_status' not in path_attrs and 'source_rescue_representative_status' not in path_attrs
+        assert path_attrs['path_independent_donor_species_count'] == ('2',)
+        catalog = refinement.build_catalog(name, effective / 'species_cds' / (name + '.fa'), gff,
+                                           effective / 'species_genome' / (name + '.fa'))
+        assert catalog['loci'][0]['gene_id'] == gene_id
+        candidate, = catalog['loci'][0]['candidates']
+        assert candidate['source_rescue_locus_provenance'] == history
+        assert 'rescue_path_selection' not in candidate
+        assert catalog['loci'][0]['source_rescue_locus_provenance'] == history
+    full = effective / 'full_annotation' / (name + '.gff3')
+    full_catalog = refinement.build_catalog(name, effective / 'species_cds' / (name + '.fa'), full,
+                                          effective / 'species_genome' / (name + '.fa'))
+    selected_path, = [c for c in full_catalog['loci'][0]['candidates'] if c['source_transcript_id'] == chosen['source_transcript_id']]
+    assert selected_path['source_rescue_locus_provenance'] == history and 'rescue_path_selection' not in selected_path
+    assert 'ID=old_primary;' in full.read_text() and 'ID=old_alternative;' in full.read_text()
+
+
+def test_historical_rescue_locus_count_cannot_be_borrowed_as_new_path_support():
+    old = {'rescue_path_selection': {'representative_status': 'ambiguous', 'selection_policy': 'longest_cds_then_coding_shape',
+                                   'locus_independent_donor_species_count': '2', 'path_independent_donor_species_count': '1'}}
+    gene = {'gene_id': 'Target_ggrescue_locus', 'seqid': 'chr', 'strand': '+', 'candidates': [old]}
+    candidate = {'candidate_id': 'new', 'source_transcript_id': 'new', 'blocks': [[0, 12, 0]],
+                 'support': {'donors': ['Donor1', 'Donor2', 'Donor3', 'Target']}}
+    lines = refinement.candidate_gff(gene, candidate, 'Target').splitlines()
+    assert 'source_rescue_locus_independent_donor_species_count=2' in lines[0]
+    assert 'path_independent_donor_species_count=3' in lines[1]
+    assert 'representative_status=ambiguous' not in lines[1]
+    altered = copy.deepcopy(old)
+    altered['rescue_path_selection']['locus_independent_donor_species_count'] = '3'
+    gene['candidates'].append(altered)
+    with pytest.raises(ValueError, match='Conflicting historical rescue locus provenance'):
+        refinement.candidate_gff(gene, candidate, 'Target')
+
+
 @pytest.mark.parametrize("implicit", [False, True])
 def test_gtf_without_id_parent_reexports_exact_selected_path_and_metadata(tmp_path, implicit):
     inputs, edges, rows = tiny_inputs(tmp_path)
@@ -1192,12 +1386,15 @@ def test_effective_binds_directly_read_catalog_metadata_content(tmp_path, monkey
     assert not (root / 'effective' / 'receipt.json').exists()
 
 
-def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, monkeypatch):
+@pytest.mark.parametrize('mutation_boundary', ['reading_id_map', 'hashing_outputs'])
+def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, monkeypatch, mutation_boundary):
     inputs, edges, _rows = tiny_inputs(tmp_path)
     root, anchor_root = tmp_path / 'run', tmp_path / 'anchors'
     value = refinement.plan(root, inputs=inputs, edges=edges, mode='off')
     anchor_root.mkdir()
-    (anchor_root / 'plan.json').write_text('{}\n')
+    anchor_plan = {'synteny_jobs': [], 'request': {'sources': value['request']['sources'],
+                                                  'files': value['request']['files']}}
+    refinement.atomic_json(anchor_root / 'plan.json', anchor_plan)
     value['request'].update(rescue_output=str(anchor_root), edges=None)
     refinement.atomic_json(root / 'plan.json', value)
     for name in value['species']:
@@ -1208,18 +1405,26 @@ def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, mo
                   [dict(jcvi_id='g', locus_id='g', original_id='g', status='selected')])
         refinement.atomic_json(directory / 'receipt.json', {'key': {'plan': refinement.digest(anchor_root / 'plan.json'), 'species': name},
                                                            'files': {'genes.id_map.tsv': refinement.digest(mapping)}})
-    monkeypatch.setattr(refinement.rescue, 'load', lambda *_args: {'synteny_jobs': []})
-    monkeypatch.setattr(refinement.rescue, 'prepared', lambda _root, _value, name: anchor_root / 'prepared' / name)
+    monkeypatch.setattr(refinement.rescue, 'load', lambda *_args: anchor_plan)
     original = refinement.read_table
     damaged = anchor_root / 'prepared' / value['species'][-1] / 'genes.id_map.tsv'
 
     def changing_id_map(path):
         result = original(path)
-        if Path(path) == damaged:
+        if mutation_boundary == 'reading_id_map' and Path(path) == damaged:
             damaged.write_text(damaged.read_text() + '\n')
         return result
 
     monkeypatch.setattr(refinement, 'read_table', changing_id_map)
+    original_hash_outputs = refinement.rescue.hash_outputs
+
+    def changing_output_hashes(directory, **kwargs):
+        result = original_hash_outputs(directory, **kwargs)
+        if mutation_boundary == 'hashing_outputs' and (directory / 'edges.json').exists():
+            damaged.write_text(damaged.read_text() + '\n')
+        return result
+
+    monkeypatch.setattr(refinement.rescue, 'hash_outputs', changing_output_hashes)
     with pytest.raises(ValueError, match='Stage dependency content changed'):
         refinement.correspondence(root, value)
     assert not (root / 'correspondence' / 'receipt.json').exists()

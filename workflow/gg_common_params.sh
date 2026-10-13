@@ -5,7 +5,7 @@
 # Host-side entrypoint path bootstrap lives in support/gg_entrypoint_bootstrap.sh
 # because this file is also sourced inside the container by core scripts.
 
-: "${GG_COMMON_TMP_ROOT:=/tmp}" # /tmp (node-local scratch) | env (execution-node TMPDIR) | workspace | absolute host directory.
+: "${GG_COMMON_TMP_ROOT:=auto}" # auto (NIG /data1; otherwise workspace) | env (execution-node TMPDIR) | workspace | absolute host directory.
 
 : "${GG_COMMON_REPRESENTATIVE_INPUTS:=}" # Optional verified effective/inputs.tsv from gene-model refinement.
 : "${GG_COMMON_GENETIC_CODE:=1}" # NCBI genetic code table ID used for translation/ORF-related steps.

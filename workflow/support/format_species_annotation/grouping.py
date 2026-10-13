@@ -45,7 +45,7 @@ from .grouping_identity import (
     strip_gff_feature_prefix,
 )
 from .organelle import gff_organelle_seqids
-from .source_identity import source_annotation_path
+from .source_identity import locus_identity_audit, task_annotation_path
 
 NCBI_LIKE_PROVIDERS = frozenset(("ncbi", "refseq", "genbank"))
 
@@ -236,7 +236,8 @@ def build_gff_cds_grouping_index(task):
     gene_alias_to_gene_tokens = defaultdict(set)
     use_coordinate_rescue = gene_grouping_mode_for_task(task) == "rescue_overlap"
     cds_features_by_transcript = defaultdict(list)
-    organelle_seqids = gff_organelle_seqids(gff_path)
+    annotation_path = task_annotation_path(task)
+    organelle_seqids = gff_organelle_seqids(annotation_path)
     organelle_cds_features = 0
     organelle_aliases = set()
     coge_features, coge_names = {}, {}
@@ -247,7 +248,7 @@ def build_gff_cds_grouping_index(task):
         from .genbank import _coge_export_transcript, duplicate_coge_model_ids
         coge_duplicate_features = duplicate_coge_model_ids(gff_path)
 
-    with open_text(source_annotation_path(gff_path), "rt", errors="replace") as handle:
+    with open_text(annotation_path, "rt", errors="replace") as handle:
         for line_number, raw_line in enumerate(handle, 1):
             if raw_line.startswith("##FASTA"):
                 break
@@ -387,6 +388,26 @@ def build_gff_cds_grouping_index(task):
                             str(max(int(child["coordinates"][3]) for child in children))),
             "is_ordered_gene": False,
         }
+
+    coge_alias_gene_tokens = {}
+    if task["provider"] == "coge":
+        from .coge_identity import coge_identity_evidence
+        for transcript, gene in coge_identity_evidence(annotation_path)["gene_owners"].items():
+            if transcript in feature_records or gene not in feature_records:
+                continue
+            rows = cds_features_by_transcript[transcript]
+            if not rows:
+                continue
+            feature_records[transcript] = {
+                "feature_type": "mrna", "parents": (gene,), "gene_token": "",
+                "authoritative_gene_tokens": (), "aliases": (transcript,),
+                "line_number": feature_records[gene]["line_number"],
+                "coordinates": (rows[0]["seqid"], rows[0]["strand"],
+                                str(min(row["start"] for row in rows)),
+                                str(max(row["end"] for row in rows))),
+                "is_ordered_gene": False,
+            }
+            coge_alias_gene_tokens[transcript] = feature_records[gene]["gene_token"]
 
     # Supplied CDS can have a valid RNA->gene relationship even when its source
     # GFF omitted CDS features. Keep identity evidence without inventing genomic
@@ -622,6 +643,8 @@ def build_gff_cds_grouping_index(task):
     )
     return {
         "gff_path": str(gff_path),
+        "locus_identity": locus_identity_audit(task),
+        "coge_alias_gene_tokens": coge_alias_gene_tokens,
         "explicit_missing_parent_gene_tokens": tuple(sorted(
             strip_gff_feature_prefix(parent) for parent in missing_parent_children)),
         "alias_to_gene_tokens": {

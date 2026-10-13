@@ -40,6 +40,32 @@ This has two practical consequences:
 - adding a new config variable to an entrypoint usually requires adding it to the registry,
 - variables that are not in the registry remain host-local unless they are forwarded separately on purpose.
 
+HGT summaries automatically return category-1 trait results with
+`run_hgt_trait_focus=1`. `hgt_summary_focus_event_tsv=auto` and
+`hgt_summary_focus_event_gene_tsv=auto` select native event/context tables;
+explicit paths preserve a previously filtered project cohort and enriched gene
+annotations as inputs. Focused results additionally apply the configured
+[shared query-Pfam pair filter](gene-structure-tree-plot.md#shared-pfam-filter-for-focused-hgt).
+Enabled Pfam and protein-length requirements are evaluated together on each
+exact bilateral event-gene pair before trait selection, so multiple traits
+share the same passing cohort and pair-stage counts.
+For non-Arthropoda donors into Arthropoda, set
+`hgt_summary_focus_direction_filter=non_arthropoda_to_arthropoda`; the existing
+`non_arthropoda_to_insecta` choice limits recipients to Insecta. This additional
+species-branch filter follows the exact-pair filter and precedes every trait's
+category-1 selection. The filtering-flow figure shows taxonomy and trait as
+separate steps with their own event and orthogroup counts.
+`hgt_summary_focus_species_taxonomy=auto` reads the saved
+`output/species_taxonomy/species_taxonomy.tsv`; an explicit path selects another
+existing host-species taxonomy table. The general default `any` preserves other
+projects' transfer directions. See the root `direction_event_audit.tsv` and
+`direction_species_branches.tsv` for excluded, unknown and mixed branches.
+See [focused HGT outputs](host-scaffold-taxonomy.md#category-1-focused-results)
+for the three summary PDFs, two-page gene-tree/context PDFs, trait eligibility,
+internal-branch context and event-counting rules.
+`hgt_summary_focus_filter_audit_tsv` optionally supplies an existing project
+direction/UFBoot audit for upstream filtering-flow counts.
+
 ## Configuration precedence
 
 The effective value seen by a core script usually follows this precedence,
@@ -69,6 +95,18 @@ when a parameter intentionally needs to be cleared.
 The editable entrypoint blocks are the source of generated configuration
 metadata. Run `bash ./dev config-check` to detect forwarding-registry drift,
 or `bash ./dev config-schema markdown` to render a current reference table.
+
+Missing-model rescue additional exploration uses
+`GG_INPUT_GENE_MODEL_RESCUE_MAX_GENOME_QUERIES` (default `20000`) and
+`GG_INPUT_GENE_MODEL_RESCUE_UNANCHORED_MIN_SPECIES` (default `2`).
+Terminal completion is bounded by
+`GG_INPUT_GENE_MODEL_RESCUE_TERMINAL_MAX_EXTENSION` (default `300` bp) and
+`GG_INPUT_GENE_MODEL_RESCUE_TERMINAL_MAX_UNALIGNED_C_OVERHANG` (default `2`
+donor residues). `GG_INPUT_GENE_MODEL_RESCUE_PREDICTION_CACHE` optionally selects
+a completed rescue output whose prediction inputs and contents are frozen and
+verified; acceptance and genome validation are rerun. See
+[additional rescue candidates](rescue-additional-candidates.md) for the explicit
+limits, independent donor support and distinction from orthology/copy recovery.
 
 ## Shared common parameter file
 
@@ -122,6 +160,11 @@ For BUSCO, the conservative default is `GG_COMMON_BUSCO_LINEAGE=eukaryota_odb12`
 Setting `GG_COMMON_BUSCO_LINEAGE=auto` explicitly resolves a dataset from species names.
 For single-species stages, GeneGalleon picks the deepest BUSCO dataset mapped to that species.
 For multi-species BUSCO stages, it picks the deepest BUSCO dataset shared across the dataset's species.
+Placement mappings are resolved from BUSCO's standard `file_versions.tsv`,
+using the latest integer ODB version available for all three domains. Dated
+archives are checked against the manifest before the existing mapping-ready
+stamp is published. A directory URL is not used as a listing, and acquisition
+errors remain visible when no local mapping can be reused.
 In `gg_genome_evolution`, the multi-species BUSCO run and BUSCO summary are shared between the
 species-tree branch and the BUSCO-based genome-evolution branch. Those shared stages are controlled
 by `run_species_busco` and `run_build_species_busco_summary`; the genome-evolution BUSCO steps reuse
@@ -236,6 +279,17 @@ CDS in that path. The trade-off is that codon-sequence-based analyses are not
 available from protein-only inputs.
 DNA-tree and dating steps that still require CDS-only assumptions are disabled
 automatically in protein mode.
+
+MCMCtree's derived standalone NHX/Newick sidecars follow NWKit's default
+`--rooting-token no` and `--rooting-nhx no` output policy. This omits declaration
+tokens without changing the root, topology, branch lengths, names or support.
+The original FigTree/NEXUS declarations and dated tree remain unchanged during
+sidecar recovery. Explicit NWKit `--rooting-token yes` emits the rooting token;
+the ON/OFF outputs must have the same interpreted tree semantics.
+Conversions that cannot retain the interpreted rooting state remain rejected.
+WGD classification output follows the same default-OFF token policy; its
+writer/reader round trip must preserve rooted topology, lengths and node
+annotations for both leading-token and NHX-rooted inputs.
 
 ## How `GG_COMMON_*` is applied
 
@@ -404,13 +458,62 @@ candidate-free background, missing-data semantics, and counting units.
 - `hgt_summary_transfer_tree_max_edges` (default `200`): number of mapped
   donor-to-recipient edges drawn in `plots/hgt_transfer_tree.pdf`, selected by
   alternating event-count and tree-distance rankings. Existing reverse
-  directions are then added to the same curves, so the directional count can
+  directions are then added as separate arrows, so the directional count can
   exceed this initial limit; `0` draws
   all mapped edges. `plots/hgt_transfer_edges.tsv` always retains all parsed
   directed pairs.
+- `hgt_summary_transfer_arrow_alpha` (default `0.55`): transfer-arrow opacity
+  from `0` (transparent) to `1` (opaque), used by the summary and trait-focused
+  figures. Translucent arrows make overlapping transfers easier to inspect.
+- `hgt_summary_focus_require_shared_pfam` (default `1`): category-1 focused
+  tables and figures require at least one retained event-linked donor/recipient
+  gene pair sharing a query Pfam accession, with each gene individually passing
+  the existing class scaffold-background profile. Set `0` to disable the Pfam
+  requirement; the independent protein-length rule remains enabled. Disable
+  both pair requirements for the earlier scaffold-only cohort. The input and
+  global candidate tables are preserved.
+- `hgt_summary_focus_min_shared_pfam_coverage` (default `0.5`): inclusive
+  fraction required on **both proteins of the same event-gene pair**. Union
+  overlapping saved query-domain intervals before dividing by that protein's
+  length in amino acids. This measures shared-domain query coverage, not
+  pairwise alignment coverage. Set `0` for any shared query Pfam. Review flags
+  for repeat/generic binding domains, differing domain sets and proteins
+  <100 aa do not exclude events. Length eligibility follows the separate
+  protein-length-ratio settings below.
+- `hgt_summary_focus_require_length_ratio` (default `1`): require measured,
+  positive protein lengths for the same exact bilateral event-gene pair that
+  meets any enabled Pfam criterion. This works even with the Pfam requirement
+  disabled. Set `0` to reproduce the preceding Pfam-only cohort.
+- `hgt_summary_focus_min_length_ratio` (default `0.5`): inclusive minimum of
+  `min(donor_length_aa, recipient_length_aa) / max(donor_length_aa,
+  recipient_length_aa)`, a finite fraction from `0` to `1`. Lengths come from
+  saved query-protein records; family averages, alignment lengths and best-hit
+  protein lengths are not substituted. Missing or nonpositive lengths cannot
+  pass an enabled rule, even at threshold `0`. Both enabled criteria must be
+  satisfied by one exact pair; different copies cannot rescue opposite sides.
+- `hgt_summary_focus_allow_both_no_pfam` (default `0`): when the Pfam filter is
+  enabled, set `1` to also allow a pair whose two genes both have explicit
+  searched/no-hit records. Missing records and one-sided no-hits still fail.
+  This explicit opt-in bypasses unavailable domain coverage; coverage stays
+  unmeasured. The independently enabled length rule still applies to that pair.
+  No additional E-value threshold is imposed on saved Pfam hits.
+  Saved query RPS-BLAST records are used; no additional search is run. Per-trait
+  event/pair/gene audits retain exclusion reasons and source hashes, including
+  when plotting is disabled.
+- `hgt_summary_focus_direction_filter` (default `any`): set
+  `non_arthropoda_to_arthropoda` to require modeled donor species branches
+  entirely outside Arthropoda and recipients entirely within Arthropoda.
+  `non_arthropoda_to_insecta` instead requires all recipient tips within
+  Insecta. This taxonomy step follows the exact-pair filter, before the separate
+  category-1 trait step. Mixed, unknown and unmapped branches are withheld.
+- `hgt_summary_focus_species_taxonomy` (default `auto`): existing host-species
+  taxonomy for the direction filter, normally
+  `output/species_taxonomy/species_taxonomy.tsv`. An enabled filter requires
+  this table even without plotting.
 
 The transfer plot counts branch-level GeneRax `Y@donor@recipient` records and
-changes link width in proportion to that event count. Arrowheads point to the
+sets each arrow's constant shaft width in proportion to that direction's event
+count. Reciprocal directions use separate curves. Arrowheads point to the
 recipient/target. This is a count visualization, not a probability or HGT
 confidence score.
 

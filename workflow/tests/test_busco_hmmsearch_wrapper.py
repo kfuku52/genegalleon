@@ -182,3 +182,101 @@ def test_gg_busco_stderr_matches_known_metaeuk_modified_fas_bug(tmp_path: Path):
     completed = _run_bash(command, cwd=tmp_path)
 
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("arguments", "inherited", "expected"),
+    [
+        ([], None, "1"),
+        (["--cpu", "4"], None, "4"),
+        (["--cpu=4"], None, "4"),
+        (["-c", "4"], None, "4"),
+        (["-c4"], None, "4"),
+        (["-c=4"], None, "4"),
+        (["--cpu", "+0004"], None, "4"),
+        (["--cpu", "8", "-c", "3"], None, "3"),
+        (["--cpu", "4"], "1", "1"),
+        (["--cpu", "4"], "2", "2"),
+        (["--cpu", "4"], "32", "4"),
+        (["--cpu", "4"], "+0002", "2"),
+        (["--cpu", "4"], "0", "4"),
+        (["--cpu", "4"], "not-a-number", "4"),
+        ([], "32", "1"),
+        (["--cpu", "4"], "999999999999999999999999999", "4"),
+        (["--cpu", "bad"], "2", "1"),
+        (["--cpu", "0"], "2", "1"),
+        (["--cpu", "-4"], "2", "1"),
+    ],
+)
+def test_busco_metaeuk_default_threads_obey_cpu_and_preserve_parent(
+    tmp_path: Path, arguments: list[str], inherited: str | None, expected: str
+):
+    bin_dir = tmp_path / "bin"
+    observed = tmp_path / "child"
+    parent = tmp_path / "parent"
+    observed_args = tmp_path / "arguments"
+    _write_executable(bin_dir / "hmmsearch", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(
+        bin_dir / "busco",
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        f"printf '%s\\n' \"$MMSEQS_NUM_THREADS\" \"$OMP_NUM_THREADS\" "
+        f"> {shlex.quote(str(observed))}\n"
+        f"printf '%s\\n' \"$@\" > {shlex.quote(str(observed_args))}\n",
+    )
+    setting = (
+        "unset MMSEQS_NUM_THREADS"
+        if inherited is None
+        else f"export MMSEQS_NUM_THREADS={shlex.quote(inherited)}"
+    )
+    argv = ["--in", "input with spaces.fasta", "--mode", "transcriptome", *arguments]
+    command = (
+        f"source {shlex.quote(str(GG_BUSCO_PATH))}; "
+        f"gg_support_dir={shlex.quote(str(SUPPORT_DIR))}; "
+        f"{setting}; "
+        f"printf '%s\\n' \"${{MMSEQS_NUM_THREADS-__unset__}}\" > {shlex.quote(str(parent))}; "
+        f"gg_run_busco_with_metaeuk_modified_fas_compat {shlex.join(argv)}; "
+        f"printf '%s\\n' \"${{MMSEQS_NUM_THREADS-__unset__}}\" >> {shlex.quote(str(parent))}"
+    )
+    completed = _run_bash(
+        command,
+        cwd=tmp_path,
+        env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "OMP_NUM_THREADS": "1"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert observed.read_text(encoding="utf-8").splitlines() == [expected, "1"]
+    assert observed_args.read_text(encoding="utf-8").splitlines() == argv
+    assert parent.read_text(encoding="utf-8").splitlines() == [
+        inherited if inherited is not None else "__unset__"
+    ] * 2
+
+
+def test_busco_timeout_child_inherits_thread_limit_and_exit_status(tmp_path: Path):
+    if shutil.which("timeout") is None:
+        pytest.skip("GNU timeout is unavailable on this host")
+    bin_dir = tmp_path / "bin"
+    observed = tmp_path / "child"
+    _write_executable(bin_dir / "hmmsearch", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(
+        bin_dir / "busco",
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        f"printf '%s\\n' \"$MMSEQS_NUM_THREADS\" > {shlex.quote(str(observed))}\n"
+        "exit 23\n",
+    )
+    command = (
+        f"source {shlex.quote(str(GG_BUSCO_PATH))}; "
+        f"gg_support_dir={shlex.quote(str(SUPPORT_DIR))}; "
+        "GG_BUSCO_TIMEOUT_SECONDS=30 "
+        "gg_run_busco_with_metaeuk_modified_fas_compat --cpu 4"
+    )
+    completed = _run_bash(
+        command,
+        cwd=tmp_path,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "MMSEQS_NUM_THREADS": "32",
+        },
+    )
+
+    assert completed.returncode == 23, completed.stderr
+    assert observed.read_text(encoding="utf-8").splitlines() == ["4"]

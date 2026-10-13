@@ -69,6 +69,9 @@ bundled query families, with local synteny and gene-tree topology support:
 ![AHA, STRICTCHK, and YABBY ortholog presence with synteny and topology support](docs/assets/example-plots/readme-test-family-presence-absence.png)
 
 All three families are detected in each of the seven test species.
+The [presence/absence guide](docs/presence-absence.md) also covers optional
+additional ortholog candidates selected by duplication confidence score and
+duplication bars restricted to the displayed genes.
 
 Orthogroup rarefaction from small illustrative test data. Curves show mean
 counts across random species subsets; shaded bands show one standard deviation:

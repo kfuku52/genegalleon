@@ -57,12 +57,12 @@ MATCH_ATTRIBUTE_KEYS = {
 }
 
 FALLBACK_FEATURES = {
-    "mRNA",
+    "mrna",
     "transcript",
-    "J_gene_segment",
-    "V_gene_segment",
-    "C_gene_segment",
-    "D_gene_segment",
+    "j_gene_segment",
+    "v_gene_segment",
+    "c_gene_segment",
+    "d_gene_segment",
     "gene",
 }
 
@@ -521,14 +521,17 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
             representative_map.choice(str(identifier), species)
     print("Extracting gene IDs: {}".format(datetime.datetime.now()), flush=True)
     lookup, min_len, max_len = build_search_term_lookup(seq_names)
-    gff_feat = gff.loc[(gff.loc[:, "feature"] == feature), :].copy()
+    # GWH exports use `Gene`; the formatter already accepts feature names
+    # case-insensitively. Keep source spelling and case-sensitive IDs intact.
+    feature_names = gff.loc[:, "feature"].str.lower()
+    gff_feat = gff.loc[feature_names == feature.lower(), :].copy()
     if gff_feat.shape[0] == 0:
         if representative_map is not None and len(seq_names):
             raise ValueError("Representative map supplied but GFF contains no CDS")
         return gff_feat.assign(gene_id="")
 
     value_cache = {}
-    fallback_mask = gff.loc[:, "feature"].isin(FALLBACK_FEATURES)
+    fallback_mask = feature_names.isin(FALLBACK_FEATURES)
     id_info = {}
     resolved_cache = {}
     if fallback_mask.any():
@@ -621,6 +624,17 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
         for gene_id, attr in zip(out["gene_id"], out["attributes"], strict=True):
             feature_id, parents, _ = parse_attribute_fields(attr)
             if feature_id and parents and all(p in gene_features for p in parents):
+                # GWH omits RNA rows and gives each CDS segment a different
+                # ID. Its explicit transcript accession binds those segments;
+                # a CDS segment ID alone would truncate a multi-exon model.
+                accessions = [unquote(value) for field in str(attr).split(";")
+                              if field.partition("=")[0].strip() == "Parent_Accession"
+                              for value in field.partition("=")[2].split(",")]
+                if accessions:
+                    if len(accessions) != 1 or not accessions[0]:
+                        raise ValueError(f"Ambiguous direct-gene CDS transcript accession for {gene_id}")
+                    models.append(tuple(accessions))
+                    continue
                 models.append((feature_id,))
                 continue
             parent_ids = transcript_ids(attr, gene_id)

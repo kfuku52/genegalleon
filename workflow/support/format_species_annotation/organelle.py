@@ -129,8 +129,9 @@ def iter_non_organelle_gff_lines(path, seqids=None, *, attribute_changes=None):
                 break
             line = apply_common_replacements(raw_line)
             if not gff_data_line_is_organelle(line, excluded):
-                if attribute_changes is not None:
-                    raw_line = normalise_line(raw_line, path, line_number, attribute_changes)
+                if attribute_changes is not None or raw_line.rstrip("\r\n").endswith("\t"):
+                    raw_line = normalise_line(raw_line, path, line_number,
+                                              attribute_changes if attribute_changes is not None else [])
                 yield apply_common_replacements(raw_line)
 
 

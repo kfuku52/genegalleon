@@ -345,3 +345,71 @@ def test_success_cleanup_waits_for_retention_scan(tmp_path, interrupt):
         if child.poll() is None:
             child.kill()
         child.communicate(timeout=10)
+
+
+@pytest.mark.parametrize('site', ['default', 'shirokane', 'audrey1'])
+def test_auto_uses_workspace_and_routes_auxiliary_tempfiles(tmp_path, site):
+    workspace = tmp_path / 'workspace'
+    env = run_env(tmp_path, GG_COMMON_TMP_ROOT='auto', GG_SITE_PROFILE=site,
+                  gg_workspace_dir=str(workspace))
+    result = shell('gg_configure_task_tmp_mount && '
+                   'test "$TMPDIR" = "$gg_workspace_dir/.genegalleon-runtime-$(id -u)/tmp" && '
+                   'test "$APPTAINER_TMPDIR" = "$TMPDIR" && '
+                   'printf "root=%s\\nmount=%s\\ntmp=%s\\ncache=%s\\n" '
+                   '"$GG_COMMON_TMP_ROOT" "${GG_TMP_MOUNT:-}" '
+                   '"$APPTAINERENV_TMPDIR" "$APPTAINERENV_PYTHONPYCACHEPREFIX"', env)
+    assert result.returncode == 0, result.stderr
+    assert 'root=workspace' in result.stdout
+    assert 'mount=\n' in result.stdout
+    private = workspace / f'.genegalleon-runtime-{os.getuid()}'
+    assert (private / 'tmp').is_dir()
+    assert (private / 'pycache').is_dir()
+    assert 'tmp=/workspace/.genegalleon-runtime-' in result.stdout
+    assert 'cache=/workspace/.genegalleon-runtime-' in result.stdout
+    assert '/tmp/genegalleon' not in result.stdout
+
+
+def test_auto_nig_requires_valid_data1_and_explicit_workspace_wins(tmp_path):
+    env = run_env(tmp_path, GG_COMMON_TMP_ROOT='auto', GG_SITE_PROFILE='nig',
+                  gg_workspace_dir=str(tmp_path / 'workspace'))
+    result = shell('gg_tmp_validate_nig_data1() { return 0; }; gg_resolve_tmp_root', env)
+    # Resolution must still validate the selected root; a missing data1 is rejected.
+    if Path('/data1').is_dir():
+        assert result.stdout.strip() == '/data1'
+    else:
+        assert result.returncode != 0
+    result = shell('gg_tmp_validate_nig_data1() { return 1; }; gg_resolve_tmp_root', env)
+    assert result.returncode != 0
+    env['GG_COMMON_TMP_ROOT'] = 'workspace'
+    assert shell('gg_resolve_tmp_root', env).stdout.strip() == 'workspace'
+
+
+def test_nig_data1_on_system_filesystem_is_rejected(tmp_path):
+    env = run_env(tmp_path)
+    result = shell('stat() { printf "1\\n"; }; '
+                   f'gg_tmp_validate_nig_data1 "{tmp_path}"', env)
+    assert result.returncode != 0
+    assert 'operating-system filesystem' in result.stderr
+    result = shell('stat() { if [[ "$3" == / ]]; then echo 1; else echo 2; fi; }; '
+                   f'gg_tmp_validate_nig_data1 "{tmp_path}"', env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_auto_does_not_classify_arbitrary_m_hostname_as_nig(tmp_path):
+    env = run_env(tmp_path, GG_COMMON_TMP_ROOT='auto')
+    env.pop('GG_SITE_PROFILE', None)
+    result = shell('hostname() { echo my-workstation; }; gg_resolve_tmp_root', env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'workspace'
+
+
+def test_workspace_runtime_tmp_symlink_is_rejected(tmp_path):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    (workspace / f'.genegalleon-runtime-{os.getuid()}').symlink_to(elsewhere)
+    env = run_env(tmp_path, GG_COMMON_TMP_ROOT='workspace', gg_workspace_dir=str(workspace))
+    result = shell('gg_configure_task_tmp_mount', env)
+    assert result.returncode != 0
+    assert not list(elsewhere.iterdir())

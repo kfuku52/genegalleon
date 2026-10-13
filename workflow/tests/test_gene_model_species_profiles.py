@@ -64,6 +64,14 @@ def test_cached_compressed_genome_corruption_is_rebuilt_and_source_is_unchanged(
 def test_zero_prediction_windows_skip_predictor_genome_index(tmp_path, monkeypatch):
     inputs, edges, _ = tiny_inputs(tmp_path)
     root = tmp_path / "run"
+    # Plan provenance requires a predictor identity even when no work is queued.
+    # This unit test must not depend on the host installing a real predictor.
+    predictor = tmp_path / "miniprot"
+    predictor.write_text("#!/bin/sh\nexit 99\n")
+    predictor.chmod(0o755)
+    original_which = refinement.shutil.which
+    monkeypatch.setattr(refinement.shutil, "which",
+                        lambda name: str(predictor) if name == "miniprot" else original_which(name))
     value = refinement.plan(root, inputs=inputs, edges=edges)
     def forbidden(_path):
         raise AssertionError("Prediction indexed a genome without a candidate window")

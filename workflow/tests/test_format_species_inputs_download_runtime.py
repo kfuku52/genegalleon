@@ -68,7 +68,7 @@ def test_download_manifest_resolves_ddbj_bioproject_to_public_wgs_gbff(tmp_path)
 
     handler = lambda *args, **kwargs: _DdbjFixtureHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -483,7 +483,7 @@ def test_download_manifest_fernbase_provider_follows_latest_version_subdir(tmp_p
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -582,7 +582,7 @@ def test_download_manifest_fernbase_combined_mode_merges_non_overlapping_low_con
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -673,7 +673,7 @@ def test_download_manifest_fernbase_provider_accepts_markerless_top_level_genome
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -742,7 +742,7 @@ def test_download_manifest_veupathdb_provider_resolves_from_service(tmp_path):
 
     handler = lambda *args, **kwargs: _VEuPathDbFixtureHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -817,7 +817,7 @@ def test_download_manifest_insectbase_provider_resolves_from_api_and_formats_arc
 
     handler = lambda *args, **kwargs: _InsectBaseFixtureHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -907,7 +907,7 @@ def test_download_manifest_ncbi_id_only_auto_resolve(tmp_path):
 
     handler = lambda *args, **kwargs: _NcbiFixtureHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1042,7 +1042,7 @@ def test_download_manifest_refseq_and_genbank_id_only_auto_resolve(tmp_path):
 
     handler = lambda *args, **kwargs: _NcbiRefseqGenbankFixtureHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1119,7 +1119,7 @@ def test_download_manifest_ncbi_dataset_url_id_auto_resolve(tmp_path):
 
     handler = lambda *args, **kwargs: _NcbiFixtureHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1264,7 +1264,7 @@ def test_download_manifest_ncbi_falls_back_to_datasets_api_when_ftp_files_missin
 
     handler = lambda *args, **kwargs: _NcbiFallbackHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1432,7 +1432,7 @@ def test_download_manifest_ncbi_uses_gbff_when_cds_and_gff_are_missing(tmp_path)
 
     handler = lambda *args, **kwargs: _NcbiGbffFallbackHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1762,7 +1762,7 @@ def test_download_manifest_oryza_minuta_merges_public_gramene_subgenomes(tmp_pat
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:

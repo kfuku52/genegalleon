@@ -1,22 +1,22 @@
 """Normalise evidenced CDS/GFF inconsistencies before representative selection."""
+import contextlib
 import hashlib
 import json
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
-from urllib.parse import quote
 
 from Bio.Data import CodonTable
 from cds_model_normalisation import CdsModelNormaliser
-from format_species_writers import apply_common_replacements
 
-from .common import first_token, iter_fasta_records, parse_gff_attributes
+from .common import append_gff_attribute, first_token, parse_gff_attributes
+from .genome_intervals import genome_intervals
 from .grouping import extract_cds_header_alias_tiers, resolve_cds_header_gff_gene
 from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
-from .source_identity import source_annotation_path
+from .source_identity import task_annotation_path
 
-VERSION = 1
+VERSION = 4
 
 
 def audit_path(cds_path):
@@ -36,6 +36,7 @@ def signature(path):
 
 def contract(task):
     return {"version": VERSION, "genetic_code": int(task.get("genetic_code", 1)),
+            "gff_repair_mode": str(task.get("gff_repair_mode", "safe")),
             "implementation": signature(__file__)["sha256"],
             "evidence_implementation": signature(__import__(CdsModelNormaliser.__module__, fromlist=[""]).__file__)["sha256"],
             "inputs": {key: signature(task[key]) for key in ("cds_path", "gff_path", "genome_path", "gbff_path") if task.get(key)}}
@@ -114,20 +115,27 @@ def iter_normalised_cds_records(task, state=None):
     reference_cache = []
     def reference_mapping():
         if not reference_cache:
-            reference_cache.append(gff_reference_mapping(task["gff_path"], task["genome_path"]))
+            reference_cache.append(gff_reference_mapping(task["gff_path"], task["genome_path"],
+                                                        reference_index=readers[0].index))
         return reference_cache[0]
-    def genome_records():
-        for header, sequence in iter_fasta_records(task["genome_path"]):
-            yield first_token(apply_common_replacements(header)), sequence.upper()
+    genome_scope = contextlib.ExitStack()
+    readers = []
+    def genome_context():
+        if not readers:
+            regions = ((row["seqid"], row["start"], row["end"]) for row in normaliser.features
+                       if row["feature"] in {"CDS", "exon"})
+            readers.append(genome_scope.enter_context(genome_intervals(
+                task["genome_path"], regions, scratch_dir=task.get("_normalisation_scratch", tempfile.gettempdir()))))
+        return contextlib.nullcontext(readers[0])
     def attribute_parser(text):
         return {key: ",".join(values) for key, values in parse_gff_attributes(text).items()}
     def gff_lines():
-        for line in iter_non_organelle_gff_lines(source_annotation_path(task["gff_path"])):
+        for line in iter_non_organelle_gff_lines(task_annotation_path(task)):
             if line.startswith("#") or len(line.rstrip("\r\n").split("\t")) == 9:
                 yield line
     normaliser = CdsModelNormaliser(
         {"species": task["species_prefix"], "gff": str(task["gff_path"]), "genome": str(task["genome_path"]), "genetic_code": code},
-        Path(task.get("_normalisation_scratch", tempfile.gettempdir())), "format", genome_records=genome_records,
+        Path(task.get("_normalisation_scratch", tempfile.gettempdir())), "format", genome_context=genome_context,
         reference_mapping=reference_mapping, attribute_parser=attribute_parser, gff_lines=gff_lines, coding_only=True)
     index = task.get("_gff_cds_grouping_index")
     if index is None:
@@ -139,7 +147,7 @@ def iter_normalised_cds_records(task, state=None):
             by_gene[gene].add(transcript)
     updates = {}
     try:
-        for number, (header, sequence) in enumerate(iter_task_cds_records(task), 1):
+        for number, (header, sequence) in enumerate(iter_task_cds_records({**task, "_genome_interval_context": genome_context}), 1):
             raw = "".join(sequence.split()).upper()
             match = resolve_cds_header_gff_gene(task, header, grouping_index=index)
             keys = by_gene.get(match["gene_token"], set()) if match["status"] == "mapped" else set()
@@ -175,7 +183,10 @@ def iter_normalised_cds_records(task, state=None):
                      records=[row for row in normaliser.rows if row["status"] != "unchanged"],
                      phase_convention_votes=dict(normaliser.votes), gff_updates=updates)
     finally:
-        normaliser.close()
+        try:
+            normaliser.close()
+        finally:
+            genome_scope.close()
 
 
 def write_audit(task, cds_path, state):
@@ -198,5 +209,5 @@ def normalise_gff_lines(lines, updates):
             continue
         fields = line.rstrip("\r\n").split("\t")
         fields[3], fields[4], fields[7] = str(update["start"] + 1), str(update["end"]), update["phase"]
-        fields[8] += ";gg_cds_normalisation=" + quote(update["reason"], safe="")
+        fields[8] = append_gff_attribute(fields[8], "gg_cds_normalisation", update["reason"])
         yield "\t".join(fields) + "\n"

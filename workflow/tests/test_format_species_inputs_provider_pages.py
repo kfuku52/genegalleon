@@ -97,6 +97,10 @@ def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path
 
         def do_GET(self):
             parsed = urlparse(self.path)
+            if parsed.path == "/coge/api/v1/genomes/24739":
+                self._send_json({"id": 24739, "restricted": False,
+                                 "organism": {"name": "Arabidopsis thaliana"}})
+                return
             if parsed.path == "/coge/api/v1/genomes/search/arabidopsis_thaliana_v1/":
                 self._send_json(
                     {
@@ -141,7 +145,7 @@ def test_download_manifest_resolves_coge_urls_from_id_without_templates(tmp_path
             self.end_headers()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CoGeFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -223,6 +227,9 @@ def test_download_manifest_rejects_header_only_coge_gff_before_bundle_download(t
         def do_GET(self):
             parsed = urlparse(self.path)
             requested_paths.append(parsed.path)
+            if parsed.path == "/coge/api/v1/genomes/69349":
+                self._send_json({"id": 69349, "restricted": False})
+                return
             if parsed.path == "/coge/GenomeInfo.pl" and parse_qs(parsed.query).get("fname") == ["get_gff"]:
                 self._send_json(
                     {
@@ -242,7 +249,7 @@ def test_download_manifest_rejects_header_only_coge_gff_before_bundle_download(t
             self.end_headers()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _HeaderOnlyCoGeFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -378,7 +385,7 @@ def test_download_manifest_resolves_plantaedb_page_to_ncbi_bundle(tmp_path):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _PlantaeDbFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -524,7 +531,7 @@ def test_download_manifest_plantaedb_formats_after_download(tmp_path):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _PlantaeDbFormatFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -663,7 +670,7 @@ def test_download_manifest_resolves_citrusgenomedb_organism_page_to_public_bundl
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -750,7 +757,7 @@ def test_download_manifest_citrusgenomedb_analysis_page_derives_cds_from_gff_and
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -851,7 +858,7 @@ def test_download_manifest_citrusgenomedb_analysis_page_prefers_cds_over_cdna(tm
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -945,7 +952,7 @@ def test_download_manifest_citrusgenomedb_organism_page_prefers_assembly_bundle_
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1061,7 +1068,7 @@ def test_download_manifest_citrusgenomedb_analysis_page_follows_repository_index
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1149,7 +1156,7 @@ def test_download_manifest_figshare_article_resolves_requested_filenames(tmp_pat
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1259,7 +1266,7 @@ def test_download_manifest_figshare_article_supports_archive_members(tmp_path):
 
     handler = lambda *args, **kwargs: _FigshareFixtureHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1373,7 +1380,7 @@ def test_download_manifest_figshare_extracts_rar_member_from_extensionless_url(t
             super().do_GET()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FigshareRarFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1454,7 +1461,7 @@ def test_download_manifest_resolves_plantgarden_assembly_page_to_public_bundle(t
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1556,7 +1563,7 @@ def test_download_manifest_plantgarden_genome_list_page_falls_back_to_transcript
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1680,7 +1687,7 @@ def test_download_manifest_jgi_credentials_enable_protected_direct_download(tmp_
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _JgiFixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1802,7 +1809,7 @@ def test_download_manifest_resolves_cngb_id_via_cnsa_then_ncbi(tmp_path):
 
     handler = lambda *args, **kwargs: _CngbNcbiFixtureHandler(*args, root_dir=ftp_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -1877,7 +1884,7 @@ def test_download_manifest_resolves_gwh_id_via_public_index(tmp_path):
 
     handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(server_root), **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -2010,7 +2017,7 @@ def test_download_manifest_resolves_gwh_id_via_show_page_fallback(tmp_path):
 
     handler = lambda *args, **kwargs: _GwhShowHandler(*args, root_dir=server_root, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
 
     try:
@@ -2070,3 +2077,33 @@ def test_download_manifest_resolves_gwh_id_via_show_page_fallback(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_coge_resolver_requires_matching_public_metadata(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    from format_species_providers import catalogs
+
+    calls = []
+    metadata = {"id": 64491, "restricted": False, "organism": {"name": "Gelsemium elegans"}}
+    monkeypatch.setattr(catalogs, "resolve_coge_api_base_url", lambda: "https://example.test/coge/api/v1")
+    monkeypatch.setattr(catalogs, "fetch_json_with_headers", lambda *args: calls.append(args) or metadata)
+    assert catalogs.resolve_coge_genome_from_source_id("64491", 7, {"User-Agent": "fixture"}) == ("64491", metadata)
+    assert calls == [("https://example.test/coge/api/v1/genomes/64491", 7, {"User-Agent": "fixture"})]
+
+
+@pytest.mark.parametrize("metadata", [
+    {}, {"id": 64491}, {"id": 64491, "restricted": True},
+    {"id": 64491, "restricted": "false"}, {"id": 64491, "restricted": 0},
+    {"id": 64492, "restricted": False}, {"id": 64491, "restricted": False, "deleted": True},
+    [],
+])
+def test_coge_rejects_private_unknown_or_mismatched_metadata(monkeypatch, metadata):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    from format_species_providers import catalogs
+
+    calls = []
+    monkeypatch.setattr(catalogs, "fetch_json_with_headers", lambda *_: metadata)
+    monkeypatch.setattr(catalogs, "coge_export_url_has_feature", lambda *_: calls.append("export") or True)
+    with pytest.raises(ValueError, match="not verified public"):
+        catalogs.resolve_coge_download_urls_from_id("64491", "Gelsemium_elegans", 1, {})
+    assert not calls

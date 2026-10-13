@@ -124,23 +124,20 @@ def test_full_bundle_search_scan_and_sites_with_real_predictor(tmp_path, code, m
          "--scan_pvalue_calibration", "none", "--scan_n_permutations", "0", "--outdir", "direct_scan"], tmp_path, env, "direct_scan")
     pd.testing.assert_frame_equal(scan, pd.read_csv(tmp_path / "direct_scan/csubst_scan.tsv", sep="\t"))
     branches = str(scan.iloc[0].support_branch_ids) if not scan.empty else "1,2"
-    for label in ("normal_sites", "candidate_sites"):
-        directory = tmp_path / label
-        directory.mkdir()
-        command = sites.build_csubst_sites_command(str(base), str(base), branches, 2, "3di20", code, pdb="none")
-        result = run(command, directory, env, label)
-        assert "Loaded 3Di state cache" in result.stdout
-        artifacts = sites.resolve_site_artifacts(str(directory), branches)
-        assert artifacts["site_summary_pdf"] and Path(artifacts["site_summary_pdf"]).stat().st_size > 1000
-        frame = pd.read_csv(artifacts["site_table_tsv"], sep="\t")
-        assert set(frame.codon_site_alignment) == set(range(1, 101))
-        if label == "normal_sites":
-            reference = frame
-        else:
-            pd.testing.assert_frame_equal(reference, frame)
-        states = directory / "states.fa"
-        bundle.write_structural_tip_alignment(full_dir / "csubst.fasta", states)
-        assert all(len(record.seq) == 100 for record in SeqIO.parse(states, "fasta"))
+    # One direct sites call validates the CLI; the distinct normal and candidate
+    # report consumers below still run independently.
+    directory = tmp_path / "sites"
+    directory.mkdir()
+    command = sites.build_csubst_sites_command(str(base), str(base), branches, 2, "3di20", code, pdb="none")
+    result = run(command, directory, env, "sites")
+    assert "Loaded 3Di state cache" in result.stdout
+    artifacts = sites.resolve_site_artifacts(str(directory), branches)
+    assert artifacts["site_summary_pdf"] and Path(artifacts["site_summary_pdf"]).stat().st_size > 1000
+    frame = pd.read_csv(artifacts["site_table_tsv"], sep="\t")
+    assert set(frame.codon_site_alignment) == set(range(1, 101))
+    states = directory / "states.fa"
+    bundle.write_structural_tip_alignment(full_dir / "csubst.fasta", states)
+    assert all(len(record.seq) == 100 for record in SeqIO.parse(states, "fasta"))
     assert (scan.codon_site_alignment == scan.site + 1).all()
     if code == 1:
         family, colors = prepare_report_family(tmp_path, base)

@@ -20,6 +20,8 @@ EXPECTED_SOURCES = {
     "kftools",
     "rkftools",
     "fastk",
+    "rapidnj",
+    "rapidnjArm",
     "smudgeplot",
 }
 

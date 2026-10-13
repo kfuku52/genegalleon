@@ -484,6 +484,7 @@ def collect(changes, directory):
     if (key.get("schema") != 1 or key.get("rescue_plan_sha256") != selection.get("plan_sha256")
             or key.get("augmented_receipt_sha256") != selection.get("augmented_receipt_sha256")
             or receipt["files"].get("evidence.json") != evidence_hash or evidence.get("schema") != 1
+            or evidence.get("parameters") != key.get("parameters")
             or set(key["species"]) != set(evidence["species"])):
         raise ValueError("Swiss-Prot audit belongs to different rescue inputs")
     updates, diagnostic_updates = {}, {}
@@ -511,7 +512,8 @@ def collect(changes, directory):
         raise ValueError("Swiss-Prot audit changed while loading")
     for name, counts in updates.items():
         changes["species"][name]["rescue_swissprot_groups"] = counts
-        changes["species"][name].update(diagnostic_updates.get(name, {}))
+        for field in ("rescue_partial_te_groups", "rescue_no_support_reasons"):
+            changes["species"][name][field] = diagnostic_updates.get(name, {}).get(field)
     changes["swissprot_evidence"] = {"directory": str(directory.resolve()), "receipt_sha256": receipt_hash,
                                      "evidence_sha256": evidence_hash, "method": evidence["method"], "parameters": evidence["parameters"]}
     return changes

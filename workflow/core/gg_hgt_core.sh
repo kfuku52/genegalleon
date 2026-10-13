@@ -19,13 +19,30 @@ hgt_gene_family_mode="${hgt_gene_family_mode:-orthogroup}"
 
 run_hgt_eval="${run_hgt_eval:-1}"
 run_hgt_plot="${run_hgt_plot:-1}"
+run_hgt_focus="${run_hgt_focus:-1}"
 hgt_use_taxonomy_db="${hgt_use_taxonomy_db:-1}"
 hgt_contamination_dir="${hgt_contamination_dir:-}"
 hgt_taxonomy_flow_rank="${hgt_taxonomy_flow_rank:-phylum}"
 hgt_taxonomy_flow_max_categories="${hgt_taxonomy_flow_max_categories:-12}"
 hgt_species_tree="${hgt_species_tree:-auto}"
 hgt_species_trait="${hgt_species_trait:-auto}"
+hgt_focus_event_tsv="${hgt_focus_event_tsv:-auto}"
+hgt_focus_event_gene_tsv="${hgt_focus_event_gene_tsv:-auto}"
+hgt_focus_filter_audit_tsv="${hgt_focus_filter_audit_tsv:-}"
+hgt_focus_context_annotations_tsv="${hgt_focus_context_annotations_tsv:-}"
+hgt_focus_require_shared_pfam="${hgt_focus_require_shared_pfam:-1}"
+hgt_focus_allow_both_no_pfam="${hgt_focus_allow_both_no_pfam:-0}"
+hgt_focus_min_shared_pfam_coverage="${hgt_focus_min_shared_pfam_coverage:-0.5}"
+hgt_focus_require_length_ratio="${hgt_focus_require_length_ratio:-1}"
+hgt_focus_min_length_ratio="${hgt_focus_min_length_ratio:-0.5}"
+hgt_focus_direction_filter="${hgt_focus_direction_filter:-any}"
+hgt_focus_species_taxonomy="${hgt_focus_species_taxonomy:-auto}"
+case "${hgt_focus_direction_filter}" in
+  any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda) ;;
+  *) echo "Invalid focused HGT direction filter: ${hgt_focus_direction_filter}" >&2; exit 1 ;;
+esac
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
+hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
 hgt_promoter_bp="${hgt_promoter_bp:-2000}"
 hgt_fimo_qvalue="${hgt_fimo_qvalue:-0.05}"
@@ -37,12 +54,15 @@ default_hgt_contamination_dir="${gg_workspace_output_dir}/species_cds_contaminat
 file_hgt_branch="${dir_hgt}/hgt_branch_candidates.tsv"
 file_hgt_gene="${dir_hgt}/hgt_gene_candidates.tsv"
 file_hgt_orthogroup="${dir_hgt}/hgt_orthogroup_summary.tsv"
+file_hgt_events="${dir_hgt}/hgt_transfer_events.tsv"
+file_hgt_event_genes="${dir_hgt}/hgt_transfer_event_genes.tsv"
 file_hgt_readme="${dir_hgt}/README.md"
 dir_hgt_plot="${dir_hgt}/plots"
 dir_hgt_tree_plot="${dir_hgt}/tree_plot"
 dir_hgt_tree_input="${dir_hgt}/tree_plot_input"
 dir_hgt_tmp="${dir_hgt}/tmp"
 dir_hgt_provenance="${dir_hgt}/artifact_provenance"
+dir_hgt_trait_focus="${dir_hgt}/trait_focus"
 file_hgt_overview_pdf="${dir_hgt_plot}/hgt_branch_overview.pdf"
 file_hgt_taxonomy_flow_pdf="${dir_hgt_plot}/hgt_taxonomy_flow.pdf"
 file_hgt_transfer_tree_pdf="${dir_hgt_plot}/hgt_transfer_tree.pdf"
@@ -58,16 +78,36 @@ if [[ "${run_hgt_plot}" != "0" && "${run_hgt_plot}" != "1" ]]; then
   echo "Invalid binary flag value: run_hgt_plot=${run_hgt_plot} (expected 0 or 1)"
   exit 1
 fi
+if [[ "${run_hgt_focus}" != "0" && "${run_hgt_focus}" != "1" ]]; then
+  echo "Invalid binary flag value: run_hgt_focus=${run_hgt_focus} (expected 0 or 1)"
+  exit 1
+fi
 if [[ "${hgt_use_taxonomy_db}" != "0" && "${hgt_use_taxonomy_db}" != "1" ]]; then
   echo "Invalid binary flag value: hgt_use_taxonomy_db=${hgt_use_taxonomy_db} (expected 0 or 1)"
   exit 1
 fi
+for hgt_focus_flag in hgt_focus_require_shared_pfam hgt_focus_allow_both_no_pfam hgt_focus_require_length_ratio; do
+  if [[ "${!hgt_focus_flag}" != "0" && "${!hgt_focus_flag}" != "1" ]]; then
+    echo "Invalid binary flag value: ${hgt_focus_flag}=${!hgt_focus_flag} (expected 0 or 1)" >&2
+    exit 1
+  fi
+done
+for hgt_focus_fraction in hgt_focus_min_shared_pfam_coverage hgt_focus_min_length_ratio; do
+  if ! python -c 'import math, sys; c = float(sys.argv[1]); sys.exit(not (math.isfinite(c) and 0 <= c <= 1))' "${!hgt_focus_fraction}"; then
+    echo "Invalid ${hgt_focus_fraction}: ${!hgt_focus_fraction} (expected a finite fraction from 0 to 1)" >&2
+    exit 1
+  fi
+done
 if ! [[ "${hgt_taxonomy_flow_max_categories}" =~ ^[0-9]+$ ]]; then
   echo "Invalid hgt_taxonomy_flow_max_categories: ${hgt_taxonomy_flow_max_categories}"
   exit 1
 fi
 if ! [[ "${hgt_transfer_tree_max_edges}" =~ ^[0-9]+$ ]]; then
   echo "Invalid hgt_transfer_tree_max_edges: ${hgt_transfer_tree_max_edges}"
+  exit 1
+fi
+if ! python -c 'import math, sys; a = float(sys.argv[1]); sys.exit(not (math.isfinite(a) and 0 <= a <= 1))' "${hgt_transfer_arrow_alpha}"; then
+  echo "Invalid hgt_transfer_arrow_alpha: ${hgt_transfer_arrow_alpha} (expected a finite value from 0 to 1)" >&2
   exit 1
 fi
 if ! [[ "${hgt_tree_width_mm}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -354,6 +394,38 @@ if [[ ${run_hgt_eval} -eq 1 && ${hgt_eval_needs_update} -eq 1 ]]; then
   fi
 fi
 
+hgt_context_provenance_args=()
+gg_artifact_contract_init \
+  hgt_context_provenance_args \
+  "hgt_transfer_context" \
+  "all_gene_families" \
+  "${dir_hgt_provenance}/hgt_transfer_context.json"
+hgt_context_provenance_args+=(
+  --input "branch_candidates=${file_hgt_branch}"
+  --input "gene_candidates=${file_hgt_gene}"
+  --input "context_summarizer=${gg_support_dir}/summarize_hgt_transfer_context.py"
+  --input "scaffold_taxonomy_helper=${gg_support_dir}/scaffold_taxonomy.py"
+  --input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"
+  --input-gene-family-store "reconciliations=${dir_orthogroup}"
+  --output "transfer_events=${file_hgt_events}"
+  --output "transfer_event_genes=${file_hgt_event_genes}"
+  --parameter "schema_version=1"
+)
+gg_artifact_add_input_if_present hgt_context_provenance_args "species_tree" "${hgt_species_tree_path}"
+if [[ ${run_hgt_eval} -eq 1 && -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
+  gg_artifact_prepare_stage hgt_context_needs_update run_hgt_eval "${hgt_context_provenance_args[@]}" || exit $?
+  if [[ ${hgt_context_needs_update} -eq 1 ]]; then
+    python "${gg_support_dir}/summarize_hgt_transfer_context.py" \
+      --branch_tsv "${file_hgt_branch}" \
+      --gene_tsv "${file_hgt_gene}" \
+      --dir_gene_family "${dir_orthogroup}" \
+      --species_tree "${hgt_species_tree_path}" \
+      --event_out "${file_hgt_events}" \
+      --event_gene_out "${file_hgt_event_genes}"
+    gg_artifact_record "${hgt_context_provenance_args[@]}"
+  fi
+fi
+
 hgt_output_readme_run=1
 hgt_output_readme_provenance_args=()
 gg_artifact_contract_init \
@@ -368,9 +440,12 @@ hgt_output_readme_provenance_args+=(
   --input "readme_generator=${gg_support_dir}/write_hgt_output_readme.py"
   --input "table_schema=${gg_support_dir}/score_hgt_candidates.py"
   --input "scaffold_schema=${gg_support_dir}/scaffold_taxonomy.py"
+  --input "transfer_context_schema=${gg_support_dir}/summarize_hgt_transfer_context.py"
   --output "readme=${file_hgt_readme}"
   --parameter "schema_version=2"
 )
+gg_artifact_add_input_if_present hgt_output_readme_provenance_args "transfer_events" "${file_hgt_events}"
+gg_artifact_add_input_if_present hgt_output_readme_provenance_args "transfer_event_genes" "${file_hgt_event_genes}"
 gg_artifact_prepare_stage \
   hgt_output_readme_needs_update \
   hgt_output_readme_run \
@@ -380,7 +455,9 @@ if [[ ${hgt_output_readme_run} -eq 1 && ${hgt_output_readme_needs_update} -eq 1 
     --output "${file_hgt_readme}" \
     --branch_tsv "${file_hgt_branch}" \
     --gene_tsv "${file_hgt_gene}" \
-    --orthogroup_tsv "${file_hgt_orthogroup}"
+    --orthogroup_tsv "${file_hgt_orthogroup}" \
+    --event_tsv "${file_hgt_events}" \
+    --event_gene_tsv "${file_hgt_event_genes}"
   gg_artifact_record "${hgt_output_readme_provenance_args[@]}"
 fi
 
@@ -416,10 +493,12 @@ hgt_summary_plot_provenance_args+=(
   --parameter "taxonomy_flow_rank=${hgt_taxonomy_flow_rank}"
   --parameter "taxonomy_flow_max_categories=${hgt_taxonomy_flow_max_categories}"
   --parameter "transfer_tree_max_edges=${hgt_transfer_tree_max_edges}"
+  --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
 )
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_db_candidate}"
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_tree" "${hgt_species_tree_path}"
 gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait" "${hgt_species_trait_path}"
+gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "transfer_events" "${file_hgt_events}"
 if [[ -n "${hgt_species_trait_path}" ]]; then
   gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_schema" "${hgt_species_trait_path}.schema.json"
   gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_metadata" "${hgt_species_trait_path}.metadata.json"
@@ -437,6 +516,10 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       hgt_taxonomy_dbfile=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
       gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "taxonomy_database" "${hgt_taxonomy_dbfile}"
     fi
+    hgt_transfer_plot_args=()
+    if [[ -s "${file_hgt_events}" ]]; then
+      hgt_transfer_plot_args+=(--transfer_event_tsv "${file_hgt_events}")
+    fi
     python "${gg_support_dir}/plot_hgt_summary.py" \
       --branch_tsv "${file_hgt_branch}" \
       --gene_tsv "${file_hgt_gene}" \
@@ -449,8 +532,128 @@ if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
       --transfer_edges_tsv "${file_hgt_transfer_edges}" \
       --species_tree "${hgt_species_tree_path}" \
       --species_trait "${hgt_species_trait_path}" \
-      --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}"
+      --transfer_tree_max_edges "${hgt_transfer_tree_max_edges}" \
+      --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}" \
+      "${hgt_transfer_plot_args[@]}"
     gg_artifact_record "${hgt_summary_plot_provenance_args[@]}"
+  fi
+fi
+
+# Apply query-Pfam once to the shared input cohort before category-1 trait selection.
+if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
+  hgt_focus_query_taxonomy_path=""
+  if [[ -f "${hgt_taxonomy_db_candidate}" ]]; then
+    hgt_focus_query_taxonomy_path="${hgt_taxonomy_db_candidate}"
+  fi
+  hgt_focus_events="${file_hgt_events}"
+  hgt_focus_links="${file_hgt_event_genes}"
+  [[ "${hgt_focus_event_tsv}" == "auto" ]] || hgt_focus_events="${hgt_focus_event_tsv}"
+  [[ "${hgt_focus_event_gene_tsv}" == "auto" ]] || hgt_focus_links="${hgt_focus_event_gene_tsv}"
+  if [[ ! -s "${hgt_focus_events}" || ! -s "${hgt_focus_links}" || -z "${hgt_species_tree_path}" ]]; then
+    if [[ "${hgt_focus_event_tsv}" != "auto" || "${hgt_focus_event_gene_tsv}" != "auto" ]]; then
+      echo "Trait-focused HGT results require the supplied event tables and analysis species tree." >&2
+      exit 1
+    fi
+    echo "Skipping trait-focused HGT results: event context tables or analysis species tree unavailable."
+  else
+    hgt_focus_provenance_args=()
+    hgt_focus_taxonomy_path="${hgt_focus_species_taxonomy}"
+    if [[ "${hgt_focus_taxonomy_path}" == "auto" ]]; then
+      hgt_focus_taxonomy_path="${gg_workspace_output_dir}/species_taxonomy/species_taxonomy.tsv"
+    fi
+    if [[ "${hgt_focus_direction_filter}" != "any" && ! -s "${hgt_focus_taxonomy_path}" ]]; then
+      echo "Focused species-branch direction filtering requires existing species taxonomy: ${hgt_focus_taxonomy_path}" >&2
+      exit 1
+    fi
+    gg_artifact_contract_init hgt_focus_provenance_args "hgt_trait_focus" "all_category1_targets" \
+      "${dir_hgt_provenance}/hgt_trait_focus.json"
+    hgt_focus_provenance_args+=(
+      --input "events=${hgt_focus_events}"
+      --input "event_genes=${hgt_focus_links}"
+      --input "species_tree=${hgt_species_tree_path}"
+      --input "species_trait=${hgt_species_trait_path}"
+      --input "focus_helper=${gg_support_dir}/focus_hgt_traits.py"
+      --input "direction_helper=${gg_support_dir}/focus_hgt_direction.py"
+      --input "origin_review_helper=${gg_support_dir}/focus_hgt_origin.py"
+      --input "pfam_filter=${gg_support_dir}/focus_hgt_pfam.py"
+      --input "pfam_background_profile=${gg_support_dir}/focus_hgt_gene_trees.py"
+      --input "family_store=${gg_support_dir}/gene_family_output_store.py"
+      --input "plotter=${gg_support_dir}/plot_hgt_summary.py"
+      --input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"
+      --input "trait_contract=${gg_support_dir}/species_trait_contract.py"
+      --input "trait_schema=${gg_support_dir}/species_trait_schema.py"
+      --output "result_bundle=${dir_hgt_trait_focus}"
+      --parameter "schema_version=1"
+      --parameter "plots=${run_hgt_plot}"
+      --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
+      --parameter "require_shared_pfam=${hgt_focus_require_shared_pfam}"
+      --parameter "allow_both_no_pfam=${hgt_focus_allow_both_no_pfam}"
+      --parameter "min_shared_pfam_coverage=${hgt_focus_min_shared_pfam_coverage}"
+      --parameter "require_length_ratio=${hgt_focus_require_length_ratio}"
+      --parameter "min_length_ratio=${hgt_focus_min_length_ratio}"
+      --parameter "direction_filter=${hgt_focus_direction_filter}"
+    )
+    if [[ "${hgt_focus_direction_filter}" != "any" ]]; then
+      hgt_focus_provenance_args+=(--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}")
+    else
+      gg_artifact_add_input_if_present hgt_focus_provenance_args "origin_species_taxonomy" "${hgt_focus_taxonomy_path}"
+    fi
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "context_gene_host_labels" "${gg_workspace_output_dir}/species_scaffold_taxonomy"
+    if [[ ${hgt_focus_require_shared_pfam} -eq 1 || ${hgt_focus_require_length_ratio} -eq 1 ]]; then
+      hgt_focus_provenance_args+=(
+        --input-gene-family-subdir "pfam_query_hits=${dir_orthogroup}::rpsblast"
+      )
+    fi
+    if [[ ${run_hgt_plot} -eq 1 ]]; then
+      hgt_focus_provenance_args+=(
+        --input "gene_tree_focus_helper=${gg_support_dir}/focus_hgt_gene_trees.py"
+        --input "gene_tree_config=${gg_support_dir}/gene_tree_plot_config.py"
+        --input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"
+        --input "gene_context_taxonomy_schema=${gg_support_dir}/scaffold_taxonomy.py"
+        --input "gene_context=${gg_support_dir}/focus_hgt_context.py"
+        --input "focused_figures=${gg_support_dir}/focus_hgt_figures.py"
+        --input "gene_tree_plotter=${gg_support_dir}/stat_branch2tree_plot.r"
+        --input "gene_tree_renderer=${gg_support_dir}/treevis"
+        --input-gene-family-subdir "gene_tree_stats=${dir_orthogroup}::stat_branch"
+      )
+      for hgt_focus_subdir in artifact_provenance synteny rpsblast clipkit orthogroup_extraction_fasta maxalign mafft cds_fasta protein_fasta dated_tree fimo meme promoter_fasta; do
+        hgt_focus_provenance_args+=(--input-gene-family-subdir "focus_${hgt_focus_subdir}=${dir_orthogroup}::${hgt_focus_subdir}")
+      done
+      gg_artifact_add_input_if_present hgt_focus_provenance_args "gff_coordinates" "${gg_workspace_output_dir}/species_gff_info"
+      gg_artifact_add_input_if_present hgt_focus_provenance_args "context_query_lineage_database" "${hgt_taxonomy_db_candidate}"
+      if [[ -n "${hgt_focus_context_annotations_tsv}" ]]; then
+        hgt_focus_provenance_args+=(--input "context_annotations=${hgt_focus_context_annotations_tsv}")
+      fi
+      gg_artifact_add_input_if_present hgt_focus_provenance_args "filtering_audit" "${hgt_focus_filter_audit_tsv}"
+    fi
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_schema_input" "${hgt_species_trait_path}.schema.json"
+    gg_artifact_add_input_if_present hgt_focus_provenance_args "trait_metadata" "${hgt_species_trait_path}.metadata.json"
+    gg_artifact_prepare_stage hgt_focus_needs_update run_hgt_focus "${hgt_focus_provenance_args[@]}" || exit $?
+    if [[ ${hgt_focus_needs_update} -eq 1 ]]; then
+      hgt_focus_existing_taxonomy="${hgt_focus_taxonomy_path}"
+      [[ -f "${hgt_focus_existing_taxonomy}" ]] || hgt_focus_existing_taxonomy=""
+      python "${gg_support_dir}/focus_hgt_traits.py" \
+        --event_tsv "${hgt_focus_events}" --event_gene_tsv "${hgt_focus_links}" \
+        --species_tree "${hgt_species_tree_path}" --species_trait "${hgt_species_trait_path}" \
+        --output_dir "${dir_hgt_trait_focus}" --plots "${run_hgt_plot}" \
+        --gene_family_root "${dir_orthogroup}" \
+        --gff_info_root "${gg_workspace_output_dir}/species_gff_info" \
+        --filter_audit_tsv "${hgt_focus_filter_audit_tsv}" \
+        --context_annotations_tsv "${hgt_focus_context_annotations_tsv}" \
+        --mmseqs2_taxonomy_dir "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy" \
+        --scaffold_taxonomy_dir "${gg_workspace_output_dir}/species_scaffold_taxonomy" \
+        --taxonomy_dbfile "${hgt_focus_query_taxonomy_path}" \
+        --require_shared_pfam "${hgt_focus_require_shared_pfam}" \
+        --allow_both_no_pfam "${hgt_focus_allow_both_no_pfam}" \
+        --min_shared_pfam_coverage "${hgt_focus_min_shared_pfam_coverage}" \
+        --require_length_ratio "${hgt_focus_require_length_ratio}" \
+        --min_length_ratio "${hgt_focus_min_length_ratio}" \
+        --direction_filter "${hgt_focus_direction_filter}" \
+        --species_taxonomy "${hgt_focus_existing_taxonomy}" \
+        --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
+      gg_artifact_record "${hgt_focus_provenance_args[@]}"
+    fi
   fi
 fi
 

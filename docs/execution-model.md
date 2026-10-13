@@ -11,9 +11,9 @@ The wrapper normalizes host/scheduler/runtime details first, then streams the ma
 `workflow/core/gg_*_core.sh` into the container shell.
 
 For disposable computation on `/tmp`, `/scratch`, or the execution node's `$TMPDIR`,
-see [Temporary computation storage](temporary-storage.md). The default is
-node-local `/tmp`; set `GG_COMMON_TMP_ROOT=workspace` when intermediate files
-must remain in the repository workspace.
+see [Temporary computation storage](temporary-storage.md). The default `auto`
+selects `/data1` on NIG execution nodes and workspace storage elsewhere,
+including SHIROKANE. Set `GG_COMMON_TMP_ROOT` explicitly to override this choice.
 
 ## High-level flow
 

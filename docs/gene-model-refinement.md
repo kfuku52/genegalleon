@@ -93,11 +93,37 @@ conflicting phases and translation/annotation exceptions remain unresolved.
 
 Two donor isoforms from one species count as one donor. Homology-only additions
 at an already intact locus remain nonrepresentative until target RNA supports
-the whole coding path. A supported repair of an incomplete original can become
+the whole coding path by default (`isoform_adoption=rna_required`). The opt-in
+`conservation_supported` policy permits accepted homology-only additions to
+enter conserved representative selection. Adoption still requires its score
+margin, independent donor species and copy/span safeguards, plus a strictly
+positive gain in the cross-species protein/junction score against the final
+adopted neighbors. A length/ORF quality improvement alone is insufficient. This
+does not claim target RNA support or establish isoform expression.
+A supported repair of an incomplete original can become
 representative after the independent selection gates. An accepted candidate is
 therefore not automatically the chosen representative. True species-specific
 isoforms, pseudogene annotations, translation exceptions and genomic disruptions
 are protected.
+
+A supplied-CDS mismatch can be repaired without changing the coding coordinates
+when exactly one owned original path has an intact, strictly genome-valid ORF
+under a known genetic code, and at least two distinct trusted external donor
+species support that same path (or the configured higher minimum). Prediction
+coverage, identity, phase, splice, exception and collision checks still apply.
+Self support and two reference groups from one species do not count as two
+independent species. Unsupported mismatches, partial paths and normal source
+models retain their existing gates.
+
+This DNA consistency repair is counted as a model revision, including when the
+gene has another normal isoform. It preserves the gene and source transcript
+IDs and reuses the original structural transcript. Exact original CDS/GFF bytes
+remain archived. A repaired source representative is marked `sequence_repaired`;
+an already selected normal alternative is retained. Final selection flags and
+counts agree, while the original graph decision, metrics and affected selected
+flags remain in a separate audit. Repair does not resolve paralog correspondence,
+assign orthology or expected copy, or establish target RNA support. These remain
+unassigned when the graph is ambiguous; intact genomic DNA alone is insufficient.
 
 Translation follows GeneGalleon's existing context-free codon-table convention:
 alternative initiator codons retain their ordinary residue, such as TTG → L
@@ -145,6 +171,7 @@ Important settings:
 | `run_gene_model_rescue_swissprot` | `1` | Audit missing-gene rescue candidates with the existing Swiss-Prot DB and use protein support for lower rescue bars. |
 | `gene_model_rescue_swissprot_dir` | blank | Separate evidence publication; default is the frozen rescue directory's sibling `.swissprot`. See [candidate evidence](gene-model-evidence.md#candidate-only-swiss-prot-support). |
 | `gene_model_refinement_policy` | `conserved` | `longest` or `conserved`. |
+| `gene_model_refinement_isoform_adoption` | `rna_required` | `conservation_supported` allows homology-only additions when cross-species consistency improves; requires `conserved` selection. |
 | `gene_model_refinement_mode` | `conservative` | `off` skips prediction; `audit` retains prediction proposals; `conservative` accepts only supported predictions. |
 | `gene_model_refinement_dir` | blank | `output/input_generation/gene_model_refinement`. Use a new directory for changed inputs/settings/implementation. |
 | `gene_model_refinement_inputs` | blank | Optional original species CDS/GFF/genome TSV, paired with `gene_model_refinement_edges`. |
@@ -201,6 +228,18 @@ stale predictions.
 graph, including missing stages. A copied effective input TSV must match its
 published bytes; changing species membership or genetic codes is not permitted
 by retaining the sequence hashes.
+
+During correspondence, each species' rescue sources and completed prepared
+publication are read in full once within a command-local verification scope.
+Repeated comparisons check the two participating species' file identities,
+resolved paths and permissions. All used proofs are checked before publication
+and at command exit; a later command reads the bytes again. Initially damaged
+prepared outputs retain the ordinary locked recovery/rebuild policy, but a
+change after successful verification aborts rather than refreshing the proof.
+Mutable comparison outputs still receive full content verification, and each
+new intermediate publication also checks its participating species immediately
+before publication. Comparison keys, donor order and biological gates are
+unchanged. The scope does not persist stat-authorized checksums between runs.
 
 For an externally reviewed graph, `plan --inputs sources.tsv --edges edges.tsv`
 avoids rebuilding synteny. Paths in `sources.tsv` may be relative to that table;
@@ -277,35 +316,38 @@ counts rather than zeros. `model_change_summary.json` records these counts and
 their source hashes. BUSCO stacks use the existing GeneGalleon palette: black
 single-copy, firebrick duplicated, dark grey fragmented and light grey missing.
 When the original completed rescue publication is available, rescued genes are
-stacked in four support categories: S only (self-species homology), R only
-(nearest relatives), P only (phylogenetically balanced references), or multiple
-(at least two of S/R/P). Classification uses all consolidated
+stacked in four support categories: Self species only, Nearest relatives only,
+Phylogenetically balanced references only, or Multiple groups (at least two).
+The legend and explanatory notes spell out these groups. Graphical legends sit
+directly below their corresponding BUSCO, missing-gene rescue, or coding-path
+panels. Donor-group legends appear separately below each supported-model panel;
+the Swiss-Prot legend stays below the rescue panel. Classification uses all consolidated
 `support` records of each accepted model, deduplicates donor species, and counts
 each gene locus once. A donor in both frozen reference lists supports both
 types, so the multiple category does not require two distinct donor species.
-Two donors in R alone still count as R only. The four categories must sum to
+Two donors from nearest relatives alone still count as Nearest relatives only. The four categories must sum to
 the source GFF gene count, with matching accepted
 model IDs and verified plan/model/augmentation receipts. Donor memberships and
 per-gene supporting species are saved in `model_change_summary.json`.
 Rescue model IDs can name gene or transcript features; explicit GFF `Parent`
 links map transcript identities to gene loci without guessing suffixes.
 Self-species support must belong to a frozen self-synteny comparison.
-A locus with S+R, S+P, R+P or S+R+P support belongs to multiple, so each
+A locus supported by at least two of the three groups belongs to multiple, so each
 gene appears once. Each bar's label shows the total across all four segments.
 When donor groups are available, the accepted-coding-path panel shows two bars
 per species: the upper bar partitions paths into repairs and additional
 isoforms, and the lower bar partitions the same paths by supporting donor group.
 The lower bar uses the rescue colours and frozen nearest/balanced lists. It
 also includes an `Other interspecies only` segment for paths supported solely
-by interspecies donors outside those lists and without S support, which can
-occur through reverse correspondence edges. Only means exactly one of S/R/P;
+by interspecies donors outside those lists and without self-species support, which can
+occur through reverse correspondence edges. Only means exactly one donor group;
 any additional unselected donors remain in the saved per-path evidence.
 Self support means homology support from the target
 species, not target RNA evidence. Counts use the recorded accepted prediction
 `donors`, cross-check candidate support and alignments, and count each candidate
 path once. Each lower bar must sum to the upper bar's repair plus isoform total.
 `rescue_support_groups` and `accepted_path_support_groups` store the current
-S/R/P counts. Legacy `rescue_support_counts`, `rescue_self_only_loci`,
+donor-group counts. Legacy `rescue_support_counts`, `rescue_self_only_loci`,
 `accepted_path_support_counts` and per-model donor records remain unchanged in
 `model_change_summary.json` for saved-data compatibility. Regrouping requires
 complete per-model evidence; old aggregate counts cannot recover mixed self
@@ -324,14 +366,26 @@ To validate and redraw an existing comparison without running BUSCO again, use
 `python workflow/support/gene_model_refinement_busco.py --plot-only --report
 /path/to/paired-busco`. This retains the original evaluation contract and also
 supports earlier summary-only comparisons; changed input/score bytes are rejected.
+Input CDS, saved contracts, receipts and score files stay within one fresh
+verification boundary until drawing finishes, so concurrent changes also fail.
+Relocating a report preserves the original summary paths as provenance; those
+paths are not scores. Receipt hashes still bind every summary, and all counts,
+tool and lineage metadata must match the original evaluation.
 Add `--output /path/to/refinement` to this plot-only command to include rescue
 and coding-path counts from that verified publication without rerunning BUSCO.
+The report must remain outside the immutable refinement tree, including when
+using `--plot-only`. Three-stage BUSCO and Swiss-Prot diagnostic legends also
+sit below their corresponding panels, outside the data area.
 
-The missing-gene panel also has two bars per species: upper, the same S/R/P
+The missing-gene panel also has two bars per species: upper, the same donor-group
 support counts; lower, repeat overlap for the same rescued loci. The lower bar
 partitions loci into any TE-labelled CDS overlap, other/unclassified repeat
 overlap without a TE hit, assessed with no repeat overlap, or not assessed.
 Each bar sums to the rescued-locus total; excluded species remain unavailable.
+Swiss-Prot diagnostic counts must agree with those locus totals and the primary
+support categories. The displayed thresholds are bound to the audit receipt;
+historical audits without diagnostics show unavailable diagnostic fields rather
+than retaining values from a previously loaded audit.
 Missing annotation is hatched and never treated as a negative hit. These are
 annotation-overlap categories, not confirmed TE origins or functional-gene calls.
 Intronic-only repeats do not count as CDS hits. The existing BUSCO palette is
@@ -492,6 +546,12 @@ streams contig lengths to validate annotation bounds. Final effective bundles
 retain their self-contained genome copies.
 
 ## Three-stage BUSCO
+
+Within each species, three thin horizontal stacked bars are ordered vertically:
+before missing-gene rescue, after rescue, and after refinement. This layout is
+also used by the combined improvement plot when all three phases are available.
+The same BUSCO palette and per-panel legends apply; excluded species remain
+visible and explicitly marked as not analysed.
 
 The standard pipeline using completed rescue inputs also emits
 `busco_three_stage.png/svg`: pre-rescue CDS, after missing-gene rescue, and

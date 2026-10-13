@@ -571,7 +571,7 @@ def test_generate_species_trait_gift_api_mode_uses_species_lookup_and_trait_page
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), GiftHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     completed = None
     try:
@@ -712,7 +712,7 @@ def test_generate_species_trait_gift_api_resolves_trait_name_via_traits_meta(tmp
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), GiftHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     completed = None
     try:
@@ -790,7 +790,7 @@ def test_generate_species_trait_print_gift_traits_supports_search_and_limit():
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), GiftHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     completed = None
     try:
@@ -897,7 +897,7 @@ def test_generate_species_trait_gbif_distribution_preset_without_trait_files(tmp
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), GbifHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     completed = None
     output = tmp_path / "species_trait.tsv"

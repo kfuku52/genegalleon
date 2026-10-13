@@ -4,6 +4,7 @@
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -56,15 +57,53 @@ def source_files(source, workspace, plan=False):
     return sorted(paths)
 
 
+def coalesce_project_sources(paths, project, workspace, destinations=()):
+    """Restrict already-visible raw input trees without growing container scope.
+
+    External sources and the writable workspace always retain exact file binds.
+    Only native staged-cache generations or flat input directories are grouped;
+    donor task plans and their lock namespaces must remain writable.
+    """
+    project, workspace = Path(project).resolve(strict=True), Path(workspace).resolve(strict=True)
+    paths = set(paths)
+    reserved = {Path(name).resolve() for name in destinations} - {project}
+
+    def allowed(directory):
+        return (directory != project and directory.is_relative_to(project)
+                and not directory.is_relative_to(workspace) and not workspace.is_relative_to(directory)
+                and not any(directory.is_relative_to(name) or name.is_relative_to(directory) for name in reserved))
+
+    groups = set()
+    for path in paths:
+        for parent in path.parents:
+            if (parent.parent.name == "staged" and parent.parent.parent.name == "input_download_cache"
+                    and re.fullmatch(r"[0-9a-f]{64}", parent.name) and allowed(parent)):
+                groups.add(parent)
+                break
+    remaining = {path for path in paths if not any(path.is_relative_to(group) for group in groups)}
+    for directory in {path.parent for path in remaining}:
+        if allowed(directory) and "input" in directory.relative_to(project).parts:
+            members = {path for path in remaining if path.parent == directory}
+            if len(members) > 1 and all(item.is_file() and not item.is_symlink() and not item.name.startswith(".")
+                                        and not item.name.endswith(".lock") for item in directory.iterdir()):
+                groups.add(directory)
+    return sorted(groups | {path for path in remaining if not any(path.is_relative_to(group) for group in groups)})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--manifest", type=Path)
     group.add_argument("--plan", type=Path)
     parser.add_argument("--workspace", required=True, type=Path)
+    parser.add_argument("--coalesce-project-sources", type=Path)
+    parser.add_argument("--existing-bind-destination", action="append", default=[])
     args = parser.parse_args()
     try:
         paths = source_files(args.plan or args.manifest, args.workspace, plan=args.plan is not None)
+        if args.coalesce_project_sources is not None:
+            paths = coalesce_project_sources(paths, args.coalesce_project_sources, args.workspace,
+                                             args.existing_bind_destination)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.error(str(exc))
     for path in paths:

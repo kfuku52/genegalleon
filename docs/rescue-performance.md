@@ -7,6 +7,24 @@ to every original candidate before validation. The comparison cache binds
 actual BED/protein inputs, comparison options and the relevant toolchain.
 See [gene-model rescue](gene-model-rescue.md) for controls and cache guarantees.
 
+## BUSCO resource bounds
+
+The refinement comparison admits at most `--jobs` species at once. The first
+observed failure stops further admission and waits for admitted species to
+finish naturally. Successful results retain the original species order.
+
+The BUSCO compatibility helper sets the child's `MMSEQS_NUM_THREADS` to the
+requested `--cpu`/`-c` value, or one when it is absent, while retaining a positive
+lower inherited limit. MetaEuk subcommands that omit `--threads` can otherwise
+use the host's online CPU count. The helper preserves the parent environment,
+BUSCO arguments and exit status. These changes do not alter model selection or
+BUSCO scoring thresholds; no whole-workflow speedup is asserted.
+
+The ordinary comparison contract includes the evaluator and wrapper hashes.
+Upgrading these files requires a new report directory. Changing only `--jobs`
+keeps the existing contract; completed leaves still require their exact source,
+summary and full-table hashes before reuse.
+
 ## Baseline evidence
 
 The 2026-10-04/05 run used GeneGalleon 0.8.124, x86_64 SIF, miniprot
@@ -106,3 +124,101 @@ When the producer did not run an interval or fallback search, that phase is
 listed in `result.json` under `skipped`, with no timings or index build.
 Partially recorded or missing evidence fails the check. Output equivalence and
 input-change checks remain active under Python's `-O` option.
+
+Verified prediction reuse also avoids generating unused local-search inputs.
+Only uncached windows are fetched and written; a completely cached local search
+does not create `regions.fa` or `queries.fa`. Genome indexing and its mandatory
+input QC still run. A predictor-facing genome alias is created only when an
+actual genome-wide or GeMoMa search needs it.
+
+A bounded benchmark with 2,048 candidates sharing 64 windows used one warmup
+and three measured trials. With 99% cached candidates, local FASTA output fell
+from 67.5 MB to 0.659 MB, and median writing plus eight-thread hash verification
+fell from 0.754 s to 0.011 s. Complete reuse wrote no local-search FASTA bytes;
+uncached inputs retained identical bytes. These measurements cover input
+preparation, not alignment or total workflow runtime.
+
+Final CDS/GFF export likewise streams `models.json`, retaining accepted models
+only, while preserving producer-receipt and source verification. On a 4.76 GB
+Ancistrocladus result, every trial retained the same 379 models with identical
+canonical JSON SHA256. One warmup plus three alternating measured trials per
+method gave a median 42.7 s / 12.1 GiB peak RSS for full-array loading versus
+25.5 s / 38 MiB for streaming. These figures measure JSON loading/filtering,
+not the whole export, genome validation or alignment.
+
+Atomic JSON output streams the same sorted, indented document through a 1 MiB
+buffer. Temporary files are removed after encoding, writing or publication
+failures, and immutable plans retain their existing comparison semantics.
+This avoids keeping an additional whole-document string and encoder chunk list
+in memory. During the 23-species run, the Simmondsia worker reached 176.6 GiB
+virtual-memory peak while materialising a 32.2 GB JSON result before writing it.
+
+A separate normal-SIF benchmark used 2,048 actual Simmondsia records, one warmup
+and three trials per method. All output bytes were identical. Median peak RSS
+was 66.0 MiB for full-document encoding and 38.8 MiB for buffered streaming;
+the loaded input itself used about 39 MiB. Median wall times were 0.238 s and
+0.247 s, so this benchmark demonstrates lower additional memory, not a timing
+speedup. The full-run peak is an observation, not a controlled comparison.
+
+## Streaming rescue audit tables
+
+The rescue producer writes `quality_flags.tsv` and `audit.tsv` from iterators
+instead of materialising another row list for each table. Model order, unresolved
+candidate order, columns and CSV quoting remain unchanged. The validated model
+collection still resides in memory; this change reduces table-writer overhead.
+
+A normal x86_64 SIF benchmark repeated 2,048 frozen Simmondsia records 128 times
+(262,144 model rows). One warmup and three alternating measured trials compared
+the exact production writer statements. Both complete output files were byte
+identical, including an unresolved fixture containing tabs, quotes and newlines.
+Median process peak RSS fell from 170.9 MiB to 56.8 MiB. The loaded sample is
+included in RSS, while input loading, AST extraction and process startup are
+outside writer wall time. Legacy wall times ranged from 5.55 to 7.21 seconds
+and streaming times from 4.90 to 5.78 seconds on the shared server. These
+measurements support a memory reduction for this serialization workload,
+without establishing whole-producer, cold-cache or 500-species performance.
+
+Use immutable source and sample directories and the sample's full SHA256:
+
+```bash
+GENEGALLEON_SIF_EXTRA_BINDS=$'/data/frozen_source\n/data/model_sample' \
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_rescue_tables.py \
+  --source /data/frozen_source --candidate "$PWD" \
+  --models /data/model_sample/models.json --sample-sha256 "$SAMPLE_SHA256" \
+  --repeat 128 --output workspace/output/rescue_table_benchmark
+```
+
+The output directory must be new. The benchmark retains implementation hashes,
+sample identity, commands, trial RSS and timing measurements, output hashes and
+row-count validation. A changed sample or different output bytes fails the run.
+
+## Compact model-store envelope encoding
+
+The compact writer validates and encodes each final candidate envelope once,
+then reuses the same immutable bytes for its accepted overlay. Explicit partial
+matching retains its distinct ordinal-free encoding. Direct helper validation,
+record bounds (including the JSONL newline), collision checks, output order,
+compression and verified reader contracts remain unchanged.
+
+A bounded normal x86_64 SIF benchmark used one CPU, 3,000 synthetic loci
+(6,000 donor-specific models), 750 accepted models and 150 revisions. Each
+condition had one warmup per method followed by six alternating trials, three
+per method. All published member bytes matched, including SQLite databases,
+compressed shards and manifests; an independent baseline reader restored every
+model, accepted path, partial record and revision.
+
+| Codec and partial mode | Previous median writer time | Single-pass median writer time | Observed reduction |
+|---|---:|---:|---:|
+| gzip, automatic | 1.182 s | 0.934 s | 20.9% |
+| zstd, automatic | 1.018 s | 0.891 s | 12.5% |
+| gzip, explicit reordered/repeated | 1.554 s | 1.263 s | 18.8% |
+| zstd, explicit reordered/repeated | 1.229 s | 1.100 s | 10.6% |
+
+Writer timing includes compression, SQLite, checksums, fsync and publication;
+input decoding, startup and readback validation are excluded. This is a storage
+component measurement on a shared server, with only three measured trials per
+method and condition. The zstd automatic ranges overlapped (previous
+0.949–1.047 s; single-pass 0.891–1.199 s). All process high-water memory readings
+were 153.3 MiB and already reached before the timed writer, so this measurement
+does not resolve writer memory differences or establish a memory reduction.
+These results do not predict whole-producer or 500-species runtime.

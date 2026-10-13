@@ -1,3 +1,74 @@
+.alignment_domain_keys <- function(is_atgc, mapped_untrim_nt, df_seq_rps,
+                                   domain_rank, non_domain_fill, key_sep) {
+  key_vec <- rep(NA_character_, length(is_atgc))
+  valid_idx <- which(is_atgc)
+  key_vec[valid_idx] <- non_domain_fill
+  mapped_idx <- valid_idx[!is.na(mapped_untrim_nt[valid_idx])]
+  if (!nrow(df_seq_rps)) return(key_vec)
+  seq_aa_len <- suppressWarnings(as.integer(df_seq_rps[1, 'qlen']))
+  if (is.na(seq_aa_len) || seq_aa_len <= 0) return(key_vec)
+
+  # The existing trimmed-to-untrimmed mapper yields strictly increasing
+  # non-gap nucleotide indices. Find the inclusive hit endpoints in that
+  # vector, then update domain sets only at interval boundaries.
+  qstart <- suppressWarnings(as.integer(df_seq_rps[['qstart']]))
+  qend <- suppressWarnings(as.integer(df_seq_rps[['qend']]))
+  keep <- which(is.finite(qstart) & is.finite(qend))
+  if (!length(keep)) return(key_vec)
+  nt_start <- pmax(1L, (qstart[keep] - 1L) * 3L + 1L)
+  nt_end <- pmin(seq_aa_len * 3L, qend[keep] * 3L)
+  # As in the pointwise implementation, overflowing integer coordinates are
+  # invalid input, rather than domain-free sequence positions.
+  if (anyNA(nt_start) || anyNA(nt_end)) stop('missing value where TRUE/FALSE needed')
+  if (!length(mapped_idx)) return(key_vec)
+  usable <- nt_start <= nt_end
+  keep <- keep[usable]
+  nt_start <- nt_start[usable]
+  nt_end <- nt_end[usable]
+  mapped_nt <- mapped_untrim_nt[mapped_idx]
+  lower <- findInterval(nt_start - 1L, mapped_nt) + 1L
+  upper <- findInterval(nt_end, mapped_nt)
+  usable <- lower <= upper
+  if (!any(usable)) return(key_vec)
+  lower <- lower[usable]
+  upper <- upper[usable]
+  labels <- as.character(df_seq_rps[['sacc']][keep[usable]])
+
+  # Integer IDs keep repeated labels distinct from delimiters in identifiers.
+  # Counts preserve a label until the last overlapping hit has ended.
+  domain_labels <- unique(labels)
+  rank <- unname(domain_rank[match(domain_labels, names(domain_rank))])
+  rank[is.na(rank)] <- Inf
+  domain_labels <- domain_labels[order(rank, domain_labels, method = 'radix', na.last = TRUE)]
+  label_id <- match(labels, domain_labels)
+  event_pos <- c(lower, upper + 1L)
+  event_id <- c(label_id, label_id)
+  event_delta <- c(rep.int(1L, length(lower)), rep.int(-1L, length(upper)))
+  ord <- order(event_pos, method = 'radix')
+  event_pos <- event_pos[ord]
+  event_id <- event_id[ord]
+  event_delta <- event_delta[ord]
+  boundaries <- rle(event_pos)
+  event_end <- cumsum(boundaries$lengths)
+  event_start <- event_end - boundaries$lengths + 1L
+  active_count <- integer(length(domain_labels))
+  if (length(boundaries$values) > 1L) {
+    for (i in seq_len(length(boundaries$values) - 1L)) {
+      rows <- seq.int(event_start[i], event_end[i])
+      start_id <- event_id[rows[event_delta[rows] > 0L]]
+      end_id <- event_id[rows[event_delta[rows] < 0L]]
+      active_count <- active_count + tabulate(start_id, length(domain_labels)) -
+        tabulate(end_id, length(domain_labels))
+      active <- which(active_count > 0L)
+      if (length(active)) {
+        segment <- seq.int(boundaries$values[i], boundaries$values[i + 1L] - 1L)
+        key_vec[mapped_idx[segment]] <- paste(domain_labels[active], collapse = key_sep)
+      }
+    }
+  }
+  key_vec
+}
+
 add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_untrim = NULL) {
   cat(as.character(Sys.time()), 'Adding alignment column.\n')
   
@@ -30,6 +101,7 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
   domain_rank = setNames(seq_along(names(domain_fill_colors)), names(domain_fill_colors))
   
   key_sep <- ':::DOMAINSEP:::'
+  rps_rows <- split(seq_len(nrow(df_rps)), as.character(df_rps[['qacc']]))
 
   # We'll accumulate data frames for each tip in a list (faster than rbind in a loop)
   out_list <- vector("list", length(df_tip[['label']]))
@@ -46,78 +118,19 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     # Convert to a logical vector: TRUE if not '04', FALSE if '04'
     is_atgc <- (seq_vec != '04')
     mapped_untrim_nt = rep(NA_integer_, length(seq_vec))
-    has_untrim_map = FALSE
     if (!is.null(seqs_untrim) && !is.null(seqs_untrim[[seqname]])) {
       seq_untrim_vec = as.character(seqs_untrim[[seqname]])
       if (length(seq_untrim_vec) > 0) {
         mapped_untrim_nt = map_trimmed_to_untrimmed_nongap_index(seq_trim = seq_vec, seq_untrim = seq_untrim_vec, gap_code = '04')
-        has_untrim_map = any(!is.na(mapped_untrim_nt[is_atgc]))
       }
     }
 
-    active_domains <- vector("list", length(seq_vec))
+    df_seq_rps <- df_rps[integer(0), , drop = FALSE]
     if (nrow(df_rps) > 0 && has_untrimmed_alignment) {
-      df_seq_rps <- df_rps[(df_rps[['qacc']] == seqname), c('sacc', 'qstart', 'qend', 'qlen'), drop = FALSE]
-      if (nrow(df_seq_rps) > 0) {
-        nt_pos_trim = cumsum(is_atgc)
-        seq_aa_len <- suppressWarnings(as.integer(df_seq_rps[1, 'qlen']))
-        if (!is.na(seq_aa_len) && seq_aa_len > 0) {
-          ord <- order(
-            ifelse(df_seq_rps[['sacc']] %in% names(domain_rank), domain_rank[df_seq_rps[['sacc']]], Inf),
-            suppressWarnings(as.numeric(df_seq_rps[['qstart']])),
-            method = 'radix',
-            na.last = TRUE
-          )
-          for (k in ord) {
-            qstart_aa <- suppressWarnings(as.integer(df_seq_rps[k, 'qstart']))
-            qend_aa <- suppressWarnings(as.integer(df_seq_rps[k, 'qend']))
-            if (!is.finite(qstart_aa) || !is.finite(qend_aa)) {
-              next
-            }
-            nt_start <- (qstart_aa - 1L) * 3L + 1L
-            nt_end <- qend_aa * 3L
-            nt_start <- max(1L, nt_start)
-            nt_end <- min(seq_aa_len * 3L, nt_end)
-            if (nt_start > nt_end) {
-              next
-            }
-            if (has_untrim_map) {
-              is_domain_pos <- is_atgc & !is.na(mapped_untrim_nt) & (mapped_untrim_nt >= nt_start) & (mapped_untrim_nt <= nt_end)
-            } else {
-              is_domain_pos <- rep(FALSE, length(seq_vec))
-            }
-            hit_idx <- which(is_domain_pos)
-            if (length(hit_idx) > 0) {
-              dlabel <- as.character(df_seq_rps[k, 'sacc'])
-              for (h in hit_idx) {
-                if (is.null(active_domains[[h]]) || length(active_domains[[h]]) == 0) {
-                  active_domains[[h]] <- dlabel
-                } else if (!(dlabel %in% active_domains[[h]])) {
-                  active_domains[[h]] <- c(active_domains[[h]], dlabel)
-                }
-              }
-            }
-          }
-        }
-      }
+      df_seq_rps <- df_rps[rps_rows[[seqname]], c('sacc', 'qstart', 'qend', 'qlen'), drop = FALSE]
     }
-    key_vec <- rep(NA_character_, length(seq_vec))
-    valid_idx <- which(is_atgc)
-    for (i in valid_idx) {
-      labels_i <- active_domains[[i]]
-      if (is.null(labels_i) || length(labels_i) == 0) {
-        key_vec[i] <- non_domain_fill
-      } else {
-        labels_i <- unique(as.character(labels_i))
-        ord_i <- order(
-          ifelse(labels_i %in% names(domain_rank), domain_rank[labels_i], Inf),
-          labels_i,
-          method = 'radix',
-          na.last = TRUE
-        )
-        key_vec[i] <- paste(labels_i[ord_i], collapse = key_sep)
-      }
-    }
+    key_vec <- .alignment_domain_keys(is_atgc, mapped_untrim_nt, df_seq_rps,
+                                      domain_rank, non_domain_fill, key_sep)
 
     # Run-length encode
     runs <- rle(key_vec)
@@ -129,48 +142,20 @@ add_alignment_column <- function(g, args, seqs = NULL, df_rpsblast = NULL, seqs_
     # Keep only runs in non-gap positions
     keep_idx <- which(!is.na(runs$value))
     if (length(keep_idx) > 0) {
-      local_rows <- list()
-      local_n <- 1
-      for (rk in keep_idx) {
-        xmin_val <- run_starts[rk] - 1
-        xmax_val_run <- run_ends[rk] - 1
-        key_val <- runs$value[rk]
-        if (identical(key_val, non_domain_fill)) {
-          local_rows[[local_n]] <- data.frame(
-            xmin = xmin_val,
-            xmax = xmax_val_run,
-            label = seqname,
-            fill = non_domain_fill,
-            split_index = 1L,
-            split_total = 1L,
-            stringsAsFactors = FALSE
-          )
-          local_n <- local_n + 1
-        } else {
-          labels_run <- strsplit(as.character(key_val), key_sep, fixed = TRUE)[[1]]
-          n_split <- length(labels_run)
-          if (n_split == 0) {
-            next
-          }
-          for (j in seq_len(n_split)) {
-            local_rows[[local_n]] <- data.frame(
-              xmin = xmin_val,
-              xmax = xmax_val_run,
-              label = seqname,
-              fill = labels_run[j],
-              split_index = as.integer(j),
-              split_total = as.integer(n_split),
-              stringsAsFactors = FALSE
-            )
-            local_n <- local_n + 1
-          }
-        }
-      }
-      if (length(local_rows) > 0) {
-        df_local <- do.call(rbind, local_rows)
-      } else {
-        df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0), fill = character(0), split_index = integer(0), split_total = integer(0))
-      }
+      # Expand runs once per tip. The old one-row frame for every interval and
+      # overlapping domain spent most alignment-panel time constructing frames.
+      # Keep run order, domain order, zero-based endpoints and integer split IDs.
+      labels_run <- strsplit(as.character(runs$value[keep_idx]), key_sep, fixed = TRUE)
+      n_split <- lengths(labels_run)
+      df_local <- data.frame(
+        xmin = rep(run_starts[keep_idx] - 1, n_split),
+        xmax = rep(run_ends[keep_idx] - 1, n_split),
+        label = rep(seqname, sum(n_split)),
+        fill = unlist(labels_run, use.names = FALSE),
+        split_index = sequence(n_split),
+        split_total = rep(n_split, n_split),
+        stringsAsFactors = FALSE
+      )
     } else {
       # If there are no TRUE runs, just store an empty data frame
       df_local <- data.frame(xmin = numeric(0), xmax = numeric(0), label = character(0), fill = character(0), split_index = integer(0), split_total = integer(0))
@@ -517,6 +502,18 @@ add_categorical_column = function(g, args, gname, col, xlab, missing_label = '-'
     if (is_query_marker) {
         palette['Best hit'] = 'black'
         if (identical(xlab, 'Query')) xlab = 'Query\nbest\nhit'
+    }
+    if (identical(col, 'hgtfocus_tip_status')) {
+        for (level in setdiff(levels, missing_label)) {
+            donor = grepl('donor descendant', level, fixed=TRUE)
+            recipient = grepl('recipient descendant', level, fixed=TRUE)
+            unconfirmed = grepl('unconfirmed', level, fixed=TRUE)
+            palette[level] = if (donor && recipient) '#725580' else if (donor) {
+                if (unconfirmed) '#c4d9ea' else '#2b6ca3'
+            } else if (recipient) {
+                if (unconfirmed) '#ead1be' else '#b34d00'
+            } else '#a6adb2'
+        }
     }
     df_tip[['plot_value']] = factor(values, levels = levels)
     df_tip[['panel_x']] = 1

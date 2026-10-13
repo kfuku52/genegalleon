@@ -16,6 +16,105 @@ from gff2genestat import read_gff_table
 from gff_attribute_syntax import normalise_attributes, normalise_line
 
 
+@pytest.mark.parametrize("note", [
+    "Retrovirus-related Pol polyprotein [Includes: Protease (EC 3.4.23.-); Reverse transcriptase (EC 2.7.7.49); Endonuclease]",
+    "Alpha-mannosidase [Cleaved into: Alpha-mannosidase, heavy subunit; Alpha-mannosidase, light subunit]",
+    "Aquaporin (TIP1;1) (rTIP1)",
+    "Cysteine synthase (ARAth-Bsas4;1) (AtcysD1)",
+    "Protein [Cleaved into: Subunit alpha; Subunit beta] [Includes: Enzyme A; Enzyme B]",
+    "literal%253B (A;B) [Includes: C;D]",
+    "Nucleosome assembly protein 1;2 (NtNAP1;2) (Nucleosome assembly protein 1-like 2) (NtNAP1_L2)",
+    "Cation transporter HKT1;3 (OsHKT1;3) (Cation transporter HKT6) (OsHKT6)",
+])
+def test_maker_note_balanced_separators_preserve_description_and_identity(note):
+    from urllib.parse import unquote
+    raw = "ID=t;Parent=g;Name=t;Note=" + note + ";Dbxref=PFAM:PF00001;transl_table=1"
+    expected = raw.replace(note, note.replace(";", "%3B").replace(",", "%2C"))
+    fixed = normalise_attributes(raw, "maker", "mRNA")
+    assert fixed == expected
+    assert unquote(fixed) == unquote(raw)
+    assert normalise_attributes(fixed, "maker", "mRNA") == fixed
+    changes = []
+    normalise_line("chr1\tmaker\tmRNA\t1\t9\t.\t+\t.\t" + raw + "\n", "source", 1, changes)
+    assert changes[0]["reason"] == "escaped_maker_note_balanced_semicolon"
+
+
+@pytest.mark.parametrize("attrs,source,feature", [
+    ("ID=t;Parent=g;Note=protein (alpha;Parent:g)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha;unknown:key)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; b;Parent=g)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta]", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha;; beta)", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein [Includes: alpha; beta];unknown", "maker", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta)", "other", "mRNA"),
+    ("ID=t;Parent=g;Note=protein (alpha; beta)", "maker", "gene"),
+    ("ID=t;Parent=g (alpha; beta)", "maker", "mRNA"),
+    ("Note=Nucleosome assembly protein 1;2 (NtNAP1;3)", "maker", "mRNA"),
+    ("Note=Cation transporter HKT1;3 (NtNAP1;3)", "maker", "mRNA"),
+    ("Note=unknown protein 1;2 (NtNAP1;2)", "maker", "mRNA"),
+])
+def test_maker_note_repair_rejects_structural_unknown_and_incomplete_boundaries(attrs, source, feature):
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        normalise_attributes(attrs, source, feature)
+
+
+@pytest.mark.parametrize("mode", ["off", "safe", "strict"])
+@pytest.mark.parametrize("paired", [False, True])
+def test_maker_note_is_repaired_before_full_gff_formatting_without_model_changes(tmp_path, mode, paired):
+    import format_species_discovery as formatting
+    from gff_attribute_syntax import validate_gff
+
+    note = "Polyprotein [Includes: Protease; Reverse transcriptase; Endonuclease] (TIP1;1)"
+    raw = tmp_path / "raw.gff3"
+    text = ("##gff-version 3\nchr1\tmaker\tgene\t1\t12\t.\t+\t.\tID=g1;Name=g1\n"
+            "chr1\tmaker\tmRNA\t1\t12\t.\t+\t.\tID=t1;Parent=g1;Name=t1;Note=" + note + "\n"
+            "chr1\tmaker\tCDS\t1\t12\t.\t+\t0\tParent=t1\n")
+    raw.write_text(text)
+    cds = tmp_path / "Species_one.cds.fa"
+    cds.write_text(">Species_one_g1\nATGAAACCCTAA\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    task = {"provider": "local", "species_key": "Species_one", "species_prefix": "Species_one",
+            "gff_path": raw, "gff_repair_mode": mode}
+    result = formatting.format_gff(task, output, overwrite=False, dry_run=False,
+                                   formatted_cds_path=cds if paired else None)
+    validate_gff(result["output_path"])
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.read() == text.replace(note, note.replace(";", "%3B"))
+    audit = json.loads(Path(str(result["output_path"]) + ".repair.json").read_text())["attribute_syntax"]
+    assert audit["changed_rows"] == 1 and audit["changes"][0]["source_line"] == 3
+    assert audit["changes"][0]["reason"] == "escaped_maker_note_balanced_semicolon"
+    assert raw.read_text() == text
+
+
+@pytest.mark.parametrize("note", [
+    "Geneious type: Repeat Region; Geneious type: repeat_region",
+    "Geneious type: Repeat_Regiion; IRa; Geneious type: repeat_region",
+])
+def test_geneious_organelle_repeat_notes_preserve_literal_semicolons(note):
+    from urllib.parse import unquote
+    raw = "ID=repeat;note=" + note + ";standard_name=IRb Repeat region;transl_table=11"
+    fixed = normalise_attributes(raw, ".", "misc_feature")
+    assert unquote(fixed) == raw
+    assert normalise_attributes(fixed, ".", "misc_feature") == fixed
+    changes = []
+    normalise_line("organelle\t.\tmisc_feature\t1\t50\t.\t+\t.\t" + raw + "\n", "source", 1, changes)
+    assert changes[0]["reason"] == "escaped_geneious_repeat_note_semicolon"
+
+
+@pytest.mark.parametrize("attrs,source,feature", [
+    ("note=Geneious type: Repeat Region;Parent:t", ".", "misc_feature"),
+    ("note=Geneious type: Repeat Region; IRa; arbitrary", ".", "misc_feature"),
+    ("note=Geneious type: Repeat Region; Geneious type: repeat_region", ".", "gene"),
+    ("note=Geneious type: Repeat Region; Geneious type: repeat_region", "other", "misc_feature"),
+    ("Note=Geneious type: Repeat Region; Geneious type: repeat_region", ".", "misc_feature"),
+])
+def test_geneious_repair_rejects_ambiguous_or_structural_fragments(attrs, source, feature):
+    with pytest.raises(ValueError, match="Unrecoverable"):
+        normalise_attributes(attrs, source, feature)
+
+
 def test_description_linkage_separator_is_encoded_and_audited():
     raw = "ID=Sb01g07380;description=PREDICTED: endo-1,3;1,4-beta-D-glucanase-like [Sesamum indicum];transl_table=1"
     expected = raw.replace("1,3;1,4-", "1%2C3%3B1%2C4-")
@@ -254,3 +353,32 @@ def test_busco_import_rejects_a_source_change_during_copy(busco_pair, monkeypatc
     with pytest.raises(OSError, match="File changed"):
         resume.import_busco(donor, target, "S", source_cds, target_cds, source_settings, target_settings)
     assert not (target / "artifact_provenance/busco.S.json").exists()
+
+
+@pytest.mark.parametrize("extra", ["\t", "\t\t\t"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
+def test_empty_trailing_gff_columns_preserve_features_and_audit(tmp_path, extra, ending):
+    from format_species_annotation.organelle import iter_non_organelle_gff_lines
+    from gff_attribute_syntax import validated_lines
+
+    feature = "Chr10\tEVM\tCDS\t1029939\t1030655\t.\t-\t0\tID=cds.CcoG0000001.1;Parent=CcoG0000001.1;"
+    raw = feature + extra + ending
+    changes = []
+    fixed = normalise_line(raw, "Cornus.gff", 1, changes)
+    assert fixed == feature + ending
+    assert changes == [{"source_line": 1, "before": feature + extra,
+                        "after": feature, "reason": "removed_empty_trailing_columns"}]
+    assert list(validated_lines([fixed], "formatted.gff")) == [fixed]
+    with pytest.raises(ValueError, match="nine GFF columns"):
+        list(validated_lines([raw], "unformatted.gff"))
+    source = tmp_path / "Cornus.gff"
+    source.write_bytes(raw.encode())
+    assert list(iter_non_organelle_gff_lines(source, seqids=())) == [feature + ("\n" if ending else "")]
+    assert source.read_bytes() == raw.encode()
+
+
+@pytest.mark.parametrize("extra", ["\tvalue", "\t ", "\tvalue\t", "\t\tvalue"])
+def test_nonempty_extra_gff_columns_remain_rejected(extra):
+    feature = "chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=t"
+    with pytest.raises(ValueError, match="nine GFF columns"):
+        normalise_line(feature + extra + "\n", "source.gff", 1, [])

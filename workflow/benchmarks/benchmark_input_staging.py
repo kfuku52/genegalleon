@@ -35,6 +35,19 @@ def worker(args):
     manifest.write_text('provider\tid\tspecies_key\tbind_local_sources\tcds_url\tgff_url\tgenome_url\n'
                         + 'direct\tfixture\tExample_species\t1\t'
                         + '\t'.join(roles[role].as_uri() for role in ('cds', 'gff', 'genome')) + '\n')
+    if args.staged_reuse:
+        donor = root / 'donor/output/input_generation/tmp/task_plan.json'
+        with contextlib.redirect_stdout(io.StringIO()):
+            sys.argv = ['planner', '--provider', 'all', '--download-manifest', str(manifest),
+                        '--download-dir', str(root / 'downloads'), '--stage-downloads', '--outfile', str(donor)]
+            assert planner.main() == 0
+            staging.stage_downloads(donor)
+        settings = Path(str(donor) + '.settings.json')
+        settings.write_text('{}\n')
+        state.atomic_json(Path(str(donor) + '.prepared.json'), {
+            'plan_sha256': state.digest(donor), 'settings_sha256': state.digest(settings),
+            'files': state.digest_paths(Path(str(donor) + '.tasks').glob('1.*')),
+        })
     original = state.digest
     reads = []
 
@@ -51,6 +64,8 @@ def worker(args):
         started = time.perf_counter()
         with contextlib.redirect_stdout(io.StringIO()):
             if phase == 'plan':
+                if args.staged_reuse:
+                    state.export_staged_manifest(donor, manifest)
                 sys.argv = ['planner', '--provider', 'all', '--download-manifest', str(manifest),
                             '--download-dir', str(root / 'downloads'), '--stage-downloads', '--outfile', str(plan)]
                 assert planner.main() == 0
@@ -64,9 +79,17 @@ def worker(args):
         phases[phase] = {'seconds': time.perf_counter() - started,
                          'sha256_calls': len(reads), 'sha256_bytes': sum(reads)}
     proof = hashlib.sha256()
-    for path in [plan, root / 'metadata.json', *sorted(Path(str(plan) + '.tasks').iterdir())]:
-        proof.update(path.name.encode())
-        proof.update(path.read_bytes())
+    if args.compare_staged_reuse:
+        # The new plan adds sealed staging evidence. Compare all staged input
+        # roles, identities, parameters and source hashes, excluding that added
+        # evidence field; no scientific input/result is excluded.
+        actual = json.loads((Path(str(plan) + '.tasks') / '1.json').read_text())['task']
+        actual.pop('staged_input_reuse', None)
+        proof.update(json.dumps(actual, sort_keys=True).encode())
+    else:
+        for path in [plan, root / 'metadata.json', *sorted(Path(str(plan) + '.tasks').iterdir())]:
+            proof.update(path.name.encode())
+            proof.update(path.read_bytes())
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     print(json.dumps({'phases': phases, 'receipt_sha256': proof.hexdigest(),
                       'peak_rss_bytes': peak_rss * (1 if sys.platform == 'darwin' else 1024)}))
@@ -80,6 +103,8 @@ def main():
     parser.add_argument('--trials', type=int, default=3)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--alias-roles', action='store_true')
+    parser.add_argument('--compare-staged-reuse', action='store_true', help='Compare ordinary bound inputs with native sealed staging export.')
+    parser.add_argument('--staged-reuse', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--fixture-root', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -91,6 +116,8 @@ def main():
     if not args.output:
         parser.error('--output is required')
     roots = {'current': args.support_root.resolve()}
+    if args.compare_staged_reuse:
+        roots = {'baseline': args.support_root.resolve(), 'current': args.support_root.resolve()}
     if args.baseline_support:
         roots['baseline'] = args.baseline_support.resolve()
     result = {'python': sys.version, 'platform': platform.platform(), 'genome_mib': args.genome_mib,
@@ -115,6 +142,10 @@ def main():
                            '--fixture-root', str(root)]
                 if args.alias_roles:
                     command.append('--alias-roles')
+                if args.compare_staged_reuse:
+                    command.append('--compare-staged-reuse')
+                    if label == 'current':
+                        command.append('--staged-reuse')
                 sample = json.loads(subprocess.check_output(command, text=True))
                 print(label, 'warmup' if trial == 0 else trial, sample['phases'], flush=True)
                 if trial:

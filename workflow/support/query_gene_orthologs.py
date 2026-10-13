@@ -7,9 +7,10 @@ itself). A tip assigned to more than one adjacent column is represented as a
 shared ancestral copy predating the duplication that separated those
 reference genes. Tips are grouped by species and reference-gene set so their
 group size is the plotted copy number. Plot labels are verified against the
-family CDS FASTA. The tree table also retains every reconciled duplication
-outside the compact reference-gene subtree so the plot can map the complete
-family's duplication history onto the species tree. A fourth table compares
+family CDS FASTA. The tree table retains every original duplication and records
+which displayed genes descend from each child, so bars count only D nodes with
+displayed genes in both children without changing the original S/D calls.
+A fourth table compares
 each plotted copy with each covered reference gene using the family's local
 synteny neighborhoods. Two or more distinct shared neighbor-similarity groups
 provide local-synteny support; a single shared group is retained as
@@ -18,7 +19,8 @@ A fifth table retains candidate/reference pair provenance for Gene tree UFBoot,
 while requiring every pair represented by one glyph to resolve to the same
 orthology-defining speciation branch and support value.
 
-The default reference-species basis preserves the historical output schema.
+The default reference-species basis preserves the historical output fields,
+with additive displayed-descendant provenance in the tree table.
 The query-gene basis coalesces query records that select the same gene-tree
 tip, retains every original record in a query-to-anchor mapping table, and
 writes semantically explicit ``anchor_*`` fields.
@@ -42,6 +44,13 @@ else:
 STAT_BRANCH_SUFFIX = "_stat.branch.tsv"
 SYNTENY_SUFFIX = "_synteny.tsv"
 SYNTENY_SUPPORT_MIN_ANCHORS = 2
+DUP_CONF_FIELDS = [
+    "family_id", "family_order", "species", "reference_cds_fasta_id",
+    "candidate_cds_fasta_id", "mrca_branch_id", "mrca_event",
+    "shared_species_count", "union_species_count", "dup_conf_score",
+    "dup_conf_score_threshold", "branch_ufboot", "branch_ufboot_source",
+]
+QUERY_DUP_CONF_FIELDS = [field.replace("reference_", "anchor_", 1) for field in DUP_CONF_FIELDS]
 COLUMN_FIELDS = [
     "column_order",
     "family_id",
@@ -85,6 +94,9 @@ TREE_FIELDS = [
     "mapped_species_node",
     "duplication_index",
     "in_reference_tree",
+    "displayed_gene_ids",
+    "displayed_child1_gene_ids",
+    "displayed_child2_gene_ids",
 ]
 SYNTENY_FIELDS = [
     "family_id",
@@ -185,6 +197,9 @@ QUERY_TREE_FIELDS = [
     "mapped_species_node",
     "duplication_index",
     "in_anchor_tree",
+    "displayed_gene_ids",
+    "displayed_child1_gene_ids",
+    "displayed_child2_gene_ids",
 ]
 QUERY_SYNTENY_FIELDS = [
     field.replace("reference_", "anchor_") if field.startswith("reference_") else field
@@ -247,7 +262,134 @@ def build_arg_parser():
     parser.add_argument("--out_synteny", metavar="PATH", required=True)
     parser.add_argument("--out_ufboot", metavar="PATH", required=True)
     parser.add_argument("--out_query_map", metavar="PATH", default="")
+    parser.add_argument("--dup_conf_score_threshold", "--dup-conf-score-threshold",
+                        type=validate_dup_conf_threshold, default=0,
+                        help="0 disables extra candidates; positive values flag cross-species D-MRCA pairs with Jaccard score <= threshold")
+    parser.add_argument("--out_dup_conf", metavar="TSV", default="",
+                        help="Pairwise provenance for weak-duplication candidates")
     return parser
+
+
+def validate_dup_conf_threshold(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("dup_conf_score_threshold must be a finite number between 0 and 1") from exc
+    if not math.isfinite(number) or not 0 <= number <= 1:
+        raise ValueError("dup_conf_score_threshold must be a finite number between 0 and 1")
+    return number
+
+
+def species_overlap_counts(by_id, children, root):
+    """Recompute Jaccard counts on the full saved tree without changing events."""
+    species_sets, counts = {}, {}
+    stack = [(root, False)]
+    while stack:
+        node, visited = stack.pop()
+        node_children = children.get(node, [])
+        if not node_children:
+            species = normalize_species_label(by_id[node].get("spnode_coverage", ""))
+            if not species:
+                raise ValueError(f"Weak-duplication candidates require a species for every tree tip: branch={node}")
+            species_sets[node] = {species}
+            continue
+        if not visited:
+            stack.append((node, True))
+            stack.extend((child, False) for child in reversed(node_children))
+            continue
+        if len(node_children) != 2:
+            raise ValueError("Weak-duplication candidates require a strictly binary saved gene tree")
+        left, right = (species_sets[child] for child in node_children)
+        species_sets[node] = left | right
+        counts[node] = (len(left & right), len(species_sets[node]))
+        expected_event = "D" if counts[node][0] else "S"
+        if by_id[node].get("so_event") != expected_event:
+            raise ValueError(
+                f"Saved species-overlap event disagrees with descendant species: "
+                f"branch={node}, saved={by_id[node].get('so_event')!r}, expected={expected_event}"
+            )
+    return counts
+
+
+def add_weak_duplication_candidates(store, columns, glyphs, threshold):
+    """Add separate cross-species candidate glyphs; retain all strict calls and D nodes."""
+    threshold = validate_dup_conf_threshold(threshold)
+    if threshold == 0:
+        return glyphs, []
+    columns_by_family = defaultdict(list)
+    for column in columns:
+        columns_by_family[str(column["family_id"])].append(column)
+    additions, evidence = [], []
+    for family_id, family_columns in columns_by_family.items():
+        rows = read_stat_branch(store, family_id)
+        if not rows:
+            raise ValueError(f"Weak-duplication candidates require stat_branch rows: family={family_id}")
+        by_id, children, root = build_tree_index(rows)
+        counts = species_overlap_counts(by_id, children, root)
+        cds_ids = set(read_family_cds_fasta_ids(store, family_id))
+        ancestors = {node: ancestor_chain(by_id, node) for node in by_id}
+        support, support_source = normalized_ufboot_by_branch(by_id, family_id)
+        family_columns.sort(key=lambda column: int(column["column_order"]))
+        grouped = defaultdict(list)
+        for tip, row in by_id.items():
+            if row.get("so_event") != "L":
+                continue
+            species = str(row.get("spnode_coverage") or "").strip()
+            candidate_id = str(row.get("node_name") or "").strip()
+            matches_by_mrca = defaultdict(list)
+            for column in family_columns:
+                anchor = int(column["reference_tip_branch_id"])
+                if normalize_species_label(species) == normalize_species_label(by_id[anchor].get("spnode_coverage", "")):
+                    continue
+                mrca = mrca_node(ancestors, tip, anchor)
+                if by_id[mrca].get("so_event") != "D":
+                    continue
+                shared, union = counts[mrca]
+                score = shared / union
+                if score > threshold:
+                    continue
+                if not candidate_id or candidate_id not in cds_ids:
+                    raise ValueError(
+                        f"Additional ortholog candidate is absent from CDS FASTA: "
+                        f"family={family_id}, candidate={candidate_id!r}"
+                    )
+                matches_by_mrca[mrca].append(column)
+                evidence.append(dict(
+                    family_id=family_id, family_order=column["family_order"], species=species,
+                    reference_cds_fasta_id=column["cds_fasta_id"], candidate_cds_fasta_id=candidate_id,
+                    mrca_branch_id=mrca, mrca_event="D", shared_species_count=shared,
+                    union_species_count=union, dup_conf_score=score, dup_conf_score_threshold=threshold,
+                    branch_ufboot=support.get(mrca) if mrca != root and support.get(mrca) is not None else "",
+                    branch_ufboot_source=support_source,
+                ))
+            for mrca, matches in matches_by_mrca.items():
+                # Split gapped anchor sets so no unassigned column is painted.
+                runs = []
+                for column in matches:
+                    if not runs or int(column["column_order"]) != int(runs[-1][-1]["column_order"]) + 1:
+                        runs.append([])
+                    runs[-1].append(column)
+                for run in runs:
+                    grouped[(species, mrca, tuple(int(column["column_order"]) for column in run))].append(candidate_id)
+        column_by_order = {int(column["column_order"]): column for column in family_columns}
+        for (species, _mrca, orders), genes in sorted(grouped.items()):
+            covered = [column_by_order[order] for order in orders]
+            glyph = dict(
+                species=species, family_id=family_id, family_order=covered[0]["family_order"],
+                reference_species=covered[0]["reference_species"], relation="weak_duplication",
+                reference_cds_fasta_ids=";".join(column["cds_fasta_id"] for column in covered),
+                reference_gene_ids=";".join(column["gene_id"] for column in covered),
+                reference_gene_count=len(covered), copy_number=len(genes), gene_ids=";".join(sorted(genes)),
+                start_order=min(orders), end_order=max(orders), is_contiguous=1, lane_index=1, lane_count=1,
+            )
+            if "query_ids" in covered[0]:
+                glyph["anchor_query_ids"] = ";".join(column["query_ids"] for column in covered)
+            additions.append(glyph)
+    result = [dict(glyph) for glyph in glyphs] + additions
+    assign_lanes(result)
+    result.sort(key=lambda row: (str(row["species"]), int(row["start_order"]), int(row["end_order"]), str(row["relation"])))
+    evidence.sort(key=lambda row: (int(row["family_order"]), str(row["species"]), str(row["candidate_cds_fasta_id"]), str(row["reference_cds_fasta_id"])))
+    return result, evidence
 
 
 def _open_query_text(path):
@@ -1108,6 +1250,68 @@ def mapped_species_node_for_gene_node(row, is_query_tip=False):
     return mapped_species_node
 
 
+def annotate_displayed_duplications(by_id, children, root, glyphs, tree_nodes):
+    """Record displayed descendants of original D nodes; deduplicate gene identities."""
+    displayed = {
+        gene for glyph in glyphs for gene in str(glyph.get("gene_ids") or "").split(";")
+        if gene
+    }
+    tip_by_gene = {}
+    for node, row in by_id.items():
+        if str(row.get("so_event") or "") != "L":
+            continue
+        gene = str(row.get("node_name") or node)
+        if gene in tip_by_gene:
+            raise ValueError(f"Displayed duplication counts require unique saved tip gene IDs: {gene}")
+        tip_by_gene[gene] = node
+    missing = displayed - tip_by_gene.keys()
+    if missing:
+        raise ValueError(f"Displayed glyph genes are absent from the saved tree: {sorted(missing)}")
+    displayed_by_node = {}
+    stack = [(root, False)]
+    while stack:
+        node, visited = stack.pop()
+        node_children = children.get(node, [])
+        if not visited and node_children:
+            stack.append((node, True))
+            stack.extend((child, False) for child in reversed(node_children))
+            continue
+        if node_children:
+            displayed_by_node[node] = set().union(*(displayed_by_node[child] for child in node_children))
+        else:
+            gene = str(by_id[node].get("node_name") or node)
+            displayed_by_node[node] = {gene} if gene in displayed else set()
+    compact_roots = [row for row in tree_nodes
+                     if row["in_reference_tree"] == 1 and row["parent_node_id"] == ""]
+    if len(compact_roots) != 1:
+        raise ValueError("Displayed duplication counts require exactly one compact tree root")
+    for row in tree_nodes:
+        row["displayed_gene_ids"] = ""
+        row["displayed_child1_gene_ids"] = ""
+        row["displayed_child2_gene_ids"] = ""
+        if row["event"] != "D":
+            continue
+        node_children = children.get(int(row["node_id"]), [])
+        if len(node_children) != 2:
+            raise ValueError(f"Displayed duplication counts require two children at D node {row['node_id']}")
+        for number, child in enumerate(node_children, start=1):
+            row[f"displayed_child{number}_gene_ids"] = ";".join(sorted(displayed_by_node[child]))
+    compact_roots[0]["displayed_gene_ids"] = ";".join(sorted(displayed))
+
+
+def refresh_displayed_duplications(store, glyphs, tree_nodes):
+    """Refresh provenance after adding candidates, including aliased manifest sources."""
+    glyphs_by_family = defaultdict(list)
+    nodes_by_family = defaultdict(list)
+    for glyph in glyphs:
+        glyphs_by_family[str(glyph["family_id"])].append(glyph)
+    for node in tree_nodes:
+        nodes_by_family[str(node["family_id"])].append(node)
+    for family_id, nodes in nodes_by_family.items():
+        by_id, children, root = build_tree_index(read_stat_branch(store, family_id))
+        annotate_displayed_duplications(by_id, children, root, glyphs_by_family[family_id], nodes)
+
+
 def build_query_tree_nodes(
     by_id,
     children,
@@ -1417,6 +1621,17 @@ def validate_glyph_ufboot_evidence(rows, glyph):
         )
 
     statuses = {str(row["orthology_ufboot_status"]) for row in rows}
+    if glyph.get("relation") == "weak_duplication":
+        if statuses != {"not_evaluable"} or any(
+            row["orthology_mrca_event"] != "D"
+            or row["orthology_ufboot_unavailable_reason"] != "weak_duplication"
+            or row["decisive_branch_ufboot"] != ""
+            for row in rows
+        ):
+            raise ValueError("Weak-duplication glyphs cannot report speciation-based orthology support")
+        if len({row["orthology_mrca_branch_id"] for row in rows}) != 1:
+            raise ValueError("Weak-duplication glyph pairs must share one duplication MRCA")
+        return
     if "reference_self" in statuses:
         if statuses != {"reference_self"}:
             raise ValueError(
@@ -1594,14 +1809,19 @@ def collect_reference_ufboot_evidence(
                     mrca_event = str(by_id[mrca].get("so_event") or "")
                     row["orthology_mrca_branch_id"] = mrca
                     row["orthology_mrca_event"] = mrca_event
-                    if mrca_event != "S":
+                    is_weak = glyph.get("relation") == "weak_duplication"
+                    if is_weak and mrca_event != "D":
+                        raise ValueError("Weak-duplication glyph pair must retain its original D MRCA")
+                    if not is_weak and mrca_event != "S":
                         raise ValueError(
                             "Ortholog glyph pair does not have a speciation MRCA: "
                             f"family={family_id}, candidate={candidate_cds_fasta_id!r}, "
                             f"reference={reference_cds_fasta_id!r}, mrca={mrca}, "
                             f"event={mrca_event!r}"
                         )
-                    if mrca == root:
+                    if is_weak:
+                        row["orthology_ufboot_unavailable_reason"] = "weak_duplication"
+                    elif mrca == root:
                         row["orthology_ufboot_unavailable_reason"] = "mrca_is_root"
                     else:
                         support = ufboot_by_branch.get(mrca)
@@ -1610,7 +1830,7 @@ def collect_reference_ufboot_evidence(
                             row["orthology_ufboot_status"] = "evaluated"
                             row["orthology_ufboot_unavailable_reason"] = ""
                 glyph_evidence_rows.append(row)
-        if require_one_branch_per_glyph:
+        if require_one_branch_per_glyph or glyph.get("relation") == "weak_duplication":
             validate_glyph_ufboot_evidence(glyph_evidence_rows, glyph)
         evidence_rows.extend(glyph_evidence_rows)
     evidence_rows.sort(
@@ -1771,6 +1991,7 @@ def _collect_family_orthologs_for_anchors(
                 "the reconciled gene tree is inconsistent with reference-gene columns: "
                 f"family={family_id}, reference_species={normalized_reference_species}"
             )
+    annotate_displayed_duplications(by_id, children, root, glyphs, tree_nodes)
     for output_rows in (columns, glyphs, tree_nodes):
         for output_row in output_rows:
             output_row["reference_species"] = normalized_anchor_basis_label
@@ -2195,6 +2416,9 @@ def query_evidence_for_output(rows):
 
 
 def run(args):
+    dup_threshold = validate_dup_conf_threshold(getattr(args, "dup_conf_score_threshold", 0))
+    if dup_threshold > 0 and not getattr(args, "out_dup_conf", ""):
+        raise ValueError("--out_dup_conf is required when --dup_conf_score_threshold is positive")
     manifest_path = getattr(args, "family_manifest", "")
     manifest_records = read_family_manifest(manifest_path) if manifest_path else None
     store = ManifestOutputStore(manifest_records) if manifest_records else GeneFamilyOutputStore(args.dir_gene_family)
@@ -2210,6 +2434,9 @@ def run(args):
             reference_species=args.reference_species,
             family_file=args.family_file,
         )
+        glyphs, dup_evidence = add_weak_duplication_candidates(store, columns, glyphs, dup_threshold)
+        if dup_evidence:
+            refresh_displayed_duplications(store, glyphs, tree_nodes)
         synteny_evidence = collect_reference_synteny_evidence(
             store=store,
             columns=columns,
@@ -2225,6 +2452,8 @@ def run(args):
         write_tsv(args.out_tree, TREE_FIELDS, tree_nodes)
         write_tsv(args.out_synteny, SYNTENY_FIELDS, synteny_evidence)
         write_tsv(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
+        if getattr(args, "out_dup_conf", ""):
+            write_tsv(args.out_dup_conf, DUP_CONF_FIELDS, dup_evidence)
         print(
             "Reference-species ortholog summary: "
             f"reference_species={normalize_species_label(args.reference_species)}, "
@@ -2260,6 +2489,9 @@ def run(args):
         selection_audit=selection_audit,
         long_rows=long_rows,
     )
+    glyphs, dup_evidence = add_weak_duplication_candidates(store, columns, glyphs, dup_threshold)
+    if dup_evidence:
+        refresh_displayed_duplications(store, glyphs, tree_nodes)
     synteny_evidence = collect_reference_synteny_evidence(
         store=store,
         columns=columns,
@@ -2285,6 +2517,8 @@ def run(args):
         query_evidence_for_output(ufboot_evidence),
     )
     write_tsv(out_query_map, QUERY_MAP_FIELDS, query_map)
+    if getattr(args, "out_dup_conf", ""):
+        write_tsv(args.out_dup_conf, QUERY_DUP_CONF_FIELDS, query_evidence_for_output(dup_evidence))
     if selection_output:
         write_tsv(selection_output, SELECTION_FIELDS, selection_audit)
     if getattr(args, "out_long", ""):

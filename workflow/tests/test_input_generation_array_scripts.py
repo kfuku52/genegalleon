@@ -18,6 +18,96 @@ REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
 
 
 @pytest.fixture
+def atomic_state(monkeypatch):
+    monkeypatch.syspath_prepend(str(SUPPORT_DIR))
+    import input_generation_array_state as state
+    return state
+
+
+@pytest.mark.parametrize("value", [
+    None, [], {},
+    {"z": [True, False, None], "a": {"unicode": "遺伝子🧬", "escaped": "\\\"\n\r\t"}},
+    {"floats": [-0.0, 1.25, 1e-100, float("inf"), float("-inf"), float("nan")]},
+    [{"cds": [[10, 13, 0], [40, 49, 0]], "evidence": {"query": "donor_gene", "donor": "Species_a"},
+      "problems": [], "coverage": .95, "raw_prediction": {"frameshift": False, "identity": .88}}],
+    {"sequence": "ATGC" * 300000, "support": [{"donor": "近縁種", "identity": .99}]},
+], ids=["null", "empty_list", "empty_dict", "nested_unicode", "floats", "rescue_model", "large_sequence"])
+def test_atomic_json_keeps_exact_legacy_bytes(tmp_path, atomic_state, value):
+    expected = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    destination = tmp_path / "result.json"
+    atomic_state.atomic_json(destination, value)
+    assert destination.read_bytes() == expected
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_atomic_json_immutable_keeps_existing_bytes_and_universal_newline_equivalence(tmp_path, atomic_state, newline):
+    value = {"sequence": "A" * (2 * 1024 * 1024 + 3), "tail": 1}
+    destination = tmp_path / "plan.json"
+    raw = (json.dumps(value, sort_keys=True, indent=2) + "\n").replace("\n", newline).encode()
+    destination.write_bytes(raw)
+    before = destination.stat()
+    atomic_state.atomic_json(destination, value, immutable=True)
+    assert destination.read_bytes() == raw
+    assert (destination.stat().st_ino, destination.stat().st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    with pytest.raises(ValueError, match="Plan already exists with different inputs"):
+        atomic_state.atomic_json(destination, {**value, "tail": 2}, immutable=True)
+    assert destination.read_bytes() == raw
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_atomic_json_immutable_creates_actual_receipt_once(tmp_path, atomic_state):
+    destination = tmp_path / "nested" / "receipt.json"
+    value = {"files": {"models.json": "a" * 64}, "task_index": 1}
+    atomic_state.atomic_json(destination, value, immutable=True)
+    expected = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    assert destination.read_bytes() == expected
+    before = destination.stat()
+    atomic_state.atomic_json(destination, value, immutable=True)
+    assert destination.read_bytes() == expected
+    assert destination.stat().st_ino == before.st_ino
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+@pytest.mark.parametrize("failure", ["unsupported", "circular", "write", "replace", "link"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_atomic_json_failure_preserves_destination_and_removes_partial_temporary(tmp_path, atomic_state, monkeypatch, failure, existing):
+    destination = tmp_path / "result.json"
+    old = b'{"unchanged": true}\n'
+    if existing:
+        destination.write_bytes(old)
+    value = ["A" * (2 * 1024 * 1024 + 3)]
+    expected_error = OSError
+    if failure == "unsupported":
+        value.append(object())
+        expected_error = TypeError
+    elif failure == "circular":
+        value.append(value)
+        expected_error = ValueError
+    elif failure == "write":
+        from contextlib import contextmanager
+        named = atomic_state.tempfile.NamedTemporaryFile
+        @contextmanager
+        def broken_writer(*args, **kwargs):
+            with named(*args, **kwargs) as handle:
+                class Writer:
+                    name = handle.name
+                    def write(self, chunk):
+                        handle.write(chunk)
+                        raise OSError("injected write failure")
+                yield Writer()
+        monkeypatch.setattr(atomic_state.tempfile, "NamedTemporaryFile", broken_writer)
+    elif failure in {"replace", "link"}:
+        def broken_publication(*_):
+            raise OSError("injected publication failure")
+        monkeypatch.setattr(atomic_state.os, failure, broken_publication)
+    with pytest.raises(expected_error):
+        atomic_state.atomic_json(destination, value, immutable=failure == "link")
+    assert destination.read_bytes() == old if existing else not destination.exists()
+    assert set(tmp_path.iterdir()) == ({destination} if existing else set())
+
+
+@pytest.fixture
 def bound_staging_plan(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(SUPPORT_DIR))
     species = 'Arabidopsis_thaliana'
@@ -92,6 +182,111 @@ def plan_reuse(new_plan, manifest):
     return run_python(PLAN_SCRIPT, '--provider', 'all', '--download-manifest', str(manifest),
                       '--download-dir', str(new_plan.parent / 'new-downloads'),
                       '--stage-downloads', '--outfile', str(new_plan))
+
+
+def _prepared_staged_export_source(source_plan, workspace):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+    plan = workspace / 'output/input_generation/tmp/task_plan.json'
+    plan.parent.mkdir(parents=True)
+    plan.write_bytes(source_plan.read_bytes())
+    staging.stage_downloads(plan)
+    settings = Path(str(plan) + '.settings.json')
+    settings.write_text('{}\n')
+    files = list(Path(str(plan) + '.tasks').glob('1.*'))
+    state.atomic_json(Path(str(plan) + '.prepared.json'), {
+        'plan_sha256': state.digest(plan), 'settings_sha256': state.digest(settings),
+        'files': state.digest_paths(files),
+    })
+    return plan
+
+
+def test_native_staged_export_preserves_species_and_uses_sealed_inputs(bound_staging_plan, tmp_path):
+    import input_generation_array_state as state
+    import stage_input_generation_downloads as staging
+    source, roles = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    manifest = tmp_path / 'export.tsv'
+    state.export_staged_manifest(old, manifest)
+    rows = list(csv.DictReader(manifest.open(), delimiter='\t'))
+    assert [row['species_key'] for row in rows] == state.load_plan(old)['species']
+    assert rows[0]['reuse_staged_plan_sha256'] == state.digest(old)
+    new = tmp_path / 'new.json'
+    assert plan_reuse(new, manifest).returncode == 0
+    staging.stage_downloads(new)
+    actual = json.loads(Path(str(new) + '.tasks/1.json').read_text())['task']
+    assert {role: actual[role + '_path'] for role in roles} == {role: str(path) for role, path in roles.items()}
+    roles['genome'].write_text('changed\n')
+    with pytest.raises(ValueError, match='changed|SHA256'):
+        staging.stage_downloads(new)
+
+
+def test_staged_export_uses_corrected_donor_without_changing_cohort(bound_staging_plan, tmp_path):
+    import input_generation_array_state as state
+    source, roles = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    corrected = tmp_path / 'corrected.cds.fa'
+    corrected.write_bytes(roles['cds'].read_bytes())
+    value = state.load_plan(source)
+    task = value['tasks'][0]
+    task['manifest_row']['cds_url'] = corrected.as_uri()
+    task['input_sha256'].pop(str(roles['cds']))
+    task['input_sha256'][str(corrected)] = state.digest(corrected)
+    replacement = tmp_path / 'replacement.json'
+    replacement.write_text(json.dumps(value))
+    donor = _prepared_staged_export_source(replacement, tmp_path / 'corrected-donor')
+    out = tmp_path / 'export.tsv'
+    state.export_staged_manifest(old, out, [donor])
+    row, = csv.DictReader(out.open(), delimiter='\t')
+    assert row['species_key'] == task['species_key']
+    assert row['cds_url'] == corrected.as_uri()
+    assert row['reuse_staged_plan_sha256'] == state.digest(donor)
+    new = tmp_path / 'new.json'
+    assert plan_reuse(new, out).returncode == 0
+
+
+@pytest.mark.parametrize('target', ['plan', 'receipt', 'raw'])
+def test_staged_export_cannot_overwrite_source_inputs_or_evidence(bound_staging_plan, tmp_path, target):
+    import input_generation_array_state as state
+    source, roles = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    path = {'plan': old, 'receipt': Path(str(old) + '.tasks/1.json'), 'raw': roles['cds']}[target]
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='overlaps protected'):
+        state.export_staged_manifest(old, path)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('bad', ['receipt', 'marker', 'identity', 'changed_during_export'])
+def test_staged_export_rejects_invalid_or_changed_donors(bound_staging_plan, tmp_path, monkeypatch, bad):
+    import input_generation_array_state as state
+    source, _ = bound_staging_plan
+    old = _prepared_staged_export_source(source, tmp_path / 'donor')
+    receipt = Path(str(old) + '.tasks/1.json')
+    if bad == 'receipt':
+        receipt.write_text('{}')
+    elif bad == 'marker':
+        Path(str(old) + '.prepared.json').unlink()
+    elif bad == 'identity':
+        value = json.loads(receipt.read_text())
+        value['task']['species_prefix'] = 'Other_species'
+        receipt.write_text(json.dumps(value))
+        marker = Path(str(old) + '.prepared.json')
+        value = json.loads(marker.read_text())
+        value['files'][str(receipt)] = state.digest(receipt)
+        marker.write_text(json.dumps(value))
+    else:
+        from input_generation_staging_reuse import StagedProofReader
+        original = StagedProofReader.resolve
+        def mutate(reader, task):
+            result = original(reader, task)
+            receipt.write_text(receipt.read_text() + '\n')
+            return result
+        monkeypatch.setattr(StagedProofReader, 'resolve', mutate)
+    out = tmp_path / 'export.tsv'
+    with pytest.raises((ValueError, OSError)):
+        state.export_staged_manifest(old, out)
+    assert not out.exists()
 
 
 def test_cross_plan_reuse_reads_once_keeps_outputs_and_same_plan_resume(reusable_staging_plan, monkeypatch):
@@ -560,7 +755,7 @@ def test_staged_http_inputs_run_without_server_and_reject_missing_or_changed_cac
     species = "Arabidopsis_thaliana"
     write_direct_species_fixture(raw, species)
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     manifest = tmp_path / "source.tsv"
     base = f"http://127.0.0.1:{server.server_port}/{species}/{species}"
@@ -757,7 +952,7 @@ def test_required_genome_rejects_partial_staged_download_without_receipt(tmp_pat
     write_direct_species_fixture(raw, species)
     (raw / species / f"{species}.genome.fa").unlink()
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"
@@ -794,7 +989,7 @@ def test_required_gff_rejects_partial_staged_download_without_receipt(tmp_path):
     write_direct_species_fixture(raw, species)
     (raw / species / f"{species}.gff").unlink()
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(SimpleHTTPRequestHandler, directory=str(raw)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         manifest = tmp_path / "manifest.tsv"

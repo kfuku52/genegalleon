@@ -11,7 +11,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = Path(__file__).with_name("validation_manifest.json")
-SUITES = ("smoke", "fast", "static", "integration-download", "integration-workflow", "runtime", "full", "r")
+SUITES = ("smoke", "fast", "static", "integration-download", "integration-workflow",
+          "runtime", "runtime-python", "runtime-extra", "full", "r")
 
 
 def load_manifest():
@@ -26,15 +27,18 @@ def commands_for(suite, workers, extra):
     commands = []
     if suite != "r":
         command = [sys.executable, "-m", "pytest", "-q"]
-        if suite in {"fast", "integration-download", "integration-workflow", "full"}:
+        if suite in {"fast", "integration-download", "integration-workflow", "runtime-python", "full"}:
             command += ["-n", workers, "--dist", "load"]
-        if suite != "full":
+        if suite not in {"full", "runtime-extra"}:
             # This option is defined in the test-directory conftest. Keeping
             # its value attached prevents pytest's initial parse from treating
             # it as a path before that conftest has been loaded via testpaths.
-            command += [f"--gg-suite={suite}"]
-        if suite in {"runtime", "full"}:
+            lane = "runtime" if suite == "runtime-python" else suite
+            command += [f"--gg-suite={lane}"]
+        if suite in {"runtime", "runtime-python", "runtime-extra", "full"}:
             command += ["--gg-strict-runtime"]
+        if suite == "runtime-extra":
+            command += manifest["runtime_extra_python"]
         # pytest's configured testpaths supplies the default; explicit file
         # paths and -k/-x/--lf retain their native meaning without a second root.
         commands.append(command + extra)
@@ -50,12 +54,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("suite", choices=SUITES)
     parser.add_argument("--workers", default=os.environ.get("GG_PYTEST_WORKERS", "2"))
+    parser.add_argument("--gg-shard", metavar="INDEX/COUNT", help="Run one partition of the selected Python tests")
     parser.add_argument("--list", action="store_true", help="Print commands without running them")
     args, extra = parser.parse_known_args()
     if args.workers != "auto" and (not args.workers.isdigit() or int(args.workers) < 1):
         parser.error("--workers must be a positive integer or auto")
     if extra[:1] == ["--"]:
         extra = extra[1:]
+    if args.gg_shard is not None:
+        # Attach the value so pytest discovers testpaths/conftest before it
+        # interprets an unknown custom option's value as a filesystem path.
+        extra.append(f"--gg-shard={args.gg_shard}")
     if args.suite == "r" and extra:
         parser.error("pytest arguments apply only to Python suites")
     commands = commands_for(args.suite, args.workers, extra)
@@ -64,7 +73,7 @@ def main():
         return 0
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    if args.suite in {"runtime", "full", "r"}:
+    if args.suite in {"runtime", "runtime-python", "runtime-extra", "full", "r"}:
         env.update(load_manifest()["environment"])
     for command in commands:
         print("[validation] " + shlex.join(command), flush=True)

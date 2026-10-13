@@ -5,8 +5,8 @@ Independent CLI. Input files and the first BUSCO/reference selection are frozen;
 no orthogroup, inferred species tree, or family-loss calls are required.
 """
 import argparse
-import bisect
 import csv
+import gzip
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -23,40 +23,107 @@ import tempfile
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from Bio import Phylo
 from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
 try:
+    import busco_reference_quality as busco_reference_implementation
+    from busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from cds_model_normalisation import CdsModelNormaliser
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from gene_model_species_profiles import parameters_for, read_profiles
     from gff_attribute_syntax import validate_gff
     from input_generation_array_state import atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
+    from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
+    from rescue_coding_paths import (
+        OwnershipIndex,
+        alignment_support,
+        coding_shape,
+        original_ownership,
+        resolve_coding_paths,
+    )
     from rescue_model_quality import model_quality
+    from rescue_model_store import export_legacy_models, iter_accepted_models, write_model_store
+    from rescue_prediction_cache import (
+        MINIPROT_MAX_SECONDARY,
+        MINIPROT_OUTPUT_SCORE_RATIO,
+        RAW_FIELDS,
+        SEARCH_CONTRACT_FILE,
+        frozen_prediction_cache_key,
+        prediction_search_contract,
+        verify_prediction_cache,
+    )
+    from rescue_prediction_cache import (
+        stream_json_array as stream_json_array,
+    )
+    from rescue_raw_validation import RawValidationMemo
+    from rescue_search_inputs import (
+        LOCAL_RECORDS,
+        export_inputs,
+        genome_aliases,
+        local_record,
+        write_genome_records,
+        write_record,
+    )
+    from rescue_terminal_completion import complete_terminals
     from species_labeling import extract_species_label
     from stage_output_hashes import hash_outputs, hash_paths
 except ImportError:
+    from . import busco_reference_quality as busco_reference_implementation
+    from .busco_reference_quality import COMPARABLE_QUALITY, busco_quality, patristic_distances
     from .cds_model_normalisation import CdsModelNormaliser
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gff_attribute_syntax import validate_gff
     from .input_generation_array_state import atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
+    from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
+    from .rescue_coding_paths import (
+        OwnershipIndex,
+        alignment_support,
+        coding_shape,
+        original_ownership,
+        resolve_coding_paths,
+    )
     from .rescue_model_quality import model_quality
+    from .rescue_model_store import export_legacy_models, iter_accepted_models, write_model_store
+    from .rescue_prediction_cache import (
+        MINIPROT_MAX_SECONDARY,
+        MINIPROT_OUTPUT_SCORE_RATIO,
+        RAW_FIELDS,
+        SEARCH_CONTRACT_FILE,
+        frozen_prediction_cache_key,
+        prediction_search_contract,
+        verify_prediction_cache,
+    )
+    from .rescue_prediction_cache import (
+        stream_json_array as stream_json_array,
+    )
+    from .rescue_raw_validation import RawValidationMemo
+    from .rescue_search_inputs import (
+        LOCAL_RECORDS,
+        export_inputs,
+        genome_aliases,
+        local_record,
+        write_genome_records,
+        write_record,
+    )
+    from .rescue_terminal_completion import complete_terminals
     from .species_labeling import extract_species_label
     from .stage_output_hashes import hash_outputs, hash_paths
 
 SCHEMA = 1
-COMPARABLE_QUALITY = ("lineage", "version", "mode", "lineage_date", "markers")
 PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscore",
               "min_anchors", "distance", "diagonal_bound", "max_interval", "padding",
-              "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback")
+              "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback",
+              "max_genome_queries", "unanchored_min_species", "terminal_max_extension",
+              "terminal_max_unaligned_c_overhang")
 
 
 def run(command, directory, label, stdout=None):
@@ -70,25 +137,6 @@ def run(command, directory, label, stdout=None):
                                     env={**os.environ, "MPLBACKEND": "Agg"})
     if result.returncode:
         raise RuntimeError(f"{label} failed ({result.returncode}): {logs / (label + '.log')}")
-
-
-def busco_quality(path):
-    text = Path(path).read_text()
-    complete = re.search(r"C:([\d.]+)%", text)
-    lineage = re.search(r"lineage dataset is:\s*(\S+)", text)
-    version = re.search(r"BUSCO version is:\s*(\S+)", text)
-    mode = re.search(r"BUSCO was run in mode:\s*(\S+)", text)
-    markers = re.search(r"\bn:\s*(\d+)", text)
-    date = re.search(r"Creation date:\s*([^,\s)]+)", text)
-    if not all((complete, lineage, version, mode, markers)):
-        raise ValueError(f"BUSCO summary lacks completeness/lineage/version/mode/marker count: {path}")
-    value = float(complete[1])
-    if not math.isfinite(value) or not 0 <= value <= 100:
-        raise ValueError(f"Invalid BUSCO completeness: {path}")
-    if int(markers[1]) < 1:
-        raise ValueError(f"Invalid BUSCO marker count: {path}")
-    return {"complete_pct": value, "lineage": lineage[1], "version": version[1], "mode": mode[1],
-            "lineage_date": date[1] if date else None, "markers": int(markers[1])}
 
 
 def table(path):
@@ -124,38 +172,28 @@ def identities():
     for package in ("kffractbias", "jcvi"):
         versions["source_hashes"].update(package_source_hashes(package))
     versions["implementation"] = digest(__file__)
+    versions["prediction_search_contract"] = prediction_search_contract()
     versions["attribute_syntax_implementation"] = digest(sys.modules[validate_gff.__module__].__file__)
+    versions["ownership_attribute_parser_implementation"] = digest(Path(__file__).with_name("format_species_annotation") / "common.py")
     versions["mapping_implementation"] = digest(sys.modules[prepare_genome.__module__].__file__)
     versions["anchor_admission_implementation"] = digest(sys.modules[prepare_rescue_genome.__module__].__file__)
     versions["cds_normalisation_implementation"] = digest(sys.modules[CdsModelNormaliser.__module__].__file__)
     versions["reader_implementation"] = digest(sys.modules[fasta_records.__module__].__file__)
     versions["state_implementation"] = digest(sys.modules[atomic_json.__module__].__file__)
+    versions["busco_quality_implementation"] = digest(busco_reference_implementation.__file__)
     versions["quality_implementation"] = digest(sys.modules[model_quality.__module__].__file__)
     versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
     versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))
     versions["output_hashes_implementation"] = digest(sys.modules[hash_outputs.__module__].__file__)
+    versions["search_inputs_implementation"] = digest(sys.modules[local_record.__module__].__file__)
+    versions["model_store_implementation"] = digest(sys.modules[write_model_store.__module__].__file__)
+    versions["raw_validation_implementation"] = digest(sys.modules[RawValidationMemo.__module__].__file__)
+    for name, module in (("resolve_coding_paths", "rescue_coding_paths"),
+                         ("complete_terminals", "rescue_terminal_completion"),
+                         ("nominate_genome_only_candidates", "rescue_additional_candidates"),
+                         ("verify_prediction_cache", "rescue_prediction_cache")):
+        versions[name + "_implementation"] = digest(Path(__file__).with_name(module + ".py"))
     return versions
-
-
-def patristic_distances(tree):
-    """All tip distances in O(N^2), without repeated whole-tree LCA scans."""
-    graph = defaultdict(list)
-    for parent in tree.find_clades():
-        for child in parent.clades:
-            length = child.branch_length or 0.0
-            graph[parent].append((child, length))
-            graph[child].append((parent, length))
-    leaves = {tip: tip.name for tip in tree.get_terminals()}
-    result = {}
-    for tip, name in leaves.items():
-        row, stack = {}, [(tip, None, 0.0)]
-        while stack:
-            node, previous, distance = stack.pop()
-            if node in leaves:
-                row[leaves[node]] = distance
-            stack.extend((child, node, distance + length) for child, length in graph[node] if child is not previous)
-        result[name] = row
-    return result
 
 
 def guide_evidence(path, tree_path, expected_inputs=None, nearest_references=None):
@@ -207,6 +245,9 @@ def build_plan(args):
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / ".plan.lock"):
+        if (args.max_genome_queries < 0 or args.unanchored_min_species < 2
+                or args.terminal_max_extension < 1):
+            raise ValueError("Invalid bounded genome-search or terminal-completion parameters")
         species = sorted({extract_species_label(p.name) for p in args.cds_dir.iterdir()
                           if p.is_file() and p.name.removesuffix(".gz").endswith((".fa", ".fas", ".fasta", ".fna"))})
         if not species:
@@ -286,6 +327,11 @@ def build_plan(args):
                    "tools": identities(), "tree_metric": "unit_edges" if topology_only else "patristic_distance",
                    "gemoma_jar": str(args.gemoma_jar.resolve()) if args.gemoma_jar else None,
                    "gemoma_java": None}
+        request["output_storage"] = {"format": getattr(args, "model_storage", "compact"),
+                                     "retain_search_inputs": bool(getattr(args, "retain_search_inputs", False))}
+        prediction_cache = getattr(args, "prediction_cache", None)
+        if prediction_cache:
+            request["prediction_cache"] = frozen_prediction_cache_key(prediction_cache, sources)
         guide_stability = None
         if getattr(args, "guide_tree_receipt", None):
             if topology_only:
@@ -362,9 +408,10 @@ def build_plan(args):
         return plan
 
 
-def load(root):
+def load(root, *, inspect_only=False):
     plan = json.loads((root / "plan.json").read_text())
-    if plan["request"]["schema"] != SCHEMA or plan["request"]["tools"] != identities():
+    if (plan["request"]["schema"] != SCHEMA
+            or (not inspect_only and plan["request"]["tools"] != identities())):
         raise ValueError("Rescue schema/tools changed; use a new output directory")
     plan_digest(root, plan)
     if plan["request"].get("guide_tree_receipt"):
@@ -448,7 +495,7 @@ def recover_publication(dest, journal, token):
     journal.unlink()
 
 
-def stage(root, relative, key, builder, guard=None, hash_workers=1):
+def stage(root, relative, key, builder, guard=None, hash_workers=1, publication_guard=None):
     """Publish only complete jobs; retain their diagnostics after failed attempts."""
     dest = root / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -472,6 +519,8 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1):
             if not files:
                 raise ValueError("Empty stage outputs")
             atomic_json(tmp / "receipt.json", {"key": key, "files": files})
+            if publication_guard:
+                publication_guard()
             # Retain the previous complete directory until replacement succeeds.
             backup = None
             if dest.exists():
@@ -499,18 +548,25 @@ def stage(root, relative, key, builder, guard=None, hash_workers=1):
     return dest
 
 
-def prepared(root, plan, name):
+def prepared(root, plan, name, source_snapshot=None):
     source = plan["request"]["sources"][name]
-    key = {"plan": plan_digest(root, plan), "species": name}
+    if source_snapshot is not None:
+        source_snapshot.assert_context(root, plan)
+    key = {"plan": source_snapshot.plan_digest() if source_snapshot else plan_digest(root, plan), "species": name}
     def guard():
-        require_same_key(key["plan"], plan_digest(root, plan))
-        verify_sources(plan, [name], ["fasta", "gff", "genome"])
+        if source_snapshot is not None:
+            source_snapshot.verify_source(name)
+            require_same_key(key["plan"], source_snapshot.plan_digest())
+        else:
+            require_same_key(key["plan"], plan_digest(root, plan))
+            verify_sources(plan, [name], ["fasta", "gff", "genome"])
     guard()
     def build(tmp):
         genes, meta = prepare_rescue_genome(source, tmp, "genes", 1.0)
         atomic_json(tmp / "mapping.json", meta)
         atomic_json(tmp / "positions.json", [vars(g) for g in genes])
-    return stage(root, Path("prepared") / name, key, build, guard)
+    publication = {'publication_guard': lambda: source_snapshot.check([name])} if source_snapshot else {}
+    return stage(root, Path("prepared") / name, key, build, guard, **publication)
 
 
 def parse_anchors(path):
@@ -576,7 +632,10 @@ def build_comparison(tmp, job, dirs, params, cpus):
     atomic_json(tmp / "blocks.json", parse_anchors(anchors))
 
 
-def comparison_cache_key(root, plan, job):
+def comparison_cache_key(root, plan, job, prepared_snapshot=None):
+    if prepared_snapshot is not None:
+        prepared_snapshot.assert_context(root, plan)
+        prepared_snapshot.check_job(job)
     names = sorted({job["a"], job["b"]})
     tools = plan["request"]["tools"]
     owners = ("kfFractBias", "jcvi", "biopython", "numpy", "natsort", "more-itertools", "python",
@@ -584,7 +643,8 @@ def comparison_cache_key(root, plan, job):
     modules = {k: v for k, v in tools["source_hashes"].items() if k.startswith(("kffractbias.", "jcvi."))}
     algorithm = "\n".join(inspect.getsource(f) for f in (build_comparison, align_self, parse_anchors, run))
     return {"schema": 1, "job": {k: job[k] for k in ("a", "b", "kind")},
-            "inputs": {n: {ext: digest(root / "prepared" / n / ("genes." + ext)) for ext in ("bed", "pep")} for n in names},
+            "inputs": {n: {ext: (prepared_snapshot.file_digest(n, "genes." + ext) if prepared_snapshot
+                                else digest(root / "prepared" / n / ("genes." + ext))) for ext in ("bed", "pep")} for n in names},
             "parameters": {k: plan["request"]["parameters"][k] for k in ("cscore", "min_anchors", "distance", "diagonal_bound")},
             "tools": {k: tools[k] for k in owners}, "source_hashes": modules,
             "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
@@ -609,33 +669,48 @@ def copy_verified_comparison(source, destination, key):
         raise ValueError("Comparison cache changed during copying")
 
 
-def synteny(root, plan, index, cpus, comparison_cache=None):
+def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=None):
     jobs = plan["synteny_jobs"]
     if not 1 <= index <= len(jobs):
         raise ValueError("Synteny index outside frozen plan")
     job = jobs[index - 1]
-    dirs = {n: prepared(root, plan, n) for n in {job["a"], job["b"]}}
+    if prepared_snapshot is not None:
+        prepared_snapshot.assert_context(root, plan)
+        prepared_snapshot.check_job(job)
+    dirs = {n: prepared_snapshot.prepared(n) if prepared_snapshot else prepared(root, plan, n)
+            for n in {job["a"], job["b"]}}
     params = plan["request"]["parameters"]
-    key = comparison_key(root, job)
-    cache_key = comparison_cache_key(root, plan, job)
+    key = comparison_key(root, job, prepared_snapshot)
+    cache_key = comparison_cache_key(root, plan, job, prepared_snapshot)
     cache_root = (comparison_cache or root.parent / "gene_model_rescue_comparison_cache").resolve()
     if cache_root == root or root in cache_root.parents:
         raise ValueError("Comparison cache must be outside the frozen rescue output")
     cache_id = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode()).hexdigest()
     def guard():
-        plan_digest(root, plan)
-        require_same_key(key, comparison_key(root, job))
-        require_same_key(cache_key, comparison_cache_key(root, plan, job))
+        if prepared_snapshot is not None:
+            prepared_snapshot.plan_digest()
+        else:
+            plan_digest(root, plan)
+        require_same_key(key, comparison_key(root, job, prepared_snapshot))
+        require_same_key(cache_key, comparison_cache_key(root, plan, job, prepared_snapshot))
     def build(tmp):
+        publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}
         cached = stage(cache_root, Path("comparisons") / cache_id, cache_key,
-                       lambda output: build_comparison(output, job, dirs, params, cpus), guard)
+                       lambda output: build_comparison(output, job, dirs, params, cpus), guard,
+                       **publication)
         copy_verified_comparison(cached, tmp, cache_key)
         atomic_json(tmp / "job.json", job)
         atomic_json(tmp / "cache.json", {"cache_key": cache_key, "cache_receipt_sha256": digest(cached / "receipt.json")})
-    return stage(root, Path("synteny") / job["id"], key, build, guard)
+    publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}
+    return stage(root, Path("synteny") / job["id"], key, build, guard, **publication)
 
 
-def comparison_key(root, job):
+def comparison_key(root, job, prepared_snapshot=None):
+    if prepared_snapshot is not None:
+        prepared_snapshot.assert_context(root)
+        prepared_snapshot.check_job(job)
+        return {"plan": prepared_snapshot.plan_digest(), "job": job,
+                "prepared": {n: prepared_snapshot.receipt_digest(n) for n in sorted({job["a"], job["b"]})}}
     plan_hash = digest(root / "plan.json")
     names = sorted({job["a"], job["b"]})
     for name in names:
@@ -759,6 +834,10 @@ def rescue_key(root, plan, name):
     for donor in donors:
         if not verified(root / "prepared" / donor, {"plan": plan_hash, "species": donor}):
             raise ValueError("Prepared annotation incomplete or corrupted: " + donor)
+    cache = plan["request"].get("prediction_cache")
+    if cache:
+        expected = {**cache, "species": {name: cache["species"][name]} if name in cache["species"] else {}}
+        require_same_key(expected, frozen_prediction_cache_key(cache["root"], [name]))
     return {"plan": plan_hash, "species": name,
             "comparisons": {j["id"]: digest(root / "synteny" / j["id"] / "receipt.json") for j in jobs},
             "prepared": {n: digest(root / "prepared" / n / "receipt.json") for n in donors}}
@@ -769,11 +848,19 @@ def attributes(text):
 
 
 def read_miniprot(path):
-    models = []
+    return list(iter_miniprot(miniprot_lines(path)))
+
+
+def iter_miniprot(lines):
+    """Yield completed predictions without retaining another expanded array."""
     current = None
     paf = None
-    for line in Path(path).read_text().splitlines():
+    for line in lines:
+        line = line.rstrip("\r\n")
         if line.startswith("##PAF\t"):
+            if current is not None:
+                yield current
+                current = None
             f = line.split("\t")[1:]
             if len(f) < 12:
                 raise ValueError("Invalid embedded miniprot PAF")
@@ -806,7 +893,6 @@ def read_miniprot(path):
                            "identity": float(attr.get("Identity", 0)), "cds": [], "id": attr["ID"]}
                 if (current["query"], f[0], f[6]) != (paf["paf_query"], paf["paf_seqid"], paf["paf_strand"]):
                     raise ValueError("miniprot GFF and PAF do not describe the same model")
-                models.append(current)
                 paf = None
             elif f[2] == "CDS":
                 if current is None or attr.get("Parent") != current["id"]:
@@ -814,7 +900,15 @@ def read_miniprot(path):
                 if (f[0], f[6]) != (current["seqid"], current["strand"]):
                     raise ValueError("miniprot CDS has inconsistent contig/strand")
                 current["cds"].append([int(f[3]) - 1, int(f[4]), int(f[7])])
-    return models
+    if current is not None:
+        yield current
+
+
+def miniprot_lines(path):
+    """Stream large predictor output without a second full text/list copy."""
+    with Path(path).open() as handle:
+        for line in handle:
+            yield line.rstrip("\r\n")
 
 
 def validate_model(model, genome, code, params):
@@ -860,7 +954,7 @@ def validate_model(model, genome, code, params):
     if set(seq) - set("ACGT"):
         problems.append("assembly_gap_or_ambiguity")
     span = genome.fetch(model["seqid"], min(e[0] for e in exons), max(e[1] for e in exons)).upper()
-    gap_bases = sum(base not in "ACGT" for base in span)
+    gap_bases = len(span) - span.count("A") - span.count("C") - span.count("G") - span.count("T")
     if gap_bases:
         problems.append("assembly_gap_within_model_span")
     if len(seq) % 3:
@@ -898,6 +992,9 @@ def overlaps(a, b):
 
 def check_interval(model):
     region = model["evidence"]
+    if region.get("genome_only"):
+        model["problems"].append("unanchored_genome_search")
+        return model
     if (model["seqid"] != region["seqid"] or not model["cds"]
             or min(s for s, _, _ in model["cds"]) < region["expected_start"]
             or max(e for _, e, _ in model["cds"]) > region["expected_end"]):
@@ -905,7 +1002,8 @@ def check_interval(model):
     return model
 
 
-def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None):
+def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, interval_workers=None,
+                     retain_inputs=False):
     """Bound pending work and retain input order, with total threads <= cpus.
 
     Only the submitting thread fetches from pysam's seekable FASTA handle.
@@ -921,15 +1019,22 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
     threads = cpus // workers
     def predict(directory):
         run(["miniprot", "-u", "-T", code, "-t", threads, "-G", max_intron,
-             "--outs=0.5", "--gff", directory / "region.fa", directory / "queries.fa"],
+             "-N", MINIPROT_MAX_SECONDARY, f"--outs={MINIPROT_OUTPUT_SCORE_RATIO}",
+             "--gff", directory / "region.fa", directory / "queries.fa"],
             directory, "miniprot", directory / "models.gff")
-        return read_miniprot(directory / "models.gff")
+        result = read_miniprot(directory / "models.gff")
+        if not retain_inputs:
+            (directory / "region.fa").unlink()
+            (directory / "queries.fa").unlink()
+        return result
     pending, predictions = deque(), []
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with gzip.open(tmp / LOCAL_RECORDS, "wt", compresslevel=1) as metadata, ThreadPoolExecutor(max_workers=workers) as executor:
         for i, ((seqid, start, end), queries) in enumerate(windows.items(), 1):
             directory = interval_dir / str(i)
             directory.mkdir()
-            (directory / "region.fa").write_text(f">interval\n{genome.fetch(seqid, start, end)}\n")
+            sequence = genome.fetch(seqid, start, end)
+            (directory / "region.fa").write_text(f">interval\n{sequence}\n")
+            write_record(metadata, local_record(i, (seqid, start, end), queries, proteins, sequence))
             with (directory / "queries.fa").open("w") as out:
                 for region in queries:
                     out.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
@@ -939,6 +1044,23 @@ def search_intervals(tmp, windows, proteins, genome, code, max_intron, cpus, int
         for future in pending:
             predictions.extend(future.result())
     return predictions
+
+
+def write_local_search_inputs(directory, windows, proteins, genome):
+    """Materialize diagnostics only for local queries requiring a new search.
+
+    Candidate evidence and genome-search coverage live in their verified JSON/
+    TSV receipts. These FASTAs are optional local-search diagnostics, so a fully
+    covered cache needs neither file nor a repeated fetch of every old interval.
+    """
+    if not windows:
+        return
+    with (directory / "regions.fa").open("w") as out, (directory / "queries.fa").open("w") as queries:
+        for (seqid, start, end), regions in windows.items():
+            sequence = genome.fetch(seqid, start, end)
+            for region in regions:
+                queries.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
+                out.write(f">{region['id']}\n{sequence}\n")
 
 
 def write_unique_queries(regions, proteins, path):
@@ -960,6 +1082,16 @@ def write_unique_queries(regions, proteins, path):
 
 def expand_miniprot_queries(source, destination, representatives):
     """Restore query order, names, PAF and GFF IDs before the existing model reader/QC."""
+    lines = iter(expand_miniprot_lines(source, representatives))
+    first = next(lines, None)
+    with destination.open("w") as out:
+        if first is not None:
+            out.write(first)
+        out.writelines(lines)
+
+
+def expand_miniprot_lines(source, representatives):
+    """Restore the legacy GFF stream without an expanded persistent GFF copy."""
     blocks, headers = defaultdict(list), []
     query, lines = None, []
     known = set(representatives.values())
@@ -983,50 +1115,59 @@ def expand_miniprot_queries(source, destination, representatives):
     if set(blocks) != known:
         raise ValueError("Genome search did not report every representative with -u")
     number = 0
-    with destination.open("w") as out:
-        out.writelines(headers)
-        for original, representative in representatives.items():
-            for block in blocks[representative]:
-                identifiers = {}
-                for line in block.splitlines(keepends=True):
-                    if line.startswith("##PAF\t"):
-                        fields = line.rstrip("\n").split("\t")
-                        fields[1] = original
-                        out.write("\t".join(fields) + "\n")
-                    elif not line.startswith("#") and line.strip():
-                        fields = line.rstrip("\n").split("\t")
-                        if len(fields) != 9:
-                            raise ValueError("Invalid representative miniprot GFF row")
-                        values = fields[8].split(";")
-                        if fields[2] == "mRNA":
-                            old = attributes(fields[8])["ID"]
-                            match = re.fullmatch(r"MP(\d+)", old)
-                            if not match:
-                                raise ValueError("Unexpected miniprot model ID")
-                            number += 1
-                            identifiers[old] = "MP" + str(number).zfill(len(match[1]))
-                        rewritten = []
-                        for value in values:
-                            if value.startswith(("ID=", "Parent=")):
-                                key, token = value.split("=", 1)
-                                if token not in identifiers:
-                                    raise ValueError("Unbound representative miniprot feature")
-                                value = key + "=" + identifiers[token]
-                            elif value.startswith("Target="):
-                                target = value[len("Target="):].split(" ", 1)
-                                if target[0] != representative or len(target) != 2:
-                                    raise ValueError("Inconsistent representative miniprot Target")
-                                value = "Target=" + original + " " + target[1]
-                            rewritten.append(value)
-                        fields[8] = ";".join(rewritten)
-                        out.write("\t".join(fields) + "\n")
-                    else:
-                        out.write(line)
+    yield from headers
+    for original, representative in representatives.items():
+        for block in blocks[representative]:
+            identifiers = {}
+            for line in block.splitlines(keepends=True):
+                if line.startswith("##PAF\t"):
+                    fields = line.rstrip("\n").split("\t")
+                    fields[1] = original
+                    yield "\t".join(fields) + "\n"
+                elif not line.startswith("#") and line.strip():
+                    fields = line.rstrip("\n").split("\t")
+                    if len(fields) != 9:
+                        raise ValueError("Invalid representative miniprot GFF row")
+                    values = fields[8].split(";")
+                    if fields[2] == "mRNA":
+                        old = attributes(fields[8])["ID"]
+                        match = re.fullmatch(r"MP(\d+)", old)
+                        if not match:
+                            raise ValueError("Unexpected miniprot model ID")
+                        number += 1
+                        identifiers[old] = "MP" + str(number).zfill(len(match[1]))
+                    rewritten = []
+                    for value in values:
+                        if value.startswith(("ID=", "Parent=")):
+                            key, token = value.split("=", 1)
+                            if token not in identifiers:
+                                raise ValueError("Unbound representative miniprot feature")
+                            value = key + "=" + identifiers[token]
+                        elif value.startswith("Target="):
+                            target = value[len("Target="):].split(" ", 1)
+                            if target[0] != representative or len(target) != 2:
+                                raise ValueError("Inconsistent representative miniprot Target")
+                            value = "Target=" + original + " " + target[1]
+                        rewritten.append(value)
+                    fields[8] = ";".join(rewritten)
+                    yield "\t".join(fields) + "\n"
+                else:
+                    yield line
+
+
+def output_storage(plan):
+    value = plan["request"].get("output_storage", {"format": "legacy", "retain_search_inputs": True})
+    if (not isinstance(value, dict) or set(value) != {"format", "retain_search_inputs"}
+            or not isinstance(value["format"], str) or value["format"] not in {"compact", "legacy"}
+            or type(value["retain_search_inputs"]) is not bool):
+        raise ValueError("Unknown or malformed rescue output-storage configuration")
+    return value
 
 
 def rescue(root, plan, name, cpus, interval_workers=None):
     if name not in plan["species"]:
         raise ValueError("Unknown rescue species")
+    storage = output_storage(plan)
     donors = [name, *plan["donors"][name]]
     for donor in donors:
         prepared(root, plan, donor)
@@ -1035,8 +1176,13 @@ def rescue(root, plan, name, cpus, interval_workers=None):
     verify_sources(plan, [name], ["genome", "fasta", "gff"])
     source = plan["request"]["sources"][name]
     params = parameters_for(plan["request"], name)
+    additional, nomination = nominate_genome_only_candidates(root, plan, name, regions, params)
+    regions.extend(additional)
     def build(tmp):
         from gene_model_catalog import indexed_genome
+        expanded_genome_sha256 = None
+        atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
+        atomic_json(tmp / "genome_search_nomination.json", nomination)
         if not regions:
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
@@ -1064,156 +1210,236 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     if (len(f) == 9 and f[2] in {"gene", "mRNA", "transcript", "CDS"}
                             and (f[0] not in lengths or not 0 <= int(f[3]) - 1 < int(f[4]) <= lengths[f[0]])):
                         raise ValueError("Original annotation outside or absent from genome")
-            atomic_json(tmp / "models.json", [])
             atomic_json(tmp / "candidates.json", [])
+            if storage["format"] == "compact":
+                write_model_store(tmp, [], revisions=[])
+            else:
+                atomic_json(tmp / "models.json", [])
+                atomic_json(tmp / "revision_candidates.json", [])
+                atomic_json(tmp / "partial_models.json", [])
             write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"), [])
             write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
                       "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
                       "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"), [])
             return
-        existing = []
         with open_text(Path(source["gff"])) as handle:
-            for line in handle:
-                if line.strip() == "##FASTA":
-                    break
-                if line.startswith("#") or not line.strip():
-                    continue
-                fields = line.rstrip().split("\t")
-                if len(fields) == 9 and fields[2] in {"gene", "mRNA", "transcript", "CDS"}:
-                    existing.append({"seqid": fields[0], "start": int(fields[3]) - 1, "end": int(fields[4])})
+            existing = original_ownership(handle, attributes)
+        placement_ownership = OwnershipIndex(existing)
         proteins = {donor: {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")} for donor in donors}
+        frozen_cache = plan["request"].get("prediction_cache")
         with indexed_genome(source["genome"]) as genome:
-            (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             positions = json.loads((root / "prepared" / name / "positions.json").read_text())
             for feature in [*existing, *positions]:
                 if (feature["seqid"] not in lengths or feature["start"] < 0
                         or feature["end"] <= feature["start"] or feature["end"] > lengths[feature["seqid"]]):
                     raise ValueError("Original annotation outside or absent from genome: " + str(feature))
-            with (tmp / "regions.fa").open("w") as out, (tmp / "queries.fa").open("w") as queries:
-                for region in regions:
+            for region in regions:
+                if not region.get("genome_only"):
                     region["end"] = min(region["end"], genome.get_reference_length(region["seqid"]))
-                    out.write(f">{region['id']}\n{genome.fetch(region['seqid'], region['start'], region['end'])}\n")
-                    queries.write(f">{region['id']}\n{proteins[region['donor']][region['query']]}\n")
+            cached = (verify_prediction_cache(frozen_cache["root"], root, plan, name, regions, params, frozen_cache)
+                      if frozen_cache else None)
+            cached_ids = cached.candidate_ids() if cached else set()
+            cached_genome_ids = cached.genome_candidate_ids() if cached else set()
             atomic_json(tmp / "candidates.json", regions)
             windows = defaultdict(list)
             for region in regions:
+                if region.get("genome_only") or region["id"] in cached_ids:
+                    continue
                 windows[(region["seqid"], region["start"], region["end"])].append(region)
+            if storage["retain_search_inputs"]:
+                write_local_search_inputs(tmp, windows, proteins, genome)
             predictions = search_intervals(tmp, windows, proteins, genome, source["genetic_code"],
-                                           params["max_intron"], cpus, interval_workers)
+                                           params["max_intron"], cpus, interval_workers,
+                                           retain_inputs=storage["retain_search_inputs"])
             by_id = {r["id"]: r for r in regions}
             validated = []
+            raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params)
+            def checked_prediction(model):
+                # Preserve predictor coordinates and metrics before any genomic
+                # completion, so a later plan rechecks its own terminal bounds.
+                raw_prediction = {key: model[key] for key in RAW_FIELDS if key in model}
+                raw_prediction["cds"] = [list(block) for block in model["cds"]]
+                raw_prediction["evidence"] = dict(model["evidence"])
+                checked = raw_validation.validate(model)
+                evidence = model["evidence"]
+                checked = complete_terminals(checked, genome, source["genetic_code"], params,
+                                             proteins[evidence["donor"]][evidence["query"]], validate_model)
+                checked["raw_prediction"] = raw_prediction
+                return check_interval(checked)
+            if cached:
+                for model in cached.iter_models():
+                    validated.append(checked_prediction(model))
             for model in predictions:
                 region = by_id[model["query"]]
                 model["seqid"] = region["seqid"]
                 model["cds"] = [[s + region["start"], e + region["start"], p] for s, e, p in model["cds"]]
                 model["evidence"] = region
                 model["search"] = "synteny_interval"
-                validated.append(check_interval(validate_model(model, genome, source["genetic_code"], params)))
+                validated.append(checked_prediction(model))
             def unresolved_regions():
-                preview = consolidate([{**m, "problems": list(m["problems"])} for m in validated], existing, name)
-                resolved = {m["query"] for m in preview if m["status"] in {"accepted", "duplicate_support"}}
+                preview = [{**m, "problems": list(m["problems"])} for m in validated]
+                reassess_unanchored_models(preview, params["unanchored_min_species"], ownership=placement_ownership)
+                preview = consolidate(preview, existing, name, plan.get("nearest_references", {}).get(name, ()))
+                resolved = {m["query"] for m in preview if m["status"] in {"accepted", "duplicate_support", "accepted_alternative_path"}}
                 return [r for r in regions if r["id"] not in resolved]
-            unresolved = unresolved_regions()
+            # A verified whole-genome cache already covers these queries,
+            # including empty results. Without GeMoMa, this preview's unresolved
+            # set is immediately filtered to empty and has no consumer.
+            fully_cached_genome = cached is not None and all(r["id"] in cached_genome_ids for r in regions)
+            unresolved = ([] if fully_cached_genome and not plan["request"]["gemoma_jar"]
+                          else unresolved_regions())
+            # Old local-search coverage and old whole-genome coverage are
+            # separate, because acceptance can change under the new policy.
+            unresolved = [r for r in unresolved if r["id"] not in cached_genome_ids]
+            searched_genome_ids = set(cached_genome_ids)
             if params["genome_fallback"] and unresolved:
-                with (tmp / "unresolved.fa").open("w") as out:
-                    for r in unresolved:
-                        out.write(f">{r['id']}\n{proteins[r['donor']][r['query']]}\n")
+                if storage["retain_search_inputs"]:
+                    with (tmp / "unresolved.fa").open("w") as out:
+                        for r in unresolved:
+                            out.write(f">{r['id']}\n{proteins[r['donor']][r['query']]}\n")
                 representatives = write_unique_queries(unresolved, proteins, tmp / "unresolved.unique.fa")
-                write_tsv(tmp / "genome_query_mapping.tsv", ("candidate", "representative"), representatives.items())
+                write_genome_records(tmp, unresolved, representatives, proteins)
+                write_tsv(tmp / "genome_prediction_query_mapping.tsv", ("candidate", "representative"), representatives.items())
+                searched_genome_ids.update(representatives)
+                (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
                 run(["miniprot", "-T", source["genetic_code"], "-t", cpus, "-d", tmp / "genome.mpi", tmp / "genome.fa"], tmp, "miniprot_index")
-                run(["miniprot", "-u", "-t", cpus, "-G", params["max_intron"], "--gff",
+                run(["miniprot", "-u", "-t", cpus, "-G", params["max_intron"],
+                     "-N", MINIPROT_MAX_SECONDARY, f"--outs={MINIPROT_OUTPUT_SCORE_RATIO}", "--gff",
                      tmp / "genome.mpi", tmp / "unresolved.unique.fa"], tmp, "miniprot_genome", tmp / "genome.unique.gff")
-                expand_miniprot_queries(tmp / "genome.unique.gff", tmp / "genome.gff", representatives)
-                for model in read_miniprot(tmp / "genome.gff"):
+                if storage["retain_search_inputs"]:
+                    expand_miniprot_queries(tmp / "genome.unique.gff", tmp / "genome.gff", representatives)
+                expanded_digest = hashlib.sha256()
+                def hashed_expansion():
+                    for line in expand_miniprot_lines(tmp / "genome.unique.gff", representatives):
+                        expanded_digest.update(line.encode())
+                        yield line
+                for model in iter_miniprot(hashed_expansion()):
                     model["evidence"] = by_id[model["query"]]
                     model["search"] = "genome_fallback"
-                    validated.append(check_interval(validate_model(model, genome, source["genetic_code"], params)))
-                unresolved = unresolved_regions()
+                    validated.append(checked_prediction(model))
+                expanded_genome_sha256 = expanded_digest.hexdigest()
+                # Only optional GeMoMa consumes unresolved after genome search;
+                # final placement and coding-path admission still run below.
+                if plan["request"]["gemoma_jar"]:
+                    unresolved = unresolved_regions()
             if plan["request"]["gemoma_jar"] and unresolved:
                 # Selected transcript IDs and target coordinates constrain the
                 # optional refinement. Predictions still pass the same QC.
-                refine_gemoma(tmp, root, plan, source, unresolved, genome, validated, cpus)
+                gemoma_regions = [r for r in unresolved if not r.get("genome_only")]
+                if gemoma_regions:
+                    if not (tmp / "genome.fa").exists():
+                        (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
+                    refine_gemoma(tmp, root, plan, source, gemoma_regions, genome, validated, cpus)
+            if cached:
+                cached.check()
+            if searched_genome_ids:
+                covered = [r for r in regions if r["id"] in searched_genome_ids]
+                coverage_mapping = write_unique_queries(covered, proteins, tmp / "genome.covered.unique.fa")
+                write_tsv(tmp / "genome_query_mapping.tsv", ("candidate", "representative"), coverage_mapping.items())
+            atomic_json(tmp / "raw_validation_memo.json", raw_validation.diagnostics())
         # Recheck sources before publication, including the target genome.
         verify_sources(plan, [name], ["genome", "fasta", "gff"])
-        models = consolidate(validated, existing, name)
+        placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
+        models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()))
         for model in models:
             model["quality_evidence"] = model_quality(model, source["genetic_code"])
-        atomic_json(tmp / "models.json", models)
+        atomic_json(tmp / "placement_audit.json", placement)
+        revisions = {}
+        for model in models:
+            if len(model.get("revision_owner_ids", [])) != 1 or set(model["problems"]) - {"overlap_existing_annotation"}:
+                continue
+            shape = (*coding_shape(model), model["revision_owner_ids"][0])
+            evidence = {**model["evidence"], "alignment": {"coverage": model["coverage"],
+                        "identity": model["identity"], "problems": list(model["problems"])}}
+            if shape not in revisions:
+                revisions[shape] = {**model, "support": []}
+            revisions[shape]["support"].append(evidence)
+        if storage["format"] == "compact":
+            write_model_store(tmp, models, revisions=revisions.values())
+        else:
+            atomic_json(tmp / "models.json", models)
+            atomic_json(tmp / "revision_candidates.json", list(revisions.values()))
+            atomic_json(tmp / "partial_models.json", [m for m in models if m.get("partial_evidence", {}).get("partial")])
+        atomic_json(tmp / "search_inputs.json", {
+            "schema": 1, "plan_sha256": plan_digest(root, plan),
+            "source_files": {source[k]: plan["request"]["files"][source[k]] for k in ("genome", "fasta", "gff")},
+            "prepared_receipts": {donor: digest(root / "prepared" / donor / "receipt.json") for donor in donors},
+            "retained_search_inputs": storage["retain_search_inputs"],
+            "local_records": LOCAL_RECORDS if (tmp / LOCAL_RECORDS).exists() else None,
+            "expanded_genome_gff_sha256": expanded_genome_sha256,
+            "prediction_search_contract": prediction_search_contract(),
+            "prediction_cache": plan["request"].get("prediction_cache"),
+        })
+        atomic_json(tmp / "prediction_reuse.json", {"cached_local_queries": len(cached_ids),
+                    "cached_genome_queries": len(cached_genome_ids), "searched_local_windows": len(windows),
+                    "additional_genome_queries": len(additional), "all_queries": len(regions),
+                    "search_contract": prediction_search_contract(),
+                    "cached_search_contract": cached.search_contract if cached else None,
+                    "cached_local_search_compatible": cached.local_search_compatible if cached else None,
+                    "cached_genome_search_compatible": cached.genome_search_compatible if cached else None})
         write_tsv(tmp / "quality_flags.tsv", ("candidate", "model_id", "status", "start_codon",
                   "donor_n_terminus_aligned", "donor_c_terminus_aligned", "donor_species", "flags",
                   "donor_aligned_query_fraction", "donor_internal_unaligned_query_fraction"),
-                  [(m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
+                  ((m["query"], m.get("model_id", ""), m["status"], m["quality_evidence"]["start_codon"],
                     m["quality_evidence"]["terminal_alignment"]["n_aligned"],
                     m["quality_evidence"]["terminal_alignment"]["c_aligned"],
                     ",".join(m["quality_evidence"]["donor_species"]), ",".join(m["quality_evidence"]["flags"]),
                     m["quality_evidence"]["query_alignment"]["aligned_query_fraction"],
                     m["quality_evidence"]["query_alignment"]["internal_unaligned_query_fraction"])
-                   for m in models])
+                   for m in models))
         detected = {m["query"] for m in validated}
-        audit = [{"candidate": m["query"], "donor_gene": m["evidence"]["query"], "status": m["status"],
-                  "reasons": ",".join(m["problems"]), "coverage": m["coverage"], "identity": m["identity"],
-                  "model_id": m.get("model_id", "")} for m in models]
-        audit += [{"candidate": r["id"], "donor_gene": r["query"], "status": "unresolved", "reasons": "no_alignment",
-                   "coverage": "", "identity": "", "model_id": ""} for r in regions if r["id"] not in detected]
+        def audit_rows():
+            for m in models:
+                yield (m["query"], m["evidence"]["query"], m["status"], ",".join(m["problems"]),
+                       m["coverage"], m["identity"], m.get("model_id", ""))
+            for r in regions:
+                if r["id"] not in detected:
+                    yield (r["id"], r["query"], "unresolved", "no_alignment", "", "", "")
         write_tsv(tmp / "audit.tsv", ("candidate", "donor_gene", "status", "reasons", "coverage", "identity", "model_id"),
-                  [list(row.values()) for row in audit])
+                  audit_rows())
         # Huge indexes are execution scratch, not reusable unverified outputs.
         (tmp / "genome.mpi").unlink(missing_ok=True)
-        (tmp / "genome.fa").unlink()
+        (tmp / "genome.fa").unlink(missing_ok=True)
+        if not storage["retain_search_inputs"]:
+            (tmp / "unresolved.unique.fa").unlink(missing_ok=True)
+            (tmp / "genome.covered.unique.fa").unlink(missing_ok=True)
     return stage(root, Path("rescued") / name, key, build,
                  lambda: require_same_key(key, rescue_key(root, plan, name)), hash_workers=cpus)
 
 
-def consolidate(validated, existing, species):
-    # Merge original spans once. The predecessor of the query's end suffices
-    # for overlap detection against disjoint, sorted half-open intervals.
-    spans = defaultdict(list)
-    for old in existing:
-        spans[old["seqid"]].append((old["start"], old["end"]))
-    indexes = {}
-    for seqid, intervals in spans.items():
-        merged = []
-        for start, end in sorted(intervals):
-            if merged and start <= merged[-1][1]:
-                merged[-1][1] = max(end, merged[-1][1])
-            else:
-                merged.append([start, end])
-        indexes[seqid] = ([s for s, _ in merged], [e for _, e in merged])
+def consolidate(validated, existing, species, nearest=()):
+    ownership = OwnershipIndex(existing)
     unique = {}
     for model in validated:
-        shape = (model["seqid"], model["strand"], tuple(tuple(e) for e in model["cds"]))
+        shape = coding_shape(model)
         model["start"] = min((e[0] for e in model["cds"]), default=0)
         model["end"] = max((e[1] for e in model["cds"]), default=0)
-        starts, ends = indexes.get(model["seqid"], ([], []))
-        preceding = bisect.bisect_left(starts, model["end"]) - 1
-        if preceding >= 0 and ends[preceding] > model["start"]:
-            model["problems"].append("overlap_existing_annotation")
+        owners = ownership.overlapping(model)
+        if owners:
+            model["problems"] = sorted(set(model["problems"]) | {"overlap_existing_annotation"})
+            identifiers = sorted({o["gene_id"] for o in owners if o.get("gene_id")})
+            model["revision_owner_ids"] = identifiers
+            model["revision_disposition"] = "existing_model_refinement" if len(identifiers) == 1 else "ambiguous_split_or_merge"
         model["status"] = "unresolved" if model["problems"] else "accepted"
         if model["status"] == "accepted":
             model["model_id"] = species + "_ggrescue_" + hashlib.sha256(repr(shape).encode()).hexdigest()[:16]
+            evidence = {**model.get("evidence", {}), "alignment": {
+                "coverage": model.get("coverage", 0), "identity": model.get("identity", 0),
+                "problems": list(model["problems"])}}
             if shape in unique:
-                unique[shape]["support"].append(model["evidence"])
+                unique[shape]["support"].append(evidence)
                 model["status"] = "duplicate_support"
             else:
-                model["support"] = [model["evidence"]]
+                model["support"] = [evidence]
                 unique[shape] = model
     accepted = sorted(unique.values(), key=lambda m: (m["seqid"], m["start"], m["end"]))
-    # Competing models are retained for review, not resolved by arbitrary score.
-    furthest = None
-    for model in accepted:
-        if furthest is not None and overlaps(furthest, model):
-            for overlapping in (furthest, model):
-                overlapping["status"] = "unresolved"
-                if "competing_new_models" not in overlapping["problems"]:
-                    overlapping["problems"].append("competing_new_models")
-        if furthest is None or furthest["seqid"] != model["seqid"] or model["end"] > furthest["end"]:
-            furthest = model
+    resolve_coding_paths(accepted, nearest)
     for model in validated:
-        shape = (model["seqid"], model["strand"], tuple(tuple(e) for e in model["cds"]))
+        shape = coding_shape(model)
         if model["status"] == "duplicate_support" and unique[shape]["status"] == "unresolved":
             model["status"] = "unresolved"
-            model["problems"].append("competing_new_models")
+            model["problems"] = sorted(set(model["problems"]) | set(unique[shape]["problems"]))
     return validated
 
 
@@ -1298,10 +1524,13 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                 if proteins is None:
                     proteins = {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")}
                 reference = proteins[r["query"]]
-                from Bio.Align import PairwiseAligner
-                aligner = PairwiseAligner(mode="global", match_score=2, mismatch_score=-1,
-                                          open_gap_score=-5, extend_gap_score=-1)
-                alignment = aligner.align(reference, protein)[0] if protein else None
+                over_budget = len(reference) * len(protein) > params.get("terminal_max_alignment_cells", 25_000_000)
+                alignment = None
+                if protein and not over_budget:
+                    from Bio.Align import PairwiseAligner
+                    aligner = PairwiseAligner(mode="global", match_score=2, mismatch_score=-1,
+                                              open_gap_score=-5, extend_gap_score=-1)
+                    alignment = aligner.align(reference, protein)[0]
                 aligned = sum(b - a for a, b in alignment.aligned[0]) if alignment else 0
                 matches = sum(reference[a + k] == protein[c + k] for (a, b), (c, d) in zip(*alignment.aligned, strict=True)
                               for k in range(b - a)) if alignment else 0
@@ -1315,7 +1544,32 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                     checked["problems"].append("low_coverage")
                 if checked["identity"] < params["minimum_identity"]:
                     checked["problems"].append("low_identity")
+                if over_budget:
+                    checked["problems"].append("donor_alignment_budget_exceeded")
+                raw_prediction = {key: checked[key] for key in RAW_FIELDS if key in checked}
+                raw_prediction["cds"] = [list(block) for block in model["cds"]]
+                raw_prediction["evidence"] = dict(model["evidence"])
+                checked = complete_terminals(checked, genome, source["genetic_code"], params, reference, validate_model)
+                checked["raw_prediction"] = raw_prediction
                 validated.append(check_interval(checked))
+
+
+def rescue_selection_attributes(model, path=None):
+    """Export locus corroboration without assigning it to every coding path."""
+    selection = model.get("path_selection")
+    if not selection:
+        return ""
+    locus = model["locus_support"]
+    values = [("representative_status", selection["representative_status"]),
+              ("representative_selection_policy", selection["selection_policy"]),
+              ("locus_independent_donor_species_count", len(locus["independent_donor_species"])),
+              ("rescue_orthology", locus["orthology"]), ("rescue_expected_copy", locus["expected_copy"])]
+    if path is not None:
+        targets = {row["target"] for item in [model, *model.get("alternative_coding_paths", [])]
+                   for row in [item.get("evidence", {}), *item.get("support", [])] if row.get("target")}
+        donors = {donor for donor, _, _ in alignment_support(path)} - targets
+        values.append(("path_independent_donor_species_count", len(donors)))
+    return ";" + ";".join(f"{key}={quote(str(value), safe='')}" for key, value in values)
 
 
 def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers=1):
@@ -1334,9 +1588,11 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
             (tmp / subdir).mkdir()
         rows = []
         admission_summaries = {}
+        alternative_counts = {}
         for name in names:
             source = plan["request"]["sources"][name]
-            models = [m for m in json.loads((root / "rescued" / name / "models.json").read_text()) if m["status"] == "accepted"]
+            models = list(iter_accepted_models(root / "rescued" / name))
+            alternative_counts[name] = sum(len(m.get("alternative_coding_paths", [])) for m in models)
             cds = tmp / "species_cds" / (name + ".rescue.cds.fa")
             gff = tmp / "species_gff" / (name + ".rescue.gff3")
             existing_ids = set()
@@ -1381,12 +1637,28 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                         if kind == feature and attribute not in {"ID", "Parent"}:
                             attr += f";{attribute}={identifier}"
                         return attr
-                    out.write("\t".join([*common[:2], "gene", *common[3:8], fields("gene", "ID=" + gene)]) + "\n")
+                    alternative_paths = model.get("alternative_coding_paths", [])
+                    gene_start = min([model["start"], *[min(b[0] for b in a["cds"]) for a in alternative_paths]])
+                    gene_end = max([model["end"], *[max(b[1] for b in a["cds"]) for a in alternative_paths]])
+                    locus_attributes = rescue_selection_attributes(model)
+                    out.write("\t".join([*common[:2], "gene", str(gene_start + 1), str(gene_end), *common[5:8], fields("gene", "ID=" + gene + locus_attributes)]) + "\n")
                     transcript_feature = "transcript" if feature == "transcript" else "mRNA"
-                    out.write("\t".join([*common[:2], transcript_feature, *common[3:8], fields(transcript_feature, f"ID={transcript};Parent={gene}")]) + "\n")
+                    out.write("\t".join([*common[:2], transcript_feature, *common[3:8], fields(transcript_feature, f"ID={transcript};Parent={gene}" + rescue_selection_attributes(model, model))]) + "\n")
                     for cds_id, (start, end, phase) in zip(cds_ids, model["cds"], strict=True):
                         out.write("\t".join([model["seqid"], "genegalleon_rescue", "CDS", str(start + 1), str(end), ".",
                                             model["strand"], str(phase), fields("CDS", f"ID={cds_id};Parent={transcript}")]) + "\n")
+                    for alternative in alternative_paths:
+                        alt_id = identifier + ".alt_" + alternative["model_id"].rsplit("_", 1)[-1]
+                        start, end = min(b[0] for b in alternative["cds"]), max(b[1] for b in alternative["cds"])
+                        ids = {alt_id, *[f"{alt_id}.cds{i}" for i in range(1, len(alternative["cds"]) + 1)]}
+                        if ids & gff_ids:
+                            raise ValueError("Alternative coding path GFF ID collides")
+                        gff_ids.update(ids)
+                        out.write("\t".join([model["seqid"], "genegalleon_rescue", transcript_feature, str(start + 1), str(end),
+                                            ".", model["strand"], ".", f"ID={alt_id};Parent={gene};support=homology_coding_path" + rescue_selection_attributes(model, alternative)]) + "\n")
+                        for i, (s, e, phase) in enumerate(alternative["cds"], 1):
+                            out.write("\t".join([model["seqid"], "genegalleon_rescue", "CDS", str(s + 1), str(e), ".",
+                                                model["strand"], str(phase), f"ID={alt_id}.cds{i};Parent={alt_id}"]) + "\n")
                 out.write(embedded)
             # Exercise the same full-ID annotation mapping used by downstream synteny.
             check = tmp / ("check_" + name)
@@ -1409,6 +1681,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
         atomic_json(tmp / "summary.json", {"counting_unit": "new gene model", "species": len(rows),
                                            "rescued_models": sum(r[2] for r in rows), "changed_species": [r[0] for r in rows if r[2]],
                                            "common_references": plan["common_references"],
+                                           "alternative_coding_paths": alternative_counts,
                                            "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
     return stage(root, destination, key, build, guard, hash_workers=hash_workers)
@@ -1431,6 +1704,90 @@ def qc_work_items(root, plan, indices, hash_workers=1):
         done = verified(root / "workers" / name, {"plan": plan_digest(root, plan), "species": name}, hash_workers=hash_workers)
         result.append((index, name, rows[0]["cds"], rows[0]["rescued_models"], int(done)))
     return result
+
+
+def export_destination(root, destination):
+    """Keep review exports outside the frozen producer and its future stages."""
+    destination = Path(destination).resolve()
+    if destination.is_relative_to(Path(root).resolve()):
+        raise ValueError("Review export destination must be outside the frozen rescue output")
+    if destination.exists():
+        raise FileExistsError("Review export destination already exists")
+    return destination
+
+
+def export_worker_inputs(root, plan, name, destination, *, combined=False, cpus=1):
+    """Read a completed producer without rerunning it or changing its receipt."""
+    try:
+        from gene_model_catalog import indexed_genome
+    except ImportError:
+        from .gene_model_catalog import indexed_genome
+    destination = export_destination(root, destination)
+    directory = root / "rescued" / name
+    key = rescue_key(root, plan, name)
+    if not verified(directory, key, hash_workers=cpus):
+        raise ValueError("Predictor input export requires a complete verified rescue")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix=".working-search-inputs-", dir=destination.parent))
+    tmp.rmdir()
+    source = plan["request"]["sources"][name]
+    donors = [name, *plan["donors"][name]]
+    try:
+        prepared_receipts = {}
+        def verify_prepared():
+            for donor in donors:
+                folder = root / "prepared" / donor
+                expected = {"plan": plan_digest(root, plan), "species": donor}
+                if not verified(folder, expected, hash_workers=cpus):
+                    raise ValueError("Predictor input export requires verified prepared donors")
+                current = digest(folder / "receipt.json")
+                if donor in prepared_receipts and prepared_receipts[donor] != current:
+                    raise ValueError("Prepared donor changed during predictor input export")
+                prepared_receipts[donor] = current
+        verify_prepared()
+        proteins = {donor: {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")} for donor in donors}
+        verify_sources(plan, [name], ["genome", "fasta", "gff"])
+        if (directory / LOCAL_RECORDS).exists() or (directory / "genome_search_inputs.jsonl.gz").exists():
+            with indexed_genome(source["genome"]) as genome:
+                result = export_inputs(directory, tmp, genome, proteins, combined=combined)
+            if combined and (directory / "genome.unique.gff").is_file():
+                expand_miniprot_queries(directory / "genome.unique.gff", tmp / "genome.gff", genome_aliases(directory))
+                metadata = json.loads((directory / "search_inputs.json").read_text())
+                if digest(tmp / "genome.gff") != metadata.get("expanded_genome_gff_sha256"):
+                    raise ValueError("Regenerated genome GFF differs from frozen prediction stream")
+        else:
+            # Older publications retained the actual inputs. Copy only those
+            # explicitly requested; never alter their original receipt members.
+            tmp.mkdir()
+            count = 0
+            for interval in sorted((directory / "intervals").glob("*"), key=lambda p: int(p.name)):
+                if not interval.is_dir():
+                    continue
+                paths = [interval / "region.fa", interval / "queries.fa"]
+                if any(not path.is_file() for path in paths):
+                    raise ValueError("Legacy predictor inputs lack reconstruction records")
+                target = tmp / "intervals" / interval.name
+                target.mkdir(parents=True)
+                for path in paths:
+                    shutil.copyfile(path, target / path.name)
+                count += 1
+            for filename in ["unresolved.unique.fa", *(["regions.fa", "queries.fa", "unresolved.fa", "genome.gff"] if combined else [])]:
+                if (directory / filename).is_file():
+                    shutil.copyfile(directory / filename, tmp / filename)
+            result = {"local_windows": count, "combined_diagnostics": combined, "legacy_retained_inputs": True}
+        verify_sources(plan, [name], ["genome", "fasta", "gff"])
+        verify_prepared()
+        if not verified(directory, key, hash_workers=cpus):
+            raise ValueError("Rescue changed during predictor input export")
+        atomic_json(tmp / "export_receipt.json", {
+            "origin_receipt_sha256": digest(directory / "receipt.json"), "plan_sha256": plan_digest(root, plan),
+            "prepared_receipts": prepared_receipts,
+            "files": hash_outputs(tmp, workers=cpus, hash_function=digest), **result})
+        tmp.rename(destination)
+        return destination
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 
 def parser():
@@ -1461,9 +1818,18 @@ def parser():
     plan.add_argument("--minimum-identity", type=float, default=0.5)
     plan.add_argument("--max-intron", type=int, default=20000)
     plan.add_argument("--genome-fallback", type=int, choices=(0, 1), default=1)
+    plan.add_argument("--prediction-cache", type=Path, help="Frozen, checksum-verified previous rescue output; raw predictions are revalidated")
+    plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
+                      help="Versioned shared prediction storage, or explicit legacy JSON arrays")
+    plan.add_argument("--retain-search-inputs", action="store_true",
+                      help="Retain diagnostic and completed predictor FASTAs (default: regenerate on demand)")
+    plan.add_argument("--max-genome-queries", type=int, default=20000)
+    plan.add_argument("--unanchored-min-species", type=int, default=2)
+    plan.add_argument("--terminal-max-extension", type=int, default=300)
+    plan.add_argument("--terminal-max-unaligned-c-overhang", type=int, choices=(0, 1, 2), default=2)
     plan.add_argument("--gemoma-jar", type=Path, help="Optional GeMoMa refinement; requires Java and tblastn")
     plan.add_argument("--gemoma-java", default="java", help="Java executable compatible with the supplied GeMoMa jar")
-    for name in ("synteny", "rescue", "finalize", "run", "status", "qc", "worker-complete", "qc-inputs"):
+    for name in ("synteny", "rescue", "finalize", "run", "status", "qc", "worker-complete", "qc-inputs", "export-search-inputs", "export-models"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--output", type=Path, required=True)
         cmd.add_argument("--cpus", type=int, default=1, help="Predictor and full-checksum CPU budget")
@@ -1473,6 +1839,11 @@ def parser():
             cmd.add_argument("--comparison-cache", type=Path, help="Shared comparison cache (default: OUTPUT parent/gene_model_rescue_comparison_cache)")
         if name in {"synteny", "rescue", "worker-complete", "qc-inputs"}:
             cmd.add_argument("--task-index", type=int, help="One-based frozen job/species index; omit to run all")
+        if name in {"export-search-inputs", "export-models"}:
+            cmd.add_argument("--task-index", type=int, required=True, help="One-based frozen species index")
+            cmd.add_argument("--destination", type=Path, required=True, help="New export directory; producer files are untouched")
+        if name == "export-search-inputs":
+            cmd.add_argument("--combined", action="store_true", help="Also recreate repeated regions.fa/queries.fa diagnostics")
         if name == "qc":
             cmd.add_argument("--busco-dir", type=Path, required=True)
     return p
@@ -1498,7 +1869,7 @@ def main():
                           "common_references": plan["common_references"]}))
         return
     root = args.output.resolve()
-    plan = load(root)
+    plan = load(root, inspect_only=args.command in {"export-search-inputs", "export-models"})
     if getattr(args, "cpus", 1) < 1:
         p.error("cpus must be positive")
     if getattr(args, "interval_workers", None) is not None and not 1 <= args.interval_workers <= args.cpus:
@@ -1507,6 +1878,19 @@ def main():
         count = len(plan["synteny_jobs"]) if args.command == "synteny" else len(plan["species"])
         if not 1 <= args.task_index <= count:
             p.error("task index outside frozen plan")
+    if args.command == "export-search-inputs":
+        print(export_worker_inputs(root, plan, plan["species"][args.task_index - 1], args.destination,
+                                   combined=args.combined, cpus=args.cpus))
+        return
+    if args.command == "export-models":
+        destination = export_destination(root, args.destination)
+        name = plan["species"][args.task_index - 1]
+        directory = root / "rescued" / name
+        if not verified(directory, rescue_key(root, plan, name), hash_workers=args.cpus):
+            raise ValueError("Legacy export requires a complete verified rescue")
+        export_legacy_models(directory, destination, directory=True)
+        print(destination)
+        return
     if args.command == "qc-inputs":
         indices = [args.task_index] if args.task_index is not None else range(1, len(plan["species"]) + 1)
         for row in qc_work_items(root, plan, indices, hash_workers=args.cpus):
