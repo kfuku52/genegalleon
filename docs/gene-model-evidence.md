@@ -51,14 +51,36 @@ Other-protein support does not prove host function. No support does not exclude
 a divergent or unrepresented TE. TE-related homology also occurs in domesticated
 host genes. The audit never excludes or changes gene models automatically.
 
-The BUSCO comparison accepts `--rescue-swissprot-dir /data/gene_model_rescue.swissprot`.
-This changes the lower rescue bar to **Swiss-Prot protein support**, keeping its
+The BUSCO comparison discovers the completed rescue's sibling `.swissprot`
+publication by default and verifies its plan, locus IDs and source hashes.
+`--rescue-swissprot-dir /data/gene_model_rescue.swissprot` selects another audit.
+The lower rescue bar always shows **Swiss-Prot protein support**, keeping its
 S/R/P donor bar and the original BUSCO palette. Existing DNA repeat-overlap
 measurements remain a separate evidence axis; protein homology is not labelled
 as genomic repeat overlap. Excluded species remain explicitly not analysed.
-The figure legend records the actual search/support thresholds from the audit,
-the TE/other annotation rules and locus-counting method. Thresholds absent from a
-historical summary are labelled unavailable instead of inferred from defaults.
+The figure records actual support thresholds from the audit; the full TE/other
+rules and individual hits remain in its evidence tables. Thresholds absent from
+a historical summary are labelled unavailable instead of inferred from defaults.
+
+A direct comparison command with completed rescue inputs also requires this
+audit by default. To generate a missing audit without rerunning BUSCO, provide
+`--swissprot-db-prefix`, `--swissprot-metadata` and `--swissprot-cache` with
+`--plot-only --output ... --report ...`; `--cpus` and
+`--swissprot-memory-gb` bound the advisory search. Its publication goes in the
+report's `rescue_swissprot/` directory. A missing or mismatched audit fails
+instead of silently switching to RepeatMasker overlap.
+`--no-rescue-swissprot` explicitly opts out, showing protein support as
+**Not assessed**. The input-generation setting `run_gene_model_rescue_swissprot=0`
+forwards that opt-out.
+
+The default three-stage comparison writes PNG, SVG and a one-page PDF, 7.2 inches
+wide with 8 pt Helvetica. Species labels are italic and split over two lines.
+Four equal panels run left to right: missing-gene rescue, gene-model refinement
+(accepted coding paths), BUSCO before/after rescue/after refinement, and stacked
+change in complete groups. BUSCO axes show percentages below and group counts
+above. An unanalysed species retains only its pre-rescue BUSCO bar; the other
+three panels say **Not analysed**. Rescue counts gene loci; refinement counts
+accepted repair and isoform paths, which may share a locus.
 
 ## Genomic, RNA and repeat evidence
 

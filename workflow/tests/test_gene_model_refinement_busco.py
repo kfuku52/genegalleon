@@ -520,9 +520,9 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
         for legend, bounds in zip(fig.legends, legends, strict=True):
             title = legend.get_title().get_text().replace("\n", " ")
             if title == "BUSCO status":
-                left, right = fig.axes[0].bbox.x0, fig.axes[0 if staged else 1].bbox.x1
+                left, right = fig.axes[2].bbox.x0, fig.axes[3].bbox.x1
             else:
-                ax = fig.axes[-1] if "coding-path" in title or "Coding-path" in title else fig.axes[-2]
+                ax = fig.axes[1] if "coding-path" in title or "Coding-path" in title else fig.axes[0]
                 left, right = ax.bbox.x0, ax.bbox.x1
             assert left - 1 <= bounds.x0 < bounds.x1 <= right + 1
         return original_save(fig, *args, **kwargs)
@@ -561,30 +561,39 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     displayed = " ".join(" ".join(ElementTree.fromstring(svg).itertext()).split())
     for color in (*busco.RESCUE_SUPPORT_COLOURS, busco.RESCUE_SELF_COLOUR):
         assert color in svg
-    for label in busco.SUPPORT_GROUP_LABELS if grouped else (*busco.RESCUE_SUPPORT_LABELS, busco.RESCUE_SELF_LABEL):
+    labels = ("Self only", "Nearest only", "Balanced only", "Multiple groups") if staged else (
+        busco.SUPPORT_GROUP_LABELS if grouped else (*busco.RESCUE_SUPPORT_LABELS, busco.RESCUE_SELF_LABEL))
+    for label in labels:
         assert label in displayed
-    assert ("at least two support types" if grouped else "donor belonging to both lists") in svg
+    if not staged:
+        assert ("at least two support types" if grouped else "donor belonging to both lists") in svg
     if grouped:
         assert "S/R/P" not in svg
     assert ">11<" in svg
-    assert ("Target RNA is separate from self-species homology" if grouped else "mixed self/interspecies support uses the interspecies group") in svg
+    assert ("target RNA is separate" if staged else
+            "Target RNA is separate from self-species homology" if grouped else
+            "mixed self/interspecies support uses the interspecies group") in svg
     self_bar = next(b for b in bars if b[3] == busco.RESCUE_SELF_COLOUR)
-    assert self_bar[1:3] == (1, 0 if grouped else 10)
+    assert self_bar[1:3] == (1, 0 if staged or grouped else 10)
     rescue_bars = [b for b in bars if b[0] is self_bar[0]]
     rescue_upper = [b for b in rescue_bars if b[4] == -.20]
     rescue_lower = [b for b in rescue_bars if b[4] == .20]
     assert len(rescue_upper) == 4 and sum(b[1] for b in rescue_upper) == 11
-    assert len(rescue_lower) == (5 if swissprot else 4) and sum(b[1] for b in rescue_lower) == 11
-    assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [2, 3, 4, 2])
-    assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 2, 5, 9])
-    for label in busco.SWISSPROT_LABELS if swissprot else busco.REPEAT_GROUP_LABELS:
+    assert len(rescue_lower) == 5 and sum(b[1] for b in rescue_lower) == 11
+    assert [b[1] for b in rescue_lower] == ([2, 3, 1, 4, 1] if swissprot else [0, 0, 0, 0, 11])
+    assert [b[2] for b in rescue_lower] == ([0, 2, 5, 6, 10] if swissprot else [0, 0, 0, 0, 0])
+    swiss_labels = ("TE-related only", "Other protein only", "TE + other", "No informative hit", "Not assessed") if staged else busco.SWISSPROT_LABELS
+    for label in swiss_labels:
         assert label in displayed
-    assert ("Upper: donors; lower: Swiss-Prot" if swissprot else "Upper: support; lower: repeats") in svg
-    assert ("no support does not exclude TE origin" if swissprot else "no hit does not establish a true gene") in svg
+    assert ("Swiss-Prot support" if staged else "Upper: donors; lower: Swiss-Prot") in svg
+    assert "no support does not exclude TE origin" in svg
+    assert "Repeat annotation" not in svg
     if swissprot:
-        for description in ("E-value &lt;= 1e-07", "paired residues &gt;= 55 aa", "query coverage &gt;= 60%", "target coverage &gt;= 65%",
+        descriptions = ("E &lt;= 1e-07", "paired length &gt;= 55 aa", "query/target coverage &gt;= 60%/65%", "score &gt;= 95%") if staged else (
+                            "E-value &lt;= 1e-07", "paired residues &gt;= 55 aa", "query coverage &gt;= 60%", "target coverage &gt;= 65%",
                             "Bit score &gt;= 95% of the best qualifying hit", "sensitivity 7; max hits 40", "no sequence-identity cutoff",
-                            "Transposable element keyword", "TE silencing/regulation", "each locus counts once"):
+                            "Transposable element keyword", "TE silencing/regulation", "each locus counts once")
+        for description in descriptions:
             assert description in svg
     coding_ax = next(b[0] for b in bars if b[3] == "#187d97")
     upper = [b for b in bars if b[0] is coding_ax and b[4] == -.20]
@@ -592,9 +601,10 @@ def test_rescue_and_two_path_stacks_include_all_support_and_reject_wrong_totals(
     assert len(upper) == 2 and sum(b[1] for b in upper) == 5
     assert len(lower) == 5 and sum(b[1] for b in lower) == 5
     assert [b[2] for b in lower] == [0, 1, 2, 3, 4]
-    assert [b[3] for b in lower] == list(busco.PATH_SUPPORT_GROUP_COLOURS if grouped else busco.PATH_SUPPORT_COLOURS)
-    assert "Upper: repair / isoform; lower: support" in svg and "Other interspecies only" in svg
-    assert svg.count(">Not analysed<") == 2
+    assert [b[3] for b in lower] == list(busco.PATH_SUPPORT_GROUP_COLOURS if staged or grouped else busco.PATH_SUPPORT_COLOURS)
+    assert ("Accepted coding paths" if staged else "Upper: repair / isoform; lower: support") in svg
+    assert ("Other species only" if staged else "Other interspecies only") in svg
+    assert svg.count(">Not analysed<") == (3 if staged else 2)
     changes["species"]["Species_a"]["rescue_repeat_groups"]["not_assessed"] = 3
     with pytest.raises(ValueError, match="Repeat groups must sum"):
         busco.plot_comparison(rows, tmp_path, changes)

@@ -272,3 +272,4 @@ finish_gene_model_refinement() {''' + function + "\n}\nfinish_gene_model_refinem
     assert any(c.startswith("audit ") for c in commands) == enabled
     plot = next(c for c in commands if "gene_model_refinement_busco.py" in c)
     assert ("--rescue-swissprot-dir " + str(anchor) + ".swissprot" in plot) == enabled
+    assert ("--no-rescue-swissprot" in plot) == (not enabled)

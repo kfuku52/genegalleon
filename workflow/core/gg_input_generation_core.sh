@@ -2641,6 +2641,9 @@ finish_gene_model_refinement() {
   local refinement_review_dir="${gene_model_refinement_dir%/}.review"
   local anchor_dir="${gene_model_refinement_rescue_dir:-${gene_model_rescue_dir}}"
   local -a swissprot_plot_args=()
+  if [[ ${run_gene_model_rescue_swissprot} -eq 0 ]]; then
+    swissprot_plot_args+=(--no-rescue-swissprot)
+  fi
   local -a busco_phase_args=()
   if [[ -z "${gene_model_refinement_inputs}" && -s "${anchor_dir}/augmented/receipt.json" ]]; then
     busco_phase_args+=(--three-stage)
