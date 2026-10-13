@@ -293,17 +293,26 @@ def test_actual_runtime_warm_no_download_core_resume_requires_no_native_executio
 
 @pytest.mark.parametrize('backend,devices,success', [('none', '', True), ('annevo', '', False),
                                                     ('annevo', '0', True), ('annevo', 'all', False)])
-def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, success):
+@pytest.mark.parametrize('representation', ['array', 'legacy_string'])
+def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, success, representation):
     text = ENTRY.read_text()
     start = text.index('if [[ "${genome_annotation_backend}" == "annevo" ]]')
     end = text.index('gg_entrypoint_activate_container_runtime', start)
-    command = 'singularity_command=(fixture exec);\n' + text[start:end] + '\nprintf "%s\\n" "${singularity_command[@]}"'
+    declaration = ('singularity_command=(fixture exec)' if representation == 'array'
+                   else 'singularity_command="fixture exec"')
+    command = declaration + ';\n' + text[start:end] + '\nprintf "%s\\n" "${singularity_command[@]}"'
     result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
                             env={**os.environ, 'genome_annotation_backend': backend,
                                  'CUDA_VISIBLE_DEVICES': devices, 'GG_CONTAINER_DOCKER_GPU_DEVICES': ''})
     assert (result.returncode == 0) == success, result.stderr
     if success:
-        assert ('--nv' in result.stdout.splitlines()) == (backend == 'annevo')
+        expected = ['fixture', 'exec'] if representation == 'array' else ['fixture exec']
+        if backend == 'annevo':
+            if representation == 'array':
+                expected.append('--nv')
+            else:
+                expected[0] += ' --nv'
+        assert result.stdout.splitlines() == expected
 
 
 def test_completed_cds_validation_stamp_reuses_only_unchanged_input_content(tmp_path):

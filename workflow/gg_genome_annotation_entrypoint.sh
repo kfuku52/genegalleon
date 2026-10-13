@@ -179,7 +179,7 @@ if [[ "${genome_annotation_backend}" == "annevo" ]]; then
   export SINGULARITYENV_CUDA_VISIBLE_DEVICES="${annotation_gpu_devices}" APPTAINERENV_CUDA_VISIBLE_DEVICES="${annotation_gpu_devices}"
   case "$(declare -p singularity_command)" in
     declare\ -a*) singularity_command+=(--nv) ;;
-    *) singularity_command="${singularity_command} --nv" ;;
+    *) printf -v singularity_command '%s --nv' "${singularity_command[0]}" ;;
   esac
 fi
 gg_entrypoint_activate_container_runtime
