@@ -622,6 +622,7 @@ def test_content_digest_cache_preserves_stat_integers_outside_sqlite_range(tmp_p
     source = tmp_path / "input.txt"
     source.write_text("content\n")
     signature = list(module.ContentDigestCache.signature(source))
+    signature[3:] = [1_700_000_000_000_000_001, 1_700_000_000_000_000_002]
     signature[field] = value
     monkeypatch.setattr(module.ContentDigestCache, "signature", staticmethod(lambda path: tuple(signature)))
     database = tmp_path / "digests.sqlite3"
@@ -641,6 +642,49 @@ def test_content_digest_cache_preserves_stat_integers_outside_sqlite_range(tmp_p
         reopened.close()
 
 
+@pytest.mark.parametrize("coarse_field", [3, 4])
+def test_coarse_timestamp_same_size_rewrite_is_rehashed(tmp_path, monkeypatch, coarse_field):
+    spec = spec_from_file_location("digest_cache_coarse_rewrite", SUPPORT / "content_digest_cache.py")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "input.txt"
+    source.write_bytes(b"alpha")
+    signature = list(module.ContentDigestCache.signature(source))
+    signature[3:] = [1_700_000_000_000_000_001, 1_700_000_000_000_000_002]
+    signature[coarse_field] = 1_700_000_000_000_000_000
+    monkeypatch.setattr(module.ContentDigestCache, "signature", staticmethod(lambda path: tuple(signature)))
+    module.configure(tmp_path / "digests.sqlite3")
+    try:
+        assert module.cached_sha256_file(source) == (hashlib.sha256(b"alpha").hexdigest(), 5)
+        source.write_bytes(b"bravo")
+        assert module.cached_sha256_file(source) == (hashlib.sha256(b"bravo").hexdigest(), 5)
+    finally:
+        module.configure(None)
+
+
+@pytest.mark.parametrize("coarse_field", [3, 4])
+def test_existing_cache_row_with_coarse_timestamp_is_not_adopted(tmp_path, monkeypatch, coarse_field):
+    spec = spec_from_file_location("digest_cache_coarse_legacy", SUPPORT / "content_digest_cache.py")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = tmp_path / "input.txt"
+    source.write_bytes(b"alpha")
+    signature = list(module.ContentDigestCache.signature(source))
+    signature[3:] = [1_700_000_000_000_000_001, 1_700_000_000_000_000_002]
+    monkeypatch.setattr(module.ContentDigestCache, "signature", staticmethod(lambda path: tuple(signature)))
+    cache = module.ContentDigestCache(tmp_path / "digests.sqlite3")
+    try:
+        cache.put("file_sha256", source, hashlib.sha256(b"alpha").hexdigest(), 5)
+        signature[coarse_field] = 1_700_000_000_000_000_000
+        column = "mtime_ns" if coarse_field == 3 else "ctime_ns"
+        with cache._connect() as connection:
+            connection.execute(f"UPDATE digest_cache SET {column}=?", (signature[coarse_field],))
+        source.write_bytes(b"bravo")
+        assert cache.get("file_sha256", source) is None
+    finally:
+        cache.close()
+
+
 def test_content_digest_cache_is_shared_safely_across_threads(tmp_path: Path):
     files = []
     for index in range(32):
@@ -654,7 +698,16 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
-from content_digest_cache import cached_sha256_file, configure
+from content_digest_cache import ContentDigestCache, cached_sha256_file, configure
+
+# This test isolates concurrent cache transactions from the host filesystem's
+# timestamp precision. Coarse timestamps have separate invalidation coverage.
+original_signature = ContentDigestCache.signature
+def precise_signature(path):
+    values = list(original_signature(path))
+    values[3:] = [value + (1 if value % 1_000_000_000 == 0 else 0) for value in values[3:]]
+    return tuple(values)
+ContentDigestCache.signature = staticmethod(precise_signature)
 
 database = Path(sys.argv[2])
 paths = [Path(value) for value in sys.argv[3:]]
@@ -675,12 +728,15 @@ with sqlite3.connect(database) as connection:
 
 
 @pytest.mark.parametrize("size", [7, 2**64 - 1])
-def test_content_digest_cache_preserves_integer_rows_and_large_logical_sizes(tmp_path, size):
+def test_content_digest_cache_preserves_integer_rows_and_large_logical_sizes(tmp_path, monkeypatch, size):
     spec = spec_from_file_location("digest_cache_size_audit", SUPPORT / "content_digest_cache.py")
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     source = tmp_path / "input.txt"
     source.write_text("content\n")
+    signature = list(module.ContentDigestCache.signature(source))
+    signature[3:] = [1_700_000_000_000_000_001, 1_700_000_000_000_000_002]
+    monkeypatch.setattr(module.ContentDigestCache, "signature", staticmethod(lambda path: tuple(signature)))
     database = tmp_path / "digests.sqlite3"
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     cache = module.ContentDigestCache(database)
