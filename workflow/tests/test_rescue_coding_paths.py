@@ -159,6 +159,15 @@ def test_canonical_equal_length_tie_is_coordinate_deterministic(reverse):
     assert a['path_selection']['representative_status'] == 'ambiguous'
 
 
+def test_native_predictor_cannot_enable_an_ambiguous_longest_path_fallback():
+    a = model('a', [[0, 90, 0]], ('Relative', 'Phylogenetic'), identity=.74)
+    b = model('b', [[6, 90, 0]], ('Relative', 'Phylogenetic'), identity=.76)
+    b['support'][0]['annevo'] = {'native_transcript_id': 'native.t'}
+    paths.resolve_coding_paths([a, b])
+    assert all(row['status'] == 'unresolved' for row in (a, b))
+    assert all('ambiguous_annevo_coding_path_representative' in row['problems'] for row in (a, b))
+
+
 def test_duplicate_queries_and_self_do_not_supply_independent_fallback_species():
     a = model('a', [[0, 60, 0]], ('Relative',))
     b = model('b', [[6, 60, 0]], ('Relative',))

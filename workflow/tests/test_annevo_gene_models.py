@@ -62,6 +62,8 @@ def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, stran
     assert all(m['sequence'] == coding and m['cds'] == blocks and m['problems'] == [] for m in checked)
     assert all(m['coverage'] == m['identity'] == 1 for m in models)
     assert all(m['evidence']['annevo']['native_transcript_id'] == 'native.t' for m in models)
+    assert all(m['evidence']['annevo']['alignment']['junction_information_available'] is False for m in models)
+    assert all('score' in m['evidence']['annevo']['alignment'] and 'junction_similarity' in m['evidence']['annevo']['alignment'] for m in models)
 
 
 @pytest.mark.parametrize('profile', annevo.PROFILES)
@@ -243,3 +245,135 @@ def test_native_cached_paths_are_skipped_without_weakening_raw_provenance_checks
     native['raw_prediction']['seqid'] = 'other'
     with pytest.raises(ValueError, match='does not match its model provenance'):
         cache._raw_prediction(native, {'q': region})
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_transfer_confirmation_needs_actual_same_query_and_junctions(tmp_path, strand):
+    genome, _gff, _receipt, table, sources, coding, _blocks = native_fixture(tmp_path, strand=strand)
+    region = dict(id='q', donor='Donor_species', query='protein', seqid='chr', start=0, end=394)
+    proteins = {'Donor_species': {'protein': str(Seq(coding).translate()).removesuffix('*')}}
+    with catalog_module.indexed_genome(genome) as sequence:
+        models, _ = annevo.nominate(annevo.freeze_inputs(table, sources), 'Target_species', [region], proteins, sequence, refinement.DEFAULTS)
+        checked = rescue.validate_model(models[0], sequence, 1, refinement.DEFAULTS)
+    transferred = {**copy.deepcopy(checked), 'evidence': region, 'search': 'synteny_interval'}
+    positive = copy.deepcopy(checked)
+    annevo.confirm_transferred_structure([positive], [transferred])
+    assert positive['evidence']['annevo']['genomic_structure_transfer']['confirmed']
+    for bad in [copy.deepcopy(checked), {**copy.deepcopy(transferred), 'evidence': {**region, 'query': 'other'}},
+                {**copy.deepcopy(transferred), 'problems': ['frameshift']},
+                {**copy.deepcopy(transferred), 'cds': [[30, 364, 0]]}]:
+        negative = copy.deepcopy(checked)
+        annevo.confirm_transferred_structure([negative], [bad])
+        assert 'annevo_unconfirmed_coding_structure' in negative['problems']
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_source_structure_retains_exons_and_complete_termini(strand):
+    from gene_model_source_retention import source_structure_retention
+    blocks = [[100, 130, 0], [200, 233, 0], [300, 330, 0]]
+    if strand == '-':
+        blocks.reverse()
+    original = dict(candidate_id='source', seqid='chr', strand=strand, blocks=blocks,
+                    cds='ATG' + 'AAA' * 29 + 'TAA', quality={})
+    candidate = dict(seqid='chr', strand=strand, blocks=[*blocks])
+    assert source_structure_retention(candidate, [original], 1)['preserved']
+    # A frame-changing missing exon does not invalidate the retained endpoints.
+    missing = {**original, 'blocks': [blocks[0], blocks[-1]], 'cds': 'ATG' + 'AAA' * 17 + 'A' + 'TAA'}
+    assert source_structure_retention(candidate, [missing], 1)['preserved']
+    for altered in ([[100, 130, 0], [300, 330, 0]],
+                    [[103, 130, 0], [200, 233, 0], [300, 330, 0]],
+                    [[97, 130, 0], [200, 233, 0], [300, 330, 0]],
+                    [[100, 130, 0], [200, 236, 0], [300, 330, 0]]):
+        assert not source_structure_retention({**candidate, 'blocks': altered}, [original], 1)['preserved']
+
+
+def test_incomplete_terminal_extension_remains_possible():
+    from gene_model_source_retention import source_structure_retention
+    original = dict(candidate_id='source', seqid='chr', strand='+', blocks=[[100, 130, 0]],
+                    cds='ATG' + 'AAA' * 9, quality={})
+    assert source_structure_retention(dict(seqid='chr', strand='+', blocks=[[100, 160, 0]]), [original], 1)['preserved']
+
+
+def test_new_locus_needs_whole_path_transfer_and_cannot_borrow_partial_termini(tmp_path):
+    genome, _gff, _receipt, table, sources, coding, _blocks = native_fixture(tmp_path)
+    region = dict(id='q', target='Target_species', donor='Donor_species', query='protein', seqid='chr', start=0, end=394,
+                  genome_only=True, annevo_bounded_placement=True)
+    proteins = {'Donor_species': {'protein': str(Seq(coding).translate()).removesuffix('*')}}
+    with catalog_module.indexed_genome(genome) as sequence:
+        models, _ = annevo.nominate(annevo.freeze_inputs(table, sources), 'Target_species', [region], proteins, sequence, refinement.DEFAULTS)
+        native = rescue.check_interval(rescue.validate_model(models[0], sequence, 1, refinement.DEFAULTS))
+    transferred = {**copy.deepcopy(native), 'evidence': region, 'search': 'genome_fallback'}
+    good = copy.deepcopy(native)
+    annevo.confirm_transferred_structure([good], [transferred])
+    assert good['evidence']['annevo']['genomic_structure_transfer']['confirmed']
+    partial = copy.deepcopy(transferred)
+    partial['cds'][0][0] += 3
+    partial['problems'].append('missing_start')
+    proposed = copy.deepcopy(native)
+    annevo.confirm_transferred_structure([proposed], [partial])
+    assert 'annevo_unconfirmed_coding_structure' in proposed['problems']
+
+
+def test_homology_cannot_discard_retained_source_exon_without_whole_path_rna():
+    fixture = importlib.import_module('test_gene_model_refinement')
+    catalog, models, edges = fixture.classification_fixture()
+    original = catalog['loci'][0]['candidates'][0]
+    original['blocks'].append([200, 240, 0])
+    original['cds'] += 'AAA' * 13 + 'A'
+    row = fixture.classify(catalog, models, edges)[0]
+    assert row['status'] == 'proposal' and 'unconfirmed_source_structure_change' in row['problems']
+    assert not row['candidate']['quality']['representative_eligible']
+    rna = [dict(species=catalog['species'], seqid='chr1', strand='+', cds_blocks=json.dumps([b[:2] for b in models[0]['cds']]),
+                transcript_id='whole_rna', count=1)]
+    admitted = fixture.classify(catalog, models, edges, rna=rna)[0]
+    assert admitted['status'] == 'accepted' and admitted['candidate']['quality']['representative_eligible']
+
+
+def test_whole_path_rna_can_confirm_structure_without_miniprot_junction_agreement():
+    fixture = importlib.import_module('test_gene_model_refinement')
+    catalog, models, edges = fixture.classification_fixture()
+    for model in models:
+        model['problems'] = ['annevo_unconfirmed_coding_structure']
+        model['evidence'] = {'annevo': {'native_transcript_id': 'native.t'}}
+    assert fixture.classify(catalog, models, edges)[0]['status'] == 'proposal'
+    rna = [dict(species=catalog['species'], seqid='chr1', strand='+', cds_blocks=json.dumps([b[:2] for b in models[0]['cds']]),
+                transcript_id='actual_whole_RNA_fixture', count=1)]
+    row = fixture.classify(catalog, models, edges, rna=rna)[0]
+    assert row['status'] == 'accepted'
+    assert all(a['structure_confirmation'] == 'whole_coding_RNA' for a in row['alignments'])
+
+
+def test_mask_sampling_is_reproducible_across_process_hash_seeds():
+    import os
+    import subprocess
+    benchmark_dir = SUPPORT.parent / 'benchmarks'
+    code = '''import json,sys
+sys.path.insert(0,sys.argv[1])
+import benchmark_annevo_masked_models as b
+ids=['gene_'+str(i) for i in range(80)]
+choices={g:[(100,131),(200,232),(300,334)] for g in reversed(ids)}
+genes,exons=b.sampled_masks(dict.fromkeys(ids),choices,.25,20261014)
+print(json.dumps([sorted(genes),{g:sorted(v) for g,v in exons.items()}],sort_keys=True))
+'''
+    results = [subprocess.check_output([sys.executable, '-c', code, str(benchmark_dir)], text=True,
+                                      env={**os.environ, 'PYTHONHASHSEED': value}) for value in ('1', '79')]
+    assert results[0] == results[1]
+    genes, exons = json.loads(results[0])
+    assert len(genes) == len(exons) == 20
+
+
+def test_benchmark_separates_nonexact_hidden_locus_from_off_reference_addition(tmp_path):
+    sys.path.insert(0, str(SUPPORT.parent / 'benchmarks'))
+    benchmark = importlib.import_module('benchmark_annevo_masked_models')
+    fixture = importlib.import_module('test_rescue_coding_paths')
+    models = []
+    for blocks in ([[0, 63, 0]], [[100, 160, 0]]):
+        row = fixture.model('toy', blocks, ('Donor_one', 'Donor_two'))
+        row['evidence']['target'] = 'Target_species'
+        models.append(row)
+    gff = tmp_path / 'masked.gff3'
+    gff.write_text('##gff-version 3\n')
+    truth = {'reference_gene': {'seqid': 'chr1', 'strand': '+', 'blocks': [[0, 60, 0]]}}
+    result = benchmark.evaluate_rescue(models, gff, truth, {'reference_gene'}, 'Target_species')
+    assert result['accepted_additions'] == 2
+    assert result['nonexact_additions_at_hidden_loci'] == result['off_reference_additions_unknown'] == 1

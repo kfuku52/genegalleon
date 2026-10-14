@@ -128,7 +128,8 @@ def implementation():
                     'rescue_terminal_completion.py', 'rescue_coding_paths.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
                     'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
-                    'refinement_input_snapshot.py', 'annevo_gene_models.py', 'genome_sequence_identity.py')
+                    'refinement_input_snapshot.py', 'annevo_gene_models.py', 'genome_sequence_identity.py',
+                    'gene_model_source_retention.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -922,7 +923,8 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         # Alignment quality belongs to this donor, not the shared coding path.
         # Failed alignments cannot veto a supported path or count as support.
         alignment_problems = sorted(set(m['problems']) & {'low_coverage', 'low_identity',
-                                                        'low_reciprocal_coverage', 'annevo_alignment_bounded'})
+                                                        'low_reciprocal_coverage', 'annevo_alignment_bounded',
+                                                        'annevo_unconfirmed_coding_structure'})
         problems = sorted(set(m['problems']) - set(alignment_problems))
         if g.get('ambiguous_coordinates'):
             problems.append('ambiguous_locus_coordinates')
@@ -954,12 +956,23 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         if m['donor_species'] not in trusted_donors[m['gene_id']]:
             problems.append('untrusted_donor_correspondence')
         candidate['quality']['rna_supported'] = bool(rna_support(candidate, catalog['species'], rna_rows))
+        rna_confirmed_structure = (candidate['quality']['rna_supported']
+                                   and 'annevo_unconfirmed_coding_structure' in alignment_problems)
+        if rna_confirmed_structure:
+            alignment_problems.remove('annevo_unconfirmed_coding_structure')
+        from gene_model_source_retention import source_structure_retention
+        retention = source_structure_retention(candidate, g['candidates'], catalog.get('genetic_code', 1))
+        explicit_intact_adoption = (params.get('isoform_adoption') == 'conservation_supported'
+                                   and any(c['quality'].get('valid_orf') for c in g['candidates']))
+        if not candidate['quality']['rna_supported'] and not retention['preserved'] and not explicit_intact_adoption:
+            problems.append('unconfirmed_source_structure_change')
         if not candidate['quality']['rna_supported'] and any(c.get('quality', {}).get('sequence_mismatch') for c in owners):
             problems.append('unresolved_source_sequence_mismatch')
         key = m['gene_id'], shape
         if key not in grouped:
             grouped[key] = {'gene_id': m['gene_id'], 'candidate': candidate, 'problems': problems,
-                            'donors': [], 'alignments': [], 'rna_paths': rna_support(candidate, catalog['species'], rna_rows)}
+                            'donors': [], 'alignments': [], 'rna_paths': rna_support(candidate, catalog['species'], rna_rows),
+                            'source_structure_retention': retention}
         row = grouped[key]
         supported = not alignment_problems and 'untrusted_donor_correspondence' not in problems
         if supported:
@@ -978,6 +991,8 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
                                   **({'rescue_revision_model_id': m['rescue_revision_model_id']} if m.get('rescue_revision_model_id') else {})})
         if m.get('evidence', {}).get('annevo'):
             row['alignments'][-1]['annevo'] = m['evidence']['annevo']
+            if rna_confirmed_structure:
+                row['alignments'][-1]['structure_confirmation'] = 'whole_coding_RNA'
         row['problems'] = sorted(set(row['problems'] + problems))
     result = []
     for row in grouped.values():
@@ -1272,6 +1287,7 @@ def predict_species(root, value, name, cpus=1):
                 native_regions = [{**region, 'query': region['donor_candidate']} for region in queries.values()]
                 native_models, native_audit = annevo_gene_models.nominate(
                     value['request']['annevo'], name, native_regions, proteins, genome, params)
+                native_checked = []
                 for model in native_models:
                     region = queries[model['query']]
                     model.update(gene_id=region['gene_id'], donor_species=region['donor'], donor_candidate=region['donor_candidate'])
@@ -1279,7 +1295,9 @@ def predict_species(root, value, name, cpus=1):
                         model['same_coordinate_repair_only'] = True
                     checked = rescue.validate_model(model, genome, source['genetic_code'], params)
                     checked['problems'] = sorted(set(checked['problems']) | set(model['annevo_problems']))
-                    validated.append(checked)
+                    native_checked.append(checked)
+                annevo_gene_models.confirm_transferred_structure(native_checked, validated)
+                validated.extend(native_checked)
                 atomic_json(tmp / 'annevo_candidates.json', native_audit)
             if first_revision is not None:
                 with store_connection(db) as connection:
@@ -1698,6 +1716,7 @@ def finalize(root, value):
         shutil.copyfile(final / 'representative_map.tsv', tmp / 'representative_map.tsv')
         representative_map_proof = FreshDigestBatch()
         rows, changes, translation_audit, coding_audit, exclusions, gene_bounds_audit = [], [], [], [], [], []
+        unpublished_candidates = []
         for name in value['species']:
             catalog = json.loads((root / 'catalog' / name / 'catalog_metadata.json').read_text())
             catalog['loci'] = iter_loci(db, name)
@@ -1757,6 +1776,15 @@ def finalize(root, value):
                     else:
                         predicted_rows.append(candidate_gff(gene, candidate, name))
                     for c in candidates.values():
+                        if (c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path')
+                                and not c.get('same_coordinate_source_repair') and not c['quality'].get('rna_supported')
+                                and chosen['status'] == 'ambiguous_correspondence'):
+                            # Keep the proposal in the catalog/prediction audit,
+                            # rather than publishing a copy-unresolved homology
+                            # model in the active paired full GFF/CDS view.
+                            unpublished_candidates.append({'species': name, 'gene_id': gene['gene_id'],
+                                'candidate_id': c['candidate_id'], 'reason': chosen['reason']})
+                            continue
                         all_cds.write(f">{c['candidate_id']}\n{c['cds']}\n")
                         if c['origin'] == 'predicted' and not c.get('rescue_alternative_coding_path') and not c.get('same_coordinate_source_repair'):
                             # Preserve the original gene and attach only new transcript/CDS rows.
@@ -1783,6 +1811,7 @@ def finalize(root, value):
             rows.append(row)
         rescue.write_tsv(tmp / 'effective_exclusions.tsv', ('species', 'gene_id', 'candidate_id', 'reason'), exclusions)
         atomic_json(tmp / 'gene_bounds_changes.json', gene_bounds_audit)
+        atomic_json(tmp / 'unpublished_candidates.json', unpublished_candidates)
         rescue.write_tsv(tmp / 'translation_admission.tsv', ('species', 'gene_id', 'candidate_id', 'status', 'quality'), translation_audit)
         rescue.write_tsv(tmp / 'coding_admission.tsv', ('species', 'gene_id', 'candidate_id', 'status', 'head_bases_removed', 'tail_bases_removed', 'source_cds_length', 'analysis_cds_length'), coding_audit)
         rescue.write_tsv(tmp / 'species_genetic_code.tsv', ('species', 'genetic_code'), [(r['species'], r['genetic_code']) for r in rows])

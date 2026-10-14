@@ -210,6 +210,13 @@ def nominate(frozen, name, regions, proteins, genome, params):
                 protein_cache[token] = str(Seq(sequence).translate()).removesuffix('*') if len(sequence) % 3 == 0 else ''
             donor = proteins[region['donor']][region['query']]
             score = pair_score({'protein': protein_cache[token]}, {'protein': donor})
+            alignment = score.as_dict()
+            # Neither input supplies donor exon coordinates. Equal empty
+            # junction lists are not evidence of conserved target splicing.
+            # Retain the existing raw PairScore fields for saved-data readers,
+            # while explicitly marking their missing structural input.
+            alignment['junction_information_available'] = False
+            alignment['score_basis'] = 'protein_only_without_donor_junctions'
             problems = []
             if score.bounded:
                 problems.append('annevo_alignment_bounded')
@@ -217,7 +224,7 @@ def nominate(frozen, name, regions, proteins, genome, params):
                 problems.append('low_reciprocal_coverage')
             evidence = {**region, 'annevo': {**prediction['identity'],
                         'native_transcript_id': path['native_transcript_id'], 'native_gene_id': path['native_gene_id'],
-                        'alignment': score.as_dict()}}
+                        'alignment': alignment}}
             results.append({'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(b) for b in path['cds']],
                             'query': region['id'], 'coverage': score.coverage_b, 'identity': score.identity,
                             'frameshift': False, 'evidence': evidence, 'search': 'annevo_nominated_path',
@@ -236,6 +243,49 @@ def gff_attributes(evidence):
         return ''
     ids = sorted({r['native_transcript_id'] for r in origins})
     return ';prediction_engine=ANNEVO;annevo_native_transcripts=' + ','.join(quote(i, safe='._-:') for i in ids)
+
+
+def confirm_transferred_structure(native_models, transferred):
+    """Protein similarity alone does not corroborate a target exon chain.
+
+    Require the same donor query's actual genomic mapping to retain every
+    internal junction and compatible coding coordinates. Partial start/stop
+    transfer can still corroborate internal structure. Another ANNEVO row
+    cannot supply this check, and this never adds a donor species.
+    """
+    from rescue_coding_paths import coding_shape, compatible_paths
+    def key(model):
+        evidence = model.get('evidence', {})
+        return (model.get('gene_id', evidence.get('target')), model.get('donor_species', evidence.get('donor')),
+                model.get('donor_candidate', evidence.get('query')), model['seqid'], model['strand'])
+    def junctions(model):
+        ordered = sorted(model['cds'])
+        return tuple((a[1], b[0]) for a, b in zip(ordered, ordered[1:], strict=False))
+    def checked_support(model):
+        donor, query = key(model)[1:3]
+        return {**model, 'problems': [], 'support': [],
+                'evidence': {**model.get('evidence', {}), 'donor': donor, 'query': query}}
+    allowed = {'missing_start', 'missing_stop', 'unanchored_genome_search'}
+    by_query = defaultdict(list)
+    for model in transferred:
+        if (not model.get('evidence', {}).get('annevo') and model.get('sequence') and model.get('cds')
+                and not set(model.get('problems', [])) - allowed):
+            by_query[key(model)].append(model)
+    for model in native_models:
+        model['problems'] = [p for p in model['problems'] if p != 'annevo_unconfirmed_coding_structure']
+        matches = [other for other in by_query[key(model)] if junctions(other) == junctions(model)
+                   and compatible_paths(checked_support(model), checked_support(other))]
+        if model.get('evidence', {}).get('genome_only'):
+            # No existing target model corroborates either terminus here.
+            # Do not turn a partial/paralog placement into a new complete gene.
+            matches = [other for other in matches if coding_shape(other) == coding_shape(model)
+                       and not {'missing_start', 'missing_stop'} & set(other.get('problems', []))]
+        model['evidence']['annevo']['genomic_structure_transfer'] = {
+            'confirmed': bool(matches), 'counting_unit': 'same_donor_query_genomic_mapping',
+            'scope': 'whole_coding_path' if model.get('evidence', {}).get('genome_only') else 'internal_junctions',
+            'matching_paths': [{'query': row['query'], 'cds': row['cds']} for row in matches]}
+        if not matches:
+            model['problems'] = sorted(set(model['problems']) | {'annevo_unconfirmed_coding_structure'})
 
 
 def main():
