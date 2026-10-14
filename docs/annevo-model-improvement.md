@@ -52,9 +52,12 @@ installation. Scheduler resources remain explicit and unchanged.
 
 ## Admission and restart
 
-- Import only successful GG native GPU prediction receipts for the qualified
-  Magnoliopsida profile and nuclear genetic code 1. Freeze table/GFF/receipt
-  hashes with the plan; verify them at fresh boundaries and before publication.
+- Import only successful GG native GPU prediction receipts for the six supported
+  [ANNEVO model profiles](annevo-genome-annotation.md#select-a-model-automatically)
+  and nuclear genetic code 1. Newly supported profiles must retain their matching
+  native inference lineage; legacy Magnoliopsida receipts remain valid. Freeze
+  table/GFF/receipt hashes with the plan; verify them at fresh boundaries and
+  before publication.
 - The prediction must use the target assembly. New native receipts additionally
   bind sorted contig names, lengths and DNA sequence hashes, allowing gzip,
   description, wrapping, ordering and letter-case differences without allowing

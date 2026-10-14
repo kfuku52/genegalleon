@@ -18,7 +18,8 @@ installation prefix below `workspace/downloads/annotation/annevo/runtimes/` must
 fit that limit, including the cache key, generation and `environment` directory.
 Choose a shorter workspace path before first installation when needed; installed
 generations cannot be renamed after relocation. Failed installation records and
-generations remain available for diagnosis.
+generations remain available for diagnosis. Remove this path constraint only
+after qualifying a payload whose binary relocation fields accept longer prefixes.
 
 ## Configure the stage
 
