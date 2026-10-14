@@ -176,7 +176,9 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
             if inputs:
                 raise ValueError('Choose --inputs or --rescue-output; explicit inputs must not be silently ignored')
             anchor_root = Path(rescue_output).resolve()
-            anchors = rescue.load(anchor_root)
+            # Consume the frozen producer; its schema, receipts and inputs are
+            # verified below. A downstream catalogue update does not rerun it.
+            anchors = rescue.load(anchor_root, inspect_only=True)
             sources = copy.deepcopy(anchors['request']['sources'])
             files = [str(anchor_root / 'plan.json')]
             augmented = anchor_root / 'augmented'
@@ -520,7 +522,7 @@ def correspondence(root, value, cpus=1, comparison_cache=None):
     request = value['request']
     anchor_root = Path(request['rescue_output']) if request['rescue_output'] else None
     if anchor_root and not request['edges']:
-        anchor_plan = rescue.load(anchor_root)
+        anchor_plan = rescue.load(anchor_root, inspect_only=True)
         with PreparedSnapshot(anchor_root, anchor_plan, rescue) as snapshot:
             return _correspondence(root, value, db, cpus, comparison_cache, anchor_plan, snapshot)
     return _correspondence(root, value, db, cpus, comparison_cache)
@@ -1921,7 +1923,7 @@ def inspect_stages(root, value):
     request = value['request']
     if request['rescue_output'] and not request['edges']:
         anchor_root = Path(request['rescue_output'])
-        anchor_plan = rescue.load(anchor_root)
+        anchor_plan = rescue.load(anchor_root, inspect_only=True)
         anchor_hashes = {}
         for job in anchor_plan['synteny_jobs']:
             if job['a'] == job['b']:

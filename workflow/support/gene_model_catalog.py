@@ -130,6 +130,110 @@ def reconstruct_sequence(blocks, seqid, strand, genome):
     return "".join(pieces)
 
 
+def _coding_key(candidate, genome_sha256):
+    shape = [genome_sha256, candidate["seqid"], candidate["strand"], candidate["blocks"],
+             hashlib.sha256(candidate["cds"].encode()).hexdigest()]
+    return hashlib.sha256(json.dumps(shape, separators=(",", ":")).encode()).hexdigest()
+
+
+def _generated_annotation_source(source):
+    return source.lower().startswith("genegalleon")
+
+
+def _complementary_source_view(candidate, eligible):
+    """Probe a uniquely identified source convention without adopting it yet."""
+    blocks = candidate["blocks"]
+    rows = [{"start": a, "end": b, "phase": str(p)} for a, b, p in blocks]
+    if (not eligible or candidate.get("origin") != "original"
+            or any(_generated_annotation_source(source) for source in candidate.get("source_annotation_sources", []))
+            or phase_conventions(rows) != {"complementary"}):
+        return candidate
+    canonical = [[a, b, (-p) % 3] for a, b, p in blocks]
+    return {**candidate, "blocks": canonical,
+            "quality": {**candidate["quality"], "translation_offset": canonical[0][2],
+                        "partial": bool(candidate["quality"]["partial"] or canonical[0][2])}}
+
+
+def _source_phase_interpretation_valid(candidate, genetic_code):
+    """Fence replay of an adopted convention against changed model evidence."""
+    evidence = candidate.get("source_phase_interpretation")
+    if evidence is None:
+        source_blocks = candidate.get("source_blocks")
+        if source_blocks is None:
+            return True
+        try:
+            rows = [{"start": a, "end": b, "phase": str(p)} for a, b, p in source_blocks]
+            return phase_conventions(rows) != {"complementary"}
+        except (TypeError, ValueError):
+            return False
+    try:
+        source_blocks = candidate["source_blocks"]
+        rows = [{"start": a, "end": b, "phase": str(p)} for a, b, p in source_blocks]
+        canonical = [[a, b, (-p) % 3] for a, b, p in source_blocks]
+        source_sha = evidence["source_cds_sha256"]
+        source_id = evidence["source_fasta_id"]
+        sources = candidate["source_annotation_sources"]
+        if (candidate.get("origin") != "original" or any(_generated_annotation_source(source) for source in sources)
+                or sources != evidence["source_annotation_sources"]
+                or evidence["schema"] != 1
+                or phase_conventions(rows) != {"complementary"} or candidate["blocks"] != canonical
+                or hashlib.sha256(json.dumps(source_blocks).encode()).hexdigest() != evidence["source_blocks_sha256"]
+                or source_blocks[0][2] != evidence["source_first_phase"]
+                or canonical[0][2] != evidence["translation_offset"]
+                or evidence["source_convention"] != "complementary" or evidence["canonical_convention"] != "gff3"
+                or evidence["genetic_code"] != genetic_code
+                or candidate["source_transcript_id"] != evidence["source_transcript_id"]
+                or candidate["source_gene_id"] != evidence["source_gene_id"]
+                or hashlib.sha256(candidate["cds"].upper().encode()).hexdigest() != evidence["genomic_cds_sha256"]
+                or candidate["coding_key"] != _coding_key(candidate, evidence["genome_sha256"])):
+            return False
+        view = {**candidate, "quality": {**candidate["quality"],
+                "translation_offset": canonical[0][2], "partial": bool(canonical[0][2] or candidate["quality"]["partial"])}}
+        for record in candidate.get("source_cds", []):
+            if (record["source_fasta_id"] == source_id and record["normalized_sha256"] == source_sha
+                    and record["sequence_agreement"]
+                    and hashlib.sha256(record["cds"].encode()).hexdigest() == record["sha256"]
+                    and hashlib.sha256(record["cds"].upper().encode()).hexdigest() == source_sha
+                    and _source_convention(record["cds"].upper(), view) == evidence["sequence_convention"]):
+                return evidence["binding"] == "source_transcript"
+        return (evidence["binding"] == "unique_source_coding_path" and any(
+            record["source_fasta_id"] == source_id and record["source_cds_sha256"] == source_sha
+            and record["source_convention"] == evidence["sequence_convention"]
+            for record in candidate.get("source_coding_path_evidence", [])))
+    except (KeyError, TypeError, ValueError, IndexError):
+        return False
+
+
+def _interpret_bound_source_phases(candidate, sequence, identifier, sources, genetic_code, *, binding, eligible):
+    """Adopt complementary frame fields only after same-model source agreement."""
+    view = _complementary_source_view(candidate, eligible)
+    quality = candidate["quality"]
+    if (view is candidate or not quality.get("source_sequence_agreement")
+            or quality.get("sequence_mismatch") or quality.get("structure_problem")):
+        return
+    convention = _source_convention(sequence, view)
+    if not convention:
+        return
+    candidate["source_blocks"] = [list(block) for block in candidate["blocks"]]
+    candidate["blocks"] = view["blocks"]
+    candidate["source_phase_interpretation"] = {
+        "schema": 1, "source_convention": "complementary", "canonical_convention": "gff3",
+        "binding": binding, "source_fasta_id": identifier,
+        "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
+        "genomic_cds_sha256": hashlib.sha256(candidate["cds"].encode()).hexdigest(),
+        "source_transcript_id": candidate["source_transcript_id"], "source_gene_id": candidate["source_gene_id"],
+        "source_annotation_sources": list(candidate["source_annotation_sources"]),
+        "source_blocks_sha256": hashlib.sha256(json.dumps(candidate["source_blocks"]).encode()).hexdigest(),
+        "source_cds_file_sha256": sources["cds"]["sha256"], "gff_sha256": sources["gff"]["sha256"],
+        "genome_sha256": sources["genome"]["sha256"], "genetic_code": genetic_code,
+        "source_first_phase": candidate["source_blocks"][0][2],
+        "translation_offset": candidate["blocks"][0][2], "sequence_convention": convention,
+    }
+    candidate["coding_key"] = _coding_key(candidate, sources["genome"]["sha256"])
+    candidate["quality"] = validate_candidate(candidate, genetic_code)
+    candidate["junctions"] = _junctions(candidate["blocks"], candidate["strand"])
+
+
 def validate_candidate(candidate, genetic_code=1):
     """Return independent translation/structure quality for a coding candidate.
 
@@ -145,6 +249,8 @@ def validate_candidate(candidate, genetic_code=1):
     blocks = candidate.get("blocks", [])
     previous = candidate.get("quality", {})
     structure_problem = previous.get("structure_problem", "")
+    if not _source_phase_interpretation_valid(candidate, code):
+        structure_problem = "source_phase_interpretation_mismatch"
     ascending = sorted(blocks)
     if not structure_problem:
         if candidate.get("strand", "+") not in {"+", "-"}:
@@ -424,6 +530,7 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                                for convention in conventions)
     normaliser.global_convention = next(iter(normaliser.votes)) if len(normaliser.votes) == 1 else None
     loci, candidates, transcript_aliases, excluded_loci = {}, {}, defaultdict(set), {}
+    native_phase_candidates = set()
     genes_by_id, transcripts_by_id = {}, {}
     try:
         with indexed_genome(paths["genome"]) as genome:
@@ -510,6 +617,7 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                              "seqid": seqid, "strand": strand, "cds": sequence, "protein": "",
                              "blocks": blocks, "junctions": [], "quality": quality, "origin": "original",
                              "source_fasta_ids": [], "source_cds_sha256": [], "source_cds": []}
+                candidate["source_annotation_sources"] = sorted({row["source"] for row in [*rows, *normaliser.nodes.get(transcript, [])]})
                 # Rescue can establish a locus while compatible isoforms still
                 # have no decisive representative rank. Preserve that evidence
                 # without changing translation quality or admission policy.
@@ -555,11 +663,13 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                     candidate['rescue_alternative_coding_path'] = True
                     candidate['quality']['representative_eligible'] = False
                     candidate['support'] = {'class': 'homology_only_predicted', 'source': 'missing_gene_rescue_alternative'}
+                if (not current_rescue_path and candidate["origin"] == "original"
+                        and not any(_generated_annotation_source(source) for source in candidate["source_annotation_sources"])):
+                    native_phase_candidates.add(candidate_id)
                 candidate["quality"] = validate_candidate(candidate, genetic_code)
                 if not candidate["quality"]["phase_conflict"] and not candidate["quality"]["phase_unresolved"]:
                     candidate["junctions"] = _junctions(blocks, strand)
-                coding = [sources["genome"]["sha256"], seqid, strand, blocks, hashlib.sha256(sequence.encode()).hexdigest()]
-                candidate["coding_key"] = hashlib.sha256(json.dumps(coding, separators=(",", ":")).encode()).hexdigest()
+                candidate["coding_key"] = _coding_key(candidate, sources["genome"]["sha256"])
                 locus = loci.setdefault(gene_id, {"species": species, "gene_id": gene_id,
                                                   "source_gene_id": source_gene, "gene_token": gene,
                                                   "seqid": seqid, "strand": strand,
@@ -603,7 +713,8 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                     possible = {candidate["candidate_id"] for candidate in locus["candidates"]} if locus else set()
                 for candidate_id in possible:
                     _record_five_prime_convention(sequence, candidates[candidate_id], normaliser, genome)
-                exact = {identifier for identifier in possible if _source_matches(sequence, candidates[identifier])}
+                views = {key: _complementary_source_view(candidates[key], key in native_phase_candidates) for key in possible}
+                exact = {key for key in possible if _source_matches(sequence, views[key])}
                 chosen = explicit if len(explicit) == 1 else exact
                 # A gene-only FASTA header can still identify its sole coding
                 # transcript independently of sequence agreement. Bind that identity
@@ -616,7 +727,7 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                 row = {"source_fasta_id": identifier, "source_cds_sha256": hashlib.sha256(sequence.encode()).hexdigest(),
                        "mapping_status": status, "candidate_ids": bound, "possible_candidate_ids": sorted(possible),
                        "sequence_agreement": bool(bound and bound[0] in exact),
-                       "source_convention": _source_convention(sequence, candidates[bound[0]]) if bound else ""}
+                       "source_convention": _source_convention(sequence, views[bound[0]]) if bound else ""}
                 if not bound and len(exact) > 1 and len({candidates[c]["gene_id"] for c in exact}) == 1:
                     # UTR-only identities can identify the source coding path without
                     # identifying one transcript. Retain identity ambiguity and an
@@ -629,9 +740,11 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                             candidate = candidates[matching_id]
                             candidate.setdefault("source_coding_path_evidence", []).append({
                                 "source_fasta_id": identifier, "source_cds_sha256": row["source_cds_sha256"],
-                                "source_convention": _source_convention(sequence, candidate),
+                                "source_convention": _source_convention(sequence, views[matching_id]),
                             })
                             candidate["quality"]["source_sequence_agreement"] = True
+                            _interpret_bound_source_phases(candidate, sequence, identifier, sources, genetic_code,
+                                binding="unique_source_coding_path", eligible=matching_id in native_phase_candidates)
                             _infer_missing_phases(candidate, genetic_code, "complete_genomic_cds_and_unique_source_coding_path")
                 mapping.append(row)
                 if (not bound and possible and not exact and match["status"] == "mapped"
@@ -661,6 +774,9 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                                                      "source_convention": row["source_convention"]})
                     candidate["quality"]["source_sequence_agreement"] = row["sequence_agreement"]
                     candidate.setdefault("source_conventions", []).append(row["source_convention"])
+                    if row["sequence_agreement"]:
+                        _interpret_bound_source_phases(candidate, sequence, identifier, sources, genetic_code,
+                            binding="source_transcript", eligible=bound[0] in native_phase_candidates)
                     corrected_length = _corrected_cds_length(sequence, candidate, normaliser.global_convention)
                     if corrected_length is not None:
                         candidate["corrected_cds_length"] = corrected_length
