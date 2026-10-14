@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from annevo_model_selection import OVERLAP_PROFILES, PROFILES, stable_signature, taxonomy_sha
+from annevo_model_selection import OVERLAP_PROFILES, PROFILES, protect_outputs, stable_signature, taxonomy_sha
 from annevo_runtime_cache import prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
@@ -183,9 +183,9 @@ def run(args):
     log_root = output.with_name(output.name + ".logs")
     destinations = (output, output_receipt, log_root,
                     log_root / "native.stdout.txt", log_root / "native.stderr.txt")
+    protect_outputs(destinations, protected)
     if (output.resolve() == output_receipt.resolve()
-            or any(p.resolve() in protected or p.resolve().is_relative_to(generation)
-                   for p in destinations)):
+            or any(p.resolve().is_relative_to(generation) for p in destinations)):
         raise ValueError("ANNEVO outputs must not overwrite inputs or the installed runtime")
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     output_receipt.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

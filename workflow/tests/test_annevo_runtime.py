@@ -324,8 +324,10 @@ def test_mixed_profiles_share_environment_and_fetch_only_selected_weights(tmp_pa
 
 
 @pytest.mark.parametrize('role', ['taxid_map', 'genome_metadata', 'taxonomy_db'])
-@pytest.mark.parametrize('output_role', ['output', 'output_receipt', 'native.stdout.txt', 'native.stderr.txt'])
-def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypatch, role, output_role):
+@pytest.mark.parametrize(('output_role', 'alias'), [('output', 'direct'), ('output_receipt', 'direct'),
+    ('native.stdout.txt', 'direct'), ('native.stderr.txt', 'direct'),
+    ('native.stdout.txt', 'hardlink'), ('native.stderr.txt', 'hardlink')])
+def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypatch, role, output_role, alias):
     spec = importlib.util.spec_from_file_location('protected_taxonomy_fixture', Path(__file__).with_name('test_annevo_model_selection.py'))
     fixtures = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fixtures)
@@ -339,6 +341,7 @@ def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypa
     value = {'model_profile': 'Mammalia', 'model_path': str(tmp_path / 'model'), 'generation': str(tmp_path / 'installed')}
     monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
     monkeypatch.setattr(runtime, 'inference_settings', lambda *a: {'overlap_pred': True})
+    monkeypatch.setattr(runtime, 'runtime_environment', lambda *a: {})
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: pytest.fail('output collision reached GPU probe'))
     args = argparse.Namespace(receipt=str(selected), genome=selection_args.genome, output=str(tmp_path / 'out.gff3'),
         output_receipt=str(tmp_path / 'out.json'), model_profile=choice['model_profile'], threads=4,
@@ -346,9 +349,12 @@ def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypa
     if output_role.startswith('native.'):
         log_input = tmp_path / 'out.gff3.logs' / output_role
         log_input.parent.mkdir()
-        Path(getattr(selection_args, role)).rename(log_input)
-        setattr(selection_args, role, str(log_input))
-        fixtures.selection.select(selection_args)
+        if alias == 'hardlink':
+            os.link(getattr(selection_args, role), log_input)
+        else:
+            Path(getattr(selection_args, role)).rename(log_input)
+            setattr(selection_args, role, str(log_input))
+            fixtures.selection.select(selection_args)
     protected = Path(getattr(selection_args, role))
     before = protected.read_bytes()
     if not output_role.startswith('native.'):

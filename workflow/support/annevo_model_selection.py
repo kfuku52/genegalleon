@@ -40,8 +40,11 @@ def taxonomy_sha(path):
 
 def protect_outputs(outputs, inputs):
     protected = {Path(path).expanduser().resolve() for path in inputs if path}
-    if any(Path(path).expanduser().resolve() in protected for path in outputs):
-        raise ValueError("ANNEVO outputs must not overwrite inputs")
+    for path in outputs:
+        path = Path(path).expanduser().resolve()
+        if path in protected or (path.exists() and any(
+                target.exists() and path.samefile(target) for target in protected)):
+            raise ValueError("ANNEVO outputs must not overwrite inputs")
 
 
 def write_unchanged(path, value):
