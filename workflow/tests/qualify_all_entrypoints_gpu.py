@@ -72,6 +72,16 @@ def all_entrypoints(manifest):
     workspace.mkdir(mode=0o700)
     inputs = workspace / "input"
     inputs.mkdir()
+    # Entrypoint snapshots have their own project mount. Keep local download
+    # sources inside that reviewed mount rather than relying on inherited
+    # Apptainer bind environment variables outside the project.
+    assets = root / "input_assets"
+    assets.mkdir(mode=0o700)
+    for role in ("species_cds", "species_gff", "species_genome"):
+        shutil.copytree(seed / role, assets / role)
+        for path in (assets / role).iterdir():
+            require(sha(path) == seed_files["workspace/input/" + role + "/" + path.name], "copied local input changed")
+            path.chmod(0o400)
     query = inputs / "query_gene"
     query.mkdir()
     shutil.copyfile(seed / "query_gene/YABBY", query / "YABBY")
@@ -84,19 +94,23 @@ def all_entrypoints(manifest):
     require(sha(taxonomy) == fixtures["taxonomy_sha256"], "copied taxonomy changed")
     manifest_path = inputs / "input_generation/local.tsv"
     manifest_path.parent.mkdir()
-    cds_files = sorted((seed / "species_cds").glob("*.fa"))
+    cds_files = sorted((assets / "species_cds").glob("*.fa"))
     require(len(cds_files) == 7, "exact seven-species biological fixture required")
     species = []
     with manifest_path.open("x", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t")
-        writer.writerow(["provider", "id", "species_key", "local_cds_path", "local_gff_path", "local_genome_path"])
+        writer.writerow(["provider", "id", "species_key", "local_cds_path", "local_gff_path", "local_genome_path",
+                         "cds_filename", "gff_filename", "genome_filename"])
         for cds in cds_files:
             name = "_".join(cds.name.split("_")[:2])
-            gff = list((seed / "species_gff").glob(name + "*"))
-            genome = list((seed / "species_genome").glob(name + "*"))
+            gff = list((assets / "species_gff").glob(name + "*"))
+            genome = list((assets / "species_genome").glob(name + "*"))
             require(len(gff) == len(genome) == 1, "paired input missing: " + name)
             species.append(name)
-            writer.writerow(["local", name, name, str(cds), str(gff[0]), str(genome[0])])
+            # Local discovery uses role names; a source genome named simply
+            # <species>.fa must not be classified as provided CDS.
+            writer.writerow(["local", name, name, str(cds), str(gff[0]), str(genome[0]),
+                             name + ".cds.fa", name + ".gff3", name + ".genome.fa"])
     results = [run_case(manifest, "input_generation", workspace, {
         "provider": "local", "download_manifest": str(manifest_path), "strict": "1",
         "require_cds": "1", "require_gff": "1", "require_genome": "1",
