@@ -75,6 +75,27 @@ installation. Scheduler resources remain explicit and unchanged.
   Accepted candidates and chosen representatives remain separate decisions.
   Whole coding RNA paths use the existing `gene_model_refinement_rna` interface;
   missing expression in the sampled tissues is not a gene-loss call.
+- Confirm each ANNEVO donor comparison against that exact donor query's actual
+  genomic transfer. Existing-locus refinement needs the same internal junctions
+  and frame-compatible coding overlap; unanchored new-gene rescue needs the
+  complete coding path including both termini. ANNEVO cannot corroborate itself.
+  Whole coding RNA can confirm refinement structure without miniprot agreement.
+- An incomplete source ORF does not invalidate its retained exons or complete
+  termini. Displacing those coordinates needs whole-path target RNA support;
+  restoring missing exons and extending incomplete termini remains allowed.
+  This gate also applies to ordinary homology refinement. Explicit
+  `conservation_supported` admission retains its existing intact-locus behavior.
+- Competing ANNEVO-supported paths without a decisive existing donor rank stay
+  unresolved. They cannot become a published model through the longest-path
+  fallback. Protein-only PairScore fields remain readable, but
+  `junction_information_available=false` marks their unavailable donor structure;
+  they are not splice-confirmation evidence.
+- Copy ambiguity from the final representative-selection graph also gates
+  publication. Homology-only candidates at ambiguous loci remain in the
+  prediction/catalog audit and `unpublished_candidates.json`; they are omitted
+  from both active `full_annotation` and its paired `all_candidates` CDS file.
+  Original sources, exact-coordinate repairs and complete RNA-confirmed paths
+  keep their own evidence and publication rules.
 
 `annevo_candidates.json` records nominations and unexamined native paths. Native
 source/model/receipt identities and measured alignments stay in prediction
@@ -102,20 +123,38 @@ admission comparison ran in the GG Docker development runtime.
 
 | Exact reference coding-path recovery/admission | Without ANNEVO | With ANNEVO |
 | --- | ---: | ---: |
-| Whole-gene masks, 129 trials | 29 | 51 |
-| Exon masks, 78 trials | 24 | 41 |
+| Whole-gene masks, 129 trials | 29 | 29 |
+| Exon masks, 78 trials | 24 | 35 |
 | Intact reference loci admitted for representative replacement | 0 | 0 |
 
-Trials across seeds overlap and are not counts of distinct genes. These numbers
+Trials cover 98 distinct gene-masked loci and 62 distinct exon-masked loci;
+the same locus may appear in several seeds. These numbers
 measure candidate admission; final representative adoption also has its ordinary
 selection/margin gates. Controlled runtime tests separately execute rescue,
 inherited refinement, finalization and GFF/CDS QC, including strand reversal,
 pseudogene/stop/gap protection, source preservation and stale-input rejection.
 
-Nonexact admitted candidates also increased: 15→19 at hidden-gene loci and 6→18
-at exon-masked loci across the seeds. These differences need evidence review;
-reference absence/difference is not definitive biological error. Off-reference
-additions are reported as unknown, not true or false positives. This interval
+The v0.8.247 prototype admitted 51 exact gene recoveries and 41 exact exon
+repairs, but also 19 nonexact additions at masked-gene loci and 18 nonexact
+repairs at masked-exon loci. The source/transfer/ambiguity gates above prioritize
+safety over that sensitivity. Replaying the exact original annotation masks
+now gives 13 nonexact new-gene additions (15 without ANNEVO) and one nonexact
+masked-exon candidate in either condition. The remaining exon candidate is
+withheld from representative selection and active GFF/CDS publication by copy
+ambiguity; it is not an
+ANNEVO-specific increase. One reference locus previously emitted two rescued
+genes; this disappeared after whole-path transfer confirmation. Its original
+annotation may itself merge adjacent donor gene families, so a biological split
+is uncertain rather than established as a duplicate or a correct discovery.
+
+A separate actual selection-core diagnostic with source donor CDS/proteins,
+without donor GFF/junctions, selected 7 nonexact ANNEVO-supported exon repairs
+before these changes and zero afterward, with exact selected repairs changing
+17→22. This projection is separate from whole-cohort production finalization.
+Reference absence/difference is not definitive biological error. Off-reference
+additions now count only models outside reference coding loci; nonexact models
+at known loci are reported separately instead of counted again as off-reference.
+This interval
 test does not establish whole-genome uniqueness, unseen-species generalization,
 complete isoform discovery, or annotation accuracy for all plants. The packaged
 profile covers flowering plants; other plant groups need separate qualification.
@@ -133,5 +172,11 @@ bash workflow/tests/run_in_runtime.sh python \
 ```
 
 The report binds source SHA-256 values, parameters, donor commands and seeds.
+It writes each condition's admitted/proposed models and `mask_manifest.json`.
+Fresh sampling is independent of Python hash/set iteration order. For a change
+comparison, pass `--mask-manifest /data/prior/mask_manifest.json` to replay the
+same genes and internal exons; genome/reference hashes and exon eligibility must
+match. Masked target GFF/CDS bytes and normalized donor mappings were verified
+identical to the original comparison. No reference annotation is used as RNA.
 Keep actual source files and detailed runs in private/workspace data storage;
 do not commit downloaded biological data or local logs.

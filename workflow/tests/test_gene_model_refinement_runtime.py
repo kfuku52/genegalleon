@@ -3,6 +3,7 @@
 import hashlib
 import json
 import random
+import sqlite3
 import subprocess
 import sys
 from importlib import import_module
@@ -158,6 +159,50 @@ def rescue_frozen(root):
     return json.loads((root / 'plan.json').read_text())['request']['annevo']
 
 
+def test_copy_ambiguous_homology_candidate_is_archived_without_active_gff_cds_publication(tmp_path, monkeypatch):
+    inputs, edges, _rna, sources, _truth = truth_fixture(tmp_path)
+    original = Path(sources[0]['gff']).read_bytes()
+    root = tmp_path / 'copy_ambiguity'
+    select = refinement.select_from_store
+    def unresolved_final_selection(db, links, **kwargs):
+        result = select(db, links, **kwargs)
+        if Path(db).parent.name == 'catalog_index_final':
+            # Mock only the final copy-ambiguity boundary. Genomic prediction,
+            # admission, storage and paired GFF/CDS publication execute normally.
+            with sqlite3.connect(db) as connection:
+                locus = refinement.load_locus(connection, 'Species_target', 'Species_target_repair')
+            baseline = refinement._baseline(locus, locus['candidates'])
+            for row in result['selections']:
+                if row['species'] == 'Species_target' and row['gene_id'] == 'Species_target_repair':
+                    if row['candidate_id'] != baseline['candidate_id']:
+                        result['metrics']['changed_representatives'] -= 1
+                    row.update(candidate_id=baseline['candidate_id'], source_transcript_id=baseline['source_transcript_id'],
+                               status='ambiguous_correspondence', reason='unresolved_paralog_copy')
+            for row in result['scores']:
+                if row['species'] == 'Species_target' and row['gene_id'] == 'Species_target_repair':
+                    row['selected'] = row['candidate_id'] == baseline['candidate_id']
+        return result
+    monkeypatch.setattr(refinement, 'select_from_store', unresolved_final_selection)
+    value = refinement.plan(root, inputs=inputs, edges=edges, padding=650, max_intron=2000)
+    refinement.finalize(root, value)
+    cli('qc', '--output', root)
+    predictions = json.loads((root / 'predictions/Species_target/predictions.json').read_text())
+    candidates = {r['candidate']['candidate_id'] for r in predictions
+                  if r['gene_id'] == 'Species_target_repair' and r['status'] == 'accepted'}
+    assert candidates  # Candidate admission and publication remain separate.
+    full = (root / 'effective/full_annotation/Species_target.gff3').read_text()
+    paired = {name for name, _, _ in fasta_records(root / 'effective/all_candidates/Species_target.fa')}
+    audit = json.loads((root / 'effective/unpublished_candidates.json').read_text())
+    assert candidates <= {r['candidate_id'] for r in audit if r['reason'] == 'unresolved_paralog_copy'}
+    assert not candidates & paired
+    assert all('ID=' + name + ';' not in full for name in candidates)
+    assert (root / 'effective/source_annotation/Species_target.gff3').read_bytes() == original
+    recatalog = refinement.build_catalog('Species_target', root / 'effective/all_candidates/Species_target.fa',
+                                         root / 'effective/full_annotation/Species_target.gff3',
+                                         root / 'effective/species_genome/Species_target.fa')
+    assert not candidates & {c['source_transcript_id'] for g in recatalog['loci'] for c in g['candidates']}
+
+
 def coding(seed, residues=280):
     rng = random.Random(seed)
     codons = {}
@@ -283,8 +328,11 @@ def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological
         assert model["candidate"]["strand"] == truth[target, kind]["strand"]
         assert model["change_type"] == "model_revision"
         assert model["donors"] == ["Species_donor1", "Species_donor2"]
-    assert "alternate" in accepted
-    alternative = accepted["alternate"]
+    alternative = next(row for row in predictions if row['gene_id'] == target + '_alternate')
+    assert ("alternate" in accepted) is rna
+    if not rna:
+        assert alternative['status'] == 'proposal'
+        assert 'unconfirmed_source_structure_change' in alternative['problems']
     assert alternative["candidate"]["cds"] == truth[target, "alternate"]["shorter_cds"]
     assert alternative["change_type"] == "isoform_addition"
     assert alternative["evidence_class"] == ("rna_path_supported" if rna else "homology_only_predicted")
@@ -312,14 +360,17 @@ def test_real_miniprot_repairs_heldout_exons_adds_paths_and_preserves_biological
         assert selected[target + "_alternate"] == truth[target, "alternate"]["cds"]
     full = (effective / "full_annotation" / (target + ".gff3")).read_text()
     assert all("ID=" + kind + ".long;" in full for kind in ("repair", "minus", "alternate"))
-    assert "ID=" + alternative["candidate"]["source_transcript_id"] + ";" in full
+    assert ("ID=" + alternative["candidate"]["source_transcript_id"] + ";" in full) is rna
     reimported = refinement.build_catalog(target, effective / "all_candidates" / (target + ".fa"),
                                           effective / "full_annotation" / (target + ".gff3"),
                                           effective / "species_genome" / (target + ".fa"))
     rebound = {candidate["source_transcript_id"]: (locus, candidate) for locus in reimported["loci"]
                for candidate in locus["candidates"]}
     for kind in ("repair", "minus", "alternate"):
-        for transcript in (kind + ".long", accepted[kind]["candidate"]["source_transcript_id"]):
+        transcripts = [kind + '.long']
+        if kind in accepted:
+            transcripts.append(accepted[kind]['candidate']['source_transcript_id'])
+        for transcript in transcripts:
             locus, candidate = rebound[transcript]
             assert locus["gene_id"] == target + "_" + kind
             assert candidate["gene_token"] == kind
