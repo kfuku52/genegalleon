@@ -12,6 +12,7 @@ REVIEWED_ACTIONS = {
     "actions/cache/restore",
     "actions/cache/save",
     "actions/checkout",
+    "actions/create-github-app-token",
     "actions/download-artifact",
     "actions/setup-python",
     "actions/upload-artifact",
