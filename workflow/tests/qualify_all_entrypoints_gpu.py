@@ -33,6 +33,33 @@ def registered(source, stage):
         "gg_" + stage + "_entrypoint.sh"], text=True).splitlines()
 
 
+def prepare_query(seed, destination):
+    """Use exact seed CDS sequences independently of formatted identifiers."""
+    id_file = seed / "query_gene/YABBY"
+    ids = id_file.read_text().split()
+    require(len(ids) == 6 and len(set(ids)) == 6, "exact six YABBY query IDs required")
+    fasta = list((seed / "species_cds").glob("Arabidopsis_thaliana*.fa"))
+    require(len(fasta) == 1, "unambiguous original query CDS source required")
+    records, name, sequence = {}, None, []
+    for line in fasta[0].read_text().splitlines() + [">"]:
+        if line.startswith(">"):
+            if name in ids:
+                require(name not in records, "duplicate original query ID: " + name)
+                records[name] = "".join(sequence)
+            name = line[1:].split()[0] if line[1:].strip() else None
+            sequence = []
+        elif name is not None:
+            sequence.append(line.strip())
+    require(set(records) == set(ids) and all(records.values()), "original query CDS missing")
+    with destination.open("x") as stream:
+        for name in ids:
+            stream.write(">" + name + "\n" + records[name] + "\n")
+    return {"id_file": str(id_file), "id_file_sha256": sha(id_file),
+        "cds_source": str(fasta[0]), "cds_source_sha256": sha(fasta[0]),
+        "query": str(destination), "query_sha256": sha(destination),
+        "ids": ids, "sequence_type": "DNA", "genetic_code": 1}
+
+
 def run_case(manifest, stage, workspace, settings, outputs):
     root, source = Path(manifest["root"]), Path(manifest["source"]["root"])
     names = registered(source, stage)
@@ -84,7 +111,11 @@ def all_entrypoints(manifest):
             path.chmod(0o400)
     query = inputs / "query_gene"
     query.mkdir()
-    shutil.copyfile(seed / "query_gene/YABBY", query / "YABBY")
+    # Formatting gives the species input canonical identifiers. The supported
+    # DNA FASTA query route preserves the original six seed sequences and lets
+    # the real entrypoint translate them with the configured genetic code.
+    query_provenance = prepare_query(seed, query / "YABBY")
+    write_json(root / "receipts/all_entrypoints_query_input.json", query_provenance)
     shutil.copytree(seed / "species_rnaseq/Amborella_trichopoda", inputs / "species_rnaseq/Amborella_trichopoda")
     fixtures = json.loads(Path(manifest["model_qualification"]).read_text())
     taxonomy = workspace / "downloads/ete_taxonomy/taxa.sqlite"
@@ -144,7 +175,7 @@ def all_entrypoints(manifest):
     results.append(run_case(manifest, "fractionation_bias", fractionation, {"run_kffractbias": "1", "delete_tmp_dir": "0"},
         ["output/kffractbias/synthetic/synthetic.genes.tsv", "output/kffractbias/synthetic/synthetic.summary.json",
          "output/kffractbias/synthetic/synthetic.synteny.zip"]))
-    results.append(run_case(manifest, "genome_evolution", workspace, {"genome_evolution_mode": "orthogroups",
+    results.append(run_case(manifest, "genome_evolution", workspace, {"genome_evolution_mode": "all",
         "run_cds_translation": "1", "run_orthofinder": "1", "run_og_selection": "1", "delete_tmp_dir": "0"},
         ["output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"]))
     results.append(run_case(manifest, "gene_evolution", workspace, {"mode_gene_evolution": "query2family",
@@ -167,6 +198,7 @@ def all_entrypoints(manifest):
     require({row["entrypoint"] for row in results} == expected and all(row["verified"] for row in results), "all eight entrypoints required")
     proof = {"all_entrypoints_verified": True, "entrypoints_passed": 8, "entrypoint_runs_passed": 19,
         "profiles_passed": native["profiles_passed"], "cases": results, "fixture_species": species,
+        "query_input": query_provenance,
         "scientific_completion_verified": False, "scope": "eight-real-entrypoints-with-enabled-main-producers-and-six-GPU-profiles"}
     write_json(root / "receipts/all_entrypoints_qualification.json", proof)
     return proof
