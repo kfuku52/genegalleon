@@ -59,8 +59,10 @@ The other overrides follow the same `GG_GENOME_ANNOTATION_` prefix, for example
 `GG_GENOME_ANNOTATION_ANNEVO_NO_DOWNLOAD=1`. A verified `representative_inputs`
 view cannot be combined with new ANNEVO prediction. Native windows, flank sizes,
 minimum intron/protein criteria and decoding remain those of the qualified
-runtime. Existing genetic-code, BUSCO, annotation and contamination settings
-retain their meaning.
+runtime. The qualified ANNEVO annotation/candidate pipeline supports genetic
+code 1; other `genetic_code` settings fail before taxonomy or runtime acquisition
+and GPU prediction. The existing CDS-based backend retains its genetic-code
+support. BUSCO, annotation and contamination settings retain their meaning.
 
 ## Select a model automatically
 
@@ -96,7 +98,10 @@ downloads are enabled. A cached database or explicit snapshot is reused without
 refreshing it. `annevo_no_download=1` requires the taxonomy database, runtime and
 selected model to be present. To adopt newer taxonomy, replace the snapshot
 explicitly and use the normal stale-artifact policy. Active SQLite transactions
-are rejected; use a quiescent snapshot.
+are rejected before and after selection and at the prediction boundaries; use a
+quiescent snapshot. Selection reads the hashed SQLite main file in one read
+transaction, excluding WAL changes, and rejects changes before publishing its
+receipt. CLI outputs cannot replace the genome, TaxID evidence, or taxonomy DB.
 
 | NCBI ancestor | TaxID | Native model and `-l` | Overlapping prediction |
 | --- | --- | --- | --- |

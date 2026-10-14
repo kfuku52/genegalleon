@@ -117,6 +117,17 @@ def run(args):
         raise ValueError('Pipeline CPU budget exceeds the scheduler allocation')
     rows, table_sha = read_inputs(args.inputs, args.output)
     root = Path(args.output).absolute()
+    protected = {Path(args.inputs).resolve()}
+    for row in rows:
+        protected.update(Path(row[key]).resolve() for key in ('genome', 'receipt', 'selection_receipt') if row.get(key))
+        if row.get('selection_receipt'):
+            # Protect every species' evidence before the first log is opened.
+            # Scientific selection is independently verified at prediction.
+            choice = json.loads(Path(row['selection_receipt']).read_text())
+            protected.update(Path(item['path']).resolve() for item in choice.get('evidence', []))
+            if choice.get('taxonomy'):
+                protected.add(Path(choice['taxonomy']['path']).resolve())
+    native.protect_outputs([root / name for name in ('pipeline.json', 'pipeline.failed.json', 'candidate_inputs.tsv')], protected)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp_root = Path(args.tmp_root).absolute()
     if not tmp_root.is_dir() or tmp_root.is_symlink():
@@ -159,6 +170,13 @@ def run(args):
         selection_args = argparse.Namespace(model_profile=profile, species=name,
                                             selection_receipt=row.get('selection_receipt', ''))
         selection, selection_sha = native.selection_record(selection_args, genome)
+        protected.add(Path(runtime['model_path']).resolve())
+        logs = directory / 'logs'
+        destinations = (output, receipt_path, logs, *(logs / (stage + '.' + stream + '.txt')
+            for stage in ('prediction', 'decoding') for stream in ('stdout', 'stderr')))
+        native.protect_outputs(destinations, protected)
+        if any(path.resolve().is_relative_to(Path(runtime['generation']).resolve()) for path in destinations):
+            raise ValueError('Pipeline outputs must not overwrite the installed runtime')
         original_sha = file_sha(genome)
         settings = native.inference_settings(runtime, profile)
         expected = dict(runtime_digest=runtime['runtime_digest'], cache_key=runtime['cache_key'],
@@ -203,7 +221,6 @@ def run(args):
                 with gzip.open(genome, 'rb') as source, native_genome.open('xb') as target:
                     shutil.copyfileobj(source, target, length=8 * 1024 * 1024)
             prepared_sha = file_sha(native_genome)
-            logs = directory / 'logs'
             logs.mkdir(exist_ok=True)
             env = runtime_environment(runtime)
             env.update(OMP_NUM_THREADS=str(args.predict_threads), MKL_NUM_THREADS=str(args.predict_threads),
@@ -289,6 +306,7 @@ def run(args):
             os.replace(stage, root / 'candidate_inputs.tsv')
             return result
         except BaseException as error:
+            native.protect_outputs([root / 'pipeline.failed.json'], protected)
             atomic_json(root / 'pipeline.failed.json', {**stats, 'status': 'failed',
                         'error': str(error), 'wall_seconds': time.monotonic() - started})
             raise

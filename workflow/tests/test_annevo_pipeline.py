@@ -3,6 +3,7 @@ import argparse
 import csv
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -170,6 +171,63 @@ def test_redirected_pair_is_rejected_before_native_prediction(batch):
     with pytest.raises(ValueError, match='Redirected'):
         pipeline.run(args)
     assert not events.exists()
+
+
+@pytest.mark.parametrize('input_role', ['genome', 'later_genome', 'receipt', 'table', 'selection_evidence', 'model'])
+@pytest.mark.parametrize('log_name', ['prediction.stdout.txt', 'prediction.stderr.txt', 'decoding.stdout.txt', 'decoding.stderr.txt'])
+def test_logs_cannot_truncate_batch_inputs_or_selection_evidence(batch, monkeypatch, input_role, log_name):
+    make, events, selected = batch
+    args = make()
+    protected = {'genome': args.tmp_root/'one.fa', 'later_genome': args.tmp_root/'two.fa',
+                 'receipt': selected, 'table': args.inputs}.get(input_role)
+    if input_role == 'selection_evidence':
+        protected = args.tmp_root/'taxids.tsv'
+        protected.write_text('species\ttaxid\none\t3398\n')
+        choice = args.tmp_root/'selection.json'
+        choice.write_text(json.dumps({'evidence': [{'path': str(protected)}]}))
+        rows = list(csv.DictReader(args.inputs.open(), delimiter='\t'))
+        with args.inputs.open('w', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=['species', 'genome', 'receipt', 'selection_receipt'], delimiter='\t')
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({**row, 'selection_receipt': str(choice) if row['species']=='two' else ''})
+    elif input_role == 'model':
+        protected = args.tmp_root/'native/model.pt'
+        protected.write_text('model weights')
+    logs = args.output/'one/logs'
+    logs.mkdir(parents=True)
+    os.link(protected, logs/log_name)
+    before = protected.read_bytes()
+    with pytest.raises(ValueError, match='outputs must not overwrite inputs'):
+        pipeline.run(args)
+    assert protected.read_bytes() == before
+    assert not events.exists()
+
+
+def test_log_directory_cannot_redirect_writes_into_runtime(batch):
+    make, events, _ = batch
+    args = make(('one',))
+    directory = args.output/'one'
+    directory.mkdir(parents=True)
+    (directory/'logs').symlink_to(args.tmp_root/'native', target_is_directory=True)
+    with pytest.raises(ValueError, match='installed runtime'):
+        pipeline.run(args)
+    assert not events.exists()
+
+
+def test_failure_receipt_cannot_replace_selection_evidence(batch):
+    make, events, _ = batch
+    args = make(('fail',))
+    args.output.mkdir()
+    evidence = args.output/'pipeline.failed.json'
+    evidence.write_text('selection evidence')
+    choice = args.tmp_root/'selection.json'
+    choice.write_text(json.dumps({'evidence': [{'path': str(evidence)}]}))
+    args.inputs.write_text(args.inputs.read_text().replace('genome\treceipt\n', 'genome\treceipt\tselection_receipt\n').rstrip('\n')+'\t'+str(choice)+'\n')
+    before = evidence.read_bytes()
+    with pytest.raises(ValueError, match='outputs must not overwrite inputs'):
+        pipeline.run(args)
+    assert evidence.read_bytes()==before and not events.exists()
 
 
 @pytest.mark.parametrize('budget', [float('nan'), float('inf')])

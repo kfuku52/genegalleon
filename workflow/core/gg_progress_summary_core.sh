@@ -136,8 +136,8 @@ if [[ -d "${dir_orthogroup}" ]]; then
       --dir_og "${dir_orthogroup}" \
       --genecount "${file_orthogroup_genecount_selected}" \
       --ncpu "${ncpu_progress_summary}" \
-      --updated-genecount-out orthogroup_genecount.alignment_stats.tsv \
-      --out orthogroup_summary.tsv
+      --updated-genecount-out "${gg_workspace_dir}/orthogroup_genecount.alignment_stats.tsv" \
+      --out "${gg_workspace_dir}/orthogroup_summary.tsv"
     if [[ "${gene_family_output_storage}" == "zip" ]]; then
       python "${gg_support_dir}/gene_family_output_store.py" drain-queue \
         --root "${dir_orthogroup}" \
@@ -164,7 +164,7 @@ if [[ -d "${dir_query2family}" ]]; then
       --dir_query2family "${dir_query2family}" \
       --dir_query_gene "${dir_query_gene}" \
       --ncpu "${ncpu_progress_summary}" \
-      --out query2family_summary.tsv
+      --out "${gg_workspace_dir}/query2family_summary.tsv"
     if [[ "${gene_family_output_storage}" == "zip" ]]; then
       python "${gg_support_dir}/gene_family_output_store.py" drain-queue \
         --root "${dir_query2family}" \
@@ -193,5 +193,5 @@ if [[ -d "${dir_transcriptome_assembly}" ]]; then
     --gg_workspace_input_dir "${gg_workspace_input_dir}" \
     --mode "${mode_transcriptome_assembly}" \
     --ncpu "${ncpu_progress_summary}" \
-    --out transcriptome_assembly_summary.tsv
+    --out "${gg_workspace_dir}/transcriptome_assembly_summary.tsv"
 fi

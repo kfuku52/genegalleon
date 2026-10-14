@@ -839,7 +839,7 @@ def test_orthogroup_summaries_do_not_write_augmented_tables_into_orthofinder():
     progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")
     gene_summary = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
 
-    assert "--updated-genecount-out orthogroup_genecount.alignment_stats.tsv" in progress
+    assert '--updated-genecount-out "${gg_workspace_dir}/orthogroup_genecount.alignment_stats.tsv"' in progress
     assert '--updated-genecount-out "${summary_output_dir}/orthogroup_genecount.alignment_stats.tsv"' in gene_summary
 
 

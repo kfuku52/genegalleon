@@ -69,6 +69,18 @@ def test_disabled_backend_does_not_validate_or_prepare_unused_lazy_resources(tmp
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize('code', ['6', '12'])
+def test_nonstandard_code_fails_before_runtime_or_prediction(tmp_path, monkeypatch, code):
+    monkeypatch.setenv('GG_COMMON_GENETIC_CODE', code)
+    result, calls, workspace = run_selected_stage(tmp_path, profile='Fungi')
+    assert result.returncode != 0 and 'requires genetic_code=1' in result.stderr
+    assert calls == []
+    assert not (workspace / 'downloads/annotation/annevo').exists()
+    assert not (workspace / 'output/genome_prediction/annevo/Test_species/candidate_inputs.tsv').exists()
+    disabled = source_function('gg_validate_genome_annotation_backend', env={'genome_annotation_backend': 'none', 'genetic_code': code})
+    assert disabled.returncode == 0, disabled.stderr
+
+
 def test_all_backend_options_are_forwarded():
     result = subprocess.run(
         ["bash", "-c", 'source "$1"; gg_print_entrypoint_config_vars gg_genome_annotation_entrypoint.sh',

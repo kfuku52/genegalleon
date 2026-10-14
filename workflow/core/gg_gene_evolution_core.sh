@@ -2263,7 +2263,7 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
 
   export BLASTDB_LMDB_MAP_SIZE=100000000
   check_species_cds_dir "${query_reference_dir}"
-  check_if_species_files_unique "${query_reference_dir}"
+  check_if_species_files_unique "${query_reference_dir}" fasta
 
   if [[ -e "${og_id}".blastQuery.fasta ]]; then
     rm -f -- "${og_id}.blastQuery.fasta"
@@ -2656,7 +2656,7 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
   num_gene=${#genes[@]}
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     check_species_protein_dir "${dir_sp_protein_input}"
-    check_if_species_files_unique "${dir_sp_protein_input}"
+    check_if_species_files_unique "${dir_sp_protein_input}" fasta
     if [[ -s "${file_species_genetic_code}" ]]; then
       echo "species_genetic_code.tsv is ignored because species_protein inputs are provided: ${file_species_genetic_code}"
     fi
