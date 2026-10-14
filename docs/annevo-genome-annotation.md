@@ -60,6 +60,8 @@ Generated data stays under
 - `formatted/<content-key>/species_cds`, `species_gff`, `species_genome`, plus
   standard formatter summaries and source provenance;
 - a separate formatter provenance record.
+- `candidate_inputs.tsv` and its provenance for optional
+  [rescue/refinement additions and corrections](annevo-model-improvement.md).
 
 The standard input formatter extracts CDS from the native GFF and genome,
 retaining its existing gene grouping, phase, identifier and longest-CDS rules.

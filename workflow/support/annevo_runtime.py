@@ -17,6 +17,7 @@ from pathlib import Path
 
 from annevo_runtime_cache import prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
+from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
 
 
@@ -140,6 +141,9 @@ def run(args):
     env["OMP_NUM_THREADS"] = str(args.threads)
     env["MKL_NUM_THREADS"] = str(args.threads)
     original_sha, selected_sha = file_sha(genome), file_sha(selected)
+    sequence_identity = genome_sequence_digest(genome)
+    if file_sha(genome) != original_sha:
+        raise RuntimeError("ANNEVO genome changed during sequence identity reading")
     with namespace_lock(output.with_name(output.name + ".publication.lock"), exclusive=True, timeout=86400):
         gpu = probe_gpu(runtime, env)
         # Keep native multiprocessing sockets short, irrespective of workspace path length.
@@ -179,6 +183,7 @@ def run(args):
                        "runtime_digest": runtime["runtime_digest"], "cache_key": runtime["cache_key"],
                        "source_commit": runtime["source_commit"], "model_sha256": runtime["model_sha256"],
                        "model_profile": args.model_profile, "genome_sha256": original_sha,
+                       "genome_sequence_sha256": sequence_identity,
                        "prepared_receipt_sha256": selected_sha, "argv": argv,
                        "native_genome_sha256": native_genome_sha, "genome_gzip": compressed,
                        "parameters": {"threads": args.threads, "batch_size": args.batch_size,

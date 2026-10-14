@@ -64,6 +64,100 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
         refinement.plan(tmp_path / 'new-refinement', rescue_output=anchor_root, mode='off')
 
 
+def native_candidate_table(tmp_path, target, genome, gff_text):
+    """Mock only the native predictor boundary, never genomic/donor evidence."""
+    gff, receipt, table = (tmp_path / name for name in ('native.gff3', 'native.receipt.json', 'native.tsv'))
+    gff.write_text(gff_text)
+    value = dict(schema_version=1, kind='genegalleon-annevo-native-prediction', native_returncode=0,
+                 gpu_probe={'gpu_verified': True}, model_profile='Magnoliopsida', runtime_digest='a' * 64,
+                 model_sha256='b' * 64, source_commit='c' * 40, cache_key='d' * 64,
+                 genome_sha256=hashlib.sha256(Path(genome).read_bytes()).hexdigest(),
+                 GFF_sha256=hashlib.sha256(gff.read_bytes()).hexdigest(), GFF_bytes=gff.stat().st_size)
+    receipt.write_text(json.dumps(value))
+    write_tsv(table, ['species', 'gff', 'receipt'], [dict(species=target, gff=str(gff), receipt=str(receipt))])
+    return table, gff, receipt
+
+
+def test_annevo_exon_candidates_pass_real_refinement_finalization_and_source_fences(tmp_path):
+    inputs, edges, _rna, sources, truth = truth_fixture(tmp_path)
+    target = 'Species_target'
+    source = next(s for s in sources if s['species'] == target)
+    original = {s[role]: Path(s[role]).read_bytes() for s in sources for role in ('cds', 'gff', 'genome')}
+    text = '##gff-version 3\n'
+    for kind in ('repair', 'minus', 'intact', 'pseudogene', 'stop', 'gap'):
+        path = truth[target, kind]
+        text += annotation('chr_' + kind, 'native_' + kind, 'native_' + kind + '.t', path['blocks'], path['strand'])
+    table, native_gff, _receipt = native_candidate_table(tmp_path, target, source['genome'], text)
+    root = tmp_path / 'native_refinement'
+    cli('plan', '--inputs', inputs, '--edges', edges, '--output', root,
+        '--annevo-inputs', table, '--padding', 650, '--max-intron', 2000)
+    assert refinement.load(root)['request']['annevo']['predictions'][target]['gff'] == str(native_gff)
+    cli('run', '--output', root, '--cpus', 2)
+    cli('qc', '--output', root)
+    predictions = json.loads((root / 'predictions' / target / 'predictions.json').read_text())
+    supported = {r['gene_id'].removeprefix(target + '_'): r for r in predictions
+                 if r['status'] == 'accepted' and r['candidate'].get('support', {}).get('annevo')}
+    assert {'repair', 'minus'} <= supported.keys()
+    assert not {'intact', 'pseudogene', 'stop', 'gap'} & supported.keys()
+    selected = {i: s for i, _, s in fasta_records(root / 'effective/species_cds' / (target + '.fa'))}
+    for kind in ('repair', 'minus', 'intact'):
+        assert selected[target + '_' + kind] == truth[target, kind]['cds']
+    derived_gff = (root / 'effective/species_gff' / (target + '.gff3')).read_text()
+    assert 'prediction_engine=ANNEVO' in derived_gff and 'annevo_native_transcripts=' in derived_gff
+    assert all(Path(p).read_bytes() == data for p, data in original.items())
+    cli('run', '--output', root, '--cpus', 2)  # Verified prediction/finalization reuse.
+    native_gff.write_text(native_gff.read_text() + '\n')
+    result = cli('qc', '--output', root, success=False)
+    assert 'Frozen refinement input changed' in result.stderr
+
+
+def test_annevo_missing_gene_candidates_survive_rescue_and_inherited_refinement(tmp_path):
+    fixture = import_module('test_rescue_gene_models_runtime')
+    data = fixture.hidden_models.__wrapped__(tmp_path)
+    directory, names, truth = data
+    target = names[0]
+    original = {path: path.read_bytes() for role in ('cds', 'gff', 'genome') for path in (directory / role).iterdir()}
+    # The complete donor annotation is an explicit mocked native coding path;
+    # miniprot/LAST, source DNA and donor-species admission execute normally.
+    donor_gff = next((directory / 'gff').glob(names[1] + '*'))
+    genome = next((directory / 'genome').glob(target + '*'))
+    groups = {}
+    for line in donor_gff.read_text().splitlines():
+        if line.startswith('#'):
+            continue
+        f = line.split('\t')
+        if len(f) == 9 and f[2] == 'CDS':
+            parent = refinement.rescue.attributes(f[8])['Parent']
+            groups.setdefault((f[0], f[6], parent), []).append([int(f[3]) - 1, int(f[4]), int(f[7])])
+    text = '##gff-version 3\n'
+    for i, ((seqid, strand, _parent), blocks) in enumerate(sorted(groups.items())):
+        text += annotation(seqid, 'native_' + str(i), 'native_' + str(i) + '.t', blocks, strand)
+    table, _native, _receipt = native_candidate_table(tmp_path, target, genome, text)
+    root = tmp_path / 'native_rescue'
+    fixture.cli('plan', '--cds-dir', directory / 'cds', '--gff-dir', directory / 'gff',
+                '--genome-dir', directory / 'genome', '--busco-dir', directory / 'busco',
+                '--tree', directory / 'tree.nwk', '--output', root, '--annevo-inputs', table, '--model-storage', 'compact')
+    fixture.cli('run', '--output', root, '--cpus', 2)
+    models = list(import_module('rescue_model_store').iter_accepted_models(root / 'rescued' / target))
+    assert any(m['sequence'] == truth[8] and any(s.get('annevo') for s in m.get('support', [])) for m in models)
+    gff = (root / 'augmented/species_gff' / (target + '.rescue.gff3')).read_text()
+    assert 'prediction_engine=ANNEVO' in gff
+    final = tmp_path / 'native_inherited'
+    cli('plan', '--rescue-output', root, '--output', final, '--mode', 'off')
+    assert refinement.load(final)['request']['annevo'] == rescue_frozen(root)
+    cli('run', '--output', final, '--cpus', 2)
+    cli('qc', '--output', final)
+    assert truth[8] in {sequence for _, _, sequence in fasta_records(final / 'effective/species_cds' / (target + '.fa'))}
+    assert all(path.read_bytes() == raw for path, raw in original.items())
+    genome.write_text(genome.read_text() + '>new_contig\nACGT\n')
+    with pytest.raises(ValueError, match='ANNEVO candidate genome differs'):
+        refinement.plan(tmp_path / 'changed_genome_inherited', rescue_output=root, mode='off')
+
+
+def rescue_frozen(root):
+    return json.loads((root / 'plan.json').read_text())['request']['annevo']
+
+
 def coding(seed, residues=280):
     rng = random.Random(seed)
     codons = {}

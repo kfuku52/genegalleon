@@ -90,6 +90,9 @@ class RefinementInputSnapshot:
                 for name, source in value['request']['sources'].items():
                     for field in ('fasta', 'gff', 'genome'):
                         self.path_groups.setdefault(source[field], name)
+                for name, prediction in value['request'].get('annevo', {}).get('predictions', {}).items():
+                    for field in ('gff', 'receipt'):
+                        self.path_groups.setdefault(prediction[field], name)
             if parsed != self.frozen or value != self.frozen or self.plan != self.frozen:
                 raise InputChanged('Frozen refinement plan changed during execution')
         except (OSError, ValueError) as exc:

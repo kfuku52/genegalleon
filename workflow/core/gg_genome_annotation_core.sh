@@ -212,6 +212,10 @@ gg_generate_annevo_annotation() {
       gg_step_skip "ANNEVO native genome prediction"
     fi
 
+    python "${gg_support_dir}/annevo_gene_models.py" --species "${sp_ub}" \
+      --genome "${file_sp_genome}" --gff "${native_gff}" --receipt "${native_receipt}" \
+      --output "${prediction_dir}/candidate_inputs.tsv" || exit $?
+
     local format_key
     format_key=$(gg_annevo_format_generation_key "${file_sp_genome}" "${native_gff}") || exit $?
     local format_dir="${prediction_dir}/formatted/${format_key}"
