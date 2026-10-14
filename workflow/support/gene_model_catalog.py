@@ -680,8 +680,9 @@ def build_catalog(species, cds_path, gff_path, genome_path, genetic_code=1):
                     loci[gene_id]["source_baseline_basis"] = "matching_coding_path_transcript_identity_ambiguous"
     finally:
         normaliser.close()
-    if any(_stat_identity(path) != frozen[name] for name, path in paths.items()):
-        raise OSError("Sources changed during coding isoform catalog construction")
+    changed = {name: str(path) for name, path in paths.items() if _stat_identity(path) != frozen[name]}
+    if changed:
+        raise OSError("Sources changed during coding isoform catalog construction: " + json.dumps(changed, sort_keys=True))
     summary = {"loci": len(loci), "candidates": len(candidates),
                "usable_candidates": sum(candidate["quality"]["usable"] for candidate in candidates.values()),
                "coding_paths": len({candidate["coding_key"] for candidate in candidates.values()}),

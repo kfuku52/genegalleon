@@ -114,7 +114,7 @@ reference GFF, actual donor CDS/proteins and real miniprot placement. Genomic DN
 and the fixed ANNEVO prediction stay unchanged; only reference annotations are
 masked. No reference annotation is relabelled as RNA evidence.
 
-The first real-data test used Aethionema arabicum CoGe genome 37218, its first
+The original v0.8.248 admission assay used Aethionema arabicum CoGe genome 37218, its first
 1 Mb of `lcl|LG-1`, 178 complete-envelope annotated loci (175 intact coding
 loci), and donor CDS from Arabidopsis thaliana TAIR10.1 and Capsella rubella
 Caprub1_0. Three seeds each hid 43 complete genes or one frame-changing internal
@@ -126,6 +126,11 @@ admission comparison ran in the GG Docker development runtime.
 | Whole-gene masks, 129 trials | 29 | 29 |
 | Exon masks, 78 trials | 24 | 35 |
 | Intact reference loci admitted for representative replacement | 0 | 0 |
+
+These are historical results from the interval assay. That assay originally
+omitted the production donor-supported terminal-completion stage; the updated
+benchmark includes it before placement checks. Replaying the same interval
+masks with that stage leaves the table above unchanged.
 
 Trials cover 98 distinct gene-masked loci and 62 distinct exon-masked loci;
 the same locus may appear in several seeds. These numbers
@@ -180,3 +185,60 @@ match. Masked target GFF/CDS bytes and normalized donor mappings were verified
 identical to the original comparison. No reference annotation is used as RNA.
 Keep actual source files and detailed runs in private/workspace data storage;
 do not commit downloaded biological data or local logs.
+
+## Whole genome and additional species comparison
+
+`workflow/benchmarks/benchmark_annevo_genome_models.py` extends the assay to
+complete assemblies, all reference coding isoforms, real donor genome/GFF/CDS
+catalogs, two deterministic mask seeds and an unmasked control. It distinguishes
+changes at intact sources from attempts to complete pre-existing partial models.
+Its selector projection writes paired selected-prediction GFF/CDS artifacts.
+The placement-derived graph is approximate; these results are not full-cohort
+orthology validation or calibrated biological accuracy. Reference differences
+and off-reference models remain separate categories.
+
+The `--native-experiment` directory contains the original `manifest.json`,
+`upstream_exit.json` and `runtime_inventory.json` from a registered native ANNEVO
+comparison. Alternatively, pass `--receipt /data/native_prediction.json` for
+a normal GG native GPU prediction; the two evidence options are exclusive.
+The benchmark verifies the genome, GFF, command, runtime/model and
+successful CUDA bindings. This is an explicit benchmark-only import of original
+evidence, not a generated GG native receipt; production candidate imports retain
+their stricter existing receipt contract.
+
+```bash
+bash workflow/tests/run_in_runtime.sh python \
+  workflow/benchmarks/benchmark_annevo_genome_models.py \
+  --species Target_species --genome /data/target.fa \
+  --reference-gff /data/reference.gff3 --annevo-gff /data/native.gff3 \
+  --native-experiment /data/original_native_experiment \
+  --donor-cds Donor_one=/data/one.cds.fa.gz \
+  --donor-genome Donor_one=/data/one.genome.fa.gz \
+  --donor-gff Donor_one=/data/one.gff3.gz \
+  --donor-cds Donor_two=/data/two.cds.fa.gz \
+  --donor-genome Donor_two=/data/two.genome.fa.gz \
+  --donor-gff Donor_two=/data/two.gff3.gz \
+  --fraction 0.02 --cpus 4 --output workspace/output/new_whole_genome_comparison
+```
+
+Aethionema arabicum (203,446,438 bp) and Brachypodium stacei (234,142,426 bp)
+were compared against their independent original annotations, using Arabidopsis
+thaliana/Capsella rubella and Brachypodium distachyon/Oryza sativa, respectively.
+Two seeds masked 966/1,130 complete genes and 536/552 internal-exon cases. Exact
+exon-repair admissions increased from 44 to 76 and from 97 to 161 with ANNEVO.
+New-gene exact recoveries were 200→194 and 280→278: conservative path ambiguity
+still limits this route, and native confirmation alone supplies no extra donor.
+The separate Geranium dissectum full-prediction structural comparison uses
+Helixer as another predictor, not independent annotation truth.
+
+This expansion found that unspecified source phases could disable initiation
+protection after an internal exon was removed. An observed source start codon
+with no known nonzero translation offset is now protected even when the phase
+is unspecified. This protects its coordinates without assigning a phase or
+asserting an intact ORF. Explicit partial starts retain their existing behavior;
+whole-coding-path RNA can still authorize source structure changes.
+
+A generic two-donor internal-protein-gap filter was also examined. It would
+remove an exact reference recovery as well as a nonexact candidate, so it was
+not adopted. Additional reference-different coding paths require biological
+review; numerical coverage/support thresholds remain unchanged.
