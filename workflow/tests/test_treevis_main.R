@@ -760,7 +760,7 @@ writeLines(c('qacc\tsacc\tqstart\tqend', 'g1\tPF0001\t1\t200'), domain_file)
 changed <- try(reader_env$read_plot_input(domain_file, 'domain'), silent=TRUE)
 stopifnot(inherits(changed, 'try-error'), grepl('changed during rendering', as.character(changed)))
 profile_file <- file.path(reader_dir, 'missing-ggimage.Rprofile')
-writeLines("requireNamespace <- function(package, ...) if (package == 'ggimage') FALSE else base::requireNamespace(package, ...)", profile_file)
+writeLines(".libPaths <- function(...) character()", profile_file)
 missing_dependency <- suppressWarnings(system2('Rscript', shQuote(plot_script),
   env=c('GG_TREE_PLOT_CHECK_GGIMAGE=1', paste0('R_PROFILE_USER=', shQuote(profile_file))), stdout=TRUE, stderr=TRUE))
 stopifnot(identical(attr(missing_dependency, 'status'), 42L))

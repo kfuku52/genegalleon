@@ -2,8 +2,9 @@
 """Best-effort persistent cache for content digests.
 
 Cache hits require an exact match of device, inode, size, nanosecond mtime, and
-nanosecond ctime.  A cache failure never weakens provenance checks: callers
-fall back to reading and hashing the content.
+nanosecond ctime. Whole-second timestamps cannot distinguish same-size writes
+on coarse filesystems, so those files always require a content read. A cache
+failure never weakens provenance checks: callers read and hash the content.
 """
 
 from __future__ import annotations
@@ -99,6 +100,8 @@ class ContentDigestCache:
             return None
         try:
             signature_before = self.signature(path)
+            if any(value % 1_000_000_000 == 0 for value in signature_before[3:]):
+                return None
             with self._lock:
                 with self._connect() as connection:
                     row = connection.execute(
@@ -134,6 +137,8 @@ class ContentDigestCache:
             return
         try:
             signature = self.signature(path)
+            if any(value % 1_000_000_000 == 0 for value in signature[3:]):
+                return
             if expected_signature is not None and signature != expected_signature:
                 return
             with self._lock:

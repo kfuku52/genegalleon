@@ -10,6 +10,34 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+@pytest.mark.parametrize('metadata', ['package.rds', 'nsInfo.rds'])
+def test_installed_ggimage_read_error_is_a_failure_not_an_optional_skip(tmp_path, metadata):
+    library = tmp_path / 'library'
+    # Copy the actual installed package, then reproduce an unreadable RDS file
+    # without changing the runtime library or fabricating a namespace result.
+    setup = subprocess.run(['Rscript', '-e',
+        "args=commandArgs(TRUE); dir.create(args[1]); "
+        "pkg=find.package('ggimage'); "
+        "stopifnot(file.copy(pkg,args[1],recursive=TRUE)); "
+        "writeLines('truncated RDS',file.path(args[1],'ggimage','Meta',args[2]))",
+        str(library), metadata], capture_output=True)
+    assert setup.returncode == 0, setup.stderr.decode()
+    profile = tmp_path / 'broken-library.Rprofile'
+    # Exclude the runtime's healthy copy, including images that install ggimage
+    # in .Library. This changes only the isolated R process's library lookup.
+    profile.write_text('unlockBinding(".Library",baseenv())\n'
+        'assign(".Library",'+json.dumps(str(library))+',baseenv())\n'
+        'lockBinding(".Library",baseenv())\n'
+        '.libPaths('+json.dumps(str(library))+', include.site=FALSE)\n')
+    result = subprocess.run(['Rscript', str(SUPPORT/'stat_branch2tree_plot.r')],
+        cwd=tmp_path, capture_output=True,
+        env={**os.environ, 'GG_TREE_PLOT_CHECK_GGIMAGE': '1', 'R_PROFILE_USER': str(profile)})
+    assert result.returncode == 1, result.stderr.decode()
+    assert b'ggimage package is unavailable' not in result.stdout
+    assert b'Error' in result.stderr
+    assert not (tmp_path/'stat_branch2tree_plot.pdf').exists()
+
+
 def normalized(path):
     return re.sub(rb'/(CreationDate|ModDate) \([^)]*\)', b'', path.read_bytes())
 
