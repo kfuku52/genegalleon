@@ -441,7 +441,10 @@ def cluster_neighbors_by_similarity(seq_fasta, input_sequence_mode, evalue_cutof
             gene_to_group[gene] = gid
             group_size[gid] = 1
         return gene_to_group, group_size
-    run_cmd(["diamond", "makedb", "--in", pep_fasta, "--db", db_prefix])
+    run_cmd([
+        "diamond", "makedb", "--in", pep_fasta, "--db", db_prefix,
+        "--threads", str(max(1, int(threads))),
+    ])
     run_cmd(
         [
             "diamond",

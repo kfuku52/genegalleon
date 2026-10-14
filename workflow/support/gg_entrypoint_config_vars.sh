@@ -320,6 +320,15 @@ EOF
     gg_genome_annotation_entrypoint.sh)
       cat <<'EOF'
 representative_inputs
+genome_annotation_backend
+annevo_model_profile
+annevo_taxid_map
+annevo_genome_metadata
+annevo_taxonomy_db
+annevo_runtime_manifest
+annevo_no_download
+annevo_batch_size
+annevo_sequence_threshold
 busco_lineage
 scaffold_host_taxid
 contamination_removal_rank
@@ -548,6 +557,7 @@ gene_model_refinement_inputs
 gene_model_refinement_edges
 gene_model_refinement_rescue_dir
 gene_model_refinement_rna
+gene_model_annevo_inputs
 gene_model_refinement_min_margin
 gene_model_refinement_min_support
 gene_model_refinement_candidate_limit

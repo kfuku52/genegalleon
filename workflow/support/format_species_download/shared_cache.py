@@ -6,6 +6,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from .integrity import byte_integrity_contract, validate_download
+
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -17,17 +19,19 @@ def sha256_file(path):
 
 def materialize_shared_download(download, arguments):
     # Import lazily: locking owns both the public transport and lock helpers.
-    from .local import validate_gzip_with_cache
     from .locking import _fsync_directory, acquire_download_lock, release_download_lock
+    contract = byte_integrity_contract(arguments.get("expected_sha256"), arguments.get("expected_size"))
     root = Path(os.environ['GG_DOWNLOAD_SHARED_CACHE_DIR']).expanduser().resolve()
     if Path(arguments["destination"]).resolve().is_relative_to(root):
         raise ValueError("download destination must be outside the shared cache")
     root.mkdir(parents=True, exist_ok=True)
     # Include request headers so data requested under different credentials cannot
     # alias. Neither URLs nor header values are written to the receipt.
-    identity = json.dumps([arguments['url'], arguments['archive_member'],
-                           sorted((k.lower(), v) for k, v in (arguments['headers'] or {}).items())],
-                          separators=(',', ':'))
+    identity_values = [arguments['url'], arguments['archive_member'],
+                       sorted((k.lower(), v) for k, v in (arguments['headers'] or {}).items())]
+    if contract is not None:
+        identity_values.append({"byte_integrity": contract})
+    identity = json.dumps(identity_values, separators=(',', ':'))
     key = hashlib.sha256(identity.encode()).hexdigest()
     entry = root / key
     entry.mkdir(exist_ok=True)
@@ -47,6 +51,9 @@ def materialize_shared_download(download, arguments):
                          and type(evidence['size']) is int and evidence['size'] > 0
                          and evidence['size'] == payload.stat().st_size
                          and evidence['sha256'] == sha256_file(payload))
+                if contract is not None:
+                    valid = (valid and evidence.get("byte_integrity") == contract
+                             and evidence['sha256'] == contract['sha256'] and evidence['size'] == contract['size'])
             except (OSError, ValueError, KeyError, TypeError):
                 pass
         if not valid:
@@ -58,6 +65,8 @@ def materialize_shared_download(download, arguments):
             fetched = True
             evidence = {'schema_version': 2, 'size': payload.stat().st_size,
                         'sha256': sha256_file(payload)}
+            if contract is not None:
+                evidence["byte_integrity"] = contract
             temp = receipt.with_suffix('.tmp')
             with open(temp, 'w', encoding='utf-8') as out:
                 json.dump(evidence, out)
@@ -81,7 +90,9 @@ def materialize_shared_download(download, arguments):
                 os.fsync(out.fileno())
             if sha256_file(temporary) != evidence["sha256"]:
                 raise OSError("shared download copy checksum mismatch")
-            error = validate_gzip_with_cache(Path(temporary), expected_path=destination)
+            error = validate_download(Path(temporary), expected_path=destination,
+                                      expected_sha256=arguments.get("expected_sha256"),
+                                      expected_size=arguments.get("expected_size"))
             if error is not None:
                 raise OSError('shared download failed validation: {}'.format(error))
             os.replace(temporary, destination)

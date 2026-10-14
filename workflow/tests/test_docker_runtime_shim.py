@@ -4,6 +4,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_DIR = REPO_ROOT / "workflow"
 SUPPORT_DIR = WORKFLOW_DIR / "support"
@@ -184,6 +186,88 @@ def test_docker_singularity_shim_translates_bind_mounts_and_envs(tmp_path: Path)
     assert args[args.index("-w") + 1] == "/workspace"
     assert args[-4:] == ["local/genegalleon:dev", "bash", "-s", "--"]
     assert (tmp_path / "call_1.stdin").read_text(encoding="utf-8") == "echo shim-test\n"
+
+
+@pytest.mark.parametrize("devices", ["0", "2", "3", "0,1", "2,4", "GPU-498ed493-27bc-b686-e464-e1c4087f0626"])
+def test_docker_nv_exposes_only_explicit_scheduler_devices(tmp_path, devices):
+    bin_dir = _prepare_stub_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "GG_CONTAINER_DOCKER_IMAGE": "fixture", "CUDA_VISIBLE_DEVICES": devices,
+           "GG_CONTAINER_DOCKER_GPU_DEVICES": "", "APPTAINERENV_CUDA_VISIBLE_DEVICES": devices,
+           "SINGULARITYENV_CUDA_VISIBLE_DEVICES": devices}
+    result = subprocess.run(["bash", str(SHIM_PATH), "exec", "--nv", "fixture.sif", "true"],
+                            capture_output=True, text=True, env=env, input="", timeout=10)
+    assert result.returncode == 0, result.stderr
+    args = (tmp_path / "call_1.args").read_text().splitlines()
+    expected = f'"device={devices}"' if ',' in devices else f'device={devices}'
+    assert args[args.index('--gpus') + 1] == expected
+    assert '--nv' not in args and 'all' not in args
+    assert f'CUDA_VISIBLE_DEVICES={devices}' in args
+    visibility = [value for value in args if value.startswith('CUDA_VISIBLE_DEVICES=')]
+    assert visibility[-1] == 'CUDA_VISIBLE_DEVICES=' + ','.join(str(i) for i in range(len(devices.split(','))))
+
+
+@pytest.mark.parametrize("devices", ["", "all", "none", "void", "-1", "0,,1", "0,", ",0", "0,0", "0;echo unsafe", "GPU-invalid"])
+def test_docker_nv_rejects_missing_or_unbounded_gpu_selection(tmp_path, devices):
+    bin_dir = _prepare_stub_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "GG_CONTAINER_DOCKER_IMAGE": "fixture", "CUDA_VISIBLE_DEVICES": devices,
+           "GG_CONTAINER_DOCKER_GPU_DEVICES": "", "APPTAINERENV_CUDA_VISIBLE_DEVICES": "",
+           "SINGULARITYENV_CUDA_VISIBLE_DEVICES": ""}
+    result = subprocess.run(["bash", str(SHIM_PATH), "exec", "--nv", "fixture.sif", "true"],
+                            capture_output=True, text=True, env=env, input="", timeout=10)
+    assert result.returncode != 0
+    assert not (tmp_path / 'docker.counter').exists()
+
+
+@pytest.mark.parametrize("conflict", ["GG_CONTAINER_DOCKER_GPU_DEVICES", "APPTAINERENV_CUDA_VISIBLE_DEVICES", "SINGULARITYENV_CUDA_VISIBLE_DEVICES"])
+def test_docker_nv_refuses_allocator_and_forwarded_visibility_conflicts(tmp_path, conflict):
+    bin_dir = _prepare_stub_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "GG_CONTAINER_DOCKER_IMAGE": "fixture", "CUDA_VISIBLE_DEVICES": '0',
+           "GG_CONTAINER_DOCKER_GPU_DEVICES": "", "APPTAINERENV_CUDA_VISIBLE_DEVICES": "",
+           "SINGULARITYENV_CUDA_VISIBLE_DEVICES": "", conflict: '1'}
+    result = subprocess.run(["bash", str(SHIM_PATH), "exec", "--nv", "fixture.sif", "true"],
+                            capture_output=True, text=True, env=env, input="", timeout=10)
+    assert result.returncode != 0
+    assert 'must match' in result.stderr
+    assert not (tmp_path / 'docker.counter').exists()
+
+
+def test_docker_gpu_override_is_explicit_when_no_scheduler_visibility_exists(tmp_path):
+    bin_dir = _prepare_stub_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "GG_CONTAINER_DOCKER_IMAGE": "fixture", "CUDA_VISIBLE_DEVICES": '',
+           "GG_CONTAINER_DOCKER_GPU_DEVICES": '2', "APPTAINERENV_CUDA_VISIBLE_DEVICES": "",
+           "SINGULARITYENV_CUDA_VISIBLE_DEVICES": ""}
+    result = subprocess.run(["bash", str(SHIM_PATH), "exec", "--nv", "fixture.sif", "true"],
+                            capture_output=True, text=True, env=env, input="", timeout=10)
+    assert result.returncode == 0, result.stderr
+    args = (tmp_path / "call_1.args").read_text().splitlines()
+    assert args[args.index('--gpus') + 1] == 'device=2'
+
+
+def test_docker_without_nv_retains_cpu_behavior_even_when_gpu_env_is_set(tmp_path):
+    bin_dir = _prepare_stub_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "GG_CONTAINER_DOCKER_IMAGE": "fixture", "CUDA_VISIBLE_DEVICES": '0',
+           "GG_CONTAINER_DOCKER_GPU_DEVICES": 'all'}
+    result = subprocess.run(["bash", str(SHIM_PATH), "exec", "fixture.sif", "true"],
+                            capture_output=True, text=True, env=env, input="", timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert '--gpus' not in (tmp_path / 'call_1.args').read_text().splitlines()
+
+
+@pytest.mark.parametrize("flag", ["--nv=true", "--nvccli", "--rocm"])
+def test_docker_does_not_silently_drop_other_gpu_requests(tmp_path, flag):
+    bin_dir = _prepare_stub_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+           "GG_CONTAINER_DOCKER_IMAGE": "fixture", "CUDA_VISIBLE_DEVICES": '0'}
+    result = subprocess.run(["bash", str(SHIM_PATH), "exec", flag, "fixture.sif", "true"],
+                            capture_output=True, text=True, env=env, input="", timeout=10)
+    assert result.returncode != 0
+    assert 'Unsupported Docker GPU option' in result.stderr
+    assert not (tmp_path / 'docker.counter').exists()
 
 
 def test_print_version_summary_formats_container_version_with_tag_when_distinct():

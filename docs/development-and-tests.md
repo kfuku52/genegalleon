@@ -146,6 +146,51 @@ Host-local checks are useful for quick syntax or narrow static feedback, but do
 not use them as evidence of container runtime compatibility. Report validation
 as SIF or Docker/container validation according to the runtime actually used.
 
+## Optional ANNEVO clade GPU qualification
+
+`workflow/tests/test_annevo_models_gpu.py` is an opt-in runtime test for all six
+ANNEVO profiles. Run its six cases sequentially inside a GPU-enabled GeneGalleon
+container provided by the site's registered allocation procedure, after verifying
+the exact runtime's freshness. Ordinary CPU validation reports six documented
+skips; these do not constitute GPU evidence. Do not pass pytest workers to this
+qualification. The bounded qualification uses four CPUs, 32 GiB, one allocated
+CUDA GPU and FASTA inputs of at most 1.1 MB each.
+
+The executor supplies `GG_ANNEVO_GPU_FIXTURES` naming a sealed JSON document with
+`taxonomy_db`, `taxonomy_sha256`, `runtime_locator` and a `fixtures` object keyed
+by the six native profile names. Every fixture has `profile`, `species`, positive
+`taxid`, `genome` and its input-byte `sha256`. Prepare these inputs from reviewed
+public sequence records in a separate qualification directory, retain accession,
+range, retrieval evidence and hashes, and bind them read-only. The test constructs
+its own TaxID table and outputs in pytest temporary storage; it does not alter
+curated inputs or previous jobs.
+
+Inside that reserved container, the focused command is:
+
+```bash
+python -m pytest -q workflow/tests/test_annevo_models_gpu.py -x -p no:cacheprovider
+```
+
+Only this explicitly provisioned test enables external transport for cold asset
+acquisition. It verifies one common environment, only selected model downloads,
+actual CUDA prediction for each matched model/lineage, warm `--no-download` reuse,
+identical cold/warm native GFFs, and standard formatter/CDS phase/ownership and
+longest-CDS validation. It retains native and selection receipts and QC logs.
+These small fixtures establish execution and integration, not whole-genome
+annotation quality, BUSCO completeness or all-species compatibility. Configuration
+and outputs are described in [ANNEVO genome prediction](annevo-genome-annotation.md).
+
+For full wrapper integration, the registered allocated executor can call
+`python3 -B workflow/tests/qualify_annevo_entrypoint_gpu.py --manifest <sealed-package>`
+on the host. It uses the same six reviewed fixtures and bounded allocation, a
+fresh workspace and cache, and runs the real genome annotation entrypoint twice
+per species. It checks automatic selection, CUDA prediction, candidate export,
+CDS resolution, GFF information, sequence statistics, required version reporting,
+warm offline reuse and CDS/GFF/longest-CDS QC. Optional localization, taxonomy
+search, BUSCO and multispecies plots are disabled in this small qualification;
+the exact overrides, twelve exit records and artifacts remain in its new output
+directory. Existing execution records and caches are never reused or overwritten.
+
 ## Install test dependencies
 
 Python-side test dependencies are listed in:

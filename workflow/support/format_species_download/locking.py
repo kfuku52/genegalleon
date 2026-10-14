@@ -37,10 +37,9 @@ from format_species_network import download_retry_delay
 from format_species_network import guarded_urlopen as urlopen
 from shared_lock import acquire_lock, release_lock
 
+from .integrity import byte_integrity_contract, validate_download
 from .local import (
-    quarantine_corrupt_gzip,
     quarantine_existing_file,
-    validate_gzip_with_cache,
 )
 
 RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
@@ -173,9 +172,11 @@ def discard_partial_download(partial_path, url_hash_path):
             pass
 
 
-def prepare_partial_download(target, url, overwrite):
+def prepare_partial_download(target, url, overwrite, *, expected_sha256=None, expected_size=None):
     partial_path, url_hash_path = partial_download_paths(target)
-    expected_url_hash = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
+    contract = byte_integrity_contract(expected_sha256, expected_size)
+    identity = str(url) if contract is None else json.dumps([str(url), contract], sort_keys=True, separators=(",", ":"))
+    expected_url_hash = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     if overwrite:
         discard_partial_download(partial_path, url_hash_path)
     elif partial_path.exists():
@@ -265,8 +266,9 @@ class DownloadBodyProgress:
             self.warnings.append("{} could not record body progress ({})".format(self.lock_context, type(exc).__name__))
 
 
-def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_context):
+def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_context, *, expected_sha256=None, expected_size=None):
     """Download sequential ranges, preserving only bytes from one representation."""
+    contract = byte_integrity_contract(expected_sha256, expected_size)
     identity_path = Path(str(partial_path) + ".identity.json")
     try:
         identity = json.loads(identity_path.read_text())
@@ -321,7 +323,7 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
             status = response_status_code(response)
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
             html_type = content_type in ("text/html", "application/xhtml+xml")
-            if html_type:
+            if html_type and contract is None:
                 disposition = Message()
                 disposition["Content-Disposition"] = response.headers.get("Content-Disposition", "")
                 filename = disposition.get_filename() or ""
@@ -354,6 +356,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                 raise ValueError("Content-Range on a non-partial response")
             elif status not in (0, 200):
                 raise ValueError("unexpected download response status {}".format(status))
+            if contract is not None and total is not None and total != contract["size"]:
+                raise ValueError("HTTP representation differs from the expected byte-integrity size")
             response_etag = response.headers.get("ETag", "")
             response_validator = (response_etag and not response_etag.startswith("W/")) or response.headers.get("Last-Modified")
             if status == 206 and "Range" not in current_headers:
@@ -401,6 +405,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                             break
                         if expected is not None and response_bytes + len(chunk) > expected:
                             raise ValueError("response exceeded declared length")
+                        if contract is not None and resume_from + response_bytes + len(chunk) > contract["size"]:
+                            raise ValueError("response exceeded expected byte-integrity size")
                         out.write(chunk)
                         response_bytes += len(chunk)
                         progress.record("reading", resume_from + response_bytes)
@@ -413,7 +419,7 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                 raise IncompleteRead(b"", max(0, expected - response_bytes))
             if status == 206 and partial_path.stat().st_size < total:
                 continue
-            if html_type:
+            if html_type and contract is None:
                 # An attachment label alone never proves content. Check the
                 # assembled body, including resumed responses, before publishing.
                 with open(partial_path, "rb") as source:
@@ -609,7 +615,12 @@ def _download_url_to_file(
     validation_cache=None,
     validation_key="",
     validation_relative_target="",
+    *,
+    expected_sha256=None,
+    expected_size=None,
 ):
+    contract = byte_integrity_contract(expected_sha256, expected_size)
+    byte_options = {"expected_sha256": expected_sha256, "expected_size": expected_size} if contract else {}
     if dry_run:
         return False
     destination = Path(destination)
@@ -640,25 +651,27 @@ def _download_url_to_file(
     tmp = Path(str(destination) + ".tmp.{}".format(os.getpid()))
     try:
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
-            if quarantine_corrupt_gzip(
+            validation_error = validate_download(
                 destination,
-                warnings,
-                lock_context,
                 validation_cache=validation_cache,
                 validation_key=validation_key,
                 source_url=url,
                 archive_member=archive_member_text,
                 relative_target=validation_relative_target,
-            ):
-                pass
-            else:
+                expected_sha256=expected_sha256,
+                expected_size=expected_size,
+            )
+            if validation_error is None:
                 return False
+            quarantine_existing_file(destination, warnings, lock_context, validation_error,
+                                     validation_label="byte-integrity" if contract else "gzip")
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
             return False
         attempts = resolve_download_attempts()
         retry_base_seconds = resolve_download_retry_base_seconds()
         if archive_member_text == "":
-            partial_path, partial_url_hash_path = prepare_partial_download(destination, url, overwrite)
+            partial_path, partial_url_hash_path = prepare_partial_download(
+                destination, url, overwrite, expected_sha256=expected_sha256, expected_size=expected_size)
             last_validation_error = None
             for attempt in range(1, attempts + 1):
                 try:
@@ -669,10 +682,11 @@ def _download_url_to_file(
                         timeout,
                         warnings,
                         lock_context,
+                        **byte_options,
                     )
-                    if destination.name.lower().endswith(".gz"):
+                    if contract is None and destination.name.lower().endswith(".gz"):
                         normalize_uncompressed_gzip(partial_path, warnings, lock_context)
-                    validation_error = validate_gzip_with_cache(
+                    validation_error = validate_download(
                         partial_path,
                         expected_path=destination,
                         validation_cache=validation_cache,
@@ -680,6 +694,8 @@ def _download_url_to_file(
                         source_url=url,
                         archive_member=archive_member_text,
                         relative_target=validation_relative_target,
+                        expected_sha256=expected_sha256,
+                        expected_size=expected_size,
                     )
                     if validation_error is None:
                         last_validation_error = None
@@ -687,11 +703,14 @@ def _download_url_to_file(
                         _fsync_directory(destination.parent)
                         break
                     last_validation_error = validation_error
-                    quarantined = quarantine_existing_file(partial_path, warnings, lock_context, validation_error)
+                    validation_label = "byte-integrity" if contract else "gzip"
+                    quarantined = quarantine_existing_file(partial_path, warnings, lock_context, validation_error,
+                                                          validation_label=validation_label)
                     if attempt < attempts:
                         warnings.append(
-                            "{} downloaded corrupt gzip to {}; retrying attempt {}/{} ({})".format(
+                            "{} downloaded corrupt {} to {}; retrying attempt {}/{} ({})".format(
                                 lock_context,
+                                validation_label,
                                 quarantined,
                                 attempt + 1,
                                 attempts,
@@ -700,7 +719,7 @@ def _download_url_to_file(
                         )
                         sleep_before_download_retry(attempt, retry_base_seconds)
                         continue
-                    raise OSError("downloaded gzip failed integrity check: {}".format(validation_error))
+                    raise OSError("downloaded {} failed integrity check: {}".format(validation_label, validation_error))
                 except Exception as exc:
                     transient_error = is_transient_network_error(exc)
                     if attempt < attempts and transient_error:
@@ -718,7 +737,7 @@ def _download_url_to_file(
                         discard_partial_download(partial_path, partial_url_hash_path)
                     raise
             if last_validation_error is not None:
-                raise OSError("downloaded gzip failed integrity check: {}".format(last_validation_error))
+                raise OSError("downloaded {} failed integrity check: {}".format("byte-integrity" if contract else "gzip", last_validation_error))
         else:
             # Reuse the same validation/retry path for archives themselves.
             _download_url_to_file(
@@ -754,7 +773,7 @@ def _download_url_to_file(
                 raise
             finally:
                 release_download_lock(archive_lock, archive_ownership)
-            validation_error = validate_gzip_with_cache(
+            validation_error = validate_download(
                 tmp,
                 expected_path=destination,
                 validation_cache=validation_cache,
@@ -762,10 +781,13 @@ def _download_url_to_file(
                 source_url=url,
                 archive_member=archive_member_text,
                 relative_target=validation_relative_target,
+                expected_sha256=expected_sha256,
+                expected_size=expected_size,
             )
             if validation_error is not None:
-                quarantine_existing_file(tmp, warnings, lock_context, validation_error)
-                raise OSError("downloaded archive member gzip failed integrity check: {}".format(validation_error))
+                validation_label = "byte-integrity" if contract else "gzip"
+                quarantine_existing_file(tmp, warnings, lock_context, validation_error, validation_label=validation_label)
+                raise OSError("downloaded archive member {} failed integrity check: {}".format(validation_label, validation_error))
             os.replace(tmp, destination)
             _fsync_directory(destination.parent)
     except Exception:
@@ -785,11 +807,13 @@ def download_url_to_file(
     url, destination, headers, timeout, dry_run, overwrite, lock_stale_seconds,
     warnings, lock_context, archive_member="", validation_cache=None,
     validation_key="", validation_relative_target="",
+    *, expected_sha256=None, expected_size=None,
 ):
     """Download with optional cross-plan cache and private structured outcomes."""
     from format_species_network import request_database
 
     from .shared_cache import materialize_shared_download
+    contract = byte_integrity_contract(expected_sha256, expected_size)
     arguments = dict(
         url=url, destination=destination, headers=headers, timeout=timeout,
         dry_run=dry_run, overwrite=overwrite, lock_stale_seconds=lock_stale_seconds,
@@ -797,6 +821,8 @@ def download_url_to_file(
         validation_cache=validation_cache, validation_key=validation_key,
         validation_relative_target=validation_relative_target,
     )
+    if contract is not None:
+        arguments.update(expected_sha256=expected_sha256, expected_size=expected_size)
     started = time.monotonic()
     warning_start = len(warnings)
     error = None

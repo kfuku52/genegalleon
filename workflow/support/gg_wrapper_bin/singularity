@@ -18,9 +18,16 @@ run_container_command() {
 	local var_name=""
 	local bare_name=""
 	local mount_spec=""
+	local gpu_requested=0
+	local gpu_devices=""
+	local gpu_device=""
+	local gpu_internal_devices=""
+	local gpu_ordinal=0
+	local seen_gpu_devices=","
 	local -a docker_args=()
 	local -a mount_specs=()
 	local -a container_cmd=()
+	local -a gpu_device_list=()
 
 	if [[ -z "${image_ref}" ]]; then
 		echo "GG_CONTAINER_DOCKER_IMAGE or GG_WRAPPER_IMAGE is required for Docker-backed runtime." >&2
@@ -29,6 +36,14 @@ run_container_command() {
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+			--nv)
+				gpu_requested=1
+				shift
+				;;
+			--nv=*|--nvccli|--rocm)
+				echo "Unsupported Docker GPU option: $1; use --nv with an explicit device selection." >&2
+				exit 1
+				;;
 			--*)
 				shift
 				;;
@@ -56,6 +71,38 @@ run_container_command() {
 		--label "io.github.kfuku52.project=genegalleon"
 		--user "$(id -u):$(id -g)"
 	)
+	if [[ ${gpu_requested} -eq 1 ]]; then
+		gpu_devices="${GG_CONTAINER_DOCKER_GPU_DEVICES:-${CUDA_VISIBLE_DEVICES:-}}"
+		if [[ -z "${gpu_devices}" || "${gpu_devices}" == ,* || "${gpu_devices}" == *, || "${gpu_devices}" == *,,* ]]; then
+			echo "--nv requires explicit GPU indices or UUIDs in CUDA_VISIBLE_DEVICES or GG_CONTAINER_DOCKER_GPU_DEVICES." >&2
+			exit 1
+		fi
+		if [[ -n "${CUDA_VISIBLE_DEVICES:-}" && "${gpu_devices}" != "${CUDA_VISIBLE_DEVICES}" ]]; then
+			echo "Docker GPU selection must match CUDA_VISIBLE_DEVICES; refusing a different allocation." >&2
+			exit 1
+		fi
+		for var_name in APPTAINERENV_CUDA_VISIBLE_DEVICES SINGULARITYENV_CUDA_VISIBLE_DEVICES; do
+			if [[ -n "${!var_name:-}" && "${!var_name}" != "${gpu_devices}" ]]; then
+				echo "Forwarded CUDA_VISIBLE_DEVICES must match the selected Docker GPU allocation." >&2
+				exit 1
+			fi
+		done
+		IFS=',' read -r -a gpu_device_list <<< "${gpu_devices}"
+		for gpu_device in "${gpu_device_list[@]}"; do
+			if [[ ! "${gpu_device}" =~ ^[0-9]+$ && ! "${gpu_device}" =~ ^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || [[ "${seen_gpu_devices}" == *",${gpu_device},"* ]]; then
+				echo "Invalid or duplicate Docker GPU device: ${gpu_device}" >&2
+				exit 1
+			fi
+			seen_gpu_devices+="${gpu_device},"
+			gpu_internal_devices+="${gpu_internal_devices:+,}${gpu_ordinal}"
+			gpu_ordinal=$((gpu_ordinal + 1))
+		done
+		if [[ ${#gpu_device_list[@]} -gt 1 ]]; then
+			docker_args+=(--gpus "\"device=${gpu_devices}\"")
+		else
+			docker_args+=(--gpus "device=${gpu_devices}")
+		fi
+	fi
 
 	if [[ -n "${mounts_csv}" ]]; then
 		IFS=',' read -r -a mount_specs <<< "${mounts_csv}"
@@ -92,6 +139,11 @@ run_container_command() {
 			forwarded_names="${forwarded_names},${bare_name}"
 		fi
 	done < <(compgen -A variable "SINGULARITYENV_" | LC_ALL=C sort || true)
+	if [[ ${gpu_requested} -eq 1 ]]; then
+		# NVIDIA injects the selected physical devices into a new ordinal space.
+		# Put this last so forwarded host indices cannot mask the selected GPU.
+		docker_args+=(-e "CUDA_VISIBLE_DEVICES=${gpu_internal_devices}")
+	fi
 
 	if [[ ",${forwarded_names}," != *",HOME,"* ]]; then
 		docker_args+=(-e "HOME=${docker_home}")

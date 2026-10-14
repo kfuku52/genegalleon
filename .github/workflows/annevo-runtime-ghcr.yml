@@ -1,0 +1,82 @@
+name: annevo-runtime-ghcr
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/annevo-runtime-ghcr.yml"
+      - "container/scripts/*annevo*"
+      - "workflow/support/annevo*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: annevo-runtime-ghcr-linux-amd64
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build source-bound dedicated runtime from the official moving branch
+        run: >-
+          python3 container/scripts/bootstrap_annevo_runtime_distribution.py
+          --output "${RUNNER_TEMP}/annevo-distribution"
+          --work-parent "${RUNNER_TEMP}"
+      - name: Hand off exact manifest and compressed parts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: annevo-distribution-linux-amd64
+          path: ${{ runner.temp }}/annevo-distribution/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout exact trusted publication code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download exact build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: annevo-distribution-linux-amd64
+          path: ${{ runner.temp }}/annevo-distribution
+      - name: Set up OCI publisher
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+      - name: Publish candidate artifact and verify anonymous bytes; preserve the GPU-qualified default
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          GG_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "${GHCR_TOKEN}" | oras login ghcr.io --username "${GHCR_USER}" --password-stdin
+          distribution="${RUNNER_TEMP}/annevo-distribution"
+          mapfile -t manifests < <(find "${distribution}" -maxdepth 1 -name '*.manifest.json' -type f)
+          [[ "${#manifests[@]}" == 1 ]]
+          repository="ghcr.io/$(printf '%s' "${GG_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          python3 container/scripts/publish_annevo_runtime_bundle.py \
+            --manifest "${manifests[0]}" --repository "${repository}" \
+            --immutable-only \
+            > "${RUNNER_TEMP}/annevo-publication-proof.json"
+          cat "${RUNNER_TEMP}/annevo-publication-proof.json" >> "${GITHUB_STEP_SUMMARY}"

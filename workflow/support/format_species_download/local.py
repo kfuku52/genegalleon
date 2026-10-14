@@ -107,7 +107,7 @@ def validate_gzip_with_cache(
     )
 
 
-def quarantine_existing_file(path, warnings, context, reason):
+def quarantine_existing_file(path, warnings, context, reason, *, validation_label="gzip"):
     suffix = ".corrupt.{}.{}".format(time.strftime("%Y%m%d%H%M%S"), os.getpid())
     quarantine_path = Path(str(path) + suffix)
     counter = 1
@@ -115,7 +115,7 @@ def quarantine_existing_file(path, warnings, context, reason):
         counter += 1
         quarantine_path = Path(str(path) + suffix + ".{}".format(counter))
     path.replace(quarantine_path)
-    warnings.append("{} found corrupt gzip cache {}; moved to {} ({})".format(context, path, quarantine_path, reason))
+    warnings.append("{} found corrupt {} cache {}; moved to {} ({})".format(context, validation_label, path, quarantine_path, reason))
     return quarantine_path
 
 

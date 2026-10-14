@@ -132,7 +132,7 @@ def implementation():
                     'rescue_homology_policy.py', 'rescue_path_compatibility.py', 'rescue_boundary_revalidation.py',
                     'rescue_model_store.py', 'rescue_prediction_cache.py', 'rescue_raw_validation.py',
                     'rescue_prepared_snapshot.py', 'refinement_receipt_snapshot.py',
-                    'refinement_input_snapshot.py')
+                    'refinement_input_snapshot.py', 'annevo_gene_models.py', 'genome_sequence_identity.py')
     files = [support / name for name in dependencies] + list((support / 'format_species_annotation').rglob('*.py'))
     return {str(Path(m.__file__).name): digest(m.__file__) for m in modules} | {Path(__file__).name: digest(__file__)} | {str(p.relative_to(support)): digest(p) for p in files}
 
@@ -167,7 +167,7 @@ def revision_models(request, name):
     return iter_revision_models(directory)
 
 
-def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, **parameters):
+def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_profiles=None, annevo_inputs=None, **parameters):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / '.plan.lock'):
@@ -270,6 +270,15 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
         for optional in (edges, rna, species_profiles):
             if optional:
                 files.append(str(Path(optional).resolve()))
+        import annevo_gene_models
+        inherited_annevo = anchors['request'].get('annevo') if anchor_root else None
+        if inherited_annevo:
+            annevo_gene_models.verify_inputs(inherited_annevo)
+        annevo_table = annevo_inputs or (inherited_annevo['table'] if inherited_annevo else None)
+        annevo = annevo_gene_models.freeze_inputs(annevo_table, sources) if annevo_table else None
+        if annevo:
+            annevo_gene_models.verify_inputs(annevo)
+            files.extend(annevo['files'])
         tool = shutil.which('miniprot') if params['mode'] != 'off' else None
         request = {'schema': SCHEMA, 'sources': sources, 'files': digest_paths(files), 'parameters': params,
                    'implementation': implementation(), 'dependencies': dependency_identities(), 'rescue_output': str(anchor_root) if anchor_root else None,
@@ -279,6 +288,8 @@ def plan(output, inputs=None, rescue_output=None, edges=None, rna=None, species_
                    'revision_model_stores': revision_model_stores,
                    'revision_donor_maps': revision_donor_maps,
                    'miniprot': {'path': tool, 'sha256': digest(tool)} if tool else None}
+        if annevo:
+            request['annevo'] = annevo
         if not edges and not anchor_root:
             raise ValueError('A frozen synteny rescue plan or explicit trusted correspondence table is required')
         if params['mode'] != 'off' and not tool:
@@ -308,9 +319,12 @@ def load(root, names=None):
     if request['schema'] != SCHEMA or request['implementation'] != implementation() or request['dependencies'] != dependency_identities():
         raise ValueError('Refinement implementation changed; use a new output directory')
     species_paths = {source[k] for source in request['sources'].values() for k in ('fasta', 'gff', 'genome')}
+    native = request.get('annevo', {}).get('predictions', {})
+    species_paths.update(prediction[k] for prediction in native.values() for k in ('gff', 'receipt'))
     files = request['files'] if names is None else {p: value for p, value in request['files'].items() if p not in species_paths}
     if names is not None:
         files.update({request['sources'][n][k]: request['files'][request['sources'][n][k]] for n in names for k in ('fasta', 'gff', 'genome')})
+        files.update({native[n][k]: request['files'][native[n][k]] for n in names if n in native for k in ('gff', 'receipt')})
     if _INPUT_SNAPSHOT is None:
         if digest_paths(files) != files:
             raise ValueError('Frozen refinement input changed')
@@ -912,7 +926,8 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
         original_shapes = {(c.get('seqid', g['seqid']), c.get('strand', g['strand']), tuple(tuple(b) for b in c['blocks'])) for c in g['candidates']}
         # Alignment quality belongs to this donor, not the shared coding path.
         # Failed alignments cannot veto a supported path or count as support.
-        alignment_problems = sorted(set(m['problems']) & {'low_coverage', 'low_identity'})
+        alignment_problems = sorted(set(m['problems']) & {'low_coverage', 'low_identity',
+                                                        'low_reciprocal_coverage', 'annevo_alignment_bounded'})
         problems = sorted(set(m['problems']) - set(alignment_problems))
         if g.get('ambiguous_coordinates'):
             problems.append('ambiguous_locus_coordinates')
@@ -965,6 +980,8 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
                                   'supports_path': supported, 'problems': alignment_problems,
                                   **({'terminal_completion': m['terminal_completion']} if m.get('terminal_completion') else {}),
                                   **({'rescue_revision_model_id': m['rescue_revision_model_id']} if m.get('rescue_revision_model_id') else {})})
+        if m.get('evidence', {}).get('annevo'):
+            row['alignments'][-1]['annevo'] = m['evidence']['annevo']
         row['problems'] = sorted(set(row['problems'] + problems))
     result = []
     for row in grouped.values():
@@ -1009,6 +1026,8 @@ def classify_predictions(models, catalog, edges, params, rna_rows, genome_hash):
                                  'rna_path_supported' if row['rna_paths'] else 'homology_only_predicted')
         set_representative_admission(row, valid_original, params)
         row['candidate']['support'] = {'donors': row['donors'], 'rna_paths': row['rna_paths'], 'class': row['evidence_class']}
+        if any(a.get('annevo') for a in row['alignments']):
+            row['candidate']['support']['annevo'] = [a['annevo'] for a in row['alignments'] if a.get('annevo')]
         result.append(row)
     active = []
     ordered = sorted(result, key=lambda r: (r['candidate']['seqid'], min(b[0] for b in r['candidate']['blocks'])))
@@ -1230,7 +1249,8 @@ def predict_species(root, value, name, cpus=1):
             for model in chain((first_revision,), revisions):
                 revision_count += 1
                 yield model
-        with indexed_genome(source['genome']) if windows or first_revision is not None else contextlib.nullcontext() as genome:
+        native_enabled = name in value['request'].get('annevo', {}).get('predictions', {})
+        with indexed_genome(source['genome']) if windows or first_revision is not None or native_enabled else contextlib.nullcontext() as genome:
             bounded = {}
             for (seqid, start, end), regions in windows.items():
                 end = min(end, genome.get_reference_length(seqid))
@@ -1251,6 +1271,20 @@ def predict_species(root, value, name, cpus=1):
                 if any(a < region['start'] or b > region['end'] for a, b, _ in checked['cds']):
                     checked['problems'].append('outside_search_window')
                 validated.append(checked)
+            if native_enabled:
+                import annevo_gene_models
+                native_regions = [{**region, 'query': region['donor_candidate']} for region in queries.values()]
+                native_models, native_audit = annevo_gene_models.nominate(
+                    value['request']['annevo'], name, native_regions, proteins, genome, params)
+                for model in native_models:
+                    region = queries[model['query']]
+                    model.update(gene_id=region['gene_id'], donor_species=region['donor'], donor_candidate=region['donor_candidate'])
+                    if region.get('same_coordinate_repair_only'):
+                        model['same_coordinate_repair_only'] = True
+                    checked = rescue.validate_model(model, genome, source['genetic_code'], params)
+                    checked['problems'] = sorted(set(checked['problems']) | set(model['annevo_problems']))
+                    validated.append(checked)
+                atomic_json(tmp / 'annevo_candidates.json', native_audit)
             if first_revision is not None:
                 with store_connection(db) as connection:
                     imported, import_proposals = import_rescue_revisions(
@@ -1304,6 +1338,10 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
         if not isinstance(donors, list) or any(not isinstance(donor, str) or not donor for donor in donors):
             raise ValueError('Invalid current coding-path donor support: ' + candidate['candidate_id'])
         path_attributes = ';path_independent_donor_species_count=' + str(len(set(donors) - {name}))
+    if candidate.get('support', {}).get('annevo'):
+        import annevo_gene_models
+        path_attributes += annevo_gene_models.gff_attributes(
+            [{'annevo': origin} for origin in candidate['support']['annevo']])
     lines = [row('gene', start, end, '.', 'ID=' + gid + historical_attributes),
              row('mRNA', start, end, '.', f'ID={tid};Parent={gid};gene_id={token}' + path_attributes)]
     for i, (a, b, phase) in enumerate(blocks, 1):
@@ -1910,6 +1948,7 @@ def parser():
     prep.add_argument('--rescue-output', type=Path)
     prep.add_argument('--edges', type=Path)
     prep.add_argument('--rna', type=Path, help='Whole coding RNA paths: species,seqid,strand,cds_blocks(JSON),transcript_id,count TSV')
+    prep.add_argument('--annevo-inputs', type=Path, help='Source-bound native ANNEVO candidate TSV: species,gff,receipt')
     prep.add_argument('--species-profiles', type=Path, help='Explicit target-species prediction parameter overrides (TSV)')
     for key, default in DEFAULTS.items():
         prep.add_argument('--' + key.replace('_', '-'), type=type(default), default=default)
@@ -1933,7 +1972,8 @@ def _main():
         return
     if args.command == 'plan':
         plan(args.output, args.inputs, args.rescue_output, args.edges, args.rna,
-             species_profiles=args.species_profiles, **{k: getattr(args, k) for k in DEFAULTS})
+             species_profiles=args.species_profiles, annevo_inputs=args.annevo_inputs,
+             **{k: getattr(args, k) for k in DEFAULTS})
         return
     if args.cpus < 1:
         raise ValueError('--cpus must be positive')

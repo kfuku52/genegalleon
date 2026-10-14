@@ -38,6 +38,7 @@
     "test_native_tree_dating.py",
     "test_native_ou_shift.py",
     "test_synteny_search_integration.py",
+    "test_synteny_neighbor_thread_budget_runtime.py",
     "test_aster_ortools_runtime.py",
     "test_csubst_scan_runtime_integration.py",
     "test_owned_runtime_contracts.py",
@@ -55,7 +56,8 @@
     "test_rescue_swissprot_evidence.py",
     "test_genome_format_streaming_runtime.py",
     "test_gene_model_refinement_runtime.py",
-    "test_busco_guide_tree_runtime.py"
+    "test_busco_guide_tree_runtime.py",
+    "test_annevo_models_gpu.py"
   ],
   "runtime_extra_python": [
     "workflow/tests/test_hgt_end_to_end.py",
@@ -81,5 +83,12 @@
     ["Rscript", "workflow/tests/test_treevis_synteny.R"],
     ["Rscript", "workflow/tests/test_treevis_legends.R"]
   ],
-  "allowed_skips": {}
+  "allowed_skips": {
+    "workflow/tests/test_annevo_models_gpu.py::test_cold_model_warm_offline_gff_and_cds[Mammalia]": "requires an allocated CUDA GPU and a sealed GG_ANNEVO_GPU_FIXTURES manifest",
+    "workflow/tests/test_annevo_models_gpu.py::test_cold_model_warm_offline_gff_and_cds[Aves]": "requires an allocated CUDA GPU and a sealed GG_ANNEVO_GPU_FIXTURES manifest",
+    "workflow/tests/test_annevo_models_gpu.py::test_cold_model_warm_offline_gff_and_cds[Actinopteri]": "requires an allocated CUDA GPU and a sealed GG_ANNEVO_GPU_FIXTURES manifest",
+    "workflow/tests/test_annevo_models_gpu.py::test_cold_model_warm_offline_gff_and_cds[Insecta]": "requires an allocated CUDA GPU and a sealed GG_ANNEVO_GPU_FIXTURES manifest",
+    "workflow/tests/test_annevo_models_gpu.py::test_cold_model_warm_offline_gff_and_cds[Fungi]": "requires an allocated CUDA GPU and a sealed GG_ANNEVO_GPU_FIXTURES manifest",
+    "workflow/tests/test_annevo_models_gpu.py::test_cold_model_warm_offline_gff_and_cds[Magnoliopsida]": "requires an allocated CUDA GPU and a sealed GG_ANNEVO_GPU_FIXTURES manifest"
+  }
 }
