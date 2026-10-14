@@ -5,9 +5,17 @@ args = cli_args
 # The workflow used to start another R process for this optional dependency.
 # Keep its skip behavior, but check in the rendering process before loading R
 # packages. Direct invocations retain their existing dependency behavior.
-if (Sys.getenv('GG_TREE_PLOT_CHECK_GGIMAGE') == '1' && !requireNamespace('ggimage', quietly=TRUE)) {
-  cat('ggimage package is unavailable. Disabling run_tree_plot.\n')
-  quit(status=42)
+if (Sys.getenv('GG_TREE_PLOT_CHECK_GGIMAGE') == '1') {
+  # requireNamespace also returns FALSE for an installed package whose metadata
+  # cannot be read. Only an absent installation is the optional-dependency skip;
+  # namespace/IO errors must fail the rendering attempt with their real cause.
+  ggimage_installed = isNamespaceLoaded('ggimage') ||
+    any(file.exists(file.path(.libPaths(), 'ggimage', 'DESCRIPTION')))
+  if (!ggimage_installed) {
+    cat('ggimage package is unavailable. Disabling run_tree_plot.\n')
+    quit(status=42)
+  }
+  loadNamespace('ggimage')
 }
 
 options(lifecycle_verbosity = 'quiet')
