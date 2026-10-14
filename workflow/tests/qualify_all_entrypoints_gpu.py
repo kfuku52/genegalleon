@@ -189,7 +189,12 @@ def all_entrypoints(manifest):
         ["output/gene_summary/query2family/query2family_summary.tsv"]))
     results.append(run_case(manifest, "progress_summary", workspace, {"mode_transcriptome_assembly": "fastq",
         "gene_family_output_storage": "files"},
-        ["output/query2family/query2family_summary.tsv"]))
+        ["query2family_summary.tsv", "transcriptome_assembly_summary.tsv"]))
+    with (workspace / "query2family_summary.tsv").open() as stream:
+        summary = list(csv.DictReader(stream, delimiter="\t"))
+    require(len(summary) == 1 and summary[0]["query"] == "YABBY" and all(
+        summary[0].get(stage) == "1" for stage in ("mafft", "clipkit", "iqtree_tree", "rooted_tree", "tree_plot")),
+        "query progress summary does not prove enabled main producers completed")
     require(all(sha(source / name) == digest for name, digest in seed_files.items()), "sealed biological inputs changed")
     native = qualify(manifest)
     results.append({"entrypoint": "gg_genome_annotation_entrypoint.sh", "verified": True, "profiles_passed": 6,
