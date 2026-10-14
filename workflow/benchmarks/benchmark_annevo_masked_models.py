@@ -144,7 +144,13 @@ def donor_placements(args, directory, genome):
                       seqid=raw['seqid'], start=max(0, a - 300), end=min(genome.get_reference_length(raw['seqid']), b + 300),
                       genome_only=True, annevo_bounded_placement=True)
         raw.update(query=region['id'], evidence=region, search='genome_fallback')
-        checked = rescue.check_interval(rescue.validate_model(raw, genome, 1, refinement.DEFAULTS))
+        # Match the production worker: complete real donor-supported partial
+        # termini before applying placement/ownership flags. The previous
+        # assay skipped this stage, understating whole-path confirmations.
+        checked = rescue.validate_model(raw, genome, 1, refinement.DEFAULTS)
+        checked = rescue.complete_terminals(checked, genome, 1, refinement.DEFAULTS,
+                                            proteins[donor][query], rescue.validate_model)
+        checked = rescue.check_interval(checked)
         models.append(checked)
         if b - a <= refinement.DEFAULTS['max_interval']:
             regions.append(region)

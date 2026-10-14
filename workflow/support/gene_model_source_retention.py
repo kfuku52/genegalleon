@@ -21,7 +21,12 @@ def source_structure_retention(candidate, originals, genetic_code):
         predicted = sorted(candidate['blocks'], reverse=candidate['strand'] == '-')
         dna = original.get('cds', '').upper()
         explicit_partial = original.get('quality', {}).get('annotated_partial', False)
-        complete_start = not explicit_partial and blocks[0][2] == 0 and dna[:3] in table.start_codons
+        # An unspecified phase does not erase an observed source initiation
+        # codon. Protect its coordinates without declaring the whole ORF valid.
+        first_phase = blocks[0][2]
+        phase_allows_start = first_phase == 0 or (first_phase in (-1, None)
+                                                   and original.get('quality', {}).get('translation_offset', 0) == 0)
+        complete_start = not explicit_partial and phase_allows_start and dna[:3] in table.start_codons
         complete_stop = not explicit_partial and dna[-3:] in table.stop_codons
         changed = []
         for i, (a, b, _phase) in enumerate(blocks):

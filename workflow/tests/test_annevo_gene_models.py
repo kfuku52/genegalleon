@@ -377,3 +377,143 @@ def test_benchmark_separates_nonexact_hidden_locus_from_off_reference_addition(t
     result = benchmark.evaluate_rescue(models, gff, truth, {'reference_gene'}, 'Target_species')
     assert result['accepted_additions'] == 2
     assert result['nonexact_additions_at_hidden_loci'] == result['off_reference_additions_unknown'] == 1
+
+
+def genome_benchmark():
+    sys.path.insert(0, str(SUPPORT.parent / 'benchmarks'))
+    return importlib.import_module('benchmark_annevo_genome_models')
+
+
+def test_genome_benchmark_matches_all_isoforms_and_separates_unknown_loci():
+    b = genome_benchmark()
+    first = dict(seqid='chr', strand='+', blocks=[[10, 20, 0], [40, 51, 2]])
+    second = {**first, 'blocks': [[10, 23, 0], [40, 51, 2]]}
+    other = dict(seqid='chr', strand='+', blocks=[[80, 110, 0]])
+    catalog = {'loci': [dict(gene_id='gene', candidates=[first, second]), dict(gene_id='other', candidates=[other])]}
+    reference = b.reference_index(catalog)
+    assert b.match_category(second, *reference)[:2] == ('exact_any_reference_isoform', ['gene'])
+    unknown = dict(seqid='chr', strand='+', cds=[[130, 160, 0]])
+    assert b.match_category(unknown, *reference) == ('off_reference_unknown', [], [])
+    fusion = dict(seqid='chr', strand='+', cds=[[10, 20, 0], [80, 110, 0]])
+    assert b.match_category(fusion, *reference)[0] == 'multiple_reference_loci'
+    # Exonic overlap is required: an intron-nested gene has no coding overlap.
+    nested = dict(seqid='chr', strand='+', cds=[[25, 35, 0]])
+    assert b.match_category(nested, *reference)[0] == 'off_reference_unknown'
+
+
+def external_experiment_fixture(tmp_path):
+    b = genome_benchmark()
+    genome, native = tmp_path / 'genome.fa', tmp_path / 'native.gff3'
+    genome.write_text('>chr\nATGAAATAA\n')
+    native.write_text('##gff-version 3\n')
+    inventory = dict(root='/sealed', source_commit='a' * 40,
+                     files=[dict(path='model.pt', sha256='b' * 64)])
+    ipath = tmp_path / 'runtime_inventory.json'
+    ipath.write_text(json.dumps(inventory))
+    manifest = dict(schema_version=1, kind='predictor-native-package-v1', tool='ANNEVO', species='Target_species',
+                    inputs={'genome': '/sealed/genome.fa'}, options={'lineage': 'Magnoliopsida'}, root='/output',
+                    runtime={'inventory': '/sealed/inventory.json', 'source_commit': 'a' * 40, 'model': '/sealed/model.pt'},
+                    files={'/sealed/genome.fa': b.rescue.digest(genome), '/sealed/inventory.json': b.rescue.digest(ipath)})
+    mpath = tmp_path / 'manifest.json'
+    mpath.write_text(json.dumps(manifest))
+    receipt = dict(manifest_sha256=b.rescue.digest(mpath), upstream_returncode=0, integration_returncode=0,
+                   gpu_probe={'gpu_verified': True, 'tool': 'ANNEVO'}, upstream_completion_reported=True,
+                   artifact_sha256=b.rescue.digest(native), artifact_bytes=native.stat().st_size,
+                   command=['annotation.py', '-g', '/sealed/genome.fa', '-m', '/sealed/model.pt',
+                            '-l', 'Magnoliopsida', '-o', '/output/prediction.gff3'])
+    rpath = tmp_path / 'upstream_exit.json'
+    rpath.write_text(json.dumps(receipt))
+    return b, genome, native, rpath, receipt
+
+
+def test_external_benchmark_keeps_original_provenance_separate_from_native_gg_receipts(tmp_path):
+    b, genome, native, rpath, receipt = external_experiment_fixture(tmp_path)
+    frozen = b.external_prediction(tmp_path, 'Target_species', genome, native)
+    identity = frozen['predictions']['Target_species']['identity']
+    assert identity['provenance_kind'] == 'verified_external_native_experiment'
+    assert 'cache_key' not in identity
+    with pytest.raises(ValueError, match='successful.*native'):
+        annevo.prediction_identity(native, rpath, b.rescue.digest(genome))
+    assert json.loads(rpath.read_text()) == receipt
+
+
+@pytest.mark.parametrize('change', ['gpu', 'exit', 'manifest', 'model', 'genome', 'gff'])
+def test_external_benchmark_rejects_failed_or_changed_original_evidence(tmp_path, change):
+    b, genome, native, rpath, receipt = external_experiment_fixture(tmp_path)
+    if change == 'gpu':
+        receipt['gpu_probe']['gpu_verified'] = False
+    elif change == 'exit':
+        receipt['upstream_returncode'] = False  # bool cannot masquerade as integer zero
+    elif change == 'manifest':
+        receipt['manifest_sha256'] = '0' * 64
+    elif change == 'model':
+        receipt['command'][receipt['command'].index('-m') + 1] = '/other/model.pt'
+    elif change == 'genome':
+        genome.write_text('>chr\nATGCCCTAA\n')
+    else:
+        native.write_text('##gff-version 3\n# changed\n')
+    rpath.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='binding|sealed inputs'):
+        b.external_prediction(tmp_path, 'Target_species', genome, native)
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_completed_actual_donor_transfer_confirms_native_path_without_waiving_placement(tmp_path, strand):
+    genome, _gff, _receipt, table, sources, coding, blocks = native_fixture(tmp_path, strand=strand)
+    region = dict(id='q', target='Target_species', donor='Donor_species', query='protein',
+                  seqid='chr', start=0, end=394, genome_only=True, annevo_bounded_placement=True)
+    protein = str(Seq(coding).translate()).removesuffix('*')
+    proteins = {'Donor_species': {'protein': protein}}
+    with catalog_module.indexed_genome(genome) as sequence:
+        raw_native, _ = annevo.nominate(annevo.freeze_inputs(table, sources), 'Target_species', [region], proteins,
+                                        sequence, refinement.DEFAULTS)
+        native = rescue.check_interval(rescue.validate_model(raw_native[0], sequence, 1, refinement.DEFAULTS))
+        partial_blocks = copy.deepcopy(blocks)
+        if strand == '+':
+            partial_blocks[0][0] += 3
+        else:
+            partial_blocks[0][1] -= 3
+        raw = dict(seqid='chr', strand=strand, cds=partial_blocks, query='q', evidence=region, frameshift=False,
+                   coverage=(len(protein) - 1) / len(protein), identity=1., query_start=1,
+                   query_end=len(protein), query_length=len(protein), search='genome_fallback')
+        partial = rescue.validate_model(raw, sequence, 1, refinement.DEFAULTS)
+        before = copy.deepcopy(native)
+        annevo.confirm_transferred_structure([before], [rescue.check_interval(copy.deepcopy(partial))])
+        assert 'annevo_unconfirmed_coding_structure' in before['problems']
+        completed = rescue.complete_terminals(partial, sequence, 1, refinement.DEFAULTS, protein, rescue.validate_model)
+        completed = rescue.check_interval(completed)
+        annevo.confirm_transferred_structure([native], [completed])
+    assert completed['terminal_completion']['status'] == 'completed'
+    assert completed['cds'] == blocks
+    assert completed['problems'] == native['problems'] == ['unanchored_genome_search']
+    assert native['evidence']['annevo']['genomic_structure_transfer']['scope'] == 'whole_coding_path'
+    # Genomic confirmation cannot resolve copy/placement ownership on its own.
+    assert native['evidence']['genome_only'] is True
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+@pytest.mark.parametrize('phase', [-1, None])
+def test_unspecified_phase_does_not_erase_observed_source_initiation(strand, phase):
+    from gene_model_source_retention import source_structure_retention
+    blocks = [[100, 130, phase], [200, 232, -1], [300, 330, -1]]
+    if strand == '-':
+        blocks.reverse()
+        blocks[0][2] = phase
+    # Missing internal coding sequence prevents whole-ORF phase inference,
+    # but the retained physical start and stop codons still constrain repair.
+    source = dict(candidate_id='source', seqid='chr', strand=strand, blocks=[blocks[0], blocks[-1]],
+                  cds='ATG' + 'AAA' * 18 + 'A' + 'TAA', quality={'translation_offset': 0})
+    exact = dict(seqid='chr', strand=strand, blocks=copy.deepcopy(blocks))
+    assert source_structure_retention(exact, [source], 1)['preserved']
+    extended = copy.deepcopy(exact)
+    if strand == '+':
+        extended['blocks'][0][0] -= 12
+    else:
+        extended['blocks'][0][1] += 12
+    audit = source_structure_retention(extended, [source], 1)
+    assert not audit['preserved'] and not audit['sources'][0]['complete_start_preserved']
+    # Explicit partial starts or a known nonzero first phase keep their
+    # existing incomplete-terminus behavior; no complete ORF is inferred here.
+    for partial in [{**source, 'quality': {'annotated_partial': True}},
+                    {**source, 'blocks': [[*source['blocks'][0][:2], 1], source['blocks'][-1]]}]:
+        assert source_structure_retention(extended, [partial], 1)['preserved']
