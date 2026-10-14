@@ -25,8 +25,9 @@ p=argparse.ArgumentParser()
 for n in ['-g','-p','-o','-t','-m','-l','-s','--batch_size','--num_workers','--min_intron_length','--min_prot_length']:p.add_argument(n)
 p.add_argument('--show_log',action='store_true');p.add_argument('--overlap_pred',action='store_true');p.add_argument('--comp',action='store_true')
 a=p.parse_args();name=Path(a.g).stem
+child_umask=os.umask(0o077);os.umask(child_umask)
 def event(stage):
- with open(EVENTS,'a') as f:f.write(json.dumps({'event':stage,'name':name,'time':time.monotonic(),'cuda':os.environ.get('CUDA_VISIBLE_DEVICES'),'jit':os.environ.get('NUMBA_CACHE_DIR'),'compression':a.comp})+'\\n')
+ with open(EVENTS,'a') as f:f.write(json.dumps({'event':stage,'name':name,'time':time.monotonic(),'cuda':os.environ.get('CUDA_VISIBLE_DEVICES'),'jit':os.environ.get('NUMBA_CACHE_DIR'),'compression':a.comp,'umask':child_umask})+'\\n')
 '''.replace('EVENTS', repr(str(events)))
     (source / 'prediction.py').write_text("length_config={'Magnoliopsida':[30720,5120,32]}\n" + common + '''
 event('prediction-start');time.sleep(.12)
@@ -152,6 +153,19 @@ def test_shared_jit_cache_is_bound_and_persists_without_touching_runtime(batch):
         assert receipt['pipeline']['jit_cache_directory']==str(directory)
         assert receipt['pipeline']['jit_cache_key']==directory.name
     assert not list(args.tmp_root.glob('gg-ap-*'))
+
+
+def test_native_children_use_private_umask_without_changing_parent_or_other_threads(batch):
+    make,events,_=batch
+    previous=os.umask(0o002)
+    try:
+        pipeline.run(make())
+        current=os.umask(0o002)
+        assert current==0o002
+    finally:
+        os.umask(previous)
+    trace=[json.loads(line) for line in events.read_text().splitlines()]
+    assert all(row['umask']==0o077 for row in trace)
 
 
 def test_schedule_rejects_genome_changes_before_native_prediction(batch,monkeypatch):

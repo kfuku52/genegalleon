@@ -119,7 +119,7 @@ def command(receipt, script, arguments):
 def execute(argv, env, work, logs, stage):
     start = time.monotonic()
     with (logs / (stage + '.stdout.txt')).open('w') as stdout, (logs / (stage + '.stderr.txt')).open('w') as stderr:
-        result = subprocess.run(argv, env=env, cwd=work, stdout=stdout, stderr=stderr)
+        result = subprocess.run(argv, env=env, cwd=work, stdout=stdout, stderr=stderr, umask=0o077)
     if result.returncode:
         raise RuntimeError('ANNEVO native ' + stage + ' failed; retained logs: ' + str(logs))
     return dict(stage=stage, argv=argv, seconds=time.monotonic() - start,
