@@ -17,6 +17,14 @@ independent donor, copy/span, score-margin or positive-gain gates for replacing 
 representative. See [rescue homology support](gene-model-rescue.md) for fixed
 cutoff compatibility and the separate coding-path integration criterion.
 
+Original annotations using complementary frame fields are interpreted as GFF3
+phases only when the same annotated coding path is bound to an agreeing source
+CDS. The interpretation retains source fields and sequence hashes; generated
+GeneGalleon paths and unsupported or ambiguous phase conventions remain strict.
+Frozen rescue publications can be consumed after a downstream helper update:
+their schema, plan, source inputs and dependency receipts are still verified,
+while producer execution continues to require its own recorded tool identities.
+
 ## Workflow
 
 ```mermaid
