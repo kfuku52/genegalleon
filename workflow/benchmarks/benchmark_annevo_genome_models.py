@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import benchmark_annevo_masked_models as bm
+from annevo_prediction_equivalence import decision_fields, matching_features
 from gene_model_catalog import build_catalog, indexed_genome
 from gene_model_selection import select_representatives
 
@@ -149,6 +150,56 @@ def query_locus_map(catalogs):
     return aliases
 
 
+def checked_native(frozen, args, regions, proteins, genome, baseline):
+    models, nomination = ann.nominate(frozen, args.species, regions, proteins, genome, ref.DEFAULTS)
+    checked = []
+    for model in models:
+        m = rescue.validate_model(model, genome, 1, ref.DEFAULTS)
+        m = rescue.complete_terminals(m, genome, 1, ref.DEFAULTS, proteins[model['evidence']['donor']][model['evidence']['query']], rescue.validate_model)
+        m['problems'] = sorted(set(m['problems']) | set(model['annevo_problems']))
+        checked.append(rescue.check_interval(m))
+    ann.confirm_transferred_structure(checked, baseline)
+    return checked, nomination
+
+
+def semantic_cases(value):
+    # Paired main verifies all native fields/model/genome before this step.
+    return decision_fields(value)
+
+
+def compare_admissions(output, seeds):
+    parents = [(output/'unmasked_control'/'gene', output/'unmasked_control'/'exon')]
+    parents += [(output/('gene_'+str(s)), output/('exon_'+str(s))) for s in seeds]
+    comparisons = []
+    for gene, exon in parents:
+        for directory in (gene, exon):
+            # Unmasked controls put condition before the gene/exon role.
+            if directory.parent.name == 'unmasked_control':
+                a = directory.parent/'with_ANNEVO'/directory.name
+                b = directory.parent/'with_compared_ANNEVO'/directory.name
+            else:
+                a, b = directory/'with_ANNEVO', directory/'with_compared_ANNEVO'
+            left = semantic_cases(json.loads((a/'accepted_cases.json').read_text()))
+            right = semantic_cases(json.loads((b/'accepted_cases.json').read_text()))
+            def key(row):
+                return json.dumps(row, sort_keys=True)
+            cases_equal = sorted(left, key=key) == sorted(right, key=key)
+            exon_role = directory.name == 'exon' or directory.name.startswith('exon_')
+            artifacts_equal = not exon_role or all((a/name).is_file() and (b/name).is_file()
+                                  and (a/name).read_bytes() == (b/name).read_bytes()
+                                  for name in ('selected_predictions.gff3', 'selected_predictions.cds.fa'))
+            selection_equal = not exon_role or ((a/'selection.json').is_file() and (b/'selection.json').is_file()
+                                and semantic_cases(json.loads((a/'selection.json').read_text())) == semantic_cases(json.loads((b/'selection.json').read_text())))
+            comparisons.append(dict(scope=str(directory.relative_to(output)), accepted_models=len(left),
+                                    accepted_cases_identical=cases_equal, selected_GFF_CDS_identical=artifacts_equal,
+                                    representative_selection_identical=selection_equal))
+    if not all(row['accepted_cases_identical'] and row['selected_GFF_CDS_identical']
+               and row['representative_selection_identical'] for row in comparisons):
+        rescue.atomic_json(output/'admission_equivalence.failed.json', comparisons)
+        raise ValueError('Paired ANNEVO rescue/refinement decisions or selected artifacts changed')
+    return comparisons
+
+
 def refinement_assay(models, catalog, donors, aliases, hidden, reference, output):
     loci = {g['gene_id']: g for g in catalog['loci']}
     _refs, _shapes, ownership = reference_index(catalog)
@@ -230,6 +281,8 @@ def main():
     provenance = parser.add_mutually_exclusive_group(required=True)
     provenance.add_argument('--native-experiment', type=Path, help='Original registered external native experiment evidence')
     provenance.add_argument('--receipt', type=Path, help='Successful source-bound GG native GPU receipt')
+    parser.add_argument('--compare-annevo-gff', type=Path, help='Second actual native prediction to compare with the same evidence and masks')
+    parser.add_argument('--compare-receipt', type=Path, help='Successful GG native GPU receipt for the second prediction')
     parser.add_argument('--donor-cds', action='append', required=True)
     parser.add_argument('--donor-genome', action='append', required=True)
     parser.add_argument('--donor-gff', action='append', required=True)
@@ -237,6 +290,8 @@ def main():
     parser.add_argument('--fraction', type=float, default=.02)
     parser.add_argument('--cpus', type=int, default=4)
     args = parser.parse_args()
+    if bool(args.compare_annevo_gff) != bool(args.compare_receipt):
+        parser.error('Paired comparison requires both compare-annevo-gff and compare-receipt')
     if args.seed and len(args.seed) != len(set(args.seed)):
         raise ValueError('Duplicate mask seed')
     if not 0 < args.fraction < 1 or args.cpus < 1:
@@ -248,10 +303,23 @@ def main():
         frozen = ann.freeze_inputs(table, {args.species: {'genome': str(args.genome), 'genetic_code': 1}})
     else:
         frozen = external_prediction(args.native_experiment, args.species, args.genome, args.annevo_gff)
+    compared = None
+    paired_features = None
+    if args.compare_receipt:
+        table = args.output/'compared_candidates.tsv'
+        table.write_text('species\tgff\treceipt\n'+'\t'.join((args.species, str(args.compare_annevo_gff.resolve()), str(args.compare_receipt.resolve())))+'\n')
+        compared = ann.freeze_inputs(table, {args.species: {'genome': str(args.genome), 'genetic_code': 1}})
+        first = frozen['predictions'][args.species]['identity']
+        second = compared['predictions'][args.species]['identity']
+        if any(first[k] != second[k] for k in ('genome_sha256', 'runtime_digest', 'model_sha256', 'source_commit', 'model_profile')):
+            raise ValueError('Paired ANNEVO genome, model or runtime inputs differ')
+        paired_features = matching_features(args.annevo_gff, args.compare_annevo_gff)
     maps = {role: dict(item.split('=', 1) for item in getattr(args, 'donor_' + role)) for role in ('cds', 'genome', 'gff')}
     if len(maps['cds']) < 2 or any(set(maps[role]) != set(maps['cds']) for role in maps) or args.species in maps['cds']:
         raise ValueError('Require matching genome/GFF/CDS for at least two distinct external donor species')
     files = [args.genome, args.reference_gff, args.annevo_gff, *frozen['files'], *(Path(p) for m in maps.values() for p in m.values())]
+    if compared:
+        files += [args.compare_annevo_gff, *compared['files']]
     hashes = rescue.digest_paths(files)
     donors = [build_catalog(s, maps['cds'][s], maps['gff'][s], maps['genome'][s]) for s in sorted(maps['cds'])]
     aliases = query_locus_map(donors)
@@ -267,17 +335,31 @@ def main():
         baseline, regions, proteins, placement = bm.donor_placements(args, args.output, genome)
         dump_compressed(args.output / 'baseline.checked.json.gz', baseline)
         print('PLACEMENT_READY', args.species, len(baseline), flush=True)
-        native, nomination = ann.nominate(frozen, args.species, regions, proteins, genome, ref.DEFAULTS)
-        checked = []
-        for model in native:
-            m = rescue.validate_model(model, genome, 1, ref.DEFAULTS)
-            m = rescue.complete_terminals(m, genome, 1, ref.DEFAULTS, proteins[model['evidence']['donor']][model['evidence']['query']], rescue.validate_model)
-            m['problems'] = sorted(set(m['problems']) | set(model['annevo_problems']))
-            checked.append(rescue.check_interval(m))
-        ann.confirm_transferred_structure(checked, baseline)
+        checked, nomination = checked_native(frozen, args, regions, proteins, genome, baseline)
         dump_compressed(args.output / 'native.checked.json.gz', checked)
         rescue.atomic_json(args.output / 'nomination.json', nomination)
         print('NATIVE_NOMINATION_READY', args.species, len(checked), flush=True)
+        conditions = [('without_ANNEVO', None), ('with_ANNEVO', checked)]
+        if compared:
+            # Keep one native candidate population resident during paired
+            # assays. Production prediction caches use the same JSON records.
+            del checked
+            conditions = [('without_ANNEVO', None), ('with_ANNEVO', args.output/'native.checked.json.gz')]
+            other, other_audit = checked_native(compared, args, regions, proteins, genome, baseline)
+            dump_compressed(args.output/'compared_native.checked.json.gz', other)
+            rescue.atomic_json(args.output/'compared_nomination.json', other_audit)
+            print('COMPARED_NOMINATION_READY', args.species, len(other), flush=True)
+            del other
+            conditions.append(('with_compared_ANNEVO', args.output/'compared_native.checked.json.gz'))
+        def condition_models():
+            for condition, records in conditions:
+                if isinstance(records, Path):
+                    with gzip.open(records, 'rt') as stream:
+                        loaded = json.load(stream)
+                    yield condition, baseline + loaded
+                    del loaded
+                else:
+                    yield condition, baseline if records is None else baseline + records
         exon_choices = {}
         for gene in full['loci']:
             g = gene['gene_id']
@@ -299,7 +381,7 @@ def main():
                                              hidden_blocks={source_ids[g]: v for g,v in exons.items()})
             masked = build_catalog(args.species, ecds, egff, args.genome)
             masked['annotation_spans'] = ref.annotation_ownership_spans(egff, masked)
-            for condition, models in [('without_ANNEVO', baseline), ('with_ANNEVO', baseline + checked)]:
+            for condition, models in condition_models():
                 go, eo = mgff.parent / condition, egff.parent / condition
                 go.mkdir()
                 eo.mkdir()
@@ -309,19 +391,22 @@ def main():
                 results.append(result)
                 rescue.atomic_json(args.output / 'partial_results.json', results)
                 print('CONDITION_COMPLETE', json.dumps(result), flush=True)
+                del models
         control = args.output / 'unmasked_control'
         control.mkdir()
         controls = {}
         full['annotation_spans'] = ref.annotation_ownership_spans(gff, full)
-        for condition, models in [('without_ANNEVO', baseline), ('with_ANNEVO', baseline + checked)]:
+        for condition, models in condition_models():
             d = control / condition
             d.mkdir()
             (d / 'gene').mkdir()
             (d / 'exon').mkdir()
             controls[condition] = dict(gene=gene_assay(models, gff, args.species, set(), reference, d / 'gene'),
                                       exon=refinement_assay(models, copy.deepcopy(full), donors, aliases, set(), reference, d / 'exon'))
+            del models
         if rescue.digest_paths(hashes) != hashes:
             raise ValueError('Whole-genome benchmark source inputs changed')
+        equivalence = compare_admissions(args.output, args.seed or [20261020, 20261021]) if compared else None
         report = dict(schema=1, species=args.species, genome_bases=sum(genome.get_reference_length(s) for s in genome.references),
                       genome_contigs=len(genome.references), reference_genes=len(full['loci']), intact_reference_genes=len(truth),
                       all_reference_isoforms_scored=True, exon_maskable_genes=len(exon_choices),
@@ -330,6 +415,10 @@ def main():
                       no_synthetic_RNA=True, annotation_absence_is_unknown=True,
                       scope='whole assembly admission and selector projection with real donor structure; approximate placement graph; not full cohort finalization',
                       implementation=ref.implementation(), benchmark_sha256=rescue.digest(__file__), parameters=ref.DEFAULTS)
+        if equivalence is not None:
+            report.update(paired_admission_equivalence=equivalence, all_paired_admissions_and_selected_artifacts_identical=True,
+                          compared_native_identity=compared['predictions'][args.species]['identity'],
+                          paired_native_feature_sha256=paired_features)
         rescue.atomic_json(args.output / 'comparison.json', report)
         print(json.dumps({k:v for k,v in report.items() if k not in {'input_sha256','masks','implementation'}}, indent=2))
 

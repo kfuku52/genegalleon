@@ -169,3 +169,75 @@ and its own license remain independently recorded.
 
 For the opt-in six-clade GPU test and its bounded input manifest, see
 [development validation](development-and-tests.md#optional-annevo-clade-gpu-qualification).
+
+## Pipeline several genomes in one GPU allocation
+
+For rescue/refinement over many genomes, run `workflow/support/annevo_pipeline.py`
+inside the GPU-enabled GG container. Prepare the optional runtime/model once with
+`annevo_runtime.py prepare`, then create a TSV with `species`, `genome`, `receipt`
+columns. `receipt` names the installed runtime receipt, not a prediction receipt.
+An optional fourth `selection_receipt` column retains an automatic model selection.
+Paths can be absolute or relative to the TSV. The program invokes native
+`prediction.py` on one GPU and native `decoding.py` in two independent CPU slots:
+
+```bash
+python workflow/support/annevo_pipeline.py --inputs genomes.tsv --output predictions \
+  --predict-threads 4 --decoder-workers 2 --decode-threads 4 --max-tmp-gib 128
+```
+
+Reserve at least 14 CPUs for this configuration: four predictor threads, two
+data-loader workers and two four-thread decoders. One GPU allocation is sufficient;
+independent Slurm jobs requesting an exclusive GPU cannot share that allocation.
+The ordinary annotation entrypoint and scientific defaults are unchanged. Completed
+species publish native GFF/receipt pairs; after all species succeed, the combined
+`candidate_inputs.tsv` feeds the existing rescue/refinement `annevo_inputs` option.
+Unchanged pairs are verified and reused. Changed inputs/parameters or corrupt pairs
+stop execution; select a new output directory for a new prediction generation.
+Failures retain logs and never publish an incomplete campaign table.
+
+Complete contigs and native thresholds are preserved. Temporary space is reserved
+before prediction using 60 bytes/base for native probabilities plus FASTA/metadata
+headroom. The program bounds pending work and cleans each intermediate after its
+decoder finishes. A genome exceeding the budget stops with an explicit error;
+the sequence-group threshold does not cap the complete HDF5 file size.
+
+`workflow/benchmarks/benchmark_annevo_pipeline.py` compares two alternating pairs
+of serial/native annotation and pipelined execution on exactly the same TSV,
+runtime, model and GPU. It records wall time, GPU samples, native receipts and GFF
+feature/byte equality. It runs workloads only inside an existing allocation;
+resource planning and scheduler submission remain separate. Rescue admission and
+representative selection require a separate comparison using the frozen donors
+and actual production gates.
+
+The whole-genome admission benchmark accepts `--compare-annevo-gff` and
+`--compare-receipt` alongside its original native prediction. It nominates and
+validates both actual predictions against the same miniprot placements, donor
+catalogs and masks, then checks individual accepted cases, representative choices
+and selected GFF/CDS bytes. Independent execution-receipt and raw GFF artifact
+identities are retained in the report. Native parallel decoding can reorder
+sequence-number comments; these identities are excluded from decision equality
+only after every native annotation field and model/genome input agrees.
+Its placement graph remains explicitly
+approximate; a fixed alternative annotation is a regression control, not
+independent biological truth.
+
+The 2026-10-14 whole-genome comparison used Aethionema arabicum (203 Mb),
+Brachypodium stacei (234 Mb) and Geranium dissectum (568 Mb), one RTX 6000 Ada,
+16 allocated CPUs and 64 GiB RAM. Both routes used the same installed runtime,
+Magnoliopsida model, batch size 32 and four decoding threads per species.
+
+| Matched trial | Serial | Pipeline |
+| --- | --- | --- |
+| 1, serial first | 32.53 min | 27.50 min |
+| 2, pipeline first | 29.86 min | 26.15 min |
+| Median | 31.19 min | 26.83 min |
+
+The measured reduction was 14.0% (1.16x speedup), with a sampled peak GPU memory
+of 5.33 GiB and peak intermediate reservation of 50.8 GiB. All nine GFF annotation
+fields matched across all four runs. Whole-gene and internal-exon masking plus
+unmasked controls retained identical individual admissions, representative choices
+and selected GFF/CDS. These admission assays used an approximate placement graph;
+Geranium's fixed Helixer annotation was a regression control. In this input order,
+GPU prediction overlapped CPU decoding, but only one of the two decoder slots was
+active at a time. The large final genome and probability-file I/O limited the
+gain. This measurement does not establish steady-state throughput for 500 species.
