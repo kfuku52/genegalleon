@@ -99,14 +99,18 @@ def all_entrypoints(manifest):
     species = []
     with manifest_path.open("x", newline="") as stream:
         writer = csv.writer(stream, delimiter="\t")
-        writer.writerow(["provider", "id", "species_key", "local_cds_path", "local_gff_path", "local_genome_path"])
+        writer.writerow(["provider", "id", "species_key", "local_cds_path", "local_gff_path", "local_genome_path",
+                         "cds_filename", "gff_filename", "genome_filename"])
         for cds in cds_files:
             name = "_".join(cds.name.split("_")[:2])
             gff = list((assets / "species_gff").glob(name + "*"))
             genome = list((assets / "species_genome").glob(name + "*"))
             require(len(gff) == len(genome) == 1, "paired input missing: " + name)
             species.append(name)
-            writer.writerow(["local", name, name, str(cds), str(gff[0]), str(genome[0])])
+            # Local discovery uses role names; a source genome named simply
+            # <species>.fa must not be classified as provided CDS.
+            writer.writerow(["local", name, name, str(cds), str(gff[0]), str(genome[0]),
+                             name + ".cds.fa", name + ".gff3", name + ".genome.fa"])
     results = [run_case(manifest, "input_generation", workspace, {
         "provider": "local", "download_manifest": str(manifest_path), "strict": "1",
         "require_cds": "1", "require_gff": "1", "require_genome": "1",
