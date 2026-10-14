@@ -91,15 +91,24 @@ disable_if_no_matching_input_file() {
 
 check_if_species_files_unique() {
   local species_dir=$1
+  local file_type=${2:-all}
   local files=()
   local file
-  shopt -s nullglob dotglob
-  for file in "${species_dir}"/*; do
-    [[ -f "${file}" ]] || continue
-    [[ "$(basename "${file}")" == .* ]] && continue
-    files+=( "${file}" )
-  done
-  shopt -u nullglob dotglob
+  case "${file_type}" in
+    fasta)
+      while IFS= read -r file; do files+=( "${file}" ); done < <(gg_find_fasta_files "${species_dir}" 1)
+      ;;
+    all)
+      shopt -s nullglob dotglob
+      for file in "${species_dir}"/*; do
+        [[ -f "${file}" ]] || continue
+        [[ "$(basename "${file}")" == .* ]] && continue
+        files+=( "${file}" )
+      done
+      shopt -u nullglob dotglob
+      ;;
+    *) echo "Unknown species file type: ${file_type}" >&2; return 1 ;;
+  esac
   local num_sp=${#files[@]}
   local sp_names=()
   local file_base

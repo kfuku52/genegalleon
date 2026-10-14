@@ -516,7 +516,7 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
       if [[ "${genome_annotation_backend}" == "annevo" ]]; then
         gg_check_annevo_cds_directory || exit 1
       else
-        check_if_species_files_unique "${dir_sp_cds%/}/."
+        check_if_species_files_unique "${dir_sp_cds%/}/." fasta
       fi
       printf '%s\n' "${species_cds_validation_signature}" > "${species_cds_validation_stamp}"
     fi

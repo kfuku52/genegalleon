@@ -1555,7 +1555,7 @@ prepare_species_protein_tmp() {
 
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     check_species_protein_dir "${dir_sp_protein_input}"
-    check_if_species_files_unique "${dir_sp_protein_input}"
+    check_if_species_files_unique "${dir_sp_protein_input}" fasta
     mapfile -t protein_files < <(gg_find_fasta_files "${dir_sp_protein_input}" 1)
     for protein_path in "${protein_files[@]}"; do
       sp_ub=$(gg_species_name_from_path "$(basename "${protein_path}")")
@@ -1586,7 +1586,7 @@ prepare_species_protein_tmp() {
   fi
 
   check_species_cds_dir "${dir_sp_cds}"
-  check_if_species_files_unique "${dir_sp_cds}"
+  check_if_species_files_unique "${dir_sp_cds}" fasta
   prepare_species_genetic_code_table "${dir_sp_cds}" "${genetic_code}" "${file_species_genetic_code_resolved}" "${file_species_genetic_code}"
   mapfile -t cds_files < <(gg_find_fasta_files "${dir_sp_cds}" 1)
   for cds_path in "${cds_files[@]}"; do
@@ -2965,7 +2965,7 @@ elif [[ "${input_sequence_mode}" == "protein" ]]; then
   fi
 else
   check_species_cds_dir "${dir_sp_cds}"
-  check_if_species_files_unique "${dir_sp_cds}"
+  check_if_species_files_unique "${dir_sp_cds}" fasta
 fi
 # Imported analysis inputs in selection-only runs are validated and hashed by
 # the copy-number stages below; disabled sequence/tree producers do not own them.

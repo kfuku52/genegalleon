@@ -2506,6 +2506,31 @@ def test_check_if_species_files_unique_ignores_hidden_files(tmp_path):
     assert "Species files are unique in" in completed.stdout
 
 
+@pytest.mark.parametrize("suffix", [".fa", ".fa.gz", ".fna"])
+def test_species_fasta_uniqueness_keeps_audits_and_rejects_real_duplicates(tmp_path, suffix):
+    directory = tmp_path / "species_cds"
+    directory.mkdir()
+    data = b">Arabidopsis_thaliana_gene1\nATGAAATAA\n"
+    fasta = directory / ("Arabidopsis_thaliana" + suffix)
+    fasta.write_bytes(gzip.compress(data) if suffix.endswith(".gz") else data)
+    audit = directory / (fasta.name + ".cds-normalisation.json")
+    audit.write_text('{"source_sha256":"retained"}\n')
+    grouping = directory / "Arabidopsis_thaliana.grouping.tsv"
+    grouping.write_text("source_gene\toutput_gene\ngene1\tgene1\n")
+    before = {p.name: p.read_bytes() for p in directory.iterdir()}
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; check_if_species_files_unique {shlex.quote(str(directory))} fasta"
+    passed = run_bash(command, cwd=tmp_path)
+    assert passed.returncode == 0, passed.stdout + passed.stderr
+    assert "scientific name unique: 1 and 1" in passed.stdout
+    assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
+    legacy = run_bash(command.removesuffix(" fasta"), cwd=tmp_path)
+    assert legacy.returncode != 0 and "not unique" in legacy.stdout
+    duplicate = directory / "Arabidopsis_thaliana_duplicate.fasta"
+    duplicate.write_bytes(data)
+    failed = run_bash(command, cwd=tmp_path)
+    assert failed.returncode != 0 and "not unique" in failed.stdout
+
+
 def test_gg_find_fasta_files_excludes_hidden_files(tmp_path):
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
