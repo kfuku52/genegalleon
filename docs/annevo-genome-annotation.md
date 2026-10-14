@@ -164,3 +164,42 @@ and its own license remain independently recorded.
 
 For the opt-in six-clade GPU test and its bounded input manifest, see
 [development validation](development-and-tests.md#optional-annevo-clade-gpu-qualification).
+
+## Pipeline several genomes in one GPU allocation
+
+For rescue/refinement over many genomes, run `workflow/support/annevo_pipeline.py`
+inside the GPU-enabled GG container. Prepare the optional runtime/model once with
+`annevo_runtime.py prepare`, then create a TSV with `species`, `genome`, `receipt`
+columns. `receipt` names the installed runtime receipt, not a prediction receipt.
+An optional fourth `selection_receipt` column retains an automatic model selection.
+Paths can be absolute or relative to the TSV. The program invokes native
+`prediction.py` on one GPU and native `decoding.py` in two independent CPU slots:
+
+```bash
+python workflow/support/annevo_pipeline.py --inputs genomes.tsv --output predictions \
+  --predict-threads 4 --decoder-workers 2 --decode-threads 4 --max-tmp-gib 128
+```
+
+Reserve at least 14 CPUs for this configuration: four predictor threads, two
+data-loader workers and two four-thread decoders. One GPU allocation is sufficient;
+independent Slurm jobs requesting an exclusive GPU cannot share that allocation.
+The ordinary annotation entrypoint and scientific defaults are unchanged. Completed
+species publish native GFF/receipt pairs; after all species succeed, the combined
+`candidate_inputs.tsv` feeds the existing rescue/refinement `annevo_inputs` option.
+Unchanged pairs are verified and reused. Changed inputs/parameters or corrupt pairs
+stop execution; select a new output directory for a new prediction generation.
+Failures retain logs and never publish an incomplete campaign table.
+
+Complete contigs and native thresholds are preserved. Temporary space is reserved
+before prediction using 60 bytes/base for native probabilities plus FASTA/metadata
+headroom. The program bounds pending work and cleans each intermediate after its
+decoder finishes. A genome exceeding the budget stops with an explicit error;
+the sequence-group threshold does not cap the complete HDF5 file size.
+
+`workflow/benchmarks/benchmark_annevo_pipeline.py` compares two alternating pairs
+of serial/native annotation and pipelined execution on exactly the same TSV,
+runtime, model and GPU. It records wall time, GPU samples, native receipts and GFF
+feature/byte equality. It runs workloads only inside an existing allocation;
+resource planning and scheduler submission remain separate. Rescue admission and
+representative selection require a separate comparison using the frozen donors
+and actual production gates.
