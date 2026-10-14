@@ -241,3 +241,33 @@ Geranium's fixed Helixer annotation was a regression control. In this input orde
 GPU prediction overlapped CPU decoding, but only one of the two decoder slots was
 active at a time. The large final genome and probability-file I/O limited the
 gain. This measurement does not establish steady-state throughput for 500 species.
+
+Additional pipeline options preserve the original configuration when omitted:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| --order | input | largest-first schedules longer assemblies earlier; candidate TSV rows retain the original input order. |
+| --compression | none | lzf passes native --comp for lossless probability storage; storage mode is recorded in prediction parameters. |
+| --jit-cache-root | omitted | A private shared cache for native Numba decoding; omitted retains per-species temporary caches. |
+
+For a comparison, use a new output directory rather than reusing predictions
+made with different storage parameters. Scheduling verifies input hashes before
+reusing assembly lengths. Shared JIT caches bind the installed runtime, source
+generation, CPU identity and Numba CPU overrides. Native Numba additionally
+checks compiler/CPU compatibility. Cache roots must be private, owned by the
+calling user and separate from inputs and the immutable installed environment.
+Changed identities select a new cache; unsafe members or modified identity
+records stop execution. No native program, model, prediction window, probability
+precision or admission threshold is changed by these options.
+
+For isolated effects and resource measurements, run
+workflow/benchmarks/benchmark_annevo_pipeline_optimizations.py in an existing GPU
+allocation with --inputs, a fresh --output, and --probability-proof-genome naming
+a qualified small matched-profile FASTA. It first verifies actual native plain/LZF
+probability bits, shapes, dtypes and metadata on that fixture outside timing.
+Four cumulative configurations run twice in reverse order: original settings,
+ordering only, ordering plus LZF, and ordering plus LZF plus shared JIT.
+Reports retain per-species phases, cache load/save events, GPU samples and
+one-second process-tree RSS/PSS. Sampled peaks are lower bounds and do not include
+whole-job page-cache/cgroup accounting. Large-genome output equivalence and actual
+rescue/refinement admission still require their recorded comparisons.
