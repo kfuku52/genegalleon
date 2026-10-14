@@ -543,7 +543,7 @@ def test_competing_predictions_for_separate_loci_cannot_both_claim_new_interval(
     second = copy.deepcopy(catalog["loci"][0])
     second["gene_id"] = "Species_target_second"
     second["candidates"][0].update(candidate_id="Species_target_second_t", source_transcript_id="second_t", source_gene_id="second",
-                                   blocks=[[180, 210, 0]])
+                                   blocks=[[180, 210, 0]], cds="AAA" * 10)
     catalog["loci"].append(second)
     alternatives = [{**model, "gene_id": second["gene_id"], "cds": [[150, 210, 0]]} for model in models]
     edges += [{**edge, "gene_a": second["gene_id"], "gene_b": edge["gene_b"] + "_second"} for edge in edges]
@@ -1026,7 +1026,7 @@ def test_source_annotation_archive_preserves_decoded_crlf_bytes(tmp_path, compre
 
 
 @pytest.mark.parametrize("implicit", [False, True])
-def test_accepted_addition_expands_canonical_full_gtf_graph_without_changing_source(tmp_path, monkeypatch, implicit):
+def test_rna_confirmed_addition_expands_canonical_full_gtf_graph_without_changing_source(tmp_path, monkeypatch, implicit):
     inputs, edges, rows = tiny_inputs(tmp_path)
     target = rows[0]
     genomic = "ATGGTACCCTAA" + "C" * 30 + "AGAAATAA" + "C" * 40
@@ -1055,13 +1055,17 @@ def test_accepted_addition_expands_canonical_full_gtf_graph_without_changing_sou
                      frameshift=False, coverage=1.0, identity=1.0)
                 for (seqid, start, _end), regions in windows.items() for region in regions]
     monkeypatch.setattr(refinement.rescue, "search_intervals", predicted_paths)
+    rna = tmp_path / 'whole_RNA_fixture.tsv'
+    write_tsv(rna, ['species', 'seqid', 'strand', 'cds_blocks', 'transcript_id', 'count'],
+              [dict(species=target['species'], seqid='chr1', strand='+', cds_blocks='[[0,3],[44,50]]',
+                    transcript_id='mocked_whole_RNA', count=1)])
     root = tmp_path / "run"
-    value = refinement.plan(root, inputs=inputs, edges=edges, mode="conservative")
+    value = refinement.plan(root, inputs=inputs, edges=edges, rna=rna, mode="conservative")
     effective = refinement.finalize(root, value)
     predictions = json.loads((root / "predictions" / target["species"] / "predictions.json").read_text())
     accepted = [row for row in predictions if row["status"] == "accepted"]
     assert len(accepted) == 1
-    assert not accepted[0]["candidate"]["quality"]["representative_eligible"]
+    assert accepted[0]["candidate"]["quality"]["representative_eligible"]
     assert (effective / "source_annotation" / (target["species"] + ".gff3")).read_bytes() == original
     full = effective / "full_annotation" / (target["species"] + ".gff3")
     records = [fields for line in full.read_text().splitlines() if not line.startswith("#") and len(fields := line.split("\t")) == 9]

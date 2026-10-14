@@ -220,6 +220,7 @@ def _install(root, key, manifest, headers, no_download, locator):
     with namespace_lock(object_root / ".install.lock", exclusive=True, timeout=86400):
         if ready_path.is_symlink():
             raise RuntimeError("ANNEVO ready receipt is redirected")
+        # gg-cache-guard: audited; exact key/manifest below and verify_ready's payload checks precede reuse.
         if ready_path.exists():
             ready = json.loads(ready_path.read_text())
             if ready.get("cache_key") != key or ready.get("manifest") != manifest:

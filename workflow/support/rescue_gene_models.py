@@ -1368,7 +1368,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                                             'end': min(genome.get_reference_length(model['seqid']), b + padding)})
                 native_models, annevo_audit = annevo_gene_models.nominate(
                     plan['request']['annevo'], name, bounded_regions, proteins, genome, params)
-                validated.extend(checked_prediction(model) for model in native_models)
+                native_checked = [checked_prediction(model) for model in native_models]
+                annevo_gene_models.confirm_transferred_structure(native_checked, validated)
+                validated.extend(native_checked)
                 atomic_json(tmp / 'annevo_candidates.json', annevo_audit)
             if cached:
                 cached.check()

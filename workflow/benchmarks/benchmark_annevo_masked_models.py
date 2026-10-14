@@ -157,13 +157,23 @@ def shape(model):
     return model['seqid'], model['strand'], tuple(tuple(b) for b in blocks)
 
 
-def evaluate_rescue(models, gff, truth, hidden, species):
+def sampled_masks(truth, exon_choices, fraction, seed):
+    """Freeze label masks independently of process hash/set iteration order."""
+    rng = random.Random(seed)
+    hidden = set(rng.sample(sorted(truth), max(1, int(len(truth) * fraction))))
+    exons = set(rng.sample(sorted(exon_choices), max(1, int(len(exon_choices) * fraction)))) if exon_choices else set()
+    return hidden, {g: {rng.choice(exon_choices[g])} for g in sorted(exons)}
+
+
+def evaluate_rescue(models, gff, truth, hidden, species, audit_path=None):
     with gff.open() as stream:
         existing = rescue.original_ownership(stream, rescue.attributes)
     ownership = rescue.OwnershipIndex(existing)
     records = copy.deepcopy(models)
     rescue.reassess_unanchored_models(records, 2, ownership=ownership)
     records = rescue.consolidate(records, existing, species)
+    if audit_path:
+        rescue.atomic_json(audit_path, records)
     accepted = [m for m in records if m['status'] == 'accepted']
     truth_shapes = {shape(c): gene for gene, c in truth.items()}
     recovered = {truth_shapes[shape(m)] for m in accepted if shape(m) in truth_shapes and truth_shapes[shape(m)] in hidden}
@@ -172,7 +182,9 @@ def evaluate_rescue(models, gff, truth, hidden, species):
                                  and any(a[0] < b[1] and a[1] > b[0] for a in m['cds'] for b in truth[g]['blocks']) for g in hidden)]
     return {'hidden_genes': len(hidden), 'exact_recovered_genes': len(recovered),
             'nonexact_additions_at_hidden_loci': len(nonexact_in_hidden), 'accepted_additions': len(accepted),
-            'off_reference_additions_unknown': sum(shape(m) not in truth_shapes for m in accepted),
+            'off_reference_additions_unknown': sum(not any(m['seqid'] == c['seqid'] and m['strand'] == c['strand']
+                                                         and any(a[0] < b[1] and a[1] > b[0] for a in m['cds'] for b in c['blocks'])
+                                                         for c in truth.values()) for m in accepted),
             'ANNEVO_supported_additions': sum(bool(m.get('evidence', {}).get('annevo') or any(s.get('annevo') for s in m.get('support', []))) for m in accepted)}
 
 
@@ -190,13 +202,20 @@ def evaluate_refinement(models, catalog, truth, hidden, species, audit_path=None
         model = copy.deepcopy(raw)
         model.update(gene_id=gene, donor_species=evidence['donor'], donor_candidate=evidence['query'])
         model['problems'] = [p for p in model['problems'] if p != 'unanchored_genome_search']
+        if evidence.get('annevo'):
+            # Refinement has an existing, uniquely owned annotated locus. Its
+            # confirmation scope differs from unanchored new-gene rescue.
+            model['evidence']['genome_only'] = False
         annotated.append(model)
-        if not model['problems']:
-            query_loci[evidence['donor'], evidence['query']].add(gene)
         key = gene, evidence['donor'], evidence['query']
         if key not in seen:
             seen.add(key)
             edges.append(dict(species_a=species, gene_a=gene, species_b=evidence['donor'], gene_b=evidence['query'], ambiguous=False))
+    annevo.confirm_transferred_structure([m for m in annotated if m.get('evidence', {}).get('annevo')],
+                                         [m for m in annotated if not m.get('evidence', {}).get('annevo')])
+    for model in annotated:
+        if not model['problems']:
+            query_loci[model['donor_species'], model['donor_candidate']].add(model['gene_id'])
     for edge in edges:
         edge['ambiguous'] = len(query_loci[edge['species_b'], edge['gene_b']]) > 1
     predictions = refinement.classify_predictions(annotated, catalog, edges, refinement.DEFAULTS, [], catalog['sources']['genome']['sha256'])
@@ -225,6 +244,7 @@ def main():
     parser.add_argument('--seed', action='append', type=int)
     parser.add_argument('--fraction', type=float, default=0.25)
     parser.add_argument('--cpus', type=int, default=4)
+    parser.add_argument('--mask-manifest', type=Path, help='Replay source-bound gene/exon masks for equivalent comparisons')
     args = parser.parse_args()
     if not 0 < args.fraction < 1 or args.cpus < 1:
         raise ValueError('Invalid holdout/resource bound')
@@ -232,6 +252,16 @@ def main():
     input_paths = [args.genome, args.reference_gff, args.annevo_gff, args.receipt,
                    *(Path(v.split('=', 1)[1]) for v in args.donor_cds)]
     hashes = rescue.digest_paths(input_paths)
+    replay = None
+    if args.mask_manifest:
+        manifest_sha = rescue.digest(args.mask_manifest)
+        replay = json.loads(args.mask_manifest.read_text())
+        if rescue.digest(args.mask_manifest) != manifest_sha:
+            raise ValueError('Mask manifest changed during reading')
+        if (replay.get('schema') != 1 or replay.get('genome_sha256') != hashes[str(args.genome)]
+                or replay.get('reference_gff_sha256') != hashes[str(args.reference_gff)]):
+            raise ValueError('Mask manifest differs from the benchmark genome/reference')
+        hashes[str(args.mask_manifest)] = manifest_sha
     results = []
     with indexed_genome(args.genome) as genome:
         rows = reference_rows(args.reference_gff, genome)
@@ -250,19 +280,43 @@ def main():
             m = rescue.validate_model(model, genome, 1, refinement.DEFAULTS)
             m['problems'] = sorted(set(m['problems']) | set(model['annevo_problems']))
             checked.append(rescue.check_interval(m))
+        annevo.confirm_transferred_structure(checked, baseline)
         rescue.atomic_json(args.output / 'annevo_nomination.json', native_audit)
         exon_choices = {g: [tuple(b[:2]) for b in c['blocks'][1:-1] if (b[1] - b[0]) % 3]
                         for g, c in truth.items() if len(c['blocks']) >= 3}
         exon_choices = {g: v for g, v in exon_choices.items() if v}
-        for seed in args.seed or [20261014, 20261015, 20261016]:
-            rng = random.Random(seed)
-            hidden = set(rng.sample(sorted(truth), max(1, int(len(truth) * args.fraction))))
+        masks = []
+        seeds = args.seed or ([r['seed'] for r in replay['seeds']] if replay else [20261014, 20261015, 20261016])
+        if len(set(seeds)) != len(seeds):
+            raise ValueError('Duplicate mask seed')
+        for seed in seeds:
+            if replay:
+                matching = [r for r in replay['seeds'] if r['seed'] == seed]
+                if len(matching) != 1:
+                    raise ValueError('Missing or duplicate replay seed')
+                selected = matching[0]
+                hidden = set(selected['hidden_genes'])
+                hidden_exons = set(selected['hidden_exon_blocks'])
+                if (not hidden or not hidden <= truth.keys() or not hidden_exons <= exon_choices.keys()
+                        or len(hidden) != len(selected['hidden_genes'])):
+                    raise ValueError('Unknown or duplicate replay locus')
+                masked = {}
+                for g, blocks in selected['hidden_exon_blocks'].items():
+                    if len(blocks) != 1 or tuple(blocks[0]) not in exon_choices[g]:
+                        raise ValueError('Replay exon is not an eligible original internal coding block')
+                    masked[source_ids[g]] = {tuple(blocks[0])}
+            else:
+                hidden, sampled = sampled_masks(truth, exon_choices, args.fraction, seed)
+                hidden_exons = set(sampled)
+                masked = {source_ids[g]: blocks for g, blocks in sampled.items()}
+            masks.append({'seed': seed, 'hidden_genes': sorted(hidden),
+                          'hidden_exon_blocks': {g: [list(b) for b in sorted(masked[source_ids[g]])] for g in sorted(hidden_exons)}})
             gff, _ = write_annotation(args.output / ('gene_holdout_' + str(seed)), rows, genome,
                                        hidden_genes={source_ids[g] for g in hidden})
-            gene = {'seed': seed, 'without_ANNEVO': evaluate_rescue(baseline, gff, truth, hidden, args.species),
-                    'with_ANNEVO': evaluate_rescue(baseline + checked, gff, truth, hidden, args.species)}
-            hidden_exons = set(rng.sample(sorted(exon_choices), max(1, int(len(exon_choices) * args.fraction)))) if exon_choices else set()
-            masked = {source_ids[g]: {rng.choice(exon_choices[g])} for g in hidden_exons}
+            gene = {'seed': seed, 'without_ANNEVO': evaluate_rescue(baseline, gff, truth, hidden, args.species,
+                                                                  gff.parent / 'without_ANNEVO_admission.json'),
+                    'with_ANNEVO': evaluate_rescue(baseline + checked, gff, truth, hidden, args.species,
+                                                   gff.parent / 'with_ANNEVO_admission.json')}
             gff, cds = write_annotation(args.output / ('exon_holdout_' + str(seed)), rows, genome, hidden_blocks=masked)
             catalog = build_catalog(args.species, cds, gff, args.genome)
             catalog['annotation_spans'] = refinement.annotation_ownership_spans(gff, catalog)
@@ -271,13 +325,16 @@ def main():
                     'with_ANNEVO': evaluate_refinement(baseline + checked, catalog, truth, hidden_exons, args.species,
                                                         gff.parent / 'with_ANNEVO_admission.json')}
             results.append({'gene_masking': gene, 'exon_masking': exon})
-    if rescue.digest_paths(input_paths) != hashes:
+    if rescue.digest_paths(hashes) != hashes:
         raise ValueError('Benchmark source inputs changed')
+    rescue.atomic_json(args.output / 'mask_manifest.json', {'schema': 1, 'genome_sha256': hashes[str(args.genome)],
+                      'reference_gff_sha256': hashes[str(args.reference_gff)], 'seeds': masks})
     report = {'scope': 'one genome interval; conservative admission, not final cohort/orthology or biological truth',
               'independent_reference': True, 'synthetic_RNA_evidence': False, 'reference_genes': len(full['loci']),
               'intact_reference_genes': len(truth), 'exon_maskable_genes': len(exon_choices),
               'input_sha256': hashes, 'parameters': refinement.DEFAULTS, 'placement': placement, 'seeds': results,
               'implementation': refinement.implementation(), 'dependencies': refinement.dependency_identities(),
+              'benchmark_script_sha256': rescue.digest(__file__), 'mask_manifest_sha256': rescue.digest(args.output / 'mask_manifest.json'),
               'miniprot': {'version': subprocess.check_output(['miniprot', '--version'], text=True).strip(),
                           'binary_sha256': rescue.digest(shutil.which('miniprot'))},
               'ANNEVO_prediction_reused_without_rerunning_GPU': True,
