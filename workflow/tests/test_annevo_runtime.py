@@ -324,7 +324,7 @@ def test_mixed_profiles_share_environment_and_fetch_only_selected_weights(tmp_pa
 
 
 @pytest.mark.parametrize('role', ['taxid_map', 'genome_metadata', 'taxonomy_db'])
-@pytest.mark.parametrize('output_role', ['output', 'output_receipt'])
+@pytest.mark.parametrize('output_role', ['output', 'output_receipt', 'native.stdout.txt', 'native.stderr.txt'])
 def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypatch, role, output_role):
     spec = importlib.util.spec_from_file_location('protected_taxonomy_fixture', Path(__file__).with_name('test_annevo_model_selection.py'))
     fixtures = importlib.util.module_from_spec(spec)
@@ -343,9 +343,16 @@ def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypa
     args = argparse.Namespace(receipt=str(selected), genome=selection_args.genome, output=str(tmp_path / 'out.gff3'),
         output_receipt=str(tmp_path / 'out.json'), model_profile=choice['model_profile'], threads=4,
         batch_size=32, sequence_threshold=25, selection_receipt=selection_args.output, species=selection_args.species)
+    if output_role.startswith('native.'):
+        log_input = tmp_path / 'out.gff3.logs' / output_role
+        log_input.parent.mkdir()
+        Path(getattr(selection_args, role)).rename(log_input)
+        setattr(selection_args, role, str(log_input))
+        fixtures.selection.select(selection_args)
     protected = Path(getattr(selection_args, role))
     before = protected.read_bytes()
-    setattr(args, output_role, str(protected))
+    if not output_role.startswith('native.'):
+        setattr(args, output_role, str(protected))
     with pytest.raises(ValueError, match='outputs must not overwrite inputs'):
         runtime.run(args)
     assert protected.read_bytes() == before

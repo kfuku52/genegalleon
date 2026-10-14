@@ -180,9 +180,12 @@ def run(args):
         if selection.get("taxonomy"):
             protected.add(Path(selection["taxonomy"]["path"]).resolve())
     generation = Path(runtime["generation"]).resolve()
+    log_root = output.with_name(output.name + ".logs")
+    destinations = (output, output_receipt, log_root,
+                    log_root / "native.stdout.txt", log_root / "native.stderr.txt")
     if (output.resolve() == output_receipt.resolve()
             or any(p.resolve() in protected or p.resolve().is_relative_to(generation)
-                   for p in (output, output_receipt))):
+                   for p in destinations)):
         raise ValueError("ANNEVO outputs must not overwrite inputs or the installed runtime")
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     output_receipt.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -218,7 +221,6 @@ def run(args):
             env["NUMBA_CACHE_DIR"] = str(work / "numba-cache")
             env["TORCH_HOME"] = str(work / "torch-cache")
             env["XDG_CACHE_HOME"] = str(work / "xdg-cache")
-            log_root = output.with_name(output.name + ".logs")
             log_root.mkdir(mode=0o700, exist_ok=True)
             started = time.monotonic()
             with (log_root / "native.stdout.txt").open("w") as stdout, (log_root / "native.stderr.txt").open("w") as stderr:
