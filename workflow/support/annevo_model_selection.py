@@ -22,6 +22,28 @@ def stable_signature(path):
     return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
 
 
+def require_quiescent_taxonomy(path):
+    if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-journal")):
+        raise ValueError("Taxonomy database has an active transaction; use a quiescent snapshot")
+
+
+def taxonomy_sha(path):
+    path = Path(path)
+    require_quiescent_taxonomy(path)
+    before = stable_signature(path)
+    digest = file_sha(path)
+    require_quiescent_taxonomy(path)
+    if stable_signature(path) != before:
+        raise ValueError("Taxonomy database changed while hashing")
+    return digest
+
+
+def protect_outputs(outputs, inputs):
+    protected = {Path(path).expanduser().resolve() for path in inputs if path}
+    if any(Path(path).expanduser().resolve() in protected for path in outputs):
+        raise ValueError("ANNEVO outputs must not overwrite inputs")
+
+
 def write_unchanged(path, value):
     path = Path(path)
     if path.is_symlink():
@@ -63,8 +85,12 @@ def evidence_rows(path, species, genome_sha, *, metadata=False):
 
 class Taxonomy:
     def __init__(self, path):
-        self.conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+        # Read the exact main-file snapshot whose bytes are hashed, never a WAL
+        # that appeared after the initial sidecar check. External main-file or
+        # sidecar changes still invalidate selection at the closing fence.
+        self.conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("BEGIN")
         self.tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
     def node(self, taxid):
@@ -108,6 +134,10 @@ class Taxonomy:
 
 
 def select(args):
+    # Protect both publication paths, including the error receipt, before any
+    # exception handler can write to a caller-supplied input path.
+    protect_outputs([args.output, str(args.output) + ".failed.json"],
+                    [args.genome, args.taxid_map, args.genome_metadata, args.taxonomy_db, __file__])
     genome = Path(args.genome).absolute()
     record = {"schema_version": 1, "kind": "genegalleon-annevo-model-selection",
               "species": args.species, "requested_profile": args.model_profile,
@@ -131,10 +161,8 @@ def select(args):
             db = Path(args.taxonomy_db).expanduser().absolute()
             if not db.is_file() or not db.stat().st_size:
                 raise ValueError("NCBI taxonomy cache is missing; prepare it online or provide annevo_taxonomy_db")
-            if Path(str(db) + "-wal").exists() or Path(str(db) + "-journal").exists():
-                raise ValueError("Taxonomy database has an active transaction; use a quiescent snapshot")
             before = stable_signature(db)
-            record["taxonomy"] = {"path": str(db), "sha256": file_sha(db), "format": "ETE NCBI SQLite"}
+            record["taxonomy"] = {"path": str(db), "sha256": taxonomy_sha(db), "format": "ETE NCBI SQLite"}
             taxonomy = Taxonomy(db)
             try:
                 resolved = [taxonomy.resolve(int(row["taxid"])) for row in candidates]
@@ -158,6 +186,7 @@ def select(args):
                 record.update(model_profile=profile, anchor_taxid=PROFILES[profile], reason="ncbi_ancestor_taxid")
             finally:
                 taxonomy.conn.close()
+            require_quiescent_taxonomy(db)
             if stable_signature(db) != before:
                 raise ValueError("Taxonomy database changed during model selection")
         record.update(status="selected", overlap_pred=record["model_profile"] in OVERLAP_PROFILES)

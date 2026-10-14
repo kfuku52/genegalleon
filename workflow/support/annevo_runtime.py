@@ -16,7 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
-from annevo_model_selection import OVERLAP_PROFILES, PROFILES
+from annevo_model_selection import OVERLAP_PROFILES, PROFILES, stable_signature, taxonomy_sha
 from annevo_runtime_cache import prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
@@ -141,6 +141,8 @@ def selection_record(args, genome):
     if not path:
         return None, None
     path = Path(path)
+    before = stable_signature(path)
+    receipt_sha = file_sha(path)
     value = json.loads(path.read_text())
     if (value.get("kind") != "genegalleon-annevo-model-selection" or value.get("schema_version") != 1
             or value.get("status") != "selected" or value.get("model_profile") != args.model_profile
@@ -148,10 +150,14 @@ def selection_record(args, genome):
             or value.get("genome_sha256") != file_sha(genome)
             or value.get("overlap_pred") != (args.model_profile in OVERLAP_PROFILES)):
         raise ValueError("ANNEVO species/model selection differs from prediction inputs")
-    for evidence in [*value.get("evidence", []), *([value["taxonomy"]] if value.get("taxonomy") else [])]:
+    for evidence in value.get("evidence", []):
         if file_sha(evidence["path"]) != evidence["sha256"]:
             raise ValueError("ANNEVO taxonomy evidence changed after model selection")
-    return value, file_sha(path)
+    if value.get("taxonomy") and taxonomy_sha(value["taxonomy"]["path"]) != value["taxonomy"]["sha256"]:
+        raise ValueError("ANNEVO taxonomy evidence changed after model selection")
+    if stable_signature(path) != before or file_sha(path) != receipt_sha:
+        raise ValueError("ANNEVO model selection changed while reading")
+    return value, receipt_sha
 
 
 def run(args):
@@ -170,6 +176,9 @@ def run(args):
     protected = {genome.resolve(), selected.resolve(), Path(runtime["model_path"]).resolve()}
     if getattr(args, "selection_receipt", ""):
         protected.add(Path(args.selection_receipt).resolve())
+        protected.update(Path(evidence["path"]).resolve() for evidence in selection.get("evidence", []))
+        if selection.get("taxonomy"):
+            protected.add(Path(selection["taxonomy"]["path"]).resolve())
     generation = Path(runtime["generation"]).resolve()
     if (output.resolve() == output_receipt.resolve()
             or any(p.resolve() in protected or p.resolve().is_relative_to(generation)
