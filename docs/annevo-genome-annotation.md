@@ -203,3 +203,36 @@ feature/byte equality. It runs workloads only inside an existing allocation;
 resource planning and scheduler submission remain separate. Rescue admission and
 representative selection require a separate comparison using the frozen donors
 and actual production gates.
+
+The whole-genome admission benchmark accepts `--compare-annevo-gff` and
+`--compare-receipt` alongside its original native prediction. It nominates and
+validates both actual predictions against the same miniprot placements, donor
+catalogs and masks, then checks individual accepted cases, representative choices
+and selected GFF/CDS bytes. Independent execution-receipt and raw GFF artifact
+identities are retained in the report. Native parallel decoding can reorder
+sequence-number comments; these identities are excluded from decision equality
+only after every native annotation field and model/genome input agrees.
+Its placement graph remains explicitly
+approximate; a fixed alternative annotation is a regression control, not
+independent biological truth.
+
+The 2026-10-14 whole-genome comparison used Aethionema arabicum (203 Mb),
+Brachypodium stacei (234 Mb) and Geranium dissectum (568 Mb), one RTX 6000 Ada,
+16 allocated CPUs and 64 GiB RAM. Both routes used the same installed runtime,
+Magnoliopsida model, batch size 32 and four decoding threads per species.
+
+| Matched trial | Serial | Pipeline |
+| --- | --- | --- |
+| 1, serial first | 32.53 min | 27.50 min |
+| 2, pipeline first | 29.86 min | 26.15 min |
+| Median | 31.19 min | 26.83 min |
+
+The measured reduction was 14.0% (1.16x speedup), with a sampled peak GPU memory
+of 5.33 GiB and peak intermediate reservation of 50.8 GiB. All nine GFF annotation
+fields matched across all four runs. Whole-gene and internal-exon masking plus
+unmasked controls retained identical individual admissions, representative choices
+and selected GFF/CDS. These admission assays used an approximate placement graph;
+Geranium's fixed Helixer annotation was a regression control. In this input order,
+GPU prediction overlapped CPU decoding, but only one of the two decoder slots was
+active at a time. The large final genome and probability-file I/O limited the
+gain. This measurement does not establish steady-state throughput for 500 species.

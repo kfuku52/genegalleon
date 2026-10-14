@@ -112,6 +112,24 @@ def test_storage_budget_rejects_before_predicting(batch):
     assert not events.exists()
 
 
+def test_small_storage_budget_backpressures_without_losing_species(batch):
+    make, events, _ = batch
+    args = make()
+    args.max_tmp_gib = .02  # one reserved species fits; two do not
+    result = pipeline.run(args)
+    assert result['max_inflight_species'] == 1
+    assert len(result['species']) == 3
+    rows = [json.loads(line) for line in events.read_text().splitlines()]
+    active = 0
+    for row in sorted(rows, key=lambda r:r['time']):
+        if row['event']=='decode-start':
+            active += 1
+        elif row['event']=='decode-end':
+            active -= 1
+        elif row['event']=='prediction-start':
+            assert active == 0
+
+
 def test_cpu_budget_rejects_allocation_overcommit(batch, monkeypatch):
     make, events, _ = batch
     monkeypatch.setenv('SLURM_CPUS_PER_TASK', '2')

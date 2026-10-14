@@ -5,7 +5,6 @@ Run in one site's allocated GPU-enabled GG container. Assets must already be
 qualified; this harness does not submit jobs or silently acquire a model.
 """
 import argparse
-import hashlib
 import json
 import statistics
 import subprocess
@@ -17,13 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 import annevo_pipeline as pipeline
 import annevo_runtime as native
+from annevo_prediction_equivalence import feature_digest
 from annevo_runtime_download import atomic_json, file_sha
-
-
-def feature_digest(path):
-    with Path(path).open() as stream:
-        rows = sorted(line.rstrip('\n') for line in stream if line.strip() and not line.startswith('#'))
-    return hashlib.sha256(('\n'.join(rows)+'\n').encode()).hexdigest()
 
 
 class GPUSamples:
