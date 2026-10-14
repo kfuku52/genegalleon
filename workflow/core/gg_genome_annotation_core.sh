@@ -119,6 +119,10 @@ gg_validate_genome_annotation_backend() {
     auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi) ;;
     *) echo "Unsupported annevo_model_profile: ${annevo_model_profile}" >&2; return 1 ;;
   esac
+  if [[ "${genetic_code}" != 1 ]]; then
+    echo "The qualified ANNEVO annotation/candidate pipeline requires genetic_code=1; received ${genetic_code}." >&2
+    return 1
+  fi
   if [[ "${annevo_no_download}" != 0 && "${annevo_no_download}" != 1 ]]; then
     echo "annevo_no_download must be 0 or 1." >&2
     return 1
@@ -264,6 +268,7 @@ PYPROFILE
 
     python "${gg_support_dir}/annevo_gene_models.py" --species "${sp_ub}" \
       --genome "${file_sp_genome}" --gff "${native_gff}" --receipt "${native_receipt}" \
+      --genetic-code "${genetic_code}" \
       --output "${prediction_dir}/candidate_inputs.tsv" || exit $?
 
     local format_key

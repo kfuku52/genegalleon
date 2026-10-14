@@ -18,15 +18,20 @@ from pathlib import Path
 from Bio.Seq import Seq
 
 try:
-    from annevo_model_selection import PROFILES
     from fasta_sequence_store import exclusive_lock
+except ImportError:
+    # Establish the shared support import path for package callers before
+    # importing the model selector's transitive support dependencies.
+    from .fasta_sequence_store import exclusive_lock
+
+try:
+    from annevo_model_selection import PROFILES
     from format_species_annotation.common import parse_gff_attributes
     from gene_model_selection import pair_score
     from genome_sequence_identity import genome_sequence_digest
     from input_generation_array_state import atomic_json, digest, digest_paths
 except ImportError:
     from .annevo_model_selection import PROFILES
-    from .fasta_sequence_store import exclusive_lock
     from .format_species_annotation.common import parse_gff_attributes
     from .gene_model_selection import pair_score
     from .genome_sequence_identity import genome_sequence_digest
@@ -294,11 +299,13 @@ def main():
     parser.add_argument('--genome', required=True, type=Path)
     parser.add_argument('--gff', required=True, type=Path)
     parser.add_argument('--receipt', required=True, type=Path)
+    parser.add_argument('--genetic-code', type=int, default=1)
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args()
     if not re.fullmatch('[A-Za-z0-9_.-]+', args.species):
         raise ValueError('Invalid species identifier')
-    identity = prediction_identity(args.gff, args.receipt, digest(args.genome), genome=args.genome)
+    identity = prediction_identity(args.gff, args.receipt, digest(args.genome),
+                                   genetic_code=args.genetic_code, genome=args.genome)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(args.output.with_suffix(args.output.suffix + '.lock')):
         with tempfile.NamedTemporaryFile(mode='w', dir=args.output.parent, newline='', delete=False) as stream:

@@ -191,6 +191,20 @@ search, BUSCO and multispecies plots are disabled in this small qualification;
 the exact overrides, twelve exit records and artifacts remain in its new output
 directory. Existing execution records and caches are never reused or overwritten.
 
+For all eight real entrypoints, the registered executor can opt into
+`workflow/tests/qualify_all_entrypoints_gpu.py` with a sealed snapshot containing
+the checked-in seven-species inputs. In the same bounded GPU allocation it runs
+local input formatting/validation, one local RNA-seq assembly with longest-CDS
+extraction and quantification, the existing small fractionation fixture,
+OrthoFinder and orthogroup selection, YABBY query retrieval/alignment/tree/summary,
+gene summaries, progress summaries, and the six-profile annotation qualification.
+Each enabled producer must emit its required output and each wrapper must finish
+with its version report. Exact overrides and 19 entrypoint exit records stay in
+a fresh qualification root. BUSCO, remote annotation databases, localization,
+dating and other optional scientific analyses are outside this small execution
+check; their absence does not establish scientific completion. The biological
+seed files and prior execution records remain unchanged.
+
 ## Install test dependencies
 
 Python-side test dependencies are listed in:

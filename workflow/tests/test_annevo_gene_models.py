@@ -2,6 +2,7 @@
 import copy
 import importlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,6 +15,13 @@ annevo = importlib.import_module('annevo_gene_models')
 catalog_module = importlib.import_module('gene_model_catalog')
 rescue = importlib.import_module('rescue_gene_models')
 refinement = importlib.import_module('gene_model_refinement')
+
+
+def test_package_import_works_without_support_on_python_path():
+    root = SUPPORT.parents[1]
+    code = 'import sys;sys.path.insert(0,' + repr(str(root)) + ');import workflow.support.annevo_gene_models'
+    result = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 def native_fixture(tmp_path, *, strand='+'):
@@ -83,6 +91,25 @@ def test_legacy_magnoliopsida_receipt_remains_compatible(tmp_path):
     document.pop('inference_settings')
     receipt.write_text(json.dumps(document))
     assert annevo.freeze_inputs(table, sources)['predictions']['Target_species']['identity']['model_profile'] == 'Magnoliopsida'
+
+
+@pytest.mark.parametrize('code', [1, 6, 12])
+def test_candidate_export_cli_checks_the_actual_genetic_code(tmp_path, code):
+    genome, gff, receipt, _table, sources, *_ = native_fixture(tmp_path)
+    output = tmp_path / 'export.tsv'
+    if code != 1:
+        output.write_text('existing candidate export')
+    result = subprocess.run([sys.executable, str(SUPPORT / 'annevo_gene_models.py'),
+        '--species', 'Target_species', '--genome', str(genome), '--gff', str(gff),
+        '--receipt', str(receipt), '--genetic-code', str(code), '--output', str(output)],
+        capture_output=True, text=True, timeout=30)
+    if code == 1:
+        assert result.returncode == 0, result.stderr
+        assert annevo.freeze_inputs(output, sources)['predictions']['Target_species']['identity']['model_profile'] == 'Magnoliopsida'
+    else:
+        assert result.returncode != 0 and 'genetic code 1' in result.stderr
+        assert output.read_text() == 'existing candidate export'
+        assert not output.with_suffix('.tsv.provenance.json').exists()
 
 
 @pytest.mark.parametrize('profile,settings', [('Mammalia', None), ('Actinopteri', {'lineage': 'Magnoliopsida'}),
