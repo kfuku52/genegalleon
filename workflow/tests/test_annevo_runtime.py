@@ -108,6 +108,35 @@ def test_failed_install_never_publishes_ready_and_can_retry(tmp_path, monkeypatc
     assert cache.prepare(root, 'Magnoliopsida', str(path))['reused'] is False
 
 
+@pytest.mark.parametrize('failed_entrypoint', [None, 'prediction.py', 'decoding.py'])
+def test_relocated_cpu_readiness_checks_every_native_cli_and_inference_dependencies(tmp_path, monkeypatch, failed_entrypoint):
+    source = tmp_path / 'source'
+    source.mkdir()
+    receipt = {'python': str(tmp_path / 'environment/bin/python'), 'native_entrypoint': str(source / 'annotation.py')}
+    profile = {'torch_version': 'OFFLINE', 'compiled_cuda': 'OFFLINE'}
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if '-c' in command:
+            code = command[-1]
+            assert 'torchmetrics' not in code and 'Bio,tqdm' in code
+            return subprocess.CompletedProcess(command, 0, json.dumps(profile), '')
+        assert kwargs['cwd'] == source.parent
+        assert command[1:4] == ['-E', '-s', '-B']
+        if Path(command[-2]).name == failed_entrypoint:
+            return subprocess.CompletedProcess(command, 1, '', 'ModuleNotFoundError: missing native model')
+        return subprocess.CompletedProcess(command, 0, 'OFFLINE native help', '')
+
+    monkeypatch.setattr(cache.subprocess, 'run', run)
+    if failed_entrypoint:
+        with pytest.raises(RuntimeError, match=failed_entrypoint):
+            cache._cpu_check(receipt, {'cuda_profile': profile})
+    else:
+        assert cache._cpu_check(receipt, {'cuda_profile': profile}) == profile
+        assert [Path(command[-2]).name for command, _ in calls[1:]] == ['annotation.py', 'prediction.py', 'decoding.py']
+
+
 def test_runtime_modification_and_redirected_manifest_are_rejected(tmp_path, monkeypatch):
     path, _ = bundle(tmp_path, monkeypatch)
     root = tmp_path/'cache'

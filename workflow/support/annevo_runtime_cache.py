@@ -189,7 +189,7 @@ def runtime_environment(receipt):
 
 
 def _cpu_check(receipt, manifest):
-    code = "import json,torch,numpy,h5py,pandas,numba,torchmetrics; print(json.dumps({'torch_version':torch.__version__,'compiled_cuda':torch.version.cuda}))"
+    code = "import json,torch,numpy,h5py,pandas,numba,Bio,tqdm; print(json.dumps({'torch_version':torch.__version__,'compiled_cuda':torch.version.cuda}))"
     completed = subprocess.run([receipt["python"], "-E", "-s", "-B", "-c", code],
                                env=runtime_environment(receipt), capture_output=True, text=True, timeout=180)
     if completed.returncode:
@@ -197,10 +197,12 @@ def _cpu_check(receipt, manifest):
     result = json.loads(completed.stdout.strip().splitlines()[-1])
     if result != manifest["cuda_profile"]:
         raise RuntimeError("ANNEVO installed CUDA dependency profile changed")
-    completed = subprocess.run([receipt["python"], "-E", "-s", "-B", receipt["native_entrypoint"], "--help"],
-                               env=runtime_environment(receipt), capture_output=True, text=True, timeout=180)
-    if completed.returncode:
-        raise RuntimeError("ANNEVO native CLI import failed: " + completed.stderr[-4000:])
+    source = Path(receipt["native_entrypoint"]).parent
+    for name in ("annotation.py", "prediction.py", "decoding.py"):
+        completed = subprocess.run([receipt["python"], "-E", "-s", "-B", str(source / name), "--help"],
+                                   env=runtime_environment(receipt), cwd=source.parent, capture_output=True, text=True, timeout=180)
+        if completed.returncode:
+            raise RuntimeError("ANNEVO native CLI import failed (" + name + "): " + completed.stderr[-4000:])
     return result
 
 

@@ -22,9 +22,11 @@ def official_fixture(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     for name in ["annotation.py", "prediction.py", "decoding.py", "src/utils.py", "LICENSE",
-                 "training/not_runtime.py", "example/not_runtime.fa", "saved_model/ANNEVO_Magnoliopsida.pt"]:
+                 "model/ANNEVO_seq.py", "model/ANNEVO_plant.py", "datamodule/data_load.py",
+                 "model_training/src/evaluate.py", "training/not_runtime.py", "example/not_runtime.fa",
+                 "saved_model/ANNEVO_Magnoliopsida.pt"]:
         path = source / name
-        path.parent.mkdir(exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"test license\n" if name == "LICENSE" else b"x" * 2048)
     for argv in [["git", "init", "-q", str(source)], ["git", "-C", str(source), "remote", "add", "origin", "https://github.com/xjtu-omics/ANNEVO"],
                  ["git", "-C", str(source), "add", "."], ["git", "-C", str(source), "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "offline fixture"]]:
@@ -143,7 +145,14 @@ def test_bundle_excludes_models_training_and_examples_and_binds_official_model(t
     source = official_fixture(tmp_path)
     abi = {"system": "Linux", "machine": "x86_64", "libc": {"name": "glibc", "version": "2.39"},
            "image_digest": "sha256:" + "a" * 64}
-    monkeypatch.setattr(loaded, "inspect_environment", lambda *args: {"machine": "x86_64", "torch_version": "fixture", "compiled_cuda": "fixture"})
+    def qualify_exact_copied_source(prefix, copied, base_abi, staging):
+        assert copied != source and copied.parent == staging
+        expected, _ = loaded.inspect_source(source, "main")
+        assert {p.relative_to(copied).as_posix() for p in copied.rglob("*") if p.is_file()} == set(expected["files"])
+        assert not (copied / "model_training").exists()
+        return {"machine": "x86_64", "torch_version": "fixture", "compiled_cuda": "fixture"}
+
+    monkeypatch.setattr(loaded, "inspect_environment", qualify_exact_copied_source)
 
     def fixture_pack(prefix, output, executable):
         environment_archive(output)
@@ -164,7 +173,8 @@ def test_bundle_excludes_models_training_and_examples_and_binds_official_model(t
     with tarfile.open(fileobj=io.BytesIO(joined), mode="r:gz") as archive:
         names = archive.getnames()
         assert "source/LICENSE" in names and "environment/bin/conda-unpack" in names
-        assert not any("saved_model" in n or "/training/" in n or "/example/" in n for n in names)
+        assert {"source/model/ANNEVO_seq.py", "source/model/ANNEVO_plant.py", "source/datamodule/data_load.py"} <= set(names)
+        assert not any("saved_model" in n or "/training/" in n or "/model_training/" in n or "/example/" in n for n in names)
         payload = json.load(archive.extractfile("provenance/payload-manifest.json"))
         assert {x["path"] for x in payload["entries"]} == set(names) - {"provenance/payload-manifest.json"}
         assert manifest["payload_uncompressed_size"] == sum(member.size for member in archive if member.isfile())
@@ -182,6 +192,40 @@ def test_bundle_excludes_models_training_and_examples_and_binds_official_model(t
     consumer._check_payload(installed, manifest)
     assert manifest["qualification"]["GPU_inference"] == "not_performed"
     assert manifest["relocation"]["rename_after_unpack"] is False
+
+
+def test_copied_native_closure_imports_models_and_data_without_original_source_leak(tmp_path):
+    loaded = module()
+    source = official_fixture(tmp_path)
+    # Replace the synthetic Python files with a functional offline import graph.
+    scripts = {"annotation.py": "import argparse\nargparse.ArgumentParser().parse_args()\n",
+               "prediction.py": "from datamodule.data_load import sequence_encode\nfrom src.utils import model_name\nimport argparse\nargparse.ArgumentParser().parse_args()\n",
+               "decoding.py": "from src.utils import model_name\nimport argparse\nargparse.ArgumentParser().parse_args()\n",
+               "src/utils.py": "from model import ANNEVO_seq, ANNEVO_plant\nmodel_name='OFFLINE'\n",
+               "model/ANNEVO_seq.py": "name='OFFLINE sequence model'\n",
+               "model/ANNEVO_plant.py": "name='OFFLINE plant model'\n",
+               "datamodule/data_load.py": "def sequence_encode(value): return value\n"}
+    for name, data in scripts.items():
+        (source / name).write_text(data)
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(source), "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "offline native import fixture"], check=True, capture_output=True)
+    source_info, _ = loaded.inspect_source(source, "main")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    copied = loaded.copy_qualified_native_source(source, source_info, staging)
+    import os
+    import sys
+    environment = {**os.environ, "PYTHONPATH": str(source), "PYTHONDONTWRITEBYTECODE": "1"}
+    for name in ("annotation.py", "prediction.py", "decoding.py"):
+        result = subprocess.run([sys.executable, "-E", "-s", "-B", str(copied / name), "--help"],
+                                cwd=staging, env=environment, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+    # Original source is still complete, but cannot hide a missing bundled model.
+    (copied / "model/ANNEVO_plant.py").unlink()
+    failed = subprocess.run([sys.executable, "-E", "-s", "-B", str(copied / "prediction.py"), "--help"],
+                            cwd=staging, env=environment, capture_output=True, text=True)
+    assert failed.returncode != 0 and "ANNEVO_plant" in failed.stderr
 
 
 def test_input_pax_long_paths_and_link_targets_roundtrip_through_actual_consumer(tmp_path, monkeypatch):

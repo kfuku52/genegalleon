@@ -81,7 +81,8 @@ def inspect_source(source, source_ref):
     notices = {name for name in tracked if "/" not in name and name.upper().startswith(("LICENSE", "COPYING", "NOTICE"))}
     if "LICENSE" not in notices or not entrypoints <= set(tracked):
         raise BundleError("Official source is missing its native entrypoints or LICENSE")
-    selected = sorted(entrypoints | notices | {name for name in tracked if name.startswith("src/") and name.endswith(".py")})
+    selected = sorted(entrypoints | notices | {name for name in tracked
+                                              if name.startswith(("src/", "model/", "datamodule/")) and name.endswith(".py")})
     paths = {}
     for name in selected:
         path = source / name
@@ -111,12 +112,13 @@ def inspect_source(source, source_ref):
 
 
 ENVIRONMENT_PROBE = r'''
-import importlib.metadata as metadata,json,platform,sys,torch
+import importlib.metadata as metadata,json,platform,sys,torch,numpy,h5py,pandas,numba,Bio,tqdm
 assert not torch.cuda.is_available(), 'builder metadata probe must be CPU-hidden'
 print(json.dumps({'system':platform.system(),'machine':platform.machine(),
  'libc':{'name':platform.libc_ver()[0],'version':platform.libc_ver()[1]},
  'python':platform.python_version(),'python_prefix':sys.prefix,
  'torch_version':torch.__version__,'compiled_cuda':torch.version.cuda,
+ 'required_import_versions':{name:metadata.version(name) for name in ['torch','numpy','h5py','pandas','numba','biopython','tqdm']},
  'packages':sorted([{'name':d.metadata['Name'],'version':d.version} for d in metadata.distributions()],key=lambda d:d['name'].lower())}))
 '''
 
@@ -154,6 +156,20 @@ def inspect_environment(prefix, source, base_abi, staging):
         packages.append(package)
     observed["conda_packages"] = packages
     return observed
+
+
+def copy_qualified_native_source(source, source_info, staging):
+    """Probe the exact subset that will be bundled, without the full checkout."""
+    destination = Path(staging) / "native-source"
+    destination.mkdir(mode=0o700)
+    for name, expected in source_info["files"].items():
+        original = Path(source) / name
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(original.read_bytes())
+        if sha256(target) != expected["sha256"] or sha256(original) != expected["sha256"]:
+            raise BundleError("Official native source changed during qualification: " + name)
+    return destination
 
 
 def preserved_shared_files(prefix):
@@ -442,7 +458,10 @@ def build_bundle(prefix, source, output, base_abi, profile, source_ref="main", c
     source_info, models = inspect_source(source, source_ref)
     with tempfile.TemporaryDirectory(prefix=".annevo-build-", dir=output.parent) as directory:
         staging = Path(directory)
-        dependencies = inspect_environment(prefix, source, base_abi, staging)
+        native_source = copy_qualified_native_source(source, source_info, staging)
+        dependencies = inspect_environment(prefix, native_source, base_abi, staging)
+        dependencies["native_source_qualification"] = {"native_tree_sha256": source_info["native_tree_sha256"],
+                                                     "entrypoints": ["annotation.py", "prediction.py", "decoding.py"]}
         shared_files = preserved_shared_files(prefix)
         env_archive = staging / "environment.tar.gz"
         pack_info = (pack_environment(prefix, env_archive, conda_pack, exclude_files=shared_files)

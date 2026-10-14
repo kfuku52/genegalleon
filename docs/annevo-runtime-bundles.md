@@ -21,7 +21,12 @@ The base ABI JSON records `system`, `machine`, `libc: {name, version}` and the
 qualified GeneGalleon `image_digest`. The producer requires the environment's
 CPU-hidden Python/Torch metadata to match this ABI and contain CUDA-built
 Torch; a CPU-only environment cannot masquerade as a GPU profile. It also checks
-all three native CLI helps. These checks do not constitute GPU qualification.
+all native inference dependencies and all three CLI helps against the exact
+copied source subset to be packaged. `model/` and `datamodule/` Python modules
+are included along with the entrypoints and `src/`; training code stays outside
+the payload. Training-only `torchmetrics` imports do not define inference
+readiness. The official environment YAML and its package versions remain intact.
+These checks do not constitute GPU qualification.
 
 ```bash
 python container/scripts/build_annevo_runtime_bundle.py \
@@ -114,7 +119,7 @@ contract never decompresses or normalizes part bytes; ordinary scientific
 downloads retain their structural gzip/ZIP and HTML validation. Extract directly
 into the final private cache directory. Run that
 directory's Python with `environment/bin/conda-unpack`, then verify native
-imports and metadata. Write readiness atomically only after verification; update
+inference imports and metadata plus all three relocated native CLI helps. Write readiness atomically only after verification; update
 a small active pointer to publish it. **Never rename the runtime directory after
 `conda-unpack`**: the repaired binary prefixes refer to that final path.
 
