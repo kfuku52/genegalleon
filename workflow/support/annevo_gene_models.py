@@ -18,12 +18,14 @@ from pathlib import Path
 from Bio.Seq import Seq
 
 try:
+    from annevo_model_selection import PROFILES
     from fasta_sequence_store import exclusive_lock
     from format_species_annotation.common import parse_gff_attributes
     from gene_model_selection import pair_score
     from genome_sequence_identity import genome_sequence_digest
     from input_generation_array_state import atomic_json, digest, digest_paths
 except ImportError:
+    from .annevo_model_selection import PROFILES
     from .fasta_sequence_store import exclusive_lock
     from .format_species_annotation.common import parse_gff_attributes
     from .gene_model_selection import pair_score
@@ -45,8 +47,14 @@ def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None
             or value.get('kind') != 'genegalleon-annevo-native-prediction'
             or type(value.get('native_returncode')) is not int or value['native_returncode'] != 0
             or not isinstance(gpu, dict) or gpu.get('gpu_verified') is not True
-            or value.get('model_profile') != 'Magnoliopsida' or genetic_code != 1):
-        raise ValueError('ANNEVO candidates require a successful native Magnoliopsida GPU receipt and genetic code 1')
+            or value.get('model_profile') not in PROFILES or genetic_code != 1):
+        raise ValueError('ANNEVO candidates require a successful supported native GPU receipt and genetic code 1')
+    settings = value.get('inference_settings')
+    # Old Magnoliopsida receipts predate inference_settings. Newly supported
+    # profiles must retain the producer's explicit model/lineage pairing.
+    if ((settings is not None or value['model_profile'] != 'Magnoliopsida')
+            and (not isinstance(settings, dict) or settings.get('lineage') != value['model_profile'])):
+        raise ValueError('ANNEVO candidate model profile differs from its native inference lineage')
     genome_match = 'raw_identity'
     if value.get('genome_sha256') != genome_sha256:
         expected_sequence = value.get('genome_sequence_sha256')

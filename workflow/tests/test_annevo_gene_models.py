@@ -37,6 +37,7 @@ def native_fixture(tmp_path, *, strand='+'):
     receipt = tmp_path / 'native.json'
     value = dict(schema_version=1, kind='genegalleon-annevo-native-prediction', native_returncode=0,
                  gpu_probe={'gpu_verified': True}, model_profile='Magnoliopsida', runtime_digest='a' * 64,
+                 inference_settings={'lineage': 'Magnoliopsida'},
                  model_sha256='b' * 64, source_commit='c' * 40, cache_key='d' * 64,
                  genome_sha256=annevo.digest(genome), GFF_sha256=annevo.digest(gff), GFF_bytes=gff.stat().st_size)
     receipt.write_text(json.dumps(value))
@@ -63,7 +64,37 @@ def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, stran
     assert all(m['evidence']['annevo']['native_transcript_id'] == 'native.t' for m in models)
 
 
-@pytest.mark.parametrize('field,value', [('kind', 'other'), ('native_returncode', 1), ('model_profile', 'Fungi'),
+@pytest.mark.parametrize('profile', annevo.PROFILES)
+def test_all_qualified_model_lineages_freeze_without_changing_candidate_gates(tmp_path, profile):
+    _genome, _gff, receipt, table, sources, *_ = native_fixture(tmp_path)
+    document = json.loads(receipt.read_text())
+    document.update(model_profile=profile, inference_settings={'lineage': profile})
+    receipt.write_text(json.dumps(document))
+    frozen = annevo.freeze_inputs(table, sources)
+    assert frozen['predictions']['Target_species']['identity']['model_profile'] == profile
+    assert frozen['predictions']['Target_species']['identity']['model_sha256'] == document['model_sha256']
+
+
+def test_legacy_magnoliopsida_receipt_remains_compatible(tmp_path):
+    _genome, _gff, receipt, table, sources, *_ = native_fixture(tmp_path)
+    document = json.loads(receipt.read_text())
+    document.pop('inference_settings')
+    receipt.write_text(json.dumps(document))
+    assert annevo.freeze_inputs(table, sources)['predictions']['Target_species']['identity']['model_profile'] == 'Magnoliopsida'
+
+
+@pytest.mark.parametrize('profile,settings', [('Mammalia', None), ('Actinopteri', {'lineage': 'Magnoliopsida'}),
+                                             ('Magnoliopsida', {'lineage': 'Fungi'})])
+def test_mismatched_or_missing_new_inference_lineage_is_rejected(tmp_path, profile, settings):
+    _genome, _gff, receipt, table, sources, *_ = native_fixture(tmp_path)
+    document = json.loads(receipt.read_text())
+    document.update(model_profile=profile, inference_settings=settings)
+    receipt.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match='inference lineage'):
+        annevo.freeze_inputs(table, sources)
+
+
+@pytest.mark.parametrize('field,value', [('kind', 'other'), ('native_returncode', 1), ('model_profile', 'unsupported'),
                                        ('source_commit', 'main'), ('runtime_digest', 'invalid'),
                                        ('genome_sha256', 'f' * 64), ('GFF_sha256', 'f' * 64), ('GFF_bytes', 0),
                                        ('gpu_probe', {'gpu_verified': False})])
