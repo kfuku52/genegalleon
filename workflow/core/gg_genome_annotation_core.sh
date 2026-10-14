@@ -17,6 +17,9 @@ genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
 genome_annotation_backend="${genome_annotation_backend:-none}"
 annevo_model_profile="${annevo_model_profile:-Magnoliopsida}"
+annevo_taxid_map="${annevo_taxid_map:-}"
+annevo_genome_metadata="${annevo_genome_metadata:-}"
+annevo_taxonomy_db="${annevo_taxonomy_db:-}"
 annevo_runtime_manifest="${annevo_runtime_manifest:-}"
 annevo_no_download="${annevo_no_download:-0}"
 annevo_batch_size="${annevo_batch_size:-32}"
@@ -112,10 +115,10 @@ gg_validate_genome_annotation_backend() {
     echo "ANNEVO prediction cannot replace a verified representative_inputs view." >&2
     return 1
   fi
-  if [[ "${annevo_model_profile}" != "Magnoliopsida" ]]; then
-    echo "annevo_model_profile must be the qualified Magnoliopsida profile." >&2
-    return 1
-  fi
+  case "${annevo_model_profile}" in
+    auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi) ;;
+    *) echo "Unsupported annevo_model_profile: ${annevo_model_profile}" >&2; return 1 ;;
+  esac
   if [[ "${annevo_no_download}" != 0 && "${annevo_no_download}" != 1 ]]; then
     echo "annevo_no_download must be 0 or 1." >&2
     return 1
@@ -178,7 +181,53 @@ gg_generate_annevo_annotation() {
       gg_shared_lock_release "${prediction_lock}"
     }
     trap cleanup_annevo_prediction_lock EXIT
-    local -a prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${annevo_model_profile}" --receipt "${runtime_receipt}")
+    local resolved_profile="${annevo_model_profile}"
+    local selection_receipt="${prediction_dir}/model_selection.json"
+    local -a selection_inputs=() selection_run_args=()
+    if [[ "${annevo_model_profile}" == auto ]]; then
+      local taxonomy_db="${annevo_taxonomy_db}"
+      local taxonomy_selection_lock=""
+      if [[ -z "${taxonomy_db}" ]]; then
+        taxonomy_db=$(workspace_taxonomy_dbfile "${gg_workspace_dir}") || exit $?
+        taxonomy_selection_lock="${gg_workspace_downloads_dir}/locks/ete_taxonomy.lock"
+        if [[ ! -s "${taxonomy_db}" && "${annevo_no_download}" != 1 && ( -n "${annevo_taxid_map}" || -n "${annevo_genome_metadata}" ) ]]; then
+          ensure_ete_taxonomy_db "${gg_workspace_dir}" || exit $?
+        fi
+      fi
+      (
+        # The ETE builder creates SQLite before it finishes publishing taxa.
+        # Readers must wait for that existing writer, even if the file is nonempty.
+        trap - EXIT
+        if [[ -n "${taxonomy_selection_lock}" ]]; then
+          gg_shared_lock_acquire "${taxonomy_selection_lock}" "ANNEVO taxonomy snapshot" || exit 1
+          gg_shared_lock_start_heartbeat "${taxonomy_selection_lock}" || exit 1
+          taxonomy_selection_heartbeat="${GG_SHARED_LOCK_HEARTBEAT_PID:-}"
+          cleanup_annevo_taxonomy_selection_lock() {
+            gg_shared_lock_stop_heartbeat "${taxonomy_selection_heartbeat}"
+            gg_shared_lock_release "${taxonomy_selection_lock}"
+          }
+          trap cleanup_annevo_taxonomy_selection_lock EXIT
+        fi
+        python "${gg_support_dir}/annevo_model_selection.py" \
+          --species "${sp_ub}" --genome "${file_sp_genome}" --model-profile auto \
+          --taxid-map "${annevo_taxid_map}" --genome-metadata "${annevo_genome_metadata}" \
+          --taxonomy-db "${taxonomy_db}" --output "${selection_receipt}"
+      ) || exit $?
+      resolved_profile=$(python - "${selection_receipt}" <<'PYPROFILE'
+import json
+import sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text())["model_profile"])
+PYPROFILE
+) || exit $?
+      # A different species/configuration must never replace this task's receipt.
+      runtime_receipt="${prediction_dir}/runtime.json"
+      selection_inputs=(--input "model_selection=${selection_receipt}")
+      selection_run_args=(--selection-receipt "${selection_receipt}" --species "${sp_ub}")
+    elif [[ "${resolved_profile}" != Magnoliopsida ]]; then
+      runtime_receipt="${prediction_dir}/runtime.json"
+    fi
+    local -a prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
     [[ -z "${annevo_runtime_manifest}" ]] || prepare_args+=(--runtime-manifest "${annevo_runtime_manifest}")
     [[ "${annevo_no_download}" != 1 ]] || prepare_args+=(--no-download)
     python "${gg_support_dir}/annevo_runtime.py" "${prepare_args[@]}" || exit $?
@@ -193,20 +242,21 @@ gg_generate_annevo_annotation() {
       --input "runner=${gg_support_dir}/annevo_runtime.py"
       --output "gff=${native_gff}"
       --output "native_receipt=${native_receipt}"
-      --parameter "model_profile=${annevo_model_profile}"
+      --parameter "model_profile=${resolved_profile}"
       --parameter "batch_size=${annevo_batch_size}"
       --parameter "sequence_threshold=${annevo_sequence_threshold}"
       --parameter "threads=${GG_TASK_CPUS}"
       --parameter "require_gpu=1"
     )
+    prediction_provenance_args+=("${selection_inputs[@]}")
     gg_artifact_prepare_stage prediction_needs_update run_annevo_prediction "${prediction_provenance_args[@]}" || exit $?
     if [[ ${prediction_needs_update} -eq 1 ]]; then
       gg_step_start "ANNEVO native genome prediction"
       python "${gg_support_dir}/annevo_runtime.py" run \
         --receipt "${runtime_receipt}" --genome "${file_sp_genome}" --output "${native_gff}" \
-        --model-profile "${annevo_model_profile}" --threads "${GG_TASK_CPUS}" \
+        --model-profile "${resolved_profile}" --threads "${GG_TASK_CPUS}" \
         --batch-size "${annevo_batch_size}" --sequence-threshold "${annevo_sequence_threshold}" \
-        --output-receipt "${native_receipt}" || exit $?
+        --output-receipt "${native_receipt}" "${selection_run_args[@]}" || exit $?
       gg_artifact_record "${prediction_provenance_args[@]}" || exit $?
     else
       gg_step_skip "ANNEVO native genome prediction"

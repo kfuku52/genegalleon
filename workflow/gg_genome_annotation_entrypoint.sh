@@ -114,7 +114,10 @@ run_wgd_ksd=0 # WGD inference by dS distribution
 
 # Genome workflow flags
 genome_annotation_backend="none" # none|annevo; annevo predicts from species_genome without replacing curated inputs.
-annevo_model_profile="Magnoliopsida" # Native flowering-plant model profile.
+annevo_model_profile="Magnoliopsida" # auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi.
+annevo_taxid_map="" # Explicit species/taxid TSV for auto model selection.
+annevo_genome_metadata="" # Trusted species/taxid/genome_sha256 TSV; optional scientific_name.
+annevo_taxonomy_db="" # Optional cached ETE NCBI SQLite snapshot; blank uses the shared workspace cache.
 annevo_runtime_manifest="" # Optional qualified runtime manifest locator; blank uses the public registry on first use.
 annevo_no_download=0 # Set 1 to require an already verified local ANNEVO runtime and model cache.
 annevo_batch_size=32 # Native prediction batch size used by the qualified GPU profile.

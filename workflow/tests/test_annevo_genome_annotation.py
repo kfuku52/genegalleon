@@ -112,7 +112,7 @@ from pathlib import Path
 import sys
 
 p=argparse.ArgumentParser();p.add_argument('command')
-for key in ['cache-root','model-profile','runtime-manifest','receipt','genome','output','threads','batch-size','sequence-threshold','output-receipt']:
+for key in ['cache-root','model-profile','runtime-manifest','receipt','genome','output','threads','batch-size','sequence-threshold','output-receipt','selection-receipt','species']:
     p.add_argument('--'+key)
 p.add_argument('--no-download',action='store_true');p.add_argument('--require-gpu',action='store_true')
 a=p.parse_args()
@@ -137,7 +137,7 @@ elif a.command=='run':
 ''')
 
 
-def run_selected_stage(tmp_path, *, policy="stop", fail=False, no_download=False, manifest=""):
+def run_selected_stage(tmp_path, *, policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map=""):
     workspace = tmp_path / "workspace"
     support = tmp_path / "support"
     if not support.exists():
@@ -159,7 +159,8 @@ def run_selected_stage(tmp_path, *, policy="stop", fail=False, no_download=False
            "dir_sp_tmp": str(task), "sp_ub": "Test_species", "file_sp_genome": str(genome),
            "genome_annotation_backend": "annevo", "GG_TASK_CPUS": "4", "artifact_stale_policy": policy,
            "ANNEVO_FIXTURE_LOG": str(log), "ANNEVO_FIXTURE_FAIL": "1" if fail else "0",
-           "annevo_no_download": "1" if no_download else "0", "annevo_runtime_manifest": manifest}
+           "annevo_no_download": "1" if no_download else "0", "annevo_runtime_manifest": manifest, "annevo_model_profile": profile,
+           "annevo_taxonomy_db": taxonomy_db, "annevo_taxid_map": taxid_map}
     command = ('source "$gg_support_dir/gg_util.sh"; gg_validate_genome_annotation_backend; '
                'gg_generate_annevo_annotation; check_species_cds_dir "$dir_sp_cds/."; gg_check_annevo_cds_directory; '
                'python "$gg_support_dir/cds_resolution.py" --cds "$file_sp_cds" --gff "$file_sp_gff" '
@@ -364,3 +365,70 @@ def test_generated_cds_scope_keeps_audits_but_rejects_additional_fasta(tmp_path)
     selected.unlink()
     missing = source_function(command, env=environment)
     assert missing.returncode != 0
+
+
+def test_auto_stage_binds_species_choice_and_taxonomy_changes_invalidate_prediction(tmp_path):
+    spec = importlib.util.spec_from_file_location('selection_fixture', ROOT / 'workflow/tests/test_annevo_model_selection.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    db = tmp_path / 'taxa.sqlite'
+    module.taxonomy(db)
+    mapping = tmp_path / 'map.tsv'
+    mapping.write_text('species\ttaxid\nTest_species\t1000004\n')
+    options = dict(profile='auto', taxonomy_db=str(db), taxid_map=str(mapping))
+    first, calls, workspace = run_selected_stage(tmp_path, **options)
+    assert first.returncode == 0, first.stdout + first.stderr
+    prediction = workspace / 'output/genome_prediction/annevo/Test_species'
+    assert calls[-1]['model_profile'] == 'Fungi'
+    assert calls[-1]['selection_receipt'] == str(prediction / 'model_selection.json')
+    assert calls[-1]['species'] == 'Test_species'
+    assert calls[-2]['receipt'] == str(prediction / 'runtime.json')
+    resumed, calls, _ = run_selected_stage(tmp_path, no_download=True, **options)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert sum(c['command'] == 'run' for c in calls) == 1
+    import sqlite3
+    with sqlite3.connect(db) as conn:
+        conn.execute("INSERT INTO synonym VALUES(1000004,'fungal example')")
+    stale, calls, _ = run_selected_stage(tmp_path, **options)
+    assert stale.returncode == 3, stale.stdout + stale.stderr
+    assert sum(c['command'] == 'run' for c in calls) == 1
+
+
+@pytest.mark.parametrize('profile', ['auto', 'Mammalia', 'Aves', 'Actinopteri', 'Insecta', 'Fungi'])
+def test_all_supported_profiles_pass_backend_validation(profile):
+    result = source_function('gg_validate_genome_annotation_backend', env={
+        'genome_annotation_backend': 'annevo', 'annevo_model_profile': profile})
+    assert result.returncode == 0, result.stderr
+
+
+def test_auto_default_taxonomy_waits_for_an_existing_builder(tmp_path):
+    import time
+    spec = importlib.util.spec_from_file_location('writer_taxonomy_fixture', ROOT / 'workflow/tests/test_annevo_model_selection.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    taxonomy_root = tmp_path / 'workspace/downloads/ete_taxonomy'
+    taxonomy_root.mkdir(parents=True)
+    module.taxonomy(taxonomy_root / 'taxa.sqlite')
+    mapping = tmp_path / 'map.tsv'
+    mapping.write_text('species\ttaxid\nTest_species\t1000004\n')
+    lock = tmp_path / 'workspace/downloads/locks/ete_taxonomy.lock'
+    started = tmp_path / 'writer_started'
+    writer = subprocess.Popen(['bash', '-c',
+        'source "$1/gg_util.sh"; gg_shared_lock_acquire "$2" fixture-builder || exit; '
+        'taxonomy_writer_lock="$2"; cleanup() { gg_shared_lock_release "$taxonomy_writer_lock"; }; '
+        'trap cleanup EXIT; touch "$3"; sleep 2',
+        'taxonomy-writer', str(SUPPORT), str(lock), str(started)])
+    try:
+        deadline = time.monotonic() + 5
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert started.exists()
+        result, calls, _ = run_selected_stage(tmp_path, profile='auto', taxid_map=str(mapping))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert 'waiting for shared lock: ANNEVO taxonomy snapshot' in result.stderr
+        assert calls[-1]['model_profile'] == 'Fungi'
+        assert writer.wait(timeout=5) == 0
+    finally:
+        if writer.poll() is None:
+            writer.terminate()
+            writer.wait(timeout=5)

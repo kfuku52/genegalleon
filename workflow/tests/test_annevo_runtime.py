@@ -239,6 +239,7 @@ def test_native_failure_retains_old_pair_and_logs(tmp_path, monkeypatch):
     value = {'model_profile': 'Magnoliopsida', 'python': sys.executable, 'model_path': str(tmp_path/'model'), 'generation': str(tmp_path/'installed'), 'native_entrypoint': str(tmp_path/'annotation.py')}
     monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: {'gpu_verified': True})
+    monkeypatch.setattr(runtime, 'inference_settings', lambda *a: {'overlap_pred': False})
     monkeypatch.setattr(runtime.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a[0], 1))
     args = argparse.Namespace(receipt=str(selected), genome=str(genome), output=str(output), output_receipt=str(receipt), model_profile='Magnoliopsida', threads=4, batch_size=32, sequence_threshold=25)
     with pytest.raises(RuntimeError, match='native prediction failed'):
@@ -261,16 +262,21 @@ def test_two_parallel_callers_install_one_generation(tmp_path, monkeypatch):
     assert sorted(r['reused'] for r in results) == [False, True]
 
 
-def test_gzip_genome_is_unpacked_in_short_native_work_and_original_is_bound(tmp_path, monkeypatch):
+@pytest.mark.parametrize("profile", ["Mammalia", "Aves", "Actinopteri", "Insecta", "Fungi", "Magnoliopsida"])
+def test_gzip_genome_is_unpacked_in_short_native_work_and_original_is_bound(tmp_path, monkeypatch, profile):
     import gzip
     genome, selected, output, receipt = [tmp_path/n for n in ('genome.fa.gz', 'selected.json', 'result.gff3', 'result.json')]
     fasta = b'>seq\nATGAAATAA\n'
     genome.write_bytes(gzip.compress(fasta))
     selected.write_bytes(b'original selected')
-    value = {'model_profile': 'Magnoliopsida', 'python': sys.executable, 'model_path': str(tmp_path/'model'), 'generation': str(tmp_path/'installed'), 'native_entrypoint': str(tmp_path/'annotation.py'), 'runtime_digest': 'a'*64, 'cache_key': 'b'*64, 'source_commit': 'c'*40, 'model_sha256': 'd'*64}
+    value = {'model_profile': profile, 'python': sys.executable, 'model_path': str(tmp_path/'model'), 'generation': str(tmp_path/'installed'), 'native_entrypoint': str(tmp_path/'annotation.py'), 'runtime_digest': 'a'*64, 'cache_key': 'b'*64, 'source_commit': 'c'*40, 'model_sha256': 'd'*64}
     monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: {'gpu_verified': True})
+    (tmp_path / 'prediction.py').write_text('def main():\n length_config=' + repr({profile: [30720, 5120, 32]}) + '\n')
     def predict(argv, **kwargs):
+        assert argv[argv.index("-l") + 1] == profile
+        assert ("--overlap_pred" in argv) == (profile in {"Mammalia", "Actinopteri"})
+        assert argv[argv.index("-m") + 1] == value["model_path"]
         native_genome = Path(argv[argv.index('-g')+1])
         assert native_genome.read_bytes() == fasta
         assert str(native_genome).startswith('/tmp/gg-annevo-')
@@ -278,9 +284,39 @@ def test_gzip_genome_is_unpacked_in_short_native_work_and_original_is_bound(tmp_
         Path(argv[argv.index('-o')+1]).write_text('seq\tANNEVO\tgene\t1\t9\t.\t+\t.\tID=g1\nseq\tANNEVO\tmRNA\t1\t9\t.\t+\t.\tID=t1;Parent=g1\nseq\tANNEVO\tCDS\t1\t9\t.\t+\t0\tID=c1;Parent=t1\n')
         return subprocess.CompletedProcess(argv, 0)
     monkeypatch.setattr(runtime.subprocess, 'run', predict)
-    args = argparse.Namespace(receipt=str(selected), genome=str(genome), output=str(output), output_receipt=str(receipt), model_profile='Magnoliopsida', threads=4, batch_size=32, sequence_threshold=25)
+    args = argparse.Namespace(receipt=str(selected), genome=str(genome), output=str(output), output_receipt=str(receipt), model_profile=profile, threads=4, batch_size=32, sequence_threshold=25)
     result = runtime.run(args)
     assert result['genome_sha256'] == download.file_sha(genome)
     assert result['native_genome_sha256'] == hashlib.sha256(fasta).hexdigest()
     assert result['genome_gzip'] is True
     assert result['GFF_sha256'] == download.file_sha(output)
+
+
+def test_mixed_profiles_share_environment_and_fetch_only_selected_weights(tmp_path, monkeypatch):
+    path, manifest = bundle(tmp_path, monkeypatch)
+    # The tiny offline bundle remains unchanged; model objects are separate.
+    source = tmp_path / 'source/saved_model'
+    for profile in ('Mammalia', 'Fungi'):
+        weight = source / ('ANNEVO_' + profile + '.pt')
+        weight.write_bytes(('fixture ' + profile).encode())
+        manifest['models'][profile] = {
+            'path': 'source/saved_model/' + weight.name,
+            'official_url': 'https://raw.githubusercontent.com/xjtu-omics/ANNEVO/' + manifest['source']['commit'] + '/saved_model/' + weight.name,
+            'sha256': download.file_sha(weight), 'size': weight.stat().st_size,
+        }
+    path.write_text(json.dumps(manifest))
+    from concurrent.futures import ThreadPoolExecutor
+    checks = []
+    monkeypatch.setattr(cache, '_cpu_check', lambda *a: checks.append(True) or manifest['cuda_profile'])
+    def selected(profile):
+        return cache.prepare(tmp_path / 'shared', profile, str(path), receipt_path=tmp_path / profile / 'runtime.json')
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(selected, ('Mammalia', 'Fungi')))
+    assert len(checks) == 1
+    assert len({r['generation'] for r in results}) == 1
+    assert {p.name for p in (tmp_path / 'shared/models').glob('*/*.pt')} == {'ANNEVO_Mammalia.pt', 'ANNEVO_Fungi.pt'}
+    for result in results:
+        profile = result['model_profile']
+        assert json.loads(Path(result['receipt_path']).read_text())['model_profile'] == profile
+        warm = cache.prepare(tmp_path / 'shared', profile, str(path), receipt_path=result['receipt_path'], no_download=True)
+        assert warm['generation'] == result['generation']

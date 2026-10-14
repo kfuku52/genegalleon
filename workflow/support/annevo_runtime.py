@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import json
 import os
@@ -15,6 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
+from annevo_model_selection import OVERLAP_PROFILES, PROFILES
 from annevo_runtime_cache import prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
 from shared_namespace_lock import namespace_lock
@@ -117,6 +119,40 @@ def publish_pair(predicted, output, output_receipt, receipt):
         backup.unlink(missing_ok=True)
 
 
+def inference_settings(runtime, profile):
+    if profile not in PROFILES:
+        raise ValueError("Unsupported ANNEVO model/lineage")
+    source = Path(runtime["native_entrypoint"]).with_name("prediction.py")
+    configs = [node for node in ast.walk(ast.parse(source.read_text()))
+               if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "length_config" for t in node.targets)]
+    if len(configs) != 1:
+        raise ValueError("Native ANNEVO lineage inference configuration is missing or ambiguous")
+    config = ast.literal_eval(configs[0].value)[profile]
+    if len(config) != 3 or any(type(value) is not int or value <= 0 for value in config):
+        raise ValueError("Invalid native ANNEVO inference configuration")
+    return dict(lineage=profile, window_size=config[0], flank_length=config[1],
+                local_pattern_size=config[2], overlap_pred=profile in OVERLAP_PROFILES,
+                prediction_source_sha256=file_sha(source))
+
+
+def selection_record(args, genome):
+    path = getattr(args, "selection_receipt", "")
+    if not path:
+        return None, None
+    path = Path(path)
+    value = json.loads(path.read_text())
+    if (value.get("kind") != "genegalleon-annevo-model-selection" or value.get("schema_version") != 1
+            or value.get("status") != "selected" or value.get("model_profile") != args.model_profile
+            or value.get("species") != getattr(args, "species", "")
+            or value.get("genome_sha256") != file_sha(genome)
+            or value.get("overlap_pred") != (args.model_profile in OVERLAP_PROFILES)):
+        raise ValueError("ANNEVO species/model selection differs from prediction inputs")
+    for evidence in [*value.get("evidence", []), *([value["taxonomy"]] if value.get("taxonomy") else [])]:
+        if file_sha(evidence["path"]) != evidence["sha256"]:
+            raise ValueError("ANNEVO taxonomy evidence changed after model selection")
+    return value, file_sha(path)
+
+
 def run(args):
     selected = Path(args.receipt)
     runtime = read_selected(selected)
@@ -128,7 +164,11 @@ def run(args):
     genome, output, output_receipt = map(Path, (args.genome, args.output, args.output_receipt))
     if genome.is_symlink() or not genome.is_file() or genome.stat().st_size == 0:
         raise ValueError("ANNEVO genome input must be a nonempty regular file")
+    selection, selection_sha = selection_record(args, genome)
+    settings = inference_settings(runtime, args.model_profile)
     protected = {genome.resolve(), selected.resolve(), Path(runtime["model_path"]).resolve()}
+    if getattr(args, "selection_receipt", ""):
+        protected.add(Path(args.selection_receipt).resolve())
     generation = Path(runtime["generation"]).resolve()
     if (output.resolve() == output_receipt.resolve()
             or any(p.resolve() in protected or p.resolve().is_relative_to(generation)
@@ -159,6 +199,8 @@ def run(args):
                     "-s", str(args.sequence_threshold), "--tmp_path", str(work),
                     "--batch_size", str(args.batch_size), "--num_workers", str(min(2, args.threads)),
                     "--min_intron_length", "20", "--min_prot_length", "100", "--show_log"]
+            if settings["overlap_pred"]:
+                argv.append("--overlap_pred")
             env["TMPDIR"] = str(work)
             env["NUMBA_CACHE_DIR"] = str(work / "numba-cache")
             env["TORCH_HOME"] = str(work / "torch-cache")
@@ -172,6 +214,10 @@ def run(args):
                 raise RuntimeError("ANNEVO native prediction failed; retained logs: " + str(log_root))
             counts = gff_counts(predicted)
             read_selected(selected)
+            if selection_sha is not None:
+                _, current_selection_sha = selection_record(args, genome)
+                if current_selection_sha != selection_sha:
+                    raise RuntimeError("ANNEVO model selection changed during prediction")
             if file_sha(selected) != selected_sha or file_sha(genome) != original_sha:
                 raise RuntimeError("ANNEVO inputs changed during prediction")
             receipt = {"schema_version": 1, "kind": "genegalleon-annevo-native-prediction",
@@ -186,7 +232,10 @@ def run(args):
                                       "num_workers": min(2, args.threads), "min_intron_length": 20, "min_prot_length": 100},
                        "GFF_sha256": file_sha(predicted), "GFF_bytes": predicted.stat().st_size,
                        "feature_counts": counts, "native_wall_seconds": time.monotonic() - started,
+                       "inference_settings": settings,
                        "scientific_completion_verified": False}
+            if selection is not None:
+                receipt.update(model_selection=selection, model_selection_sha256=selection_sha, species=args.species)
             publish_pair(predicted, output, output_receipt, receipt)
     return receipt
 
@@ -205,6 +254,8 @@ def parser():
     for name in ("receipt", "genome", "output", "output-receipt"):
         predict.add_argument("--" + name, required=True)
     predict.add_argument("--model-profile", default="Magnoliopsida")
+    predict.add_argument("--selection-receipt", default="")
+    predict.add_argument("--species", default="")
     predict.add_argument("--threads", type=int, default=4)
     predict.add_argument("--batch-size", type=int, default=32)
     predict.add_argument("--sequence-threshold", type=int, default=25)

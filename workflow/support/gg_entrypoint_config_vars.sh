@@ -322,6 +322,9 @@ EOF
 representative_inputs
 genome_annotation_backend
 annevo_model_profile
+annevo_taxid_map
+annevo_genome_metadata
+annevo_taxonomy_db
 annevo_runtime_manifest
 annevo_no_download
 annevo_batch_size
