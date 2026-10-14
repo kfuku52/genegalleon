@@ -13,6 +13,13 @@ container, with native ANNEVO and its dependencies isolated from GG's base
 Python environment. With `genome_annotation_backend="none"`, no ANNEVO cache
 lookup, download or GPU request occurs.
 
+The qualified conda-pack environment has 255-byte binary prefix fields. Its final
+installation prefix below `workspace/downloads/annotation/annevo/runtimes/` must
+fit that limit, including the cache key, generation and `environment` directory.
+Choose a shorter workspace path before first installation when needed; installed
+generations cannot be renamed after relocation. Failed installation records and
+generations remain available for diagnosis.
+
 ## Configure the stage
 
 Edit the existing entrypoint's editable block, or use its registered overrides:

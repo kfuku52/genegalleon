@@ -56,6 +56,12 @@ def qualify(manifest):
     require(os.environ.get("SLURM_CPUS_PER_TASK") == "4" and os.environ.get("SLURM_MEM_PER_NODE") == "32768"
             and os.environ.get("CUDA_VISIBLE_DEVICES"), "allocated 4 CPU / 32 GiB / CUDA required")
     workspace, assets = root / "entrypoint_workspace", root / "entrypoint_assets"
+    cache = workspace / "downloads/annotation/annevo"
+    # The qualified conda-pack payload has 255-byte binary prefix fields. Its
+    # final prefix is fixed before unpacking; installed generations cannot move.
+    prefix = cache / "runtimes" / ("a" * 32) / ("g-" + "a" * 16) / "environment"
+    require(len(os.fsencode(prefix)) <= 255,
+            "qualification output path exceeds the qualified conda-pack 255-byte prefix limit; choose a shorter fresh package root")
     workspace.mkdir(mode=0o700)
     assets.mkdir(mode=0o700)
     genomes = workspace / "input/species_genome"
@@ -90,7 +96,6 @@ def qualify(manifest):
     env.update({"GG_GENOME_ANNOTATION_" + key: value for key, value in overrides.items()})
     entrypoint = source / "workflow/gg_genome_annotation_entrypoint.sh"
     results, generations, acquired = [], set(), set()
-    cache = workspace / "downloads/annotation/annevo"
     for index, row in enumerate(ordered, 1):
         species, profile = row["species"], row["profile"]
         env.update(SLURM_ARRAY_TASK_ID=str(index), GG_GENOME_ANNOTATION_ANNEVO_NO_DOWNLOAD="0")
