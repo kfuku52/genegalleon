@@ -180,6 +180,17 @@ These small fixtures establish execution and integration, not whole-genome
 annotation quality, BUSCO completeness or all-species compatibility. Configuration
 and outputs are described in [ANNEVO genome prediction](annevo-genome-annotation.md).
 
+For full wrapper integration, the registered allocated executor can call
+`python3 -B workflow/tests/qualify_annevo_entrypoint_gpu.py --manifest <sealed-package>`
+on the host. It uses the same six reviewed fixtures and bounded allocation, a
+fresh workspace and cache, and runs the real genome annotation entrypoint twice
+per species. It checks automatic selection, CUDA prediction, candidate export,
+CDS resolution, GFF information, sequence statistics, required version reporting,
+warm offline reuse and CDS/GFF/longest-CDS QC. Optional localization, taxonomy
+search, BUSCO and multispecies plots are disabled in this small qualification;
+the exact overrides, twelve exit records and artifacts remain in its new output
+directory. Existing execution records and caches are never reused or overwritten.
+
 ## Install test dependencies
 
 Python-side test dependencies are listed in:
