@@ -144,7 +144,7 @@ def all_entrypoints(manifest):
     results.append(run_case(manifest, "fractionation_bias", fractionation, {"run_kffractbias": "1", "delete_tmp_dir": "0"},
         ["output/kffractbias/synthetic/synthetic.genes.tsv", "output/kffractbias/synthetic/synthetic.summary.json",
          "output/kffractbias/synthetic/synthetic.synteny.zip"]))
-    results.append(run_case(manifest, "genome_evolution", workspace, {"genome_evolution_mode": "orthogroups",
+    results.append(run_case(manifest, "genome_evolution", workspace, {"genome_evolution_mode": "all",
         "run_cds_translation": "1", "run_orthofinder": "1", "run_og_selection": "1", "delete_tmp_dir": "0"},
         ["output/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"]))
     results.append(run_case(manifest, "gene_evolution", workspace, {"mode_gene_evolution": "query2family",
