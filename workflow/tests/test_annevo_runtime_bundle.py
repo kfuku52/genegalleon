@@ -1,6 +1,7 @@
 import gzip
 import io
 import json
+import os
 import subprocess
 import tarfile
 from importlib.util import module_from_spec, spec_from_file_location
@@ -246,7 +247,7 @@ def test_input_pax_long_paths_and_link_targets_roundtrip_through_actual_consumer
                 member.pax_headers = {"path": name, "mtime": "1774882182.0684626", "uid": "123", "uname": "old-owner"}
                 archive.addfile(member, io.BytesIO(data))
             for name, kind, link in [("lib/hardlink", tarfile.LNKTYPE, long_name),
-                                     ("lib/symlink", tarfile.SYMTYPE, long_name.removeprefix("lib/")),
+                                     ("lib/symlink", tarfile.SYMTYPE, "./" + long_name.removeprefix("lib/")),
                                      ("lib/rootlink", tarfile.SYMTYPE, "..")]:
                 member = tarfile.TarInfo(name)
                 member.type, member.linkname = kind, link
@@ -268,7 +269,7 @@ def test_input_pax_long_paths_and_link_targets_roundtrip_through_actual_consumer
         assert hardlink.linkname == "environment/" + long_name
         assert hardlink.pax_headers["linkpath"] == hardlink.linkname
         assert archive.getmember("environment/" + long_name).pax_headers["path"] == "environment/" + long_name
-        assert archive.getmember("environment/lib/symlink").linkname == long_name.removeprefix("lib/")
+        assert archive.getmember("environment/lib/symlink").linkname == "./" + long_name.removeprefix("lib/")
     consumer_path = SCRIPT.parents[2] / "workflow/support/annevo_runtime_cache.py"
     monkeypatch.syspath_prepend(str(consumer_path.parent))
     consumer_spec = spec_from_file_location("pax_consumer_fixture", consumer_path)
@@ -282,6 +283,48 @@ def test_input_pax_long_paths_and_link_targets_roundtrip_through_actual_consumer
     assert (installed / "environment/lib/hardlink").samefile(installed / "environment" / long_name)
     assert (installed / "environment/lib/symlink").resolve() == installed / "environment" / long_name
     assert (installed / "environment/lib/rootlink").resolve() == installed / "environment"
+    declared_target = next(row["target"] for row in json.loads((installed / "provenance/payload-manifest.json").read_text())["entries"]
+                           if row["path"] == "environment/lib/symlink")
+    assert declared_target.startswith("./")
+    expected_filter = tarfile.TarInfo("environment/lib/symlink")
+    expected_filter.type, expected_filter.linkname = tarfile.SYMTYPE, declared_target
+    assert (installed / "environment/lib/symlink").readlink().as_posix() == tarfile.data_filter(expected_filter, installed).linkname
+
+
+@pytest.mark.parametrize("changed_target", ["different-license", "./retained-license", "../../../../outside"])
+def test_payload_symlink_check_rejects_altered_exact_filtered_target_or_escape(tmp_path, changed_target):
+    loaded = module()
+    source = official_fixture(tmp_path)
+    source_info, _ = loaded.inspect_source(source, "main")
+    env = tmp_path / "environment.tar.gz"
+    link = tarfile.TarInfo("lib/alias")
+    link.type, link.linkname = tarfile.SYMTYPE, "./retained-license"
+    environment_archive(env, link)
+    payload = tmp_path / "payload.tar.gz"
+    dependency, inventory, _ = loaded.write_payload(env, source, source_info, {}, {}, payload)
+    consumer_path = SCRIPT.parents[2] / "workflow/support/annevo_runtime_cache.py"
+    import sys
+    sys.path.insert(0, str(consumer_path.parent))
+    spec = spec_from_file_location("symlink_filter_consumer_fixture", consumer_path)
+    consumer = module_from_spec(spec)
+    spec.loader.exec_module(consumer)
+    root = tmp_path / "unpacked"
+    root.mkdir()
+    consumer._safe_extract(payload, root)
+    manifest = {"payload_manifest": inventory, "dependency_manifest": dependency,
+                "license": {"path": "source/LICENSE", **source_info["files"]["LICENSE"]},
+                "source": source_info}
+    consumer._check_payload(root, manifest)
+    actual = root / "environment/lib/alias"
+    # Even a same-resolved-target alternative spelling is rejected when it
+    # differs from the exact output of this Python's security filter.
+    filtered = os.readlink(actual)
+    if changed_target == filtered:
+        changed_target = filtered.removeprefix("./") if filtered.startswith("./") else "./" + filtered
+    actual.unlink()
+    actual.symlink_to(changed_target)
+    with pytest.raises((RuntimeError, tarfile.FilterError)):
+        consumer._check_payload(root, manifest)
 
 
 @pytest.mark.parametrize("pax_name", ["../outside", "/outside"])

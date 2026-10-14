@@ -159,7 +159,14 @@ def _check_payload(root, manifest):
             if path.is_symlink() or not path.is_file() or path.stat().st_size != row["size"] or file_sha(path) != row["sha256"]:
                 raise RuntimeError("ANNEVO payload checksum mismatch: " + name)
         elif row["type"] == "symlink":
-            if not path.is_symlink() or os.readlink(path) != row["target"]:
+            declared_link = tarfile.TarInfo(name)
+            declared_link.type = tarfile.SYMTYPE
+            declared_link.linkname = row["target"]
+            # The mandatory security filter can normalize link spelling.
+            # Compare its exact expected output, rather than weakening the
+            # link check to resolved-path equality or altering archive metadata.
+            materialized = tarfile.data_filter(declared_link, root)
+            if not path.is_symlink() or materialized is None or os.readlink(path) != materialized.linkname:
                 raise RuntimeError("ANNEVO payload symlink mismatch: " + name)
         elif row["type"] == "directory":
             if path.is_symlink() or not path.is_dir():

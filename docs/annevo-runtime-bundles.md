@@ -123,6 +123,12 @@ inference imports and metadata plus all three relocated native CLI helps. Write 
 a small active pointer to publish it. **Never rename the runtime directory after
 `conda-unpack`**: the repaired binary prefixes refer to that final path.
 
+Python's mandatory tar `data_filter` can normalize relative symlink spelling
+during extraction. Raw archive and inventory identities remain unchanged; the
+consumer compares each materialized link to the exact result of applying that
+same filter to its declared target. Different targets, alternative spellings
+that differ from the filter's output, and escaping links remain errors.
+
 Fetch only the requested model from its source-bound metadata, verify its size
 and SHA-256, and preserve the ANNEVO license/provenance. Keep outputs, Torch and
 Numba caches, and temporary socket paths outside the runtime. Reserved GPU
