@@ -138,6 +138,11 @@ workflow's optional GeMoMa backend remains available separately; the new
 existing-locus refinement does not invoke it. No new predictor/container
 installation is required.
 
+Verified native ANNEVO GFF/receipts can supplement these candidates with
+`gene_model_annevo_inputs` (`--annevo-inputs` for the independent planner).
+Donor support is measured independently and all existing adoption gates remain;
+see [connection, provenance and masking comparison](annevo-model-improvement.md).
+
 ## Run from input generation
 
 Set `run_gene_model_refinement=1` in

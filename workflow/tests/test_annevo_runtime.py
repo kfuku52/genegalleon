@@ -236,6 +236,7 @@ def test_native_failure_retains_old_pair_and_logs(tmp_path, monkeypatch):
     genome, selected, output, receipt = [tmp_path/n for n in ('genome.fa', 'selected.json', 'result.gff3', 'result.json')]
     for path in (genome, selected, output, receipt):
         path.write_bytes(b'original')
+    genome.write_bytes(b'>seq\nATGAAATAA\n')
     value = {'model_profile': 'Magnoliopsida', 'python': sys.executable, 'model_path': str(tmp_path/'model'), 'generation': str(tmp_path/'installed'), 'native_entrypoint': str(tmp_path/'annotation.py')}
     monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: {'gpu_verified': True})

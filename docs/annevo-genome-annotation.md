@@ -124,6 +124,8 @@ Generated data stays under
   The native receipt embeds the selection and records model/source/runtime hashes,
   argv, GPU proof and inference conditions. Failed resolution retains the previous
   complete selection and prediction.
+- `candidate_inputs.tsv` and its provenance for optional
+  [rescue/refinement additions and corrections](annevo-model-improvement.md).
 
 The standard input formatter extracts CDS from the native GFF and genome,
 retaining its existing gene grouping, phase, identifier and longest-CDS rules.

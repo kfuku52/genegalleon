@@ -133,7 +133,12 @@ elif a.command=='run':
          's\\tANNEVO\\texon\\t1\\t306\\t.\\t+\\t.\\tID=exon1;Parent=gene1.t1\\n'
          's\\tANNEVO\\tCDS\\t1\\t306\\t.\\t+\\t0\\tID=cds1;Parent=gene1.t1\\n')
     out.write_text(gff)
-    Path(a.output_receipt).write_text(json.dumps({'fixture_only':True,'genome_sha256':hashlib.sha256(Path(a.genome).read_bytes()).hexdigest(),'gff_sha256':hashlib.sha256(out.read_bytes()).hexdigest()},sort_keys=True))
+    Path(a.output_receipt).write_text(json.dumps({'fixture_only':True,'schema_version':1,
+        'kind':'genegalleon-annevo-native-prediction','native_returncode':0,
+        'gpu_probe':{'gpu_verified':True},'model_profile':'Magnoliopsida',
+        'runtime_digest':'a'*64,'model_sha256':'b'*64,'source_commit':'c'*40,'cache_key':'d'*64,
+        'genome_sha256':hashlib.sha256(Path(a.genome).read_bytes()).hexdigest(),
+        'GFF_sha256':hashlib.sha256(out.read_bytes()).hexdigest(),'GFF_bytes':out.stat().st_size},sort_keys=True))
 ''')
 
 
@@ -185,7 +190,9 @@ def test_real_formatter_and_resume_use_generated_inputs_without_mutating_curated
     genome = workspace / "input/species_genome/Test_species.fa"
     before = genome.read_bytes()
     receipts = list((workspace / "output/genome_prediction/annevo").rglob('*.provenance.json'))
-    assert len(receipts) == 2
+    assert len(receipts) == 3
+    candidate_index = workspace / 'output/genome_prediction/annevo/Test_species/candidate_inputs.tsv'
+    assert candidate_index.read_text().startswith('species\tgff\treceipt\nTest_species\t')
     native_gff = workspace / "output/genome_prediction/annevo/Test_species/Test_species.gff3"
     stamps = {path: path.stat().st_mtime_ns for path in [native_gff, *map(Path, layout), *receipts]}
     again, calls, _ = run_selected_stage(tmp_path, no_download=True)
