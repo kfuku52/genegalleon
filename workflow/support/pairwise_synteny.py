@@ -23,6 +23,7 @@ from kffractbias.io import annotation_to_genes, natural_key, select_isoforms, wr
 try:
     from busco_reference_quality import safe_token
     from fasta_sequence_store import fasta_records
+    from input_generation_array_state import FreshDigestBatch
     from pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from pairwise_synteny_karyotype import chromosome_colors
     from pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
@@ -36,6 +37,7 @@ try:
 except ImportError:  # package imports in tests
     from .busco_reference_quality import safe_token
     from .fasta_sequence_store import fasta_records
+    from .input_generation_array_state import FreshDigestBatch
     from .pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from .pairwise_synteny_karyotype import chromosome_colors
     from .pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
@@ -124,12 +126,14 @@ def build_plan(args):
     if not formats or len(set(formats)) != len(formats) or set(formats) - {"pdf", "svg", "png"}:
         raise ValueError("formats must be a unique comma-separated subset of pdf,svg,png")
     workspace = args.workspace.resolve()
+    boundary = FreshDigestBatch()
     effective_manifest = getattr(args, "representative_inputs", "")
     effective_inputs = {}
     if effective_manifest:
         effective_manifest = Path(effective_manifest)
         effective_manifest = (effective_manifest if effective_manifest.is_absolute()
                               else workspace / effective_manifest).resolve()
+        boundary.read([effective_manifest])
         effective_inputs = load_effective_inputs(effective_manifest)
         if any(int(row["genetic_code"]) not in CodonTable.generic_by_id for row in effective_inputs.values()):
             raise ValueError("Effective inputs manifest has an unknown NCBI genetic code")
@@ -138,9 +142,10 @@ def build_plan(args):
         representative_path = Path(representative_path)
         representative_path = (representative_path if representative_path.is_absolute()
                                else workspace / representative_path).resolve()
+        boundary.read([representative_path])
         load_representative_map(representative_path)
     pairs_file = args.pairs if args.pairs.is_absolute() else workspace / args.pairs
-    pairs_digest = digest(pairs_file)
+    pairs_digest = boundary.read([pairs_file])[str(pairs_file)]
     with pairs_file.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         fields = reader.fieldnames or []
@@ -161,7 +166,7 @@ def build_plan(args):
     code_digest = None
     code_file = workspace / "input/species_genetic_code/species_genetic_code.tsv"
     if code_file.is_file():
-        code_digest = digest(code_file)
+        code_digest = boundary.read([code_file])[str(code_file)]
         with code_file.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle, delimiter="\t")
             if len(reader.fieldnames or ()) != 2 or set(reader.fieldnames or ()) != {"species", "genetic_code"}:
@@ -243,21 +248,21 @@ def build_plan(args):
                 raise ValueError("dS estimation requires the same genetic code for both species; use orientation coloring for mixed-code pairs")
         pairs.append(pair)
     layout_source = Path(__file__).with_name("pairwise_synteny_layout.py").resolve()
-    inputs = {str(Path(__file__).resolve()): digest(__file__), str(layout_source): digest(layout_source),
+    inputs = {str(Path(__file__).resolve()): None, str(layout_source): None,
               str(pairs_file.resolve()): pairs_digest}
     dotplot_source = Path(__file__).with_name("pairwise_synteny_dotplot.py").resolve()
-    inputs[str(dotplot_source)] = digest(dotplot_source)
+    inputs[str(dotplot_source)] = None
     for helper in ("pairwise_synteny_karyotype.py", "pairwise_synteny_style.py", "pairwise_synteny_layout.py",
                    "busco_reference_quality.py"):
         path = Path(__file__).with_name(helper).resolve()
-        inputs[str(path)] = digest(path)
+        inputs[str(path)] = None
     reader_source = Path(__file__).with_name("fasta_sequence_store.py").resolve()
-    inputs[str(reader_source)] = digest(reader_source)
+    inputs[str(reader_source)] = None
     if representative_path or effective_inputs:
         if representative_path:
-            inputs[str(representative_path)] = digest(representative_path)
+            inputs[str(representative_path)] = None
         if effective_manifest:
-            inputs[str(effective_manifest)] = digest(effective_manifest)
+            inputs[str(effective_manifest)] = None
             for sources in effective_inputs.values():
                 for role in ("cds", "protein", "gff", "genome", "representative_map"):
                     inputs[sources[role]] = sources[role + "_sha256"]
@@ -266,16 +271,16 @@ def build_plan(args):
                         inputs[sources[role]] = sources[role + '_sha256']
         for helper in ("representative_selection.py", "gff2genestat.py", "gff_feature_structure.py"):
             path = Path(__file__).with_name(helper).resolve()
-            inputs[str(path)] = digest(path)
+            inputs[str(path)] = None
     if code_digest is not None:
         inputs[str(code_file.resolve())] = code_digest
     for pair in pairs:
         for side in ("target", "query"):
             for kind in ("fasta", "gff"):
                 path = pair[side][kind]
-                inputs[path] = digest(path)
+                inputs.setdefault(path, None)
             path = pair["dotplot_lengths"][side]["path"]
-            inputs[path] = digest(path)
+            inputs.setdefault(path, None)
     ds_tools = {}
     if dotplot_color == "ds":
         try:
@@ -286,7 +291,11 @@ def build_plan(args):
         inputs.update(ds_tools["source_hashes"])
         for pair in pairs:
             for side in ("target", "query"):
-                inputs[pair["ds"][side]["fasta"]] = digest(pair["ds"][side]["fasta"])
+                inputs.setdefault(pair["ds"][side]["fasta"], None)
+    observed = boundary.read(inputs)
+    if any(expected is not None and observed[path] != expected for path, expected in inputs.items()):
+        raise ValueError('Pairwise synteny input changed while planning')
+    inputs = observed
     plan = {
         "workspace": str(workspace), "pairs": sorted(pairs, key=lambda p: p["analysis_id"]),
         "parameters": {"cscore": args.cscore, "min_anchors": args.min_anchors, "distance": args.distance,
@@ -301,6 +310,7 @@ def build_plan(args):
     }
     if effective_manifest:
         plan["representative_inputs"] = str(effective_manifest)
+    boundary.check()
     return plan
 
 

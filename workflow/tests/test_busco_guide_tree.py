@@ -2,6 +2,7 @@
 import gzip
 import inspect
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,41 @@ from workflow.support import busco_guide_tree as guide
 from workflow.support import busco_reference_quality as quality
 from workflow.support import pairwise_synteny, rescue_gene_models
 from workflow.support.rescue_gene_models import patristic_distances
+
+
+def test_matching_sketch_proof_reuses_only_its_first_content_read(tmp_path, monkeypatch):
+    payload, meta = tmp_path / 'sketch.bin', tmp_path / 'sketch.json'
+    payload.write_bytes(b'cached sketch')
+    meta.write_text(json.dumps({'sha256': guide.digest(payload)}))
+    state = sys.modules[guide.FreshDigestBatch.__module__]
+    original = state.digest
+    reads = []
+    def digest(path):
+        reads.append(Path(path))
+        return original(path)
+    monkeypatch.setattr(state, 'digest', digest)
+    proof = guide.FreshDigestBatch()
+    assert guide.cache_matches(payload, meta, proof=proof)
+    assert proof.read([payload, meta])[str(payload)] == original(payload)
+    assert reads.count(payload) == 1
+    # The separate pre-comparison boundary still reads complete cache bytes.
+    guide.FreshDigestBatch().read([payload])
+    assert reads.count(payload) == 2
+
+
+@pytest.mark.parametrize('changed', ['sketch', 'metadata'])
+def test_matching_sketch_proof_rejects_same_byte_replacements(tmp_path, changed):
+    payload, meta = tmp_path / 'sketch.bin', tmp_path / 'sketch.json'
+    payload.write_bytes(b'cached sketch')
+    meta.write_text(json.dumps({'sha256': guide.digest(payload)}))
+    proof = guide.FreshDigestBatch()
+    assert guide.cache_matches(payload, meta, proof=proof)
+    path = payload if changed == 'sketch' else meta
+    replacement = tmp_path / 'replacement'
+    replacement.write_bytes(path.read_bytes())
+    replacement.replace(path)
+    with pytest.raises(OSError, match='changed'):
+        proof.read([payload, meta])
 
 
 def test_existing_quality_and_identifier_imports_keep_the_same_implementations():

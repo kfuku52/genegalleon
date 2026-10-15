@@ -24,6 +24,57 @@ ArchiveStoreError, GeneFamilyOutputStore = store_module.ArchiveStoreError, store
 INDEX_EPOCH_FILE, INDEX_UPDATE_FILE = store_module.INDEX_EPOCH_FILE, store_module.INDEX_UPDATE_FILE
 
 
+def test_raw_directory_hash_and_count_share_one_walk(tmp_path, monkeypatch):
+    root = tmp_path / 'alignments'
+    (root / 'nested').mkdir(parents=True)
+    (root / 'a.fa').write_text('>a\nAA\n')
+    (root / 'nested/b.fa').write_text('>b\nBB\n')
+    expected = provenance.sha256_path(root)
+    original = Path.rglob
+    walks = []
+    def walk(path, *a, **kw):
+        if path == root:
+            walks.append(path)
+        return original(path, *a, **kw)
+    monkeypatch.setattr(Path, 'rglob', walk)
+    assert provenance.raw_or_zip_directory_digest(root) == (*expected[:2], 2)
+    assert len(walks) == 1
+
+
+def test_directory_digest_shapes_share_query_proof_and_final_content_fence(tmp_path, monkeypatch):
+    root = tmp_path / 'alignments'
+    root.mkdir()
+    source = root / 'a.fa'
+    source.write_bytes(b'abc')
+    original = provenance.cached_sha256_file
+    reads = []
+    def digest(path):
+        reads.append(path)
+        return original(path)
+    monkeypatch.setattr(provenance, 'cached_sha256_file', digest)
+    with provenance.digest_observation() as memo:
+        logical = provenance.raw_or_zip_directory_digest(root)
+        assert provenance.sha256_path(root) == (*logical[:2], 'directory')
+        assert len(reads) == 1
+    assert len(reads) == 2
+    assert memo.metrics()['digest_revalidation_reads'] == 1
+
+
+def test_directory_query_rehashes_content_even_with_unchanged_metadata(tmp_path, monkeypatch):
+    root = tmp_path / 'alignments'
+    root.mkdir()
+    source = root / 'a.fa'
+    source.write_bytes(b'abc')
+    before = runtime.signature(root)
+    members = runtime.directory_signature(root)
+    monkeypatch.setattr(runtime, 'signature', lambda _path: before)
+    monkeypatch.setattr(runtime, 'directory_signature', lambda _path: members)
+    with pytest.raises(ValueError, match='content changed before publication'):
+        with provenance.digest_observation():
+            provenance.raw_or_zip_directory_digest(root)
+            source.write_bytes(b'xyz')
+
+
 def test_query_digest_session_rehashes_unique_sources_and_never_reuses_across_queries(tmp_path, monkeypatch):
     path = tmp_path / 'source'
     path.write_bytes(b'abc')

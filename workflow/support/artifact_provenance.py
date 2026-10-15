@@ -282,7 +282,10 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
         compute = scoped_digest_reader(lambda: sha256_path(path)[:2])
         if path.is_file() or path.is_dir():
             directory = path.is_dir()
-            digest, size = memo.read(path, compute, directory=directory)
+            if directory:
+                digest, size, _count = _directory_digest(path)
+            else:
+                digest, size = memo.read(path, compute)
             return digest, size, "directory" if directory else "file"
         artifact = observation_artifact(path)
         if artifact is not None:
@@ -304,8 +307,24 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
             return digest, size, "file"
         raise FileNotFoundError(path)
 
+    digest, size, _count = _directory_digest(path)
+    return digest, size, "directory"
+
+
+def _directory_digest(path: Path) -> tuple[str, int, int]:
+    """One inventory supplies both the existing digest and its file count."""
+    path = _runtime_path(path)
+    observe_path(path)
+    if path.is_symlink():
+        raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
+    if not path.is_dir():
+        raise ProvenanceError(f"Managed logical directory path is not a directory: {path}")
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is not None:
+        return memo.read(path, scoped_digest_reader(lambda: _directory_digest(path)), directory=True)
     digest = hashlib.sha256()
     total_size = 0
+    member_count = 0
     for child in sorted(path.rglob("*")):
         observe_path(child)
         if child.is_symlink():
@@ -319,7 +338,8 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
         digest.update(bytes.fromhex(child_digest))
         digest.update(child_size.to_bytes(8, "big"))
         total_size += child_size
-    return digest.hexdigest(), total_size, "directory"
+        member_count += 1
+    return digest.hexdigest(), total_size, member_count
 
 
 def is_relative_to(path: Path, parent: Path) -> bool:
@@ -610,11 +630,7 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
     raw_result: tuple[str, int, int] | None = None
     archive_result: tuple[str, int, int] | None = None
     if path.exists():
-        digest, size, artifact_type = sha256_path(path)
-        if artifact_type != "directory":
-            raise ProvenanceError(f"Managed logical directory path is not a directory: {path}")
-        member_count = sum(1 for child in path.rglob("*") if child.is_file())
-        raw_result = (digest, size, member_count)
+        raw_result = _directory_digest(path)
     if archive_path.exists():
         if archive_path.is_symlink() or not archive_path.is_file():
             raise ProvenanceError(f"Managed logical directory archive is not a regular file: {archive_path}")

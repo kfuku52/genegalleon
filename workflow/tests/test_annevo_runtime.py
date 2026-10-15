@@ -174,6 +174,33 @@ def test_runtime_modification_and_redirected_manifest_are_rejected(tmp_path, mon
         cache.prepare(root, 'Magnoliopsida', str(path))
 
 
+def test_command_verification_reuses_model_hash_and_rejects_same_byte_replacement(tmp_path, monkeypatch):
+    import input_generation_array_state as state
+
+    path, _ = bundle(tmp_path, monkeypatch)
+    selected = cache.prepare(tmp_path / 'cache', 'Magnoliopsida', str(path))
+    verification = cache.RuntimeVerification()
+    model = Path(selected['model_path'])
+    reads = []
+    original = state.digest
+    def digest(path):
+        if Path(path) == model:
+            reads.append(path)
+        return original(path)
+    monkeypatch.setattr(state, 'digest', digest)
+    first = runtime.read_selected(selected['receipt_path'], verification=verification)
+    assert runtime.read_selected(selected['receipt_path'], verification=verification) == first
+    assert len(reads) == 1
+    replacement = model.with_name('replacement')
+    replacement.write_bytes(model.read_bytes())
+    replacement.replace(model)
+    with pytest.raises(OSError, match='changed'):
+        runtime.read_selected(selected['receipt_path'], verification=verification)
+    # A later invocation freshly checks the bytes, even for identical content.
+    assert runtime.read_selected(selected['receipt_path'], verification=cache.RuntimeVerification()) == first
+    assert len(reads) == 2
+
+
 @pytest.mark.parametrize('failure', ['stale_pax_path', 'normalized_duplicate'])
 def test_archive_rejection_identifies_actual_member_without_accepting_malformed_payload(tmp_path, failure):
     archive = tmp_path / 'malformed.tar.gz'
@@ -256,7 +283,7 @@ def test_native_failure_retains_old_pair_and_logs(tmp_path, monkeypatch):
         path.write_bytes(b'original')
     genome.write_bytes(b'>seq\nATGAAATAA\n')
     value = {'model_profile': 'Magnoliopsida', 'python': sys.executable, 'model_path': str(tmp_path/'model'), 'generation': str(tmp_path/'installed'), 'native_entrypoint': str(tmp_path/'annotation.py')}
-    monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
+    monkeypatch.setattr(runtime, 'read_selected', lambda *a, **kw: value)
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: {'gpu_verified': True})
     monkeypatch.setattr(runtime, 'inference_settings', lambda *a: {'overlap_pred': False})
     monkeypatch.setattr(runtime.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a[0], 1))
@@ -289,7 +316,7 @@ def test_gzip_genome_is_unpacked_in_short_native_work_and_original_is_bound(tmp_
     genome.write_bytes(gzip.compress(fasta))
     selected.write_bytes(b'original selected')
     value = {'model_profile': profile, 'python': sys.executable, 'model_path': str(tmp_path/'model'), 'generation': str(tmp_path/'installed'), 'native_entrypoint': str(tmp_path/'annotation.py'), 'runtime_digest': 'a'*64, 'cache_key': 'b'*64, 'source_commit': 'c'*40, 'model_sha256': 'd'*64}
-    monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
+    monkeypatch.setattr(runtime, 'read_selected', lambda *a, **kw: value)
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: {'gpu_verified': True})
     (tmp_path / 'prediction.py').write_text('def main():\n length_config=' + repr({profile: [30720, 5120, 32]}) + '\n')
     def predict(argv, **kwargs):
@@ -357,7 +384,7 @@ def test_prediction_outputs_cannot_replace_selection_evidence(tmp_path, monkeypa
     selected = tmp_path / 'runtime.json'
     selected.write_text('{}')
     value = {'model_profile': 'Mammalia', 'model_path': str(tmp_path / 'model'), 'generation': str(tmp_path / 'installed')}
-    monkeypatch.setattr(runtime, 'read_selected', lambda *a: value)
+    monkeypatch.setattr(runtime, 'read_selected', lambda *a, **kw: value)
     monkeypatch.setattr(runtime, 'inference_settings', lambda *a: {'overlap_pred': True})
     monkeypatch.setattr(runtime, 'runtime_environment', lambda *a: {})
     monkeypatch.setattr(runtime, 'probe_gpu', lambda *a: pytest.fail('output collision reached GPU probe'))

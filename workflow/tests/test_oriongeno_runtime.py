@@ -164,7 +164,7 @@ def test_native_failure_preserves_previous_complete_pair(local_runtime, tmp_path
     genome.write_text('>chr\nATGAAATAA\n')
     gff.write_text('previous GFF')
     receipt.write_text('previous receipt')
-    monkeypatch.setattr(native, 'read_selected', lambda _path: runtime)
+    monkeypatch.setattr(native, 'read_selected', lambda _path, **kw: runtime)
     def execute(argv, _env, **_kwargs):
         if '-c' in argv:
             return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
@@ -233,7 +233,7 @@ def test_external_virtualenv_keeps_its_own_package_environment(tmp_path):
 def test_native_log_hardlink_cannot_truncate_checkpoint(local_runtime, tmp_path, monkeypatch):
     setup, _package, model = local_runtime
     runtime = native.prepare(setup)
-    monkeypatch.setattr(native, 'read_selected', lambda _path: runtime)
+    monkeypatch.setattr(native, 'read_selected', lambda _path, **kw: runtime)
     original_execute = native.execute
     def execute(argv, env, **kwargs):
         if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:

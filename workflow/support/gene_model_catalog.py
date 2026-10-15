@@ -73,9 +73,11 @@ def indexed_genome(path):
     path = Path(path).resolve()
     cache = os.environ.get("GG_GENOME_INDEX_CACHE")
     if cache:
-        from input_generation_array_state import digest
+        from input_generation_array_state import FreshDigestBatch, digest
         from rescue_gene_models import stage, verified
-        signature = source_signature(path)
+        source = FreshDigestBatch()
+        source_hash = source.read([path])[str(path)]
+        signature = {'path': str(path), 'size': source.paths[str(path)][0][2], 'sha256': source_hash}
         key = {"source": signature, "pysam": pysam.__version__,
                "indexer": digest(pysam.libcsamtools.__file__), "schema": 1,
                "implementation": hashlib.sha256(inspect.getsource(create_index).encode()).hexdigest()}
@@ -84,11 +86,13 @@ def indexed_genome(path):
             raise ValueError("Genome index cache must not contain the source")
         token = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
         def check():
-            if source_signature(path) != signature:
-                raise OSError("Genome source changed during index reuse")
+            try:
+                source.check()
+            except OSError as exc:
+                raise OSError("Genome source changed during index reuse") from exc
         def build(tmp):
             create_index(path, tmp / "indexed.fa")
-        staged = stage(directory, token, key, build, guard=check) / "indexed.fa"
+        staged = stage(directory, token, key, build, guard=check, publication_guard=check) / "indexed.fa"
         if not path.name.lower().endswith(".gz") and staged.resolve() != path:
             raise ValueError("Cached genome link changed")
         with contextlib.closing(pysam.FastaFile(str(staged))) as genome:

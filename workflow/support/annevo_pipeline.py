@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import annevo_runtime as native
-from annevo_runtime_cache import runtime_environment
+from annevo_runtime_cache import RuntimeVerification, runtime_environment
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
@@ -136,6 +136,7 @@ def run(args):
     completed, pending, reserved = {}, [], 0
     started = time.monotonic()
     runtime_receipts = {}
+    verification = RuntimeVerification()
     stats = dict(gpu_workers=1, decoder_workers=args.decoder_workers,
                  predict_threads=args.predict_threads, decode_threads=args.decode_threads,
                  cpu_budget=cpu_limit, max_tmp_bytes=budget, peak_reserved_bytes=0,
@@ -162,7 +163,7 @@ def run(args):
         directory.mkdir(mode=0o700, exist_ok=True)
         output, receipt_path = directory / (name + '.gff3'), directory / 'native_prediction.json'
         selected, genome = Path(row['receipt']), Path(row['genome'])
-        runtime = native.read_selected(selected)
+        runtime = native.read_selected(selected, verification=verification)
         if root.resolve().is_relative_to(Path(runtime['generation']).resolve()):
             raise ValueError('Pipeline must not publish inside its runtime')
         runtime_receipts[str(selected)] = file_sha(selected)
@@ -250,7 +251,6 @@ def run(args):
                         '--min_prot_length', '100', '--show_log'])
                     decoded = execute(argv, env_decode, work, logs, 'decoding')
                     counts = native.gff_counts(gff)
-                    native.read_selected(selected)
                     if file_sha(selected) != expected['prepared_receipt_sha256'] or file_sha(genome) != original_sha:
                         raise RuntimeError('ANNEVO inputs changed during pipeline execution')
                     if file_sha(native_genome) != prepared_sha:
@@ -264,6 +264,7 @@ def run(args):
                              'feature_counts': counts, 'native_wall_seconds': decoded['finished_monotonic'] - phase['started_monotonic'],
                              'pipeline': {'gpu_workers': 1, 'phases': [phase, decoded], 'predict_threads': args.predict_threads},
                              'scientific_completion_verified': False}
+                    native.read_selected(selected, verification=verification)
                     native.publish_pair(gff, output, receipt_path, value)
                     return name, dict(reused=False, gff=str(output), receipt=str(receipt_path))
                 finally:
@@ -288,9 +289,10 @@ def run(args):
             if file_sha(args.inputs) != table_sha:
                 raise RuntimeError('Pipeline input table changed during execution')
             for selected, expected_sha in runtime_receipts.items():
-                native.read_selected(selected)
+                native.read_selected(selected, verification=verification)
                 if file_sha(selected) != expected_sha:
                     raise RuntimeError('Pipeline runtime receipt changed during execution')
+            verification.check()
             result = {**stats, 'species': completed, 'wall_seconds': time.monotonic() - started,
                       'status': 'complete', 'scientific_completion_verified': False}
             atomic_json(root / 'pipeline.json', result)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare an isolated upstream OrionGeno installation and run native GPU GFF3 prediction."""
 import argparse
+import contextlib
 import csv
 import gzip
 import hashlib
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from annevo_model_selection import protect_outputs
 from annevo_runtime import gff_counts, publish_pair
-from annevo_runtime_cache import inspect_tree, private_root, verify_tree
+from annevo_runtime_cache import RuntimeVerification, inspect_tree, private_root, verify_tree
 from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
 from genome_sequence_identity import genome_sequence_digest
 from oriongeno_model_profiles import PROFILES
@@ -150,26 +151,32 @@ snapshot_download('BGI-Research/OrionGeno', allow_patterns=['checkpoints/orionge
         return value
 
 
-def read_selected(path):
-    value = json.loads(Path(path).read_text())
-    if value.get('kind') != 'genegalleon-oriongeno-installed-runtime' or value.get('schema_version') != 1:
-        raise ValueError('Invalid OrionGeno installed runtime receipt')
-    check = {k: v for k, v in value.items() if k not in {'runtime_digest', 'cache_key'}}
-    if (hashlib.sha256(canonical_bytes(check)).hexdigest() != value['runtime_digest']
-            or value.get('cache_key') != value['runtime_digest'] or file_sha(value['python']) != value['python_sha256']):
-        raise ValueError('OrionGeno runtime receipt or Python changed')
-    for root, tree in value['trees'].items():
-        verify_tree(Path(root), tree)
-    packages = execute([value['python'], '-B', '-m', 'pip', 'freeze', '--all'], environment(value['cache_root']), capture_output=True).stdout
-    if packages != value['packages']:
-        raise ValueError('OrionGeno installed dependencies changed')
-    return value
+def read_selected(path, *, verification=None):
+    with verification.guard() if verification is not None else contextlib.nullcontext():
+        if verification is not None:
+            verification.file_sha(path)
+        value = json.loads(Path(path).read_text())
+        if value.get('kind') != 'genegalleon-oriongeno-installed-runtime' or value.get('schema_version') != 1:
+            raise ValueError('Invalid OrionGeno installed runtime receipt')
+        check = {k: v for k, v in value.items() if k not in {'runtime_digest', 'cache_key'}}
+        sha = verification.file_sha if verification is not None else file_sha
+        if (hashlib.sha256(canonical_bytes(check)).hexdigest() != value['runtime_digest']
+                or value.get('cache_key') != value['runtime_digest'] or sha(value['python']) != value['python_sha256']):
+            raise ValueError('OrionGeno runtime receipt or Python changed')
+        tree_check = verification.verify_tree if verification is not None else verify_tree
+        for root, tree in value['trees'].items():
+            tree_check(Path(root), tree)
+        packages = execute([value['python'], '-B', '-m', 'pip', 'freeze', '--all'], environment(value['cache_root']), capture_output=True).stdout
+        if packages != value['packages']:
+            raise ValueError('OrionGeno installed dependencies changed')
+        return value
 
 
 def run(args):
     if args.threads < 1 or args.batch_size < 1:
         raise ValueError('OrionGeno threads and batch size must be positive')
-    runtime = read_selected(args.receipt)
+    verification = RuntimeVerification()
+    runtime = read_selected(args.receipt, verification=verification)
     genome, output, receipt = map(Path, (args.genome, args.output, args.output_receipt))
     if not genome.is_file() or not genome.stat().st_size:
         raise ValueError('OrionGeno genome is missing or empty')
@@ -222,14 +229,14 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
             load_models(staged)
             if file_sha(genome) != before:
                 raise ValueError('OrionGeno genome changed during prediction')
-            if read_selected(args.receipt) != runtime:
-                raise ValueError('OrionGeno runtime changed during prediction')
             result = {k: runtime[k] for k in ('runtime_digest', 'cache_key', 'source_commit', 'model_profile', 'model_sha256')}
             result.update(schema_version=1, kind='genegalleon-oriongeno-native-prediction', native_returncode=0,
                           genome_sha256=before, genome_sequence_sha256=sequence_identity,
                           GFF_sha256=file_sha(staged), GFF_bytes=staged.stat().st_size, gpu_probe=gpu,
                           inference_settings={'lineage': runtime['model_profile'], 'batch_size': args.batch_size, 'threads': args.threads},
                           argv=command, feature_counts=counts)
+            if read_selected(args.receipt, verification=verification) != runtime:
+                raise ValueError('OrionGeno runtime changed during prediction')
             publish_pair(staged, output, receipt, result)
     return result
 
