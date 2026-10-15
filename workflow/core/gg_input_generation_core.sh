@@ -52,7 +52,9 @@ gene_model_rescue_retain_search_inputs="${gene_model_rescue_retain_search_inputs
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
 gene_model_rescue_minimum_busco="${gene_model_rescue_minimum_busco:-90}"
-gene_model_rescue_minimum_coverage="${gene_model_rescue_minimum_coverage:-0.95}"
+gene_model_rescue_minimum_coverage="${gene_model_rescue_minimum_coverage:-0.70}"
+gene_model_rescue_minimum_broad_coverage="${gene_model_rescue_minimum_broad_coverage:-0.90}"
+gene_model_rescue_minimum_lower_coverage_identity="${gene_model_rescue_minimum_lower_coverage_identity:-0.70}"
 gene_model_rescue_minimum_identity="${gene_model_rescue_minimum_identity:-0.5}"
 gene_model_rescue_max_interval="${gene_model_rescue_max_interval:-200000}"
 gene_model_rescue_max_intron="${gene_model_rescue_max_intron:-20000}"
@@ -61,7 +63,7 @@ gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
 [[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
 gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
-gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-2}"
+gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-1}"
 gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
 gene_model_rescue_terminal_max_unaligned_c_overhang="${gene_model_rescue_terminal_max_unaligned_c_overhang:-2}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
@@ -2517,6 +2519,18 @@ run_array_finalize_mode() {
 }
 
 # Serialize shared stages against active species workers in this output workspace.
+resolve_oriongeno_candidate_inputs() {
+  local configured="${gene_model_oriongeno_inputs-auto}"
+  if [[ "${configured}" == auto ]]; then
+    local prediction_root="${gg_workspace_output_dir}/genome_prediction/oriongeno"
+    local tables=("${prediction_root}"/*/candidate_inputs.tsv)
+    [[ -f "${tables[0]}" ]] || return 0
+    printf '%s\n' "${prediction_root}"
+  else
+    printf '%s\n' "${configured}"
+  fi
+}
+
 prepare_gene_model_rescue() {
   local rescue_tree="${gene_model_rescue_tree}"
   local -a rescue_args=()
@@ -2541,12 +2555,17 @@ prepare_gene_model_rescue() {
     --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"
     --minimum-busco "${gene_model_rescue_minimum_busco}" --minimum-coverage "${gene_model_rescue_minimum_coverage}"
     --minimum-identity "${gene_model_rescue_minimum_identity}" --max-interval "${gene_model_rescue_max_interval}"
+    --minimum-broad-coverage "${gene_model_rescue_minimum_broad_coverage}"
+    --minimum-lower-coverage-identity "${gene_model_rescue_minimum_lower_coverage_identity}"
     --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}"
     --max-genome-queries "${gene_model_rescue_max_genome_queries}"
     --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
+  local oriongeno_inputs
+  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+  [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
@@ -2619,6 +2638,8 @@ prepare_gene_model_refinement() {
     --min-margin "${gene_model_refinement_min_margin}" --min-support "${gene_model_refinement_min_support}"
     --candidate-limit "${gene_model_refinement_candidate_limit}" --padding "${gene_model_refinement_padding}"
     --minimum-coverage "${gene_model_rescue_minimum_coverage}" --minimum-identity "${gene_model_rescue_minimum_identity}"
+    --minimum-broad-coverage "${gene_model_rescue_minimum_broad_coverage}"
+    --minimum-lower-coverage-identity "${gene_model_rescue_minimum_lower_coverage_identity}"
     --max-intron "${gene_model_rescue_max_intron}" --max-interval "${gene_model_rescue_max_interval}")
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
@@ -2632,6 +2653,9 @@ prepare_gene_model_refinement() {
   fi
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  local oriongeno_inputs
+  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+  [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || refinement_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_species_profiles}" ]] || refinement_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"

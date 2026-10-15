@@ -6,7 +6,7 @@ GeneGalleon is a container-first comparative genomics and phylogenomics workflow
 It provides scheduler-ready staged pipelines for:
 
 - transcriptome assembly and expression quantification,
-- CDS/genome annotation and contamination filtering,
+- CDS/genome annotation with selectable [OrionGeno / ANNEVO prediction](docs/oriongeno-genome-annotation.md) and contamination filtering,
 - optional [synteny-guided recovery of missing gene models](docs/gene-model-rescue.md) and
   [existing-model refinement and conserved isoform selection](docs/gene-model-refinement.md),
 - local pairwise fractionation-bias and within-genome self-synteny retention analysis with kfFractBias,

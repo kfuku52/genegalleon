@@ -872,3 +872,230 @@ The first three accept `--support-root` for a complete saved baseline support
 tree; the DB benchmark accepts `--source` for the baseline generator. Compare
 logical outputs and recorded inputs, validate each record's actual output hash,
 and report RSS/disk tradeoffs alongside timing.
+
+## Runtime and genome-index verification boundaries
+
+ANNEVO's single-prediction and multi-species producers and OrionGeno's predictor
+share runtime verification results only inside their current invocation.
+First use retains ordinary model/Python hashes and exact tree membership checks.
+Later boundaries check every known member's identity and link target, plus all
+directory generations including the root, without enumerating the tree again.
+Directory generations are checked again after members to reject additions during
+verification. Receipts and inventories remain bound to fresh content hashes;
+observed failures cannot refresh a proof. Parallel ANNEVO decoders serialize proof
+updates. Each prediction checks its runtime after output hashing, and campaign
+publication checks all used proofs. A later invocation starts fresh; these proofs
+are never persisted.
+
+The cached genome-index context similarly reads source bytes once and fences the
+source before index publication and after use. Ordinary index-output receipt
+verification remains independent. Source keys, index layout and scientific
+outputs are unchanged.
+
+The focused benchmark uses a 256 MiB model, 4,096 small runtime files in 256
+nested directories, and a 256 MiB FASTA with a warm native pysam index. It repeats
+seven verification boundaries/index contexts in each fresh worker, with one
+warmup and three measured trials. Fixture creation and cold index construction
+are outside timing; peak RSS includes them. Logical fingerprints cover model and
+all runtime-member content hashes, fetched DNA, complete index-output hashes and
+normalized index receipt keys. Only the temporary genome pathname is normalized.
+This measures verification overhead, not GPU inference or a complete workflow.
+
+On 2026-10-15, Docker Linux/arm64 with Python 3.12.15 compared a saved support
+snapshot from before this change against the updated implementation. Trials
+alternated baseline/current order after warmup; all logical fingerprints matched.
+
+| Synthetic verification workload | Before median | After median | SHA-256 bytes before / after | Directory scans before / after |
+| --- | ---: | ---: | ---: | ---: |
+| Seven runtime/model verification boundaries | 1.825 s | 0.317 s | 1,792 / 256 MiB | 3,598 / 514 |
+| Seven warm genome-index contexts | 2.532 s | 0.857 s | 5,384 / 1,800 MiB | 0 / 0 |
+
+Runtime model hashing fell from seven full reads to one. Each index context still
+reads its source afresh, but its repeated source guards now check identities;
+output verification remains unchanged. Median process peak RSS was 90.4 / 79.1
+MiB for the runtime workload and 79.6 / 80.5 MiB for indexing. Runtime proofs keep
+one inventory and its member paths in memory for the invocation; this small
+fixture does not establish peak memory for a full production environment.
+
+Save the baseline support tree before changing code, then compare both versions
+without concurrent builds or tests:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-verification-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_verification_boundaries.py \
+  --baseline-support /tmp/gg-verification-baseline --output tmp/verification-comparison.json
+```
+
+The JSON records source hashes, environment, every trial, operation counts, peak
+RSS and logical fingerprints; unequal outputs fail the comparison.
+
+## Verification in other workflow stages
+
+- Genome evolution's pairwise-synteny planner hashes the union of its inputs in
+  one fresh batch. Repeated species, GFF-derived chromosome lengths and dS input
+  aliases share physical-file reads. Pair tables, genetic-code tables and
+  selected-view manifests/maps are fenced from their first read through the end
+  of planning. Later stage verification still starts fresh.
+- Gene evolution's CDS input-view builder uses the verified resolved-FASTA hash
+  for its view identity. A reused view still checks its actual files, and source
+  identities are fenced through that check. Creating hard links changes inode
+  ctime, so a new view gets a separate full-byte proof after linking and before
+  publication; the earlier proof is never refreshed from metadata alone.
+- Input generation's BUSCO guide shares a matching sketch's first content proof
+  with its immediate checksum lookup. A cache repair starts a new proof after
+  its writes. The later complete pre-comparison cache read remains independent,
+  as do final input/tool/cache and published-output checks.
+- Shared provenance hashing computes a raw directory's member count during its
+  digest traversal. Species-tree and other logical-directory consumers retain
+  the same digests, sizes, member counts and raw/ZIP agreement checks. An audit
+  still enumerates directory generations and rehashes content before acceptance,
+  including when filesystem attributes remain unchanged.
+
+The audit also inspected transcriptome FASTQ completion contracts, FASTA SQLite
+freshness and gene-summary/database publication scopes. Their final content,
+transport-copy and producer/consumer checks establish distinct boundaries and
+remain in place. Scientific thresholds, sequence selection, stage ordering,
+manifest formats and archive layouts are unchanged.
+
+Additional benchmark cases use four 64 MiB FASTAs across fourteen synteny pairs;
+two 64 MiB source/resolved FASTA pairs and seven warm CDS-view checks; seven
+64 MiB matching BUSCO-cache payloads followed by their separate pre-comparison
+read; and seven audited traversals of 4,096 small files in 256 nested directories.
+The CDS fixture supplies synthetic resolution metadata to isolate verification,
+and verifies the actual view identity and output bytes. Synteny fingerprints keep
+all scientific inputs, pairs, parameters and real tool identities; only temporary
+workspace path prefixes and GG helper-code identity fields are normalized or
+excluded. Exact implementation hashes are recorded separately. Native tool
+metadata lookup, fixture creation and final benchmark-only output inspection are
+outside timing. Peak RSS includes setup and imports.
+
+On 2026-10-15, the same Docker Linux/arm64 image and Python 3.12.15 compared a
+support snapshot saved before these four changes against the updated code. One
+warmup and three measured trials per version alternated baseline/current order;
+all logical output fingerprints matched. No tests or builds ran concurrently.
+
+| Synthetic verification workload | Before median | After median | SHA-256 bytes before / after | `os.scandir` calls before / after |
+| --- | ---: | ---: | ---: | ---: |
+| Four species reused in fourteen synteny pairs | 0.966 s | 0.138 s | 1,792 / 256 MiB | 0 / 0 |
+| Seven warm CDS-view checks | 1.817 s | 1.361 s | 3,584 / 2,688 MiB | 0 / 0 |
+| Seven matching BUSCO sketches and comparison check | 0.704 s | 0.472 s | 1,344 / 896 MiB | 0 / 0 |
+| Seven audited logical-directory digests | 5.290 s | 5.148 s | 0.875 / 0.875 MiB | 25,186 / 21,588 |
+
+Synteny hashes each unique physical input once per plan; warm CDS views remove
+one resolved-target read per species. BUSCO removes one payload read but adds a
+small metadata-file proof, so its total SHA-256 call count stays at 21. Directory
+content reads stay unchanged: only the separate counting traversal is removed,
+reducing `os.scandir` calls by 14.3%. Its timing difference is small and does not
+establish a general workflow speedup. Byte totals above round small metadata and
+helper files. These cases measure verification overhead, not complete analyses.
+
+Median process peak RSS before/after was 69.7/69.7 MiB for synteny, 103.7/103.7
+MiB for CDS views, 70.1/70.2 MiB for BUSCO and 93.0/81.7 MiB for directories.
+Proofs and input unions retain paths and filesystem identities for their local
+scope; these small fixtures do not establish production peak memory.
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-stage-verification-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_verification_boundaries.py \
+  --baseline-support /tmp/gg-stage-verification-baseline \
+  --cases synteny-plan cds-view busco-cache logical-directory \
+  --mib 64 --files 4096 --boundaries 7 --repeats 3 \
+  --output tmp/stage-verification-comparison.json
+```
+
+## Stage preparation, family summaries and ordered alignment queues
+
+Pairwise synteny prepares each distinct complete source description and mapping
+threshold once within the analysis command. Private temporary generations hold
+the existing BED, peptide, ID map, normalized coordinates and metadata. Each pair
+gets independent copies, checked against the generation's content hashes, so
+native tools cannot modify preparations used by later pairs. Source and generated
+file identities remain fenced through the last native command. No raw sequence
+cache persists in RAM across species, and generations are removed on success or
+failure. Later stage verification still performs its independent full reads.
+
+Ortholog summaries finish strict/weak-copy, displayed-duplication, synteny and
+UFBoot evidence one family at a time. A family's parsed branch table, CDS IDs,
+validated tree and ancestor chains are shared, then released. Species-tree
+parsing and target-ancestry ranks are shared only within that command. Source
+generations and raw/ZIP archive observations are fenced before writing summary
+tables; an earlier family's mutation still fails after its parsed data has been
+released. Scalar helper APIs remain fresh outside these scopes. Selection rules,
+support values, missingness, output columns and deterministic row/lane order are
+unchanged.
+
+Pairwise dS and WGD keep at most eight times the configured worker count in their
+ordered alignment queue. The bound includes completed results waiting behind a
+slow earlier pair. Closing or failure cancels queued work; active jobs finish
+before the executor exits. Pair selection, alignment settings, genetic codes,
+scientific sample limits and TSV order are unchanged. This bounds futures and
+alignment-result retention, not all input pair/request collections. A slow first
+job can still hold up ordered output and leave workers idle once the window is
+exhausted; this is a memory/throughput tradeoff, not a claim that MAFFT itself is
+faster. Alignment-helper provenance includes the queue implementation.
+
+The synteny renderer uses one karyotype process per pair for multiple formats.
+The existing `--format` CLI remains available; `--formats=pdf,png,svg` shares
+imports while creating and closing a fresh figure for each format. Inputs are
+fenced again inside each atomic plot/report publication. A later format's failure
+preserves its previous output and does not run subsequent formats. The diagnostic
+command log records the actual batch invocation; figure paths, style-report
+schema and per-pair directories are unchanged.
+
+`benchmark_stage_efficiency.py` compares a saved support snapshot against the
+current code in fresh processes. It checks complete outputs, normalizing only
+temporary workspace prefixes and non-scientific plotting metadata. Preparation
+uses four species with 4,000 900-nt CDSs each across fourteen pairs, substituting
+only the native search/screen calls. Summary cases use 128 copies of the existing
+45-node weak-duplication fixture, including query-based closest selection. The
+queue case uses 20,000 ordered 4-KiB results, four workers and a slow first job;
+it isolates scheduling/result memory rather than scientific alignment. Plotting
+uses actual PDF/PNG/SVG rendering with a fixed metadata epoch and SVG hash salt.
+Fixture creation and final fingerprints are outside timing; peak RSS includes
+setup/imports and reports the larger of parent or largest child, not their sum.
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-stage-efficiency-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_stage_efficiency.py \
+  --baseline-support /tmp/gg-stage-efficiency-baseline/baseline-support \
+  --output tmp/stage-efficiency-comparison.json
+```
+
+On 2026-10-15, Docker Linux/arm64, Python 3.12.15 and the same immutable image
+compared a support snapshot from `fe8a23aa` with the updated implementation.
+Each case used one warmup and three measured fresh processes, alternating
+baseline/current order, without concurrent tests or builds. All logical output
+fingerprints matched. Complete PDF/PNG/SVG output bytes also matched after the
+documented metadata normalization; a regression test compares all three formats
+with a fixed metadata epoch/hash salt.
+
+| Synthetic workload | Before median | After median | Relevant operation counts before / after | Peak RSS before / after |
+| --- | ---: | ---: | --- | ---: |
+| Four-species preparation across fourteen pairs | 14.079 s | 2.786 s | FASTA parses 28 / 4; GFF parses 28 / 4 | 69.5 / 66.8 MiB |
+| 128-family summary with weak-copy evidence | 0.454 s | 0.451 s | Branch reads/index builds 512 / 128; CDS-ID reads 256 / 128 | 104.4 / 101.0 MiB |
+| Same summary with closest-query selection | 0.678 s | 0.610 s | Species-tree parses 256 / 1; family index builds 768 / 128 | 108.9 / 107.1 MiB |
+| 20,000 ordered 4-KiB results, four workers | 0.284 s | 0.540 s | Submitted before first result 20,000 / 32 | 133.3 / 20.9 MiB |
+| One karyotype in PDF, PNG and SVG | 6.979 s | 2.929 s | Python plot processes 3 / 1 | 205.0 / 209.2 MiB |
+
+Preparation and plotting isolate the affected overhead; these results do not
+establish whole-workflow speedups. Summary timings overlap between trials, so no
+reliable time saving is claimed for those small families despite the reduction
+in reads and parsing. The ordered queue reduces this fixture's peak RSS by
+84.3%, but costs about 0.26 s more over 20,000 near-empty tasks. It is a memory
+improvement, not a scheduler-throughput improvement. Actual MAFFT throughput was
+not benchmarked. Plot workers retain imports between formats and used about
+4.2 MiB more largest-process RSS in this fixture.
+
+The queue row comes from a follow-up with the final eight-jobs-per-worker window:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-stage-efficiency-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_stage_efficiency.py \
+  --baseline-support /tmp/gg-stage-efficiency-baseline/baseline-support \
+  --cases ordered-queue --output tmp/stage-efficiency-queue-final.json
+```
+
+The initial all-case comparison used a smaller window. A separate 8/32/128-job
+window sweep motivated increasing the four-worker limit to 32 to reduce waiting
+overhead while keeping memory bounded. Both result files retain every trial,
+operation count, source hash and logical fingerprint for their actual code.

@@ -9,7 +9,7 @@ The default gene-family tree plot includes a structure column between the intron
 count and protein domains when GFF-derived block coordinates are available.
 Boxes show CDS in the tip-label color and explicitly annotated UTRs in a
 paler tint of that color. UTR boxes are also thinner. Lines show intervening
-introns. Unannotated UTRs are not inferred from transcript spans or other isoforms. Each row runs from the 5′ to 3′ coding end, including minus-strand
+introns. This reader uses explicit UTR features. The optional representative finalization stage writes [projected UTRs](oriongeno-genome-annotation.md#longest-projected-utr-per-side) with source provenance; the plot itself does not infer them. Each row runs from the 5′ to 3′ coding end, including minus-strand
 genes. Boxes, lines, and abbreviated labels beside pairwise heatmaps use the
 same tip-label colors as the main labels.
 

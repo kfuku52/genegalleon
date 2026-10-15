@@ -11,16 +11,19 @@ import subprocess
 import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 
 try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
+    from parallel_io import ordered_bounded_results
     from wgd_evidence import branch_for_ks, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
+    from .parallel_io import ordered_bounded_results
     from .wgd_evidence import branch_for_ks, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
 
@@ -421,8 +424,10 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
             continue
         pairs_file, ds_file = output / f"aligned_pairs.code{code}.tsv", output / f"pair_ds.code{code}.tsv"
         with ThreadPoolExecutor(max_workers=cpus) as pool:
-            aligned = pool.map(lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]], code), selected)
-            write_table(pairs_file, aligned, PAIR_COLUMNS)
+            with closing(ordered_bounded_results(pool,
+                    lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]], code),
+                    ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
+                write_table(pairs_file, aligned, PAIR_COLUMNS)
         run_tool(["cdskit", "dnds", "--pairs_file", pairs_file,
                   "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"dnds.code{code}")
         expected = {"|".join(pair) for pair, _ in selected}

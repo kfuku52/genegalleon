@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import gzip
 import json
 import os
@@ -17,29 +18,33 @@ import uuid
 from pathlib import Path
 
 from annevo_model_selection import OVERLAP_PROFILES, PROFILES, protect_outputs, stable_signature, taxonomy_sha
-from annevo_runtime_cache import prepare, runtime_environment, verify_ready
+from annevo_runtime_cache import RuntimeVerification, prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
 
 
-def read_selected(path):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise RuntimeError("ANNEVO runtime receipt is missing or redirected")
-    receipt = json.loads(path.read_text())
-    if receipt.get("schema_version") != 1 or receipt.get("kind") != "genegalleon-annevo-installed-runtime":
-        raise RuntimeError("Invalid ANNEVO selected runtime receipt")
-    verify_ready(receipt)
-    model = Path(receipt["model_path"])
-    expected_model = receipt["manifest"]["models"][receipt["model_profile"]]
-    expected_path = Path(receipt["cache_root"]) / "models" / expected_model["sha256"] / Path(expected_model["path"]).name
-    if (model != expected_path or receipt["model_sha256"] != expected_model["sha256"]
-            or receipt["model_size"] != expected_model["size"]):
-        raise RuntimeError("ANNEVO selected model identity changed")
-    if model.is_symlink() or not model.is_file() or model.stat().st_size != receipt["model_size"] or file_sha(model) != receipt["model_sha256"]:
-        raise RuntimeError("ANNEVO model checksum changed")
-    return receipt
+def read_selected(path, *, verification=None):
+    with verification.guard() if verification is not None else contextlib.nullcontext():
+        path = Path(path)
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("ANNEVO runtime receipt is missing or redirected")
+        if verification is not None:
+            verification.file_sha(path)
+        receipt = json.loads(path.read_text())
+        if receipt.get("schema_version") != 1 or receipt.get("kind") != "genegalleon-annevo-installed-runtime":
+            raise RuntimeError("Invalid ANNEVO selected runtime receipt")
+        verify_ready(receipt, verification=verification)
+        model = Path(receipt["model_path"])
+        expected_model = receipt["manifest"]["models"][receipt["model_profile"]]
+        expected_path = Path(receipt["cache_root"]) / "models" / expected_model["sha256"] / Path(expected_model["path"]).name
+        if (model != expected_path or receipt["model_sha256"] != expected_model["sha256"]
+                or receipt["model_size"] != expected_model["size"]):
+            raise RuntimeError("ANNEVO selected model identity changed")
+        sha = verification.file_sha if verification is not None else file_sha
+        if model.is_symlink() or not model.is_file() or model.stat().st_size != receipt["model_size"] or sha(model) != receipt["model_sha256"]:
+            raise RuntimeError("ANNEVO model checksum changed")
+        return receipt
 
 
 def probe_gpu(receipt, env):
@@ -162,7 +167,8 @@ def selection_record(args, genome):
 
 def run(args):
     selected = Path(args.receipt)
-    runtime = read_selected(selected)
+    verification = RuntimeVerification()
+    runtime = read_selected(selected, verification=verification)
     if args.model_profile != runtime["model_profile"]:
         raise ValueError("ANNEVO selected model profile changed")
     for value in (args.threads, args.batch_size, args.sequence_threshold):
@@ -228,7 +234,6 @@ def run(args):
             if result.returncode or not predicted.is_file() or predicted.stat().st_size == 0:
                 raise RuntimeError("ANNEVO native prediction failed; retained logs: " + str(log_root))
             counts = gff_counts(predicted)
-            read_selected(selected)
             if selection_sha is not None:
                 _, current_selection_sha = selection_record(args, genome)
                 if current_selection_sha != selection_sha:
@@ -252,6 +257,7 @@ def run(args):
                        "scientific_completion_verified": False}
             if selection is not None:
                 receipt.update(model_selection=selection, model_selection_sha256=selection_sha, species=args.species)
+            read_selected(selected, verification=verification)
             publish_pair(predicted, output, output_receipt, receipt)
     return receipt
 

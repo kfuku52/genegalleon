@@ -323,8 +323,9 @@ def _raw_prediction(model, regions):
         model = original
     region = regions[model["query"]]
     old_evidence = model.get("evidence", {})
-    if model.get('search') == 'annevo_nominated_path':
-        if not isinstance(old_evidence.get('annevo'), dict):
+    if model.get('search') in {'annevo_nominated_path', 'oriongeno_nominated_path'}:
+        engine = model['search'].removesuffix('_nominated_path')
+        if not isinstance(old_evidence.get(engine), dict):
             raise ValueError('Cached ANNEVO prediction lacks its native provenance')
         # These paths must be re-nominated against the selected native GFF and
         # freshly aligned donors. The verified miniprot cache remains reusable.
@@ -522,9 +523,14 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
     if name not in frozen["species"]:
         return None
     batch = FreshDigestBatch()
+    def expect_many(items):
+        items = list(items)
+        hashes = batch.read(path for path, _ in items)
+        for path, expected in items:
+            if hashes[str(path)] != expected:
+                raise ValueError("Frozen prediction cache content changed: " + str(path))
     def expect(path, expected):
-        if batch.read([path])[str(path)] != expected:
-            raise ValueError("Frozen prediction cache content changed: " + str(path))
+        expect_many([(path, expected)])
     expect(old_root / "plan.json", frozen["plan_sha256"])
     old_plan = json.loads((old_root / "plan.json").read_text())
     directory = old_root / "rescued" / name
@@ -536,8 +542,8 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
             or any(receipt["files"].get(p) != v for p, v in worker["files"].items())):
         raise ValueError("Cached worker is not bound to frozen plan/results")
     _verify_model_metadata(directory, worker)
-    for member, expected in worker["files"].items():
-        expect(_safe_member(directory, member), expected)
+    expect_many((_safe_member(directory, member), expected)
+                for member, expected in worker["files"].items())
     for tool in ("miniprot", "miniprot_sha256"):
         if not old_plan["request"]["tools"].get(tool) or old_plan["request"]["tools"][tool] != plan["request"]["tools"].get(tool):
             raise ValueError("Prediction cache miniprot identity changed")
@@ -552,6 +558,7 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
         if old_params.get(key) != params.get(key):
             raise ValueError("Prediction cache search parameter changed: " + key)
     donors = {name, *(row["donor"] for row in regions), *receipt["key"].get("prepared", {})}
+    source_checks, prepared_directories = [], {}
     for donor in sorted(donors):
         old_source = old_plan["request"]["sources"].get(donor)
         source = plan["request"]["sources"].get(donor)
@@ -561,17 +568,22 @@ def verify_prediction_cache(old_root, new_root, plan, name, regions, params, fro
             old_hash = old_plan["request"]["files"][old_source[source_field]]
             if plan["request"]["files"][source[source_field]] != old_hash:
                 raise ValueError("Prediction cache frozen source changed: " + donor + "/" + source_field)
-            expect(Path(old_source[source_field]), old_hash)
-            expect(Path(source[source_field]), old_hash)
-        old_prepared = old_root / "prepared" / donor
+            source_checks.extend([(Path(old_source[source_field]), old_hash),
+                                  (Path(source[source_field]), old_hash)])
+        prepared_directories[donor] = old_root / "prepared" / donor
+    expect_many(source_checks)
+    prepared_hashes = batch.read(directory / "receipt.json" for directory in prepared_directories.values())
+    prepared_checks = []
+    for donor, old_prepared in prepared_directories.items():
         old_receipt = _receipt(old_prepared)
         if (old_receipt["key"] != {"plan": frozen["plan_sha256"], "species": donor}
-                or receipt["key"].get("prepared", {}).get(donor) != batch.read([old_prepared / "receipt.json"])[str(old_prepared / "receipt.json")]):
+                or receipt["key"].get("prepared", {}).get(donor) != prepared_hashes[str(old_prepared / "receipt.json")]):
             raise ValueError("Prediction cache prepared producer changed")
-        for member, expected in old_receipt["files"].items():
-            expect(_safe_member(old_prepared, member), expected)
+        prepared_checks.extend((_safe_member(old_prepared, member), expected)
+                               for member, expected in old_receipt["files"].items())
         expected_protein = old_receipt["files"]["genes.pep"]
-        expect(new_root / "prepared" / donor / "genes.pep", expected_protein)
+        prepared_checks.append((new_root / "prepared" / donor / "genes.pep", expected_protein))
+    expect_many(prepared_checks)
     mapping = {row["id"]: row for row in regions}
     if len(mapping) != len(regions):
         raise ValueError("Duplicate current prediction candidate IDs")

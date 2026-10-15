@@ -78,6 +78,17 @@ def test_nomination_threshold_uses_single_target_match_not_union(tmp_path):
     assert {"partial", "full"} <= {row["query"] for row in rows}
 
 
+def test_nomination_uses_coupled_coverage_identity_policy(tmp_path):
+    plan = comparison(tmp_path, [hit("t1", "partial", 80, identity=60),
+                                 hit("t2", "full", 80, identity=80)])
+    params = {**PARAMS, "minimum_coverage": .7, "minimum_broad_coverage": .9,
+              "minimum_lower_coverage_identity": .7}
+    rows, diagnostic = nominate_genome_only_candidates(tmp_path, plan, "T", [], params)
+    assert "partial" in {r["query"] for r in rows}
+    assert "full" not in {r["query"] for r in rows}
+    assert diagnostic["counts"]["represented"] == 1
+
+
 def test_nomination_cap_is_deterministic_and_reported(tmp_path):
     plan = comparison(tmp_path, [])
     rows, diagnostic = nominate_genome_only_candidates(tmp_path, plan, "T", [], {**PARAMS, "max_genome_queries": 2})
@@ -123,7 +134,7 @@ def model(donor="D", gene="q", start=0, seqid="chr1", problems=None):
             "evidence": {"target": "T", "donor": donor, "query": gene}}
 
 
-def test_off_block_requires_two_independent_species():
+def test_off_block_accepts_two_independent_species():
     rows = [model(), model("E")]
     diagnostic = reassess_unanchored_models(rows)
     assert rows[0]["problems"] == rows[1]["problems"] == []
@@ -133,7 +144,7 @@ def test_off_block_requires_two_independent_species():
 
 def test_paralogs_and_self_do_not_inflate_support():
     rows = [model("D", "q1"), model("D", "q2"), model("T", "self")]
-    reassess_unanchored_models(rows)
+    reassess_unanchored_models(rows, minimum_species=2)
     assert all("outside_expected_synteny_interval" in row["problems"] for row in rows)
     assert rows[0]["placement_evidence"]["independent_donor_species"] == ["D"]
 
@@ -148,7 +159,8 @@ def test_multiple_genomic_copies_remain_proposals():
 def test_hard_disruption_does_not_supply_support():
     rows = [model(), model("E", problems=["frameshift", "outside_expected_synteny_interval"])]
     reassess_unanchored_models(rows)
-    assert all(row["problems"] for row in rows)
+    assert not rows[0]["problems"]
+    assert rows[1]["problems"] == ["frameshift", "outside_expected_synteny_interval"]
     assert "placement_evidence" not in rows[1]
 
 
@@ -441,6 +453,44 @@ def test_cache_content_mutation_is_rejected(tmp_path, surface):
         verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
 
 
+@pytest.mark.parametrize("replace_same_bytes", [False, True])
+@pytest.mark.parametrize("group", ["worker", "sources", "prepared", "prepared_receipts"])
+def test_cache_member_change_during_grouped_verification_is_rejected(tmp_path, monkeypatch, replace_same_bytes, group):
+    from importlib import import_module
+
+    from workflow.support import rescue_prediction_cache as implementation
+    state = import_module(implementation.FreshDigestBatch.__module__)
+    old, new, plan, region = cache_fixture(tmp_path)
+    key = frozen_prediction_cache_key(old)
+    if group == "worker":
+        members = list(key["species"]["T"]["files"])
+        target, trigger = (old / "rescued" / "T" / member for member in (members[0], members[-1]))
+    elif group == "sources":
+        target, trigger = (Path(plan["request"]["sources"]["D"][field]) for field in ("genome", "gff"))
+    elif group == "prepared":
+        target, trigger = (root / "prepared" / "D" / "genes.pep" for root in (old, new))
+    else:
+        target, trigger = (old / "prepared" / donor / "receipt.json" for donor in ("D", "E"))
+    assert target != trigger
+    original = state.digest
+    changed = []
+    def digest_then_change(path):
+        result = original(path)
+        if Path(path) == trigger and not changed:
+            changed.append(True)
+            if replace_same_bytes:
+                replacement = target.with_suffix(".replacement")
+                replacement.write_bytes(target.read_bytes())
+                replacement.replace(target)
+            else:
+                target.write_bytes(target.read_bytes() + b" ")
+        return result
+    monkeypatch.setattr(state, "digest", digest_then_change)
+    with pytest.raises(OSError, match="changed while hashing"):
+        verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
+    assert changed
+
+
 @pytest.mark.parametrize("change", ["miniprot", "search", "source", "prepared"])
 def test_cache_incompatible_predictor_inputs_are_rejected(tmp_path, change):
     old, new, plan, region = cache_fixture(tmp_path)
@@ -561,7 +611,7 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
     from workflow.support.entrypoint_config_schema import parse_entrypoint
     root = Path(__file__).resolve().parents[2]
     new_parameters = {"prediction_cache": ("", "old verified predictions"), "max_genome_queries": ("20000", "17"),
-                      "unanchored_min_species": ("2", "3"), "terminal_max_extension": ("300", "180"),
+                      "unanchored_min_species": ("1", "3"), "terminal_max_extension": ("300", "180"),
                       "terminal_max_unaligned_c_overhang": ("2", "1")}
     metadata = {parameter.name: parameter for parameter in parse_entrypoint("gg_input_generation_entrypoint.sh")}
     overrides = {}
@@ -572,7 +622,7 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
         overrides[metadata[name].environment] = value
     core = (root / "workflow/core/gg_input_generation_core.sh").read_text()
     defaults = core[core.index('gene_model_rescue_tree='):core.index('require_cds=')]
-    function = core[core.index('prepare_gene_model_rescue() {'):core.index('\ngene_model_rescue_busco_species() {')]
+    function = core[core.index('resolve_oriongeno_candidate_inputs() {'):core.index('\ngene_model_rescue_busco_species() {')]
     tree = tmp_path / "tree.nwk"
     tree.write_text("(T,D);\n")
     capture = tmp_path / "arguments"
@@ -586,6 +636,7 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
                 "gene_model_rescue_tree=" + shlex.quote(str(tree)), "gg_support_dir=/support",
                 "species_cds_dir=/cds", "species_gff_dir=/gff", "species_genome_dir=/genome",
                 "species_busco_short_dir=/busco", "gg_workspace_input_dir=" + shlex.quote(str(tmp_path)),
+                "gg_workspace_output_dir=" + shlex.quote(str(tmp_path / "output")),
                 "prepare_gene_model_rescue"]
     for suffix, (_, value) in new_parameters.items():
         name = "gene_model_rescue_" + suffix
@@ -598,3 +649,42 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
     for suffix, (_, value) in new_parameters.items():
         flag = "--" + suffix.replace("_", "-")
         assert arguments[arguments.index(flag) + 1] == value
+
+
+def test_one_external_species_supports_intact_homologue_by_default():
+    rows = [model()]
+    diagnostic = reassess_unanchored_models(rows)
+    assert rows[0]["problems"] == []
+    assert diagnostic["minimum_species"] == 1
+    assert rows[0]["placement_evidence"]["independent_donor_species"] == ["D"]
+    assert rows[0]["placement_evidence"]["orthology"] == "unassigned"
+    assert rows[0]["placement_evidence"]["expected_copy"] == "unassigned"
+
+
+def test_explicit_two_species_requirement_remains_available():
+    rows = [model()]
+    reassess_unanchored_models(rows, minimum_species=2)
+    assert rows[0]["problems"] == ["outside_expected_synteny_interval"]
+    assert rows[0]["placement_evidence"]["reason"] == "insufficient_unique_donor_support"
+
+
+def test_self_only_is_not_external_presence_support():
+    rows = [model("T", "self")]
+    reassess_unanchored_models(rows)
+    assert rows[0]["problems"] == ["outside_expected_synteny_interval"]
+    assert rows[0]["placement_evidence"]["independent_donor_species"] == []
+
+
+@pytest.mark.parametrize("minimum", [0, -1, True, False, 1.0, None])
+def test_unanchored_support_requires_positive_integer(minimum):
+    with pytest.raises(ValueError, match="at least one"):
+        reassess_unanchored_models([model()], minimum_species=minimum)
+
+
+def test_rescue_cli_defaults_to_one_external_species(tmp_path):
+    from workflow.support.rescue_gene_models import parser
+    args = parser().parse_args(["plan", "--cds-dir", str(tmp_path),
+        "--gff-dir", str(tmp_path), "--genome-dir", str(tmp_path),
+        "--busco-dir", str(tmp_path), "--tree", str(tmp_path / "tree.nwk"),
+        "--output", str(tmp_path / "out")])
+    assert args.unanchored_min_species == 1

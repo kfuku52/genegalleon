@@ -55,23 +55,56 @@ def native_fixture(tmp_path, *, strand='+'):
     return genome, gff, receipt, table, sources, coding, blocks
 
 
+@pytest.mark.parametrize('engine', ['annevo', 'oriongeno'])
 @pytest.mark.parametrize('strand', ['+', '-'])
-def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, strand):
+def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, strand, engine):
     genome, _gff, _receipt, table, sources, coding, blocks = native_fixture(tmp_path, strand=strand)
-    frozen = annevo.freeze_inputs(table, sources)
+    if engine == 'oriongeno':
+        value = json.loads(_receipt.read_text())
+        value.update(kind='genegalleon-oriongeno-native-prediction', model_profile='plants', inference_settings={'lineage': 'plants'})
+        _receipt.write_text(json.dumps(value))
+    frozen = annevo.freeze_inputs(table, sources, engine=engine)
     regions = [dict(id='q' + donor, donor=donor, query='protein', seqid='chr', start=0, end=394)
                for donor in ('Donor_one', 'Donor_two')]
     protein = str(Seq(coding).translate()).removesuffix('*')
     proteins = {r['donor']: {'protein': protein} for r in regions}
     with catalog_module.indexed_genome(genome) as sequence:
-        models, audit = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS)
+        models, audit = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS, engine=engine)
         checked = [rescue.validate_model(m, sequence, 1, refinement.DEFAULTS) for m in models]
     assert len(models) == 2 and audit['native_paths'] == 1 and audit['proposals'] == []
     assert all(m['sequence'] == coding and m['cds'] == blocks and m['problems'] == [] for m in checked)
     assert all(m['coverage'] == m['identity'] == 1 for m in models)
-    assert all(m['evidence']['annevo']['native_transcript_id'] == 'native.t' for m in models)
-    assert all(m['evidence']['annevo']['alignment']['junction_information_available'] is False for m in models)
-    assert all('score' in m['evidence']['annevo']['alignment'] and 'junction_similarity' in m['evidence']['annevo']['alignment'] for m in models)
+    assert all(m['evidence'][engine]['native_transcript_id'] == 'native.t' for m in models)
+    assert all(m['evidence'][engine]['alignment']['junction_information_available'] is False for m in models)
+    assert all('score' in m['evidence'][engine]['alignment'] and 'junction_similarity' in m['evidence'][engine]['alignment'] for m in models)
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_parallel_nomination_retains_exact_order_scores_audit_and_inputs(tmp_path, strand):
+    genome, _gff, _receipt, table, sources, coding, _blocks = native_fixture(tmp_path, strand=strand)
+    frozen = annevo.freeze_inputs(table, sources)
+    regions = [dict(id=f'q{i}', donor='Donor_one' if i % 2 else 'Donor_two', query='protein',
+                    seqid='chr', start=0, end=394) for i in range(600)]
+    regions += [dict(id='unbounded', donor='Donor_one', query='protein', seqid='chr',
+                     start=0, end=394, genome_only=True),
+                dict(id='no_hit', donor='Donor_two', query='protein', seqid='chr', start=0, end=20)]
+    protein = str(Seq(coding).translate()).removesuffix('*')
+    proteins = {'Donor_one': {'protein': protein}, 'Donor_two': {'protein': 'M' + 'K' * 100}}
+    before = copy.deepcopy((frozen, regions, proteins))
+    with catalog_module.indexed_genome(genome) as sequence:
+        serial = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS)
+        parallel = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS, cpus=2)
+    assert parallel == serial
+    assert [row['query'] for row in parallel[0]] == [f'q{i}' for i in range(600)]
+    assert (frozen, regions, proteins) == before
+    parallel[0][0]['cds'][0][0] += 1
+    assert parallel[0][0]['cds'] != parallel[0][1]['cds']
+
+
+@pytest.mark.parametrize('cpus', [0, -1, True, 1.5, '2'])
+def test_nomination_rejects_invalid_cpu_budget(cpus):
+    with pytest.raises(ValueError, match='CPUs must be a positive integer'):
+        annevo.nominate(None, 'Target_species', [], {}, None, {}, cpus=cpus)
 
 
 @pytest.mark.parametrize('profile', annevo.PROFILES)

@@ -5,8 +5,10 @@ from collections import defaultdict
 
 try:
     from format_species_annotation.common import parse_gff_attributes
+    from rescue_path_compatibility import protein_path_support
 except ImportError:
     from .format_species_annotation.common import parse_gff_attributes
+    from .rescue_path_compatibility import protein_path_support
 
 
 def coding_shape(model):
@@ -33,13 +35,18 @@ def coding_overlap(a, b):
     return shared, in_frame
 
 
-def compatible_paths(a, b):
+def compatible_paths(a, b, *, owners_a=(), owners_b=()):
+    # Similar proteins and shared exons cannot override distinct original loci.
+    if owners_a and owners_b and set(owners_a).isdisjoint(owners_b):
+        return False
     shared, in_frame = coding_overlap(a, b)
     shorter = min(sum(e - s for s, e, *_ in a['cds']), sum(e - s for s, e, *_ in b['cds']))
     # A complete sequence and donor provenance are required before a new path
     # can resolve a conflict. Bare coordinate records remain review proposals.
-    return (bool(a.get('sequence')) and bool(b.get('sequence')) and bool(alignment_support(a)) and bool(alignment_support(b)) and shorter > 0
-            and shared / shorter >= .80 and in_frame == shared)
+    if not (a.get('sequence') and b.get('sequence') and alignment_support(a) and alignment_support(b)
+            and shorter > 0 and shared > 0 and in_frame == shared):
+        return False
+    return shared / shorter >= .80 or protein_path_support(a, b)['supported']
 
 
 def overlap_components(models):
@@ -249,7 +256,7 @@ def resolve_coding_paths(models, nearest=()):
                    if evidence.get('target')}
         donors = sorted({donor for row in rows for donor, _, _ in alignment_support(row)} - targets)
         if not decisive:
-            if any(evidence.get('annevo') for row in rows
+            if any(evidence.get('annevo') or evidence.get('oriongeno') for row in rows
                    for evidence in [row.get('evidence', {}), *row.get('support', [])]):
                 # A new predictor must not make an unresolved initiation/splice
                 # choice publishable through the longest-path fallback.

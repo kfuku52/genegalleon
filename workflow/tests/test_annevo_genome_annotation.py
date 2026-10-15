@@ -26,7 +26,7 @@ def source_function(command, *, env=None):
     )
 
 
-@pytest.mark.parametrize("backend", ["none", "annevo"])
+@pytest.mark.parametrize("backend", ["none", "annevo", "oriongeno"])
 def test_explicit_backend_selection(backend):
     result = source_function("gg_validate_genome_annotation_backend", env={"genome_annotation_backend": backend})
     assert result.returncode == 0, result.stderr
@@ -89,10 +89,10 @@ def test_all_backend_options_are_forwarded():
     expected = {"genome_annotation_backend", "annevo_model_profile", "annevo_runtime_manifest",
                 "annevo_no_download", "annevo_batch_size", "annevo_sequence_threshold"}
     assert expected <= set(result.stdout.splitlines())
-    assert 'genome_annotation_backend="none"' in ENTRY.read_text()
+    assert 'genome_annotation_backend="oriongeno"' in ENTRY.read_text()
 
 
-@pytest.mark.parametrize("backend", ["none", "annevo"])
+@pytest.mark.parametrize("backend", ["none", "annevo", "oriongeno"])
 def test_actual_input_discovery_selects_cds_or_genomes_only(backend, tmp_path):
     cds = tmp_path / "species_cds"
     genome = tmp_path / "species_genome"
@@ -154,15 +154,23 @@ elif a.command=='run':
 ''')
 
 
-def run_selected_stage(tmp_path, *, policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map=""):
+def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map=""):
     workspace = tmp_path / "workspace"
     support = tmp_path / "support"
     if not support.exists():
         support.mkdir()
         for path in SUPPORT.iterdir():
-            if path.name != "annevo_runtime.py":
+            if path.name not in {"annevo_runtime.py", "oriongeno_runtime.py"}:
                 (support / path.name).symlink_to(path, target_is_directory=path.is_dir())
         fake_native_runtime(support / "annevo_runtime.py")
+        fake_native_runtime(support / "oriongeno_runtime.py")
+        if backend == 'oriongeno':
+            fixture = support / 'oriongeno_runtime.py'
+            code = fixture.read_text().replace("'selection-receipt','species'", "'selection-receipt','species','python','checkpoint','source-commit'")
+            code = code.replace("p=argparse.ArgumentParser()", "PROFILES={'plants'}\np=argparse.ArgumentParser()")
+            code = code.replace("'genegalleon-annevo-native-prediction'", "'genegalleon-oriongeno-native-prediction'")
+            code = code.replace("'model_profile':'Magnoliopsida',", "'model_profile':'plants','inference_settings':{'lineage':'plants'},")
+            fixture.write_text(code)
     genome = workspace / "input/species_genome/Test_species.fa"
     genome.parent.mkdir(parents=True, exist_ok=True)
     if not genome.exists():
@@ -174,8 +182,9 @@ def run_selected_stage(tmp_path, *, policy="stop", fail=False, no_download=False
            "gg_workspace_output_dir": str(workspace / "output"),
            "gg_workspace_downloads_dir": str(workspace / "downloads"),
            "dir_sp_tmp": str(task), "sp_ub": "Test_species", "file_sp_genome": str(genome),
-           "genome_annotation_backend": "annevo", "GG_TASK_CPUS": "4", "artifact_stale_policy": policy,
+           "genome_annotation_backend": backend, "GG_TASK_CPUS": "4", "artifact_stale_policy": policy,
            "ANNEVO_FIXTURE_LOG": str(log), "ANNEVO_FIXTURE_FAIL": "1" if fail else "0",
+           "oriongeno_no_download": "1" if no_download else "0",
            "annevo_no_download": "1" if no_download else "0", "annevo_runtime_manifest": manifest, "annevo_model_profile": profile,
            "annevo_taxonomy_db": taxonomy_db, "annevo_taxid_map": taxid_map}
     command = ('source "$gg_support_dir/gg_util.sh"; gg_validate_genome_annotation_backend; '
@@ -312,11 +321,12 @@ def test_actual_runtime_warm_no_download_core_resume_requires_no_native_executio
 
 
 @pytest.mark.parametrize('backend,devices,success', [('none', '', True), ('annevo', '', False),
-                                                    ('annevo', '0', True), ('annevo', 'all', False)])
+                                                    ('annevo', '0', True), ('annevo', 'all', False),
+                                                    ('oriongeno', '0', True), ('oriongeno', '', False)])
 @pytest.mark.parametrize('representation', ['array', 'legacy_string'])
 def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, success, representation):
     text = ENTRY.read_text()
-    start = text.index('if [[ "${genome_annotation_backend}" == "annevo" ]]')
+    start = text.index('if [[ "${genome_annotation_backend}" == "annevo" ||')
     end = text.index('gg_entrypoint_activate_container_runtime', start)
     declaration = ('singularity_command=(fixture exec)' if representation == 'array'
                    else 'singularity_command="fixture exec"')
@@ -327,7 +337,7 @@ def test_entrypoint_requests_gpu_only_for_selected_backend(backend, devices, suc
     assert (result.returncode == 0) == success, result.stderr
     if success:
         expected = ['fixture', 'exec'] if representation == 'array' else ['fixture exec']
-        if backend == 'annevo':
+        if backend != 'none':
             if representation == 'array':
                 expected.append('--nv')
             else:
@@ -451,3 +461,14 @@ def test_auto_default_taxonomy_waits_for_an_existing_builder(tmp_path):
         if writer.poll() is None:
             writer.terminate()
             writer.wait(timeout=5)
+
+
+def test_oriongeno_stage_runs_formatter_candidate_export_and_offline_resume(tmp_path):
+    first, calls, workspace = run_selected_stage(tmp_path, backend='oriongeno')
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert [c['command'] for c in calls] == ['prepare', 'run']
+    prediction = workspace/'output/genome_prediction/oriongeno/Test_species'
+    assert (prediction/'candidate_inputs.tsv').is_file()
+    second, calls, _ = run_selected_stage(tmp_path, backend='oriongeno', no_download=True)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert [c['command'] for c in calls].count('run') == 1

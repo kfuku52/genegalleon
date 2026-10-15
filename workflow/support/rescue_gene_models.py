@@ -40,6 +40,7 @@ try:
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
+    from rescue_boundary_revalidation import revalidate_boundaries
     from rescue_coding_paths import (
         OwnershipIndex,
         alignment_support,
@@ -47,6 +48,7 @@ try:
         original_ownership,
         resolve_coding_paths,
     )
+    from rescue_homology_policy import homology_problems
     from rescue_model_quality import model_quality
     from rescue_model_store import export_legacy_models, iter_accepted_models, write_model_store
     from rescue_prediction_cache import (
@@ -84,6 +86,7 @@ except ImportError:
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
+    from .rescue_boundary_revalidation import revalidate_boundaries
     from .rescue_coding_paths import (
         OwnershipIndex,
         alignment_support,
@@ -91,6 +94,7 @@ except ImportError:
         original_ownership,
         resolve_coding_paths,
     )
+    from .rescue_homology_policy import homology_problems
     from .rescue_model_quality import model_quality
     from .rescue_model_store import export_legacy_models, iter_accepted_models, write_model_store
     from .rescue_prediction_cache import (
@@ -122,6 +126,7 @@ SCHEMA = 1
 PARAMETERS = ("common_references", "nearest_references", "minimum_busco", "cscore",
               "min_anchors", "distance", "diagonal_bound", "max_interval", "padding",
               "minimum_coverage", "minimum_identity", "max_intron", "genome_fallback",
+              "minimum_broad_coverage", "minimum_lower_coverage_identity",
               "max_genome_queries", "unanchored_min_species", "terminal_max_extension",
               "terminal_max_unaligned_c_overhang")
 
@@ -174,6 +179,9 @@ def identities():
     versions["implementation"] = digest(__file__)
     versions["annevo_candidate_implementation"] = digest(Path(__file__).with_name("annevo_gene_models.py"))
     versions["annevo_alignment_implementation"] = digest(Path(__file__).with_name("gene_model_selection.py"))
+    versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
+    versions["oriongeno_profiles_implementation"] = digest(Path(__file__).with_name("oriongeno_model_profiles.py"))
+    versions["transcript_utr_implementation"] = digest(Path(__file__).with_name("transcript_utrs.py"))
     versions["annevo_genome_identity_implementation"] = digest(Path(__file__).with_name("genome_sequence_identity.py"))
     from Bio.Align import _pairwisealigner
     versions['annevo_pairwise_aligner_sha256'] = digest(_pairwisealigner.__file__)
@@ -194,7 +202,10 @@ def identities():
     versions["model_store_implementation"] = digest(sys.modules[write_model_store.__module__].__file__)
     versions["raw_validation_implementation"] = digest(sys.modules[RawValidationMemo.__module__].__file__)
     for name, module in (("resolve_coding_paths", "rescue_coding_paths"),
+                         ("protein_path_support", "rescue_path_compatibility"),
+                         ("homology_problems", "rescue_homology_policy"),
                          ("complete_terminals", "rescue_terminal_completion"),
+                         ("revalidate_boundaries", "rescue_boundary_revalidation"),
                          ("nominate_genome_only_candidates", "rescue_additional_candidates"),
                          ("verify_prediction_cache", "rescue_prediction_cache")):
         versions[name + "_implementation"] = digest(Path(__file__).with_name(module + ".py"))
@@ -250,7 +261,7 @@ def build_plan(args):
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(root / ".plan.lock"):
-        if (args.max_genome_queries < 0 or args.unanchored_min_species < 2
+        if (args.max_genome_queries < 0 or args.unanchored_min_species < 1
                 or args.terminal_max_extension < 1):
             raise ValueError("Invalid bounded genome-search or terminal-completion parameters")
         species = sorted({extract_species_label(p.name) for p in args.cds_dir.iterdir()
@@ -337,6 +348,10 @@ def build_plan(args):
         prediction_cache = getattr(args, "prediction_cache", None)
         if prediction_cache:
             request["prediction_cache"] = frozen_prediction_cache_key(prediction_cache, sources)
+        if getattr(args, "oriongeno_inputs", None):
+            import annevo_gene_models
+            request["oriongeno"] = annevo_gene_models.freeze_inputs(args.oriongeno_inputs, sources, engine='oriongeno')
+            request["files"].update(request["oriongeno"]["files"])
         if getattr(args, "annevo_inputs", None):
             import annevo_gene_models
             request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, sources)
@@ -445,9 +460,10 @@ def verify_sources(plan, names, keys):
     current = digest_paths(paths)
     if any(plan["request"]["files"][p] != value for p, value in current.items()):
         raise ValueError("Frozen rescue input changed")
-    if plan['request'].get('annevo'):
-        import annevo_gene_models
-        annevo_gene_models.verify_inputs(plan['request']['annevo'], names)
+    for engine in ('annevo', 'oriongeno'):
+        if plan['request'].get(engine):
+            import annevo_gene_models
+            annevo_gene_models.verify_inputs(plan['request'][engine], names)
 
 
 def verified(directory, key, hash_workers=1):
@@ -935,10 +951,7 @@ def validate_model(model, genome, code, params):
         problems.append("frameshift")
     if any(not math.isfinite(model[key]) or not 0 <= model[key] <= 1 for key in ("coverage", "identity")):
         raise ValueError("Invalid alignment coverage or identity")
-    if model["coverage"] < params["minimum_coverage"]:
-        problems.append("low_coverage")
-    if model["identity"] < params["minimum_identity"]:
-        problems.append("low_identity")
+    problems.extend(homology_problems(model["coverage"], model["identity"], params))
     seq = ""
     cumulative = 0
     for i, (start, end, phase) in enumerate(exons):
@@ -994,7 +1007,7 @@ def validate_model(model, genome, code, params):
         translation = str(Seq(seq).translate(table=code))
         if "*" in translation[:-1] or ("missing_stop" in problems and "*" in translation):
             problems.append("internal_stop")
-    return {**model, "cds": exons, "sequence": seq, "assembly_ambiguous_bases": gap_bases,
+    return {**model, "cds": exons, "sequence": seq, "genetic_code": code, "assembly_ambiguous_bases": gap_bases,
             "problems": sorted(set(problems))}
 
 
@@ -1003,6 +1016,17 @@ def overlaps(a, b):
 
 
 def check_interval(model):
+    evidence = model.get('evidence', {})
+    boundary = model.get('boundary_revalidation', {})
+    nonstructural = {'unanchored_genome_search', 'outside_expected_synteny_interval',
+                    'overlap_existing_annotation', 'competing_new_models', 'ambiguous_coding_path_representative'}
+    direct = bool(model.get('sequence')) and not (set(model.get('problems', ())) - nonstructural)
+    donor = evidence.get('donor')
+    model['presence_evidence'] = {
+        'supports_intact_homolog': bool(donor and (direct or boundary.get('supports_intact_homolog'))),
+        'basis': 'verified_boundary_paths' if boundary.get('supports_intact_homolog') else 'validated_genomic_cds_and_donor_alignment',
+        'external_donor_species': [donor] if donor and donor != evidence.get('target') else [],
+        'orthology': 'unassigned', 'expected_copy': 'unassigned'}
     region = model["evidence"]
     if region.get("genome_only"):
         model["problems"].append("unanchored_genome_search")
@@ -1277,7 +1301,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 evidence = model["evidence"]
                 checked = complete_terminals(checked, genome, source["genetic_code"], params,
                                              proteins[evidence["donor"]][evidence["query"]], validate_model)
-                checked['problems'] = sorted(set(checked['problems']) | set(model.get('annevo_problems', [])))
+                checked = revalidate_boundaries(checked, genome, source["genetic_code"], params,
+                                                proteins[evidence["donor"]][evidence["query"]], validate_model)
+                checked['problems'] = sorted(set(checked['problems']) | set(model.get('annevo_problems', []) + model.get('oriongeno_problems', [])))
                 checked["raw_prediction"] = raw_prediction
                 return check_interval(checked)
             if cached:
@@ -1285,7 +1311,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     # Native ANNEVO paths are nominated and aligned anew from
                     # the current source-bound GFF; old cache support cannot
                     # enable ANNEVO implicitly or survive changed donor gates.
-                    if model.get('evidence', {}).get('annevo'):
+                    if any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')):
                         continue
                     validated.append(checked_prediction(model))
             for model in predictions:
@@ -1349,7 +1375,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     if not (tmp / "genome.fa").exists():
                         (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
                     refine_gemoma(tmp, root, plan, source, gemoma_regions, genome, validated, cpus)
-            if plan['request'].get('annevo'):
+            for engine in (e for e in ('annevo', 'oriongeno') if plan['request'].get(e)):
                 import annevo_gene_models
                 bounded_regions = [r for r in regions if not r.get('genome_only')]
                 placements = set()
@@ -1367,11 +1393,11 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                                             'start': max(0, a - padding),
                                             'end': min(genome.get_reference_length(model['seqid']), b + padding)})
                 native_models, annevo_audit = annevo_gene_models.nominate(
-                    plan['request']['annevo'], name, bounded_regions, proteins, genome, params)
+                    plan['request'][engine], name, bounded_regions, proteins, genome, params, cpus=cpus, engine=engine)
                 native_checked = [checked_prediction(model) for model in native_models]
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)
-                atomic_json(tmp / 'annevo_candidates.json', annevo_audit)
+                atomic_json(tmp / (engine + '_candidates.json'), annevo_audit)
             if cached:
                 cached.check()
             if searched_genome_ids:
@@ -1560,7 +1586,8 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
             # Re-align each refined CDS to its donor protein for comparable QC.
             for model in groups.values():
                 checked = validate_model(model, genome, source["genetic_code"],
-                                         {**params, "minimum_coverage": 0, "minimum_identity": 0})
+                                         {**params, "minimum_coverage": 0, "minimum_identity": 0,
+                                          "minimum_broad_coverage": 0})
                 protein = str(Seq(checked["sequence"][:len(checked["sequence"]) // 3 * 3]).translate(table=source["genetic_code"])).rstrip("*")
                 if proteins is None:
                     proteins = {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")}
@@ -1581,16 +1608,14 @@ def refine_gemoma(tmp, root, plan, source, regions, genome, validated, cpus):
                     checked.update(query_start=int(alignment.aligned[0][0][0]),
                                    query_end=int(alignment.aligned[0][-1][1]), query_length=len(reference))
                     checked["query_span_coverage"] = (checked["query_end"] - checked["query_start"]) / len(reference)
-                if checked["coverage"] < params["minimum_coverage"]:
-                    checked["problems"].append("low_coverage")
-                if checked["identity"] < params["minimum_identity"]:
-                    checked["problems"].append("low_identity")
+                checked["problems"].extend(homology_problems(checked["coverage"], checked["identity"], params))
                 if over_budget:
                     checked["problems"].append("donor_alignment_budget_exceeded")
                 raw_prediction = {key: checked[key] for key in RAW_FIELDS if key in checked}
                 raw_prediction["cds"] = [list(block) for block in model["cds"]]
                 raw_prediction["evidence"] = dict(model["evidence"])
                 checked = complete_terminals(checked, genome, source["genetic_code"], params, reference, validate_model)
+                checked = revalidate_boundaries(checked, genome, source["genetic_code"], params, reference, validate_model)
                 checked["raw_prediction"] = raw_prediction
                 validated.append(check_interval(checked))
 
@@ -1682,7 +1707,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                     gene_start = min([model["start"], *[min(b[0] for b in a["cds"]) for a in alternative_paths]])
                     gene_end = max([model["end"], *[max(b[1] for b in a["cds"]) for a in alternative_paths]])
                     locus_attributes = rescue_selection_attributes(model)
-                    if plan['request'].get('annevo'):
+                    if any(plan['request'].get(e) for e in ('annevo', 'oriongeno')):
                         import annevo_gene_models
                         locus_attributes += annevo_gene_models.gff_attributes(model.get('support', [model.get('evidence', {})]))
                     out.write("\t".join([*common[:2], "gene", str(gene_start + 1), str(gene_end), *common[5:8], fields("gene", "ID=" + gene + locus_attributes)]) + "\n")
@@ -1858,18 +1883,24 @@ def parser():
     plan.add_argument("--diagonal-bound", type=int, default=20)
     plan.add_argument("--max-interval", type=int, default=200000)
     plan.add_argument("--padding", type=int, default=0)
-    plan.add_argument("--minimum-coverage", type=float, default=0.95)
+    plan.add_argument("--minimum-coverage", type=float, default=0.70,
+                      help="Hard donor coverage floor; below broad coverage stronger identity is required")
+    plan.add_argument("--minimum-broad-coverage", type=float, default=0.90,
+                      help="Coverage at which minimum-identity suffices; 0 restores a fixed cutoff")
+    plan.add_argument("--minimum-lower-coverage-identity", type=float, default=0.70,
+                      help="Identity required below minimum-broad-coverage")
     plan.add_argument("--minimum-identity", type=float, default=0.5)
     plan.add_argument("--max-intron", type=int, default=20000)
     plan.add_argument("--genome-fallback", type=int, choices=(0, 1), default=1)
     plan.add_argument("--prediction-cache", type=Path, help="Frozen, checksum-verified previous rescue output; raw predictions are revalidated")
+    plan.add_argument("--oriongeno-inputs", type=Path, help="Native OrionGeno candidate and UTR TSV: species,gff,receipt")
     plan.add_argument("--annevo-inputs", type=Path, help="Source-bound native ANNEVO candidate TSV: species,gff,receipt; existing evidence/QC gates remain")
     plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
                       help="Versioned shared prediction storage, or explicit legacy JSON arrays")
     plan.add_argument("--retain-search-inputs", action="store_true",
                       help="Retain diagnostic and completed predictor FASTAs (default: regenerate on demand)")
     plan.add_argument("--max-genome-queries", type=int, default=20000)
-    plan.add_argument("--unanchored-min-species", type=int, default=2)
+    plan.add_argument("--unanchored-min-species", type=int, default=1)
     plan.add_argument("--terminal-max-extension", type=int, default=300)
     plan.add_argument("--terminal-max-unaligned-c-overhang", type=int, choices=(0, 1, 2), default=2)
     plan.add_argument("--gemoma-jar", type=Path, help="Optional GeMoMa refinement; requires Java and tblastn")
@@ -1907,6 +1938,7 @@ def main():
                 or not 0 < args.cscore <= 1 or args.min_anchors < 2 or args.distance < 1
                 or args.max_interval < 1 or args.padding < 0 or args.max_intron < 1 or args.diagonal_bound < 1
                 or not 0 < args.minimum_coverage <= 1 or not 0 < args.minimum_identity <= 1
+                or not 0 <= args.minimum_broad_coverage <= 1 or not 0 <= args.minimum_lower_coverage_identity <= 1
                 or bool(args.feature) != bool(args.attribute)):
             p.error("Invalid rescue parameters")
         plan = build_plan(args)

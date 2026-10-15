@@ -44,6 +44,77 @@ def saved_karyotype(tmp_path):
     return directory, pair, colors
 
 
+def test_batched_formats_preserve_complete_single_format_outputs(saved_karyotype, monkeypatch):
+    import matplotlib
+
+    from workflow.support.pairwise_synteny_karyotype import render_formats, render_karyotype
+
+    directory, pair, colors = saved_karyotype
+    (directory / 'karyotype_colors.json').write_text(json.dumps(colors))
+    monkeypatch.setenv('SOURCE_DATE_EPOCH', '1780000000')
+    formats, expected = ('pdf', 'png', 'svg'), {}
+    report = directory / 'karyotype_style.json'
+    with matplotlib.rc_context({'svg.hashsalt': 'gg-batch-format-test'}):
+        for fmt in formats:
+            render_karyotype(directory, pair, fmt, colors, layout_report=report)
+            expected[fmt] = (directory / ('karyotype.' + fmt)).read_bytes()
+        expected_report = report.read_bytes()
+        render_formats(directory, pair, formats, layout_report=report)
+    for fmt in formats:
+        assert (directory / ('karyotype.' + fmt)).read_bytes() == expected[fmt]
+    assert report.read_bytes() == expected_report
+
+
+def test_batch_failed_format_preserves_previous_plot_and_later_formats(saved_karyotype, monkeypatch):
+    from matplotlib.figure import Figure
+
+    from workflow.support.pairwise_synteny_karyotype import render_formats
+
+    directory, pair, colors = saved_karyotype
+    (directory / 'karyotype_colors.json').write_text(json.dumps(colors))
+    for fmt in ('png', 'svg'):
+        (directory / ('karyotype.' + fmt)).write_bytes(b'previous plot')
+    original = Figure.savefig
+    def fail(figure, path, **kwargs):
+        if kwargs.get('format') == 'png':
+            Path(path).write_bytes(b'partial plot')
+            raise OSError('simulated format failure')
+        return original(figure, path, **kwargs)
+    monkeypatch.setattr(Figure, 'savefig', fail)
+    with pytest.raises(OSError, match='format failure'):
+        render_formats(directory, pair, ('pdf', 'png', 'svg'))
+    assert (directory / 'karyotype.pdf').read_bytes().startswith(b'%PDF')
+    assert (directory / 'karyotype.png').read_bytes() == b'previous plot'
+    assert (directory / 'karyotype.svg').read_bytes() == b'previous plot'
+
+
+def test_batch_source_replacement_during_save_prevents_publication(saved_karyotype, tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    from workflow.support.pairwise_synteny_karyotype import render_formats
+
+    directory, pair, colors = saved_karyotype
+    (directory / 'karyotype_colors.json').write_text(json.dumps(colors))
+    destination, report = directory / 'karyotype.pdf', directory / 'karyotype_style.json'
+    destination.write_bytes(b'previous plot')
+    report.write_text('previous report')
+    original, figures = Figure.savefig, plt.get_fignums()
+    def changed(figure, path, **kwargs):
+        result = original(figure, path, **kwargs)
+        source = directory / 'target.bed'
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+        return result
+    monkeypatch.setattr(Figure, 'savefig', changed)
+    with pytest.raises(OSError, match='changed'):
+        render_formats(directory, pair, ('pdf', 'svg'), layout_report=report)
+    assert destination.read_bytes() == b'previous plot'
+    assert report.read_text() == 'previous report'
+    assert plt.get_fignums() == figures
+
+
 def test_karyotype_saved_relative_inputs_resolve_beside_layout(saved_karyotype, tmp_path, monkeypatch):
     from workflow.support.pairwise_synteny_karyotype import render_karyotype
 

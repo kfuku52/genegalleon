@@ -1,6 +1,8 @@
 """Install optional ANNEVO generations without modifying the GG base environment."""
 from __future__ import annotations
 
+import contextlib
+import copy
 import hashlib
 import json
 import os
@@ -9,6 +11,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -22,6 +25,7 @@ from annevo_runtime_download import (
     resolve_manifest,
     validate_manifest,
 )
+from input_generation_array_state import FreshDigestBatch
 from shared_namespace_lock import namespace_lock
 
 
@@ -81,6 +85,10 @@ def verify_tree(root, recorded):
     current = {p.relative_to(root).as_posix(): p for p in root.rglob("*")}
     if set(current) != set(recorded):
         raise RuntimeError("ANNEVO runtime file inventory changed")
+    _verify_tree_members(root, recorded, current)
+
+
+def _verify_tree_members(root, recorded, current):
     for relative, expected in recorded.items():
         path = current[relative]
         if signature(path) != expected["signature"]:
@@ -92,7 +100,77 @@ def verify_tree(root, recorded):
             raise RuntimeError("ANNEVO runtime member became a symlink: " + relative)
 
 
-def verify_ready(receipt):
+class RuntimeVerification:
+    """One invocation's full-byte hashes and exact runtime membership proofs.
+
+    First use enumerates the complete tree. Later checks stat every known member
+    and its directories, including the root, so additions, removals, replacements
+    and link/permission changes still fail. No proof is stored on disk or global.
+    """
+
+    def __init__(self):
+        self.digests = FreshDigestBatch()
+        self.trees = {}
+        self.lock = threading.RLock()
+        self.failure = None
+
+    @contextlib.contextmanager
+    def guard(self):
+        with self.lock:
+            if self.failure is not None:
+                raise RuntimeError('Runtime verification previously failed') from self.failure
+            try:
+                yield
+            except (OSError, ValueError, RuntimeError, KeyError) as exc:
+                self.failure = exc
+                raise
+
+    def file_sha(self, path):
+        with self.guard():
+            return self.digests.read([path])[str(path)]
+
+    @staticmethod
+    def _check_tree(root, entry):
+        root_identity, recorded, current = entry
+        if signature(root) != root_identity:
+            raise RuntimeError('Runtime root changed: ' + str(root))
+        _verify_tree_members(root, recorded, current)
+        RuntimeVerification._check_directories(root, entry)
+
+    @staticmethod
+    def _check_directories(root, entry):
+        root_identity, recorded, current = entry
+        # Recheck directory generations after members: a directory encountered
+        # early must not gain a new child while later files are being checked.
+        for relative, expected in recorded.items():
+            if expected['type'] == 'directory' and signature(current[relative]) != expected['signature']:
+                raise RuntimeError('Runtime directory changed: ' + relative)
+        if signature(root) != root_identity:
+            raise RuntimeError('Runtime root changed: ' + str(root))
+
+    def verify_tree(self, root, recorded):
+        with self.guard():
+            root = Path(root).absolute()
+            if root not in self.trees:
+                before = signature(root)
+                verify_tree(root, recorded)
+                entry = before, copy.deepcopy(recorded), {name: root / name for name in recorded}
+                self._check_directories(root, entry)
+                self.trees[root] = entry
+            else:
+                entry = self.trees[root]
+                if recorded != entry[1]:
+                    raise RuntimeError('Runtime inventory changed: ' + str(root))
+                self._check_tree(root, entry)
+
+    def check(self):
+        with self.guard():
+            self.digests.check()
+            for root, entry in self.trees.items():
+                self._check_tree(root, entry)
+
+
+def verify_ready(receipt, *, verification=None):
     manifest = receipt["manifest"]
     profile = receipt.get("model_profile") or next(iter(manifest["models"]))
     validate_manifest(manifest, profile)
@@ -112,9 +190,11 @@ def verify_ready(receipt):
     if root.is_symlink() or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o222:
         raise RuntimeError("ANNEVO runtime generation is unsafe or writable")
     inventory_path = Path(receipt["inventory_path"])
-    if inventory_path.is_symlink() or file_sha(inventory_path) != receipt["inventory_sha256"]:
+    sha = verification.file_sha if verification is not None else file_sha
+    if inventory_path.is_symlink() or sha(inventory_path) != receipt["inventory_sha256"]:
         raise RuntimeError("ANNEVO installed inventory checksum changed")
-    verify_tree(root, json.loads(inventory_path.read_text()))
+    tree_check = verification.verify_tree if verification is not None else verify_tree
+    tree_check(root, json.loads(inventory_path.read_text()))
     return receipt
 
 

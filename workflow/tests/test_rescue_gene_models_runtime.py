@@ -506,7 +506,11 @@ def test_genome_only_search_uses_fallback_inputs_without_local_diagnostics(hidde
     assert [row["candidate"] for row in rescue.table(directory / "genome_query_mapping.tsv")] == [region["id"]]
     models = json.loads((directory / "models.json").read_text())
     assert any(m["search"] == "genome_fallback" and m["sequence"] == sequences[8] for m in models)
-    assert all(m["status"] != "accepted" and "unanchored_genome_search" in m["problems"] for m in models)
+    accepted = [m for m in models if m["status"] == "accepted"]
+    assert len(accepted) == 1 and accepted[0]["sequence"] == sequences[8]
+    assert accepted[0]["placement_evidence"]["minimum_species"] == 1
+    assert accepted[0]["placement_evidence"]["orthology"] == 'unassigned'
+    assert accepted[0]["placement_evidence"]["expected_copy"] == 'unassigned'
 
 
 def test_broader_genome_contract_researches_cached_positive_and_empty_coverage(hidden_models, monkeypatch):
@@ -1381,7 +1385,7 @@ def test_real_unquota_self_synteny_finds_missing_copy_despite_retained_copy(hidd
     assert any(r["query"] == species[1] + "_g8" and r["seqid"] == "chr1" for r in found)
 
 
-def test_padding_does_not_accept_a_model_outside_its_flanking_anchors(hidden_models, monkeypatch):
+def test_padding_outside_flanking_anchors_cannot_supply_synteny_placement(hidden_models, monkeypatch):
     output, names, sequences = make_plan(hidden_models)
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
@@ -1396,8 +1400,12 @@ def test_padding_does_not_accept_a_model_outside_its_flanking_anchors(hidden_mod
     directory = rescue.rescue(output, plan, names[0], 1)
     models = json.loads((directory / "models.json").read_text())
     assert any(m["sequence"] == sequences[8] for m in models)
-    assert all(m["status"] != "accepted" for m in models)
-    assert any("outside_expected_synteny_interval" in m["problems"] for m in models)
+    accepted = [m for m in models if m["status"] == "accepted"]
+    assert accepted
+    assert all(m["placement_evidence"]["classification"] == "unanchored" for m in accepted)
+    assert all(m["placement_evidence"]["orthology"] == "unassigned" for m in accepted)
+    assert all(m["placement_evidence"]["expected_copy"] == "unassigned" for m in accepted)
+    assert all(m["placement_evidence"]["minimum_species"] == 1 for m in accepted)
 
 
 @pytest.mark.parametrize("query,fallback", [(8, False), (11, False), (8, True)])

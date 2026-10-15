@@ -99,6 +99,29 @@ def test_promoter_unit_and_tool_checks_are_collected_in_separate_lanes(tmp_path,
     assert f"{expected_count} tests collected" in result.stdout
 
 
+@pytest.mark.parametrize("suite", ["fast", "runtime"])
+def test_ortholog_r_rendering_is_collected_once_in_runtime(tmp_path, suite):
+    test_dir = tmp_path / "workflow/tests"
+    test_dir.mkdir(parents=True)
+    for name in ("conftest.py", "validation_manifest.json", "test_query_gene_orthologs.py",
+                 "test_query_gene_orthologs_runtime.py"):
+        shutil.copyfile(REPO_ROOT / "workflow/tests" / name, test_dir / name)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--collect-only", f"--gg-suite={suite}",
+         "-c", str(REPO_ROOT / "pyproject.toml"), "--rootdir", str(tmp_path),
+         "--confcutdir", str(tmp_path), str(test_dir)],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendering = [line for line in result.stdout.splitlines() if any(name in line for name in (
+        "::test_strict_ortholog_copy_numbers_fit_between_evidence_bands",
+        "::test_duplication_bars_follow_displayed_gene_membership[",
+    ))]
+    assert len(rendering) == (7 if suite == "runtime" else 0), result.stdout
+    assert all("test_query_gene_orthologs_runtime.py::" in line for line in rendering)
+    assert ("::test_invalid_duplication_cutoff_fails_before_reading_inputs[" in result.stdout) == (suite == "fast")
+
+
 def test_dev_forwards_focused_arguments_through_the_container(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

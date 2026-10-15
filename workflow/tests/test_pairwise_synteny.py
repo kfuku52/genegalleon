@@ -4,6 +4,7 @@ import importlib
 import itertools
 import json
 import random
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,77 @@ from workflow.support import pairwise_synteny_karyotype as karyotype
 from workflow.support import pairwise_synteny_layout as layout
 
 
+def repeated_pair_plan(tmp_path):
+    paths = {}
+    for species in ('Target_species', 'Query_species'):
+        fasta, gff = tmp_path / (species + '.faa'), tmp_path / (species + '.gff3')
+        fasta.write_text('>' + species + '_g\nMK\n')
+        gff.write_text('chr\ts\tgene\t1\t9\t.\t+\t.\tID=g\n')
+        paths[species] = fasta, gff
+    pairs = tmp_path / 'pairs.tsv'
+    with pairs.open('w') as stream:
+        writer = csv.writer(stream, delimiter='\t')
+        writer.writerow(['analysis_id', 'target_species', 'target_fasta', 'target_gff',
+                         'query_species', 'query_fasta', 'query_gff'])
+        for index in range(6):
+            writer.writerow([f'pair{index}', 'Target_species', *paths['Target_species'],
+                             'Query_species', *paths['Query_species']])
+    args = argparse.Namespace(workspace=tmp_path, pairs=pairs, sequence_mode='protein', genetic_code=1,
+        cscore=.7, min_anchors=4, distance=20, minimum_mapping_fraction=1,
+        formats='svg', karyotype_sort='both_length', dotplot_min_length=0)
+    return args, paths
+
+
+def test_planning_repeated_species_reads_each_physical_input_once(tmp_path, monkeypatch):
+    args, paths = repeated_pair_plan(tmp_path)
+    state = sys.modules[synteny.FreshDigestBatch.__module__]
+    original = state.digest
+    reads = []
+    def digest(path):
+        reads.append(Path(path))
+        return original(path)
+    monkeypatch.setattr(state, 'digest', digest)
+    monkeypatch.setattr(synteny, 'tool_identity', lambda: {})
+    plan = synteny.build_plan(args)
+    assert len(plan['pairs']) == 6
+    for source in [args.pairs, *(path for pair in paths.values() for path in pair)]:
+        assert reads.count(source) == 1
+        assert plan['input_hashes'][str(source)] == original(source)
+    # A later CLI boundary does not inherit the previous proof.
+    synteny.build_plan(args)
+    assert reads.count(paths['Target_species'][0]) == 2
+
+
+@pytest.mark.parametrize('changed', ['pairs', 'source'])
+def test_planning_rejects_same_byte_replacement_after_hashing(tmp_path, monkeypatch, changed):
+    args, paths = repeated_pair_plan(tmp_path)
+    source = args.pairs if changed == 'pairs' else paths['Target_species'][0]
+    def tools():
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+        return {}
+    monkeypatch.setattr(synteny, 'tool_identity', tools)
+    with pytest.raises(OSError, match='changed'):
+        synteny.build_plan(args)
+
+
+def test_planning_rejects_mutation_during_initial_hash(tmp_path, monkeypatch):
+    args, paths = repeated_pair_plan(tmp_path)
+    source = paths['Target_species'][0]
+    state = sys.modules[synteny.FreshDigestBatch.__module__]
+    original = state.digest
+    def changed(path):
+        value = original(path)
+        if Path(path) == source:
+            source.write_text('changed during hashing')
+        return value
+    monkeypatch.setattr(state, 'digest', changed)
+    monkeypatch.setattr(synteny, 'tool_identity', lambda: {})
+    with pytest.raises(OSError, match='changed'):
+        synteny.build_plan(args)
+
+
 def write_inputs(tmp_path, fasta=">Species_name_t1\nMPEPTIDE\n>Species_name_t2\nMPEPTIDEAAA\n"):
     source = tmp_path / "Species_name.protein.fa"
     source.write_text(fasta)
@@ -25,6 +97,90 @@ def write_inputs(tmp_path, fasta=">Species_name_t1\nMPEPTIDE\n>Species_name_t2\n
                    "chr1\ttest\tmRNA\t1\t100\t.\t+\t.\tID=t2;Parent=g1\n")
     return {"species": "Species_name", "fasta": str(source), "gff": str(gff), "mode": "protein",
             "feature": "", "attribute": "", "genetic_code": None}
+
+
+def test_preparations_share_exact_species_results_and_isolate_native_copies(tmp_path, monkeypatch):
+    source = write_inputs(tmp_path)
+    cache, first, second, control = (tmp_path / name for name in ('cache', 'first', 'second', 'control'))
+    for path in (cache, first, second, control):
+        path.mkdir()
+    expected_genes, expected_meta = synteny.prepare_genome(source, control, 'target', 1)
+    original = synteny.prepare_genome
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(synteny, 'prepare_genome', counted)
+    prepared = synteny.PreparedGenomes(cache)
+    genes, metadata = prepared.prepare(source, first, 'target', 1)
+    assert genes == expected_genes
+    assert json.dumps(metadata, sort_keys=True) == json.dumps(expected_meta, sort_keys=True)
+    (first / 'target.pep').write_text('native private modification')
+    assert prepared.prepare(source, second, 'query', 1)[0] == expected_genes
+    assert len(calls) == 1
+    for suffix in ('.bed', '.pep', '.id_map.tsv'):
+        assert (second / ('query' + suffix)).read_bytes() == (control / ('target' + suffix)).read_bytes()
+    later, third = tmp_path / 'later-cache', tmp_path / 'third'
+    later.mkdir()
+    third.mkdir()
+    replacement = tmp_path / 'replacement'
+    replacement.write_bytes(Path(source['fasta']).read_bytes())
+    replacement.replace(source['fasta'])
+    assert synteny.PreparedGenomes(later).prepare(source, third, 'target', 1)[0] == expected_genes
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('role', ['source', 'generation'])
+def test_preparation_reuse_rejects_same_byte_replacements(tmp_path, role):
+    source = write_inputs(tmp_path)
+    cache, first, second = (tmp_path / name for name in ('cache', 'first', 'second'))
+    for path in (cache, first, second):
+        path.mkdir()
+    prepared = synteny.PreparedGenomes(cache)
+    prepared.prepare(source, first, 'target', 1)
+    path = Path(source['fasta']) if role == 'source' else next(cache.iterdir()) / 'source.pep'
+    replacement = tmp_path / 'replacement'
+    replacement.write_bytes(path.read_bytes())
+    replacement.replace(path)
+    with pytest.raises(OSError, match='changed'):
+        prepared.prepare(source, second, 'query', 1)
+    assert not list(second.iterdir())
+
+
+def test_preparation_key_includes_source_options_and_mapping_threshold(tmp_path, monkeypatch):
+    source = write_inputs(tmp_path)
+    cache = tmp_path / 'cache'
+    cache.mkdir()
+    prepared = synteny.PreparedGenomes(cache)
+    original, calls = synteny.prepare_genome, []
+    def counted(*args, **kwargs):
+        calls.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(synteny, 'prepare_genome', counted)
+    for index, (options, threshold) in enumerate(((source, 1), (source, .9), (dict(source, genetic_code=2), 1))):
+        destination = tmp_path / str(index)
+        destination.mkdir()
+        prepared.prepare(options, destination, 'target', threshold)
+    assert len(calls) == 3
+
+
+def test_source_change_during_initial_preparation_is_rejected(tmp_path, monkeypatch):
+    source = write_inputs(tmp_path)
+    cache, output = tmp_path / 'cache', tmp_path / 'output'
+    cache.mkdir()
+    output.mkdir()
+    original = synteny.prepare_genome
+    def changed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        path = Path(source['gff'])
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        return result
+    monkeypatch.setattr(synteny, 'prepare_genome', changed)
+    with pytest.raises(OSError, match='changed'):
+        synteny.PreparedGenomes(cache).prepare(source, output, 'target', 1)
+    assert not list(output.iterdir())
 
 
 def test_prepare_selects_one_isoform_and_preserves_id_mapping(tmp_path):

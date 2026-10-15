@@ -49,13 +49,27 @@ def test_hgt_intron_support_respects_imputed_flag_without_count_column():
     assert intron_observation_masks(leaves)[1].tolist() == [True, False]
 
 
+def test_hgt_package_import_is_independent_of_test_collection_order(tmp_path):
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    code = (f"import sys; sys.path.insert(0, {str(root)!r}); "
+            "from workflow.support.score_hgt_candidates import intron_observation_masks; "
+            "assert callable(intron_observation_masks)")
+    result = subprocess.run([sys.executable, '-I', '-c', code], cwd=tmp_path,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("name", ["run_scm_intron", "GG_GENE_EVOLUTION_RUN_SCM_INTRON"])
-def test_retired_scm_override_fails_with_migration_instruction(name):
+def test_retired_scm_override_fails_with_migration_instruction(name, tmp_path):
     import os
     import subprocess
 
     root = Path(__file__).resolve().parents[2]
     result = subprocess.run(["bash", str(root / "workflow" / "gg_gene_evolution_entrypoint.sh")],
-                            cwd=root, env={**os.environ, name: "1"}, capture_output=True, text=True)
+                            cwd=root, env={**os.environ, name: "1", "GG_COMMON_TMP_ROOT": str(tmp_path)},
+                            capture_output=True, text=True)
     assert result.returncode != 0
     assert "run_scm_intron is retired; use run_asr_intron" in result.stderr

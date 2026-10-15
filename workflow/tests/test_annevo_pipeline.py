@@ -45,7 +45,7 @@ Path(a.o).write_text(gff);event('decode-end')
                  native_entrypoint=str(source / 'annotation.py'), generation=str(source),
                  model_path=str(source / 'model.pt'), runtime_digest='a'*64, cache_key='b'*64,
                  source_commit='c'*40, model_sha256='d'*64)
-    monkeypatch.setattr(pipeline.native, 'read_selected', lambda p: value)
+    monkeypatch.setattr(pipeline.native, 'read_selected', lambda p, **kw: value)
     monkeypatch.setattr(pipeline.native, 'probe_gpu', lambda *a: {'gpu_verified': True})
     monkeypatch.setattr(pipeline, 'runtime_environment', lambda r: dict(__import__('os').environ))
     inputs = tmp_path / 'inputs.tsv'
@@ -91,6 +91,77 @@ def test_one_gpu_two_cpu_decoders_overlap_and_export_actual_native_receipts(batc
     before = events.read_bytes()
     assert all(row['reused'] for row in pipeline.run(args)['species'].values())
     assert events.read_bytes() == before
+
+
+def checked_runtime(batch, monkeypatch):
+    import annevo_runtime_cache as cache
+    import input_generation_array_state as state
+
+    _, _, selected = batch
+    value = pipeline.native.read_selected(selected)
+    source, model = Path(value['generation']), Path(value['model_path'])
+    model.write_bytes(b'fixture model weights')
+    recorded = cache.inspect_tree(source)
+    original = state.digest
+    reads = []
+    def digest(path):
+        if Path(path) == model:
+            reads.append(path)
+        return original(path)
+    monkeypatch.setattr(state, 'digest', digest)
+    def read_selected(path, *, verification):
+        with verification.guard():
+            verification.file_sha(path)
+            verification.verify_tree(source, recorded)
+            verification.file_sha(model)
+            return value
+    monkeypatch.setattr(pipeline.native, 'read_selected', read_selected)
+    return reads, model
+
+
+def test_parallel_species_share_fresh_model_proof_and_next_run_rehashes(batch, monkeypatch):
+    make, _, _ = batch
+    reads, _ = checked_runtime(batch, monkeypatch)
+    args = make()
+    pipeline.run(args)
+    assert len(reads) == 1
+    pipeline.run(args)
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize('phase', ['prediction', 'decoding'])
+def test_runtime_changes_during_native_execution_prevent_publication(batch, monkeypatch, phase):
+    make, _, _ = batch
+    _, model = checked_runtime(batch, monkeypatch)
+    original = pipeline.execute
+    def changed(*a, **kw):
+        result = original(*a, **kw)
+        if a[-1] == phase:
+            model.write_bytes(b'changed model weights')
+        return result
+    monkeypatch.setattr(pipeline, 'execute', changed)
+    args = make(('one',))
+    with pytest.raises((RuntimeError, OSError)):
+        pipeline.run(args)
+    assert not (args.output / 'candidate_inputs.tsv').exists()
+    assert not (args.output / 'one/native_prediction.json').exists()
+
+
+def test_runtime_change_during_output_hash_prevents_publication(batch, monkeypatch):
+    make, _, _ = batch
+    _, model = checked_runtime(batch, monkeypatch)
+    original = pipeline.file_sha
+    def changed(path):
+        result = original(path)
+        if Path(path).name == 'prediction.gff3':
+            model.write_bytes(b'changed model weights')
+        return result
+    monkeypatch.setattr(pipeline, 'file_sha', changed)
+    args = make(('one',))
+    with pytest.raises((RuntimeError, OSError)):
+        pipeline.run(args)
+    assert not (args.output / 'candidate_inputs.tsv').exists()
+    assert not (args.output / 'one/native_prediction.json').exists()
 
 
 def test_decode_failure_retains_logs_and_does_not_publish_campaign_or_failed_pair(batch):

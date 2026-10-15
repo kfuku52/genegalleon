@@ -12,6 +12,7 @@ import random
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 
 from Bio import SeqIO
@@ -20,8 +21,10 @@ from Bio.Seq import Seq
 
 try:
     from fasta_sequence_store import fasta_records
+    from parallel_io import ordered_bounded_results
 except ImportError:
     from .fasta_sequence_store import fasta_records
+    from .parallel_io import ordered_bounded_results
 
 MAFFT_ARGS = ("--auto", "--amino", "--thread", "1", "--quiet")
 PAIR_COLUMNS = ("pair_id", "target_gene", "query_gene", "sequence_1", "sequence_2")
@@ -40,7 +43,8 @@ def ds_tool_identity():
         import numpy
     except ImportError as exc:
         raise RuntimeError("dS coloring requires the CDSKIT dnds command; update CDSKIT and the GeneGalleon runtime") from exc
-    files = (Path(__file__), Path(__file__).with_name("fasta_sequence_store.py"), *(Path(module.__file__) for module in (
+    files = (Path(__file__), Path(__file__).with_name("fasta_sequence_store.py"),
+             Path(__file__).with_name("parallel_io.py"), *(Path(module.__file__) for module in (
         cdskit.dnds, cdskit.codonutil, cdskit.backalign, cdskit.tsvio, cdskit.util, cdskit.atomicio)))
     mafft = shutil.which("mafft")
     if mafft is None:
@@ -156,10 +160,12 @@ def prepare_pairs(analysis, cds_paths, species, code, output, cpus=1, limit=0):
     with atomic_text_writer(output, newline="") as handle, ThreadPoolExecutor(max_workers=cpus) as workers:
         writer = csv.DictWriter(handle, fieldnames=PAIR_COLUMNS, delimiter="\t", lineterminator="\n")
         writer.writeheader()
-        for i, row in enumerate(workers.map(lambda pair: align_pair(pair, sequences, code), pairs), 1):
-            writer.writerow(row)
-            if i % 100 == 0:
-                print(f"Aligned {i}/{len(pairs)} anchor pairs", flush=True)
+        with closing(ordered_bounded_results(workers, lambda pair: align_pair(pair, sequences, code),
+                                             ((pair,) for pair in pairs), max_pending=cpus * 8)) as aligned:
+            for i, row in enumerate(aligned, 1):
+                writer.writerow(row)
+                if i % 100 == 0:
+                    print(f"Aligned {i}/{len(pairs)} anchor pairs", flush=True)
         validate_distinct_paths(inputs, [output])
     return len(pairs)
 

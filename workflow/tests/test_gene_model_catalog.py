@@ -444,7 +444,8 @@ def test_source_attribute_parser_distinguishes_gtf_scalars_from_gff3_lists_and_e
 def test_phase_conflict_is_retained_without_fixing_bases(tmp_path):
     annotations = row("gene", 1, 15, "g") + row("mRNA", 1, 15, "t", parent="g")
     annotations += row("CDS", 1, 4, "c1", parent="t", phase="0")
-    annotations += row("CDS", 11, 15, "c2", parent="t", phase="1")
+    # Neither GFF3 phase 2 nor complementary frame 1 can explain this field.
+    annotations += row("CDS", 11, 15, "c2", parent="t", phase="0")
     paths = fixture(tmp_path, ">t\nATGAAATAA\n", annotations, "ATGANNNNNNAATAA")
     candidate = MODULE.build_catalog("Species_one", *paths)["loci"][0]["candidates"][0]
     assert candidate["cds"] == "ATGAAATAA"
