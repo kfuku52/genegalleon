@@ -66,10 +66,14 @@ if [[ "$1" == "buildx" && "$2" == "ls" ]]; then
   exit 0
 fi
 if [[ "$1" == "buildx" && "$2" == "inspect" ]]; then
-  if [[ "${{STUB_BUILDX_UNAVAILABLE:-0}}" == "1" ]]; then
+  if [[ "${{STUB_BUILDX_UNAVAILABLE:-}}" == "exit" ]]; then
     exit 1
   fi
-  printf '%s\\n' 'Driver: docker'
+  if [[ "${{STUB_BUILDX_UNAVAILABLE:-}}" == "reported" ]]; then
+    printf '%s\\n' 'Error: Cannot connect to the Docker daemon' 'Nodes:'
+    exit 0
+  fi
+  printf '%s\\n' 'Driver: docker' 'Nodes:' 'Status: running'
   exit 0
 fi
 if [[ "$1" == "buildx" && "$2" == "build" ]]; then
@@ -358,10 +362,11 @@ def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tm
     assert "--build-arg GG_BUILD_JOBS=2" in docker_log_text
 
 
-def test_container_build_entrypoint_uses_native_build_when_builder_endpoint_is_unavailable(tmp_path: Path):
+@pytest.mark.parametrize("failure", ["exit", "reported"])
+def test_container_build_entrypoint_uses_native_build_when_builder_endpoint_is_unavailable(tmp_path: Path, failure):
     completed, runtime_log, docker_log, out_path = _run_entrypoint_with_buildx(
         tmp_path, "apptainer",
-        {"IMAGE_SOURCE": "local", "STUB_BUILDX_UNAVAILABLE": "1"},
+        {"IMAGE_SOURCE": "local", "STUB_BUILDX_UNAVAILABLE": failure},
     )
     assert completed.returncode == 0, completed.stderr
     assert out_path.is_file()
