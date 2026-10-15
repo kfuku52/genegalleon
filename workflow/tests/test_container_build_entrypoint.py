@@ -66,6 +66,9 @@ if [[ "$1" == "buildx" && "$2" == "ls" ]]; then
   exit 0
 fi
 if [[ "$1" == "buildx" && "$2" == "inspect" ]]; then
+  if [[ "${{STUB_BUILDX_UNAVAILABLE:-0}}" == "1" ]]; then
+    exit 1
+  fi
   printf '%s\\n' 'Driver: docker'
   exit 0
 fi
@@ -353,6 +356,20 @@ def test_container_build_entrypoint_uses_docker_daemon_for_local_buildx_image(tm
     assert "--target runtime" in docker_log_text
     assert "--build-arg BUILD_TARGET=runtime" in docker_log_text
     assert "--build-arg GG_BUILD_JOBS=2" in docker_log_text
+
+
+def test_container_build_entrypoint_uses_native_build_when_builder_endpoint_is_unavailable(tmp_path: Path):
+    completed, runtime_log, docker_log, out_path = _run_entrypoint_with_buildx(
+        tmp_path, "apptainer",
+        {"IMAGE_SOURCE": "local", "STUB_BUILDX_UNAVAILABLE": "1"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert out_path.is_file()
+    assert "step 1/1: native local build from repository" in completed.stdout
+    assert runtime_log.read_text().strip().endswith(".def")
+    calls = docker_log.read_text()
+    assert "buildx inspect --bootstrap" in calls
+    assert "buildx build" not in calls
 
 
 def test_container_build_entrypoint_forwards_development_target(tmp_path: Path):
