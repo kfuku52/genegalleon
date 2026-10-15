@@ -17,6 +17,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -198,6 +199,7 @@ def identities():
     versions["species_profiles_implementation"] = digest(sys.modules[read_profiles.__module__].__file__)
     versions["genome_index_implementation"] = digest(Path(__file__).with_name("gene_model_catalog.py"))
     versions["output_hashes_implementation"] = digest(sys.modules[hash_outputs.__module__].__file__)
+    versions["comparison_copy_proof_implementation"] = digest(Path(__file__).with_name("refinement_receipt_snapshot.py"))
     versions["search_inputs_implementation"] = digest(sys.modules[local_record.__module__].__file__)
     versions["model_store_implementation"] = digest(sys.modules[write_model_store.__module__].__file__)
     versions["raw_validation_implementation"] = digest(sys.modules[RawValidationMemo.__module__].__file__)
@@ -678,23 +680,47 @@ def comparison_cache_key(root, plan, job, prepared_snapshot=None):
             "algorithm_sha256": hashlib.sha256(algorithm.encode()).hexdigest()}
 
 
-def copy_verified_comparison(source, destination, key):
-    """Copy hashed files, never link writable outputs to another plan's cache."""
-    receipt_hash = digest(source / "receipt.json")
-    if not verified(source, key):
+def copy_verified_comparison(source, destination, key, hash_workers=1):
+    """Hash source bytes while copying into a fresh stage, then rehash outputs.
+
+    One invocation's source/receipt/path observations fence the complete copy;
+    no checksum or successful proof survives this call.
+    """
+    try:
+        from refinement_receipt_snapshot import _ReceiptProof
+    except ImportError:
+        from .refinement_receipt_snapshot import _ReceiptProof
+    source, destination = Path(source).absolute(), Path(destination).absolute()
+    first, second = source.resolve(), destination.resolve()
+    if first == second or first in second.parents or second in first.parents:
+        raise ValueError("Comparison copy destination overlaps its source")
+    proof = _ReceiptProof(source)
+    receipt = proof.receipt(source / "receipt.json", digest(source / "receipt.json"))
+    if receipt["key"] != key:
         raise ValueError("Comparison cache incomplete or corrupted")
-    receipt = json.loads((source / "receipt.json").read_text())
-    for relative, expected in receipt["files"].items():
-        path = Path(relative)
-        if path.is_absolute() or ".." in path.parts:
-            raise ValueError("Unsafe comparison cache path")
-        target = destination / path
+    def copy_member(path):
+        relative = str(path.relative_to(source))
+        expected = receipt["files"][relative]
+        target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source / path, target)
-        if digest(target) != expected:
+        copied = hashlib.sha256()
+        with os.fdopen(os.open(source / relative, os.O_RDONLY | os.O_NONBLOCK), "rb") as src:
+            if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                raise ValueError("Comparison cache member must be a regular file")
+            # Stage builders supply new directories. Exclusive creation also
+            # prevents truncating an existing symlink or shared writable inode.
+            with target.open("xb") as dst:
+                for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                    dst.write(chunk)
+                    copied.update(chunk)
+        if copied.hexdigest() != expected or digest(target) != expected:
             raise ValueError("Comparison cache changed during copying")
-    if digest(source / "receipt.json") != receipt_hash or not verified(source, key):
-        raise ValueError("Comparison cache changed during copying")
+        return expected
+    # A network filesystem can wait for each output close to finish remotely.
+    # Overlap independent member copies within the existing worker CPU budget.
+    hash_paths(source, (source / relative for relative in receipt["files"]),
+               workers=hash_workers, hash_function=copy_member)
+    proof.check()
 
 
 def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=None):
@@ -726,7 +752,7 @@ def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=No
         cached = stage(cache_root, Path("comparisons") / cache_id, cache_key,
                        lambda output: build_comparison(output, job, dirs, params, cpus), guard,
                        **publication)
-        copy_verified_comparison(cached, tmp, cache_key)
+        copy_verified_comparison(cached, tmp, cache_key, hash_workers=cpus)
         atomic_json(tmp / "job.json", job)
         atomic_json(tmp / "cache.json", {"cache_key": cache_key, "cache_receipt_sha256": digest(cached / "receipt.json")})
     publication = {'publication_guard': lambda: prepared_snapshot.check_job(job)} if prepared_snapshot else {}

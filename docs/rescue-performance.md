@@ -25,6 +25,56 @@ Upgrading these files requires a new report directory. Changing only `--jobs`
 keeps the existing contract; completed leaves still require their exact source,
 summary and full-table hashes before reuse.
 
+## Verified comparison copies
+
+Shared comparison-cache copies calculate each source SHA256 while copying its
+bytes and independently rehash the destination. A command-local receipt and
+pathname proof remains active until every copy finishes. Changes to any source,
+receipt, ancestor or symlink target abort the stage, including replacement by
+identical bytes. Copies create independent regular files in a fresh stage;
+previous complete publications retain the usual failure/recovery behavior.
+
+Synteny uses its existing CPU budget to overlap independent copies and network
+filesystem close waits. At most that many members run together, with at most two
+queued tasks per worker and a 1 MiB copy buffer per active member. The default
+direct helper call remains serial. Comparison keys, search arguments, candidate
+order and scientific admission rules are unchanged. Active frozen analyses keep
+their recorded source; implementation upgrades require a new output plan.
+
+`workflow/benchmarks/benchmark_comparison_copy.py` compares a supplied historical
+`rescue_gene_models.py` against the current function using the same runtime,
+producer receipt and allocated CPUs. It interleaves both orders after one warmup,
+checks every output SHA256, and records wall/CPU time, maximum RSS and Linux I/O
+counters. Cache inputs remain read-only; scratch and the report must be placed
+in an owned benchmark directory. A representative command is:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_comparison_copy.py \
+  --input /path/to/comparison_cache/comparisons/ID \
+  --baseline-source /path/to/historical/rescue_gene_models.py \
+  --scratch /path/to/owned/benchmark --output /path/to/owned/benchmark/copy.json \
+  --workers 4 --repeats 5
+```
+
+On 2026-10-15, two real plant comparison caches on audrey1's QNAP were
+measured inside the same x86_64 GeneGalleon SIF and four-CPU allocation, with
+one warmup and five interleaved repetitions per implementation:
+
+| Cache bytes | Median wall seconds, before / after | Median CPU seconds, before / after | Logical read bytes, before / after |
+|---:|---:|---:|---:|
+| 184,915,579 | 3.338 / 2.640 | 0.660 / 0.468 | 739,771,736 / 369,905,033 |
+| 403,744,735 | 6.584 / 6.407 | 1.094 / 0.841 | 1,615,088,200 / 807,563,249 |
+
+Every copied file matched its original receipt. Logical reads halved and median
+CPU time fell by 23–29%. Maximum process RSS rose from about 65 MiB to 74 MiB.
+Shared-storage contention produced overlapping wall-time ranges, so these
+measurements do not establish a stable wall-time or whole-workflow speedup.
+The preliminary serial-copy trial also did not improve wall time despite
+halving reads; overlapping network close waits requires multiple workers.
+The commands, individual samples, profiles, full file hashes and qualification
+record remain under the project analysis directory
+`annevo_rescue_24species_20261015/optimization_v3/` on audrey1.
+
 ## Baseline evidence
 
 The 2026-10-04/05 run used GeneGalleon 0.8.124, x86_64 SIF, miniprot
