@@ -33,7 +33,9 @@ def private_directory(path):
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError('ANNEVO JIT cache directory must be private and owned by this user')
+        raise ValueError('ANNEVO JIT cache directory must be private (0700) and owned by this user: '
+                         +str(path)+' (uid='+str(info.st_uid)+', mode='+oct(stat.S_IMODE(info.st_mode))
+                         +'); select a filesystem that preserves private POSIX permissions')
     return path
 
 

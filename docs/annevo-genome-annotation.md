@@ -257,6 +257,8 @@ reusing assembly lengths. Shared JIT caches bind the installed runtime, source
 generation, CPU identity and Numba CPU overrides. Native Numba additionally
 checks compiler/CPU compatibility. Cache roots must be private, owned by the
 calling user and separate from inputs and the immutable installed environment.
+Select a local filesystem that preserves private POSIX permissions; output
+shares that create permissive directories despite a `0700` request are rejected.
 Changed identities select a new cache; unsafe members or modified identity
 records stop execution. No native program, model, prediction window, probability
 precision or admission threshold is changed by these options.
@@ -266,6 +268,11 @@ workflow/benchmarks/benchmark_annevo_pipeline_optimizations.py in an existing GP
 allocation with --inputs, a fresh --output, and --probability-proof-genome naming
 a qualified small matched-profile FASTA. It first verifies actual native plain/LZF
 probability bits, shapes, dtypes and metadata on that fixture outside timing.
+Two untimed native GPU/decode probes then verify cold/warm JIT reuse, GFF
+equivalence and resource sampling before full-genome trials. The harness keeps
+compiled caches under `--tmp-root`, separate from the GFF output share. Preflight
+and timed caches are separate, so the first optimized trial starts cold; timed
+trials share their cache until the harness exits and removes it.
 Four cumulative configurations run twice in reverse order: original settings,
 ordering only, ordering plus LZF, and ordering plus LZF plus shared JIT.
 Reports retain per-species phases, cache load/save events, GPU samples and
