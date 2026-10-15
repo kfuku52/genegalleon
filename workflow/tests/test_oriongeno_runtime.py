@@ -205,3 +205,138 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
     assert value['GFF_sha256'] == native.file_sha(gff)
     assert value['runtime_digest'] == runtime['runtime_digest']
     assert value['feature_counts']['CDS'] == 1
+
+
+def test_external_virtualenv_keeps_its_own_package_environment(tmp_path):
+    import venv
+
+    environment = tmp_path/'venv'
+    venv.EnvBuilder(system_site_packages=True, with_pip=False, symlinks=True).create(environment)
+    python = environment/'bin/python'
+    code = "import sysconfig; print(sysconfig.get_path('purelib'))"
+    site = Path(subprocess.check_output([python, '-c', code], text=True).strip())
+    package = site/'oriongeno'
+    package.mkdir()
+    (package/'__init__.py').write_text('# isolated native package fixture\n')
+    model = tmp_path/'checkpoint'
+    model.mkdir()
+    (model/'config.json').write_text('{}')
+    (model/'model.safetensors').write_bytes(b'fixture weights')
+    args = argparse.Namespace(cache_root=str(tmp_path/'cache'), receipt=str(tmp_path/'selected.json'),
+                              python=str(python), checkpoint=str(model), source_commit='c'*40,
+                              model_profile='plants', no_download=True)
+    value = native.prepare(args)
+    assert Path(value['python']) == python
+    assert native.read_selected(args.receipt) == value
+
+
+def test_native_log_hardlink_cannot_truncate_checkpoint(local_runtime, tmp_path, monkeypatch):
+    setup, _package, model = local_runtime
+    runtime = native.prepare(setup)
+    monkeypatch.setattr(native, 'read_selected', lambda _path: runtime)
+    original_execute = native.execute
+    def execute(argv, env, **kwargs):
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        if '--output' in argv:
+            from test_transcript_utrs import model
+            Path(argv[argv.index('--output')+1]).write_text(model(cds=((0, 9),), exons=((0, 9),)))
+            return subprocess.CompletedProcess(argv, 0, '')
+        return original_execute(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    genome, output = tmp_path/'genome.fa', tmp_path/'prediction.gff3'
+    genome.write_text('>chr\nATGAAATAA\n')
+    logs = output.with_name(output.name+'.logs')
+    logs.mkdir()
+    weights = model/'model.safetensors'
+    os.link(weights, logs/'native.stdout.txt')
+    before = weights.read_bytes()
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(tmp_path/'native.json'), threads=1, batch_size=1)
+    with pytest.raises(ValueError, match='overwrite|runtime'):
+        native.run(args)
+    assert weights.read_bytes() == before
+
+
+@pytest.mark.parametrize('link_kind', ['symlink', 'hardlink'])
+@pytest.mark.parametrize('target_role', ['package', 'weights', 'previous_gff', 'previous_receipt'])
+def test_log_aliases_preserve_runtime_and_previous_publication(local_runtime, tmp_path, link_kind, target_role):
+    setup, package, checkpoint = local_runtime
+    genome, output, receipt = [tmp_path/name for name in ('genome.fa', 'prediction.gff3', 'native.json')]
+    genome.write_text('>chr\nATGAAATAA\n')
+    output.write_text('previous GFF')
+    receipt.write_text('previous receipt')
+    targets = {'package': package/'__init__.py', 'weights': checkpoint/'model.safetensors',
+               'previous_gff': output, 'previous_receipt': receipt}
+    target = targets[target_role]
+    logs = output.with_name(output.name+'.logs')
+    logs.mkdir()
+    log = logs/'native.stderr.txt'
+    if link_kind == 'symlink':
+        log.symlink_to(target)
+    else:
+        os.link(target, log)
+    native.prepare(setup)
+    before = {p: p.read_bytes() for p in [*targets.values(), genome, Path(setup.receipt)]}
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(receipt), threads=1, batch_size=1)
+    with pytest.raises(ValueError, match='overwrite'):
+        native.run(args)
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_warm_override_distinguishes_venvs_with_the_same_base_interpreter(local_runtime, tmp_path):
+    setup, _package, _model = local_runtime
+    pythons = []
+    for name in ('venv-a', 'venv-b'):
+        folder = tmp_path/name/'bin'
+        folder.mkdir(parents=True)
+        python = folder/'python'
+        python.symlink_to(sys.executable)
+        pythons.append(python)
+    setup.python = str(pythons[0])
+    native.prepare(setup)
+    before = Path(setup.receipt).read_bytes()
+    setup.python = str(pythons[1])
+    with pytest.raises(ValueError, match='differs'):
+        native.prepare(setup)
+    assert Path(setup.receipt).read_bytes() == before
+
+
+def test_legacy_python_receipt_accepts_an_alias_in_the_same_environment(local_runtime, tmp_path):
+    import shutil
+
+    setup, _package, _model = local_runtime
+    folder = tmp_path/'external/bin'
+    folder.mkdir(parents=True)
+    binary, alias = folder/'python3', folder/'python'
+    shutil.copy2(sys.executable, binary)
+    alias.symlink_to(binary.name)
+    # Older receipts recorded the dereferenced executable name.
+    setup.python = str(binary)
+    expected = native.prepare(setup)
+    before = Path(setup.receipt).read_bytes()
+    setup.python = str(alias)
+    assert native.prepare(setup) == expected
+    assert Path(setup.receipt).read_bytes() == before
+
+
+def test_runtime_preparation_respects_shared_filesystem_publication_lock(local_runtime):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+
+    from shared_namespace_lock import namespace_lock
+
+    setup, _package, _model = local_runtime
+    expected = native.prepare(setup)
+    started = Event()
+    def prepare():
+        started.set()
+        return native.prepare(setup)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with namespace_lock(Path(setup.cache_root)/'.prepare.lock', exclusive=True):
+            pending = executor.submit(prepare)
+            assert started.wait(timeout=5)
+            with pytest.raises(TimeoutError):
+                pending.result(timeout=.2)
+        assert pending.result(timeout=5) == expected

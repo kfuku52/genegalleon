@@ -39,6 +39,9 @@ Unchanged reruns verify and reuse them offline; use a new cache/receipt location
 to adopt another source or checkpoint snapshot. Changed or incomplete artifacts
 stop the stage under the usual stale-artifact policy. Failed native execution
 retains logs and the previous complete GFF/receipt pair.
+External Python paths retain their virtual-environment prefix. Preparation and
+prediction publication use the shared-filesystem namespace lock; all concurrent
+jobs sharing those paths must use the same lock protocol.
 
 Outputs are below `output/genome_prediction/oriongeno/SPECIES/`: native GFF3,
 execution receipt, prediction/formatter provenance, formatted GFF/CDS/genome,
@@ -103,6 +106,8 @@ then the selected model, then OrionGeno, with stable transcript-ID tie breaking.
 Different sides may use different donors. Each side retains one complete donor
 exon path rather than a union of competing UTRs. CDS coordinates, phase, sequence,
 protein, gene IDs and representative choice remain unchanged.
+When no UTR is available and the exon path is unchanged, completion preserves
+the GFF bytes while still exporting the transcript sequence and audit.
 
 When a boundary falls in a donor intron, retain the projected UTR and mark the
 new terminal connection, its genomic motif and whether it is canonical in the

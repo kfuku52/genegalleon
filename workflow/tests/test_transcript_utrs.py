@@ -264,3 +264,41 @@ def test_input_stage_automatic_connection_and_explicit_disable(tmp_path, setting
                             env={**os.environ, 'gene_model_oriongeno_inputs': setting,
                                  'gg_workspace_output_dir': str(tmp_path)}, capture_output=True, text=True, check=True)
     assert result.stdout.strip() == (str(root) if expected == 'root' else expected)
+
+
+@pytest.mark.parametrize('kind', ['tRNA', 'ncRNA', 'transcript'])
+def test_standalone_noncoding_features_do_not_block_coding_completion(kind):
+    selected = model()
+    original = selected + f'chr\tsource\t{kind}\t501\t550\t.\t+\t.\tID=noncoding\n'
+    original += 'chr\tsource\texon\t501\t550\t.\t+\t.\tParent=noncoding\n'
+    result, audit, sequences = utrs.complete(selected, original, Genome(), 'S')
+    assert utrs.read_models(result)['t']['cds'] == [(100, 400, 0)]
+    assert audit[0]['utr5']['length'] == audit[0]['utr3']['length'] == 50
+    assert sequences['t'] == Genome().sequence[50:450]
+
+
+@pytest.mark.parametrize('with_exons', [False, True])
+def test_completion_without_utrs_keeps_every_gff_byte(with_exons):
+    text = model(cds=((100, 400),), exons=((100, 400),))
+    if not with_exons:
+        text = ''.join(line for line in text.splitlines(keepends=True) if '\texon\t' not in line)
+    result, audit, sequences = utrs.complete(text, text, Genome(), 'S')
+    assert result == text
+    assert sequences['t'] == Genome().sequence[100:400]
+    assert audit[0]['utr5']['length'] == audit[0]['utr3']['length'] == 0
+
+
+@pytest.mark.parametrize('ownership', ['missing', 'ambiguous', 'duplicate'])
+def test_coding_transcript_ownership_still_fails_strict_import(ownership):
+    text = model()
+    if ownership == 'missing':
+        text = text.replace('ID=t;Parent=g', 'ID=t')
+    elif ownership == 'ambiguous':
+        text = text.replace('ID=t;Parent=g', 'ID=t;Parent=g,other')
+    else:
+        text += 'chr\tsource\tmRNA\t51\t450\t.\t+\t.\tID=t;Parent=g\n'
+    with pytest.raises(ValueError, match='unique identity and one gene owner'):
+        utrs.read_models(text)
+    _, audit, sequences = utrs.complete(text, text, Genome(), 'S')
+    assert audit[0]['status'] == 'unsupported_structure'
+    assert sequences == {}

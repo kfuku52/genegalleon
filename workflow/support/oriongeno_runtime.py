@@ -16,9 +16,9 @@ from annevo_model_selection import protect_outputs
 from annevo_runtime import gff_counts, publish_pair
 from annevo_runtime_cache import inspect_tree, private_root, verify_tree
 from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
-from fasta_sequence_store import exclusive_lock
 from genome_sequence_identity import genome_sequence_digest
 from oriongeno_model_profiles import PROFILES
+from shared_namespace_lock import namespace_lock
 from transcript_utrs import load_models
 
 REPOSITORY = 'https://github.com/BGIResearch/OrionGeno.git'
@@ -58,7 +58,7 @@ def prepare(args):
         raise ValueError('Unsupported OrionGeno model profile')
     root = private_root(Path(args.cache_root))
     receipt = Path(args.receipt)
-    with exclusive_lock(root / '.prepare.lock'):
+    with namespace_lock(root / '.prepare.lock', exclusive=True, timeout=86400):
         if receipt.exists():
             value = read_selected(receipt)
             if value['model_profile'] != args.model_profile:
@@ -69,11 +69,23 @@ def prepare(args):
                 raise ValueError('OrionGeno source branch differs from its receipt')
             for option, key in [('python', 'python'), ('checkpoint', 'model_path')]:
                 supplied = getattr(args, option, '')
-                if supplied and Path(supplied).resolve() != Path(value[key]).resolve():
-                    raise ValueError('OrionGeno runtime override differs from its receipt')
+                if supplied:
+                    if option == 'python':
+                        current = Path(os.path.abspath(Path(supplied).expanduser()))
+                        recorded = Path(value[key])
+                        # Keep aliases in one environment (including old
+                        # receipts), but distinguish venvs sharing one binary.
+                        changed = ((current.parent.resolve(), current.resolve())
+                                   != (recorded.parent.resolve(), recorded.resolve()))
+                    else:
+                        changed = Path(supplied).resolve() != Path(value[key]).resolve()
+                    if changed:
+                        raise ValueError('OrionGeno runtime override differs from its receipt')
             return value
         env = environment(root)
-        python = Path(args.python).resolve() if args.python else root / 'environment/bin/python'
+        # A venv interpreter commonly links to the base Python. Dereferencing
+        # that final link discards pyvenv.cfg and imports from the wrong prefix.
+        python = Path(os.path.abspath(Path(args.python).expanduser())) if args.python else root / 'environment/bin/python'
         source_commit, source_ref, source = '', getattr(args, 'source_ref', ''), None
         if not args.python:
             if args.no_download:
@@ -168,8 +180,16 @@ def run(args):
     logs = output.with_name(output.name+'.logs')
     destinations = (output, receipt, logs, logs/'native.stdout.txt', logs/'native.stderr.txt')
     protect_outputs(destinations, protected)
+    protect_outputs(destinations[3:], (output, receipt))
     if any(p.resolve().is_relative_to(Path(t).resolve()) for p in destinations for t in runtime['trees']):
         raise ValueError('OrionGeno outputs overwrite the installed runtime')
+    installed_files = {tuple(member['signature'][:2]) for tree in runtime['trees'].values()
+                       for member in tree.values() if member['type'] == 'file'}
+    for path in destinations:
+        if path.exists():
+            info = path.stat()
+            if (info.st_dev, info.st_ino) in installed_files:
+                raise ValueError('OrionGeno outputs overwrite an installed runtime file through a hardlink')
     gpu_code = """import json,torch
 import mamba_ssm,causal_conv1d
 if not torch.cuda.is_available(): raise SystemExit('OrionGeno requires an allocated CUDA GPU')
@@ -184,7 +204,7 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
         raise ValueError('OrionGeno genome changed during sequence identity reading')
     output.parent.mkdir(parents=True, exist_ok=True)
     receipt.parent.mkdir(parents=True, exist_ok=True)
-    with exclusive_lock(output.with_suffix(output.suffix+'.lock')):
+    with namespace_lock(output.with_suffix(output.suffix+'.lock'), exclusive=True, timeout=86400):
         with tempfile.TemporaryDirectory(prefix='.oriongeno-', dir=output.parent) as temporary:
             staged = Path(temporary) / 'prediction.gff3'
             native_genome = genome.resolve()

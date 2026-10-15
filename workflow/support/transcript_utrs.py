@@ -45,9 +45,14 @@ def read_models(text, *, strict=True):
         if kind.endswith(('rna', 'transcript')):
             tid = scalar('ID') or scalar('transcript_id')
             parents = attrs.get('Parent', ()) or attrs.get('gene_id', ())
-            if not tid or len(parents) != 1 or tid in models:
-                raise ValueError('Transcript requires unique identity and one gene owner')
-            models[tid] = dict(id=tid, gene=parents[0], seqid=f[0], strand=f[6],
+            # Standalone noncoding RNAs need no coding-locus owner. Validate
+            # ownership only when this transcript actually has CDS children.
+            if not tid:
+                continue
+            if tid in models:
+                models[tid]['problem'] = 'duplicate_transcript_identity'
+                continue
+            models[tid] = dict(id=tid, gene=parents[0] if len(parents) == 1 else '', seqid=f[0], strand=f[6],
                                cds=[], exons=[], utr=[], attrs=attrs)
         elif kind in {'exon', 'cds', 'utr', 'five_prime_utr', 'three_prime_utr', '5utr', '3utr'}:
             owners = attrs.get('Parent', ()) or attrs.get('transcript_id', ())
@@ -63,6 +68,10 @@ def read_models(text, *, strict=True):
             models[tid] = dict(id=tid, gene=gene, seqid=rows[0][1][0], strand=rows[0][1][6],
                                cds=[], exons=[], utr=[], attrs={})
         model = models[tid]
+        if not model['gene']:
+            model['problem'] = 'unresolved_or_ambiguous_gene_owner'
+        if strict and model.get('problem'):
+            raise ValueError('Transcript requires unique identity and one gene owner: ' + tid)
         for kind, f, _ in rows:
             if (f[0], f[6]) != (model['seqid'], model['strand']) or f[6] not in {'+', '-'}:
                 if strict:
@@ -205,6 +214,13 @@ def complete(selected_text, original_text, genome, species, native=None):
 
 def render(text, updates):
     """Update structural rows only; retain CDS IDs, coordinates, phases and attributes."""
+    # Completion still emits a transcript sequence and audit for a CDS-only
+    # model, but must not synthesize exons or label an unchanged source GFF.
+    updates = {tid: value for tid, value in updates.items()
+               if value['model'].get('utr') or any(c['blocks'] for c in value['choices'].values())
+               or value['exons'] != value['model'].get('exons')}
+    if not updates:
+        return text
     directive = re.search(r'^##FASTA(?:\r?\n|$)', text, flags=re.MULTILINE)
     text, marker, embedded = (text[:directive.start()], '##FASTA', text[directive.start()+7:]) if directive else (text, '', '')
     lines, gene_bounds, retained_features = [], defaultdict(list), set()
