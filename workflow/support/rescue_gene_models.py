@@ -1385,7 +1385,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                                             'start': max(0, a - padding),
                                             'end': min(genome.get_reference_length(model['seqid']), b + padding)})
                 native_models, annevo_audit = annevo_gene_models.nominate(
-                    plan['request']['annevo'], name, bounded_regions, proteins, genome, params)
+                    plan['request']['annevo'], name, bounded_regions, proteins, genome, params, cpus=cpus)
                 native_checked = [checked_prediction(model) for model in native_models]
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)

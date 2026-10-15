@@ -1292,7 +1292,7 @@ def predict_species(root, value, name, cpus=1):
                 import annevo_gene_models
                 native_regions = [{**region, 'query': region['donor_candidate']} for region in queries.values()]
                 native_models, native_audit = annevo_gene_models.nominate(
-                    value['request']['annevo'], name, native_regions, proteins, genome, params)
+                    value['request']['annevo'], name, native_regions, proteins, genome, params, cpus=cpus)
                 native_checked = []
                 for model in native_models:
                     region = queries[model['query']]

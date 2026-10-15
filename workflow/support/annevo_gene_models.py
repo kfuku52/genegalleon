@@ -12,7 +12,10 @@ import json
 import os
 import re
 import tempfile
-from collections import defaultdict
+from collections import defaultdict, deque
+from concurrent.futures import ProcessPoolExecutor
+from itertools import chain, islice
+from multiprocessing import get_context
 from pathlib import Path
 
 from Bio.Seq import Seq
@@ -128,6 +131,7 @@ def verify_inputs(frozen, names=None):
 def read_paths(path, genome):
     """Read native GFF relationships and zero-based CDS blocks without repair."""
     features, transcripts, cds = {}, {}, defaultdict(list)
+    references = set(genome.references)
     with Path(path).open() as stream:
         for number, line in enumerate(stream, 1):
             if line.startswith('#') or not line.strip():
@@ -145,7 +149,7 @@ def read_paths(path, genome):
             if not identifier or identifier in features:
                 raise ValueError('Missing or duplicate ANNEVO feature ID')
             start, end = int(f[3]) - 1, int(f[4])
-            if (f[0] not in genome.references or f[6] not in {'+', '-'}
+            if (f[0] not in references or f[6] not in {'+', '-'}
                     or not 0 <= start < end <= genome.get_reference_length(f[0])):
                 raise ValueError('ANNEVO GFF feature outside target genome or unknown strand')
             features[identifier] = (f[2], f[0], start, end, f[6], attrs.get('Parent'))
@@ -178,8 +182,44 @@ def read_paths(path, genome):
     return paths
 
 
-def nominate(frozen, name, regions, proteins, genome, params):
+def _score_protein_batch(pairs):
+    """Only strings cross the process boundary; genome handles stay in caller."""
+    return [pair_score({'protein': a}, {'protein': b}) for a, b in pairs]
+
+
+def _scored_pairs(pairs, cpus):
+    """Preserve pair order with at most two small pending batches per CPU."""
+    if cpus == 1:
+        for path, region, native, donor in pairs:
+            yield path, region, pair_score({'protein': native}, {'protein': donor})
+        return
+    batch_size = 64
+    initial = list(islice(pairs, max(512, cpus * batch_size)))
+    if len(initial) < 512:
+        for path, region, native, donor in initial:
+            yield path, region, pair_score({'protein': native}, {'protein': donor})
+        return
+    workers = min(cpus, (len(initial) + batch_size - 1) // batch_size)
+    pending = deque()
+    remaining = chain(initial, pairs)
+    # Spawn prevents inheriting the caller's indexed genome or SQLite handles.
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
+        while batch := list(islice(remaining, batch_size)):
+            future = executor.submit(_score_protein_batch, [(a, b) for _, _, a, b in batch])
+            pending.append((batch, future))
+            if len(pending) >= workers * 2:
+                ready, result = pending.popleft()
+                for (path, region, _, _), score in zip(ready, result.result(), strict=True):
+                    yield path, region, score
+        for ready, result in pending:
+            for (path, region, _, _), score in zip(ready, result.result(), strict=True):
+                yield path, region, score
+
+
+def nominate(frozen, name, regions, proteins, genome, params, *, cpus=1):
     """Align only paths fully inside nominated windows to their actual donors."""
+    if type(cpus) is not int or cpus < 1:
+        raise ValueError('ANNEVO comparison CPUs must be a positive integer')
     if not frozen or name not in frozen['predictions']:
         return [], {'native_paths': 0, 'candidate_pairs': 0, 'proposals': []}
     verify_inputs(frozen, [name])
@@ -194,46 +234,48 @@ def nominate(frozen, name, regions, proteins, genome, params):
         indexes[seqid] = [p['start'] for p in rows], rows
     results, proposals, nominated, protein_cache = [], [], set(), {}
     cap = int(params.get('candidate_limit', 30))
-    for region in regions:
-        # A whole-genome nomination cannot assign an ANNEVO hit to a locus.
-        # Existing miniprot genomic placement supplies a bounded target span.
-        if region.get('genome_only') and not region.get('annevo_bounded_placement'):
-            continue
-        starts, rows = indexes.get(region['seqid'], ([], []))
-        hits = [p for p in rows[bisect.bisect_left(starts, region['start']):bisect.bisect_left(starts, region['end'])]
-                if p['end'] <= region['end']]
-        if len(hits) > cap:
-            proposals.append({'query': region['id'], 'reason': 'annevo_candidate_limit_exceeded', 'paths': len(hits)})
-            continue
-        for path in hits:
-            nominated.add(path['native_transcript_id'])
-            token = path['native_transcript_id']
-            if token not in protein_cache:
-                sequence = ''.join(str(Seq(genome.fetch(path['seqid'], a, b)).reverse_complement())
-                                   if path['strand'] == '-' else genome.fetch(path['seqid'], a, b)
-                                   for a, b, _ in path['cds']).upper()
-                protein_cache[token] = str(Seq(sequence).translate()).removesuffix('*') if len(sequence) % 3 == 0 else ''
-            donor = proteins[region['donor']][region['query']]
-            score = pair_score({'protein': protein_cache[token]}, {'protein': donor})
-            alignment = score.as_dict()
-            # Neither input supplies donor exon coordinates. Equal empty
-            # junction lists are not evidence of conserved target splicing.
-            # Retain the existing raw PairScore fields for saved-data readers,
-            # while explicitly marking their missing structural input.
-            alignment['junction_information_available'] = False
-            alignment['score_basis'] = 'protein_only_without_donor_junctions'
-            problems = []
-            if score.bounded:
-                problems.append('annevo_alignment_bounded')
-            if min(score.coverage_a, score.coverage_b) < params['minimum_coverage']:
-                problems.append('low_reciprocal_coverage')
-            evidence = {**region, 'annevo': {**prediction['identity'],
-                        'native_transcript_id': path['native_transcript_id'], 'native_gene_id': path['native_gene_id'],
-                        'alignment': alignment}}
-            results.append({'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(b) for b in path['cds']],
-                            'query': region['id'], 'coverage': score.coverage_b, 'identity': score.identity,
-                            'frameshift': False, 'evidence': evidence, 'search': 'annevo_nominated_path',
-                            'annevo_problems': problems})
+    def candidate_pairs():
+        for region in regions:
+            # A whole-genome nomination cannot assign an ANNEVO hit to a locus.
+            # Existing miniprot genomic placement supplies a bounded target span.
+            if region.get('genome_only') and not region.get('annevo_bounded_placement'):
+                continue
+            starts, rows = indexes.get(region['seqid'], ([], []))
+            hits = [p for p in rows[bisect.bisect_left(starts, region['start']):bisect.bisect_left(starts, region['end'])]
+                    if p['end'] <= region['end']]
+            if len(hits) > cap:
+                proposals.append({'query': region['id'], 'reason': 'annevo_candidate_limit_exceeded', 'paths': len(hits)})
+                continue
+            for path in hits:
+                nominated.add(path['native_transcript_id'])
+                token = path['native_transcript_id']
+                if token not in protein_cache:
+                    sequence = ''.join(str(Seq(genome.fetch(path['seqid'], a, b)).reverse_complement())
+                                       if path['strand'] == '-' else genome.fetch(path['seqid'], a, b)
+                                       for a, b, _ in path['cds']).upper()
+                    protein_cache[token] = str(Seq(sequence).translate()).removesuffix('*') if len(sequence) % 3 == 0 else ''
+                donor = proteins[region['donor']][region['query']]
+                yield path, region, protein_cache[token], donor
+    for path, region, score in _scored_pairs(candidate_pairs(), cpus):
+        alignment = score.as_dict()
+        # Neither input supplies donor exon coordinates. Equal empty
+        # junction lists are not evidence of conserved target splicing.
+        # Retain the existing raw PairScore fields for saved-data readers,
+        # while explicitly marking their missing structural input.
+        alignment['junction_information_available'] = False
+        alignment['score_basis'] = 'protein_only_without_donor_junctions'
+        problems = []
+        if score.bounded:
+            problems.append('annevo_alignment_bounded')
+        if min(score.coverage_a, score.coverage_b) < params['minimum_coverage']:
+            problems.append('low_reciprocal_coverage')
+        evidence = {**region, 'annevo': {**prediction['identity'],
+                    'native_transcript_id': path['native_transcript_id'], 'native_gene_id': path['native_gene_id'],
+                    'alignment': alignment}}
+        results.append({'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(b) for b in path['cds']],
+                        'query': region['id'], 'coverage': score.coverage_b, 'identity': score.identity,
+                        'frameshift': False, 'evidence': evidence, 'search': 'annevo_nominated_path',
+                        'annevo_problems': problems})
     proposals.extend({'native_transcript_id': p['native_transcript_id'], 'reason': 'no_bounded_donor_nomination'}
                      for p in paths if p['native_transcript_id'] not in nominated)
     verify_inputs(frozen, [name])

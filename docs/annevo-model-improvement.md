@@ -48,7 +48,11 @@ commands also accept `--annevo-inputs`. Refinement inherits a frozen ANNEVO tabl
 when consuming a completed rescue publication; an explicit table is revalidated
 against the current sources. Blank input leaves ordinary prediction unchanged.
 The rescue/refinement workers consume GFF/receipts and need no GPU or ANNEVO
-installation. Scheduler resources remain explicit and unchanged.
+installation. Scheduler resources remain explicit and unchanged. Donor-protein
+comparisons use each worker's existing `--cpus` budget in bounded process batches;
+small nominations remain serial. Candidate order, scores, audit records and
+admission rules are identical to the single-CPU path. Genome and SQLite handles
+stay in the caller; only protein strings are sent to comparison processes.
 
 ## Admission and restart
 
@@ -69,7 +73,7 @@ installation. Scheduler resources remain explicit and unchanged.
   ANNEVO agreement or an available model.
 - Keep existing ORF/start/stop, phase, splice, ambiguity, protected-exception,
   copy/ownership and independent-species checks. Unanchored placements retain
-  their two-species minimum; several predictors/isoforms from one species count
+  their configured external-donor minimum; several predictors/isoforms from one species count
   once. Split/merged or conflicting loci remain proposals.
 - Existing intact loci retain `rna_required` representative admission by default.
   Accepted candidates and chosen representatives remain separate decisions.

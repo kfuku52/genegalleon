@@ -188,13 +188,20 @@ def _restore_fields(shared, context, order):
     return result
 
 
-def _unpack(envelope, body):
+def _unpack(envelope, body, *, _context_owned=False):
     if (not isinstance(envelope, dict) or set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
             or not _SHA.fullmatch(str(envelope.get("body", "")))):
         raise ValueError("Malformed model-store envelope")
     # Copies must be independent: callers routinely modify CDS/evidence/status.
     shared = json.loads(body)
-    context = json.loads(_json(envelope["context"]))
+    context = envelope["context"]
+    if _context_owned:
+        # Streaming readers decoded this envelope exclusively for this record.
+        # Retain finite-number/UTF-8 validation without decoding its context a
+        # second time. Shared-body values are still decoded independently above.
+        _json(context)
+    else:
+        context = json.loads(_json(context))
     if "raw_order" in envelope:
         if "raw_prediction" not in shared or "raw_prediction" not in context:
             raise ValueError("Missing raw-prediction field layout")
@@ -606,7 +613,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None):
                     envelope = json.loads(_decompress(blob, manifest["codec"]))
                     if envelope.get("ordinal") != ordinal:
                         raise ValueError("Model-store overlay order changed")
-                    record = _unpack(envelope, bodies.read(envelope["body"]))
+                    record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
                     if kind == "accepted" and record.get("status") != "accepted":
                         raise ValueError("Non-primary record in accepted overlay")
                     count += 1
@@ -632,7 +639,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None):
                     for envelope in _lines(path, manifest["codec"], expected):
                         if envelope.get("ordinal") != ordinal:
                             raise ValueError("Model-store candidate order changed")
-                        record = _unpack(envelope, bodies.read(envelope["body"]))
+                        record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
                         ordinal += 1
                         count += 1
                         if statuses is None or record.get("status") in statuses:

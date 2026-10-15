@@ -74,6 +74,34 @@ def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, stran
     assert all('score' in m['evidence']['annevo']['alignment'] and 'junction_similarity' in m['evidence']['annevo']['alignment'] for m in models)
 
 
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_parallel_nomination_retains_exact_order_scores_audit_and_inputs(tmp_path, strand):
+    genome, _gff, _receipt, table, sources, coding, _blocks = native_fixture(tmp_path, strand=strand)
+    frozen = annevo.freeze_inputs(table, sources)
+    regions = [dict(id=f'q{i}', donor='Donor_one' if i % 2 else 'Donor_two', query='protein',
+                    seqid='chr', start=0, end=394) for i in range(600)]
+    regions += [dict(id='unbounded', donor='Donor_one', query='protein', seqid='chr',
+                     start=0, end=394, genome_only=True),
+                dict(id='no_hit', donor='Donor_two', query='protein', seqid='chr', start=0, end=20)]
+    protein = str(Seq(coding).translate()).removesuffix('*')
+    proteins = {'Donor_one': {'protein': protein}, 'Donor_two': {'protein': 'M' + 'K' * 100}}
+    before = copy.deepcopy((frozen, regions, proteins))
+    with catalog_module.indexed_genome(genome) as sequence:
+        serial = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS)
+        parallel = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS, cpus=2)
+    assert parallel == serial
+    assert [row['query'] for row in parallel[0]] == [f'q{i}' for i in range(600)]
+    assert (frozen, regions, proteins) == before
+    parallel[0][0]['cds'][0][0] += 1
+    assert parallel[0][0]['cds'] != parallel[0][1]['cds']
+
+
+@pytest.mark.parametrize('cpus', [0, -1, True, 1.5, '2'])
+def test_nomination_rejects_invalid_cpu_budget(cpus):
+    with pytest.raises(ValueError, match='CPUs must be a positive integer'):
+        annevo.nominate(None, 'Target_species', [], {}, None, {}, cpus=cpus)
+
+
 @pytest.mark.parametrize('profile', annevo.PROFILES)
 def test_all_qualified_model_lineages_freeze_without_changing_candidate_gates(tmp_path, profile):
     _genome, _gff, receipt, table, sources, *_ = native_fixture(tmp_path)
