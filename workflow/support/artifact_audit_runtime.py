@@ -9,8 +9,11 @@ import stat
 import sys
 import threading
 import time
+from itertools import islice
 from pathlib import Path
 
+from artifact_audit_guards import AuditCapacityError, GuardSpill
+from artifact_audit_guards import encode as encode_guard
 from workflow_observation import atomic_json
 
 PROGRESS_SCHEMA = "genegalleon-step-progress-v1"
@@ -105,8 +108,11 @@ class AuditDigests:
     source identities are rechecked before accepting the complete audit. No
     digest from an earlier audit is accepted instead of reading a file here.
     """
-    def __init__(self, limit=250000):
+    def __init__(self, limit=250000, *, spill_guards=False):
         self.limit = limit
+        self.spill_guards = spill_guards
+        self.guard_memory_limit = min(limit, 4096) if spill_guards else limit
+        self.guard_spill = None
         self.entries = {}
         self.guards = {}
         self.sources = {}
@@ -130,14 +136,14 @@ class AuditDigests:
                     self.cache_hits += 1
                     return previous[1]
                 if len(self.entries) >= self.limit:
-                    raise ValueError("Audit digest inventory exceeds its bounded capacity")
+                    raise AuditCapacityError("Audit digest inventory exceeds its bounded capacity")
             members = directory_signature(path) if directory else None
             value = compute()
             if signature(path) != before or directory and directory_signature(path) != members:
                 raise ValueError(f"Audit source changed while hashing: {path}")
             with self.lock:
                 if key not in self.entries and len(self.entries) >= self.limit:
-                    raise ValueError("Audit digest inventory exceeds its bounded capacity")
+                    raise AuditCapacityError("Audit digest inventory exceeds its bounded capacity")
                 self.bytes_hashed += int(value[1])
                 self.unique_sources += 1
                 self.entries[key] = before, value, members, compute
@@ -145,12 +151,25 @@ class AuditDigests:
 
     def guard(self, key, identity, reader):
         with self.lock:
+            if self.guard_spill is not None:
+                self.guard_spill.guard(key, identity, reader)
+                return
             if key in self.guards and self.guards[key][0] != identity:
                 raise ValueError("Audit source changed during the audit")
-            if len(self.guards) < self.limit or key in self.guards:
+            if len(self.guards) < self.guard_memory_limit or key in self.guards:
                 self.guards[key] = identity, reader
             else:
-                raise ValueError("Audit source guard inventory exceeds its bounded capacity")
+                if not self.spill_guards:
+                    raise AuditCapacityError("Audit source guard inventory exceeds its bounded capacity")
+                self.guard_spill = GuardSpill()
+                for old_key, (old_identity, old_reader) in self.guards.items():
+                    self.guard_spill.guard(old_key, old_identity, old_reader)
+                self.guards.clear()
+                self.guard_spill.guard(key, identity, reader)
+
+    def close(self):
+        if self.guard_spill is not None:
+            self.guard_spill.close()
 
     def resolve(self, key, reader):
         with self.stripes[hash(key) % len(self.stripes)]:
@@ -166,7 +185,9 @@ class AuditDigests:
     def validate(self, workers=1, progress=None):
         with self.lock:
             entries = list(self.entries.items())
-            guards = list(self.guards.values())
+            spilled = self.guard_spill is not None
+            guard_count = len(self.guard_spill.readers) if spilled else len(self.guards)
+            guards = self.guard_spill.values() if spilled else iter(list(self.guards.values()))
         def validate_entry(item):
             (path, _member, directory, _constraint), (before, value, members, compute) = item
             if signature(path) != before or directory and directory_signature(path) != members:
@@ -181,14 +202,16 @@ class AuditDigests:
                 raise ValueError(f"Audit source content changed before publication: {path}")
         def validate_guard(item):
             identity, reader = item
-            if reader() != identity:
+            actual = reader()
+            if (encode_guard(actual) if spilled else actual) != identity:
                 raise ValueError("Logical audit source changed before publication")
         if progress:
-            progress.phase("source_revalidation", len(entries) + len(guards))
+            progress.phase("source_revalidation", len(entries) + guard_count)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             for values, check in ((entries, validate_entry), (guards, validate_guard)):
-                for offset in range(0, len(values), workers * 8):
-                    for _ in executor.map(check, values[offset:offset + workers * 8]):
+                iterator = iter(values)
+                while batch := list(islice(iterator, workers * 8)):
+                    for _ in executor.map(check, batch):
                         if progress:
                             progress.advance(metrics=self.metrics())
 
@@ -196,7 +219,9 @@ class AuditDigests:
         with self.lock:
             return {"digest_bytes_read": self.bytes_hashed, "digest_cache_hits": self.cache_hits,
                     "unique_digest_reads": self.unique_sources, "cache_entries": len(self.entries),
-                    "digest_revalidation_reads": self.revalidation_reads}
+                    "digest_revalidation_reads": self.revalidation_reads,
+                    "source_guard_count": len(self.guard_spill.readers) if self.guard_spill else len(self.guards),
+                    "source_guard_spilled": int(self.guard_spill is not None)}
 
 
 class AuditProgress:

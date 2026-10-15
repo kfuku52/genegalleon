@@ -782,6 +782,12 @@ run_gene_family_database_for_source() {
     --parameter "row_threshold=8000"
     --parameter "cutoff_stat=OCNany2spe,0.8"
   )
+  if [[ "${gene_family_source}" == "orthogroup" && -n "${file_orthogroup_genecount_selected}" ]]; then
+    database_provenance_args+=(
+      --input "family_catalog=${file_orthogroup_genecount_selected}"
+      --parameter "family_scope=selected_orthogroups_v1"
+    )
+  fi
   gg_artifact_prepare_stage database_needs_update run_gene_family_database_build "${database_provenance_args[@]}" || return $?
   if [[ ${run_gene_family_database_build} -ne 1 ]]; then
     echo "Skipping database prep because run_gene_family_database_build=0."
@@ -797,6 +803,7 @@ run_gene_family_database_for_source() {
     --workspace-root "${gg_workspace_dir}"
     --output-tsv "${provenance_report}"
     --mode "${gene_family_source}"
+    --workers "${GG_TASK_CPUS:-1}"
     --check-csubst-branches
   )
   if [[ "${gene_family_source}" == "query2family" ]]; then

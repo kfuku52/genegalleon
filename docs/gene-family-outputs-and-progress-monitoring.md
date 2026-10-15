@@ -140,6 +140,24 @@ ORDER BY p_value_global_bh;
 In `mode_gene_evolution=orthogroup`, the same style of per-family outputs is
 written under `workspace/output/orthogroup/`.
 
+### Database audit scope and scale
+
+When the selected orthogroup count table is present, `gg_gene_summary` binds it
+as a database input and uses those exact, unique family IDs for both the audit
+and database import. Both statistics tables must cover every selected family.
+Older families remain in their original raw/ZIP storage; they are not deleted
+or silently treated as current selected results. A standalone unscoped audit
+continues to inspect the entire store. Changing the catalog during a build
+prevents publication of the database and its provenance.
+
+Full audits use the allocated CPU count. Above 4,096 source identity guards,
+their identities spill into a private temporary SQLite index, bounded to
+512 MiB and two million readers. Every guard is still rechecked before
+publication; no previous-run digest or guard is reused. Disk exhaustion,
+identity changes and the remaining explicit capacity bounds stop the audit.
+The index is removed on success and failure, and progress reports the total
+guard count and whether spilling occurred.
+
 ## ZIP-backed storage
 
 `workflow/gg_common_params.sh` defaults

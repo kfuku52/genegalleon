@@ -336,6 +336,93 @@ def test_guard_capacity_fails_closed_instead_of_dropping_source_checks():
         memo.guard("two", 2, lambda: 2)
 
 
+@pytest.mark.parametrize('workers', [1, 4])
+def test_spilled_guards_retain_every_final_check_and_detect_late_mutation(workers):
+    memo = AuditDigests(limit=2, spill_guards=True)
+    values = {str(index): (index, 'same') for index in range(19)}
+    calls = []
+    try:
+        for key, identity in values.items():
+            def read(key=key):
+                calls.append(key)
+                return values[key]
+            memo.guard(('logical', key), identity, read)
+        assert not memo.guards
+        assert memo.metrics()['source_guard_count'] == 19
+        memo.validate(workers=workers)
+        assert sorted(calls) == sorted(values)
+        memo.guard(('logical', '0'), values['0'], lambda: values['0'])
+        assert memo.metrics()['source_guard_count'] == 19
+        with pytest.raises(ValueError, match='changed during'):
+            memo.guard(('logical', '0'), (0, 'different'), lambda: (0, 'different'))
+        values['0'] = (0, 'changed after audit')
+        with pytest.raises(ValueError, match='changed before publication'):
+            memo.validate(workers=workers)
+        directory = Path(memo.guard_spill.directory.name)
+        assert directory.is_dir()
+    finally:
+        memo.close()
+    assert not directory.exists()
+
+
+def test_full_audit_spill_exceeds_old_capacity_without_dropping_fences():
+    memo = AuditDigests(spill_guards=True)
+    checked = set()
+    try:
+        for index in range(250001):
+            def read(index=index):
+                checked.add(index)
+                return (index, 'source')
+            memo.guard(('source', index), (index, 'source'), read)
+        memo.validate(workers=4)
+        assert len(checked) == 250001
+        assert memo.metrics()['source_guard_count'] == 250001
+        assert memo.metrics()['source_guard_spilled'] == 1
+    finally:
+        memo.close()
+
+
+def test_spill_failure_and_identity_types_fail_closed(monkeypatch):
+    from artifact_audit_guards import GuardSpill, encode
+    assert encode((True,)) != encode((1,))
+    assert encode(('a',)) != encode(['a'])
+    spill = GuardSpill()
+    try:
+        class Full:
+            def __len__(self):
+                return 2_000_000
+        spill.readers = Full()
+        with pytest.raises(ValueError, match='bounded capacity'):
+            spill.guard('over', 1, lambda: 1)
+    finally:
+        spill.close()
+
+
+def test_spill_inventory_loss_is_never_accepted():
+    memo = AuditDigests(limit=1, spill_guards=True)
+    try:
+        memo.guard('one', 1, lambda: 1)
+        memo.guard('two', 2, lambda: 2)
+        memo.guard_spill.database.execute('DELETE FROM guards WHERE reader=0')
+        with pytest.raises(ValueError, match='inventory changed'):
+            memo.validate()
+    finally:
+        memo.close()
+
+
+def test_audit_capacity_is_one_structural_error_not_invalid_families(tmp_path, monkeypatch):
+    logical = fixture(tmp_path, families=10)
+    def full(*args, **kwargs):
+        raise runtime.AuditCapacityError('Audit source guard spill exceeds its bounded capacity')
+    monkeypatch.setattr(AuditDigests, 'guard', full)
+    report = tmp_path / 'audit.tsv'
+    assert provenance.audit(arguments(tmp_path, logical, report)) == 1
+    rows = report.read_text().splitlines()
+    assert len(rows) == 2
+    assert '\tsnapshot_identity\taudit_error\t' in rows[1]
+    assert 'invalid_manifest' not in report.read_text()
+
+
 def test_digest_capacity_fails_closed_even_for_concurrent_first_reads(tmp_path):
     memo = AuditDigests(limit=1)
     paths = []
