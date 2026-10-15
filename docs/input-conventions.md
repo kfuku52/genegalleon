@@ -139,6 +139,9 @@ exact input hashes; ordinary input-generation reference checks remain unchanged.
 Direct/local CDS downloads retain model identity from structured CoGe headers;
 the transport provider does not replace the CoGe model ID with the species name.
 Malformed structured CDS identities and identifier sanitization collisions fail.
+JGI GeneCatalog names also retain their portal and numeric protein identity when
+CDS inputs arrive through direct/local transport or carry a previous species
+prefix. Grouping uses that complete JGI namespace; conflicting matches still fail.
 For supplied CDS, an explicit RNA-to-gene Parent remains usable when its GFF
 omits CDS blocks; this does not invent missing genomic coding coordinates.
 
