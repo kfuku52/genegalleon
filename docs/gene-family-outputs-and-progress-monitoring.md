@@ -158,6 +158,11 @@ identity changes and the remaining explicit capacity bounds stop the audit.
 The index is removed on success and failure, and progress reports the total
 guard count and whether spilling occurred.
 
+Raw file listings use directory-entry file types without following symlinks,
+avoiding two metadata requests per selected name on shared filesystems. Actual
+artifact reads still validate source metadata and bytes; unreadable selected
+sources and changes during a read snapshot remain errors.
+
 ## ZIP-backed storage
 
 `workflow/gg_common_params.sh` defaults
