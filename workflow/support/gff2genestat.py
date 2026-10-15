@@ -614,6 +614,11 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
         # under that gene are alternative models; repeated IDs are CDS parts.
         gene_features = {parse_attribute_fields(a)[0] for a in
                          gff.loc[gff["feature"].str.lower().isin(["gene", "pseudogene"]), "attributes"]}
+        # An explicit RNA remains the CDS parent when a source reuses its gene
+        # ID for that RNA. Only parents without RNA rows are direct-gene models.
+        transcript_features = {parse_attribute_fields(a)[0] for a in
+                               gff.loc[feature_names.str.endswith(("rna", "transcript")), "attributes"]}
+        gene_features.difference_update(transcript_features)
         parent_proteins = {}
         for gene_id, attr in zip(out["gene_id"], out["attributes"], strict=True):
             protein_values = _parse_gff_attributes(attr).get("protein_id", [])

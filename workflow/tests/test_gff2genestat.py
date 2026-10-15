@@ -27,6 +27,32 @@ def test_gff3_list_values_decode_once_and_gtf_percent_values_remain_literal():
     assert transcript_ids('gene_id "g"; transcript_id "t%2C1";', 'g') == ('t%2C1',)
 
 
+@pytest.mark.parametrize('rna_feature', ['mRNA', 'transcript'])
+@pytest.mark.parametrize('representative', [False, True])
+def test_rna_sharing_gene_id_preserves_complete_cds_and_utr(tmp_path, rna_feature, representative):
+    gff = tmp_path / 'Plant_species.gff'
+    gff.write_text(
+        'chr1\ts\tgene\t1\t39\t.\t+\t.\tID=gene1\n'
+        f'chr1\ts\t{rna_feature}\t1\t39\t.\t+\t.\tID=gene1;Parent=gene1\n'
+        'chr1\ts\texon\t1\t12\t.\t+\t.\tParent=gene1\n'
+        'chr1\ts\texon\t25\t39\t.\t+\t.\tParent=gene1\n'
+        'chr1\ts\tCDS\t4\t12\t.\t+\t0\tID=part1;Parent=gene1\n'
+        'chr1\ts\tCDS\t25\t33\t.\t+\t0\tID=part2;Parent=gene1\n'
+        'chr1\ts\tfive_prime_UTR\t1\t3\t.\t+\t.\tParent=gene1\n'
+        'chr1\ts\tthree_prime_UTR\t34\t39\t.\t+\t.\tParent=gene1\n')
+    selection = tmp_path / 'map.tsv'
+    selection.write_text('species\tgene_id\tcandidate_id\tsource_transcript_id\tstatus\tscore\tmargin\treason\n'
+                         'Plant_species\tPlant_species_gene1\tc1\tgene1\tselected\t1\t0.2\tconserved\n')
+    columns = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
+    output = OUT_COLS + ['gff_transcript_id', 'phase_status', 'utr_blocks']
+    rows = process_single_gff(gff.name, str(tmp_path), ['Plant_species_gene1'], 'CDS', 'longest',
+                              columns, output, representative_map=selection if representative else None)
+    row = rows.iloc[0]
+    assert row.gff_transcript_id == 'gene1'
+    assert row.feature_size == 18 and row.feature_blocks == '4-12;25-33'
+    assert row.phase_status == 'consistent' and row.utr_blocks == '1-3;34-39'
+
+
 def test_explicit_representative_uses_shorter_cds_phase_introns_and_utr(tmp_path):
     gff = tmp_path / 'Plant_species.gff'
     gff.write_text(
