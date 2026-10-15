@@ -118,6 +118,7 @@ matched the image to current inputs before execution.
 - Outgoing-commit checks for container-build selection, artifact provenance/audit, rescue stores and raw validation: **310 passed, 1 skipped**. The skip is the optional zstd codec because `zstandard` is absent; gzip/auto paths passed.
 - `bash ./dev lint`: passed, using the documented `GG_LINT_BASH` Docker wrapper for Bash 4+; ShellCheck on tracked shell scripts and 162 shell-static tests also passed.
 - Runtime R checks: 30 source parses, actual BUSCO summary/annotation-count regressions and dated-tree interval/NHX regressions passed.
+- Follow-up CI collection check: all 11 promoter runtime cases are required; validation-runner/development-tooling checks: **65 passed**.
 - `git diff --check`: passed.
 
 NWKIT's owning change (`88d3cba6`, version 0.43.53) passed its `tools/check.py

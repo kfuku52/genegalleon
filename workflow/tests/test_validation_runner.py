@@ -80,7 +80,7 @@ def test_suite_selection_honors_pytest_ignore_options(tmp_path, suite, option):
     assert "1 test collected" in result.stdout
 
 
-@pytest.mark.parametrize("suite, expected_count", [("fast", 4), ("runtime", 6)])
+@pytest.mark.parametrize("suite, expected_count", [("fast", 4), ("runtime", 11)])
 def test_promoter_unit_and_tool_checks_are_collected_in_separate_lanes(tmp_path, suite, expected_count):
     test_dir = tmp_path / "workflow/tests"
     test_dir.mkdir(parents=True)
@@ -96,6 +96,9 @@ def test_promoter_unit_and_tool_checks_are_collected_in_separate_lanes(tmp_path,
     assert result.returncode == 0, result.stdout + result.stderr
     assert ("test_normalize_ncpu_clamps_non_positive_values" in result.stdout) == (suite == "fast")
     assert ("test_promoter_cli_preserves_chromosome_identifiers" in result.stdout) == (suite == "runtime")
+    for name in ("test_batched_promoters_match_legacy_bytes_and_use_custom_seqkit_once",
+                 "test_batched_promoters_reject_source_replacement_before_accepting_output"):
+        assert (name in result.stdout) == (suite == "runtime")
     assert f"{expected_count} tests collected" in result.stdout
 
 
