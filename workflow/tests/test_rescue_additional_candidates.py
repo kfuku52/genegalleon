@@ -622,7 +622,7 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
         overrides[metadata[name].environment] = value
     core = (root / "workflow/core/gg_input_generation_core.sh").read_text()
     defaults = core[core.index('gene_model_rescue_tree='):core.index('require_cds=')]
-    function = core[core.index('prepare_gene_model_rescue() {'):core.index('\ngene_model_rescue_busco_species() {')]
+    function = core[core.index('resolve_oriongeno_candidate_inputs() {'):core.index('\ngene_model_rescue_busco_species() {')]
     tree = tmp_path / "tree.nwk"
     tree.write_text("(T,D);\n")
     capture = tmp_path / "arguments"
@@ -636,6 +636,7 @@ def test_rescue_config_overrides_are_exported_and_forwarded_to_plan(tmp_path):
                 "gene_model_rescue_tree=" + shlex.quote(str(tree)), "gg_support_dir=/support",
                 "species_cds_dir=/cds", "species_gff_dir=/gff", "species_genome_dir=/genome",
                 "species_busco_short_dir=/busco", "gg_workspace_input_dir=" + shlex.quote(str(tmp_path)),
+                "gg_workspace_output_dir=" + shlex.quote(str(tmp_path / "output")),
                 "prepare_gene_model_rescue"]
     for suffix, (_, value) in new_parameters.items():
         name = "gene_model_rescue_" + suffix
