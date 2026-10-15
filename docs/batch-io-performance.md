@@ -938,8 +938,10 @@ RSS and logical fingerprints; unequal outputs fail the comparison.
   of planning. Later stage verification still starts fresh.
 - Gene evolution's CDS input-view builder uses the verified resolved-FASTA hash
   for its view identity. A reused view still checks its actual files, and source
-  identities are fenced through that check. Creating hard links changes inode
-  ctime, so a new view gets a separate full-byte proof after linking and before
+  identities are fenced through that check. Reuse and concurrent publication
+  require exactly the recorded regular files; extra members and redirected
+  views are rejected. Creating hard links changes inode ctime, so a new view
+  gets a separate full-byte proof after linking and before
   publication; the earlier proof is never refreshed from metadata alone.
 - Input generation's BUSCO guide shares a matching sketch's first content proof
   with its immediate checksum lookup. A cache repair starts a new proof after
@@ -1017,12 +1019,15 @@ failure. Later stage verification still performs its independent full reads.
 Ortholog summaries finish strict/weak-copy, displayed-duplication, synteny and
 UFBoot evidence one family at a time. A family's parsed branch table, CDS IDs,
 validated tree and ancestor chains are shared, then released. Species-tree
-parsing and target-ancestry ranks are shared only within that command. Source
-generations and raw/ZIP archive observations are fenced before writing summary
-tables; an earlier family's mutation still fails after its parsed data has been
-released. Scalar helper APIs remain fresh outside these scopes. Selection rules,
-support values, missingness, output columns and deterministic row/lane order are
-unchanged.
+parsing and target-ancestry ranks are shared only within that command, including
+the optional presence/absence table. Source generations, raw/ZIP archives,
+query FASTAs, manifests and selection metadata remain observed until the complete
+set of staged tables is ready. Output roles must be distinct and cannot replace
+read inputs. Any failed read, verification, table write or installation rolls
+back the table set; an earlier family's mutation still fails after its parsed
+data has been released. Scalar helper APIs remain fresh outside these scopes.
+Selection rules, support values, missingness, output columns and deterministic
+row/lane order are unchanged.
 
 Pairwise dS and WGD keep at most eight times the configured worker count in their
 ordered alignment queue. The bound includes completed results waiting behind a
@@ -1040,7 +1045,14 @@ imports while creating and closing a fresh figure for each format. Inputs are
 fenced again inside each atomic plot/report publication. A later format's failure
 preserves its previous output and does not run subsequent formats. The diagnostic
 command log records the actual batch invocation; figure paths, style-report
-schema and per-pair directories are unchanged.
+schema and per-pair directories are unchanged. All requested plot/report paths
+are checked together before rendering, including aliases of later formats.
+
+ANNEVO and OrionGeno selected-runtime reads fence the complete verification,
+including the model check and OrionGeno's package-inventory subprocess. Both
+standalone calls and a shared invocation proof recheck known runtime members
+before accepting a receipt. A shared proof still avoids repeated full hashes
+and directory enumeration.
 
 `benchmark_stage_efficiency.py` compares a saved support snapshot against the
 current code in fresh processes. It checks complete outputs, normalizing only

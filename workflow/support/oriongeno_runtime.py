@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Prepare an isolated upstream OrionGeno installation and run native GPU GFF3 prediction."""
 import argparse
-import contextlib
 import csv
 import gzip
 import hashlib
@@ -15,7 +14,7 @@ from pathlib import Path
 
 from annevo_model_selection import protect_outputs
 from annevo_runtime import gff_counts, publish_pair
-from annevo_runtime_cache import RuntimeVerification, inspect_tree, private_root, verify_tree
+from annevo_runtime_cache import RuntimeVerification, inspect_tree, private_root
 from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
 from genome_sequence_identity import genome_sequence_digest
 from oriongeno_model_profiles import PROFILES
@@ -152,23 +151,23 @@ snapshot_download('BGI-Research/OrionGeno', allow_patterns=['checkpoints/orionge
 
 
 def read_selected(path, *, verification=None):
-    with verification.guard() if verification is not None else contextlib.nullcontext():
-        if verification is not None:
-            verification.file_sha(path)
+    verification = verification if verification is not None else RuntimeVerification()
+    with verification.guard():
+        verification.file_sha(path)
         value = json.loads(Path(path).read_text())
         if value.get('kind') != 'genegalleon-oriongeno-installed-runtime' or value.get('schema_version') != 1:
             raise ValueError('Invalid OrionGeno installed runtime receipt')
         check = {k: v for k, v in value.items() if k not in {'runtime_digest', 'cache_key'}}
-        sha = verification.file_sha if verification is not None else file_sha
         if (hashlib.sha256(canonical_bytes(check)).hexdigest() != value['runtime_digest']
-                or value.get('cache_key') != value['runtime_digest'] or sha(value['python']) != value['python_sha256']):
+                or value.get('cache_key') != value['runtime_digest']
+                or verification.file_sha(value['python']) != value['python_sha256']):
             raise ValueError('OrionGeno runtime receipt or Python changed')
-        tree_check = verification.verify_tree if verification is not None else verify_tree
         for root, tree in value['trees'].items():
-            tree_check(Path(root), tree)
+            verification.verify_tree(Path(root), tree)
         packages = execute([value['python'], '-B', '-m', 'pip', 'freeze', '--all'], environment(value['cache_root']), capture_output=True).stdout
         if packages != value['packages']:
             raise ValueError('OrionGeno installed dependencies changed')
+        verification.check()
         return value
 
 

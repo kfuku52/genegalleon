@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import contextlib
 import gzip
 import json
 import os
@@ -25,12 +24,12 @@ from shared_namespace_lock import namespace_lock
 
 
 def read_selected(path, *, verification=None):
-    with verification.guard() if verification is not None else contextlib.nullcontext():
+    verification = verification if verification is not None else RuntimeVerification()
+    with verification.guard():
         path = Path(path)
         if path.is_symlink() or not path.is_file():
             raise RuntimeError("ANNEVO runtime receipt is missing or redirected")
-        if verification is not None:
-            verification.file_sha(path)
+        verification.file_sha(path)
         receipt = json.loads(path.read_text())
         if receipt.get("schema_version") != 1 or receipt.get("kind") != "genegalleon-annevo-installed-runtime":
             raise RuntimeError("Invalid ANNEVO selected runtime receipt")
@@ -41,9 +40,10 @@ def read_selected(path, *, verification=None):
         if (model != expected_path or receipt["model_sha256"] != expected_model["sha256"]
                 or receipt["model_size"] != expected_model["size"]):
             raise RuntimeError("ANNEVO selected model identity changed")
-        sha = verification.file_sha if verification is not None else file_sha
-        if model.is_symlink() or not model.is_file() or model.stat().st_size != receipt["model_size"] or sha(model) != receipt["model_sha256"]:
+        if (model.is_symlink() or not model.is_file() or model.stat().st_size != receipt["model_size"]
+                or verification.file_sha(model) != receipt["model_sha256"]):
             raise RuntimeError("ANNEVO model checksum changed")
+        verification.check()
         return receipt
 
 

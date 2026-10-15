@@ -27,6 +27,7 @@ from content_digest_cache import cached_sha256_file
 from fasta_sequence_store import fasta_records
 from gff2genestat import disable_structure, process_single_gff
 from input_generation_array_state import FreshDigestBatch
+from workflow_observation import path_signature
 
 POLICY_VERSION = 1
 GFF_COLUMNS = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
@@ -263,6 +264,24 @@ def resolve(cds, gff, genome, output_dir, code=1, representative_map=None):
     return destination, traits_path, report_path
 
 
+def _verify_view(destination, selected):
+    """A content-addressed view must contain exactly its regular FASTA files."""
+    if destination.is_symlink() or not destination.is_dir():
+        raise ValueError(f'Invalid CDS input view: {destination}')
+    before = path_signature(destination)
+    members = {path.name: path for path in destination.iterdir()}
+    if set(members) != set(selected) or any(path.is_symlink() or not path.is_file() for path in members.values()):
+        raise ValueError(f'Changed CDS input view membership: {destination}')
+    proof = FreshDigestBatch()
+    hashes = proof.read(members.values())
+    for name, entry in selected.items():
+        if hashes[str(members[name])] != entry['sha256']:
+            raise ValueError(f'Changed CDS input view: {name}')
+    proof.check()
+    if destination.is_symlink() or path_signature(destination) != before:
+        raise ValueError(f'Changed CDS input view membership: {destination}')
+
+
 def resolved_view(source_dir, resolution_dir, view_dir):
     """Bind downstream inputs to verified resolutions; preserve unprocessed species."""
     source_dir, resolution_dir, view_dir = map(Path, (source_dir, resolution_dir, view_dir))
@@ -294,10 +313,8 @@ def resolved_view(source_dir, resolution_dir, view_dir):
         proof.check()
     identity = hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
     destination = view_dir / identity
-    if destination.exists():
-        for name, entry in selected.items():
-            if digest(destination / name) != entry['sha256']:
-                raise ValueError(f'Changed CDS input view: {name}')
+    if destination.exists() or destination.is_symlink():
+        _verify_view(destination, selected)
         for proof in proofs.values():
             proof.check()
         return destination
@@ -328,9 +345,8 @@ def resolved_view(source_dir, resolution_dir, view_dir):
         except OSError:
             if not destination.is_dir():
                 raise
-            for name, entry in selected.items():
-                if digest(destination / name) != entry['sha256']:
-                    raise ValueError(f'Concurrent CDS view differs: {name}') from None
+            _verify_view(destination, selected)
+            publication.check()
     return destination
 
 

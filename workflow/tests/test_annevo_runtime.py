@@ -201,6 +201,31 @@ def test_command_verification_reuses_model_hash_and_rejects_same_byte_replacemen
     assert len(reads) == 2
 
 
+@pytest.mark.parametrize('shared', [False, True])
+def test_selected_runtime_checks_members_after_model_verification(tmp_path, monkeypatch, shared):
+    path, _ = bundle(tmp_path, monkeypatch)
+    selected = cache.prepare(tmp_path / 'cache', 'Magnoliopsida', str(path))
+    model, member = Path(selected['model_path']), Path(selected['native_entrypoint'])
+    original_file, original_proof = runtime.file_sha, cache.RuntimeVerification.file_sha
+    def change_member():
+        member.chmod(0o600)
+        member.write_bytes(b'changed after the runtime tree check')
+    def changed_file(path):
+        result = original_file(path)
+        if Path(path) == model:
+            change_member()
+        return result
+    def changed_proof(self, path):
+        result = original_proof(self, path)
+        if Path(path) == model:
+            change_member()
+        return result
+    monkeypatch.setattr(runtime, 'file_sha', changed_file)
+    monkeypatch.setattr(cache.RuntimeVerification, 'file_sha', changed_proof)
+    with pytest.raises(RuntimeError, match='member changed'):
+        runtime.read_selected(selected['receipt_path'], verification=cache.RuntimeVerification() if shared else None)
+
+
 @pytest.mark.parametrize('failure', ['stale_pax_path', 'normalized_duplicate'])
 def test_archive_rejection_identifies_actual_member_without_accepting_malformed_payload(tmp_path, failure):
     archive = tmp_path / 'malformed.tar.gz'
