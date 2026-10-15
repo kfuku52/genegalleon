@@ -1316,7 +1316,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                                            retain_inputs=storage["retain_search_inputs"])
             by_id = {r["id"]: r for r in regions}
             validated = []
-            raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params)
+            raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params,
+                                               candidate_homology=homology_problems)
             def checked_prediction(model):
                 # Preserve predictor coordinates and metrics before any genomic
                 # completion, so a later plan rechecks its own terminal bounds.

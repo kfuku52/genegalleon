@@ -75,6 +75,96 @@ The commands, individual samples, profiles, full file hashes and qualification
 record remain under the project analysis directory
 `annevo_rescue_24species_20261015/optimization_v3/` on audrey1.
 
+## Genomic validation and DNA-body reuse
+
+The canonical `validate_model` implementation uses coverage and identity only
+for its homology flags. Rescue and refinement prediction now opt into a bounded
+genomic memo keyed by exact contig, strand, input CDS/phase layout and frameshift
+state. The genome, genetic code, validator and parameter scope remain fixed.
+Homology flags are recalculated from each candidate's own metrics, including
+after parameter changes. Terminal completion, boundary revalidation, native
+structure confirmation, ownership and final selection retain their own checks.
+Other callers and arbitrary validators retain the original exact-metric cache
+by default. Malformed inputs still reach the original validator and errors.
+
+The memo's overlay copier skips ordinary deepcopy dispatch for immutable
+string/numeric leaves, while copying mutable dicts/lists independently. It
+preserves field order, aliases and cycles and delegates subclasses/custom types
+to their deepcopy protocol. This does not replace JSON or input validation.
+
+The compact store places donor alignment metrics in its existing candidate
+context, including the raw prediction's metrics. Identical genomic bodies can
+then share one body despite differing donor metrics. All fields, original order,
+raw bindings, rejected candidates and selective accepted/partial/revision views
+are preserved. The recorded layout supports both old and new placements without
+a format migration. Existing receipts are never rewritten.
+
+The 2026-10-15 audit used actual plant records on audrey1, the same x86_64 SIF,
+four allocated CPUs, one warmup and five interleaved trials per implementation.
+Each component/RSS trial used a fresh process. Full ordered output digests
+matched on every trial:
+
+| Operation, 20,000 actual ANNEVO candidate pairs | Before | After |
+|---|---:|---:|
+| Raw genomic QC, median wall seconds | 5.493 | 0.828 |
+| Raw genomic QC, median CPU seconds | 5.493 | 0.827 |
+| Genomic cache hits | 863 (4.3%) | 18,679 (93.4%) |
+| Raw QC median peak RSS, MiB | 309.1 | 307.2 |
+| Publication write, median CPU seconds | 2.415 | 1.360 |
+| Publication bytes, all store files | 35,207,627 | 4,384,095 |
+| Distinct DNA bodies | 19,137 | 1,321 |
+
+These are component measurements, not a whole-cohort speed estimate. Writing
+median wall time was 4.528 versus 1.537 seconds, with overlapping ranges under
+shared NAS load. CPU time and stored bytes provide the clearer evidence here.
+Publication maximum RSS remained about 469–471 MiB. Genomic QC excluded native
+alignment, terminal completion and downstream admission; its output digest was
+identical with each candidate's homology policy applied.
+
+Two older miniprot samples (20,000 rows each, one warmup and three repetitions)
+used 6.5% and 5.0% less store space. Their DNA-body counts barely changed, and
+median CPU differences were within 1.4%; no write-speed improvement is claimed
+for those samples. Shared PAF payload still contributes to body identity, so
+metric separation alone does not guarantee substantial body deduplication.
+
+The copier separately reduced full QC-overlay copying by 26–27% on two real
+20,000-record species samples. Peak process RSS increased by 13–15 MiB. A
+prototype caller reduced old-cache read/reconstruction/QC replay by only
+5.2–5.6%, illustrating why the isolated copy ratio is not a pipeline ratio.
+Those replay trials reused one process and do not provide comparable peak RSS.
+The frozen project's cached-QC adapter was not changed to this prototype.
+`workflow/benchmarks/benchmark_validation_copy.py` reproduces the copy comparison
+from an owned JSONL of validation overlays:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_validation_copy.py \
+  --input /path/to/owned/QC_overlays.jsonl --output /path/to/owned/copy.json --repeats 5
+```
+
+Commands, source hashes, individual trials, receipted source/sample bindings,
+profiles, older miniprot-sample checks and the broader audit remain in the
+canonical project `annevo_rescue_24species_20261015/optimization_v4/`. SIF evidence
+qualifies these isolated components against the recorded runtime. Docker tests
+use identical changed files in the matching pre-merge source snapshot because
+a concurrent artifact-provenance merge changed unrelated runtime inputs. This
+does not qualify the full current-main SIF or the newest moving dependencies.
+Frozen analyses retain their recorded scientific source and output plans.
+
+## Remaining bottlenecks and priorities
+
+| Area | Evidence and next action |
+|---|---|
+| Retained candidate memory | The first combined species retained 2,139,583 old/native rows and reached about 25 GiB RSS. Replace full-list retention with an ordered disk spool and explicit admission indexes, keeping every isoform, rejection reason and audit row. This needs complete output-equivalence validation before deployment. |
+| CPU scheduling | Cached replay and publication are largely single-process inside a 40-CPU allocation. Native alignment already uses bounded processes. Schedule independent species only after measuring their combined peak memory; multiplying workers without a memory bound is unsuitable. |
+| Repeated protein scoring | Inspect exact native-protein/donor-protein pair repetition across overlapping nominations. A bounded score cache could expand results back to every original candidate; do not merge candidate evidence or drop isoforms. No speed claim is established yet. |
+| Structure-confirmation index | Index only donor/query keys needed by the current native candidates while consuming and validating the complete transferred stream. Measure this before changing it; the genomic-QC bottleneck was larger. |
+| Candidate lookup memory | Parsing the large candidate JSON contributed roughly 2.3 GiB before retained-model growth in the two old-cache profiles. A disk index or compact lookup could reduce this baseline, with exact identifier/order/unknown-field preservation. |
+| Store JSON decoding | Readers retain bounded raw-body caches but re-decode each record. Parsed-body caching could share immutable strings, but must account for Python-object memory and independently copy mutable fields. Benchmark it rather than enlarging caches blindly. |
+| Quality and consolidation | On the profiled 20,000-record samples each took about 0.4 seconds, versus about 17 seconds for instrumented replay. They are lower-priority CPU targets. Profiling overhead is included in these figures. |
+| Refinement and finalization | Current main already scopes input proofs and donor loading. Final outputs deliberately contain independent complete files; optimize repeated reads only while retaining source/receipt mutation detection and publication guarantees. |
+| Protein BUSCO | The project already schedules nine four-CPU workers and reuses exact, verified unchanged phase results. Preserve protein mode, translations, lineage and adoption rules; do not rerun unchanged leaves just to parallelize them. |
+| Checkpoint recovery | Completed-stage verification must distinguish nomination counts from executed searches. The project resume driver now rehashes completed dependencies once, retains the explicit fresh-search prohibition and reuses completed species. It does not upgrade their scientific source. |
+
 ## Baseline evidence
 
 The 2026-10-04/05 run used GeneGalleon 0.8.124, x86_64 SIF, miniprot

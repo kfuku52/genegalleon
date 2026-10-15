@@ -70,6 +70,30 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     assert list(iterator) == []
 
 
+@pytest.mark.parametrize("legacy_layout", [False, True])
+def test_donor_metrics_preserve_all_views_without_duplicating_dna(tmp_path, monkeypatch, legacy_layout):
+    records = [model(0, "accepted"), model(1, "accepted")]
+    metrics = {"coverage", "identity", "query_span_coverage", "query_start", "query_end", "query_length"}
+    for i, record in enumerate(records):
+        values = dict(coverage=.91 + i * .01, identity=.8 + i * .05, query_span_coverage=.95,
+                      query_start=i, query_end=100 + i, query_length=110 + i)
+        record.update(values)
+        record["raw_prediction"].update(values)
+    revisions = [copy.deepcopy(records[1])]
+    with monkeypatch.context() as patch:
+        if legacy_layout:
+            patch.setattr(store, "BODY_FIELDS", store.BODY_FIELDS | metrics)
+        directory, manifest = published(tmp_path, records, revisions=revisions)
+    assert manifest["counts"]["bodies"] == (2 if legacy_layout else 1)
+    for read, expected in [(store.iter_models, records), (store.iter_accepted_models, records),
+                           (store.iter_partial_models, [records[1]]), (store.iter_revision_models, revisions)]:
+        assert json.dumps(list(read(directory)), ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
+    restored = list(store.iter_models(directory))
+    restored[0]["coverage"] = .1
+    restored[0]["raw_prediction"]["query_end"] = -1
+    assert list(store.iter_models(directory)) == records
+
+
 @pytest.mark.parametrize("prefix", ["##PAF\t", "#PAF\t", ""])
 @pytest.mark.parametrize("newline", ["\n", "\r\n", ""])
 def test_real_miniprot_paf_aliases_share_body_with_exact_nested_binding(tmp_path, prefix, newline):

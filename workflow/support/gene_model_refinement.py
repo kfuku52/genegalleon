@@ -1281,6 +1281,8 @@ def predict_species(root, value, name, cpus=1):
         native_engines = [e for e in ('annevo', 'oriongeno') if name in value['request'].get(e, {}).get('predictions', {})]
         native_enabled = bool(native_engines)
         with indexed_genome(source['genome']) if windows or first_revision is not None or native_enabled else contextlib.nullcontext() as genome:
+            raw_validation = rescue.RawValidationMemo(rescue.validate_model, genome, source['genetic_code'], params,
+                                                      candidate_homology=rescue.homology_problems)
             bounded = {}
             for (seqid, start, end), regions in windows.items():
                 end = min(end, genome.get_reference_length(seqid))
@@ -1295,7 +1297,7 @@ def predict_species(root, value, name, cpus=1):
                 model.update(gene_id=region['gene_id'], donor_species=region['donor'], donor_candidate=region['donor_candidate'])
                 if region.get('same_coordinate_repair_only'):
                     model['same_coordinate_repair_only'] = True
-                checked = rescue.validate_model(model, genome, source['genetic_code'], params)
+                checked = raw_validation.validate(model)
                 checked = rescue.complete_terminals(checked, genome, source['genetic_code'], params,
                     proteins[region['donor']][region['donor_candidate']], rescue.validate_model)
                 if any(a < region['start'] or b > region['end'] for a, b, _ in checked['cds']):
@@ -1312,7 +1314,7 @@ def predict_species(root, value, name, cpus=1):
                     model.update(gene_id=region['gene_id'], donor_species=region['donor'], donor_candidate=region['donor_candidate'])
                     if region.get('same_coordinate_repair_only'):
                         model['same_coordinate_repair_only'] = True
-                    checked = rescue.validate_model(model, genome, source['genetic_code'], params)
+                    checked = raw_validation.validate(model)
                     checked['problems'] = sorted(set(checked['problems']) | set(model[engine + '_problems']))
                     native_checked.append(checked)
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
