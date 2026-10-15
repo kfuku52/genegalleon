@@ -107,6 +107,7 @@ gene_model_refinement_inputs="" # Optional raw CDS/GFF/genome TSV; requires an e
 gene_model_refinement_edges="" # Optional trusted synteny locus correspondence TSV.
 gene_model_refinement_rescue_dir="" # Existing frozen rescue plan; blank uses gene_model_rescue_dir.
 gene_model_refinement_rna="" # Optional complete coding RNA paths TSV, with zero-based half-open CDS blocks.
+gene_model_oriongeno_inputs="auto" # auto discovers completed OrionGeno cohort predictions; or explicit TSV/directory; blank disables native import.
 gene_model_annevo_inputs="" # Optional verified native ANNEVO candidate TSV: species,gff,receipt; shared by rescue/refinement.
 gene_model_refinement_min_margin=0.10 # Experimental minimum candidate score margin; not a calibrated probability.
 gene_model_refinement_min_support=2 # Minimum independent donor species for accepting homology predictions.

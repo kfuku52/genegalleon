@@ -179,6 +179,9 @@ def identities():
     versions["implementation"] = digest(__file__)
     versions["annevo_candidate_implementation"] = digest(Path(__file__).with_name("annevo_gene_models.py"))
     versions["annevo_alignment_implementation"] = digest(Path(__file__).with_name("gene_model_selection.py"))
+    versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
+    versions["oriongeno_profiles_implementation"] = digest(Path(__file__).with_name("oriongeno_model_profiles.py"))
+    versions["transcript_utr_implementation"] = digest(Path(__file__).with_name("transcript_utrs.py"))
     versions["annevo_genome_identity_implementation"] = digest(Path(__file__).with_name("genome_sequence_identity.py"))
     from Bio.Align import _pairwisealigner
     versions['annevo_pairwise_aligner_sha256'] = digest(_pairwisealigner.__file__)
@@ -345,6 +348,10 @@ def build_plan(args):
         prediction_cache = getattr(args, "prediction_cache", None)
         if prediction_cache:
             request["prediction_cache"] = frozen_prediction_cache_key(prediction_cache, sources)
+        if getattr(args, "oriongeno_inputs", None):
+            import annevo_gene_models
+            request["oriongeno"] = annevo_gene_models.freeze_inputs(args.oriongeno_inputs, sources, engine='oriongeno')
+            request["files"].update(request["oriongeno"]["files"])
         if getattr(args, "annevo_inputs", None):
             import annevo_gene_models
             request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, sources)
@@ -453,9 +460,10 @@ def verify_sources(plan, names, keys):
     current = digest_paths(paths)
     if any(plan["request"]["files"][p] != value for p, value in current.items()):
         raise ValueError("Frozen rescue input changed")
-    if plan['request'].get('annevo'):
-        import annevo_gene_models
-        annevo_gene_models.verify_inputs(plan['request']['annevo'], names)
+    for engine in ('annevo', 'oriongeno'):
+        if plan['request'].get(engine):
+            import annevo_gene_models
+            annevo_gene_models.verify_inputs(plan['request'][engine], names)
 
 
 def verified(directory, key, hash_workers=1):
@@ -1295,7 +1303,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                                              proteins[evidence["donor"]][evidence["query"]], validate_model)
                 checked = revalidate_boundaries(checked, genome, source["genetic_code"], params,
                                                 proteins[evidence["donor"]][evidence["query"]], validate_model)
-                checked['problems'] = sorted(set(checked['problems']) | set(model.get('annevo_problems', [])))
+                checked['problems'] = sorted(set(checked['problems']) | set(model.get('annevo_problems', []) + model.get('oriongeno_problems', [])))
                 checked["raw_prediction"] = raw_prediction
                 return check_interval(checked)
             if cached:
@@ -1303,7 +1311,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     # Native ANNEVO paths are nominated and aligned anew from
                     # the current source-bound GFF; old cache support cannot
                     # enable ANNEVO implicitly or survive changed donor gates.
-                    if model.get('evidence', {}).get('annevo'):
+                    if any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')):
                         continue
                     validated.append(checked_prediction(model))
             for model in predictions:
@@ -1367,7 +1375,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     if not (tmp / "genome.fa").exists():
                         (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
                     refine_gemoma(tmp, root, plan, source, gemoma_regions, genome, validated, cpus)
-            if plan['request'].get('annevo'):
+            for engine in (e for e in ('annevo', 'oriongeno') if plan['request'].get(e)):
                 import annevo_gene_models
                 bounded_regions = [r for r in regions if not r.get('genome_only')]
                 placements = set()
@@ -1385,11 +1393,11 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                                             'start': max(0, a - padding),
                                             'end': min(genome.get_reference_length(model['seqid']), b + padding)})
                 native_models, annevo_audit = annevo_gene_models.nominate(
-                    plan['request']['annevo'], name, bounded_regions, proteins, genome, params, cpus=cpus)
+                    plan['request'][engine], name, bounded_regions, proteins, genome, params, cpus=cpus, engine=engine)
                 native_checked = [checked_prediction(model) for model in native_models]
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)
-                atomic_json(tmp / 'annevo_candidates.json', annevo_audit)
+                atomic_json(tmp / (engine + '_candidates.json'), annevo_audit)
             if cached:
                 cached.check()
             if searched_genome_ids:
@@ -1699,7 +1707,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                     gene_start = min([model["start"], *[min(b[0] for b in a["cds"]) for a in alternative_paths]])
                     gene_end = max([model["end"], *[max(b[1] for b in a["cds"]) for a in alternative_paths]])
                     locus_attributes = rescue_selection_attributes(model)
-                    if plan['request'].get('annevo'):
+                    if any(plan['request'].get(e) for e in ('annevo', 'oriongeno')):
                         import annevo_gene_models
                         locus_attributes += annevo_gene_models.gff_attributes(model.get('support', [model.get('evidence', {})]))
                     out.write("\t".join([*common[:2], "gene", str(gene_start + 1), str(gene_end), *common[5:8], fields("gene", "ID=" + gene + locus_attributes)]) + "\n")
@@ -1885,6 +1893,7 @@ def parser():
     plan.add_argument("--max-intron", type=int, default=20000)
     plan.add_argument("--genome-fallback", type=int, choices=(0, 1), default=1)
     plan.add_argument("--prediction-cache", type=Path, help="Frozen, checksum-verified previous rescue output; raw predictions are revalidated")
+    plan.add_argument("--oriongeno-inputs", type=Path, help="Native OrionGeno candidate and UTR TSV: species,gff,receipt")
     plan.add_argument("--annevo-inputs", type=Path, help="Source-bound native ANNEVO candidate TSV: species,gff,receipt; existing evidence/QC gates remain")
     plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
                       help="Versioned shared prediction storage, or explicit legacy JSON arrays")

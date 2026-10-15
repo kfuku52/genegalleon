@@ -67,7 +67,7 @@ flowchart LR
 4. **Effective inputs:** retain original transcripts in `full_annotation`, add
    accepted paths with stable assembly/coordinate/phase/CDS-derived IDs, and
    publish a selected GFF with the exact transcript behind every representative.
-   Original selected transcripts retain their source exon/UTR metadata. CDSs of
+   Selected transcripts receive [longest projected UTRs](oriongeno-genome-annotation.md#longest-projected-utr-per-side) from existing annotation and optional OrionGeno predictions; original exon/UTR metadata stays archived. CDSs of
    unresolved biological negatives remain unchanged; unusable translations are
    excluded from the analysis protein FASTA with an explicit admission audit.
    An unexplained source-CDS/genome disagreement or unreconstructible locus is
@@ -448,6 +448,7 @@ and the locus evidence alongside completeness.
 - `representative_map.tsv`, with one explicit locus-to-transcript choice;
 - `species_genetic_code.tsv`;
 - `full_annotation`, `all_candidates`, `changes.json`, `translation_admission.tsv`;
+- `species_transcript`, `utr_audit`, and `utr_summary.tsv` for projected representative UTRs;
 - exact supplied CDS files in `source_cds`, decoded original GFF in
   `source_annotation`, `effective_exclusions.tsv`, `gene_bounds_changes.json`.
 

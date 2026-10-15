@@ -321,6 +321,13 @@ EOF
       cat <<'EOF'
 representative_inputs
 genome_annotation_backend
+oriongeno_model_profile
+oriongeno_source_ref
+oriongeno_python
+oriongeno_checkpoint
+oriongeno_source_commit
+oriongeno_no_download
+oriongeno_batch_size
 annevo_model_profile
 annevo_taxid_map
 annevo_genome_metadata
@@ -558,6 +565,7 @@ gene_model_refinement_edges
 gene_model_refinement_rescue_dir
 gene_model_refinement_rna
 gene_model_annevo_inputs
+gene_model_oriongeno_inputs
 gene_model_refinement_min_margin
 gene_model_refinement_min_support
 gene_model_refinement_candidate_limit

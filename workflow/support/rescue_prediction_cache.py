@@ -323,8 +323,9 @@ def _raw_prediction(model, regions):
         model = original
     region = regions[model["query"]]
     old_evidence = model.get("evidence", {})
-    if model.get('search') == 'annevo_nominated_path':
-        if not isinstance(old_evidence.get('annevo'), dict):
+    if model.get('search') in {'annevo_nominated_path', 'oriongeno_nominated_path'}:
+        engine = model['search'].removesuffix('_nominated_path')
+        if not isinstance(old_evidence.get(engine), dict):
             raise ValueError('Cached ANNEVO prediction lacks its native provenance')
         # These paths must be re-nominated against the selected native GFF and
         # freshly aligned donors. The verified miniprot cache remains reusable.

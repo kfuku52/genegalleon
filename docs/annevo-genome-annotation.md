@@ -1,7 +1,8 @@
 # Genome prediction with ANNEVO
 
-`gg_genome_annotation_entrypoint.sh` keeps its existing CDS-based behavior by
-default. Set `genome_annotation_backend="annevo"` to predict from the FASTA files
+`gg_genome_annotation_entrypoint.sh` defaults to [OrionGeno](oriongeno-genome-annotation.md).
+Set `genome_annotation_backend="none"` for existing CDS-based behavior, or
+`genome_annotation_backend="annevo"` to predict from the FASTA files
 in `workspace/input/species_genome`. No curated GFF or CDS is required for that
 route. Each array task uses the sorted genome file list; set the array size to
 that list's size. Scheduler resource directives are not changed automatically.
@@ -45,7 +46,7 @@ inside the container to `0..N-1`; for example, host `2,4` becomes container
 
 | Entrypoint option | Default | Purpose |
 | --- | --- | --- |
-| `genome_annotation_backend` | `none` | `none` retains CDS analysis; `annevo` enables genome prediction. |
+| `genome_annotation_backend` | `oriongeno` | `none` retains CDS analysis; `annevo` and `oriongeno` enable native genome prediction. |
 | `annevo_model_profile` | `Magnoliopsida` | Explicit native profile, or `auto` for per-species NCBI ancestor selection. |
 | `annevo_taxid_map` | blank | Explicit TSV with `species` and positive `taxid` columns. |
 | `annevo_genome_metadata` | blank | Trusted TSV with `species`, `taxid`, `genome_sha256`, and optional `scientific_name`. |

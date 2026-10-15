@@ -256,7 +256,7 @@ def resolve_coding_paths(models, nearest=()):
                    if evidence.get('target')}
         donors = sorted({donor for row in rows for donor, _, _ in alignment_support(row)} - targets)
         if not decisive:
-            if any(evidence.get('annevo') for row in rows
+            if any(evidence.get('annevo') or evidence.get('oriongeno') for row in rows
                    for evidence in [row.get('evidence', {}), *row.get('support', [])]):
                 # A new predictor must not make an unresolved initiation/splice
                 # choice publishable through the longest-path fallback.

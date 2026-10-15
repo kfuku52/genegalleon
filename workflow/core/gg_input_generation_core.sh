@@ -2519,6 +2519,18 @@ run_array_finalize_mode() {
 }
 
 # Serialize shared stages against active species workers in this output workspace.
+resolve_oriongeno_candidate_inputs() {
+  local configured="${gene_model_oriongeno_inputs-auto}"
+  if [[ "${configured}" == auto ]]; then
+    local prediction_root="${gg_workspace_output_dir}/genome_prediction/oriongeno"
+    local tables=("${prediction_root}"/*/candidate_inputs.tsv)
+    [[ -f "${tables[0]}" ]] || return 0
+    printf '%s\n' "${prediction_root}"
+  else
+    printf '%s\n' "${configured}"
+  fi
+}
+
 prepare_gene_model_rescue() {
   local rescue_tree="${gene_model_rescue_tree}"
   local -a rescue_args=()
@@ -2551,6 +2563,9 @@ prepare_gene_model_rescue() {
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
+  local oriongeno_inputs
+  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+  [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
@@ -2638,6 +2653,9 @@ prepare_gene_model_refinement() {
   fi
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  local oriongeno_inputs
+  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+  [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || refinement_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_species_profiles}" ]] || refinement_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"

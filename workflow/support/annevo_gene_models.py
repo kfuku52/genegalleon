@@ -41,7 +41,7 @@ except ImportError:
     from .input_generation_array_state import atomic_json, digest, digest_paths
 
 
-def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None):
+def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None, *, engine="annevo"):
     """Verify actual GG native prediction provenance before importing a path."""
     receipt = Path(receipt)
     raw_sha = digest(receipt)
@@ -50,17 +50,22 @@ def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None
         raise ValueError('ANNEVO receipt changed during reading')
     if not isinstance(value, dict):
         raise ValueError('ANNEVO native receipt must be an object')
+    if engine not in {'annevo', 'oriongeno'}:
+        raise ValueError('Unsupported native prediction engine')
+    profiles = PROFILES
+    if engine == 'oriongeno':
+        from oriongeno_model_profiles import PROFILES as profiles
     gpu = value.get('gpu_probe')
     if (type(value.get('schema_version')) is not int or value['schema_version'] != 1
-            or value.get('kind') != 'genegalleon-annevo-native-prediction'
+            or value.get('kind') != 'genegalleon-' + engine + '-native-prediction'
             or type(value.get('native_returncode')) is not int or value['native_returncode'] != 0
             or not isinstance(gpu, dict) or gpu.get('gpu_verified') is not True
-            or value.get('model_profile') not in PROFILES or genetic_code != 1):
+            or value.get('model_profile') not in profiles or genetic_code != 1):
         raise ValueError('ANNEVO candidates require a successful supported native GPU receipt and genetic code 1')
     settings = value.get('inference_settings')
     # Old Magnoliopsida receipts predate inference_settings. Newly supported
     # profiles must retain the producer's explicit model/lineage pairing.
-    if ((settings is not None or value['model_profile'] != 'Magnoliopsida')
+    if ((engine != 'annevo' or settings is not None or value['model_profile'] != 'Magnoliopsida')
             and (not isinstance(settings, dict) or settings.get('lineage') != value['model_profile'])):
         raise ValueError('ANNEVO candidate model profile differs from its native inference lineage')
     genome_match = 'raw_identity'
@@ -86,9 +91,24 @@ def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None
                                              if value.get('genome_sequence_sha256') else {})}
 
 
-def freeze_inputs(path, sources):
+def freeze_inputs(path, sources, *, engine="annevo"):
     """Freeze a subset of target species; missing rows leave their route unchanged."""
     table = Path(path).resolve()
+    if table.is_dir() and engine == 'oriongeno':
+        # Automatic cohort discovery freezes only this cohort's completed tables.
+        tables = [table / name / 'candidate_inputs.tsv' for name in sorted(sources)
+                  if (table / name / 'candidate_inputs.tsv').is_file()]
+        predictions, files = {}, {}
+        for source_table in tables:
+            part = freeze_inputs(source_table, sources, engine=engine)
+            if set(predictions) & set(part['predictions']):
+                raise ValueError('Duplicate OrionGeno species in native tables')
+            predictions.update(part['predictions'])
+            files.update(part['files'])
+        # The automatic shared prediction directory can contain only another
+        # cohort. Freeze this cohort's empty subset; missing native predictions
+        # still allow existing-annotation UTR completion.
+        return dict(table=str(table), tables=list(map(str, tables)), predictions=predictions, files=files)
     table_sha = digest(table)
     result, files = {}, {str(table): table_sha}
     with table.open(newline='') as stream:
@@ -108,7 +128,7 @@ def freeze_inputs(path, sources):
             source = sources[name]
             genome_sha = digest(source['genome'])
             identity = prediction_identity(**locations, genome_sha256=genome_sha,
-                                           genetic_code=source.get('genetic_code', 1), genome=source['genome'])
+                                           genetic_code=source.get('genetic_code', 1), genome=source['genome'], engine=engine)
             result[name] = {**locations, 'identity': identity}
             files.update({locations['gff']: identity['GFF_sha256'], locations['receipt']: identity['receipt_sha256']})
     if not result:
@@ -122,14 +142,27 @@ def verify_inputs(frozen, names=None):
     if not frozen:
         return
     selected = frozen['predictions'] if names is None else {n: frozen['predictions'][n] for n in names if n in frozen['predictions']}
-    paths = [frozen['table'], *(p[role] for p in selected.values() for role in ('gff', 'receipt'))]
+    paths = [*frozen.get('tables', [frozen['table']]), *(p[role] for p in selected.values() for role in ('gff', 'receipt'))]
     expected = {p: frozen['files'][p] for p in paths}
     if digest_paths(expected) != expected:
         raise ValueError('Frozen ANNEVO candidate input changed')
 
 
-def read_paths(path, genome):
+def read_paths(path, genome, *, engine="annevo"):
     """Read native GFF relationships and zero-based CDS blocks without repair."""
+    if engine == 'oriongeno':
+        from transcript_utrs import load_models
+        result = []
+        for model in load_models(path).values():
+            if model['seqid'] not in genome.references or any(b > genome.get_reference_length(model['seqid']) for _, b in model['exons']):
+                raise ValueError('OrionGeno model outside target genome')
+            cds = sorted(model['cds'], reverse=model['strand'] == '-')
+            if any(p not in {0, 1, 2} for _, _, p in cds):
+                raise ValueError('OrionGeno CDS lacks phase')
+            result.append(dict(native_transcript_id=model['id'], native_gene_id=model['gene'],
+                               seqid=model['seqid'], strand=model['strand'], cds=cds,
+                               start=min(b[0] for b in cds), end=max(b[1] for b in cds)))
+        return result
     features, transcripts, cds = {}, {}, defaultdict(list)
     references = set(genome.references)
     with Path(path).open() as stream:
@@ -216,7 +249,7 @@ def _scored_pairs(pairs, cpus):
                 yield path, region, score
 
 
-def nominate(frozen, name, regions, proteins, genome, params, *, cpus=1):
+def nominate(frozen, name, regions, proteins, genome, params, *, cpus=1, engine="annevo"):
     """Align only paths fully inside nominated windows to their actual donors."""
     if type(cpus) is not int or cpus < 1:
         raise ValueError('ANNEVO comparison CPUs must be a positive integer')
@@ -224,7 +257,7 @@ def nominate(frozen, name, regions, proteins, genome, params, *, cpus=1):
         return [], {'native_paths': 0, 'candidate_pairs': 0, 'proposals': []}
     verify_inputs(frozen, [name])
     prediction = frozen['predictions'][name]
-    paths = read_paths(prediction['gff'], genome)
+    paths = read_paths(prediction['gff'], genome, engine=engine)
     tracks = defaultdict(list)
     for path in paths:
         tracks[path['seqid']].append(path)
@@ -266,16 +299,16 @@ def nominate(frozen, name, regions, proteins, genome, params, *, cpus=1):
         alignment['score_basis'] = 'protein_only_without_donor_junctions'
         problems = []
         if score.bounded:
-            problems.append('annevo_alignment_bounded')
+            problems.append(engine + '_alignment_bounded')
         if min(score.coverage_a, score.coverage_b) < params['minimum_coverage']:
             problems.append('low_reciprocal_coverage')
-        evidence = {**region, 'annevo': {**prediction['identity'],
+        evidence = {**region, engine: {**prediction['identity'],
                     'native_transcript_id': path['native_transcript_id'], 'native_gene_id': path['native_gene_id'],
                     'alignment': alignment}}
         results.append({'seqid': path['seqid'], 'strand': path['strand'], 'cds': [list(b) for b in path['cds']],
                         'query': region['id'], 'coverage': score.coverage_b, 'identity': score.identity,
-                        'frameshift': False, 'evidence': evidence, 'search': 'annevo_nominated_path',
-                        'annevo_problems': problems})
+                        'frameshift': False, 'evidence': evidence, 'search': engine + '_nominated_path',
+                        engine + '_problems': problems})
     proposals.extend({'native_transcript_id': p['native_transcript_id'], 'reason': 'no_bounded_donor_nomination'}
                      for p in paths if p['native_transcript_id'] not in nominated)
     verify_inputs(frozen, [name])
@@ -285,11 +318,14 @@ def nominate(frozen, name, regions, proteins, genome, params, *, cpus=1):
 def gff_attributes(evidence):
     """Keep engine provenance distinct from independent donor-species support."""
     from urllib.parse import quote
-    origins = [r['annevo'] for r in evidence if r.get('annevo')]
-    if not origins:
+    engines = [engine for engine in ('annevo', 'oriongeno') if any(r.get(engine) for r in evidence)]
+    if not engines:
         return ''
-    ids = sorted({r['native_transcript_id'] for r in origins})
-    return ';prediction_engine=ANNEVO;annevo_native_transcripts=' + ','.join(quote(i, safe='._-:') for i in ids)
+    result = ';prediction_engine=' + ','.join(e.upper() if e == 'annevo' else 'OrionGeno' for e in engines)
+    for engine in engines:
+        ids = sorted({r[engine]['native_transcript_id'] for r in evidence if r.get(engine)})
+        result += ';' + engine + '_native_transcripts=' + ','.join(quote(i, safe='._-:') for i in ids)
+    return result
 
 
 def confirm_transferred_structure(native_models, transferred):
@@ -315,11 +351,12 @@ def confirm_transferred_structure(native_models, transferred):
     allowed = {'missing_start', 'missing_stop', 'unanchored_genome_search'}
     by_query = defaultdict(list)
     for model in transferred:
-        if (not model.get('evidence', {}).get('annevo') and model.get('sequence') and model.get('cds')
+        if (not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')) and model.get('sequence') and model.get('cds')
                 and not set(model.get('problems', [])) - allowed):
             by_query[key(model)].append(model)
     for model in native_models:
-        model['problems'] = [p for p in model['problems'] if p != 'annevo_unconfirmed_coding_structure']
+        engine = next(e for e in ('annevo', 'oriongeno') if model.get('evidence', {}).get(e))
+        model['problems'] = [p for p in model['problems'] if p != engine + '_unconfirmed_coding_structure']
         matches = [other for other in by_query[key(model)] if junctions(other) == junctions(model)
                    and compatible_paths(checked_support(model), checked_support(other))]
         if model.get('evidence', {}).get('genome_only'):
@@ -327,16 +364,17 @@ def confirm_transferred_structure(native_models, transferred):
             # Do not turn a partial/paralog placement into a new complete gene.
             matches = [other for other in matches if coding_shape(other) == coding_shape(model)
                        and not {'missing_start', 'missing_stop'} & set(other.get('problems', []))]
-        model['evidence']['annevo']['genomic_structure_transfer'] = {
+        model['evidence'][engine]['genomic_structure_transfer'] = {
             'confirmed': bool(matches), 'counting_unit': 'same_donor_query_genomic_mapping',
             'scope': 'whole_coding_path' if model.get('evidence', {}).get('genome_only') else 'internal_junctions',
             'matching_paths': [{'query': row['query'], 'cds': row['cds']} for row in matches]}
         if not matches:
-            model['problems'] = sorted(set(model['problems']) | {'annevo_unconfirmed_coding_structure'})
+            model['problems'] = sorted(set(model['problems']) | {engine + '_unconfirmed_coding_structure'})
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--engine', choices=['annevo', 'oriongeno'], default='annevo')
     parser.add_argument('--species', required=True)
     parser.add_argument('--genome', required=True, type=Path)
     parser.add_argument('--gff', required=True, type=Path)
@@ -347,7 +385,7 @@ def main():
     if not re.fullmatch('[A-Za-z0-9_.-]+', args.species):
         raise ValueError('Invalid species identifier')
     identity = prediction_identity(args.gff, args.receipt, digest(args.genome),
-                                   genetic_code=args.genetic_code, genome=args.genome)
+                                   genetic_code=args.genetic_code, genome=args.genome, engine=args.engine)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_lock(args.output.with_suffix(args.output.suffix + '.lock')):
         with tempfile.NamedTemporaryFile(mode='w', dir=args.output.parent, newline='', delete=False) as stream:

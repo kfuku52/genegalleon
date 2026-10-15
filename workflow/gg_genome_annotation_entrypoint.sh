@@ -45,7 +45,7 @@
 #PBS -V
 
 # Number of parallel batch jobs ("-t 1-N" in SGE or "--array 1-N" in SLURM):
-# N = Number of FASTA files in species_cds, or species_genome for the ANNEVO backend.
+# N = Number of FASTA files in species_cds, or species_genome for a prediction backend.
 
 set -euo pipefail
 
@@ -113,7 +113,14 @@ run_annotation=0 # Combine GFF, UniProt, domain, taxonomy, and sequence-derived 
 run_wgd_ksd=0 # WGD inference by dS distribution
 
 # Genome workflow flags
-genome_annotation_backend="none" # none|annevo; annevo predicts from species_genome without replacing curated inputs.
+genome_annotation_backend="oriongeno" # none|annevo|oriongeno; predict from species_genome without replacing curated inputs.
+oriongeno_model_profile="plants" # plants|mammals|birds|fish|other_vertebrates|arthropods|other_invertebrates|fungi.
+oriongeno_source_ref="$(source "${gg_workflow_dir}/../container/source_branches.env"; printf '%s' "${GG_SOURCE_ORIONGENO_REPO_REF}")" # Forward the declared moving branch into the container.
+oriongeno_python="" # Optional installed native Python; blank bootstraps the upstream isolated environment.
+oriongeno_checkpoint="" # Optional local checkpoint directory; blank downloads only the selected profile.
+oriongeno_source_commit="" # Required source provenance for an externally installed oriongeno_python.
+oriongeno_no_download=0 # Set 1 to require existing verified runtime/model assets.
+oriongeno_batch_size=1 # Native GPU prediction batch size.
 annevo_model_profile="Magnoliopsida" # auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi.
 annevo_taxid_map="" # Explicit species/taxid TSV for auto model selection.
 annevo_genome_metadata="" # Trusted species/taxid/genome_sha256 TSV; optional scientific_name.
@@ -164,11 +171,11 @@ forward_config_vars_to_container_env "${gg_entrypoint_name}" "delete_tmp_dir"
 if ! gg_entrypoint_prepare_container_runtime 1; then
   exit 1
 fi
-if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+if [[ "${genome_annotation_backend}" == "annevo" || "${genome_annotation_backend}" == "oriongeno" ]]; then
   # Request only the scheduler-visible GPU; the Docker shim translates --nv.
   annotation_gpu_devices="${CUDA_VISIBLE_DEVICES:-${GG_CONTAINER_DOCKER_GPU_DEVICES:-}}"
   if [[ -z "${annotation_gpu_devices}" || "${annotation_gpu_devices}" == ,* || "${annotation_gpu_devices}" == *, || "${annotation_gpu_devices}" == *,,* ]]; then
-    echo "ANNEVO requires an explicit allocated CUDA_VISIBLE_DEVICES selection." >&2
+    echo "${genome_annotation_backend} requires an explicit allocated CUDA_VISIBLE_DEVICES selection." >&2
     exit 1
   fi
   IFS=',' read -r -a annotation_gpu_device_list <<< "${annotation_gpu_devices}"
