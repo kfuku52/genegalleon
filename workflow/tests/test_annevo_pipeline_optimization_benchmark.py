@@ -68,6 +68,7 @@ def test_failed_trial_retains_sampling_diagnostics_and_never_reports_success(tmp
     inputs.write_text('controlled fixture\n')
     monkeypatch.setattr(bm.pipeline, 'read_inputs', lambda *a: ([{'genome': str(fixture), 'receipt': str(fixture)}], bm.file_sha(inputs)))
     monkeypatch.setattr(bm, 'probability_proof', lambda *a: {})
+    monkeypatch.setattr(bm, 'shared_cache_preflight', lambda *a: {})
     class GPU:
         rows = [] if failure == 'empty' else [{'memory_MiB': 1}]
         errors = ['GPU query failed'] if failure == 'GPU' else []
@@ -94,3 +95,59 @@ def test_failed_trial_retains_sampling_diagnostics_and_never_reports_success(tmp
     assert saved['memory_sample_errors'] == Memory.errors
     assert saved['GPU_samples'] == GPU.rows and saved['memory_samples'] == Memory.rows
     assert not (args.output/'comparison.json').exists()
+
+
+@pytest.mark.parametrize('problem', [None, 'no_reuse', 'changed_GFF'])
+def test_preflight_requires_actual_cache_reuse_and_same_GFF(tmp_path, monkeypatch, problem):
+    cache = tmp_path/'local-cache'
+    calls = []
+    def sampled(inputs, directory, options, config, shared_cache):
+        assert shared_cache == cache and config == bm.CONFIGURATIONS['optimized']
+        directory.mkdir()
+        cache.mkdir(exist_ok=True, mode=0o700)
+        (cache/'kernel.nbc').write_bytes(b'controlled compiled-cache fixture')
+        logs = directory/'fixture_probe/logs'
+        logs.mkdir(parents=True)
+        loaded = bool(calls) and problem != 'no_reuse'
+        (logs/'decoding.stdout.txt').write_text('[cache] data loaded\n' if loaded else '[cache] data saved\n')
+        gff = directory/'probe.gff3'
+        end = 20 if calls and problem == 'changed_GFF' else 10
+        gff.write_text('chr1\tfixture\tgene\t1\t'+str(end)+'\t.\t+\t.\tID=gene1\n')
+        calls.append(dict(inputs=inputs, cache=str(cache)))
+        return {'species': {'fixture_probe': {'gff': str(gff)}}}, 1.0, None, None
+    monkeypatch.setattr(bm, 'sampled_pipeline', sampled)
+    argv = ({'receipt': '/fixture/qualified.json'}, tmp_path/'genome.fa', tmp_path/'proof', cache, {})
+    if problem:
+        with pytest.raises(RuntimeError, match='reuse|GFF features'):
+            bm.shared_cache_preflight(*argv)
+        assert not (tmp_path/'proof/comparison.json').exists()
+    else:
+        proof = bm.shared_cache_preflight(*argv)
+        assert proof['cold_warm_GFF_features_identical'] is True
+        assert proof['outside_performance_timing'] and proof['separate_from_timed_cache']
+        assert [r['cache_load_events'] for r in proof['results']] == [0, 1]
+    assert len(calls) == 2
+
+
+def test_failed_preflight_never_starts_timed_trials_and_cleans_local_cache(tmp_path, monkeypatch):
+    inputs, genome = tmp_path/'input.tsv', tmp_path/'fixture.fa'
+    inputs.write_text('controlled inputs\n')
+    genome.write_text('>chr1\nACGT\n')
+    monkeypatch.setattr(bm.pipeline, 'read_inputs', lambda *a: ([{'genome': str(genome), 'receipt': str(genome)}], bm.file_sha(inputs)))
+    monkeypatch.setattr(bm, 'probability_proof', lambda *a: {})
+    seen = []
+    def preflight(row, genome, root, cache, options):
+        assert cache.parent.parent == tmp_path and cache.parent.is_dir()
+        assert not cache.is_relative_to(tmp_path/'output')
+        seen.append(cache.parent)
+        raise ValueError('controlled private-cache incompatibility')
+    monkeypatch.setattr(bm, 'shared_cache_preflight', preflight)
+    monkeypatch.setattr(bm, 'benchmark_trials', lambda *a: pytest.fail('Timed trials must follow successful preflight'))
+    monkeypatch.setenv('NUMBA_DEBUG_CACHE', 'original-value')
+    args = SimpleNamespace(repeats=2, output=tmp_path/'output', inputs=inputs,
+                           probability_proof_genome=genome, tmp_root=tmp_path, max_tmp_gib=1)
+    with pytest.raises(ValueError, match='private-cache incompatibility'):
+        bm.benchmark(args)
+    assert seen and not seen[0].exists()
+    assert bm.os.environ['NUMBA_DEBUG_CACHE'] == 'original-value'
+    assert not (args.output/'0_baseline').exists()

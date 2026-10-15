@@ -129,6 +129,56 @@ def probability_proof(row, genome, root, tmp_root):
     return result
 
 
+def sampled_pipeline(inputs, directory, options, config, shared_cache):
+    directory.mkdir()
+    started = time.monotonic()
+    gpu, memory = GPUSamples(), MemorySamples()
+    try:
+        with gpu, memory:
+            result = pipeline.run(argparse.Namespace(inputs=inputs, output=directory, **options,
+                order=config['order'], compression=config['compression'],
+                jit_cache_root=shared_cache if config['shared_jit'] else None))
+            wall = time.monotonic()-started
+    finally:
+        atomic_json(directory/'resource_samples.json', dict(
+            GPU_samples=gpu.rows, GPU_sample_errors=gpu.errors,
+            memory_samples=memory.rows, memory_sample_errors=memory.errors))
+    if gpu.errors or memory.errors or not gpu.rows or not memory.rows:
+        raise RuntimeError('Performance/resource sampling was incomplete; inspect '+str(directory/'resource_samples.json'))
+    return result, wall, gpu, memory
+
+
+def shared_cache_preflight(row, genome, root, cache_root, options):
+    """Actual cold/warm GPU+decode probes, outside timing and its JIT cache."""
+    root.mkdir()
+    inputs = root/'inputs.tsv'
+    inputs.write_text('species\tgenome\treceipt\nfixture_probe\t'+str(genome)+'\t'+row['receipt']+'\n')
+    config = CONFIGURATIONS['optimized']
+    expected, results = None, []
+    for repeat in range(2):
+        directory = root/str(repeat)
+        print('PREFLIGHT_STARTED', repeat, flush=True)
+        result, wall, _, _ = sampled_pipeline(inputs, directory, options, config, cache_root)
+        gff = result['species']['fixture_probe']['gff']
+        signature = feature_digest(gff)
+        if expected is not None and signature != expected:
+            raise RuntimeError('Cold/warm native cache preflight changed GFF features')
+        expected = signature
+        logs = ''.join(p.read_text() for p in directory.glob('*/logs/decoding.stdout.txt'))
+        compiled = len(list(cache_root.rglob('*.nbc')))
+        loaded = logs.count('[cache] data loaded')
+        if not compiled or (repeat and not loaded):
+            raise RuntimeError('Native JIT cache creation/reuse was not demonstrated in preflight')
+        results.append(dict(repeat=repeat, wall_seconds=wall, features_sha256=signature,
+                            compiled_files=compiled, cache_load_events=loaded))
+        print('PREFLIGHT_COMPLETE', repeat, flush=True)
+    proof = dict(kind='native-annevo-shared-cache-preflight', results=results,
+                 cold_warm_GFF_features_identical=True, outside_performance_timing=True,
+                 separate_from_timed_cache=True, cache_directory=str(cache_root))
+    atomic_json(root/'comparison.json', proof)
+    return proof
+
+
 def benchmark(args):
     if args.repeats < 2:
         raise ValueError('Use at least two alternating paired trials')
@@ -144,68 +194,63 @@ def benchmark(args):
     proof = probability_proof(rows[0], args.probability_proof_genome, root/'probability_proof', args.tmp_root)
     options = dict(predict_threads=4, decode_threads=4, decoder_workers=2, batch_size=32,
                    sequence_threshold=25, tmp_root=args.tmp_root, max_tmp_gib=args.max_tmp_gib)
-    shared_cache = root/'jit-cache'
-    trials, expected = [], {}
+    # Shared compiled kernels are executable cache data. Use the allocation's
+    # explicitly selected temporary filesystem, which must preserve private
+    # POSIX permissions, rather than assuming the GFF output share does so.
     old_debug = os.environ.get('NUMBA_DEBUG_CACHE')
     os.environ['NUMBA_DEBUG_CACHE'] = '1'
     try:
-        for repeat in range(args.repeats):
-            names = list(CONFIGURATIONS) if repeat % 2 == 0 else list(reversed(CONFIGURATIONS))
-            for name in names:
-                config = CONFIGURATIONS[name]
-                directory = root/(str(repeat)+'_'+name)
-                directory.mkdir()
-                cache_before = len(list(shared_cache.rglob('*.nbc'))) if shared_cache.exists() else 0
-                print('TRIAL_STARTED', repeat, name, flush=True)
-                started = time.monotonic()
-                gpu, memory = GPUSamples(), MemorySamples()
-                try:
-                    with gpu, memory:
-                        result = pipeline.run(argparse.Namespace(inputs=args.inputs, output=directory, **options,
-                            order=config['order'], compression=config['compression'],
-                            jit_cache_root=shared_cache if config['shared_jit'] else None))
-                        wall = time.monotonic()-started
-                finally:
-                    # Preserve the exact errors and successful samples even
-                    # when prediction or resource validation fails.
-                    atomic_json(directory/'resource_samples.json', dict(
-                        GPU_samples=gpu.rows, GPU_sample_errors=gpu.errors,
-                        memory_samples=memory.rows, memory_sample_errors=memory.errors))
-                if gpu.errors or memory.errors or not gpu.rows or not memory.rows:
-                    raise RuntimeError('Performance/resource sampling was incomplete; inspect '+str(directory/'resource_samples.json'))
-                signatures = {}
-                for species, row in result['species'].items():
-                    signatures[species] = dict(features_sha256=feature_digest(row['gff']),
-                        raw_sha256=file_sha(row['gff']), counts=native.gff_counts(row['gff']))
-                    if species in expected and signatures[species]['features_sha256'] != expected[species]['features_sha256']:
-                        raise RuntimeError('Native GFF annotation fields changed: '+species)
-                    expected.setdefault(species, signatures[species])
-                cache_logs = ''.join(p.read_text() for p in directory.glob('*/logs/decoding.stdout.txt'))
-                trial = dict(repeat=repeat, configuration=name, options=config, wall_seconds=wall,
-                    species=result['species'], signatures=signatures, pipeline=result,
-                    GPU_samples=gpu.rows, memory_samples=memory.rows,
-                    peak_GPU_MiB=max(x['memory_MiB'] for x in gpu.rows),
-                    peak_tree_RSS_KiB=max(x['RSS_KiB'] for x in memory.rows),
-                    peak_tree_PSS_KiB=max(x['PSS_KiB'] for x in memory.rows),
-                    jit_compiled_files_before=cache_before,
-                    jit_compiled_files_after=len(list(shared_cache.rglob('*.nbc'))) if shared_cache.exists() else 0,
-                    jit_cache_load_events=cache_logs.count('[cache] data loaded'),
-                    jit_cache_save_events=cache_logs.count('[cache] data saved'))
-                trials.append(trial)
-                atomic_json(root/'partial_results.json', trials)
-                print('TRIAL_COMPLETE', repeat, name, wall, flush=True)
+        with tempfile.TemporaryDirectory(prefix='gg-benchmark-jit-', dir=args.tmp_root) as work:
+            work = Path(work)
+            preflight = shared_cache_preflight(rows[0], args.probability_proof_genome,
+                                               root/'cache_preflight', work/'preflight', options)
+            return benchmark_trials(args, root, hashes, proof, options, work/'timed', preflight)
     finally:
         if old_debug is None:
             os.environ.pop('NUMBA_DEBUG_CACHE', None)
         else:
             os.environ['NUMBA_DEBUG_CACHE'] = old_debug
+
+
+def benchmark_trials(args, root, hashes, proof, options, shared_cache, preflight):
+    trials, expected = [], {}
+    for repeat in range(args.repeats):
+        names = list(CONFIGURATIONS) if repeat % 2 == 0 else list(reversed(CONFIGURATIONS))
+        for name in names:
+            config = CONFIGURATIONS[name]
+            directory = root/(str(repeat)+'_'+name)
+            cache_before = len(list(shared_cache.rglob('*.nbc'))) if shared_cache.exists() else 0
+            print('TRIAL_STARTED', repeat, name, flush=True)
+            result, wall, gpu, memory = sampled_pipeline(args.inputs, directory, options, config, shared_cache)
+            signatures = {}
+            for species, row in result['species'].items():
+                signatures[species] = dict(features_sha256=feature_digest(row['gff']),
+                    raw_sha256=file_sha(row['gff']), counts=native.gff_counts(row['gff']))
+                if species in expected and signatures[species]['features_sha256'] != expected[species]['features_sha256']:
+                    raise RuntimeError('Native GFF annotation fields changed: '+species)
+                expected.setdefault(species, signatures[species])
+            cache_logs = ''.join(p.read_text() for p in directory.glob('*/logs/decoding.stdout.txt'))
+            trial = dict(repeat=repeat, configuration=name, options=config, wall_seconds=wall,
+                species=result['species'], signatures=signatures, pipeline=result,
+                GPU_samples=gpu.rows, memory_samples=memory.rows,
+                peak_GPU_MiB=max(x['memory_MiB'] for x in gpu.rows),
+                peak_tree_RSS_KiB=max(x['RSS_KiB'] for x in memory.rows),
+                peak_tree_PSS_KiB=max(x['PSS_KiB'] for x in memory.rows),
+                jit_compiled_files_before=cache_before,
+                jit_compiled_files_after=len(list(shared_cache.rglob('*.nbc'))) if shared_cache.exists() else 0,
+                jit_cache_load_events=cache_logs.count('[cache] data loaded'),
+                jit_cache_save_events=cache_logs.count('[cache] data saved'))
+            trials.append(trial)
+            atomic_json(root/'partial_results.json', trials)
+            print('TRIAL_COMPLETE', repeat, name, wall, flush=True)
     if any(file_sha(path) != value for path, value in hashes.items()):
         raise RuntimeError('Benchmark inputs changed')
     medians = {name: statistics.median(t['wall_seconds'] for t in trials if t['configuration']==name) for name in CONFIGURATIONS}
     report = dict(schema=1, trials=trials, inputs_sha256=hashes, median_seconds=medians,
         baseline_median_seconds=medians['baseline'], optimized_median_seconds=medians['optimized'],
         speedup=medians['baseline']/medians['optimized'], wall_time_reduction_fraction=1-medians['optimized']/medians['baseline'],
-        all_GFF_features_identical=True, probability_proof=proof,
+        all_GFF_features_identical=True, probability_proof=proof, cache_preflight=preflight,
+        cache_storage='private temporary filesystem selected by tmp-root; shared across timed trials, separate preflight cache',
         all_GFF_bytes_identical=all(t['signatures']==expected for t in trials),
         scientific_completion_verified=False,
         scope='Native full-genome GPU/decode equivalence and sampled resources; admission requires separate actual assays')

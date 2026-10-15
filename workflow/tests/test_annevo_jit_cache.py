@@ -60,3 +60,18 @@ def test_cache_cannot_contain_inputs_or_modify_installed_runtime(tmp_path,runtim
     with pytest.raises(ValueError,match='separate'):
         jit.prepare(Path(runtime['generation'])/'jit',runtime,[])
     assert not (Path(runtime['generation'])/'jit').exists()
+
+
+def test_filesystem_that_ignores_private_creation_modes_is_rejected(tmp_path, runtime, monkeypatch):
+    root = tmp_path/'permissive-share'
+    mkdir = Path.mkdir
+    def inherited_mode(path, *a, **kw):
+        result = mkdir(path, *a, **kw)
+        if path == root:
+            path.chmod(0o777)
+        return result
+    monkeypatch.setattr(Path, 'mkdir', inherited_mode)
+    with pytest.raises(ValueError, match='0700.*mode=0o777.*filesystem'):
+        jit.prepare(root, runtime, [])
+    assert not list(root.rglob('*.nbc'))
+    assert not list(root.rglob('cache_identity.json'))
