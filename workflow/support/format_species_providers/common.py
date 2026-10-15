@@ -99,96 +99,88 @@ def provider_raw_dir(provider, download_root, species_key):
 
 
 def infer_provider_from_id(source_id):
+    """Infer source identity, not permission to download an arbitrary URL."""
     if source_id == "":
         return ""
-    lowered = source_id.lower()
+    # URL components must not pass through the bare-accession heuristics: a
+    # query, path or username can contain another provider's name or accession.
+    try:
+        parsed = urlparse(source_id)
+        hostname = (parsed.hostname or "").removesuffix(".")
+    except ValueError:
+        return ""
+    if parsed.scheme in ("http", "https", "ftp") and hostname:
+        return _infer_provider_from_url(hostname, parsed.path.lower())
+    if parsed.scheme in ("http", "https", "ftp", "file") or parsed.netloc:
+        return ""
     if NCBI_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
         return "ncbi"
-    if "ncbi.nlm.nih.gov/datasets/genome/" in lowered:
-        return "ncbi"
-    if DDBJ_ID_HINT_PATTERN.match(source_id):
-        return "ddbj"
-    if ENSEMBL_ID_HINT_PATTERN.match(source_id):
-        return "ensembl"
-    if ENSEMBLMETAZOA_ID_HINT_PATTERN.match(source_id):
-        return "ensemblmetazoa"
-    if ENSEMBLPROTISTS_ID_HINT_PATTERN.match(source_id):
-        return "ensemblprotists"
-    if FERNBASE_ID_HINT_PATTERN.match(source_id):
-        return "fernbase"
-    if VEUPATHDB_ID_HINT_PATTERN.match(source_id):
-        return "veupathdb"
-    if DICTYBASE_ID_HINT_PATTERN.match(source_id):
-        return "dictybase"
-    if INSECTBASE_ID_HINT_PATTERN.match(source_id):
-        return "insectbase"
-    if ORYZA_MINUTA_ID_HINT_PATTERN.match(source_id):
-        return ORYZA_MINUTA_PROVIDER
-    if INSECTBASE_IBG_ID_PATTERN.match(source_id):
-        return "insectbase"
-    if "ftp.ensembl.org" in lowered or "ensembl.org/pub/current_" in lowered:
-        return "ensembl"
-    if (
-        "ftp.ensemblgenomes.ebi.ac.uk/pub/plants/current/" in lowered
-        or "ftp.ensemblgenomes.ebi.ac.uk/pub/current/plants/" in lowered
+    for pattern, provider in (
+        (DDBJ_ID_HINT_PATTERN, "ddbj"),
+        (ENSEMBL_ID_HINT_PATTERN, "ensembl"),
+        (ENSEMBLMETAZOA_ID_HINT_PATTERN, "ensemblmetazoa"),
+        (ENSEMBLPROTISTS_ID_HINT_PATTERN, "ensemblprotists"),
+        (FERNBASE_ID_HINT_PATTERN, "fernbase"),
+        (VEUPATHDB_ID_HINT_PATTERN, "veupathdb"),
+        (DICTYBASE_ID_HINT_PATTERN, "dictybase"),
+        (INSECTBASE_ID_HINT_PATTERN, "insectbase"),
+        (ORYZA_MINUTA_ID_HINT_PATTERN, ORYZA_MINUTA_PROVIDER),
+        (INSECTBASE_IBG_ID_PATTERN, "insectbase"),
+        (COGE_ID_HINT_PATTERN, "coge"),
+        (GWH_ID_HINT_PATTERN, "gwh"),
+        (CITRUSGENOMEDB_ID_HINT_PATTERN, "citrusgenomedb"),
+        (FIGSHARE_ID_HINT_PATTERN, "figshare"),
+        (PLANTGARDEN_ID_HINT_PATTERN, "plantgarden"),
+        (PLANTAEDB_ID_HINT_PATTERN, "plantaedb"),
+        (CNGB_ID_HINT_PATTERN, "cngb"),
     ):
-        return "ensemblplants"
-    if "ftp.ensemblgenomes.ebi.ac.uk/pub/current/metazoa/" in lowered:
-        return "ensemblmetazoa"
-    if "ftp.ensemblgenomes.ebi.ac.uk/pub/current/protists/" in lowered:
-        return "ensemblprotists"
-    if COGE_ID_HINT_PATTERN.match(source_id):
-        return "coge"
-    if GWH_ID_HINT_PATTERN.match(source_id):
-        return "gwh"
-    if CITRUSGENOMEDB_ID_HINT_PATTERN.match(source_id):
-        return "citrusgenomedb"
-    if FIGSHARE_ID_HINT_PATTERN.match(source_id):
-        return "figshare"
-    if PLANTGARDEN_ID_HINT_PATTERN.match(source_id):
-        return "plantgarden"
-    if PLANTAEDB_ID_HINT_PATTERN.match(source_id):
-        return "plantaedb"
-    if CNGB_ID_HINT_PATTERN.match(source_id):
-        return "cngb"
-    if extract_ddbj_bioproject_id(source_id) != "":
-        return "ddbj"
-    if extract_ddbj_wgs_prefix(source_id) != "":
+        if pattern.match(source_id):
+            return provider
+    if extract_ddbj_bioproject_id(source_id) != "" or extract_ddbj_wgs_prefix(source_id) != "":
         return "ddbj"
     if GWH_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
         return "gwh"
     if CNGB_ASSEMBLY_ACCESSION_PATTERN.match(source_id):
         return "cngb"
-    if "genomevolution.org" in lowered:
-        return "coge"
-    if "/gwh/" in lowered:
+    return ""
+
+
+def _infer_provider_from_url(hostname, path):
+    def in_domain(domain):
+        return hostname == domain or hostname.endswith("." + domain)
+
+    if in_domain("ncbi.nlm.nih.gov") and path.startswith("/datasets/genome/"):
+        return "ncbi"
+    if hostname == "ftp.ensembl.org" or (in_domain("ensembl.org") and path.startswith("/pub/current_")):
+        return "ensembl"
+    if hostname == "ftp.ensemblgenomes.ebi.ac.uk":
+        for division in ("plants", "metazoa", "protists"):
+            if path.startswith("/pub/current/" + division + "/"):
+                return "ensembl" + division
+        if path.startswith("/pub/plants/current/"):
+            return "ensemblplants"
+    if in_domain("cncb.ac.cn") and path.startswith("/gwh/"):
         return "gwh"
-    if "citrusgenomedb.org/" in lowered:
-        return "citrusgenomedb"
-    if "figshare.com/articles/" in lowered or "api.figshare.com/" in lowered:
+    if in_domain("figshare.com") and (hostname == "api.figshare.com" or path.startswith("/articles/")):
         return "figshare"
-    if "plantgarden.jp/" in lowered:
-        return "plantgarden"
-    if "plantaedb.com/" in lowered:
-        return "plantaedb"
-    if "cngb.org" in lowered or "cncb.ac.cn" in lowered:
-        return "cngb"
-    if "ddbj.nig.ac.jp/" in lowered or "getentry.ddbj.nig.ac.jp/" in lowered:
-        return "ddbj"
-    if "flybase.org" in lowered:
-        return "flybase"
-    if "wormbase.org" in lowered:
-        return "wormbase"
-    if "vectorbase.org" in lowered:
-        return "vectorbase"
-    if "fernbase.org" in lowered:
-        return "fernbase"
-    if "veupathdb.org" in lowered:
-        return "veupathdb"
-    if "dictybase.org" in lowered:
-        return "dictybase"
-    if "insect-genome.com" in lowered:
-        return "insectbase"
+    for domain, provider in (
+        ("genomevolution.org", "coge"),
+        ("citrusgenomedb.org", "citrusgenomedb"),
+        ("plantgarden.jp", "plantgarden"),
+        ("plantaedb.com", "plantaedb"),
+        ("cngb.org", "cngb"),
+        ("cncb.ac.cn", "cngb"),
+        ("ddbj.nig.ac.jp", "ddbj"),
+        ("flybase.org", "flybase"),
+        ("wormbase.org", "wormbase"),
+        ("vectorbase.org", "vectorbase"),
+        ("fernbase.org", "fernbase"),
+        ("veupathdb.org", "veupathdb"),
+        ("dictybase.org", "dictybase"),
+        ("insect-genome.com", "insectbase"),
+    ):
+        if in_domain(domain):
+            return provider
     return ""
 
 

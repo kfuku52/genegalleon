@@ -66,8 +66,10 @@ def bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(download, 'platform_name', lambda: manifest['platform'])
     original_fetch = cache.fetch_verified
     def fetch(url, target, sha, size, **kwargs):
-        if 'raw.githubusercontent.com' in url:
-            url = (source/'saved_model'/Path(url).name).as_uri()
+        for model in manifest['models'].values():
+            if url == model['official_url']:
+                url = (source / Path(model['path']).relative_to('source')).as_uri()
+                break
         return original_fetch(url, target, sha, size, **kwargs)
     monkeypatch.setattr(cache, 'fetch_verified', fetch)
     monkeypatch.setattr(cache.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a[0], 0, '', ''))
@@ -91,6 +93,22 @@ def test_cold_install_warm_reuse_and_selected_receipt_stability(tmp_path, monkey
     Path(first['model_path']).write_bytes(b'corrupt')
     with pytest.raises(RuntimeError, match='checksum'):
         cache.prepare(root, 'Magnoliopsida', str(path), no_download=True)
+
+
+def test_offline_bundle_redirects_only_exact_manifest_model_urls(tmp_path, monkeypatch):
+    requests = []
+    monkeypatch.setattr(cache, 'fetch_verified', lambda url, *args, **kwargs: requests.append(url))
+    _, manifest = bundle(tmp_path, monkeypatch)
+    official = manifest['models']['Magnoliopsida']['official_url']
+    unrelated = [
+        official.replace('raw.githubusercontent.com', 'raw.githubusercontent.com.example.invalid'),
+        official.replace('raw.githubusercontent.com', 'raw.githubusercontent.com@example.invalid'),
+        'https://example.invalid/?next=' + official,
+        official.replace('/xjtu-omics/ANNEVO/', '/unrelated/repository/'),
+    ]
+    for url in [*unrelated, official]:
+        cache.fetch_verified(url, tmp_path / 'unused', 'unused', 0)
+    assert requests == [*unrelated, (tmp_path / 'source/saved_model/ANNEVO_Magnoliopsida.pt').as_uri()]
 
 
 def test_failed_install_never_publishes_ready_and_can_retry(tmp_path, monkeypatch):
