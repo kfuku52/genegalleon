@@ -108,7 +108,7 @@ quiet window. The record retains the excluded original samples and reason.
 
 ## Validation
 
-Validation used the Docker image recorded above, with its built-in NWKIT 0.43.53;
+Implementation validation used the Docker image recorded above, with its built-in NWKIT 0.43.53;
 no source override was used in the final checks. `GG_RUNTIME_FRESHNESS=always`
 matched the image to current inputs before execution.
 
@@ -119,6 +119,14 @@ matched the image to current inputs before execution.
 - `bash ./dev lint`: passed, using the documented `GG_LINT_BASH` Docker wrapper for Bash 4+; ShellCheck on tracked shell scripts and 162 shell-static tests also passed.
 - Runtime R checks: 30 source parses, actual BUSCO summary/annotation-count regressions and dated-tree interval/NHX regressions passed.
 - Follow-up CI collection check: all 11 promoter runtime cases are required; validation-runner/development-tooling checks: **65 passed**.
+- Follow-up legacy-input routing fixture: supply the core's workspace variable
+  and check cache arguments, including spaces in paths.
+  `GG_RUNTIME_FRESHNESS=always bash ./dev check runtime-python workflow/tests/test_gene_model_refinement_downstream.py -x`:
+  **30 passed** in rebuilt Docker image
+  `sha256:a28e1760f1cf2cca40798943bc8e48d594b160147c00baf0441820ada07e41a7`,
+  runtime input `f0f256153dba58726e3cb60f15f81002adead91a9c458d8fc6da75bad40d8d31`.
+  The old image was rejected as stale; it was used only to reproduce the
+  isolated fixture failure before rebuilding.
 - `git diff --check`: passed.
 
 NWKIT's owning change (`88d3cba6`, version 0.43.53) passed its `tools/check.py
