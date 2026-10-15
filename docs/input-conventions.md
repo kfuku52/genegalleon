@@ -764,6 +764,14 @@ python workflow/support/format_species_inputs.py \
 
 Manifest required columns:
 
+For 1KP, use `provider=onekp`, the original four-letter sample code as `id`,
+and an explicit curated `species_key` when a published name has changed. The
+resolver uses the official CNGB sample index and downloads the published
+`CODE-translated-nucleotides.fa.gz` CDS. It records the reported species and
+sample code in the resolved manifest, rejects flagged or unknown sample identities,
+and never treats SOAP transcript assemblies or translated proteins as CDS.
+Explicit local/public `cds_url` values remain supported for already verified CDS.
+
 - `provider` (required; first column in XLSX templates)
 - `id` (required; second column in XLSX templates)
 - `species_key` is optional

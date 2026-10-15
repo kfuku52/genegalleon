@@ -461,6 +461,11 @@ def download_from_manifest(
                             row=row,
                         )
                 if resolved_urls is not None:
+                    if provider == "onekp":
+                        row = {**row, **{key: resolved_urls[key] for key in ("onekp_reported_species", "onekp_sample_code") if key in resolved_urls}}
+                        for key in ("onekp_reported_species", "onekp_sample_code"):
+                            if key not in resolved_fieldnames:
+                                resolved_fieldnames.append(key)
                     gff_validation = str(resolved_urls.get("gff_validation") or "").strip()
                     if cds_url == "":
                         cds_url = (resolved_urls.get("cds_url") or "").strip()

@@ -467,7 +467,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
         assert 'INDIRECT("id_opts_"&$A2)' in str(id_validation.formula1)
 
         list_sheet = workbook["_lists"]
-        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 24)]
+        provider_values = [list_sheet.cell(row=i, column=1).value for i in range(1, 25)]
         assert provider_values == [
             "ensembl",
             "ensemblplants",
@@ -490,6 +490,7 @@ def test_build_download_manifest_xlsx_has_provider_and_id_dropdowns(tmp_path):
             "dictybase",
             "insectbase",
             "oryza_minuta",
+            "onekp",
             "direct",
             "local",
         ]
@@ -573,6 +574,7 @@ def test_build_download_manifest_xlsx_id_lists_are_provider_specific(tmp_path):
             "dictybase",
             "insectbase",
             "oryza_minuta",
+            "onekp",
             "direct",
             "local",
         ]
@@ -795,6 +797,7 @@ def test_build_download_manifest_xlsx_prefers_snapshot_for_full_providers(tmp_pa
             "dictybase",
             "insectbase",
             "oryza_minuta",
+            "onekp",
             "direct",
             "local",
         ]

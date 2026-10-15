@@ -599,6 +599,7 @@ def discover_tasks(provider, input_dir, allowed_species_keys=None):
         "dictybase",
         "insectbase",
         ORYZA_MINUTA_PROVIDER,
+        "onekp",
         "direct",
     ):
         return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
