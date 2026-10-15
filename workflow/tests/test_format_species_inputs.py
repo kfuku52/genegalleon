@@ -354,6 +354,69 @@ def test_formatting_normalises_partial_cds_and_paired_gff_without_rescue_flag(tm
     assert not list(tmp_path.glob("*.fai"))
 
 
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("provided", [False, True])
+def test_valid_cds_canonicalises_complementary_phases_without_changing_model(tmp_path, strand, provided):
+    module = load_module()
+    from validate_cds_gff_mapping import validate_single_species
+
+    sequence = "ATG" + "AAA" * 282 + "TAA"
+    boundaries = [0, 199, 312, 512, 852]
+    blocks = [(sequence[start:end], phase) for start, end, phase in
+              zip(boundaries, boundaries[1:], [0, 1, 0, 2], strict=False)]
+    task = normalisation_bundle(tmp_path, [{"blocks": blocks, "strand": strand}], provided=provided)
+    originals = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path")}
+    output = tmp_path / "output"
+    output.mkdir()
+    cds = module.format_cds(task, output, False, False)
+    assert dict(module.iter_fasta_records(cds["output_path"])) == {"Test_species_g1": sequence}
+    assert cds["cds_normalised_records"] == 0  # No sequence correction.
+    gff = module.format_gff(task, output, False, False, formatted_cds_path=cds["output_path"])
+    with gzip.open(gff["output_path"], "rt") as handle:
+        formatted = [line.rstrip().split("\t") for line in handle if "\tCDS\t" in line]
+    source = [line.split("\t") for line in originals["gff_path"].decode().splitlines() if "\tCDS\t" in line]
+    for rows in (formatted, source):
+        rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [row[7] for row in formatted] == ["0", "2", "0", "1"]
+    assert [row[:7] for row in formatted] == [row[:7] for row in source]
+    assert all("Parent=t1" in row[8] and "gg_cds_normalisation=complementary_cds_phase" in row[8]
+               for row in formatted)
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=cds["output_path"], gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert mapping["ok"], mapping.get("error")
+    audit = json.loads(Path(str(cds["output_path"]) + ".cds-normalisation.json").read_text())
+    assert audit["records"][0]["gff_phase_normalised"] is True
+    assert audit["records"][0]["status"] == "unchanged"
+    assert {name: Path(task[name]).read_bytes() for name in originals} == originals
+
+
+@pytest.mark.parametrize("mutation", ["genomic_mismatch", "shared_parent", "ambiguous", "exception", "canonical"])
+def test_phase_only_normalisation_requires_unambiguous_same_model_evidence(tmp_path, mutation, monkeypatch):
+    load_module()
+    from cds_model_normalisation import CdsModelNormaliser
+    from format_species_annotation.cds_normalisation import iter_normalised_cds_records
+
+    phases = [0, 2] if mutation == "canonical" else [0, 1]
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGA", phases[0]), ("AATAA", phases[1])]}])
+    text = task["gff_path"].read_text()
+    if mutation == "genomic_mismatch":
+        task["cds_path"].write_text(">t1\nATGCCCTAA\n")
+    elif mutation == "shared_parent":
+        text = text.replace("Parent=t1", "Parent=t1,t2")
+    elif mutation == "ambiguous":
+        text = text.replace("\t1\tParent=t1", "\t.\tParent=t1")
+    elif mutation == "exception":
+        text = text.replace("ID=t1;Parent=g1", "ID=t1;Parent=g1;exception=ribosomal_slippage")
+    task["gff_path"].write_text(text)
+    if mutation in {"shared_parent", "ambiguous", "exception", "canonical"}:
+        def forbidden_fetch(*_args):
+            raise AssertionError("unsupported or canonical models must not fetch genomic evidence")
+        monkeypatch.setattr(CdsModelNormaliser, "fetch", forbidden_fetch)
+    state = {}
+    list(iter_normalised_cds_records(task, state))
+    assert state["gff_updates"] == {}
+
+
 @pytest.mark.parametrize("explicit", [False, True])
 def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path, monkeypatch, explicit):
     import tempfile

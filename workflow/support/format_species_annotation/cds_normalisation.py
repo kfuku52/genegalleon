@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from Bio.Data import CodonTable
-from cds_model_normalisation import CdsModelNormaliser
+from cds_model_normalisation import CdsModelNormaliser, phase_conventions
 
 from .common import append_gff_attribute, first_token, parse_gff_attributes
 from .genome_intervals import genome_intervals
@@ -16,7 +16,7 @@ from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
 from .source_identity import task_annotation_path
 
-VERSION = 4
+VERSION = 5
 
 
 def audit_path(cds_path):
@@ -98,6 +98,25 @@ def cds_changes(normaliser, key, offset, trailing, reason):
     return updates
 
 
+def phase_only_changes(normaliser, sequence, keys):
+    """Canonicalise one complete model only after exact genomic identity."""
+    if len(keys) != 1:
+        return {}
+    key = next(iter(keys))
+    blocks = normaliser.models[key]
+    if (blocks[0]["phase"] != "0" or phase_conventions(blocks) != {"complementary"}
+            or any("," in row["attributes"].get("Parent", "") for row in blocks)
+            or len({(row["seqid"], row["strand"]) for row in blocks}) != 1
+            or blocks[0]["strand"] not in {"+", "-"}):
+        return {}
+    ascending = sorted(blocks, key=lambda row: row["start"])
+    if any(a["end"] > b["start"] for a, b in zip(ascending, ascending[1:], strict=False)):
+        return {}
+    if normaliser.fetch(blocks) != sequence:
+        return {}
+    return cds_changes(normaliser, key, 0, 0, "complementary_cds_phase")
+
+
 def iter_normalised_cds_records(task, state=None):
     """Yield (header, effective CDS, decision), retaining unsupported originals."""
     from .tasks import iter_task_cds_records
@@ -175,12 +194,22 @@ def iter_normalised_cds_records(task, state=None):
             else:
                 if decision["status"] == "excluded":
                     decision["status"] = "retained_unresolved"
+                elif decision["reason"] == "valid_original_translation":
+                    changes = phase_only_changes(normaliser, raw, keys)
+                    if changes:
+                        for source_line, update in changes.items():
+                            if source_line in updates and updates[source_line] != update:
+                                raise ValueError("Conflicting CDS/GFF normalisations: " + update["transcript"])
+                            updates[source_line] = update
+                        # CDS bases, coordinates and identifiers are unchanged.
+                        decision.update(reason="complementary_cds_phase", gff_phase_normalised=True)
             yield header, raw, decision
         if contract(task) != frozen:
             raise OSError("Inputs changed during CDS normalisation")
         state.update(contract=frozen, counts=dict(Counter(row["status"] for row in normaliser.rows)),
                      reasons=dict(Counter(row["reason"] for row in normaliser.rows)),
-                     records=[row for row in normaliser.rows if row["status"] != "unchanged"],
+                     records=[row for row in normaliser.rows
+                              if row["status"] != "unchanged" or row.get("gff_phase_normalised")],
                      phase_convention_votes=dict(normaliser.votes), gff_updates=updates)
     finally:
         try:
