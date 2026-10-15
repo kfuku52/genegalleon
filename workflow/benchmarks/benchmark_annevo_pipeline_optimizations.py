@@ -52,7 +52,9 @@ def process_memory(pid):
         try:
             rollup = dict(line.split(':', 1) for line in (Path('/proc')/str(child)/'smaps_rollup').read_text().splitlines() if ':' in line)
             child_pss = int(rollup['Pss'].split()[0])
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # Linux can return ESRCH, as well as ENOENT, after a child exits
+            # between the ancestry snapshot and its smaps_rollup read.
             continue
         rss += rows[child][1]
         pss += child_pss
@@ -73,7 +75,7 @@ class MemorySamples:
             try:
                 self.rows.append(process_memory(os.getpid()))
             except (OSError, RuntimeError, KeyError, ValueError) as error:
-                self.errors.append(str(error))
+                self.errors.append(type(error).__name__+': '+str(error))
             self.stop.wait(1)
 
     def __enter__(self):
@@ -152,16 +154,25 @@ def benchmark(args):
             for name in names:
                 config = CONFIGURATIONS[name]
                 directory = root/(str(repeat)+'_'+name)
+                directory.mkdir()
                 cache_before = len(list(shared_cache.rglob('*.nbc'))) if shared_cache.exists() else 0
                 print('TRIAL_STARTED', repeat, name, flush=True)
                 started = time.monotonic()
-                with GPUSamples() as gpu, MemorySamples() as memory:
-                    result = pipeline.run(argparse.Namespace(inputs=args.inputs, output=directory, **options,
-                        order=config['order'], compression=config['compression'],
-                        jit_cache_root=shared_cache if config['shared_jit'] else None))
-                    wall = time.monotonic()-started
+                gpu, memory = GPUSamples(), MemorySamples()
+                try:
+                    with gpu, memory:
+                        result = pipeline.run(argparse.Namespace(inputs=args.inputs, output=directory, **options,
+                            order=config['order'], compression=config['compression'],
+                            jit_cache_root=shared_cache if config['shared_jit'] else None))
+                        wall = time.monotonic()-started
+                finally:
+                    # Preserve the exact errors and successful samples even
+                    # when prediction or resource validation fails.
+                    atomic_json(directory/'resource_samples.json', dict(
+                        GPU_samples=gpu.rows, GPU_sample_errors=gpu.errors,
+                        memory_samples=memory.rows, memory_sample_errors=memory.errors))
                 if gpu.errors or memory.errors or not gpu.rows or not memory.rows:
-                    raise RuntimeError('Performance/resource sampling was incomplete')
+                    raise RuntimeError('Performance/resource sampling was incomplete; inspect '+str(directory/'resource_samples.json'))
                 signatures = {}
                 for species, row in result['species'].items():
                     signatures[species] = dict(features_sha256=feature_digest(row['gff']),
