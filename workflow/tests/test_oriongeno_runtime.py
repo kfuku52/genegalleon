@@ -79,6 +79,15 @@ def test_runtime_environment_keeps_native_caches_local_and_drops_python_injectio
     assert env['NUMBA_NUM_THREADS'] == '3'
 
 
+def test_production_conda_c_compiler_is_exposed_to_triton(tmp_path, monkeypatch):
+    monkeypatch.delenv('CC', raising=False)
+    monkeypatch.setattr(native.shutil, 'which', lambda name: '/opt/conda/bin/'+name
+                        if name == 'x86_64-conda-linux-gnu-cc' else None)
+    assert native.environment(tmp_path)['CC'] == '/opt/conda/bin/x86_64-conda-linux-gnu-cc'
+    monkeypatch.setenv('CC', '/explicit/compiler')
+    assert native.environment(tmp_path)['CC'] == '/explicit/compiler'
+
+
 @pytest.mark.parametrize('changed', ['package', 'model', 'receipt'])
 def test_runtime_snapshot_rejects_changes(local_runtime, changed):
     args, package, model = local_runtime

@@ -40,6 +40,12 @@ def environment(root, threads=1):
     env.update(PYTHONDONTWRITEBYTECODE='1', PYTHONNOUSERSITE='1',
                OMP_NUM_THREADS=str(threads), MKL_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS=str(threads),
                NUMBA_NUM_THREADS=str(threads))
+    # GG's production image carries the Conda C toolchain under its target
+    # name. Triton otherwise searches only for cc/gcc/clang at first inference.
+    if not env.get('CC'):
+        compiler = shutil.which('cc') or shutil.which('gcc') or shutil.which('x86_64-conda-linux-gnu-cc')
+        if compiler:
+            env['CC'] = compiler
     return env
 
 
