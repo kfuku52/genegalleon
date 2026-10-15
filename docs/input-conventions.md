@@ -511,6 +511,13 @@ same detected or declared factor levels and reference coding.
   - by default, GeneGalleon appends `amalgkit_sra_strategy_query` to keep transcriptome-oriented SRA strategies (`RNA-seq`, `EST`, `CLONE`); set that variable empty or broaden it if you intentionally need other strategies
 - `mode_transcriptome_assembly="fastq"`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
+  - accepts regular files and readable absolute or relative symlinks to regular
+    FASTQ files at that directory's first level; hidden files and nested files
+    are excluded. Broken, unreadable or non-file FASTQ links stop discovery.
+    External link targets must also be visible inside the execution container.
+    Launchers can source the core with `GG_CORE_SOURCE_ONLY=1` and call
+    `discover_native_fastq_files INPUT_DIRECTORY` inside that same container to
+    qualify the exact discovery path without starting analysis.
 - `mode_transcriptome_assembly="metadata"`
   - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
   - for a reviewed cohort within the same workspace, set

@@ -84,6 +84,43 @@ fi
 # Named stage functions for gg_transcriptome_generation_core.sh.
 # This file is sourced by workflow/core/gg_transcriptome_generation_core.sh.
 
+discover_native_fastq_files() {
+  # Shared by analysis and container-side launch qualification. Validate the
+  # complete shallow inventory before publishing any paths to the caller.
+  python - "$1" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+try:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"FASTQ input directory must be a physical directory: {root}")
+    selected = []
+    for path in sorted(root.iterdir()):
+        if path.name.startswith('.') or not path.name.endswith(('.fq', '.fastq', '.fq.gz', '.fastq.gz')):
+            continue
+        if '\n' in str(path) or '\r' in str(path):
+            raise ValueError(f"FASTQ input path contains a line break: {path!s}")
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode):
+            if path.is_symlink():
+                raise ValueError(f"FASTQ input symlink does not resolve to a regular file: {path}")
+            continue
+        if not os.access(path, os.R_OK):
+            raise ValueError(f"FASTQ input is not readable in the current runtime: {path}")
+        with path.open('rb') as handle:
+            handle.read(1)
+        selected.append(str(path))
+except (OSError, ValueError) as exc:
+    print(f"Native FASTQ input discovery failed: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+for path in selected:
+    print(path)
+PY
+}
+
 resolve_busco_lineage_for_current_species() {
   if [[ -n "${busco_lineage_resolved}" ]]; then
     return 0
@@ -3751,7 +3788,11 @@ if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
   dir_species_fastq="${dirs[${id}]}"
   sp_ub="$(basename "${dir_species_fastq}")"
   files_fastq=()
-  mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \) | sort)
+  native_fastq_listing=$(discover_native_fastq_files "${dir_species_fastq}") || exit 1
+  if [[ -n "${native_fastq_listing}" ]]; then
+    mapfile -t files_fastq <<< "${native_fastq_listing}"
+  fi
+  unset native_fastq_listing
   echo "Input fastq directory: ${dir_species_fastq}"
   echo "Species: ${sp_ub}"
   printf 'Input fastq files: %s\n' "${files_fastq[*]}"
