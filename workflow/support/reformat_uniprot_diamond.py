@@ -89,7 +89,7 @@ def read_fasta_ids(path):
     return ids
 
 
-def read_uniprot_descriptions(path):
+def read_uniprot_descriptions(path, accessions=None):
     desc = {}
     if (path == '') or (not os.path.exists(path)):
         return desc
@@ -101,12 +101,13 @@ def read_uniprot_descriptions(path):
                     continue
                 parts = header.split(None, 1)
                 acc = parts[0]
-                text = parts[1] if len(parts) > 1 else ''
-                desc[acc] = text
+                if accessions is None or acc in accessions:
+                    text = parts[1] if len(parts) > 1 else ''
+                    desc[acc] = text
     return desc
 
 
-def read_uniprot_metadata(path):
+def read_uniprot_metadata(path, accessions=None):
     if (path == '') or (not os.path.exists(path)):
         return pandas.DataFrame(columns=['accession'] + METADATA_COLUMNS)
     header = pandas.read_csv(path, sep='\t', dtype=str, low_memory=False, keep_default_na=False, nrows=0)
@@ -117,14 +118,20 @@ def read_uniprot_metadata(path):
     else:
         return pandas.DataFrame(columns=['accession'] + METADATA_COLUMNS)
     usecols = [accession_col] + [col for col in METADATA_COLUMNS if col in header.columns]
-    df = pandas.read_csv(
-        path,
-        sep='\t',
-        dtype=str,
-        low_memory=False,
-        keep_default_na=False,
-        usecols=usecols,
-    )
+    options = dict(sep='\t', dtype=str, low_memory=False, keep_default_na=False, usecols=usecols)
+    if accessions is None:
+        df = pandas.read_csv(path, **options)
+    else:
+        # Parse the complete TSV with pandas, retaining only relevant rows.
+        # Chunking preserves quoted fields, literal IDs and first-duplicate wins
+        # without materializing the entire reference table for each family.
+        frames = []
+        with pandas.read_csv(path, chunksize=16384, **options) as reader:
+            for chunk in reader:
+                selected = chunk.loc[chunk[accession_col].isin(accessions)].copy()
+                if not selected.empty:
+                    frames.append(selected)
+        df = pandas.concat(frames, ignore_index=True) if frames else pandas.DataFrame(columns=usecols)
     if accession_col != 'accession':
         df = df.rename(columns={accession_col: 'accession'})
     keep_cols = ['accession']
@@ -220,11 +227,12 @@ def main():
         out['sprot_identity'] = gene_index.map(hit_map['pident']).map(lambda x: fmt_float(x, precision=2))
         out['sprot_evalue'] = gene_index.map(hit_map['evalue']).map(fmt_evalue)
 
-    uniprot_desc = read_uniprot_descriptions(args.uniprot_fasta)
+    accessions = set(out['sprot_best'].dropna())
+    uniprot_desc = read_uniprot_descriptions(args.uniprot_fasta, accessions)
     if len(uniprot_desc) > 0:
         out['sprot_recname'] = out['sprot_best'].map(uniprot_desc).fillna('')
 
-    metadata = read_uniprot_metadata(args.uniprot_meta_tsv)
+    metadata = read_uniprot_metadata(args.uniprot_meta_tsv, accessions)
     if metadata.shape[0] > 0:
         out = out.join(metadata.set_index('accession'), on='sprot_best')
 

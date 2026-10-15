@@ -518,6 +518,13 @@ checks equivalent logical outputs and separates parent/child peak RSS.
 For profiling native two-page HGT PDFs and verifying exact drawing/audit
 equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
 
+## Reference annotation comparisons
+
+For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot
+metadata retention, see [reference annotation performance](reference-annotation-performance.md).
+Its benchmark compares exact outputs across saved/current support directories,
+reports time and process peak RSS, and includes a dense annotation control.
+
 ## Input staging comparisons
 
 See [input-generation performance](input-generation-performance.md) for native

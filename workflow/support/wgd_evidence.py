@@ -28,36 +28,58 @@ def number(value):
 
 def branch_for_ks(focal, ks, tree, bounds):
     """Require the whole divergence interval to lie between corrected boundaries."""
-    if not isinstance(ks, (tuple, list)):
-        ks = (ks, ks)
-    ks = tuple(number(value) for value in ks)
-    if len(ks) != 2 or any(value is None for value in ks) or ks[0] > ks[1]:
-        return None, "missing_or_invalid_ks"
-    leaf = next((node for node in tree.leaves() if node.name == focal), None)
-    if leaf is None:
-        return None, "unknown_species"
-    from nwkit.clade_index import CladeIndex
+    return KsBranchPlacer(tree, bounds).place(focal, ks)
 
-    index = CladeIndex(tree)
-    child = leaf
-    lower = 0.0
-    while child.up is not None:
-        parent = child.up
-        row = bounds.get((focal, index.clade_id_for_node(parent)))
-        if (row is None or row.get("status") != "ok"
-                or row.get("monotone_from_younger_node") not in {"yes", "not_comparable"}):
-            return None, "unresolved_divergence_boundary"
-        # Use the primary boundary interval, not optional bootstrap diagnostics.
-        lo, hi = number(row.get("ci_lower")), number(row.get("ci_upper"))
-        if row.get("interval_status") != "ok" or lo is None or hi is None or hi < lo or lo < lower:
-            return None, "unresolved_boundary_uncertainty"
-        if ks[0] > lower and ks[1] < lo:
-            return index.clade_id_for_node(child), "interval_supported"
-        if ks[0] <= hi:
-            return None, "boundary_overlap"
-        lower = hi
-        child = parent
-    return None, "older_than_root_unresolved"
+
+class KsBranchPlacer:
+    """Reuse a species-tree index within one batch on an unchanged tree.
+
+    Bounds are read for each placement, including edits to their rows. Nothing
+    is cached across commands; a different tree requires a new placer.
+    """
+
+    def __init__(self, tree, bounds):
+        self.tree = tree
+        self.bounds = bounds
+        self.leaves = None
+        self.index = None
+
+    def place(self, focal, ks):
+        if not isinstance(ks, (tuple, list)):
+            ks = (ks, ks)
+        ks = tuple(number(value) for value in ks)
+        if len(ks) != 2 or any(value is None for value in ks) or ks[0] > ks[1]:
+            return None, "missing_or_invalid_ks"
+        if self.leaves is None:
+            self.leaves = {}
+            for leaf in self.tree.leaves():
+                self.leaves.setdefault(leaf.name, leaf)
+        leaf = self.leaves.get(focal)
+        if leaf is None:
+            return None, "unknown_species"
+        if self.index is None:
+            from nwkit.clade_index import CladeIndex
+
+            self.index = CladeIndex(self.tree)
+        child = leaf
+        lower = 0.0
+        while child.up is not None:
+            parent = child.up
+            row = self.bounds.get((focal, self.index.clade_id_for_node(parent)))
+            if (row is None or row.get("status") != "ok"
+                    or row.get("monotone_from_younger_node") not in {"yes", "not_comparable"}):
+                return None, "unresolved_divergence_boundary"
+            # Use the primary boundary interval, not optional bootstrap diagnostics.
+            lo, hi = number(row.get("ci_lower")), number(row.get("ci_upper"))
+            if row.get("interval_status") != "ok" or lo is None or hi is None or hi < lo or lo < lower:
+                return None, "unresolved_boundary_uncertainty"
+            if ks[0] > lower and ks[1] < lo:
+                return self.index.clade_id_for_node(child), "interval_supported"
+            if ks[0] <= hi:
+                return None, "boundary_overlap"
+            lower = hi
+            child = parent
+        return None, "older_than_root_unresolved"
 
 
 def valid_position(row):
