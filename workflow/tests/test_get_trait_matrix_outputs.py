@@ -126,3 +126,121 @@ def test_numeric_gene_identifiers_keep_zero_padding_and_trait_types(tmp_path, in
     assert result.measurement.tolist() == [1, 2, 3]
     assert str(result.measurement.dtype) == 'int64'
     assert result['missing'].isna().all()
+
+
+@pytest.mark.parametrize('header', ['gene_id\tvalue\tmissing\tlabel\n', 'value\tmissing\tlabel\n'])
+def test_shared_index_preserves_types_duplicate_order_and_literal_ids(tmp_path, header):
+    import pandas as pd
+
+    from workflow.support.get_trait_matrix import process_trait_file
+
+    path = tmp_path / 'traits.tsv'
+    path.write_text(header + '001\t1.2345678901234567\tNA\ttext\nNA\t-2\tNULL\t001\n'
+                    '001\t3\tnan\tNA\nNULL\t4\tNA\tother\n')
+    mapping = {'001': 'Species_a_001', 'NA': 'Species_a_NA', 'NULL': 'Species_a_NULL'}
+    for ids in [set(mapping), {'001'}, {'absent'}, {'NA', 'NULL'}]:
+        expected = process_trait_file(path, ids, mapping)
+        for _ in range(2):
+            actual = process_trait_file(path, ids, mapping, tmp_path / 'cache')
+            pd.testing.assert_frame_equal(actual, expected)
+    path.write_text(header + '001\t9\tNA\tnew\n')
+    pd.testing.assert_frame_equal(process_trait_file(path, set(mapping), mapping, tmp_path / 'cache'),
+                                  process_trait_file(path, set(mapping), mapping))
+
+
+def test_shared_index_build_once_and_rebuild_corrupt_index(tmp_path):
+    import pandas as pd
+
+    from workflow.support.trait_table_index import read_subset
+
+    path = tmp_path / 'traits.tsv'
+    path.write_text('gene_id\tvalue\ng\t1\ng\t2\n')
+    calls = []
+    def loader(path):
+        calls.append(path)
+        return pd.read_csv(path, sep='\t')
+    cache = tmp_path / 'cache'
+    for _ in range(2):
+        result = read_subset(path, {'g'}, loader, cache)
+        assert result.value.tolist() == [1, 2]
+    assert len(calls) == 1
+    next(cache.glob('*.sqlite3')).write_bytes(b'corrupt index')
+    assert read_subset(path, {'g'}, loader, cache).value.tolist() == [1, 2]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('change', ['rewrite', 'replace'])
+def test_shared_index_rejects_source_change_during_parse(tmp_path, change):
+    import pandas as pd
+
+    from workflow.support.trait_table_index import read_subset
+
+    path = tmp_path / 'traits.tsv'
+    path.write_text('gene_id\tvalue\ng\t1\n')
+    def loader(path):
+        result = pd.read_csv(path, sep='\t')
+        if change == 'rewrite':
+            path.write_text('gene_id\tvalue\ng\t2\n')
+        else:
+            replacement = tmp_path / 'replacement'
+            replacement.write_bytes(path.read_bytes())
+            replacement.replace(path)
+        return result
+    with pytest.raises(OSError, match='changed'):
+        read_subset(path, {'g'}, loader, tmp_path / 'cache')
+
+
+def test_concurrent_family_queries_publish_one_complete_species_index(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    import pandas as pd
+
+    from workflow.support.get_trait_matrix import process_trait_file
+
+    path = tmp_path / 'traits.tsv'
+    path.write_text('gene_id\tvalue\n' + ''.join(f'g{i}\t{i}\n' for i in range(100)))
+    mapping = {f'g{i}': f'Species_a_g{i}' for i in range(100)}
+    def query(i):
+        selected = {f'g{i}', f'g{i+1}'}
+        return process_trait_file(path, selected, mapping, tmp_path / 'cache')
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(query, range(8)))
+    for i, actual in enumerate(results):
+        pd.testing.assert_frame_equal(actual, process_trait_file(path, {f'g{i}', f'g{i+1}'}, mapping))
+    assert len(list((tmp_path / 'cache').glob('*.sqlite3'))) == 1
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_indexed_wide_rows_preserve_unicode_unsigned_booleans_and_float_values(tmp_path, compressed):
+    import pandas as pd
+
+    from workflow.support.get_trait_matrix import process_trait_file
+
+    path = tmp_path / ('traits.tsv.gz' if compressed else 'traits.tsv')
+    pd.DataFrame({'gene_id': ['001', 'NA', '001'], 'text': ['λ'*2000, 'NULL', 'quoted\twith\nnewline'],
+                  'unsigned': [2**64-2, 2**64-3, 2**64-4], 'flag': [True, False, True],
+                  'value': [float('nan'), float('inf'), -0.0]}).to_csv(path, sep='\t', index=False)
+    mapping = {'001': 'Species_a_001', 'NA': 'Species_a_NA'}
+    expected = process_trait_file(path, set(mapping), mapping)
+    for _ in range(2):
+        actual = process_trait_file(path, set(mapping), mapping, tmp_path / 'cache')
+        pd.testing.assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_index_binding_preserves_filename_based_compression_errors(tmp_path, compressed):
+    import gzip
+
+    from workflow.support.get_trait_matrix import process_trait_file
+
+    source = tmp_path / ('traits.tsv.gz' if compressed else 'traits.tsv')
+    content = b'gene_id\tvalue\ng\t1\n'
+    source.write_bytes(gzip.compress(content) if compressed else content)
+    alias = tmp_path / ('alias.tsv' if compressed else 'alias.tsv.gz')
+    alias.symlink_to(source)
+    mapping = {'g': 'Species_a_g'}
+    process_trait_file(source, {'g'}, mapping, tmp_path / 'cache')
+    with pytest.raises((UnicodeError, OSError)) as expected:
+        process_trait_file(alias, {'g'}, mapping)
+    with pytest.raises(type(expected.value)):
+        process_trait_file(alias, {'g'}, mapping, tmp_path / 'cache')

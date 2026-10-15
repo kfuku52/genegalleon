@@ -1,0 +1,1109 @@
+{
+  "environment": {
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.15 (main, Oct  6 2026, 23:51:47) [GCC 15.3.0]",
+    "packages": {
+      "numpy": "1.26.4",
+      "pandas": "3.0.6",
+      "nwkit": "0.43.53",
+      "biopython": "1.88"
+    },
+    "tools": {
+      "seqkit": "seqkit v2.14.0",
+      "R": "Rscript (R) version 4.4.3 (2025-02-28)",
+      "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
+    }
+  },
+  "source_sha256": {
+    "baseline": {
+      "get_promoter_fasta.py": "6fddd1eeb589b04a8170d227aef037b04043af23228efc7d62826949c24297f8",
+      "subgenome_dominance.py": "ca7b6de63490907e005f3512e9507babf67bbab4413bab9de6beb7d0cee78be4",
+      "pairwise_synteny_layout.py": "63996babc3419fcdda19ba48ab73e09704c038f9b44374cd1a23625b203215fd",
+      "get_trait_matrix.py": "50aa3004e260eab84b03d9ac66feaf59ba27a39aad62642aecc5fc32ce7d6f35",
+      "gff2genestat.py": "b844653f0e9f37aa82de8098bb4f618e96f1d0664e7b6d5389d9942df66ef392",
+      "focus_hgt_context.py": "a214f30c4079fad24d659b18ee0ae0896abda2e82b0ac1aa5ddef0010bef1f72",
+      "dated_tree_presentation.py": "631e3e91bff9097dd0dfbeafc45318ebc0e3940a3db2fabf6f102fd6d6266b05",
+      "busco_kmer_distance.cpp": "ffd5e20984ab8c14bbd5b77a90df135f1f6f778a97d9c214063a5f73d24098f2",
+      "species_tree_guided_gene_tree_rooting.py": "89de0a33ead3eb014cb41801fa0ef6c2a7128c77c0b760af099bfc6386eb8a4d",
+      "annotation_summary.r": "e31978ee9424e7ef54c0c39bb60e2e1ff8b9a16e887614ecc6ac90591ee1d497"
+    },
+    "current": {
+      "get_promoter_fasta.py": "15bb1e588b86cdecf6c2ce091e59947f78181d105c60f218eba3546ef689206a",
+      "subgenome_dominance.py": "e123de68b8f3c900c5be673ca72ff5c0a13b7e598f04ba6765acb328c680e3c8",
+      "pairwise_synteny_layout.py": "8a1cdc8ee89cadbc16c0dbf9250de46ea2f30ff41c103ceb7ed39de672fcf87f",
+      "get_trait_matrix.py": "70c70864c91be50e42f9e440fa8e11cebe6ba2fe077125e92e348e6861b34513",
+      "gff2genestat.py": "8a5b6b9ace4fc2a1be78686e623236d08289e248c11040b81e0ddc890e624801",
+      "focus_hgt_context.py": "9c460623f2794dedc585b91f7f40e1a0a148613f6b767633cacd2eff2950eb43",
+      "dated_tree_presentation.py": "06f55725b465232608bc2d27bd9dfca4b3a1a232eff633c2df745fbc5d83bd2c",
+      "busco_kmer_distance.cpp": "e1d4e84c10aee6f9a07e8f4acd62cc633250ee61f29d72b0fc5fbbee6df5affc",
+      "species_tree_guided_gene_tree_rooting.py": "fd96b11a1b042c15e2b3f4b183095bfce4b22043a2dded15702a9c86145b8704",
+      "annotation_summary.r": "3db33a9b22e6943c88a8fc70c2ce3ed2a18a2cc47f83da3b9e4946d2741fa5db",
+      "trait_table_index.py": "dbcc2bb8fce1233945cc453982d5c5fac2dc95465f46e27947ff1f6c54412a74"
+    }
+  },
+  "workloads": {
+    "promoter": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 3.7097935429774225,
+            "peak_rss_kib_linux": 87108,
+            "child_peak_rss_kib_linux": 87108,
+            "output_sha256": "6b5848e8a7181408456638e33846eef4c31bd2d7779828b85236cc9100a7638a",
+            "counts": {
+              "genes": 60,
+              "genome_bytes": 6396396
+            }
+          },
+          {
+            "seconds": 2.9321499599609524,
+            "peak_rss_kib_linux": 86988,
+            "child_peak_rss_kib_linux": 86988,
+            "output_sha256": "6b5848e8a7181408456638e33846eef4c31bd2d7779828b85236cc9100a7638a",
+            "counts": {
+              "genes": 60,
+              "genome_bytes": 6396396
+            }
+          },
+          {
+            "seconds": 3.1409931679954752,
+            "peak_rss_kib_linux": 86804,
+            "child_peak_rss_kib_linux": 86804,
+            "output_sha256": "6b5848e8a7181408456638e33846eef4c31bd2d7779828b85236cc9100a7638a",
+            "counts": {
+              "genes": 60,
+              "genome_bytes": 6396396
+            }
+          }
+        ],
+        "median_seconds": 3.1409931679954752,
+        "median_peak_rss_kib_linux": 86988
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.0678671260830015,
+            "peak_rss_kib_linux": 86992,
+            "child_peak_rss_kib_linux": 86992,
+            "output_sha256": "6b5848e8a7181408456638e33846eef4c31bd2d7779828b85236cc9100a7638a",
+            "counts": {
+              "genes": 60,
+              "genome_bytes": 6396396
+            }
+          },
+          {
+            "seconds": 0.029503082972951233,
+            "peak_rss_kib_linux": 86944,
+            "child_peak_rss_kib_linux": 86944,
+            "output_sha256": "6b5848e8a7181408456638e33846eef4c31bd2d7779828b85236cc9100a7638a",
+            "counts": {
+              "genes": 60,
+              "genome_bytes": 6396396
+            }
+          },
+          {
+            "seconds": 0.031195166055113077,
+            "peak_rss_kib_linux": 86932,
+            "child_peak_rss_kib_linux": 86932,
+            "output_sha256": "6b5848e8a7181408456638e33846eef4c31bd2d7779828b85236cc9100a7638a",
+            "counts": {
+              "genes": 60,
+              "genome_bytes": 6396396
+            }
+          }
+        ],
+        "median_seconds": 0.031195166055113077,
+        "median_peak_rss_kib_linux": 86944
+      }
+    },
+    "bootstrap": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 0.2894606660120189,
+            "peak_rss_kib_linux": 358216,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "cb880a231f555cb0ef0ac8d9775c8705ff0aded0ff9bce123d78cf3b7403fcad",
+            "counts": {
+              "blocks": 10000,
+              "bootstrap_replicates": 2000,
+              "permutation_replicates": 100
+            }
+          },
+          {
+            "seconds": 0.28414837596938014,
+            "peak_rss_kib_linux": 358296,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "cb880a231f555cb0ef0ac8d9775c8705ff0aded0ff9bce123d78cf3b7403fcad",
+            "counts": {
+              "blocks": 10000,
+              "bootstrap_replicates": 2000,
+              "permutation_replicates": 100
+            }
+          },
+          {
+            "seconds": 0.2902269170153886,
+            "peak_rss_kib_linux": 358288,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "cb880a231f555cb0ef0ac8d9775c8705ff0aded0ff9bce123d78cf3b7403fcad",
+            "counts": {
+              "blocks": 10000,
+              "bootstrap_replicates": 2000,
+              "permutation_replicates": 100
+            }
+          }
+        ],
+        "median_seconds": 0.2894606660120189,
+        "median_peak_rss_kib_linux": 358288
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.14783887495286763,
+            "peak_rss_kib_linux": 61728,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "cb880a231f555cb0ef0ac8d9775c8705ff0aded0ff9bce123d78cf3b7403fcad",
+            "counts": {
+              "blocks": 10000,
+              "bootstrap_replicates": 2000,
+              "permutation_replicates": 100
+            }
+          },
+          {
+            "seconds": 0.125069290981628,
+            "peak_rss_kib_linux": 61788,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "cb880a231f555cb0ef0ac8d9775c8705ff0aded0ff9bce123d78cf3b7403fcad",
+            "counts": {
+              "blocks": 10000,
+              "bootstrap_replicates": 2000,
+              "permutation_replicates": 100
+            }
+          },
+          {
+            "seconds": 0.1231972920941189,
+            "peak_rss_kib_linux": 61832,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "cb880a231f555cb0ef0ac8d9775c8705ff0aded0ff9bce123d78cf3b7403fcad",
+            "counts": {
+              "blocks": 10000,
+              "bootstrap_replicates": 2000,
+              "permutation_replicates": 100
+            }
+          }
+        ],
+        "median_seconds": 0.125069290981628,
+        "median_peak_rss_kib_linux": 61788
+      }
+    },
+    "geometry": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 0.6682348749600351,
+            "peak_rss_kib_linux": 58784,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "26f86a91deaf3e7c271d4bea2b07b9b19342e90ef6135df8000f44f2f67ce347",
+            "counts": {
+              "genes": 40000,
+              "scaffolds": 512
+            }
+          },
+          {
+            "seconds": 0.5690220000687987,
+            "peak_rss_kib_linux": 58784,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "26f86a91deaf3e7c271d4bea2b07b9b19342e90ef6135df8000f44f2f67ce347",
+            "counts": {
+              "genes": 40000,
+              "scaffolds": 512
+            }
+          },
+          {
+            "seconds": 0.5709467510459945,
+            "peak_rss_kib_linux": 58796,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "26f86a91deaf3e7c271d4bea2b07b9b19342e90ef6135df8000f44f2f67ce347",
+            "counts": {
+              "genes": 40000,
+              "scaffolds": 512
+            }
+          }
+        ],
+        "median_seconds": 0.5709467510459945,
+        "median_peak_rss_kib_linux": 58784
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.016259833006188273,
+            "peak_rss_kib_linux": 59228,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "26f86a91deaf3e7c271d4bea2b07b9b19342e90ef6135df8000f44f2f67ce347",
+            "counts": {
+              "genes": 40000,
+              "scaffolds": 512
+            }
+          },
+          {
+            "seconds": 0.011745624942705035,
+            "peak_rss_kib_linux": 59172,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "26f86a91deaf3e7c271d4bea2b07b9b19342e90ef6135df8000f44f2f67ce347",
+            "counts": {
+              "genes": 40000,
+              "scaffolds": 512
+            }
+          },
+          {
+            "seconds": 0.012856042012572289,
+            "peak_rss_kib_linux": 59224,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "26f86a91deaf3e7c271d4bea2b07b9b19342e90ef6135df8000f44f2f67ce347",
+            "counts": {
+              "genes": 40000,
+              "scaffolds": 512
+            }
+          }
+        ],
+        "median_seconds": 0.012856042012572289,
+        "median_peak_rss_kib_linux": 59224
+      }
+    },
+    "joint-layout": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 3.4014619599329308,
+            "peak_rss_kib_linux": 59908,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "70a7e292c39554d25ec1547b03b57d47e1aa2d0017b952ce3cd4de97e924aa29",
+            "counts": {
+              "genes_per_track": 20000,
+              "chromosomes": 5,
+              "track_solves": 121
+            }
+          },
+          {
+            "seconds": 3.3451425429666415,
+            "peak_rss_kib_linux": 59904,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "70a7e292c39554d25ec1547b03b57d47e1aa2d0017b952ce3cd4de97e924aa29",
+            "counts": {
+              "genes_per_track": 20000,
+              "chromosomes": 5,
+              "track_solves": 121
+            }
+          },
+          {
+            "seconds": 3.6174473350401968,
+            "peak_rss_kib_linux": 59844,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "70a7e292c39554d25ec1547b03b57d47e1aa2d0017b952ce3cd4de97e924aa29",
+            "counts": {
+              "genes_per_track": 20000,
+              "chromosomes": 5,
+              "track_solves": 121
+            }
+          }
+        ],
+        "median_seconds": 3.4014619599329308,
+        "median_peak_rss_kib_linux": 59904
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.11164337501395494,
+            "peak_rss_kib_linux": 59432,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "70a7e292c39554d25ec1547b03b57d47e1aa2d0017b952ce3cd4de97e924aa29",
+            "counts": {
+              "genes_per_track": 20000,
+              "chromosomes": 5,
+              "track_solves": 121
+            }
+          },
+          {
+            "seconds": 0.10138387500774115,
+            "peak_rss_kib_linux": 59428,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "70a7e292c39554d25ec1547b03b57d47e1aa2d0017b952ce3cd4de97e924aa29",
+            "counts": {
+              "genes_per_track": 20000,
+              "chromosomes": 5,
+              "track_solves": 121
+            }
+          },
+          {
+            "seconds": 0.12062791700009257,
+            "peak_rss_kib_linux": 59496,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "70a7e292c39554d25ec1547b03b57d47e1aa2d0017b952ce3cd4de97e924aa29",
+            "counts": {
+              "genes_per_track": 20000,
+              "chromosomes": 5,
+              "track_solves": 121
+            }
+          }
+        ],
+        "median_seconds": 0.11164337501395494,
+        "median_peak_rss_kib_linux": 59432
+      }
+    },
+    "traits": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 6.626151710981503,
+            "peak_rss_kib_linux": 133876,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+            "counts": {
+              "first_family_seconds": 0.3496543330838904,
+              "genes": 40000,
+              "traits": 80,
+              "families": 20,
+              "selected_per_family": 20,
+              "source_bytes": 55307023
+            }
+          },
+          {
+            "seconds": 7.1661239200038835,
+            "peak_rss_kib_linux": 133984,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+            "counts": {
+              "first_family_seconds": 0.39999529195483774,
+              "genes": 40000,
+              "traits": 80,
+              "families": 20,
+              "selected_per_family": 20,
+              "source_bytes": 55307023
+            }
+          },
+          {
+            "seconds": 7.1165279620327055,
+            "peak_rss_kib_linux": 134076,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+            "counts": {
+              "first_family_seconds": 0.34341508406214416,
+              "genes": 40000,
+              "traits": 80,
+              "families": 20,
+              "selected_per_family": 20,
+              "source_bytes": 55307023
+            }
+          }
+        ],
+        "median_seconds": 7.1165279620327055,
+        "median_peak_rss_kib_linux": 133984
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 4.118628168944269,
+            "peak_rss_kib_linux": 126556,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+            "counts": {
+              "first_family_seconds": 3.111528294044547,
+              "genes": 40000,
+              "traits": 80,
+              "families": 20,
+              "selected_per_family": 20,
+              "source_bytes": 55307023
+            }
+          },
+          {
+            "seconds": 2.8624315839260817,
+            "peak_rss_kib_linux": 126324,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+            "counts": {
+              "first_family_seconds": 1.9483259168919176,
+              "genes": 40000,
+              "traits": 80,
+              "families": 20,
+              "selected_per_family": 20,
+              "source_bytes": 55307023
+            }
+          },
+          {
+            "seconds": 3.2715963339433074,
+            "peak_rss_kib_linux": 126444,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+            "counts": {
+              "first_family_seconds": 1.937588374945335,
+              "genes": 40000,
+              "traits": 80,
+              "families": 20,
+              "selected_per_family": 20,
+              "source_bytes": 55307023
+            }
+          }
+        ],
+        "median_seconds": 3.2715963339433074,
+        "median_peak_rss_kib_linux": 126444
+      }
+    },
+    "cds": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 10.691923088976182,
+            "peak_rss_kib_linux": 127000,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "b8d4729216963b4c037e7f052268b1a6ace6b883247a508251a34ea7a710cc42",
+            "counts": {
+              "first_family_seconds": 0.05769724992569536,
+              "genes": 40000,
+              "families": 200,
+              "selected_per_family": 20,
+              "external_source_hashes": 0
+            }
+          },
+          {
+            "seconds": 11.505072337924503,
+            "peak_rss_kib_linux": 127392,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "b8d4729216963b4c037e7f052268b1a6ace6b883247a508251a34ea7a710cc42",
+            "counts": {
+              "first_family_seconds": 0.05957983294501901,
+              "genes": 40000,
+              "families": 200,
+              "selected_per_family": 20,
+              "external_source_hashes": 0
+            }
+          },
+          {
+            "seconds": 12.17105071397964,
+            "peak_rss_kib_linux": 131156,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "b8d4729216963b4c037e7f052268b1a6ace6b883247a508251a34ea7a710cc42",
+            "counts": {
+              "first_family_seconds": 0.05950949992984533,
+              "genes": 40000,
+              "families": 200,
+              "selected_per_family": 20,
+              "external_source_hashes": 0
+            }
+          }
+        ],
+        "median_seconds": 11.505072337924503,
+        "median_peak_rss_kib_linux": 127392
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 4.718686626991257,
+            "peak_rss_kib_linux": 117196,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "b8d4729216963b4c037e7f052268b1a6ace6b883247a508251a34ea7a710cc42",
+            "counts": {
+              "first_family_seconds": 0.30964904197026044,
+              "genes": 40000,
+              "families": 200,
+              "selected_per_family": 20,
+              "external_source_hashes": 0
+            }
+          },
+          {
+            "seconds": 3.291838127071969,
+            "peak_rss_kib_linux": 119696,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "b8d4729216963b4c037e7f052268b1a6ace6b883247a508251a34ea7a710cc42",
+            "counts": {
+              "first_family_seconds": 0.2820359170436859,
+              "genes": 40000,
+              "families": 200,
+              "selected_per_family": 20,
+              "external_source_hashes": 0
+            }
+          },
+          {
+            "seconds": 3.846060710027814,
+            "peak_rss_kib_linux": 119864,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "b8d4729216963b4c037e7f052268b1a6ace6b883247a508251a34ea7a710cc42",
+            "counts": {
+              "first_family_seconds": 0.2899007920641452,
+              "genes": 40000,
+              "families": 200,
+              "selected_per_family": 20,
+              "external_source_hashes": 0
+            }
+          }
+        ],
+        "median_seconds": 3.846060710027814,
+        "median_peak_rss_kib_linux": 119696
+      }
+    },
+    "hgt": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 6.968251837068237,
+            "peak_rss_kib_linux": 202760,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "028cae530ef89a6531e873e2d3b22273a0aeb5fa0d23b42c71e017c16ecacdaa",
+            "counts": {
+              "genes": 12000,
+              "events": 520
+            }
+          },
+          {
+            "seconds": 6.131098045036197,
+            "peak_rss_kib_linux": 202824,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "028cae530ef89a6531e873e2d3b22273a0aeb5fa0d23b42c71e017c16ecacdaa",
+            "counts": {
+              "genes": 12000,
+              "events": 520
+            }
+          },
+          {
+            "seconds": 6.63272729399614,
+            "peak_rss_kib_linux": 202900,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "028cae530ef89a6531e873e2d3b22273a0aeb5fa0d23b42c71e017c16ecacdaa",
+            "counts": {
+              "genes": 12000,
+              "events": 520
+            }
+          }
+        ],
+        "median_seconds": 6.63272729399614,
+        "median_peak_rss_kib_linux": 202824
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.3236387500073761,
+            "peak_rss_kib_linux": 203364,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "028cae530ef89a6531e873e2d3b22273a0aeb5fa0d23b42c71e017c16ecacdaa",
+            "counts": {
+              "genes": 12000,
+              "events": 520
+            }
+          },
+          {
+            "seconds": 0.33130037505179644,
+            "peak_rss_kib_linux": 203304,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "028cae530ef89a6531e873e2d3b22273a0aeb5fa0d23b42c71e017c16ecacdaa",
+            "counts": {
+              "genes": 12000,
+              "events": 520
+            }
+          },
+          {
+            "seconds": 0.3202646659919992,
+            "peak_rss_kib_linux": 203304,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "028cae530ef89a6531e873e2d3b22273a0aeb5fa0d23b42c71e017c16ecacdaa",
+            "counts": {
+              "genes": 12000,
+              "events": 520
+            }
+          }
+        ],
+        "median_seconds": 0.3236387500073761,
+        "median_peak_rss_kib_linux": 203304
+      }
+    },
+    "dated": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 0.5607960829511285,
+            "peak_rss_kib_linux": 57496,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "0cfdc440759fe5e8a34385bf9d569469da4c793f40bd1812ff28c39aa6f6e0ed",
+            "counts": {
+              "tips": 12000
+            }
+          },
+          {
+            "seconds": 0.5405863750493154,
+            "peak_rss_kib_linux": 57476,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "0cfdc440759fe5e8a34385bf9d569469da4c793f40bd1812ff28c39aa6f6e0ed",
+            "counts": {
+              "tips": 12000
+            }
+          },
+          {
+            "seconds": 0.5623767920769751,
+            "peak_rss_kib_linux": 57496,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "0cfdc440759fe5e8a34385bf9d569469da4c793f40bd1812ff28c39aa6f6e0ed",
+            "counts": {
+              "tips": 12000
+            }
+          }
+        ],
+        "median_seconds": 0.5607960829511285,
+        "median_peak_rss_kib_linux": 57496
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.004933167016133666,
+            "peak_rss_kib_linux": 58260,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "0cfdc440759fe5e8a34385bf9d569469da4c793f40bd1812ff28c39aa6f6e0ed",
+            "counts": {
+              "tips": 12000
+            }
+          },
+          {
+            "seconds": 0.006748999934643507,
+            "peak_rss_kib_linux": 58260,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "0cfdc440759fe5e8a34385bf9d569469da4c793f40bd1812ff28c39aa6f6e0ed",
+            "counts": {
+              "tips": 12000
+            }
+          },
+          {
+            "seconds": 0.004629625007510185,
+            "peak_rss_kib_linux": 58196,
+            "child_peak_rss_kib_linux": 0,
+            "output_sha256": "0cfdc440759fe5e8a34385bf9d569469da4c793f40bd1812ff28c39aa6f6e0ed",
+            "counts": {
+              "tips": 12000
+            }
+          }
+        ],
+        "median_seconds": 0.004933167016133666,
+        "median_peak_rss_kib_linux": 58260
+      }
+    },
+    "kmer": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 0.9614822919247672,
+            "peak_rss_kib_linux": 55668,
+            "child_peak_rss_kib_linux": 146608,
+            "output_sha256": "10d8ac18c887c744a500ee7aaff816ea8722a4f0fe75df71435d6e589970a700",
+            "counts": {
+              "kernel_peak_rss_kib_linux": 103340,
+              "species": 1600,
+              "markers": 2,
+              "note": "Empty sketches isolate pair storage/output; compilation excluded; kernel RSS measured in separate parent."
+            }
+          },
+          {
+            "seconds": 1.027711542090401,
+            "peak_rss_kib_linux": 55740,
+            "child_peak_rss_kib_linux": 146676,
+            "output_sha256": "10d8ac18c887c744a500ee7aaff816ea8722a4f0fe75df71435d6e589970a700",
+            "counts": {
+              "kernel_peak_rss_kib_linux": 103292,
+              "species": 1600,
+              "markers": 2,
+              "note": "Empty sketches isolate pair storage/output; compilation excluded; kernel RSS measured in separate parent."
+            }
+          },
+          {
+            "seconds": 1.018789125024341,
+            "peak_rss_kib_linux": 55624,
+            "child_peak_rss_kib_linux": 146480,
+            "output_sha256": "10d8ac18c887c744a500ee7aaff816ea8722a4f0fe75df71435d6e589970a700",
+            "counts": {
+              "kernel_peak_rss_kib_linux": 103228,
+              "species": 1600,
+              "markers": 2,
+              "note": "Empty sketches isolate pair storage/output; compilation excluded; kernel RSS measured in separate parent."
+            }
+          }
+        ],
+        "median_seconds": 1.018789125024341,
+        "median_peak_rss_kib_linux": 55668
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.9565205419203267,
+            "peak_rss_kib_linux": 55740,
+            "child_peak_rss_kib_linux": 146932,
+            "output_sha256": "10d8ac18c887c744a500ee7aaff816ea8722a4f0fe75df71435d6e589970a700",
+            "counts": {
+              "kernel_peak_rss_kib_linux": 53180,
+              "species": 1600,
+              "markers": 2,
+              "note": "Empty sketches isolate pair storage/output; compilation excluded; kernel RSS measured in separate parent."
+            }
+          },
+          {
+            "seconds": 0.9186536670895293,
+            "peak_rss_kib_linux": 55688,
+            "child_peak_rss_kib_linux": 146740,
+            "output_sha256": "10d8ac18c887c744a500ee7aaff816ea8722a4f0fe75df71435d6e589970a700",
+            "counts": {
+              "kernel_peak_rss_kib_linux": 53176,
+              "species": 1600,
+              "markers": 2,
+              "note": "Empty sketches isolate pair storage/output; compilation excluded; kernel RSS measured in separate parent."
+            }
+          },
+          {
+            "seconds": 0.9906329590594396,
+            "peak_rss_kib_linux": 55624,
+            "child_peak_rss_kib_linux": 146716,
+            "output_sha256": "10d8ac18c887c744a500ee7aaff816ea8722a4f0fe75df71435d6e589970a700",
+            "counts": {
+              "kernel_peak_rss_kib_linux": 53308,
+              "species": 1600,
+              "markers": 2,
+              "note": "Empty sketches isolate pair storage/output; compilation excluded; kernel RSS measured in separate parent."
+            }
+          }
+        ],
+        "median_seconds": 0.9565205419203267,
+        "median_peak_rss_kib_linux": 55688
+      }
+    },
+    "rooting": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 4.352833877084777,
+            "peak_rss_kib_linux": 112124,
+            "child_peak_rss_kib_linux": 191732,
+            "output_sha256": "988774046367496fb35e02efa4d66a6bb7a5056fdc06875dd23a7401d18d52bf",
+            "counts": {
+              "tips": 4
+            }
+          },
+          {
+            "seconds": 4.54126016900409,
+            "peak_rss_kib_linux": 112116,
+            "child_peak_rss_kib_linux": 191728,
+            "output_sha256": "988774046367496fb35e02efa4d66a6bb7a5056fdc06875dd23a7401d18d52bf",
+            "counts": {
+              "tips": 4
+            }
+          },
+          {
+            "seconds": 4.478967003058642,
+            "peak_rss_kib_linux": 112124,
+            "child_peak_rss_kib_linux": 191748,
+            "output_sha256": "988774046367496fb35e02efa4d66a6bb7a5056fdc06875dd23a7401d18d52bf",
+            "counts": {
+              "tips": 4
+            }
+          }
+        ],
+        "median_seconds": 4.478967003058642,
+        "median_peak_rss_kib_linux": 112124
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 2.286077583907172,
+            "peak_rss_kib_linux": 192736,
+            "child_peak_rss_kib_linux": 192736,
+            "output_sha256": "988774046367496fb35e02efa4d66a6bb7a5056fdc06875dd23a7401d18d52bf",
+            "counts": {
+              "tips": 4
+            }
+          },
+          {
+            "seconds": 2.076085833949037,
+            "peak_rss_kib_linux": 192840,
+            "child_peak_rss_kib_linux": 192840,
+            "output_sha256": "988774046367496fb35e02efa4d66a6bb7a5056fdc06875dd23a7401d18d52bf",
+            "counts": {
+              "tips": 4
+            }
+          },
+          {
+            "seconds": 2.1849019170040265,
+            "peak_rss_kib_linux": 192884,
+            "child_peak_rss_kib_linux": 192884,
+            "output_sha256": "988774046367496fb35e02efa4d66a6bb7a5056fdc06875dd23a7401d18d52bf",
+            "counts": {
+              "tips": 4
+            }
+          }
+        ],
+        "median_seconds": 2.1849019170040265,
+        "median_peak_rss_kib_linux": 192840
+      }
+    },
+    "r-annotation": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 12.703,
+            "output_sha256": "37325ce23798e3a6b04d400cecb935c6c2c2167f0d460c449573fceac1b49bdf",
+            "counts": {
+              "species": 3,
+              "genes_per_species": 30000,
+              "columns": 80,
+              "counted_columns": 5
+            },
+            "peak_rss_kib_linux": 210692
+          },
+          {
+            "seconds": 13.568,
+            "output_sha256": "37325ce23798e3a6b04d400cecb935c6c2c2167f0d460c449573fceac1b49bdf",
+            "counts": {
+              "species": 3,
+              "genes_per_species": 30000,
+              "columns": 80,
+              "counted_columns": 5
+            },
+            "peak_rss_kib_linux": 210692
+          },
+          {
+            "seconds": 14.787,
+            "output_sha256": "37325ce23798e3a6b04d400cecb935c6c2c2167f0d460c449573fceac1b49bdf",
+            "counts": {
+              "species": 3,
+              "genes_per_species": 30000,
+              "columns": 80,
+              "counted_columns": 5
+            },
+            "peak_rss_kib_linux": 210840
+          }
+        ],
+        "median_seconds": 13.568,
+        "median_peak_rss_kib_linux": 210692
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 8.623,
+            "output_sha256": "37325ce23798e3a6b04d400cecb935c6c2c2167f0d460c449573fceac1b49bdf",
+            "counts": {
+              "species": 3,
+              "genes_per_species": 30000,
+              "columns": 80,
+              "counted_columns": 5
+            },
+            "peak_rss_kib_linux": 151116
+          },
+          {
+            "seconds": 9.343,
+            "output_sha256": "37325ce23798e3a6b04d400cecb935c6c2c2167f0d460c449573fceac1b49bdf",
+            "counts": {
+              "species": 3,
+              "genes_per_species": 30000,
+              "columns": 80,
+              "counted_columns": 5
+            },
+            "peak_rss_kib_linux": 151120
+          },
+          {
+            "seconds": 8.779,
+            "output_sha256": "37325ce23798e3a6b04d400cecb935c6c2c2167f0d460c449573fceac1b49bdf",
+            "counts": {
+              "species": 3,
+              "genes_per_species": 30000,
+              "columns": 80,
+              "counted_columns": 5
+            },
+            "peak_rss_kib_linux": 151072
+          }
+        ],
+        "median_seconds": 8.779,
+        "median_peak_rss_kib_linux": 151116
+      }
+    },
+    "r-busco": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 5.377,
+            "output_sha256": "15223969956c2319ffd702b60d29f24a0931805d543b04bffd40b9e1f80559bf",
+            "counts": {
+              "species": 400,
+              "records_per_species": 1000
+            },
+            "peak_rss_kib_linux": 173560
+          },
+          {
+            "seconds": 5.793,
+            "output_sha256": "15223969956c2319ffd702b60d29f24a0931805d543b04bffd40b9e1f80559bf",
+            "counts": {
+              "species": 400,
+              "records_per_species": 1000
+            },
+            "peak_rss_kib_linux": 178828
+          },
+          {
+            "seconds": 6.698,
+            "output_sha256": "15223969956c2319ffd702b60d29f24a0931805d543b04bffd40b9e1f80559bf",
+            "counts": {
+              "species": 400,
+              "records_per_species": 1000
+            },
+            "peak_rss_kib_linux": 182292
+          }
+        ],
+        "median_seconds": 5.793,
+        "median_peak_rss_kib_linux": 178828
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 1.261,
+            "output_sha256": "15223969956c2319ffd702b60d29f24a0931805d543b04bffd40b9e1f80559bf",
+            "counts": {
+              "species": 400,
+              "records_per_species": 1000
+            },
+            "peak_rss_kib_linux": 132628
+          },
+          {
+            "seconds": 1.626,
+            "output_sha256": "15223969956c2319ffd702b60d29f24a0931805d543b04bffd40b9e1f80559bf",
+            "counts": {
+              "species": 400,
+              "records_per_species": 1000
+            },
+            "peak_rss_kib_linux": 132748
+          },
+          {
+            "seconds": 1.217,
+            "output_sha256": "15223969956c2319ffd702b60d29f24a0931805d543b04bffd40b9e1f80559bf",
+            "counts": {
+              "species": 400,
+              "records_per_species": 1000
+            },
+            "peak_rss_kib_linux": 133384
+          }
+        ],
+        "median_seconds": 1.261,
+        "median_peak_rss_kib_linux": 132748
+      }
+    }
+  },
+  "protocol": {
+    "warmups_per_variant": 1,
+    "trials_per_variant": 3,
+    "ordering": "alternating baseline/current; fresh child processes",
+    "comparison": "byte hashes (root PDF dates normalized), bootstrap includes both RNG states",
+    "concurrency": "Original pass observed an unrelated four-second website job during traits. The entire traits case was repeated separately without other container starts. Final measurements use that repeat; excluded original samples are retained below."
+  },
+  "runtime": {
+    "kind": "Docker",
+    "image_id": "sha256:ed7a16415711a8905bf007dc4e50715173d173bd3920c870df8cad9187e66d51",
+    "runtime_input": "8b8bdf5356c1cef419f63f9484dd557d10c317003d098a65424e18ec72f21b70",
+    "baseline_revision": "3ce51d28",
+    "nwkit_revision": "88d3cba63ddc8a71edcce00b055322e685315e2a"
+  },
+  "benchmark_sha256": {
+    "benchmark_workflow_efficiency.py": "f56a556baccbb0cd6a93e371638359de6722983b160091edad290ae39eb87640",
+    "benchmark_workflow_efficiency.R": "a88057b419acad6bcbe072cfece5f284939390dfd710ce13430ae32ce89d8113"
+  },
+  "excluded_measurements": {
+    "traits": {
+      "reason": "Unrelated website one-off container ran 07:00:24\u201307:00:28 UTC during the original expression pass. Entire case replaced by a focused repeat; no other container started during that repeat.",
+      "samples": {
+        "baseline": {
+          "trials": [
+            {
+              "seconds": 7.965455294935964,
+              "peak_rss_kib_linux": 127808,
+              "child_peak_rss_kib_linux": 0,
+              "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+              "counts": {
+                "first_family_seconds": 0.5082600419409573,
+                "genes": 40000,
+                "traits": 80,
+                "families": 20,
+                "selected_per_family": 20,
+                "source_bytes": 55307023
+              }
+            },
+            {
+              "seconds": 7.368474129005335,
+              "peak_rss_kib_linux": 130356,
+              "child_peak_rss_kib_linux": 0,
+              "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+              "counts": {
+                "first_family_seconds": 0.3282502089859918,
+                "genes": 40000,
+                "traits": 80,
+                "families": 20,
+                "selected_per_family": 20,
+                "source_bytes": 55307023
+              }
+            },
+            {
+              "seconds": 7.86930025392212,
+              "peak_rss_kib_linux": 127768,
+              "child_peak_rss_kib_linux": 0,
+              "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+              "counts": {
+                "first_family_seconds": 0.39866929198615253,
+                "genes": 40000,
+                "traits": 80,
+                "families": 20,
+                "selected_per_family": 20,
+                "source_bytes": 55307023
+              }
+            }
+          ],
+          "median_seconds": 7.86930025392212,
+          "median_peak_rss_kib_linux": 127808
+        },
+        "current": {
+          "trials": [
+            {
+              "seconds": 3.2710653350222856,
+              "peak_rss_kib_linux": 126620,
+              "child_peak_rss_kib_linux": 0,
+              "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+              "counts": {
+                "first_family_seconds": 2.142216210020706,
+                "genes": 40000,
+                "traits": 80,
+                "families": 20,
+                "selected_per_family": 20,
+                "source_bytes": 55307023
+              }
+            },
+            {
+              "seconds": 3.1699768769321963,
+              "peak_rss_kib_linux": 126664,
+              "child_peak_rss_kib_linux": 0,
+              "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+              "counts": {
+                "first_family_seconds": 2.1153806259389967,
+                "genes": 40000,
+                "traits": 80,
+                "families": 20,
+                "selected_per_family": 20,
+                "source_bytes": 55307023
+              }
+            },
+            {
+              "seconds": 3.5844172929646447,
+              "peak_rss_kib_linux": 126744,
+              "child_peak_rss_kib_linux": 0,
+              "output_sha256": "ba7fe6eebafc81c25fe0ea22d531c4547989272439e94fc81ea646f4dafa893f",
+              "counts": {
+                "first_family_seconds": 2.3266830008942634,
+                "genes": 40000,
+                "traits": 80,
+                "families": 20,
+                "selected_per_family": 20,
+                "source_bytes": 55307023
+              }
+            }
+          ],
+          "median_seconds": 3.2710653350222856,
+          "median_peak_rss_kib_linux": 126664
+        }
+      }
+    }
+  }
+}

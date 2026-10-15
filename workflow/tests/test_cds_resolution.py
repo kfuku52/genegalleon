@@ -289,16 +289,17 @@ def test_negative_strand_reference_and_explicit_fragment_order(tmp_path):
     assert resolution.extract_genomic_candidates(traits, genome) == {'g': 'ATGTAA'}
 
 
-def test_resolution_traits_are_bound_to_exact_selected_sequence(tmp_path):
+@pytest.mark.parametrize('indexed', [False, True])
+def test_resolution_traits_are_bound_to_exact_selected_sequence(tmp_path, indexed):
     from gff2genestat import apply_cds_resolution
     fasta, gff, ref = inputs(tmp_path)
     output, traits_path, _ = resolution.resolve(fasta, gff, ref, tmp_path / 'resolved')
     traits = pd.read_csv(traits_path, sep='\t')
     records = list(resolution.fasta_records(output))
-    apply_cds_resolution(traits, records, output.parent)
+    apply_cds_resolution(traits, records, output.parent, tmp_path / 'table-cache' if indexed else None)
     assert traits.iloc[0].structure_status == 'sequence_verified'
     records[0] = (records[0][0], records[0][1], 'ATGCCCTAA')
-    apply_cds_resolution(traits, records, output.parent)
+    apply_cds_resolution(traits, records, output.parent, tmp_path / 'table-cache' if indexed else None)
     assert traits.iloc[0].structure_status == 'sequence_not_coordinate_matched'
     assert pd.isna(traits.iloc[0].feature_size)
 

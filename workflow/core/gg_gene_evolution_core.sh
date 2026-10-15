@@ -2873,7 +2873,8 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   if [[ "${input_sequence_mode}" == "cds" ]]; then
     gff_cds_validation_args+=(--validate-cds-length --structure-policy report --phase-policy report)
     if [[ -z "${representative_inputs}" ]]; then
-      gff_cds_validation_args+=(--cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved")
+      gff_cds_validation_args+=(--cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved"
+        --table-cache "${gg_workspace_dir}/.gg_cache/trait_tables")
     fi
   fi
   python "${gg_support_dir}/gff2genestat.py" \
@@ -4541,6 +4542,7 @@ if [[ ${expression_needs_update} -eq 1 && ${run_generate_expression_matrix} -eq 
 
   python "${gg_support_dir}/get_trait_matrix.py" \
     --dir_trait "${dir_sp_expression}" \
+    --table-cache "${gg_workspace_dir}/.gg_cache/trait_tables" \
     --seqfile "${og_id}.trait_matrix_input.fasta" \
     --ncpu "${GG_TASK_CPUS}" \
     --outfile expression_matrix.tsv

@@ -347,6 +347,11 @@ Family expression matrices also read the first column as literal gene IDs,
 preserving leading zeros and IDs such as `NA`, `NULL`, and `nan`. Numeric trait
 columns retain their normal type inference and missing-value handling.
 
+Family workflows reuse typed row indexes under `workspace/.gg_cache/trait_tables`
+for expression and resolved CDS tables. Each retrieval verifies source and index
+content, preserving duplicate rows and source order. Direct helper calls can opt
+in with `--table-cache PATH`; a first query pays the index construction cost.
+
 Minimal example:
 
 ```tsv

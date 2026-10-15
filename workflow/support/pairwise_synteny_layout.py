@@ -2,7 +2,7 @@
 
 import math
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from itertools import permutations
 from pathlib import Path
 
@@ -18,17 +18,20 @@ JOINT_MAX_ROUNDS = 8
 
 
 def track_geometry(seqids, genes):
-    counts = Counter(g.seqid for g in genes)
+    grouped = defaultdict(list)
+    for gene in genes:
+        grouped[gene.seqid].append(gene)
+    counts = {sid: len(group) for sid, group in grouped.items()}
     gap = min(0.01, 0.01 * 16 / len(seqids) + 0.001) if len(seqids) > 16 else 0.01
     span = XEND - XSTART - gap * (len(seqids) - 1)
-    if span <= 0 or not seqids or any(counts[sid] == 0 for sid in seqids):
+    if span <= 0 or not seqids or any(not counts.get(sid) for sid in seqids):
         raise ValueError("Invalid ribbon track geometry")
     ratio = span / sum(counts[sid] for sid in seqids)
     ranks = {}
     for sid in seqids:
         # JCVI Bed.order_in_chr sorts by start, then literal accession (not end
         # or natural accession order). Shared-start transcripts must agree too.
-        ordered = sorted((g for g in genes if g.seqid == sid), key=lambda g: (g.start, g.gene_id))
+        ordered = sorted(grouped[sid], key=lambda g: (g.start, g.gene_id))
         ranks.update((g.gene_id, rank) for rank, g in enumerate(ordered))
     widths = {sid: counts[sid] * ratio for sid in seqids}
     return widths, ranks, ratio, gap
@@ -122,13 +125,14 @@ def minimize_order(order, widths, gap, cost, exact_limit=EXACT_LIMIT):
 def order_by_ribbon_length(selected, genomes, simple, moving, scale_mode="shared"):
     if moving is None:
         return order_both_by_ribbon_length(selected, genomes, simple, scale_mode)
-    fixed = 1 - moving
+    prepared = _prepare_layout(selected, genomes, simple, scale_mode)
+    return _order_track(selected, moving, scale_mode, prepared)
+
+
+def _prepare_layout(selected, genomes, simple, scale_mode):
     geometry = pair_track_geometry(selected, genomes, scale_mode)
-    widths, ranks, ratio, gap = geometry[moving]
-    fixed_widths, fixed_ranks, fixed_ratio, fixed_gap = geometry[fixed]
-    fixed_offsets = offsets(selected[fixed], fixed_widths, fixed_gap)
     lookup = [{g.gene_id: g.seqid for g in genes} for genes in genomes]
-    connections = {sid: [] for sid in selected[moving]}
+    blocks = []
     for line in Path(simple).read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.startswith("#"):
             continue
@@ -139,6 +143,22 @@ def order_by_ribbon_length(selected, genomes, simple, moving, scale_mode="shared
         seqids = [lookup[i][ends[i][0]] for i in (0, 1)]
         if any(lookup[i][ends[i][1]] != seqids[i] for i in (0, 1)):
             raise ValueError("A ribbon spans multiple chromosomes")
+        blocks.append((ends, seqids))
+    return geometry, blocks
+
+
+def _order_track(selected, moving, scale_mode, prepared):
+    fixed = 1 - moving
+    original_geometry, blocks = prepared
+    # Dict insertion order affects floating-point sums in metadata. Recreate
+    # only the cheap ordered widths; ranks and ratios are invariant.
+    geometry = [({sid: widths[sid] for sid in order}, ranks, ratio, gap)
+                for order, (widths, ranks, ratio, gap) in zip(selected, original_geometry, strict=True)]
+    widths, ranks, ratio, gap = geometry[moving]
+    fixed_widths, fixed_ranks, fixed_ratio, fixed_gap = geometry[fixed]
+    fixed_offsets = offsets(selected[fixed], fixed_widths, fixed_gap)
+    connections = {sid: [] for sid in selected[moving]}
+    for ends, seqids in blocks:
         if seqids[moving] not in connections or seqids[fixed] not in fixed_offsets:
             continue
         a, b = (ranks[gene] for gene in ends[moving])
@@ -179,7 +199,8 @@ def order_both_by_ribbon_length(selected, genomes, simple, scale_mode="shared"):
     def key(orders):
         return tuple(tuple(indices[side][sid] for sid in order) for side, order in enumerate(orders))
 
-    best, metadata = order_by_ribbon_length(original, genomes, simple, 0, scale_mode)
+    prepared = _prepare_layout(original, genomes, simple, scale_mode)
+    best, metadata = _order_track(original, 0, scale_mode, prepared)
     before = metadata["objective_before"]
     best_value = metadata["objective_after"]
     solves = 1
@@ -202,7 +223,7 @@ def order_both_by_ribbon_length(selected, genomes, simple, scale_mode="shared"):
         for order in permutations(original[fixed]):
             start = [list(track) for track in original]
             start[fixed] = list(order)
-            candidate, info = order_by_ribbon_length(start, genomes, simple, 1 - fixed, scale_mode)
+            candidate, info = _order_track(start, 1 - fixed, scale_mode, prepared)
             solves += 1
             consider(candidate, info)
         solver, optimal, starts, rounds = "exact_joint_permutation_subset_dp", True, 1, None
@@ -219,7 +240,7 @@ def order_both_by_ribbon_length(selected, genomes, simple, scale_mode="shared"):
             for _ in range(rounds):
                 prior = [list(track) for track in current]
                 for moving in (restart % 2, 1 - restart % 2):
-                    current, info = order_by_ribbon_length(current, genomes, simple, moving, scale_mode)
+                    current, info = _order_track(current, moving, scale_mode, prepared)
                     solves += 1
                     consider(current, info)
                 value = info["objective_after"]

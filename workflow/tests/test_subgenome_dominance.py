@@ -367,3 +367,17 @@ def test_missing_expression_id_is_not_counted_as_zero(tmp_path):
     assert detection["n_loci"] == 11 and detection["effect"] == 0
     coverage = list(csv.DictReader((tmp_path / "output/expression_coverage.tsv").open(), delimiter="\t"))
     assert coverage[0]["gene_ids_present"] == "0" and coverage[0]["positive_samples"] == "0"
+
+
+@pytest.mark.parametrize('blocks', [3, 17, 101, 10001])
+@pytest.mark.parametrize('bit_generator', [np.random.PCG64, np.random.MT19937])
+def test_batched_bootstrap_matches_complete_draws_and_rng_state(blocks, bit_generator):
+    sums = np.linspace(-3, 7, blocks)
+    counts = np.arange(blocks) % 5 + 1
+    expected_rng = np.random.Generator(bit_generator(931))
+    actual_rng = np.random.Generator(bit_generator(931))
+    draws = expected_rng.integers(0, blocks, (201, blocks))
+    expected = sums[draws].sum(axis=1) / counts[draws].sum(axis=1)
+    np.testing.assert_array_equal(sd.bootstrap_estimates(sums, counts, 201, actual_rng), expected)
+    assert json.dumps(actual_rng.bit_generator.state, default=lambda v: v.tolist()) == json.dumps(
+        expected_rng.bit_generator.state, default=lambda v: v.tolist())
