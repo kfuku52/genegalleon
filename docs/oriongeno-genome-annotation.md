@@ -49,6 +49,9 @@ Outputs are below `output/genome_prediction/oriongeno/SPECIES/`: native GFF3,
 execution receipt, prediction/formatter provenance, formatted GFF/CDS/genome,
 and `candidate_inputs.tsv`. These outputs do not establish annotation accuracy
 or BUSCO completeness by themselves.
+Native GFFs can encode UTRs through exon sequence outside CDSs without separate
+UTR feature rows. Representative completion derives those intervals and emits
+explicit UTR rows in its final GFF views.
 
 ## Connect the whole cohort to representative selection
 
