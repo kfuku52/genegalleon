@@ -104,11 +104,11 @@ Different sides may use different donors. Each side retains one complete donor
 exon path rather than a union of competing UTRs. CDS coordinates, phase, sequence,
 protein, gene IDs and representative choice remain unchanged.
 
-When a boundary falls in a donor intron, a newly reconstructed terminal splice
-requires a genomic GT-AG, GC-AG or AT-AC motif in transcription direction.
-Such connections are marked as newly inferred; the motif does not prove RNA
-support. An unresolved connection, no mapped prediction, or CDS reaching the
-outer transcript end yields no UTR on that side and an explicit reason.
+When a boundary falls in a donor intron, retain the projected UTR and mark the
+new terminal connection, its genomic motif and whether it is canonical in the
+audit. Motifs do not provide RNA support or add a UTR-loss criterion. A CDS
+reaching the donor's outer transcript end removes the UTR on that side. Missing
+source UTRs, unmapped predictions and unsupported source models are also audited.
 An overlap with another coding locus is not used to silently trim a UTR.
 
 The resulting model is a derived prediction and may combine different source

@@ -100,7 +100,7 @@ def load_models(path):
 
 
 def project(donor, selected, side, genome):
-    """Retain donor exons outside selected CDS; inspect any new terminal splice."""
+    """Retain donor exons outside selected CDS; audit any new terminal splice."""
     if donor['seqid'] not in genome.references or any(b > genome.get_reference_length(donor['seqid']) for _, b in donor['exons']):
         return dict(blocks=[], length=0, reason='source_outside_genome', boundary_shift=0, new_junction=False)
     low = (side == '5') == (selected['strand'] == '+')
@@ -112,24 +112,26 @@ def project(donor, selected, side, genome):
     blocks = [[a, min(b, boundary)] for a, b in donor['exons'] if a < boundary] if low else [
         [max(a, boundary), b] for a, b in donor['exons'] if b > boundary]
     blocks = [b for b in blocks if b[0] < b[1]]
-    reason, new_junction = 'projected', False
+    reason, new_junction, motif, canonical = 'projected', False, None, None
     if not blocks:
         reason = 'cds_reaches_transcript_end'
     else:
         edge = blocks[-1][1] if low else blocks[0][0]
         if edge != boundary:
             # The CDS boundary lies in a donor intron or outside its exon path.
-            # A synthetic splice is allowed only with a genomic splice motif.
+            # This is the requested coordinate projection, including novel
+            # terminal connections. Record their motifs without imposing an
+            # additional UTR-loss gate or claiming biological splice support.
             a, b = sorted((edge, boundary))
-            intron = genome.fetch(selected['seqid'], a, b).upper()
+            intron = (genome.fetch(selected['seqid'], a, b) if b-a < 4 else
+                      genome.fetch(selected['seqid'], a, a+2)+genome.fetch(selected['seqid'], b-2, b)).upper()
             if selected['strand'] == '-':
                 intron = str(Seq(intron).reverse_complement())
-            if len(intron) < 4 or (intron[:2], intron[-2:]) not in {('GT', 'AG'), ('GC', 'AG'), ('AT', 'AC')}:
-                blocks, reason = [], 'terminal_connection_unresolved'
-            else:
-                new_junction = True
+            new_junction, motif = True, intron[:2]+'-'+intron[-2:]
+            canonical = b-a >= 4 and (intron[:2], intron[-2:]) in {('GT', 'AG'), ('GC', 'AG'), ('AT', 'AC')}
     return dict(blocks=blocks, length=sum(b-a for a, b in blocks), reason=reason,
-                boundary_shift=boundary-old_boundary, new_junction=new_junction)
+                boundary_shift=boundary-old_boundary, new_junction=new_junction,
+                junction_motif=motif, junction_canonical=canonical)
 
 
 def _overlap(a, b):

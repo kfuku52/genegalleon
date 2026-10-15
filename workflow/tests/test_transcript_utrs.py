@@ -100,19 +100,19 @@ def test_mislabeled_source_utr_is_replaced_with_correct_side(strand):
     assert high[2] == ('three_prime_UTR' if strand == '+' else 'five_prime_UTR')
 
 
-@pytest.mark.parametrize('motif,accepted', [('GTAG', True), ('AAAA', False)])
-def test_boundary_in_donor_intron_requires_genomic_splice_connection(motif, accepted):
-    selected = model(cds=((100, 400),), exons=((100, 400),))
-    native = utrs.read_models(model('n', 'ng', cds=((120, 400),), exons=((20, 50), (120, 450))))
+@pytest.mark.parametrize('strand', ['+', '-'])
+@pytest.mark.parametrize('motif,canonical', [('GTAG', True), ('AAAA', False)])
+def test_boundary_in_donor_intron_keeps_projected_utr_and_audits_connection(motif, canonical, strand):
+    selected = model(cds=((100, 400),), exons=((100, 400),), strand=strand)
+    native = utrs.read_models(model('n', 'ng', cds=((120, 400),), exons=((20, 50), (120, 450)), strand=strand))
     sequence = list('A'*1200)
-    sequence[50:52], sequence[98:100] = motif[:2], motif[2:]
+    genomic_motif = str(Seq(motif).reverse_complement()) if strand == '-' else motif
+    sequence[50:52], sequence[98:100] = genomic_motif[:2], genomic_motif[2:]
     _, audit, _ = utrs.complete(selected, selected, Genome(''.join(sequence)), 'S', native)
-    chosen = audit[0]['utr5']
-    assert bool(chosen['length']) == accepted
-    if accepted:
-        assert chosen['new_junction']
-    else:
-        assert any(r['reason'] == 'terminal_connection_unresolved' for r in audit[0]['candidates']['5'])
+    chosen = audit[0]['utr5' if strand == '+' else 'utr3']
+    assert chosen['length'] == 30 and chosen['new_junction']
+    assert chosen['junction_canonical'] == canonical
+    assert chosen['junction_motif'] == motif[:2]+'-'+motif[2:]
 
 
 def test_native_model_overlapping_two_loci_is_not_assigned_by_longest_utr():
