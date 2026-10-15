@@ -86,9 +86,9 @@ After the final representative CDS is selected, every species and every
 exported representative passes UTR completion. UTR length does not affect CDS
 selection. Candidate transcript ends come from existing annotation and matched
 OrionGeno models, including models with different CDS starts/stops/internal
-exons. Native models must have a unique selected gene owner by same-strand
-coding overlap on the same contig. Merged or copy-ambiguous overlaps stay
-unassigned.
+exons. Native models first match a unique selected gene with an identical CDS
+exon path on the same contig and strand, then use unique same-strand coding
+overlap when no exact path exists. Merged or copy-ambiguous matches stay unassigned.
 
 For each donor transcript and each side, keep its outer transcript end fixed
 and retain its exonic sequence outside the selected CDS boundary. This can

@@ -161,7 +161,10 @@ def complete(selected_text, original_text, genome, species, native=None):
         starts, ends, rows = tracks.get((model['seqid'], model['strand']), ([], [], []))
         left = bisect.bisect_right(ends, min(b[0] for b in model['cds']))
         right = bisect.bisect_left(starts, max(b[1] for b in model['cds']))
-        owners = {m['gene'] for m in rows[left:right] if _overlap(m['cds'], model['cds'])}
+        overlapping = [m for m in rows[left:right] if _overlap(m['cds'], model['cds'])]
+        shape = [b[:2] for b in model['cds']]
+        exact = {m['gene'] for m in overlapping if [b[:2] for b in m['cds']] == shape}
+        owners = exact or {m['gene'] for m in overlapping}
         if len(owners) == 1:
             donors[next(iter(owners))].append(model)
     updates, audit, sequences = {}, [], {}

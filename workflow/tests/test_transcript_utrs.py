@@ -123,6 +123,18 @@ def test_native_model_overlapping_two_loci_is_not_assigned_by_longest_utr():
     assert all(r['native_status'] == 'no_unique_coding_overlap' for r in audit)
 
 
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_unique_exact_native_cds_keeps_utrs_when_a_neighbor_also_overlaps(strand):
+    selected = model('a', 'ga', cds=((100, 250),), exons=((100, 250),), strand=strand)
+    selected += model('b', 'gb', cds=((200, 400),), exons=((200, 400),), strand=strand)
+    native = utrs.read_models(model('n', 'ng', cds=((100, 250),), exons=((50, 300),), strand=strand))
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    by_id = {row['transcript_id']: row for row in audit}
+    assert by_id['a']['utr5']['length'] == by_id['a']['utr3']['length'] == 50
+    assert by_id['a']['native_status'] == 'mapped'
+    assert by_id['b']['native_status'] == 'no_unique_coding_overlap'
+
+
 def test_same_length_prefers_existing_and_full_annotation_keeps_other_isoforms():
     selected = model()
     other = model('other', cds=((100, 400),), exons=((50, 450),)).splitlines(keepends=True)[1:]
