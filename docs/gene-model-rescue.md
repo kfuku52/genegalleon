@@ -609,4 +609,7 @@ a representative CDS. Frame disruptions, assembly ambiguity and unsupported long
 tails remain failures. The original predictor coordinates and PAF are retained;
 `boundary_revalidation` records attempted paths and the admission decision.
 Prediction-cache replay rechecks raw predictions with the current implementation.
+Frozen result and preparation files are hashed in groups, with full-byte reads
+and generation checks before and after each group and before cache use. This
+avoids repeated per-file scans of every previously verified pathname.
 This step does not assign orthology or relax coding-path compatibility.

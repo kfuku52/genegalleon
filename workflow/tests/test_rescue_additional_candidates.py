@@ -453,6 +453,44 @@ def test_cache_content_mutation_is_rejected(tmp_path, surface):
         verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
 
 
+@pytest.mark.parametrize("replace_same_bytes", [False, True])
+@pytest.mark.parametrize("group", ["worker", "sources", "prepared", "prepared_receipts"])
+def test_cache_member_change_during_grouped_verification_is_rejected(tmp_path, monkeypatch, replace_same_bytes, group):
+    from importlib import import_module
+
+    from workflow.support import rescue_prediction_cache as implementation
+    state = import_module(implementation.FreshDigestBatch.__module__)
+    old, new, plan, region = cache_fixture(tmp_path)
+    key = frozen_prediction_cache_key(old)
+    if group == "worker":
+        members = list(key["species"]["T"]["files"])
+        target, trigger = (old / "rescued" / "T" / member for member in (members[0], members[-1]))
+    elif group == "sources":
+        target, trigger = (Path(plan["request"]["sources"]["D"][field]) for field in ("genome", "gff"))
+    elif group == "prepared":
+        target, trigger = (root / "prepared" / "D" / "genes.pep" for root in (old, new))
+    else:
+        target, trigger = (old / "prepared" / donor / "receipt.json" for donor in ("D", "E"))
+    assert target != trigger
+    original = state.digest
+    changed = []
+    def digest_then_change(path):
+        result = original(path)
+        if Path(path) == trigger and not changed:
+            changed.append(True)
+            if replace_same_bytes:
+                replacement = target.with_suffix(".replacement")
+                replacement.write_bytes(target.read_bytes())
+                replacement.replace(target)
+            else:
+                target.write_bytes(target.read_bytes() + b" ")
+        return result
+    monkeypatch.setattr(state, "digest", digest_then_change)
+    with pytest.raises(OSError, match="changed while hashing"):
+        verify_prediction_cache(old, new, plan, "T", [region], PARAMS, key)
+    assert changed
+
+
 @pytest.mark.parametrize("change", ["miniprot", "search", "source", "prepared"])
 def test_cache_incompatible_predictor_inputs_are_rejected(tmp_path, change):
     old, new, plan, region = cache_fixture(tmp_path)
