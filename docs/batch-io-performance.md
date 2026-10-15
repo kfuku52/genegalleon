@@ -1002,3 +1002,100 @@ GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-stage-verification-baseline \
   --mib 64 --files 4096 --boundaries 7 --repeats 3 \
   --output tmp/stage-verification-comparison.json
 ```
+
+## Stage preparation, family summaries and ordered alignment queues
+
+Pairwise synteny prepares each distinct complete source description and mapping
+threshold once within the analysis command. Private temporary generations hold
+the existing BED, peptide, ID map, normalized coordinates and metadata. Each pair
+gets independent copies, checked against the generation's content hashes, so
+native tools cannot modify preparations used by later pairs. Source and generated
+file identities remain fenced through the last native command. No raw sequence
+cache persists in RAM across species, and generations are removed on success or
+failure. Later stage verification still performs its independent full reads.
+
+Ortholog summaries finish strict/weak-copy, displayed-duplication, synteny and
+UFBoot evidence one family at a time. A family's parsed branch table, CDS IDs,
+validated tree and ancestor chains are shared, then released. Species-tree
+parsing and target-ancestry ranks are shared only within that command. Source
+generations and raw/ZIP archive observations are fenced before writing summary
+tables; an earlier family's mutation still fails after its parsed data has been
+released. Scalar helper APIs remain fresh outside these scopes. Selection rules,
+support values, missingness, output columns and deterministic row/lane order are
+unchanged.
+
+Pairwise dS and WGD keep at most eight times the configured worker count in their
+ordered alignment queue. The bound includes completed results waiting behind a
+slow earlier pair. Closing or failure cancels queued work; active jobs finish
+before the executor exits. Pair selection, alignment settings, genetic codes,
+scientific sample limits and TSV order are unchanged. This bounds futures and
+alignment-result retention, not all input pair/request collections. A slow first
+job can still hold up ordered output and leave workers idle once the window is
+exhausted; this is a memory/throughput tradeoff, not a claim that MAFFT itself is
+faster. Alignment-helper provenance includes the queue implementation.
+
+The synteny renderer uses one karyotype process per pair for multiple formats.
+The existing `--format` CLI remains available; `--formats=pdf,png,svg` shares
+imports while creating and closing a fresh figure for each format. Inputs are
+fenced again inside each atomic plot/report publication. A later format's failure
+preserves its previous output and does not run subsequent formats. The diagnostic
+command log records the actual batch invocation; figure paths, style-report
+schema and per-pair directories are unchanged.
+
+`benchmark_stage_efficiency.py` compares a saved support snapshot against the
+current code in fresh processes. It checks complete outputs, normalizing only
+temporary workspace prefixes and non-scientific plotting metadata. Preparation
+uses four species with 4,000 900-nt CDSs each across fourteen pairs, substituting
+only the native search/screen calls. Summary cases use 128 copies of the existing
+45-node weak-duplication fixture, including query-based closest selection. The
+queue case uses 20,000 ordered 4-KiB results, four workers and a slow first job;
+it isolates scheduling/result memory rather than scientific alignment. Plotting
+uses actual PDF/PNG/SVG rendering with a fixed metadata epoch and SVG hash salt.
+Fixture creation and final fingerprints are outside timing; peak RSS includes
+setup/imports and reports the larger of parent or largest child, not their sum.
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-stage-efficiency-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_stage_efficiency.py \
+  --baseline-support /tmp/gg-stage-efficiency-baseline/baseline-support \
+  --output tmp/stage-efficiency-comparison.json
+```
+
+On 2026-10-15, Docker Linux/arm64, Python 3.12.15 and the same immutable image
+compared a support snapshot from `fe8a23aa` with the updated implementation.
+Each case used one warmup and three measured fresh processes, alternating
+baseline/current order, without concurrent tests or builds. All logical output
+fingerprints matched. Complete PDF/PNG/SVG output bytes also matched after the
+documented metadata normalization; a regression test compares all three formats
+with a fixed metadata epoch/hash salt.
+
+| Synthetic workload | Before median | After median | Relevant operation counts before / after | Peak RSS before / after |
+| --- | ---: | ---: | --- | ---: |
+| Four-species preparation across fourteen pairs | 14.079 s | 2.786 s | FASTA parses 28 / 4; GFF parses 28 / 4 | 69.5 / 66.8 MiB |
+| 128-family summary with weak-copy evidence | 0.454 s | 0.451 s | Branch reads/index builds 512 / 128; CDS-ID reads 256 / 128 | 104.4 / 101.0 MiB |
+| Same summary with closest-query selection | 0.678 s | 0.610 s | Species-tree parses 256 / 1; family index builds 768 / 128 | 108.9 / 107.1 MiB |
+| 20,000 ordered 4-KiB results, four workers | 0.284 s | 0.540 s | Submitted before first result 20,000 / 32 | 133.3 / 20.9 MiB |
+| One karyotype in PDF, PNG and SVG | 6.979 s | 2.929 s | Python plot processes 3 / 1 | 205.0 / 209.2 MiB |
+
+Preparation and plotting isolate the affected overhead; these results do not
+establish whole-workflow speedups. Summary timings overlap between trials, so no
+reliable time saving is claimed for those small families despite the reduction
+in reads and parsing. The ordered queue reduces this fixture's peak RSS by
+84.3%, but costs about 0.26 s more over 20,000 near-empty tasks. It is a memory
+improvement, not a scheduler-throughput improvement. Actual MAFFT throughput was
+not benchmarked. Plot workers retain imports between formats and used about
+4.2 MiB more largest-process RSS in this fixture.
+
+The queue row comes from a follow-up with the final eight-jobs-per-worker window:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/tmp/gg-stage-efficiency-baseline \
+  bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_stage_efficiency.py \
+  --baseline-support /tmp/gg-stage-efficiency-baseline/baseline-support \
+  --cases ordered-queue --output tmp/stage-efficiency-queue-final.json
+```
+
+The initial all-case comparison used a smaller window. A separate 8/32/128-job
+window sweep motivated increasing the four-worker limit to 32 to reduce waiting
+overhead while keeping memory bounded. Both result files retain every trial,
+operation count, source hash and logical fingerprint for their actual code.
