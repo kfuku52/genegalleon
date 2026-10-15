@@ -1315,7 +1315,7 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
             if artifact is None:
                 raise FileNotFoundError(logical_root / raw)
             return memo.read(artifact.live_path or artifact.zip_path,
-                             lambda: audit_entry_digest(entry, store, logical_root, workspace_root),
+                             scoped_digest_reader(lambda: audit_entry_digest(entry, store, logical_root, workspace_root)),
                              member=artifact.member_name)
         path = resolve_reference(entry, logical_root, workspace_root)
         # Absent optional outputs retain the exact existing missing/type rules.

@@ -10,7 +10,9 @@ Each array task handles one sorted genome; provision the array for all species.
 
 Run the genome annotation entrypoint in an explicitly allocated CUDA GPU job.
 The existing SIF `--nv` / Docker GPU adapter forwards that allocation; the
-predictor never requests every GPU implicitly. OrionGeno bootstraps its own
+predictor never requests every GPU implicitly. The first environment preparation
+imports native CUDA/Triton extensions and also needs this GPU allocation and
+driver mount. OrionGeno bootstraps its own
 Linux x86-64 environment from the moving source branch declared in
 `container/source_branches.env`, using the upstream environment and native-wheel
 requirements. Source and model licenses remain with those assets. The base GG
@@ -47,6 +49,9 @@ Outputs are below `output/genome_prediction/oriongeno/SPECIES/`: native GFF3,
 execution receipt, prediction/formatter provenance, formatted GFF/CDS/genome,
 and `candidate_inputs.tsv`. These outputs do not establish annotation accuracy
 or BUSCO completeness by themselves.
+Native GFFs can encode UTRs through exon sequence outside CDSs without separate
+UTR feature rows. Representative completion derives those intervals and emits
+explicit UTR rows in its final GFF views.
 
 ## Connect the whole cohort to representative selection
 

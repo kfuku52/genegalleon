@@ -347,6 +347,11 @@ Family expression matrices also read the first column as literal gene IDs,
 preserving leading zeros and IDs such as `NA`, `NULL`, and `nan`. Numeric trait
 columns retain their normal type inference and missing-value handling.
 
+Family workflows reuse typed row indexes under `workspace/.gg_cache/trait_tables`
+for expression and resolved CDS tables. Each retrieval verifies source and index
+content, preserving duplicate rows and source order. Direct helper calls can opt
+in with `--table-cache PATH`; a first query pays the index construction cost.
+
 Minimal example:
 
 ```tsv
@@ -677,6 +682,11 @@ Notes:
   corresponding GFF CDS boundaries and recompute standard GFF3 phases. Genome
   sequence and downloaded sources remain unchanged. This runs independently of
   `GG_INPUT_RUN_GENE_MODEL_RESCUE`, including provided and GFF-derived CDS,
+- a complete, uniquely bound CDS model with complementary frame fields is
+  converted to standard GFF3 phases when its genomic CDS exactly matches the
+  valid supplied or derived sequence. This phase-only correction preserves
+  bases, coordinates and IDs, and is recorded separately from sequence changes.
+  Shared, ambiguous, exceptional or mismatched models remain unchanged,
 - `*.fa.gz.cds-normalisation.json` records source/output SHA-256 hashes,
   translation code, corrections, GFF coordinate changes and unresolved records.
   Translation exceptions, pseudogenes, ambiguous phase conventions and

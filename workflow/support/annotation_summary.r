@@ -185,6 +185,7 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
         cat('Skipping the analysis of BUSCO tables.\n')
         return(df_out)
     }
+    tables = list()
     df = data.frame(busco_id=character(), status=character(), label=character(), stringsAsFactors=FALSE)
     species_keys = gg_species_label_from_filename(files)
     gg_stop_on_duplicate_species_keys(species_keys, files, paste(outbase, 'BUSCO files'))
@@ -212,8 +213,9 @@ generate_busco_summary = function(dir_busco, outbase, df_out, tr = NA, font_size
             stringsAsFactors=FALSE
         )
         tmp = tmp[!(is.na(tmp[['busco_id']]) | is.na(tmp[['status']]) | tmp[['busco_id']]=='' | tmp[['status']]==''), , drop=FALSE]
-        df = rbind(df, tmp[,c('busco_id','status','label'), drop=FALSE])
+        tables[[length(tables) + 1L]] = tmp[,c('busco_id','status','label'), drop=FALSE]
     }
+    if (length(tables)) df = do.call(rbind, tables)
     if (nrow(df) == 0) {
         cat('Skipping the analysis of BUSCO tables because no BUSCO records were parsed.\n')
         return(df_out)
@@ -524,7 +526,9 @@ generate_annotation_summary <- function(dir_species_annotation, outbase, tr = NA
     for (file in files) {
         file_path <- file.path(dir_species_annotation, file)
         sp <- species_labels[[file]]
-        tmp <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '#', fill = TRUE, quote = '')
+        header <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '#', fill = TRUE, quote = '', nrows = 0)
+        classes <- ifelse(names(header) %in% old_cols, NA_character_, 'NULL')
+        tmp <- read.table(file_path, sep = '\t', header = TRUE, comment.char = '#', fill = TRUE, quote = '', colClasses = classes)
         tmp2 <- apply(tmp, 2, function(x) { sum((!is.na(x)) & (x != '')) })
         tmp2 <- tmp2[old_cols]
         tmp2[is.na(tmp2)] <- 0

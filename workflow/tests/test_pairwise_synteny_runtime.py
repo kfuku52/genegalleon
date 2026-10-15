@@ -115,6 +115,27 @@ def test_batch_source_replacement_during_save_prevents_publication(saved_karyoty
     assert plt.get_fignums() == figures
 
 
+@pytest.mark.parametrize('alias', ['direct', 'symlink', 'hardlink'])
+def test_batch_rejects_report_aliasing_a_later_format_before_any_write(saved_karyotype, alias):
+    from workflow.support.pairwise_synteny_karyotype import render_formats
+
+    directory, pair, colors = saved_karyotype
+    (directory / 'karyotype_colors.json').write_text(json.dumps(colors))
+    for fmt in ('pdf', 'svg'):
+        (directory / ('karyotype.' + fmt)).write_bytes(b'previous ' + fmt.encode())
+    report = directory / 'karyotype.svg'
+    if alias != 'direct':
+        report = directory / 'report.json'
+        if alias == 'symlink':
+            report.symlink_to('karyotype.svg')
+        else:
+            os.link(directory / 'karyotype.svg', report)
+    with pytest.raises(ValueError, match='distinct'):
+        render_formats(directory, pair, ('pdf', 'svg'), layout_report=report)
+    for fmt in ('pdf', 'svg'):
+        assert (directory / ('karyotype.' + fmt)).read_bytes() == b'previous ' + fmt.encode()
+
+
 def test_karyotype_saved_relative_inputs_resolve_beside_layout(saved_karyotype, tmp_path, monkeypatch):
     from workflow.support.pairwise_synteny_karyotype import render_karyotype
 

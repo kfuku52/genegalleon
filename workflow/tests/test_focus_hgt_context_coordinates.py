@@ -159,3 +159,27 @@ def test_native_context_pdf_and_complete_audit_match_scalar_compression(tmp_path
     def normalize(path):
         return re.sub(rb'/(CreationDate|ModDate) \([^)]*\)', b'', path.read_bytes())
     assert normalize(indexed) == normalize(baseline)
+
+
+def test_indexed_neighbors_match_scalar_with_nested_loci_and_literal_ties(tmp_path):
+    rng = random.Random(18)
+    models = [model(f'g{i}', 1 + rng.randrange(10000), 1) for i in range(300)]
+    for row in models:
+        row['end'] = str(int(row['start']) + rng.randrange(1, 10000))
+        row['feature_blocks'] = row['start'] + '-' + row['end']
+    models.extend([model('g2_tie', 30, 40), model('g10_tie', 30, 40), model('outer', 1, 30000)])
+    write(tmp_path / 'A.gff_info.tsv', list(models[0]), models)
+    coordinates = GenomeCoordinates(tmp_path)
+    for focal in models:
+        others = [r for r in models if r['gene_id'] != focal['gene_id']]
+        start, end = int(focal['start']), int(focal['end'])
+        left = sorted([r for r in others if int(r['end']) < start], key=lambda r: (-int(r['end']), r['gene_id']))[:2]
+        right = sorted([r for r in others if int(r['start']) > end], key=lambda r: (int(r['start']), r['gene_id']))[:2]
+        overlapping = sorted([r for r in others if int(r['start']) <= end and int(r['end']) >= start],
+            key=lambda r: (abs((int(r['start']) + int(r['end'])) / 2 - (start + end) / 2), r['gene_id']))[:2]
+        link = dict(gene_species='A', gene_id=focal['gene_id'])
+        actual = coordinates.neighborhood(link)
+        assert actual[0] == focal
+        assert actual[1] == sorted(left + right + overlapping + [focal], key=lambda r: (int(r['start']), r['gene_id']))
+        assert coordinates.scaffold_models(link, focal) == sorted(models, key=lambda r: (int(r['start']), r['gene_id']))
+    coordinates.verify()

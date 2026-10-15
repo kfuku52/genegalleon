@@ -40,14 +40,25 @@ from collections import defaultdict
 from pathlib import Path
 
 if __package__:
-    from .gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+    from .gene_family_output_store import GeneFamilyOutputStore, observe_path, read_only_observation
     from .input_generation_array_state import FreshDigestBatch
 else:
-    from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+    from gene_family_output_store import GeneFamilyOutputStore, observe_path, read_only_observation
     from input_generation_array_state import FreshDigestBatch
 
 _FAMILY_INPUTS = contextvars.ContextVar('ortholog_family_inputs', default=None)
 _SPECIES_INPUTS = contextvars.ContextVar('ortholog_species_inputs', default=None)
+_SUMMARY_SOURCES = contextvars.ContextVar('ortholog_summary_sources', default=None)
+
+
+def observe_summary_input(path):
+    """Fence file reads and retain their paths for output-alias validation."""
+    path = Path(path).absolute()
+    for source in (path, path.resolve(strict=True)):
+        observe_path(source)
+        sources = _SUMMARY_SOURCES.get()
+        if sources is not None:
+            sources.add(source)
 
 
 class FamilyInputs:
@@ -67,6 +78,7 @@ class FamilyInputs:
     def observe(self, artifact):
         if artifact is not None:
             path = artifact.live_path or artifact.zip_path
+            observe_summary_input(path)
             current = self.identity(path)
             if self.sources.setdefault(path, current) != current:
                 raise ValueError('Family source changed during summary: ' + str(path))
@@ -113,6 +125,7 @@ class SpeciesInputs:
         from Bio import Phylo
 
         key = str(Path(path).absolute())
+        observe_summary_input(path)
         self.proof.read([key])
         if key not in self.trees:
             self.trees[key] = Phylo.read(path, 'newick')
@@ -122,6 +135,9 @@ class SpeciesInputs:
 
 @contextlib.contextmanager
 def species_inputs():
+    if _SPECIES_INPUTS.get() is not None:
+        yield
+        return
     inputs = SpeciesInputs()
     token = _SPECIES_INPUTS.set(inputs)
     try:
@@ -512,6 +528,7 @@ def add_weak_duplication_candidates(store, columns, glyphs, threshold):
 
 def _open_query_text(path):
     path = Path(path)
+    observe_summary_input(path)
     if path.suffix == ".gz":
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
     return path.open("r", encoding="utf-8", errors="replace")
@@ -571,6 +588,7 @@ def _source_species_from_header(header):
 def read_query_metadata(path):
     if not path:
         return {}
+    observe_summary_input(path)
     metadata = {}
     with Path(path).open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -677,6 +695,7 @@ def select_closest_queries(rows, definitions, family_id, species_tree, target_sp
 
 def read_family_manifest(path):
     """Read explicit saved tree sources without copying or pruning their artifacts."""
+    observe_summary_input(path)
     base = Path(path).resolve().parent
     records = []
     with Path(path).open(encoding="utf-8", newline="") as handle:
@@ -793,11 +812,18 @@ def manifest_query_definitions(record, rows, cds_fasta_ids):
 
 def read_family_ids(query_dir, family_file=""):
     query_dir = Path(query_dir)
+    observe_summary_input(query_dir)
     available = sorted(
         path.name for path in query_dir.iterdir() if path.is_file() and not path.name.startswith(".")
     )
+    # Reference-species mode uses only these names, but must still preserve
+    # the curated query files if an output was accidentally pointed at one.
+    sources = _SUMMARY_SOURCES.get()
+    if sources is not None:
+        sources.update(query_dir / name for name in available)
     if not family_file:
         return available
+    observe_summary_input(family_file)
     selected = []
     with Path(family_file).open("r", encoding="utf-8", errors="replace") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
@@ -869,6 +895,8 @@ def read_family_synteny(store, family_id):
 
     name = f"{family_id}{SYNTENY_SUFFIX}"
     artifact = store.artifact("synteny", name)
+    if artifact is not None:
+        observe_summary_input(artifact.live_path or artifact.zip_path)
     if artifact is None or not artifact.size:
         return []
     with store.open_binary("synteny", name) as binary_handle:
@@ -2591,6 +2619,50 @@ class FamilyEvidence:
 
 
 def run(args):
+    """Publish the complete table set only after all reads and writes succeed."""
+    from nwkit.file_paths import validate_distinct_output_paths, validate_outputs_do_not_replace_inputs
+    from nwkit.output_transaction import output_transaction
+
+    roles = ['out_columns', 'out_glyphs', 'out_tree', 'out_synteny', 'out_ufboot', 'out_dup_conf']
+    if getattr(args, 'basis', 'reference_species') == 'query_gene':
+        roles += ['out_query_map', 'out_selection', 'out_long', 'out_overlap']
+    outputs = []
+    for name in roles:
+        value = getattr(args, name, '')
+        if name == 'out_query_map':
+            value = str(value).strip()
+        if value:
+            outputs.append((name, Path(value)))
+    inputs = [(name, getattr(args, name, '')) for name in
+              ('family_file', 'family_manifest', 'query_metadata', 'species_tree')]
+    validate_distinct_output_paths(outputs)
+    validate_outputs_do_not_replace_inputs(inputs, outputs)
+    with contextlib.ExitStack() as publication:
+        sources = set()
+        token = _SUMMARY_SOURCES.set(sources)
+        publication.callback(_SUMMARY_SOURCES.reset, token)
+        staged = None
+
+        def write(path, fields, rows):
+            nonlocal staged
+            if staged is None:
+                for source in sources:
+                    observe_path(source)
+                _SPECIES_INPUTS.get().proof.check()
+                validate_outputs_do_not_replace_inputs([('summary source', source) for source in sources], outputs)
+                staged = publication.enter_context(output_transaction(
+                    [path for _name, path in outputs], create_parents=True))
+            write_tsv(staged[Path(path)], fields, rows)
+
+        # Keep both observations live until every staged table is complete.
+        # Exiting them verifies the sources before the transaction publishes.
+        with read_only_observation(), species_inputs():
+            message = _run(args, write)
+            validate_outputs_do_not_replace_inputs([('summary source', path) for path in sources], outputs)
+    print(message, flush=True)
+
+
+def _run(args, write):
     dup_threshold = validate_dup_conf_threshold(getattr(args, "dup_conf_score_threshold", 0))
     if dup_threshold > 0 and not getattr(args, "out_dup_conf", ""):
         raise ValueError("--out_dup_conf is required when --dup_conf_score_threshold is positive")
@@ -2612,14 +2684,14 @@ def run(args):
                 _family_transform=evidence.process,
             )
         dup_evidence, synteny_evidence, ufboot_evidence = evidence.tables()
-        write_tsv(args.out_columns, COLUMN_FIELDS, columns)
-        write_tsv(args.out_glyphs, GLYPH_FIELDS, glyphs)
-        write_tsv(args.out_tree, TREE_FIELDS, tree_nodes)
-        write_tsv(args.out_synteny, SYNTENY_FIELDS, synteny_evidence)
-        write_tsv(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
+        write(args.out_columns, COLUMN_FIELDS, columns)
+        write(args.out_glyphs, GLYPH_FIELDS, glyphs)
+        write(args.out_tree, TREE_FIELDS, tree_nodes)
+        write(args.out_synteny, SYNTENY_FIELDS, synteny_evidence)
+        write(args.out_ufboot, UFBOOT_FIELDS, ufboot_evidence)
         if getattr(args, "out_dup_conf", ""):
-            write_tsv(args.out_dup_conf, DUP_CONF_FIELDS, dup_evidence)
-        print(
+            write(args.out_dup_conf, DUP_CONF_FIELDS, dup_evidence)
+        return (
             "Reference-species ortholog summary: "
             f"reference_species={normalize_species_label(args.reference_species)}, "
             f"columns={len(columns)}, glyphs={len(glyphs)}, tree_nodes={len(tree_nodes)}, "
@@ -2627,10 +2699,8 @@ def run(args):
             f"synteny_supported={sum(row['synteny_status'] == 'supported' for row in synteny_evidence)}, "
             f"synteny_single_anchor={sum(row['synteny_status'] == 'single_anchor' for row in synteny_evidence)}, "
             f"ufboot_evaluated={sum(row['orthology_ufboot_status'] == 'evaluated' for row in ufboot_evidence)}, "
-            f"ufboot_not_evaluable={sum(row['orthology_ufboot_status'] == 'not_evaluable' for row in ufboot_evidence)}",
-            flush=True,
+            f"ufboot_not_evaluable={sum(row['orthology_ufboot_status'] == 'not_evaluable' for row in ufboot_evidence)}"
         )
-        return
 
     out_query_map = str(getattr(args, "out_query_map", "")).strip()
     if not out_query_map:
@@ -2657,32 +2727,30 @@ def run(args):
             _family_transform=evidence.process,
         )
     dup_evidence, synteny_evidence, ufboot_evidence = evidence.tables()
-    write_tsv(args.out_columns, QUERY_COLUMN_FIELDS, query_columns_for_output(columns))
-    write_tsv(args.out_glyphs, QUERY_GLYPH_FIELDS, query_glyphs_for_output(glyphs))
-    write_tsv(args.out_tree, QUERY_TREE_FIELDS, query_tree_for_output(tree_nodes))
-    write_tsv(
+    write(args.out_columns, QUERY_COLUMN_FIELDS, query_columns_for_output(columns))
+    write(args.out_glyphs, QUERY_GLYPH_FIELDS, query_glyphs_for_output(glyphs))
+    write(args.out_tree, QUERY_TREE_FIELDS, query_tree_for_output(tree_nodes))
+    write(
         args.out_synteny,
         QUERY_SYNTENY_FIELDS,
         query_evidence_for_output(synteny_evidence),
     )
-    write_tsv(
+    write(
         args.out_ufboot,
         QUERY_UFBOOT_FIELDS,
         query_evidence_for_output(ufboot_evidence),
     )
-    write_tsv(out_query_map, QUERY_MAP_FIELDS, query_map)
+    write(out_query_map, QUERY_MAP_FIELDS, query_map)
     if getattr(args, "out_dup_conf", ""):
-        write_tsv(args.out_dup_conf, QUERY_DUP_CONF_FIELDS, query_evidence_for_output(dup_evidence))
+        write(args.out_dup_conf, QUERY_DUP_CONF_FIELDS, query_evidence_for_output(dup_evidence))
     if selection_output:
-        write_tsv(selection_output, SELECTION_FIELDS, selection_audit)
+        write(selection_output, SELECTION_FIELDS, selection_audit)
     if getattr(args, "out_long", ""):
         # Complete absent-family rows for the species-tree tips as well as observed taxa.
         species = {row["species"] for row in long_rows}
         if getattr(args, "species_tree", ""):
-            from Bio import Phylo
-
             species.update(normalize_species_label(tip.name)
-                           for tip in Phylo.read(args.species_tree, "newick").get_terminals())
+                           for tip in read_species_tree(args.species_tree).get_terminals())
         by_key = {(row["query"], row["species"]): row for row in long_rows}
         families = sorted({(row["query_order"], row["query"]) for row in long_rows})
         complete_long = []
@@ -2691,7 +2759,7 @@ def run(args):
                 complete_long.append(by_key.get((family, sp), dict(
                     species=sp, species_display=sp.replace("_", " "), query=family,
                     query_order=order, presence=0, copy_number=0, status="complete")))
-        write_tsv(args.out_long, ["species", "species_display", "query", "query_order",
+        write(args.out_long, ["species", "species_display", "query", "query_order",
                                   "presence", "copy_number", "status"], complete_long)
     gene_families = defaultdict(set)
     for glyph in glyphs:
@@ -2701,19 +2769,18 @@ def run(args):
                      family_count=len(families))
                 for (sp, gene), families in sorted(gene_families.items()) if len(families) > 1]
     if getattr(args, "out_overlap", ""):
-        write_tsv(args.out_overlap, ["species", "cds_fasta_id", "family_ids", "family_count"], overlaps)
+        write(args.out_overlap, ["species", "cds_fasta_id", "family_ids", "family_count"], overlaps)
     if overlaps:
         warnings.warn(f"{len(overlaps)} genes occur in multiple plot blocks; do not sum blocks as independent counts",
                       stacklevel=2)
-    print(
+    return (
         "Query-gene ortholog summary: "
         f"query_records={len(query_map)}, anchors={len(columns)}, "
         f"coalesced_records={len(query_map) - len(columns)}, glyphs={len(glyphs)}, "
         f"tree_nodes={len(tree_nodes)}, "
         f"shared_across_anchors={sum(row['relation'] == 'shared_ancestral' for row in glyphs)}, "
         f"synteny_supported={sum(row['synteny_status'] == 'supported' for row in synteny_evidence)}, "
-        f"ufboot_evaluated={sum(row['orthology_ufboot_status'] == 'evaluated' for row in ufboot_evidence)}",
-        flush=True,
+        f"ufboot_evaluated={sum(row['orthology_ufboot_status'] == 'evaluated' for row in ufboot_evidence)}"
     )
 
 

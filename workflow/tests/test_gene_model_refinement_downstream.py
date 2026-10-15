@@ -214,6 +214,7 @@ def test_gene_evolution_only_applies_original_resolution_to_legacy_inputs(tmp_pa
     start = text.index('  gff_cds_validation_args=()')
     script = text[start:text.index('  python "${gg_support_dir}/gff2genestat.py"', start)]
     environment = dict(os.environ, input_sequence_mode='cds', gg_workspace_output_dir=str(tmp_path),
+                       gg_workspace_dir=str(tmp_path / 'workspace with spaces'),
                        representative_inputs='selected-inputs.tsv' if selected else '')
     result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + script +
                              '\nprintf "%s\\n" "${gff_cds_validation_args[@]}"'],
@@ -222,9 +223,12 @@ def test_gene_evolution_only_applies_original_resolution_to_legacy_inputs(tmp_pa
     assert '--validate-cds-length' in arguments
     if selected:
         assert '--cds-resolution-dir' not in arguments
+        assert '--table-cache' not in arguments
     else:
         index = arguments.index('--cds-resolution-dir')
         assert arguments[index + 1] == str(tmp_path / 'species_cds_resolved')
+        cache_index = arguments.index('--table-cache')
+        assert arguments[cache_index + 1] == str(tmp_path / 'workspace with spaces/.gg_cache/trait_tables')
 
 
 def test_gene_evolution_gff_trait_cache_binds_reader_and_selection_implementations():

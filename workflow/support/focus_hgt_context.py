@@ -180,11 +180,44 @@ class GapCompressedCoordinates:
                 for i, gap in enumerate(gaps, 1)]
 
 
+class ScaffoldIndex:
+    """Ordered flanks and a max-end interval tree for nested/overlapping loci."""
+
+    def __init__(self, rows):
+        self.rows = sorted(rows, key=lambda r: (int(r['start']), r['gene_id']))
+        self.starts = [int(r['start']) for r in self.rows]
+        self.left = sorted(rows, key=lambda r: (-int(r['end']), r['gene_id']))
+        self.negative_ends = [-int(r['end']) for r in self.left]
+        size = 1
+        while size < len(rows):
+            size *= 2
+        self.size = size
+        self.max_end = [0] * (2 * size)
+        for i, row in enumerate(self.rows):
+            self.max_end[size + i] = int(row['end'])
+        for i in range(size - 1, 0, -1):
+            self.max_end[i] = max(self.max_end[2 * i:2 * i + 2])
+
+    def overlapping(self, start, end):
+        stop = bisect_right(self.starts, end)
+        pending = [(1, 0, self.size)]
+        while pending:
+            node, low, high = pending.pop()
+            if low >= stop or self.max_end[node] < start:
+                continue
+            if high - low == 1:
+                yield self.rows[low]
+            else:
+                mid = (low + high) // 2
+                pending.extend(((node * 2, low, mid), (node * 2 + 1, mid, high)))
+
+
 class GenomeCoordinates:
     def __init__(self, root):
         self.root = Path(root) if root else None
         self.cache = {}
         self.sources = {}
+        self.scaffold_indices = {}
 
     def load(self, species):
         if species in self.cache:
@@ -215,6 +248,7 @@ class GenomeCoordinates:
                 if int(row['start']) < 1 or int(row['end']) < int(row['start']):
                     raise ValueError('Invalid GFF coordinate span: ' + row['gene_id'])
                 by_scaffold[row["chromosome"]].append(row)
+        self.scaffold_indices[species] = {sid: ScaffoldIndex(group) for sid, group in by_scaffold.items()}
         self.cache[species] = by_gene, by_scaffold
         return self.cache[species]
 
@@ -228,20 +262,16 @@ class GenomeCoordinates:
             return None, [], 'gff_coordinates_unavailable'
         if link.get("host_scaffold_id") and row["chromosome"] != link["host_scaffold_id"]:
             raise ValueError("Event-gene scaffold and GFF scaffold disagree: " + link["gene_id"])
-        candidates = [r for r in scaffolds[row["chromosome"]] if r["gene_id"] != row["gene_id"]]
-        left = sorted(
-            [r for r in candidates if int(r["end"]) < int(row["start"])],
-            key=lambda r: (-int(r["end"]), r["gene_id"]),
-        )[:CONTEXT_MIN_FLANK_GENES]
-        right = sorted(
-            [r for r in candidates if int(r["start"]) > int(row["end"])],
-            key=lambda r: (int(r["start"]), r["gene_id"]),
-        )[:CONTEXT_MIN_FLANK_GENES]
+        index = self.scaffold_indices[link.get("gene_species", "")][row['chromosome']]
+        start, end = int(row['start']), int(row['end'])
+        left_offset = bisect_right(index.negative_ends, -start)
+        right_offset = bisect_right(index.starts, end)
+        left = index.left[left_offset:left_offset + CONTEXT_MIN_FLANK_GENES]
+        right = index.rows[right_offset:right_offset + CONTEXT_MIN_FLANK_GENES]
         center = (int(row['start']) + int(row['end'])) / 2
         # Intronic/nested loci are additional context, never substitutes for
         # the required left/right flanks. Missing scaffold annotations stay missing.
-        overlapping = sorted([r for r in candidates if int(r['start']) <= int(row['end'])
-                              and int(r['end']) >= int(row['start'])],
+        overlapping = sorted([r for r in index.overlapping(start, end) if r['gene_id'] != row['gene_id']],
                              key=lambda r: (abs((int(r['start']) + int(r['end'])) / 2 - center), r['gene_id']))[:CONTEXT_MAX_OVERLAPPING_GENES]
         selected = left + right + overlapping
         return row, sorted(selected + [row], key=lambda r: (int(r['start']), r['gene_id'])), structure(row)["status"]
@@ -251,7 +281,7 @@ class GenomeCoordinates:
         if focal is None:
             return []
         _, scaffolds = self.load(link.get('gene_species', ''))
-        return sorted(scaffolds[focal['chromosome']], key=lambda r: (int(r['start']), r['gene_id']))
+        return list(self.scaffold_indices[link.get('gene_species', '')][focal['chromosome']].rows)
 
     def verify(self):
         for path, expected in self.sources.items():

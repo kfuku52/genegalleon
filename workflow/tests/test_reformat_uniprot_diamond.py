@@ -93,6 +93,48 @@ def test_diamond_reader_keeps_empty_ids_and_numeric_na_handling(tmp_path):
     assert first[['pident', 'length', 'evalue', 'bitscore', 'qlen', 'coverage']].isna().all()
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('key', ['accession', 'sprot_best'])
+def test_filtered_metadata_preserves_quoted_fields_and_first_duplicate_across_chunks(tmp_path, compressed, key):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_metadata
+
+    path = tmp_path / ('metadata.tsv.gz' if compressed else 'metadata.tsv')
+    text = (f'{key}\tgo_terms\tgene_name_primary\tunused\n'
+            'NA\t"first\tquoted\nterm"\t001\tignored\n'
+            + ''.join(f'P{i}\tbackground\tname{i}\tignored\n' for i in range(16384))
+            + 'NA\tlast duplicate\twrong\tignored\n'
+            '001\tliteral numeric ID\tNULL\tignored\n'
+            '\tblank accession\tblank\tignored\n')
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    selected = {'NA', '001', ''}
+    full = read_uniprot_metadata(str(path))
+    actual = read_uniprot_metadata(str(path), selected)
+    expected = full.loc[full.accession.isin(selected)]
+    pandas.testing.assert_frame_equal(actual.reset_index(drop=True), expected.reset_index(drop=True))
+    assert actual.accession.tolist() == ['NA', '001', '']
+    assert actual.iloc[0].go_terms == 'first\tquoted\nterm'
+    assert read_uniprot_metadata(str(path), set()).empty
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_filtered_descriptions_keep_last_duplicate_and_ignore_empty_headers(tmp_path, compressed):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+
+    path = tmp_path / ('reference.fa.gz' if compressed else 'reference.fa')
+    text = '>NA first\nMKT\n>unrelated background\nAAA\n>\n>001\nM\n>NA last\nAA\n'
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    assert read_uniprot_descriptions(str(path), {'NA', '001'}) == {'NA': 'last', '001': ''}
+    assert read_uniprot_descriptions(str(path), set()) == {}
+
+
 def test_reformat_uniprot_diamond_adds_metadata_columns_except_rnammer(tmp_path):
     query_fasta = tmp_path / "query.fa"
     query_fasta.write_text(">gene1\nMKT\n>gene2\nAAA\n", encoding="utf-8")

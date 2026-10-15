@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from workflow.support import wgd_ssd
-from workflow.support.wgd_evidence import branch_for_ks, combine_node, read_table, summarize_events
+from workflow.support.wgd_evidence import KsBranchPlacer, branch_for_ks, combine_node, read_table, summarize_events
 
 
 def write_rows(path, fields, rows):
@@ -181,6 +181,48 @@ def test_ks_boundaries_map_to_child_branches_not_the_boundary_node(boundary_tree
     tree, ids, bounds = boundary_tree
     assert branch_for_ks("A", (0.4, 0.6), tree, bounds) == (ids["A"], "interval_supported")
     assert branch_for_ks("A", (1.4, 1.6), tree, bounds) == (ids["AB"], "interval_supported")
+
+
+def test_batch_ks_placement_matches_fresh_calls_and_reads_changed_bounds(boundary_tree, monkeypatch):
+    import nwkit.clade_index
+
+    tree, ids, bounds = boundary_tree
+    requests = [("A", value) for value in (.5, (1.4, 1.6), 0, .9, 1, 1.1, 3, None, (-1, 1), (2, 1),
+                                           ("1.4", "1.6"), (1,), (), float('nan'), float('inf'))]
+    requests += [("unknown", .5), ("B", .5)]
+    expected = [branch_for_ks(focal, ks, tree, bounds) for focal, ks in requests]
+    original = nwkit.clade_index.CladeIndex
+    builds = []
+
+    def counted(*a, **kw):
+        builds.append(a[0])
+        return original(*a, **kw)
+
+    monkeypatch.setattr(nwkit.clade_index, 'CladeIndex', counted)
+    placer = KsBranchPlacer(tree, bounds)
+    for _ in range(3):
+        assert [placer.place(focal, ks) for focal, ks in requests] == expected
+    assert builds == [tree]
+    bounds[("A", ids["AB"])]['ci_lower'] = .4
+    assert placer.place('A', .5) == (None, 'boundary_overlap')
+    bounds.clear()
+    assert placer.place('A', .5) == (None, 'unresolved_divergence_boundary')
+    assert builds == [tree]
+    other = KsBranchPlacer(tree.copy(), {})
+    assert other.place('A', .5) == (None, 'unresolved_divergence_boundary')
+    assert len(builds) == 2
+
+
+@pytest.mark.parametrize('keep', [set(), {'a1', 'a2', 'a3', 'b1', 'b2', 'b3'}, {'a1', 'a3', 'b2', 'b3'}])
+def test_cross_child_pairs_preserve_leaf_order_and_exclude_unmapped_genes(tmp_path, keep):
+    path = tmp_path / 'gene.nwk'
+    path.write_text('((a1:1,(a2:1,a3:1):1):1,(b1:1,(b2:1,b3:1):1):1);\n')
+    tree = wgd_ssd.species_tree(path)
+    labels = dict(a1='A', a2='B', a3='A', b1='B', b2='A', b3='A')
+    positions = {gene: {'species': species} for gene, species in labels.items() if gene in keep}
+    expected = [('a1', 'b2'), ('a1', 'b3'), ('a2', 'b1'), ('a3', 'b2'), ('a3', 'b3')]
+    assert wgd_ssd.same_species_cross_child_pairs(tree, positions) == [
+        pair for pair in expected if set(pair) <= keep]
 
 
 @pytest.mark.parametrize("interval", [(0.8, 1.0), (1.0, 1.2), (0.0, 0.2)])

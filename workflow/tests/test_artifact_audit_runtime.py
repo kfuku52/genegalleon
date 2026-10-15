@@ -118,7 +118,6 @@ def test_query_digest_session_restores_persistent_cache_on_error(tmp_path):
     finally:
         provenance.configure_digest_cache(None)
 
-
 @pytest.mark.parametrize('layout', ['raw', 'zip'])
 def test_whole_store_fingerprint_reads_each_content_once_without_metadata_hashing(tmp_path, monkeypatch, layout):
     logical = fixture(tmp_path)
@@ -212,6 +211,42 @@ def test_verify_common_input_is_read_once_then_fenced_and_attempt_bound(tmp_path
     assert before == sorted(str(path.relative_to(workspace)) for path in workspace.rglob('*'))
     if with_attempt:
         assert all(row['attempt_bound'] for row in result['contracts'])
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+@pytest.mark.parametrize('workers', [1, 2])
+def test_batched_logical_digest_final_reads_preserve_readonly_observation(tmp_path, monkeypatch, layout, workers):
+    logical = fixture(tmp_path, families=2)
+    entries = []
+    for index in range(2):
+        family = f"OG{index:07d}"
+        name = family + "_stat.tree.tsv"
+        path = logical / 'stat_tree' / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(f"family\n{family}\n".encode())
+        entries.append({'label': 'output', 'scope': 'logical', 'path': 'stat_tree/' + name,
+                        'artifact_type': 'file'})
+    if layout == 'zip':
+        catalog = tmp_path / 'families.txt'
+        catalog.write_text('OG0000000\nOG0000001\n')
+        subprocess.run([sys.executable, str(SUPPORT / 'gene_family_output_store.py'),
+            'convert-storage', '--root', str(logical), '--mode', 'orthogroup', '--to', 'zip',
+            '--family-id-file', str(catalog), '--progress-interval', '0'], check=True, capture_output=True)
+    # Any namespace-lock attempt would write on the real read-only mount.
+    # Do not stub the validator, digest computation or final content fence.
+    def reject_lock(*args, **kwargs):
+        raise AssertionError('read-only batch attempted a namespace-lock write')
+    monkeypatch.setattr(store_module, 'namespace_lock', reject_lock)
+    before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+    with store_module.read_only_observation():
+        with provenance.digest_observation(workers=workers) as memo:
+            for index, entry in enumerate(entries):
+                store = GeneFamilyOutputStore(logical, family_filter=f"OG{index:07d}")
+                with store.read_snapshot():
+                    expected = provenance.audit_entry_digest(entry, store, logical, tmp_path)
+                    assert provenance.audit_entry_digest(entry, store, logical, tmp_path, memo) == expected
+        assert memo.metrics()['digest_revalidation_reads'] == 2
+    assert before == sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
 
 
 def fixture(root, families=8):

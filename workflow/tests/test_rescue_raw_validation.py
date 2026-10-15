@@ -6,7 +6,8 @@ import pytest
 from Bio.Seq import Seq
 
 from workflow.support.rescue_gene_models import validate_model
-from workflow.support.rescue_raw_validation import RawValidationMemo
+from workflow.support.rescue_homology_policy import homology_problems
+from workflow.support.rescue_raw_validation import RawValidationMemo, copy_validation_data
 
 
 class Genome:
@@ -39,6 +40,7 @@ def signature(call):
         return "exception", type(error), str(error)
 
 
+@pytest.mark.parametrize("genomic_only", [False, True])
 @pytest.mark.parametrize("changes", [
     {}, {"cds": [[0, 6, 0]]}, {"cds": [[0, 7, 0]]},
     {"frameshift": True}, {"coverage": .8}, {"identity": .3},
@@ -49,9 +51,10 @@ def signature(call):
     {"sequence": "old", "problems": ["old"], "assembly_ambiguous_bases": 123},
     {"genetic_code": 2},
 ])
-def test_full_validator_output_order_and_exceptions(changes):
+def test_full_validator_output_order_and_exceptions(changes, genomic_only):
     genome = Genome()
-    memo = RawValidationMemo(validate_model, genome, 1, PARAMS)
+    memo = RawValidationMemo(validate_model, genome, 1, PARAMS,
+                             candidate_homology=homology_problems if genomic_only else None)
     for _ in range(2):
         row = model(**changes)
         expected = signature(lambda row=row: validate_model(copy.deepcopy(row), genome, 1, PARAMS))
@@ -173,3 +176,99 @@ def test_mapping_subclass_and_preexisting_field_order():
 def test_invalid_memory_limits(kwargs):
     with pytest.raises(ValueError):
         RawValidationMemo(validate_model, Genome(), 1, PARAMS, **kwargs)
+
+
+def test_overlay_copy_preserves_order_aliases_cycles_and_independent_mutables():
+    blocks = [[0, 9, 0]]
+    source = {"sequence": "ATG" * 10000, "cds": blocks, "also_cds": blocks,
+              "tuple": (blocks,), "completion": OrderedDict([("end", [9]), ("start", [0])])}
+    source["cycle"] = [source]
+    result = copy_validation_data(source)
+    assert list(result) == list(source)
+    assert result["cds"] is result["also_cds"] is result["tuple"][0]
+    assert result["cycle"][0] is result
+    assert result["sequence"] is source["sequence"]
+    assert type(result["completion"]) is OrderedDict
+    assert list(result["completion"]) == ["end", "start"]
+    result["cds"][0][1] = -1
+    result["completion"]["end"].append(12)
+    assert blocks == [[0, 9, 0]]
+    assert source["completion"]["end"] == [9]
+    second = copy_validation_data(source)
+    assert second["cds"] == [[0, 9, 0]]
+    assert second["cycle"][0] is second
+
+
+def test_overlay_copy_delegates_subclasses_and_custom_copy_protocol():
+    class Custom:
+        def __deepcopy__(self, memo):
+            return {"blocks": copy.deepcopy(self.blocks, memo)}
+
+    class Blocks(list):
+        pass
+
+    blocks = Blocks([[0, 9, 0]])
+    custom = Custom()
+    custom.blocks = blocks
+    source = {"blocks": blocks, "custom": custom, ("tuple", 2): b"bytes"}
+    result = copy_validation_data(source)
+    assert result == copy.deepcopy(source)
+    assert type(result["blocks"]) is Blocks
+    assert result["custom"]["blocks"] is result["blocks"]
+    result["blocks"][0].append(3)
+    assert blocks == [[0, 9, 0]]
+
+
+def test_overlay_copy_preserves_float_objects_and_copy_errors():
+    source = [math.nan, math.inf, -0.0, 2 ** 100, "α"]
+    result = copy_validation_data(source)
+    assert all(a is b for a, b in zip(result, source, strict=True))
+    assert math.copysign(1, result[2]) == -1
+
+    class Broken:
+        def __deepcopy__(self, memo):
+            raise ValueError("original copy failure")
+
+    with pytest.raises(ValueError, match="original copy failure"):
+        copy_validation_data({"nested": [Broken()]})
+
+
+@pytest.mark.parametrize("sequence", ["ATGAAATAA", "ATGNNNTAA", "ATGAAATGA", "ATGTAATAA", "AAACCCTAA"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("code", [1, 2])
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_genomic_memo_rechecks_every_donor_metric_without_repeating_dna(sequence, reverse, code, strand):
+    params = {**PARAMS, "minimum_coverage": .7, "minimum_broad_coverage": .9,
+              "minimum_lower_coverage_identity": .7}
+    pairs = [(1., .8), (.7, .7), (.85, .65), (.9, .5), (.69, .9), (.95, .49)]
+    sequence = sequence if strand == "+" else str(Seq(sequence).reverse_complement())
+    genome = Genome(sequence)
+    memo = RawValidationMemo(validate_model, genome, code, params, candidate_homology=homology_problems)
+    fetched = None
+    for i, (coverage, identity) in enumerate(reversed(pairs) if reverse else pairs):
+        row = model(query=f"donor{i}", coverage=coverage, identity=identity, strand=strand)
+        expected = validate_model(row, Genome(sequence), code, params)
+        actual = memo.validate(row)
+        assert actual == expected and list(actual) == list(expected)
+        assert actual["evidence"] is row["evidence"]
+        if fetched is None:
+            fetched = genome.fetches
+        assert genome.fetches == fetched
+        actual["cds"][0][1] = -99
+        actual["problems"].append("poison")
+    assert memo.diagnostics()["hits"] == len(pairs) - 1
+    assert memo.diagnostics()["homology_evaluated_per_candidate"] is True
+    params["minimum_identity"] = .95
+    row = model(identity=.8, strand=strand)
+    assert memo.validate(row) == validate_model(row, Genome(sequence), code, params)
+    assert memo.diagnostics()["scope_invalidations"] == 1
+
+
+@pytest.mark.parametrize("field,value", [(field, value) for field in ("coverage", "identity")
+                         for value in (-.1, 1.1, math.nan, math.inf, True, "0.8", None)])
+def test_genomic_memo_preserves_metric_errors_on_a_populated_cache(field, value):
+    memo = RawValidationMemo(validate_model, Genome(), 1, PARAMS, candidate_homology=homology_problems)
+    memo.validate(model())
+    row = model(**{field: value})
+    assert signature(lambda: memo.validate(row)) == signature(lambda: validate_model(row, Genome(), 1, PARAMS))
+    assert memo.diagnostics()["hits"] == 0

@@ -22,9 +22,11 @@ FORMAT = "gg_rescue_model_store_v1"
 KINDS = {"models", "accepted", "partial", "revision"}
 BODY_FIELDS = frozenset({
     "seqid", "strand", "cds", "sequence", "assembly_ambiguous_bases",
-    "coverage", "identity", "query_span_coverage", "query_start", "query_end",
-    "query_length", "frameshift", "paf_seqid", "paf_strand", "search",
+    "frameshift", "paf_seqid", "paf_strand", "search",
 })
+# Donor alignment metrics belong to the existing per-candidate context, including
+# raw_prediction. Otherwise each metric variant duplicates an identical DNA body.
+# The layout records both placements, so old stores and readers remain valid.
 MAX_RECORD_BYTES = 64 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _PAF = re.compile(r"\A(##?PAF\t)?([^\t\r\n]+)(\t[^\r\n]*)(\r?\n)?\Z")

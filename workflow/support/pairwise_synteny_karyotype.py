@@ -354,10 +354,16 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
 def render_formats(directory, pair, formats, scale_mode="shared", analysis=None, track_order="target-query",
                    *, layout_report=None):
     """Share imports, retaining fresh figures and atomic publication per format."""
+    from nwkit.file_paths import validate_distinct_output_paths, validate_outputs_do_not_replace_inputs
+
     formats = tuple(formats)
     if not formats or len(formats) != len(set(formats)) or set(formats) - {'pdf', 'svg', 'png'}:
         raise ValueError('formats must be a unique nonempty subset of pdf,svg,png')
     directory = Path(directory).resolve()
+    outputs = [(fmt, directory / ('karyotype.' + fmt)) for fmt in formats]
+    if layout_report is not None:
+        outputs.append(('layout_report', layout_report))
+    validate_distinct_output_paths(outputs)
     proof = FreshDigestBatch()
     colors_path = directory / 'karyotype_colors.json'
     proof.read([directory / 'layout', directory / 'seqids', colors_path])
@@ -365,6 +371,7 @@ def render_formats(directory, pair, formats, scale_mode="shared", analysis=None,
     paths = [path for _name, path in inputs]
     if analysis is not None:
         paths += [Path(analysis) / name for name in ('summary.json', 'logs/01.mcscan.log')]
+    validate_outputs_do_not_replace_inputs([('input', path) for path in [*paths, colors_path]], outputs)
     proof.read(paths)
     colors = json.loads(colors_path.read_text(encoding='utf-8'))
     results = []

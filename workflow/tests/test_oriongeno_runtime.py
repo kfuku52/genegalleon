@@ -104,6 +104,25 @@ def test_runtime_snapshot_rejects_changes(local_runtime, changed):
         native.read_selected(args.receipt)
 
 
+@pytest.mark.parametrize('shared', [False, True])
+@pytest.mark.parametrize('changed', ['package', 'model', 'receipt'])
+def test_read_selected_fences_changes_during_package_inventory(local_runtime, monkeypatch, shared, changed):
+    args, package, model = local_runtime
+    native.prepare(args)
+    targets = {'package': package / '__init__.py', 'model': model / 'model.safetensors',
+               'receipt': Path(args.receipt)}
+    original = native.execute
+    def changed_during_freeze(argv, env, **kwargs):
+        result = original(argv, env, **kwargs)
+        target = targets[changed]
+        target.write_bytes(target.read_bytes() + b'changed during pip freeze\n')
+        return result
+    monkeypatch.setattr(native, 'execute', changed_during_freeze)
+    verification = native.RuntimeVerification() if shared else None
+    with pytest.raises((OSError, RuntimeError), match='changed'):
+        native.read_selected(args.receipt, verification=verification)
+
+
 def test_cold_offline_runtime_does_not_install_or_download(tmp_path):
     args = argparse.Namespace(cache_root=str(tmp_path/'cache'), receipt=str(tmp_path/'selected.json'),
                               python='', checkpoint='', source_commit='', model_profile='plants', no_download=True)
