@@ -294,13 +294,17 @@ bridging fusions. These thresholds govern path integration separately from
 donor homology support. More nearest-species support, then more donor
 species, distinguishes a representative; with equal species support, an identity
 advantage of at least 0.10 is required. If that rank is tied but every path is
-compatible and the locus has validated support from at least two independent
+compatible and the locus has validated support from at least one independent
 external donor species, the locus is retained with all paths. The longest CDS,
 then coding coordinates, supplies a deterministic primary; it remains explicitly
 `representative_status=ambiguous`. Locus support is recorded separately from
 each path's own donor support, coverage and identity, including in exported GFF
-attributes. Same-donor ties and
-incompatible paths remain proposals. Compatible alternatives are additional
+attributes. A predictor's presence in the evidence does not veto this fallback.
+When adding native predictions creates an incompatible component, those native
+additions remain proposals and the checked donor-genomic paths are resolved
+independently. A native bridge cannot fuse two transferred loci. Conflicts among
+the transferred paths themselves still remain proposals. Failed CDS never
+become alternatives or disqualify a separate valid path. Compatible alternatives are additional
 transcripts under one gene,
 with one primary CDS FASTA record. They are marked as homology predictions and
 pass the existing RNA/conservation adoption policy; they are not confirmed RNA
@@ -601,11 +605,16 @@ permits at most the existing two-residue genomic C-terminal overhang.
 
 Multiple optimal donor alignments to one identical genomic CDS do not create
 multiple CDS paths. Different genomic paths within the existing score margin
-remain unresolved. Independently verified intact paths still supply presence
+retain an ambiguous representative. After rechecking their source sequence and
+complete donor alignments, these paths enter the same final locus selection as
+other complete CDS. Compatible paths are retained as alternatives under one
+locus; conflicting paths remain proposals. The failed original prediction is
+preserved, and derived alternatives are regenerated from that original during
+cache replay. Independently verified intact paths still supply presence
 evidence from a single external donor. Checked alignments retain this evidence
 even when additional optimal tracebacks exceed the alignment budget, while
-annotation selection remains unresolved. This does not assign orthology or
-a representative CDS. Frame disruptions, assembly ambiguity and unsupported long
+annotation selection remains unresolved when a budget is exceeded. This does not
+assign orthology or a biologically preferred CDS. Frame disruptions, assembly ambiguity and unsupported long
 tails remain failures. The original predictor coordinates and PAF are retained;
 `boundary_revalidation` records attempted paths and the admission decision.
 Prediction-cache replay rechecks raw predictions with the current implementation.

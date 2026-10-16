@@ -41,7 +41,7 @@ try:
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
-    from rescue_boundary_revalidation import revalidate_boundaries
+    from rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
     from rescue_coding_paths import (
         OwnershipIndex,
         alignment_support,
@@ -87,7 +87,7 @@ except ImportError:
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
-    from .rescue_boundary_revalidation import revalidate_boundaries
+    from .rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
     from .rescue_coding_paths import (
         OwnershipIndex,
         alignment_support,
@@ -1045,7 +1045,8 @@ def check_interval(model):
     evidence = model.get('evidence', {})
     boundary = model.get('boundary_revalidation', {})
     nonstructural = {'unanchored_genome_search', 'outside_expected_synteny_interval',
-                    'overlap_existing_annotation', 'competing_new_models', 'ambiguous_coding_path_representative'}
+                    'overlap_existing_annotation', 'competing_new_models', 'ambiguous_coding_path_representative',
+                    'ambiguous_annevo_coding_path_representative'}
     direct = bool(model.get('sequence')) and not (set(model.get('problems', ())) - nonstructural)
     donor = evidence.get('donor')
     model['presence_evidence'] = {
@@ -1402,6 +1403,16 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     if not (tmp / "genome.fa").exists():
                         (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
                     refine_gemoma(tmp, root, plan, source, gemoma_regions, genome, validated, cpus)
+            # Boundary alternatives have already passed strict genomic QC.
+            # Revalidate their donor proof, then let the same final locus rules
+            # choose a reproducible representative while retaining all paths.
+            boundary_models = []
+            for model in validated:
+                evidence = model['evidence']
+                boundary_models.extend(check_interval(candidate) for candidate in validated_boundary_candidates(
+                    model, genome, source['genetic_code'], params,
+                    proteins[evidence['donor']][evidence['query']], validate_model))
+            validated.extend(boundary_models)
             for engine in (e for e in ('annevo', 'oriongeno') if plan['request'].get(e)):
                 import annevo_gene_models
                 bounded_regions = [r for r in regions if not r.get('genome_only')]
