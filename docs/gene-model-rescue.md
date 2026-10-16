@@ -327,6 +327,11 @@ consumed physical file is freshly hashed once, then checked for changes through
 the end of reading and publication. This avoids duplicate hashing within one
 command without trusting saved digests, changing selected records, or reusing a
 verification batch across writes or subsequent commands.
+Finalization also retains independently verified prepared, synteny and rescue
+publications within that command. Repeated dependency guards check the observed
+generations instead of rescanning all their contents. Original and native inputs
+keep a separate fresh byte proof. Both scopes are fenced before publication and
+when reusing an existing export, and a later command starts from full verification.
 They retain annotation position only after passing current genomic and homology
 checks with exactly the same CDS coordinates and nucleotide sequence. Old status
 never replaces these checks or adds donor support. A new conflicting prediction

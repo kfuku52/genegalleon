@@ -40,6 +40,7 @@ try:
     from gff_attribute_syntax import validate_gff
     from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
+    from refinement_receipt_snapshot import ReceiptSnapshot
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
     from rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
@@ -91,6 +92,7 @@ except ImportError:
     from .gff_attribute_syntax import validate_gff
     from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
+    from .refinement_receipt_snapshot import ReceiptSnapshot
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
     from .rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
@@ -468,15 +470,18 @@ def plan_digest(root, plan):
     return result
 
 
-def verify_sources(plan, names, keys):
+def verify_sources(plan, names, keys, *, verification=None):
     paths = [plan["request"]["sources"][n][k] for n in names for k in keys]
-    current = digest_paths(paths)
+    current = verification.read(paths) if verification is not None else digest_paths(paths)
     if any(plan["request"]["files"][p] != value for p, value in current.items()):
         raise ValueError("Frozen rescue input changed")
     for engine in ('annevo', 'oriongeno'):
         if plan['request'].get(engine):
             import annevo_gene_models
-            annevo_gene_models.verify_inputs(plan['request'][engine], names)
+            if verification is None:
+                annevo_gene_models.verify_inputs(plan['request'][engine], names)
+            else:
+                annevo_gene_models.verify_inputs(plan['request'][engine], names, verification=verification)
 
 
 def verified(directory, key, hash_workers=1):
@@ -492,6 +497,19 @@ def verified(directory, key, hash_workers=1):
         # before/after stat identities. Every listed file is still read in full.
         return hash_paths(directory, paths, workers=hash_workers, hash_function=digest) == receipt["files"]
     except (OSError, ValueError):
+        return False
+
+
+def verified_dependency(snapshot, directory, key):
+    """Retain one fresh stage proof within the caller's immutable command scope."""
+    path = Path(directory) / 'receipt.json'
+    try:
+        raw = path.read_bytes()
+        if json.loads(raw).get('key') != key:
+            return False
+        snapshot.verify({str(path): hashlib.sha256(raw).hexdigest()})
+        return True
+    except (OSError, ValueError, AttributeError):
         return False
 
 
@@ -888,16 +906,17 @@ def candidates(root, plan, name):
     return list({r["id"]: r for r in result}.values())
 
 
-def rescue_key(root, plan, name):
+def rescue_key(root, plan, name, *, dependency_snapshot=None):
     jobs = [j for j in plan["synteny_jobs"] if name in {j["a"], j["b"]}
             and (j["a"] == j["b"] or (j["b"] if name == j["a"] else j["a"]) in plan["donors"][name])]
     plan_hash = plan_digest(root, plan)
+    check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for job in jobs:
-        if not verified(root / "synteny" / job["id"], comparison_key(root, job)):
+        if not check(root / "synteny" / job["id"], comparison_key(root, job)):
             raise ValueError("Comparison incomplete or corrupted: " + job["id"])
     donors = [name, *plan["donors"][name]]
     for donor in donors:
-        if not verified(root / "prepared" / donor, {"plan": plan_hash, "species": donor}):
+        if not check(root / "prepared" / donor, {"plan": plan_hash, "species": donor}):
             raise ValueError("Prepared annotation incomplete or corrupted: " + donor)
     cache = plan["request"].get("prediction_cache")
     if cache:
@@ -1903,9 +1922,10 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
         n: digest(root / "rescued" / n / "receipt.json") for n in names}}
     def guard():
         for name in names:
-            if not verified(root / "rescued" / name, rescue_key(root, plan, name), hash_workers=hash_workers):
+            expected = rescue_key(root, plan, name, dependency_snapshot=dependency_snapshot)
+            if not verified_dependency(dependency_snapshot, root / "rescued" / name, expected):
                 raise ValueError("Rescue incomplete or corrupted: " + name)
-        verify_sources(plan, names, ["fasta", "gff", "genome", "busco"])
+        verify_sources(plan, names, ["fasta", "gff", "genome", "busco"], verification=source_proof)
         require_same_key(key, {"plan": plan_digest(root, plan), "rescue_receipts": {
             n: digest(root / "rescued" / n / "receipt.json") for n in names}})
     def build(tmp):
@@ -1916,7 +1936,7 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
         alternative_counts = {}
         for name in names:
             source = plan["request"]["sources"][name]
-            models = list(iter_accepted_models(root / "rescued" / name))
+            models = list(iter_accepted_models(root / "rescued" / name, verification=source_proof))
             alternative_counts[name] = sum(len(m.get("alternative_coding_paths", [])) for m in models)
             cds = tmp / "species_cds" / (name + ".rescue.cds.fa")
             gff = tmp / "species_gff" / (name + ".rescue.gff3")
@@ -2012,7 +2032,15 @@ def finalize(root, plan, names=None, destination=Path("augmented"), hash_workers
                                            "alternative_coding_paths": alternative_counts,
                                            "anchor_admission": admission_summaries,
                                            "gene_loss_calls": False, "plan_sha256": plan_digest(root, plan)})
-    return stage(root, destination, key, build, guard, hash_workers=hash_workers)
+    source_proof = FreshDigestBatch()
+    with ReceiptSnapshot(lambda directory, key: verified(directory, key, hash_workers=hash_workers)) as dependency_snapshot:
+        def publication_guard():
+            dependency_snapshot.check_all()
+            source_proof.check()
+        result = stage(root, destination, key, build, guard, hash_workers=hash_workers,
+                       publication_guard=publication_guard)
+        source_proof.check()
+        return result
 
 
 def qc_work_items(root, plan, indices, hash_workers=1):

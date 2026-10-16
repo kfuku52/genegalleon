@@ -405,3 +405,67 @@ def test_changed_projection_refuses_cached_generation_and_publication(tmp_path):
             assert refinement.prediction_donor_names(directory, 'A', ['A', 'B']) == ['A', 'B']
             rescue.atomic_json(directory / 'donor_species.json', {})
             refinement.prediction_donor_names(directory, 'A', ['A', 'B'])
+
+def test_rescue_dependency_checks_expected_key_with_fresh_once_per_command(tmp_path, monkeypatch):
+    directory, key, receipts = publication(tmp_path)
+    measured = metrics(monkeypatch)
+    with snapshots.ReceiptSnapshot(rescue.verified) as proof:
+        assert not rescue.verified_dependency(proof, directory, {**key, 'species': 'wrong'})
+        assert measured == {}
+        for _ in range(3):
+            assert rescue.verified_dependency(proof, directory, key)
+    expected_bytes = sum(p.stat().st_size for p in directory.rglob('*') if p.is_file())
+    expected_reads = sum(p.is_file() for p in directory.rglob('*'))
+    assert measured['sha256_bytes'] == expected_bytes and measured['sha256_reads'] == expected_reads
+    measured.clear()
+    with snapshots.ReceiptSnapshot(rescue.verified) as fresh:
+        assert rescue.verified_dependency(fresh, directory, key)
+    assert measured['sha256_bytes'] == expected_bytes
+
+
+@pytest.mark.parametrize('target', ['member', 'receipt'])
+@pytest.mark.parametrize('mutation', ['rewrite', 'replace', 'permission', 'symlink'])
+def test_rescue_dependency_cannot_refresh_an_observed_changed_generation(tmp_path, target, mutation):
+    directory, key, _receipts = publication(tmp_path)
+    proof = snapshots.ReceiptSnapshot(rescue.verified)
+    assert rescue.verified_dependency(proof, directory, key)
+    path = directory / ('models.json' if target == 'member' else 'receipt.json')
+    original = path.read_bytes()
+    if mutation == 'rewrite':
+        path.write_bytes(original + b' ')
+    elif mutation == 'replace':
+        changed = tmp_path / 'replacement'
+        changed.write_bytes(original)
+        changed.replace(path)
+    elif mutation == 'permission':
+        path.chmod(path.stat().st_mode ^ 0o020)
+    else:
+        saved = tmp_path / 'saved'
+        path.rename(saved)
+        path.symlink_to(saved)
+    assert not rescue.verified_dependency(proof, directory, key)
+    with pytest.raises(snapshots.ReceiptChanged):
+        proof.check_all()
+    proof.close()
+
+
+def test_rescue_source_batch_includes_native_inputs_and_refuses_mid_command_changes(tmp_path, monkeypatch):
+    paths = {}
+    for name in ['fasta', 'gff', 'genome', 'busco', 'native_gff', 'native_receipt', 'native_table']:
+        path = tmp_path / name
+        path.write_text('input fixture ' + name)
+        paths[name] = str(path)
+    frozen = {'table': paths['native_table'],
+              'predictions': {'Target': {'gff': paths['native_gff'], 'receipt': paths['native_receipt']}},
+              'files': {p: rescue.digest(p) for p in paths.values()}}
+    plan = {'request': {'sources': {'Target': {k: paths[k] for k in ['fasta', 'gff', 'genome', 'busco']}},
+                        'files': frozen['files'], 'annevo': frozen}}
+    measured = metrics(monkeypatch)
+    proof = state.FreshDigestBatch()
+    for _ in range(3):
+        rescue.verify_sources(plan, ['Target'], ['fasta', 'gff', 'genome', 'busco'], verification=proof)
+    assert measured['sha256_reads'] == len(paths)
+    assert measured['sha256_bytes'] == sum(Path(p).stat().st_size for p in paths.values())
+    Path(paths['native_gff']).write_text('changed native source')
+    with pytest.raises((OSError, ValueError), match='changed'):
+        rescue.verify_sources(plan, ['Target'], ['fasta', 'gff', 'genome', 'busco'], verification=proof)
