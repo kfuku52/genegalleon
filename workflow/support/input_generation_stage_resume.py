@@ -393,7 +393,10 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
     species = task["species_prefix"]
     from transcriptome_orfs import input_type
     if input_type(task) != input_type(donor_task):
-        raise ValueError("Source/target nucleotide input types differ: " + species)
+        # A new frozen plan can intentionally replace supplied CDS with raw
+        # transcripts. Recompute this species; never import a different role.
+        skipped.append(species)
+        return
     if input_type(task) == "transcriptome":
         # Cross-plan source/output paths are part of the ORF audit contract.
         # Until audit rebinding is qualified, retain the donor and compute this
@@ -468,6 +471,13 @@ def _import_one(args, source_plan, source_root, source_namespace, source_setting
         validation_files = verified_snapshot(source_plan, old_index, source_root, "validate",
                                              args.format_contract_version, namespace_root=source_namespace,
                                              batch=before_copy)
+        if validation_files is None and not (complete or verify_receipt(
+                source_plan, old_index, args.source_plan_sha256, namespace_root=source_namespace)):
+            # Formatting alone may be the intermediate output of a failed
+            # validator. Give the current formatter the original source rather
+            # than binding that incomplete result to a new successful stage.
+            skipped.append(species)
+            return
     if validation_files is None and "gff" in old_paths and "genome" in old_paths:
         from format_species_annotation.reference import validate_gff_genome_references
         try:

@@ -175,6 +175,19 @@ evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
 
+A self-parented gene/RNA export can use the RNA's distinct `Name` in child
+`Parent` fields. Safe/strict repair recovers that explicit RNA ID only with one
+gene/RNA model, an unused unique name, and supporting CDS children inside the
+RNA on the same contig and strand. Only the RNA ID changes; its original ID is
+retained in attributes and the locus-identity audit. Ambiguous names, shared
+children, collisions and inconsistent geometry remain unresolved.
+
+Complementary phase fields can be canonicalized for a partial terminal codon
+as well as a complete CDS. The existing proof still requires one exact genomic
+model, first phase zero, an unambiguous complementary convention and no internal
+translation stop. Coordinates and all source CDS bases stay intact; ordinary
+terminal padding and partial-model status remain visible in the CDS audit.
+
 For a gene/exon-only GFF supplied with a genome and published CDS, safe/strict
 formatting can reconstruct coding bounds when gene, exon-parent and CDS IDs
 match completely one-to-one. Each CDS must occur exactly once in its own
@@ -787,8 +800,18 @@ and an explicit curated `species_key` when a published name has changed. The
 resolver uses the official CNGB sample index and downloads the published
 `CODE-translated-nucleotides.fa.gz` CDS. It records the reported species and
 sample code in the resolved manifest, rejects flagged or unknown sample identities,
-and never treats SOAP transcript assemblies or translated proteins as CDS.
-Explicit local/public `cds_url` values remain supported for already verified CDS.
+and keeps translated proteins separate from nucleotide inputs. An explicit
+`cds_input_type=transcriptome` selects `CODE-SOAPdenovo-Trans-assembly.fa.gz` and sends
+it through the native audited ORF extractor. This is useful when the published
+translated CDS set is incomplete. There is no automatic source switch after a
+validation failure; the input kind and source remain frozen in the manifest/plan.
+When a new plan changes a species from supplied CDS to transcriptome input,
+that species is computed afresh; verified compatible species in `resume_from`
+can still be reused. Changed donor files, plans and source identities remain errors.
+When input validation is required, donor formatting without a current validation
+checkpoint or a verified worker completion is recomputed from its original inputs.
+This avoids carrying an intermediate result from a failed validator into a new plan.
+Explicit local/public `cds_url` values remain supported for verified sources.
 
 - `provider` (required; first column in XLSX templates)
 - `id` (required; second column in XLSX templates)

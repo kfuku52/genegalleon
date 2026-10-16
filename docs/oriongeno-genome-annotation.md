@@ -115,18 +115,26 @@ It runs on the host and invokes the installed native entrypoints. It does not
 submit jobs. A scheduler can connect arrays with Slurm `aftercorr` so one slow
 download does not delay other species, and run BUSCO without reserving a GPU.
 
-The version-1 JSON contains `project_root`, `runtime_root`, `image_path`,
-`work_root`, `downloads_root`, `busco_lineage` (`embryophyta_odb12`) and `members`.
+The version-1 JSON contains `project_root`, `runtime_root`,
+`runtime_manifest_sha256`, `image_path`, `work_root`, `downloads_root`,
+`busco_lineage` (`embryophyta_odb12`) and `members`.
 All roots are existing physical absolute paths under the project, which is bound
 into the container at the same path. Each member has a consecutive 1-based `task`,
 unique `species`, `filename` (`SPECIES.genome.fa` or `.fa.gz`) and `source`:
 either `local_path` plus `sha256`, or a public `url` with optional `md5` and
 `archive_member`. MD5 applies to a directly downloaded file, not an archive member.
 
-Acquisition records the actual genome hash and hard-links its input. Prediction
+`runtime_root` owns `gg_genome_annotation`. Public downloads additionally require
+`acquisition_runtime_root` and `acquisition_runtime_manifest_sha256` for a separate
+`gg_input_generation` release. Each phase verifies its exact owning manifest and
+passes the normal release snapshot marker to the entrypoint; a different
+workflow or changed source fails the real bootstrap validation.
+
+Acquisition records the actual genome hash and publishes a verified private copy
+without changing the original file's inode or link count. Prediction
 uses a separate species workspace and the shared native runtime/model cache.
-The CPU phase audits current prediction/formatting provenance before linking the
-formatted triplet into its own BUSCO workspace. A missing, changed or incorrectly
+The CPU phase audits complete prediction/formatting provenance and copies only
+the required formatted CDS into its own BUSCO workspace. A missing, changed or incorrectly
 labelled BUSCO artifact fails the phase even if its entrypoint returned zero.
 Original annotations remain separate. Resource limits, duplicate exclusion and
 accepted-job verification belong to the scheduler submitting these phases.

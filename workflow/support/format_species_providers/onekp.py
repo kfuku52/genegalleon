@@ -23,7 +23,7 @@ def sample_index(timeout, headers):
     return index
 
 
-def resolve_onekp_download_urls_from_id(source_id, species_key, timeout, headers):
+def resolve_onekp_download_urls_from_id(source_id, species_key, timeout, headers, *, row=None):
     code = str(source_id).strip().upper()
     if not re.fullmatch(r"[A-Z]{4}", code):
         raise ValueError("provider=onekp requires the four-letter sample code, not a species name")
@@ -36,9 +36,13 @@ def resolve_onekp_download_urls_from_id(source_id, species_key, timeout, headers
     parsed = urlparse(base)
     if parsed.scheme != "https" or parsed.netloc != "ftp.cngb.org" or not parsed.path.startswith("/pub/SciRAID/onekp/assemblies/" + code + "-") or not base.endswith("/"):
         raise ValueError("Unexpected 1KP sample source location")
-    # These are the published coding nucleotide sequences. SOAP assemblies and
-    # translated proteins are different biological roles and must not enter CDS.
-    return {"cds_url": urljoin(base, code + "-translated-nucleotides.fa.gz"),
-            "cds_filename": code + ".cds.fa.gz",
+    from transcriptome_orfs import input_type
+    kind = input_type(row or {})
+    # An explicit transcriptome row enters native audited ORF extraction.
+    # Never silently treat an assembly or translated protein as supplied CDS.
+    suffix = "-SOAPdenovo-Trans-assembly.fa.gz" if kind == "transcriptome" else "-translated-nucleotides.fa.gz"
+    filename = ".transcripts.fa.gz" if kind == "transcriptome" else ".cds.fa.gz"
+    return {"cds_url": urljoin(base, code + suffix),
+            "cds_filename": code + filename,
             "species_key": species_key or sample["species"].replace(" ", "_"),
             "onekp_reported_species": sample["species"], "onekp_sample_code": code}
