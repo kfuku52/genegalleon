@@ -53,7 +53,43 @@ def worker(args):
         return original(path)
     state.digest = digest
     os.environ["GG_TASK_CPUS"] = "1"
-    if args.mode == "prepared":
+    if args.mode == "receipt":
+        # Native completion preserves both the caller's source alias and its
+        # resolved path. Verification must read their shared bytes only once.
+        plan = root / "plan.json"
+        state.atomic_json(plan, {"task_count": args.species, "tasks": [
+            {"species_prefix": f"Species_{index}"} for index in range(args.species)]})
+        block = b"ACGT" * (1024 * 256)
+        for index in range(1, args.species + 1):
+            source = root / f"source-{index}.fa"
+            with source.open("wb") as handle:
+                for _ in range(args.genome_mib):
+                    handle.write(block)
+            alias = root / f"alias-{index}.fa"
+            alias.symlink_to(source.name)
+            output = root / f"output-{index}.fa"
+            output.write_bytes(block)
+            sha = original(source)
+            files = {str(source): sha, str(output): original(output)}
+            if args.receipt_aliases:
+                files[str(alias)] = sha
+            state.atomic_json(state.receipt_path(plan, index), {
+                "plan_sha256": original(plan), "task_index": index,
+                "species_prefix": f"Species_{index - 1}",
+                "files": files})
+        frozen = {p: p.read_bytes() for p in state.receipt_path(plan, 1).parent.glob("*.json")}
+        reads.clear()
+        stamp = time.perf_counter()
+        verified = [state.verify_receipt(plan, index) for index in range(1, args.species + 1)]
+        seconds = time.perf_counter() - stamp
+        assert all(verified) and all(path.read_bytes() == raw for path, raw in frozen.items())
+        # Changed output must remain a failed verification in both variants.
+        (root / "output-1.fa").write_bytes(b"changed")
+        measured_reads = list(reads)
+        assert not state.verify_receipt(plan, 1)
+        reads[:] = measured_reads
+        proof = hashlib.sha256(json.dumps([verified, False]).encode()).hexdigest()
+    elif args.mode == "prepared":
         plan = root / "plan.json"
         state.atomic_json(plan, {"task_count": args.species, "tasks": [
             {"species_prefix": f"Species_{index}"} for index in range(args.species)]})
@@ -175,11 +211,12 @@ def worker(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("genome", "prepared", "final", "worker"), required=True)
+    parser.add_argument("--mode", choices=("genome", "prepared", "final", "worker", "receipt"), required=True)
     parser.add_argument("--baseline-repo", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--genome-mib", type=int, default=64)
     parser.add_argument("--species", type=int, default=560)
+    parser.add_argument("--receipt-aliases", type=int, choices=(0, 1), default=1)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--repo", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--fixture-root", type=Path, help=argparse.SUPPRESS)
@@ -200,7 +237,7 @@ def main():
                 shutil.rmtree(fixture, ignore_errors=True)
                 command = [sys.executable, str(Path(__file__).resolve()), "--mode", args.mode, "--repo", str(roots[name]),
                            "--output", str(args.output), "--fixture-root", str(fixture), "--genome-mib", str(args.genome_mib),
-                           "--species", str(args.species)]
+                           "--species", str(args.species), "--receipt-aliases", str(args.receipt_aliases)]
                 proc = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
                 peak = 0
                 while proc.poll() is None:
@@ -219,6 +256,7 @@ def main():
     if len({row["logical_sha256"] for rows in samples.values() for row in rows}) != 1:
         raise RuntimeError("Outputs differ")
     payload = {"mode": args.mode, "genome_mib": args.genome_mib, "species": args.species,
+               "receipt_aliases": args.receipt_aliases,
                "platform": platform.platform(), "python": sys.version, "warmups": 1, "trials": samples,
                "medians": {name: {key: statistics.median(row[key] for row in rows) for key in rows[0] if key != "logical_sha256"}
                            for name, rows in samples.items()}, "equivalent": True,
@@ -227,6 +265,8 @@ def main():
                         "includes full scientific species_results, and recomputes baseline identity per validator. "
                         "Worker timing uses real core/validators but fake BUSCO/seqkit/Rscript and local taxonomy. "
                         "Worker SHA counters exclude its subprocesses; do not use them as whole-worker I/O. "
+                        "Receipt verification includes complete source/output hashes and the selected source alias count; "
+                        "both variants must reject a changed output and leave receipt bytes unchanged. "
                         "Peak process RSS for final/worker includes setup; not isolated phase memory. Not an HPC/NAS benchmark."}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2) + "\n")
