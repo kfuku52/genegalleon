@@ -539,6 +539,13 @@ For `mode_transcriptome_assembly="sraid"` and `mode_transcriptome_assembly="fast
 
 This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_transcriptome_assembly="metadata"` inputs.
 
+Quant reference aliases preserve the capitalization of metadata `scientific_name`
+and follow AMALGKIT's filename-token rules, including an explicit `species_token`
+when supplied. Metadata names do not need to be lowercased. Species-key and
+TaxID validation still checks that every reference alias belongs to the selected
+species. `quant/reference_aliases.tsv` records the actual staged prefix; merge
+uses a temporary metadata table that groups validated aliases under that species.
+
 ### Automated provider formatting helper
 
 Manual formatting can be replaced with `workflow/support/format_species_inputs.py`, which ports key rules from legacy raw genome formatting scripts such as:

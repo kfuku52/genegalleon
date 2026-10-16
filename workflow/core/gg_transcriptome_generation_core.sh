@@ -647,6 +647,7 @@ if reference_suffix == "":
 sys.path.insert(0, str(support_dir))
 from transcriptome_species_aliases import (
     SpeciesAliasError,
+    amalgkit_species_prefixes,
     metadata_declared_species_taxid,
     normalize_species_prefix,
     validate_species_alias,
@@ -663,39 +664,47 @@ if metadata_path.exists() and metadata_path.stat().st_size > 0:
             metadata_rows = [row for row in reader if str(row.get("scientific_name", "") or "").strip()]
 
 if not metadata_rows:
-    metadata_rows = [{"scientific_name": canonical_prefix_normalized.replace("_", " ")}]
+    metadata_rows = [{"scientific_name": canonical_prefix.replace("_", " ")}]
 
 if canonical_prefix_normalized == "":
     raise SystemExit("Could not determine quant reference prefix for species_key: {}".format(canonical_prefix))
 
 resolutions = []
 resolution_by_prefix = {}
+resolution_by_name_taxid = {}
+declared_taxid_by_prefix = {}
 try:
+    # Species identity is validated with normalized labels/TaxIDs; AMALGKIT
+    # discovers references using its separate, case-preserving metadata token.
+    metadata_prefixes = amalgkit_species_prefixes(metadata_rows)
     for row in metadata_rows:
         declared_taxid = metadata_declared_species_taxid(row)
-        resolution = validate_species_alias(
-            canonical_prefix,
-            row.get("scientific_name", ""),
-            taxonomy_dbfile=taxonomy_dbfile,
-            declared_taxid=declared_taxid,
-        )
-        previous = resolution_by_prefix.get(resolution.metadata_prefix)
-        if previous is not None:
-            if (
-                previous.declared_taxid
-                and resolution.declared_taxid
-                and previous.declared_taxid != resolution.declared_taxid
-            ):
+        metadata_name = str(row.get("scientific_name", "") or "").strip()
+        resolution_key = (metadata_name, declared_taxid)
+        resolution = resolution_by_name_taxid.get(resolution_key)
+        if resolution is None:
+            resolution = validate_species_alias(
+                canonical_prefix,
+                metadata_name,
+                taxonomy_dbfile=taxonomy_dbfile,
+                declared_taxid=declared_taxid,
+            )
+            resolution_by_name_taxid[resolution_key] = resolution
+        metadata_prefix = metadata_prefixes[resolution.metadata_scientific_name]
+        if declared_taxid:
+            previous_taxid = declared_taxid_by_prefix.setdefault(metadata_prefix, declared_taxid)
+            if previous_taxid != declared_taxid:
                 raise SpeciesAliasError(
                     "Metadata has inconsistent species taxids for {!r}: {!r} and {!r}".format(
                         resolution.metadata_scientific_name,
-                        previous.declared_taxid,
-                        resolution.declared_taxid,
+                        previous_taxid,
+                        declared_taxid,
                     )
                 )
+        if metadata_prefix in resolution_by_prefix:
             continue
-        resolution_by_prefix[resolution.metadata_prefix] = resolution
-        resolutions.append(resolution)
+        resolution_by_prefix[metadata_prefix] = resolution
+        resolutions.append((metadata_prefix, resolution))
 except SpeciesAliasError as exc:
     raise SystemExit(str(exc))
 
@@ -794,9 +803,9 @@ def materialize_regular_alias(alias_path):
 
 
 audit_rows = []
-for resolution in resolutions:
+for metadata_prefix, resolution in resolutions:
     alias_path = output_dir / "{}_for_kallisto_index{}".format(
-        resolution.metadata_prefix,
+        metadata_prefix,
         reference_suffix,
     )
     materialize_regular_alias(alias_path)
@@ -805,7 +814,7 @@ for resolution in resolutions:
             "canonical_species_key": resolution.canonical_prefix,
             "canonical_scientific_name": resolution.canonical_scientific_name,
             "metadata_scientific_name": resolution.metadata_scientific_name,
-            "metadata_prefix": resolution.metadata_prefix,
+            "metadata_prefix": metadata_prefix,
             "declared_taxid": resolution.declared_taxid,
             "resolved_taxid": resolution.resolved_taxid,
             "resolution_method": resolution.method,
@@ -861,6 +870,8 @@ if not support_dir.exists():
 sys.path.insert(0, str(support_dir))
 from transcriptome_species_aliases import (
     SpeciesAliasError,
+    amalgkit_species_prefix,
+    amalgkit_species_prefixes,
     metadata_declared_species_taxid,
     validate_species_alias,
 )
@@ -875,14 +886,26 @@ with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     rows = list(reader)
 
 try:
+    amalgkit_species_prefixes(rows)
+    resolution_by_name_taxid = {}
     for row in rows:
-        resolution = validate_species_alias(
-            canonical_prefix,
-            row.get("scientific_name", ""),
-            taxonomy_dbfile=taxonomy_dbfile,
-            declared_taxid=metadata_declared_species_taxid(row),
-        )
+        metadata_name = str(row.get("scientific_name", "") or "").strip()
+        declared_taxid = metadata_declared_species_taxid(row)
+        resolution_key = (metadata_name, declared_taxid)
+        resolution = resolution_by_name_taxid.get(resolution_key)
+        if resolution is None:
+            resolution = validate_species_alias(
+                canonical_prefix,
+                metadata_name,
+                taxonomy_dbfile=taxonomy_dbfile,
+                declared_taxid=declared_taxid,
+            )
+            resolution_by_name_taxid[resolution_key] = resolution
         row["scientific_name"] = resolution.canonical_scientific_name
+        if "species_token" in fieldnames:
+            # Merge intentionally collapses aliases onto one species; its token
+            # must follow the staged name rather than each quant reference.
+            row["species_token"] = amalgkit_species_prefix(resolution.canonical_scientific_name)
 except SpeciesAliasError as exc:
     raise SystemExit(str(exc))
 
@@ -905,44 +928,32 @@ resolve_amalgkit_merge_output_prefix() {
   local metadata_file=$1
   local merge_dir=$2
   local canonical_prefix=$3
+  local support_dir=${4:-${gg_support_dir:-}}
 
-  python - "${metadata_file}" "${merge_dir}" "${canonical_prefix}" <<'PY'
+  python - "${metadata_file}" "${merge_dir}" "${canonical_prefix}" "${support_dir}" <<'PY'
 import csv
-import re
 import sys
 from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
 merge_dir = Path(sys.argv[2])
 canonical_prefix = sys.argv[3]
+support_dir = Path(sys.argv[4])
+sys.path.insert(0, str(support_dir))
+from transcriptome_species_aliases import SpeciesAliasError, amalgkit_species_prefix, amalgkit_species_prefixes
 
-def normalize_prefix(raw_value):
-    text = str(raw_value or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"\s+", "_", text)
-    text = text.replace("/", "_").replace("\\", "_")
-    return text
-
-canonical_prefix_normalized = normalize_prefix(canonical_prefix)
-metadata_prefixes = []
-seen_prefixes = set()
-
-def add_metadata_prefix(raw_value):
-    prefix = normalize_prefix(raw_value)
-    if (not prefix) or (prefix in seen_prefixes):
-        return
-    seen_prefixes.add(prefix)
-    metadata_prefixes.append(prefix)
+metadata_rows = []
 
 if metadata_path.exists() and metadata_path.stat().st_size > 0:
     with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        fieldnames = reader.fieldnames or []
-        candidate_fields = ["scientific_name"] if "scientific_name" in fieldnames else []
-        for row in reader:
-            for fieldname in candidate_fields:
-                add_metadata_prefix(row.get(fieldname, ""))
+        metadata_rows = list(reader)
+
+try:
+    canonical_prefix_normalized = amalgkit_species_prefix(canonical_prefix)
+    metadata_prefixes = list(dict.fromkeys(amalgkit_species_prefixes(metadata_rows).values()))
+except SpeciesAliasError as exc:
+    raise SystemExit(str(exc))
 
 if len(metadata_prefixes) > 1:
     raise SystemExit(
@@ -5276,7 +5287,8 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   if merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \
     "${merge_metadata_file}" \
     "./merge" \
-    "${sp_ub}"); then
+    "${sp_ub}" \
+    "${gg_support_dir}"); then
     merge_output_dir="./merge/${merge_output_prefix}"
     echo "Copying amalgkit merge outputs from: ${merge_output_dir}"
     mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"

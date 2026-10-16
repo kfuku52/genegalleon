@@ -1,5 +1,8 @@
 import csv
+import gzip
+import json
 import os
+import random
 import re
 import shlex
 import sqlite3
@@ -14,6 +17,23 @@ from shell_static_helpers import read_text
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_SCRIPT = REPO_ROOT / "workflow" / "core" / "gg_transcriptome_generation_core.sh"
 SUPPORT_DIR = REPO_ROOT / "workflow" / "support"
+REFERENCE_TOKEN_CASES = [
+    (
+        "Sarracenia rosea-x-Sarracenia-psittacina",
+        "Sarracenia_rosea-x-Sarracenia-psittacina",
+        "",
+        "Sarracenia_rosea-x-Sarracenia-psittacina",
+    ),
+    ("Species ONE", "Species_one", "", "Species_ONE"),
+    ("Species one (Cultivar A)", "Species_one", "", "Species_one_Cultivar_A"),
+    (
+        "Sarracenia rosea × Sarracenia psittacina",
+        "Sarracenia_rosea_x_Sarracenia_psittacina",
+        "",
+        "Sarracenia_rosea_Sarracenia_psittacina",
+    ),
+    ("Species one", "Species_one", "Reference_CUSTOM", "Reference_CUSTOM"),
+]
 
 
 def _taxonomy_db(tmp_path: Path) -> Path:
@@ -72,6 +92,127 @@ def _embedded_python(function_name: str) -> str:
 def _function_script(function_name: str) -> str:
     text = read_text(CORE_SCRIPT)
     return _function_body(text, function_name)
+
+
+@pytest.mark.parametrize(
+    ("scientific_name", "species_key", "species_token", "expected_prefix"),
+    REFERENCE_TOKEN_CASES,
+)
+def test_stage_quant_reference_fasta_aliases_preserves_amalgkit_search_token(
+    tmp_path, scientific_name, species_key, species_token, expected_prefix
+):
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "reference.fa.gz"
+    output_dir = tmp_path / "fasta"
+    audit_path = tmp_path / "reference_aliases.tsv"
+    metadata_path.write_text(
+        "run\tscientific_name\tspecies_token\n"
+        f"SRR1\t{scientific_name}\t{species_token}\n"
+        f"SRR2\t{scientific_name}\t{species_token}\n",
+        encoding="utf-8",
+    )
+    original_metadata = metadata_path.read_bytes()
+    reference_path.write_bytes(b">seq\nAAAA\n")
+
+    completed = subprocess.run(
+        [sys.executable, "-", str(metadata_path), str(reference_path), str(output_dir),
+         species_key, str(SUPPORT_DIR), "", str(audit_path)],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True, capture_output=True, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    expected_name = expected_prefix + "_for_kallisto_index.fa.gz"
+    assert completed.stdout.splitlines() == [expected_name]
+    assert [path.name for path in output_dir.iterdir()] == [expected_name]
+    assert (output_dir / expected_name).read_bytes() == reference_path.read_bytes()
+    assert not (output_dir / expected_name).is_symlink()
+    assert metadata_path.read_bytes() == original_metadata
+    with audit_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert len(rows) == 1
+    assert rows[0]["metadata_scientific_name"] == scientific_name
+    assert rows[0]["metadata_prefix"] == expected_prefix
+    assert rows[0]["alias_path"] == str(output_dir / expected_name)
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ("SRR1\tSpecies one\tOne\nSRR2\tSpecies one\tTwo\n", "conflicting species_token"),
+        ("SRR1\tSpecies one\tShared\nSRR2\tSpecies one var. X\tShared\n", "colliding"),
+        ("SRR1\tSpecies one\tShared\nSRR2\tSpecies one var. X\tshared\n", "colliding"),
+        ("SRR1\tSpecies one\t../reference\n", "safe path component"),
+    ],
+)
+def test_stage_quant_reference_fasta_aliases_rejects_invalid_search_tokens(tmp_path, rows, message):
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "reference.fa"
+    output_dir = tmp_path / "fasta"
+    metadata_path.write_text("run\tscientific_name\tspecies_token\n" + rows, encoding="utf-8")
+    reference_path.write_text(">seq\nAAAA\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-", str(metadata_path), str(reference_path), str(output_dir),
+         "Species_one", str(SUPPORT_DIR)],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True, capture_output=True, check=False,
+    )
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_quant_reference_rejects_conflicting_taxids_after_missing_value(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / "reference.fa"
+    output_dir = tmp_path / "fasta"
+    metadata_path.write_text(
+        "run\tscientific_name\ttaxid_species\n"
+        "SRR1\tSpecies one\t\nSRR2\tSpecies one\t100\nSRR3\tSpecies one\t200\n",
+        encoding="utf-8",
+    )
+    reference_path.write_text(">seq\nAAAA\n", encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, "-", str(metadata_path), str(reference_path), str(output_dir),
+         "Species_one", str(SUPPORT_DIR)],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+        text=True, capture_output=True, check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "inconsistent species taxids" in completed.stderr
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("function_name", [
+    "stage_quant_reference_fasta_aliases", "stage_amalgkit_merge_metadata_for_species",
+])
+def test_repeated_species_alias_revalidates_changed_taxid(tmp_path, function_name):
+    metadata_path = tmp_path / "metadata.tsv"
+    metadata_path.write_text(
+        "run\tscientific_name\ttaxid_species\n"
+        "SRR1\tDracocephalum officinale\t39324\n"
+        "SRR2\tDracocephalum officinale\t999\n",
+        encoding="utf-8",
+    )
+    taxonomy_db = _taxonomy_db(tmp_path)
+    output_path = tmp_path / "output"
+    arguments = [str(metadata_path)]
+    if function_name == "stage_quant_reference_fasta_aliases":
+        reference_path = tmp_path / "reference.fa"
+        reference_path.write_text(">seq\nAAAA\n", encoding="utf-8")
+        arguments.append(str(reference_path))
+    arguments.extend([str(output_path), "Hyssopus_officinalis", str(SUPPORT_DIR), str(taxonomy_db)])
+    completed = subprocess.run(
+        [sys.executable, "-", *arguments], input=_embedded_python(function_name),
+        text=True, capture_output=True, check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "does not match resolved taxid 39324" in completed.stderr
+    assert not output_path.exists()
 
 
 def test_stage_quant_reference_fasta_aliases_uses_exact_metadata_scientific_name(tmp_path):
@@ -145,15 +286,23 @@ def test_stage_quant_reference_fasta_aliases_still_stages_canonical_prefix_witho
     assert canonical_alias.read_bytes() == reference_path.read_bytes()
 
 
-def test_stage_quant_reference_fasta_aliases_materializes_discoverable_regular_file(tmp_path):
+@pytest.mark.parametrize(
+    ("scientific_name", "species_key", "species_token", "expected_prefix"),
+    REFERENCE_TOKEN_CASES,
+)
+def test_stage_quant_reference_fasta_aliases_materializes_discoverable_regular_file(
+    tmp_path, scientific_name, species_key, species_token, expected_prefix
+):
     quant = pytest.importorskip("amalgkit.quant")
+    runtime_utils = pytest.importorskip("amalgkit.runtime_utils")
     metadata_path = tmp_path / "metadata.tsv"
     reference_path = tmp_path / "Species_one_longestCDS.fa.gz"
     output_dir = tmp_path / "fasta"
     source_content = b">seq\nAAAA\n"
 
     metadata_path.write_text(
-        "run\tlib_layout\nSRR1\tpaired\n",
+        "run\tscientific_name\tspecies_token\n"
+        f"SRR1\t{scientific_name}\t{species_token}\n",
         encoding="utf-8",
     )
     reference_path.write_bytes(source_content)
@@ -165,7 +314,7 @@ def test_stage_quant_reference_fasta_aliases_materializes_discoverable_regular_f
             str(metadata_path),
             str(reference_path),
             str(output_dir),
-            "Species_one",
+            species_key,
             str(SUPPORT_DIR),
         ],
         input=_embedded_python("stage_quant_reference_fasta_aliases"),
@@ -175,15 +324,14 @@ def test_stage_quant_reference_fasta_aliases_materializes_discoverable_regular_f
     )
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    alias_path = output_dir / "Species_one_for_kallisto_index.fa.gz"
+    alias_path = output_dir / (expected_prefix + "_for_kallisto_index.fa.gz")
     assert alias_path.is_file()
     assert not alias_path.is_symlink()
     assert alias_path.read_bytes() == source_content
     assert reference_path.read_bytes() == source_content
-    assert quant.find_species_fasta_files(
-        str(output_dir),
-        "Species one",
-    ) == [str(alias_path)]
+    lookup_token = runtime_utils.resolve_species_token(scientific_name, species_token)
+    assert lookup_token == expected_prefix
+    assert quant.find_species_fasta_files(str(output_dir), lookup_token) == [str(alias_path)]
 
 
 def test_stage_quant_reference_fasta_aliases_copies_across_filesystems(tmp_path):
@@ -594,6 +742,121 @@ def test_stage_amalgkit_merge_metadata_for_species_collapses_cross_genus_shared_
     assert [row["scientific_name"] for row in rows] == ["Hyssopus officinalis"]
 
 
+def test_stage_amalgkit_merge_metadata_collapses_explicit_tokens_with_species_aliases(tmp_path):
+    metadata_path = tmp_path / "metadata.tsv"
+    staged_path = tmp_path / "metadata.merge.tsv"
+    metadata_path.write_text(
+        "run\tscientific_name\tspecies_token\n"
+        "SRR1\tAbies pinsapo\tBase_CUSTOM\n"
+        "SRR2\tAbies pinsapo var. marocana\tVariety_CUSTOM\n",
+        encoding="utf-8",
+    )
+    original_metadata = metadata_path.read_bytes()
+    completed = subprocess.run(
+        [sys.executable, "-", str(metadata_path), str(staged_path), "Abies_pinsapo", str(SUPPORT_DIR), ""],
+        input=_embedded_python("stage_amalgkit_merge_metadata_for_species"),
+        text=True, capture_output=True, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert metadata_path.read_bytes() == original_metadata
+    with staged_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    assert [row["scientific_name"] for row in rows] == ["Abies pinsapo", "Abies pinsapo"]
+    assert [row["species_token"] for row in rows] == ["Abies_pinsapo", "Abies_pinsapo"]
+    assert [row["run"] for row in rows] == ["SRR1", "SRR2"]
+
+
+@pytest.mark.parametrize("species_token", ["", "Hybrid_CUSTOM"])
+def test_amalgkit_quant_merge_with_mixed_case_hybrid_reference(tmp_path, species_token):
+    metadata_utils = pytest.importorskip("amalgkit.metadata_utils")
+    runtime_utils = pytest.importorskip("amalgkit.runtime_utils")
+    pandas = pytest.importorskip("pandas")
+    scientific_name = "Sarracenia rosea-x-Sarracenia-psittacina"
+    species_key = scientific_name.replace(" ", "_")
+    metadata_path = tmp_path / "metadata.tsv"
+    reference_path = tmp_path / (species_key + "_longestCDS.fa.gz")
+    fasta_dir = tmp_path / "fasta"
+    audit_path = tmp_path / "reference_aliases.tsv"
+    rng = random.Random(47)
+    sequence = "".join(rng.choices("ACGT", k=1000))
+    with gzip.open(reference_path, "wt") as handle:
+        handle.write(">tx1\n" + sequence + "\n")
+    metadata_rows = []
+    for run in ("R1", "R2"):
+        fastq_path = tmp_path / "getfastq" / run / (run + ".amalgkit.fastq.gz")
+        fastq_path.parent.mkdir(parents=True)
+        with gzip.open(fastq_path, "wt") as handle:
+            for index in range(2000):
+                start = rng.randrange(len(sequence) - 100)
+                handle.write(f"@read{index}\n{sequence[start:start + 100]}\n+\n" + "I" * 100 + "\n")
+        metadata_rows.append(dict(
+            run=run, scientific_name=scientific_name, species_token=species_token,
+            lib_layout="single", total_spots=2000, total_bases=200000, spot_length=100,
+            exclusion="no", is_sampled="yes", instrument="Illumina", taxid="1",
+        ))
+    metadata_utils.Metadata.from_DataFrame(pandas.DataFrame(metadata_rows)).df.to_csv(
+        metadata_path, sep="\t", index=False,
+    )
+    original_metadata = metadata_path.read_bytes()
+
+    def run_command(command, **kwargs):
+        completed = subprocess.run(
+            command, cwd=tmp_path, text=True, capture_output=True, check=False, timeout=90, **kwargs,
+        )
+        assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
+        return completed
+
+    run_command(
+        [sys.executable, "-", str(metadata_path), str(reference_path), str(fasta_dir), species_key,
+         str(SUPPORT_DIR), "", str(audit_path)],
+        input=_embedded_python("stage_quant_reference_fasta_aliases"),
+    )
+    run_command([
+        "amalgkit", "quant", "--out_dir", str(tmp_path), "--metadata", str(metadata_path),
+        "--threads", "1", "--clean_fastq", "no", "--fasta_dir", str(fasta_dir),
+        "--build_index", "yes", "--quant_backend", "kallisto",
+    ])
+    lookup_token = runtime_utils.resolve_species_token(scientific_name, species_token)
+    assert (tmp_path / "index" / (lookup_token + ".idx")).stat().st_size > 0
+    run_command([
+        sys.executable, str(SUPPORT_DIR / "validate_transcriptome_quant_outputs.py"),
+        "--metadata", str(metadata_path), "--quant-root", str(tmp_path / "quant"),
+    ])
+    for run in ("R1", "R2"):
+        run_dir = tmp_path / "quant" / run
+        with (run_dir / (run + "_abundance.tsv")).open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        assert [row["target_id"] for row in rows] == ["tx1"]
+        assert float(rows[0]["est_counts"]) > 0
+        assert json.loads((run_dir / (run + "_run_info.json")).read_text())["p_pseudoaligned"] > 0
+
+    merge_metadata = tmp_path / "metadata.merge.tsv"
+    run_command(
+        [sys.executable, "-", str(metadata_path), str(merge_metadata), species_key, str(SUPPORT_DIR), ""],
+        input=_embedded_python("stage_amalgkit_merge_metadata_for_species"),
+    )
+    run_command([
+        "amalgkit", "merge", "--out_dir", str(tmp_path), "--metadata", str(merge_metadata), "--threads", "1",
+    ])
+    resolved = run_command(
+        [sys.executable, "-", str(merge_metadata), str(tmp_path / "merge"), species_key, str(SUPPORT_DIR)],
+        input=_embedded_python("resolve_amalgkit_merge_output_prefix"),
+    )
+    merge_prefix = resolved.stdout.strip()
+    assert merge_prefix == "Sarracenia_rosea-x-sarracenia-psittacina"
+    for suffix in ("eff_length", "est_counts", "tpm"):
+        with (tmp_path / "merge" / merge_prefix / f"{merge_prefix}_{suffix}.tsv").open(
+            encoding="utf-8", newline="",
+        ) as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            assert set(reader.fieldnames) == {"target_id", "R1", "R2"}
+            rows = list(reader)
+        assert [row["target_id"] for row in rows] == ["tx1"]
+        assert all(float(rows[0][run]) > 0 for run in ("R1", "R2"))
+    assert metadata_path.read_bytes() == original_metadata
+
+
 def test_quant_alias_staging_failure_is_not_masked_by_process_substitution():
     text = read_text(CORE_SCRIPT)
     assert "if ! staged_quant_reference_aliases=$(stage_quant_reference_fasta_aliases" in text
@@ -601,22 +864,33 @@ def test_quant_alias_staging_failure_is_not_masked_by_process_substitution():
     assert "done < <(\n      stage_quant_reference_fasta_aliases" not in text
 
 
-def test_resolve_amalgkit_merge_output_prefix_uses_exact_metadata_scientific_name(tmp_path):
+@pytest.mark.parametrize(
+    ("scientific_name", "species_token", "expected_prefix"),
+    [
+        ("Asimitellaria furusei var. furusei", "", "Asimitellaria_furusei_var._furusei"),
+        ("Sarracenia rosea-x-Sarracenia-psittacina", "", "Sarracenia_rosea-x-Sarracenia-psittacina"),
+        ("Species one (Cultivar A)", "", "Species_one_Cultivar_A"),
+        ("Species one", "Merged_CUSTOM", "Merged_CUSTOM"),
+    ],
+)
+def test_resolve_amalgkit_merge_output_prefix_uses_exact_metadata_scientific_name(
+    tmp_path, scientific_name, species_token, expected_prefix
+):
     metadata_path = tmp_path / "metadata.tsv"
     merge_dir = tmp_path / "merge"
     metadata_path.write_text(
         "\n".join(
             [
-                "run\tscientific_name\tscientific_name_original",
-                "SRR1\tAsimitellaria furusei var. furusei\tSpecies one/original",
+                "run\tscientific_name\tspecies_token\tscientific_name_original",
+                f"SRR1\t{scientific_name}\t{species_token}\tSpecies one/original",
             ]
         )
         + "\n",
         encoding="utf-8",
     )
-    alias_dir = merge_dir / "Asimitellaria_furusei_var._furusei"
+    alias_dir = merge_dir / expected_prefix
     alias_dir.mkdir(parents=True)
-    (alias_dir / "Asimitellaria_furusei_var._furusei_eff_length.tsv").write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
+    (alias_dir / (expected_prefix + "_eff_length.tsv")).write_text("target_id\tSRR1\nx\t1\n", encoding="utf-8")
 
     command = "\n".join(
         [
@@ -624,7 +898,7 @@ def test_resolve_amalgkit_merge_output_prefix_uses_exact_metadata_scientific_nam
             "resolve_amalgkit_merge_output_prefix "
             f"{shlex.quote(str(metadata_path))} "
             f"{shlex.quote(str(merge_dir))} "
-            "Species_one",
+            f"Species_one {shlex.quote(str(SUPPORT_DIR))}",
         ]
     )
     completed = subprocess.run(
@@ -635,7 +909,7 @@ def test_resolve_amalgkit_merge_output_prefix_uses_exact_metadata_scientific_nam
     )
 
     assert completed.returncode == 0, completed.stderr + "\n" + completed.stdout
-    assert completed.stdout.strip() == "Asimitellaria_furusei_var._furusei"
+    assert completed.stdout.strip() == expected_prefix
 
 
 def test_resolve_amalgkit_merge_output_prefix_does_not_fall_back_to_canonical_prefix(tmp_path):
@@ -661,7 +935,7 @@ def test_resolve_amalgkit_merge_output_prefix_does_not_fall_back_to_canonical_pr
             "resolve_amalgkit_merge_output_prefix "
             f"{shlex.quote(str(metadata_path))} "
             f"{shlex.quote(str(merge_dir))} "
-            "Species_one",
+            f"Species_one {shlex.quote(str(SUPPORT_DIR))}",
         ]
     )
     completed = subprocess.run(
