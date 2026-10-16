@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from Bio.Data import CodonTable
-from cds_model_normalisation import CdsModelNormaliser, phase_conventions
+from cds_model_normalisation import CdsModelNormaliser, phase_conventions, protein
 
 from .common import append_gff_attribute, first_token, parse_gff_attributes
 from .genome_intervals import genome_intervals
@@ -16,7 +16,7 @@ from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
 from .source_identity import task_annotation_path
 
-VERSION = 5
+VERSION = 6
 
 
 def audit_path(cds_path):
@@ -99,7 +99,7 @@ def cds_changes(normaliser, key, offset, trailing, reason):
 
 
 def phase_only_changes(normaliser, sequence, keys):
-    """Canonicalise one complete model only after exact genomic identity."""
+    """Canonicalise one anchored model only after exact genomic identity."""
     if len(keys) != 1:
         return {}
     key = next(iter(keys))
@@ -194,7 +194,9 @@ def iter_normalised_cds_records(task, state=None):
             else:
                 if decision["status"] == "excluded":
                     decision["status"] = "retained_unresolved"
-                elif decision["reason"] == "valid_original_translation":
+                if (decision["reason"] == "valid_original_translation"
+                      or (decision["reason"] == "genomic_internal_stop_or_incomplete_codon"
+                          and len(raw) % 3 and protein(raw, code, partial=True))):
                     changes = phase_only_changes(normaliser, raw, keys)
                     if changes:
                         for source_line, update in changes.items():
