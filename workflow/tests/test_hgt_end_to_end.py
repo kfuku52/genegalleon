@@ -551,6 +551,8 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert transfer_edges.loc[0, "mapped_to_species_tree"] == 1
 
 
+@pytest.mark.skipif(any(shutil.which(tool) is None for tool in ('R', 'Rscript', 'seqkit')),
+                    reason="R and seqkit are required for HGT rendering validation")
 def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tmp_path: Path):
     workspace = tmp_path / 'workspace'
     _write_workspace_fixture(workspace)
