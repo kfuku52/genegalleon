@@ -40,9 +40,14 @@ def fixture(tmp_path):
 def test_inspection_is_exact_and_does_not_write_metadata(tmp_path):
     manifest, row = fixture(tmp_path)
     path = Path(row['files'][0]['path'])
-    before = path.stat(), path.read_bytes()
+    def identity():
+        info = path.stat()
+        # A read can update atime on the execution site's filesystem.
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
+                info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    before = identity(), path.read_bytes()
     assert prep.inspect_metadata(path, row['files'][0]['sha256'], row['runs'])['run_ids'] == row['runs']
-    assert before == (path.stat(), path.read_bytes())
+    assert before == (identity(), path.read_bytes())
     with pytest.raises(ValueError, match='membership'):
         prep.inspect_metadata(path, row['files'][0]['sha256'], row['runs'][:2])
     with pytest.raises(ValueError, match='changed'):
