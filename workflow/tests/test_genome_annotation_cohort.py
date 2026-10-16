@@ -359,3 +359,21 @@ def test_wrong_manifest_hash_rejected_without_creating_workspaces(tmp_path):
     assert result.returncode != 0
     assert 'manifest changed' in result.stderr
     assert not workspace.exists()
+
+
+def test_local_acquisition_cli_needs_only_the_host_standard_library(tmp_path):
+    manifest, member, workspace = fixture(tmp_path)
+    manifest['image_sha256'] = cohort.file_sha(Path(manifest['image_path']))
+    path = tmp_path / 'cohort.json'
+    path.write_text(json.dumps(manifest))
+    result = subprocess.run([sys.executable, '-S', '-B', str(SUPPORT / 'genome_annotation_cohort.py'),
+        '--manifest', str(path), '--manifest-sha256', cohort.file_sha(path), '--task', '1', '--phase', 'acquire'],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (workspace / 'input/species_genome/Plant_one.genome.fa').read_bytes() == Path(member['source']['local_path']).read_bytes()
+
+
+def test_provider_path_primitive_preserves_the_existing_public_export():
+    import format_species_common
+    from format_species_providers.common import provider_raw_dir
+    assert provider_raw_dir is format_species_common.provider_raw_dir

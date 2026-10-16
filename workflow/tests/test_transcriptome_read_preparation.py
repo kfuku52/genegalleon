@@ -52,7 +52,7 @@ def test_inspection_is_exact_and_does_not_write_metadata(tmp_path):
 def test_actual_inspection_cli_reads_the_selected_metadata(tmp_path):
     _, row = fixture(tmp_path)
     record = row['files'][0]
-    result = subprocess.run([sys.executable, str(SUPPORT / 'transcriptome_read_preparation.py'), '--inspect-json',
+    result = subprocess.run([sys.executable, '-S', '-B', str(SUPPORT / 'transcriptome_read_preparation.py'), '--inspect-json',
                              json.dumps(dict(path=record['path'], sha256=record['sha256'], runs=row['runs']))],
                             capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == dict(metadata_sha256=record['sha256'], run_ids=row['runs'], files=[record['basename']])

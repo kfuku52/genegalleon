@@ -20,11 +20,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from annevo_runtime_download import atomic_json, file_sha
 from artifact_provenance import audit_manifest, load_manifest, resolve_reference, runtime_support_root
-from format_species_common import is_fasta_filename
-from format_species_providers.common import provider_raw_dir
+from format_species_common import is_fasta_filename, provider_raw_dir
 from gene_family_output_store import GeneFamilyOutputStore
+from runtime_asset_io import atomic_json, file_sha
 from shared_namespace_lock import namespace_lock
 from species_labeling import extract_species_label
 

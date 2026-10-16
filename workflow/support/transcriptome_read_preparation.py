@@ -15,9 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from annevo_runtime_download import atomic_json, file_sha
 from artifact_provenance import ProvenanceError
 from genome_annotation_cohort import audit, entrypoint, environment, physical
+from runtime_asset_io import atomic_json, file_sha
 from shared_namespace_lock import namespace_lock
 
 INPUT_MODE = 'metadata-read-preparation'
