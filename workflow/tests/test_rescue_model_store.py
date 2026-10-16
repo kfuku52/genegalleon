@@ -285,6 +285,70 @@ def test_member_mutation_after_initial_verification_rejected_at_end(tmp_path):
         list(iterator)
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_live_accepted_verification_reads_each_member_once_and_keeps_copies_independent(tmp_path, monkeypatch, legacy):
+    from workflow.support import input_generation_array_state as state
+
+    records = [model(0, "accepted"), model(1)]
+    if legacy:
+        directory = tmp_path
+        (directory / "models.json").write_text(json.dumps(records))
+        receipt(directory)
+    else:
+        directory, _ = published(tmp_path, records)
+    key = store.frozen_model_store_key(directory, kind="accepted")
+    calls = []
+    real_digest = state.digest
+
+    def hashed(path):
+        calls.append(str(path))
+        return real_digest(path)
+
+    monkeypatch.setattr(state, "digest", hashed)
+    monkeypatch.setattr(store, "_digest", hashed)
+    proof = state.FreshDigestBatch()
+    expected = {str(directory / member): sha for member, sha in key["files"].items()}
+    expected[str(directory / "receipt.json")] = key["producer_receipt_sha256"]
+    assert proof.read(expected) == expected
+    first = list(store.iter_accepted_models(directory, frozen_key=key, verification=proof))
+    assert first == records[:1]
+    first[0]["cds"][0][0] = -99
+    assert list(store.iter_accepted_models(directory, frozen_key=key, verification=proof)) == records[:1]
+    assert sorted(calls) == sorted(expected)
+    proof.check()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("when", ["before_read", "after_prehash", "during_consumption", "after_consumption"])
+def test_live_accepted_verification_rejects_content_mutation(tmp_path, legacy, when):
+    from workflow.support.input_generation_array_state import FreshDigestBatch
+
+    records = [model(0, "accepted"), model(1, "accepted")]
+    if legacy:
+        directory = tmp_path
+        (directory / "models.json").write_text(json.dumps(records))
+        receipt(directory)
+    else:
+        directory, _ = published(tmp_path, records)
+    key = store.frozen_model_store_key(directory, kind="accepted")
+    member = directory / ("models.json" if legacy else "model_store/accepted.sqlite")
+    proof = FreshDigestBatch()
+    if when == "after_prehash":
+        proof.read([member])
+    iterator = store.iter_accepted_models(directory, frozen_key=key, verification=proof)
+    if when == "during_consumption":
+        assert next(iterator) == records[0]
+    if when == "after_consumption":
+        assert list(iterator) == records
+    with member.open("ab") as handle:
+        handle.write(b" ")
+    with pytest.raises((ValueError, OSError), match="checksum|changed"):
+        if when == "after_consumption":
+            proof.check()
+        else:
+            list(iterator)
+
+
 @pytest.mark.parametrize("bad", ["../outside", "/absolute", "a/../b", "a\\b", "a//b", "./a", "bad\nname"])
 def test_unsafe_receipt_members_rejected(tmp_path, bad):
     directory, _ = published(tmp_path, [])

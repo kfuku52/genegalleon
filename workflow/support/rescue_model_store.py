@@ -574,13 +574,18 @@ def _stat(path):
     return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
-def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None):
+def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None):
     root, store = _layout(directory)
-    key = frozen_key or (frozen_model_store_key(directory, kind=kind) if verify else None)
+    key = frozen_key or (frozen_model_store_key(directory, kind=kind) if verify or verification is not None else None)
     if key is not None:
         _check_key(directory, key, kind)
     paths = {p: _member(root, p) for p in key["files"]} if key is not None else {}
     stats = {p: _stat(path) for p, path in paths.items()}
+    if verification is not None:
+        expected = {str(path): key["files"][member] for member, path in paths.items()}
+        expected[str(root / "receipt.json")] = key["producer_receipt_sha256"]
+        if verification.read(expected) != expected:
+            raise ValueError("Model-store checksum changed within verification boundary")
     if not (store / "manifest.json").is_file():
         # Lazy import avoids a cycle with prediction-cache's new-store reader.
         try:
@@ -590,19 +595,19 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None):
         member = {"models": "models.json", "accepted": "models.json", "partial": "partial_models.json",
                   "revision": "revision_candidates.json"}[kind]
         if (root / member).is_file():
-            hasher = hashlib.sha256()
+            hasher = hashlib.sha256() if verification is None else None
             for record in stream_json_array(root / member, hasher=hasher):
                 if not isinstance(record, dict):
                     raise ValueError("Legacy model record is not an object")
                 if ((kind != "accepted" or record.get("status") == "accepted")
                         and (statuses is None or record.get("status") in statuses)):
                     yield record
-            if key is not None and hasher.hexdigest() != key["files"][member]:
+            if key is not None and hasher is not None and hasher.hexdigest() != key["files"][member]:
                 raise ValueError("Legacy model checksum changed")
     else:
         manifest, _ = _manifest(store)
         prefix = store.relative_to(root).as_posix()
-        if key is not None:
+        if key is not None and verification is None:
             for member, path in paths.items():
                 if not member.endswith((".jsonl.gz", ".jsonl.zst")) and _digest(path) != key["files"][member]:
                     raise ValueError(f"Model-store checksum changed: {member}")
@@ -635,7 +640,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None):
                     count = 0
                     relative = f"{prefix}/{shard['path']}"
                     path = _member(root, relative)
-                    expected = key["files"][relative] if key is not None else None
+                    expected = key["files"][relative] if key is not None and verification is None else None
                     if shard["first"] != ordinal:
                         raise ValueError("Model-store shard order changed")
                     for envelope in _lines(path, manifest["codec"], expected):
@@ -656,6 +661,8 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None):
         _check_key(directory, key, kind)
         if any(_stat(path) != stats[member] for member, path in paths.items()):
             raise ValueError("Model-store member changed during consumption")
+    if verification is not None:
+        verification.check()
 
 
 def _partials(root, store, manifest, key):
@@ -736,8 +743,14 @@ def iter_models(directory, *, statuses=None, verify=True, frozen_key=None):
     return _iter(directory, "models", statuses=statuses, verify=verify, frozen_key=frozen_key)
 
 
-def iter_accepted_models(directory, *, verify=True, frozen_key=None):
-    return _iter(directory, "accepted", verify=verify, frozen_key=frozen_key)
+def iter_accepted_models(directory, *, verify=True, frozen_key=None, verification=None):
+    """Read accepted paths, optionally sharing one live fresh verification batch.
+
+    The batch hashes each consumed physical file in full, then fences those
+    identities throughout consumption. It cannot reuse a persisted digest or
+    exempt an unread member from verification. Exhaust the iterator as usual.
+    """
+    return _iter(directory, "accepted", verify=verify, frozen_key=frozen_key, verification=verification)
 
 
 def iter_partial_models(directory, *, verify=True, frozen_key=None):

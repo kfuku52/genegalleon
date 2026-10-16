@@ -322,6 +322,11 @@ Each ancestor is bound through the saved plan and worker-receipt checksums; the
 closest producer supplies model IDs when a path appears more than once. Missing
 archived history stops discovery and is recorded in `retained_annotation_sources.json`.
 Available history with a checksum failure is rejected, rather than skipped.
+The accepted-model reader shares the caller's live verification batch: every
+consumed physical file is freshly hashed once, then checked for changes through
+the end of reading and publication. This avoids duplicate hashing within one
+command without trusting saved digests, changing selected records, or reusing a
+verification batch across writes or subsequent commands.
 They retain annotation position only after passing current genomic and homology
 checks with exactly the same CDS coordinates and nucleotide sequence. Old status
 never replaces these checks or adds donor support. A new conflicting prediction

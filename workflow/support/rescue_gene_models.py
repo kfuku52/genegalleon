@@ -1558,7 +1558,7 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
     if batch.read(expected) != expected:
         raise ValueError('Previous annotation content changed')
     result = {}
-    for model in iter_accepted_models(directory, frozen_key=key):
+    for model in iter_accepted_models(directory, frozen_key=key, verification=batch):
         for path in [model, *model.get('alternative_coding_paths', ())]:
             if not path.get('sequence') or path.get('problems'):
                 raise ValueError('Previous accepted coding path lacks an intact sequence')
