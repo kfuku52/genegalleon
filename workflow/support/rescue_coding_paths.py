@@ -324,12 +324,26 @@ def resolve_coding_paths(models, nearest=()):
                    for evidence in [row.get('evidence', {}), *row.get('support', [])]
                    if evidence.get('target')}
         donors = sorted({donor for row in rows for donor, _, _ in alignment_support(row)} - targets)
+        retained_annotation_fallback = False
         if not decisive:
             if not donors:
+                previous = [row for row in rows if row.get('retained_coding_path')]
                 for row in rows:
+                    if row.get('retained_coding_path'):
+                        continue
                     row['status'] = 'unresolved'
                     row['problems'].append('ambiguous_coding_path_representative')
-                continue
+                    if previous:
+                        row['integration_conflict'] = {'disposition': 'retain_previous_validated_annotation',
+                            'retained_model_ids': sorted(r['model_id'] for r in previous)}
+                if not previous:
+                    continue
+                # New self-only alternatives cannot revoke a source-verified
+                # annotation. Keep only the currently valid prior paths; this
+                # supplies no external evidence for the novel alternatives.
+                rows = previous
+                ranked = [row for row in ranked if row.get('retained_coding_path')]
+                retained_annotation_fallback = True
             # A reproducible CDS choice is needed by downstream one-sequence
             # inputs. Prefer the longest validated path without claiming it
             # is the biologically preferred isoform. Tie-break on coordinates.
@@ -348,8 +362,11 @@ def resolve_coding_paths(models, nearest=()):
         best['locus_support'] = {'counting_unit': 'independent_donor_species',
                                  'independent_donor_species': donors, 'minimum_species_for_fallback': 1,
                                  'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+        if retained_annotation_fallback:
+            best['locus_support']['admission_basis'] = 'source_bound_currently_validated_prior_annotation'
         best['path_selection'] = {
-            'reason': 'supported_same_locus_coding_paths' if decisive else 'compatible_locus_canonical_fallback',
+            'reason': ('retained_annotation_canonical_fallback' if retained_annotation_fallback else
+                       'supported_same_locus_coding_paths' if decisive else 'compatible_locus_canonical_fallback'),
             'rank': list(path_rank(best, nearest)), 'alternative_paths': len(alternatives),
             'representative_status': 'supported_priority' if decisive else 'ambiguous',
             'selection_policy': 'validated_donor_rank' if decisive else 'longest_cds_then_coding_shape',

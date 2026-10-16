@@ -209,6 +209,30 @@ def retained_path(row):
             'producer_receipt_sha256': '1' * 64, 'model_ids': ['previous'], 'source_directory': '/frozen/previous'}}
 
 
+@pytest.mark.parametrize('prior_isoforms', [1, 2])
+def test_new_self_only_alternatives_cannot_revoke_valid_prior_annotation(prior_isoforms):
+    old = model('old', [[6, 96, 0]], ('Self',))
+    previous = [old]
+    if prior_isoforms == 2:
+        previous.append(model('old_short', [[12, 96, 0]], ('Self',)))
+    novel = model('new_longer', [[0, 96, 0]], ('Self',))
+    independent = model('independent', [[120, 180, 0]], ('Relative',))
+    for row in [*previous, novel]:
+        row['evidence']['target'] = 'Self'
+    retained = {key: value for row in previous for key, value in retained_path(row).items()}
+    rescue.consolidate([*previous, novel, independent], [], 'Self', retained_paths=retained)
+    assert old['status'] == independent['status'] == 'accepted'
+    assert all(row['status'] == 'accepted_alternative_path' for row in previous[1:])
+    assert novel['status'] == 'unresolved'
+    assert novel['problems'] == ['ambiguous_coding_path_representative']
+    assert novel['integration_conflict']['disposition'] == 'retain_previous_validated_annotation'
+    assert old['locus_support']['independent_donor_species'] == []
+    assert old['locus_support']['admission_basis'] == 'source_bound_currently_validated_prior_annotation'
+    assert old['path_selection']['reason'] == 'retained_annotation_canonical_fallback'
+    assert old['path_selection']['representative_status'] == 'ambiguous'
+    assert len(old['alternative_coding_paths']) == prior_isoforms - 1
+
+
 def test_prior_native_annotation_survives_conflicting_new_transfer_and_independent_locus():
     old = model('old_native', [[0, 60, 0]])
     old['evidence']['annevo'] = {'native_transcript_id': 'prior.t'}

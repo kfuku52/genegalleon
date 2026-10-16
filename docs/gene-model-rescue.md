@@ -323,6 +323,10 @@ cannot invalidate such a CDS or join independent existing loci. Other new paths
 remain review proposals when they conflict. Conflicting historical annotations
 raise an error rather than silently choosing one. Retention does not assign
 orthology or an expected copy, and original-annotation ownership still applies.
+New alternatives supported only by the target species cannot revoke a retained
+CDS. In a tied component without an external donor, only the currently validated
+prior paths remain annotated; the new self-only alternatives stay unresolved.
+This retention is explicitly recorded and contributes no external donor support.
 Identical coordinates from multiple donors are consolidated with each donor's
 own coverage and identity. Accepted IDs are stable hashes of genomic exon
 coordinates; neither orthogroup IDs nor run order define them.
