@@ -12,8 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from annevo_model_selection import protect_outputs
-from annevo_runtime import gff_counts, publish_pair
+from annevo_model_selection import protect_outputs, verified_input_sha
+from annevo_runtime import gff_counts, publish_pair, selection_record
 from annevo_runtime_cache import RuntimeVerification, inspect_tree, private_root
 from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
 from genome_sequence_identity import genome_sequence_digest
@@ -179,7 +179,14 @@ def run(args):
     genome, output, receipt = map(Path, (args.genome, args.output, args.output_receipt))
     if not genome.is_file() or not genome.stat().st_size:
         raise ValueError('OrionGeno genome is missing or empty')
+    selection_options = dict(engine='oriongeno', model_profile=runtime['model_profile'], verification=verification)
+    selection, selection_sha = selection_record(args, genome, **selection_options)
     protected = {genome.resolve(), Path(args.receipt).resolve(), Path(runtime['python']).resolve()}
+    if selection is not None:
+        protected.add(Path(args.selection_receipt).resolve())
+        protected.update(Path(evidence['path']).resolve() for evidence in selection.get('evidence', []))
+        if selection.get('taxonomy'):
+            protected.add(Path(selection['taxonomy']['path']).resolve())
     if output.resolve() == receipt.resolve() or any(p.resolve() in protected or any(p.resolve().is_relative_to(Path(t).resolve()) for t in runtime['trees']) for p in (output, receipt)):
         raise ValueError('OrionGeno outputs overwrite inputs or runtime')
     env = environment(runtime['cache_root'], args.threads)
@@ -204,9 +211,9 @@ assert y.is_cuda and y[0,0].item()==32
 print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_name':torch.cuda.get_device_name()}))
 """
     gpu = json.loads(execute([runtime['python'], '-B', '-s', '-c', gpu_code], env, capture_output=True).stdout.strip().splitlines()[-1])
-    before = file_sha(genome)
+    before = verified_input_sha(genome, verification)
     sequence_identity = genome_sequence_digest(genome)
-    if file_sha(genome) != before:
+    if verified_input_sha(genome, verification) != before:
         raise ValueError('OrionGeno genome changed during sequence identity reading')
     output.parent.mkdir(parents=True, exist_ok=True)
     receipt.parent.mkdir(parents=True, exist_ok=True)
@@ -220,22 +227,38 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
                     shutil.copyfileobj(source, target)
             command = [runtime['python'], '-B', '-s', '-m', 'oriongeno', '--genome', str(native_genome),
                        '--checkpoint', runtime['model_path'], '--output', str(staged),
-                       '--batch-size', str(args.batch_size), '--output-gene', 'True', '--output-repeat', 'False']
+                       '--batch-size', str(args.batch_size), '--output-gene', 'True', '--output-repeat', 'False',
+                       '--species-name', '']
             logs.mkdir(exist_ok=True)
             with (logs/'native.stdout.txt').open('w') as stdout, (logs/'native.stderr.txt').open('w') as stderr:
                 execute(command, env, stdout=stdout, stderr=stderr, cwd=temporary)
             counts = gff_counts(staged)
             load_models(staged)
-            if file_sha(genome) != before:
+            if verified_input_sha(genome, verification) != before:
                 raise ValueError('OrionGeno genome changed during prediction')
+            if selection_sha is not None:
+                _, current_selection_sha = selection_record(args, genome, **selection_options)
+                if current_selection_sha != selection_sha:
+                    raise ValueError('OrionGeno model selection changed during prediction')
             result = {k: runtime[k] for k in ('runtime_digest', 'cache_key', 'source_commit', 'model_profile', 'model_sha256')}
             result.update(schema_version=1, kind='genegalleon-oriongeno-native-prediction', native_returncode=0,
                           genome_sha256=before, genome_sequence_sha256=sequence_identity,
                           GFF_sha256=file_sha(staged), GFF_bytes=staged.stat().st_size, gpu_probe=gpu,
                           inference_settings={'lineage': runtime['model_profile'], 'batch_size': args.batch_size, 'threads': args.threads},
                           argv=command, feature_counts=counts)
+            if selection is not None:
+                result.update(model_selection=selection, model_selection_sha256=selection_sha, species=args.species)
             if read_selected(args.receipt, verification=verification) != runtime:
                 raise ValueError('OrionGeno runtime changed during prediction')
+            # The package-inventory subprocess above can outlive concurrent
+            # input writers. Fence all used inputs and SQLite sidecars last.
+            if verified_input_sha(genome, verification) != before:
+                raise ValueError('OrionGeno genome changed before publication')
+            verification.check()
+            if selection_sha is not None:
+                _, current_selection_sha = selection_record(args, genome, **selection_options)
+                if current_selection_sha != selection_sha:
+                    raise ValueError('OrionGeno model selection changed before publication')
             publish_pair(staged, output, receipt, result)
     return result
 
@@ -294,6 +317,8 @@ def main():
         pred.add_argument('--'+key, required=True)
     pred.add_argument('--threads', type=int, default=1)
     pred.add_argument('--batch-size', type=int, default=1)
+    pred.add_argument('--selection-receipt', default='')
+    pred.add_argument('--species', default='')
     args = parser.parse_args()
     result = collect(args.prediction_root, args.output) if args.command == 'collect' else prepare(args) if args.command == 'prepare' else run(args)
     print(json.dumps(result, sort_keys=True))

@@ -114,7 +114,10 @@ run_wgd_ksd=0 # WGD inference by dS distribution
 
 # Genome workflow flags
 genome_annotation_backend="oriongeno" # none|annevo|oriongeno; predict from species_genome without replacing curated inputs.
-oriongeno_model_profile="plants" # plants|mammals|birds|fish|other_vertebrates|arthropods|other_invertebrates|fungi.
+oriongeno_model_profile="auto" # auto|plants|mammals|birds|fish|other_vertebrates|arthropods|other_invertebrates|fungi.
+oriongeno_taxid_map="" # Explicit species/taxid TSV for auto model selection.
+oriongeno_genome_metadata="" # Trusted species/taxid/genome_sha256 TSV; optional scientific_name.
+oriongeno_taxonomy_db="" # Optional cached ETE NCBI SQLite snapshot; blank uses the shared workspace cache.
 oriongeno_source_ref="$(source "${gg_workflow_dir}/../container/source_branches.env"; printf '%s' "${GG_SOURCE_ORIONGENO_REPO_REF}")" # Forward the declared moving branch into the container.
 oriongeno_python="" # Optional installed native Python; blank bootstraps the upstream isolated environment.
 oriongeno_checkpoint="" # Optional local checkpoint directory; blank downloads only the selected profile.

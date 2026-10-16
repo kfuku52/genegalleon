@@ -87,9 +87,11 @@ def test_all_backend_options_are_forwarded():
          "vars", str(SUPPORT / "gg_entrypoint_config_vars.sh")], capture_output=True, text=True, check=True,
     )
     expected = {"genome_annotation_backend", "annevo_model_profile", "annevo_runtime_manifest",
-                "annevo_no_download", "annevo_batch_size", "annevo_sequence_threshold"}
+                "annevo_no_download", "annevo_batch_size", "annevo_sequence_threshold",
+                "oriongeno_model_profile", "oriongeno_taxid_map", "oriongeno_genome_metadata", "oriongeno_taxonomy_db"}
     assert expected <= set(result.stdout.splitlines())
     assert 'genome_annotation_backend="oriongeno"' in ENTRY.read_text()
+    assert 'oriongeno_model_profile="auto"' in ENTRY.read_text()
 
 
 @pytest.mark.parametrize("backend", ["none", "annevo", "oriongeno"])
@@ -154,7 +156,7 @@ elif a.command=='run':
 ''')
 
 
-def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map=""):
+def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map="", oriongeno_profile="plants"):
     workspace = tmp_path / "workspace"
     support = tmp_path / "support"
     if not support.exists():
@@ -169,7 +171,7 @@ def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False,
             code = fixture.read_text().replace("'selection-receipt','species'", "'selection-receipt','species','python','checkpoint','source-commit'")
             code = code.replace("p=argparse.ArgumentParser()", "PROFILES={'plants'}\np=argparse.ArgumentParser()")
             code = code.replace("'genegalleon-annevo-native-prediction'", "'genegalleon-oriongeno-native-prediction'")
-            code = code.replace("'model_profile':'Magnoliopsida',", "'model_profile':'plants','inference_settings':{'lineage':'plants'},")
+            code = code.replace("'model_profile':'Magnoliopsida',", "'model_profile':json.loads(Path(a.receipt).read_text())['model_profile'],'inference_settings':{'lineage':json.loads(Path(a.receipt).read_text())['model_profile']},")
             fixture.write_text(code)
     genome = workspace / "input/species_genome/Test_species.fa"
     genome.parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +187,8 @@ def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False,
            "genome_annotation_backend": backend, "GG_TASK_CPUS": "4", "artifact_stale_policy": policy,
            "ANNEVO_FIXTURE_LOG": str(log), "ANNEVO_FIXTURE_FAIL": "1" if fail else "0",
            "oriongeno_no_download": "1" if no_download else "0",
+           "oriongeno_model_profile": oriongeno_profile, "oriongeno_taxonomy_db": taxonomy_db,
+           "oriongeno_taxid_map": taxid_map,
            "annevo_no_download": "1" if no_download else "0", "annevo_runtime_manifest": manifest, "annevo_model_profile": profile,
            "annevo_taxonomy_db": taxonomy_db, "annevo_taxid_map": taxid_map}
     command = ('source "$gg_support_dir/gg_util.sh"; gg_validate_genome_annotation_backend; '
@@ -430,16 +434,17 @@ def test_all_supported_profiles_pass_backend_validation(profile):
     assert result.returncode == 0, result.stderr
 
 
-def test_auto_default_taxonomy_waits_for_an_existing_builder(tmp_path):
+@pytest.mark.parametrize('backend', ['annevo', 'oriongeno'])
+def test_auto_default_taxonomy_waits_for_an_existing_builder(tmp_path, backend):
     import time
-    spec = importlib.util.spec_from_file_location('writer_taxonomy_fixture', ROOT / 'workflow/tests/test_annevo_model_selection.py')
+    spec = importlib.util.spec_from_file_location('writer_taxonomy_fixture', ROOT / f'workflow/tests/test_{backend}_model_selection.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     taxonomy_root = tmp_path / 'workspace/downloads/ete_taxonomy'
     taxonomy_root.mkdir(parents=True)
     module.taxonomy(taxonomy_root / 'taxa.sqlite')
     mapping = tmp_path / 'map.tsv'
-    mapping.write_text('species\ttaxid\nTest_species\t1000004\n')
+    mapping.write_text('species\ttaxid\nTest_species\t'+('1000004' if backend == 'annevo' else '9606')+'\n')
     lock = tmp_path / 'workspace/downloads/locks/ete_taxonomy.lock'
     started = tmp_path / 'writer_started'
     writer = subprocess.Popen(['bash', '-c',
@@ -452,10 +457,11 @@ def test_auto_default_taxonomy_waits_for_an_existing_builder(tmp_path):
         while not started.exists() and time.monotonic() < deadline:
             time.sleep(.01)
         assert started.exists()
-        result, calls, _ = run_selected_stage(tmp_path, profile='auto', taxid_map=str(mapping))
+        result, calls, _ = run_selected_stage(tmp_path, backend=backend, profile='auto', oriongeno_profile='auto', taxid_map=str(mapping))
         assert result.returncode == 0, result.stdout + result.stderr
-        assert 'waiting for shared lock: ANNEVO taxonomy snapshot' in result.stderr
-        assert calls[-1]['model_profile'] == 'Fungi'
+        label = 'ANNEVO' if backend == 'annevo' else 'OrionGeno'
+        assert f'waiting for shared lock: {label} taxonomy snapshot' in result.stderr
+        assert calls[-2]['model_profile'] == ('Fungi' if backend == 'annevo' else 'mammals')
         assert writer.wait(timeout=5) == 0
     finally:
         if writer.poll() is None:
@@ -472,3 +478,51 @@ def test_oriongeno_stage_runs_formatter_candidate_export_and_offline_resume(tmp_
     second, calls, _ = run_selected_stage(tmp_path, backend='oriongeno', no_download=True)
     assert second.returncode == 0, second.stdout + second.stderr
     assert [c['command'] for c in calls].count('run') == 1
+
+
+@pytest.mark.parametrize('profile', ['auto', 'plants', 'mammals', 'birds', 'fish', 'other_vertebrates',
+                                   'arthropods', 'other_invertebrates', 'fungi'])
+def test_oriongeno_profiles_pass_backend_validation(profile):
+    result = source_function('gg_validate_genome_annotation_backend', env={
+        'genome_annotation_backend': 'oriongeno', 'oriongeno_model_profile': profile})
+    assert result.returncode == 0, result.stderr
+
+
+def test_oriongeno_auto_stage_selects_model_and_rejects_stale_evidence(tmp_path):
+    from test_oriongeno_model_selection import taxonomy
+
+    db, mapping = tmp_path/'taxa.sqlite', tmp_path/'map.tsv'
+    taxonomy(db)
+    mapping.write_text('species\ttaxid\nTest_species\t9606\n')
+    options = dict(backend='oriongeno', oriongeno_profile='auto', taxonomy_db=str(db), taxid_map=str(mapping))
+    first, calls, workspace = run_selected_stage(tmp_path, **options)
+    assert first.returncode == 0, first.stdout + first.stderr
+    prediction = workspace/'output/genome_prediction/oriongeno/Test_species'
+    selected = json.loads((prediction/'model_selection.json').read_text())
+    assert selected['model_profile'] == 'mammals'
+    assert calls[-2]['model_profile'] == 'mammals'
+    assert calls[-1]['selection_receipt'] == str(prediction/'model_selection.json')
+    assert calls[-1]['species'] == 'Test_species'
+    assert calls[-2]['receipt'].endswith('/selected/mammals.json')
+    resumed, calls, _ = run_selected_stage(tmp_path, no_download=True, **options)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert sum(c['command'] == 'run' for c in calls) == 1
+    mapping.write_text(mapping.read_text()+'Other_species\t9031\n')
+    stale, calls, _ = run_selected_stage(tmp_path, **options)
+    assert stale.returncode == 3, stale.stdout + stale.stderr
+    assert sum(c['command'] == 'run' for c in calls) == 1
+
+
+@pytest.mark.parametrize('taxid', ['', '5833', '40674'])
+def test_oriongeno_auto_unresolved_never_prepares_runtime(tmp_path, taxid):
+    from test_oriongeno_model_selection import taxonomy
+
+    db, mapping = tmp_path/'taxa.sqlite', tmp_path/'map.tsv'
+    taxonomy(db)
+    mapping.write_text('species\ttaxid\n'+('Test_species\t'+taxid+'\n' if taxid else ''))
+    result, calls, workspace = run_selected_stage(tmp_path, backend='oriongeno', oriongeno_profile='auto',
+                                                   taxonomy_db=str(db), taxid_map=str(mapping))
+    assert calls == []
+    failed = workspace/'output/genome_prediction/oriongeno/Test_species/model_selection.json.failed.json'
+    assert json.loads(failed.read_text())['status'] == 'error', result.stdout + result.stderr
+    assert not (workspace/'downloads/annotation/oriongeno').exists()

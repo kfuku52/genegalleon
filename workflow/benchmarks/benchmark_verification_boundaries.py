@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKLOADS = ('runtime', 'index', 'synteny-plan', 'cds-view', 'logical-directory', 'busco-cache')
+WORKLOADS = ('runtime', 'index', 'synteny-plan', 'cds-view', 'logical-directory', 'busco-cache', 'predictor-selection')
 
 
 def worker(args):
@@ -55,6 +55,15 @@ def worker(args):
         import busco_guide_tree as guide
         guide.digest = state.digest
         proof_supported = 'proof' in inspect.signature(guide.cache_matches).parameters
+    elif args.workload == 'predictor-selection':
+        import inspect
+
+        import annevo_model_selection as selector
+        import annevo_runtime as predictor
+        real_selection_sha, real_predictor_sha = selector.file_sha, predictor.file_sha
+        selector.file_sha = lambda path: hashed(real_selection_sha, path)
+        predictor.file_sha = lambda path: hashed(real_predictor_sha, path)
+        proof_supported = 'verification' in inspect.signature(predictor.selection_record).parameters
 
     def scandir(*a, **kw):
         counters['directory_scans'] += 1
@@ -142,6 +151,25 @@ def worker(args):
                         stream.write(block)
                 metadata.write_text(json.dumps({'sha256': real_digest(payload)}))
                 sketches.append((payload, metadata))
+        elif args.workload == 'predictor-selection':
+            import sqlite3
+
+            genome, taxonomy = root/'genome.fa', root/'taxa.sqlite'
+            with genome.open('wb') as stream:
+                stream.write(b'>chr\n')
+                for _ in range(args.mib):
+                    stream.write(block+b'\n')
+            with sqlite3.connect(taxonomy) as conn:
+                conn.execute('CREATE TABLE fixture(payload BLOB)')
+                conn.execute('INSERT INTO fixture VALUES(zeroblob(?))', (args.mib*1024*1024,))
+            mapping, receipt = root/'taxids.tsv', root/'selection.json'
+            mapping.write_text('species\ttaxid\nTest_species\t9606\n')
+            record = dict(schema_version=1, kind='genegalleon-oriongeno-model-selection', status='selected',
+                          species='Test_species', model_profile='mammals', genome_sha256=real_predictor_sha(genome),
+                          evidence=[dict(path=str(mapping), sha256=real_predictor_sha(mapping))],
+                          taxonomy=dict(path=str(taxonomy), sha256=real_predictor_sha(taxonomy)))
+            receipt.write_text(json.dumps(record, sort_keys=True))
+            selection_args = argparse.Namespace(selection_receipt=str(receipt), species='Test_species')
         counters.update({key: 0 for key in counters})
         started = time.perf_counter()
         logical = []
@@ -182,6 +210,20 @@ def worker(args):
                 for _ in range(args.boundaries):
                     with provenance.digest_observation():
                         logical.append(provenance.raw_or_zip_directory_digest(tree))
+            elif args.workload == 'predictor-selection':
+                proof = runtime.RuntimeVerification() if proof_supported else None
+                options = dict(engine='oriongeno', model_profile='mammals')
+                if proof is not None:
+                    options['verification'] = proof
+                sha = (lambda path: selector.verified_input_sha(path, proof)) if proof is not None else predictor.file_sha
+                for _ in range(args.boundaries):
+                    selected, receipt_sha = predictor.selection_record(selection_args, genome, **options)
+                    assert receipt_sha == hashlib.sha256(receipt.read_bytes()).hexdigest()
+                    logical.append(selected)
+                    logical.append(sha(genome))
+                logical.append(sha(genome))
+                if proof is not None:
+                    proof.check()
             else:
                 paths, expected = [], []
                 for payload, metadata in sketches:
@@ -204,6 +246,8 @@ def worker(args):
         elapsed = time.perf_counter() - started
         if args.workload == 'cds-view':
             logical.append({path.name: real_resolution_digest(path) for path in view.iterdir()})
+        if args.workload == 'predictor-selection':
+            logical = json.loads(json.dumps(logical).replace(str(root), '<workspace>'))
         print(json.dumps(dict(seconds=elapsed, peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                               logical_sha256=hashlib.sha256(json.dumps(logical, sort_keys=True).encode()).hexdigest(),
                               **counters)))
@@ -233,7 +277,8 @@ def main():
                   configuration=dict(mib=args.mib, files=args.files, boundaries=args.boundaries,
                                      repeats=args.repeats, warmups=1), workloads={},
                   source_sha256={label: {name: hashlib.sha256((support / name).read_bytes()).hexdigest()
-                                         for name in ('annevo_runtime_cache.py', 'annevo_runtime.py', 'annevo_pipeline.py',
+                                         for name in ('annevo_runtime_cache.py', 'annevo_runtime.py', 'annevo_model_selection.py',
+                                                      'annevo_pipeline.py', 'oriongeno_model_profiles.py',
                                                       'oriongeno_runtime.py', 'gene_model_catalog.py',
                                                       'pairwise_synteny.py', 'cds_resolution.py', 'artifact_provenance.py',
                                                       'busco_guide_tree.py')}
