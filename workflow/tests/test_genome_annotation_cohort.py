@@ -64,6 +64,72 @@ def prediction(workspace):
     return root
 
 
+def owning_release(manifest, name):
+    from test_gg_util_paths import _canonical_sha256, _write_runtime_release_contract
+
+    prefix = 'acquisition_' if name == 'gg_input_generation' else ''
+    root = Path(manifest['project_root']) / (prefix + 'runtime')
+    _write_runtime_release_contract(root, name)
+    path = root / '.kfauto-release.json'
+    value = json.loads(path.read_text())
+    value['project_root'] = manifest['project_root']
+    value['contract_sha256'] = _canonical_sha256({k: v for k, v in value.items() if k != 'contract_sha256'})
+    path.write_text(json.dumps(value))
+    manifest[prefix + 'runtime_root'] = str(root)
+    manifest[prefix + 'runtime_manifest_sha256'] = cohort.file_sha(path)
+    return root
+
+
+@pytest.mark.parametrize('name', ['gg_input_generation', 'gg_genome_annotation'])
+def test_dispatch_passes_the_owning_snapshot_through_real_bootstrap(tmp_path, monkeypatch, name):
+    manifest, _, workspace = fixture(tmp_path)
+    owning_release(manifest, 'gg_genome_annotation')
+    root = owning_release(manifest, name)
+    monkeypatch.setenv('KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256', '0' * 64)
+    env = cohort.environment(manifest, workspace)
+    assert 'KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256' not in env
+    original_run = subprocess.run
+    calls = []
+    def boundary(argv, *, cwd, env, check):
+        assert cwd == root and argv == ['bash', str(root / 'workflow' / (name + '_entrypoint.sh'))]
+        assert env['KFAUTO_RUNTIME_RELEASE_ROOT'] == str(root)
+        command = ('source "$1"; gg_validate_explicit_runtime_release "$KFAUTO_RUNTIME_RELEASE_ROOT" '
+                   '"$2" "$1" "$KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256"')
+        result = original_run(['bash', '-c', command, 'bootstrap',
+            str(root / 'workflow/support/gg_entrypoint_bootstrap.sh'), name], env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(root / 'workflow')
+        calls.append(argv)
+    monkeypatch.setattr(cohort.subprocess, 'run', boundary)
+    cohort.entrypoint(manifest, name, env)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('damage', ['digest', 'workflow', 'source_file'])
+def test_changed_owning_runtime_cannot_enter_a_native_stage(tmp_path, monkeypatch, damage):
+    manifest, _, workspace = fixture(tmp_path)
+    root = owning_release(manifest, 'gg_genome_annotation')
+    if damage == 'digest':
+        manifest['runtime_manifest_sha256'] = '0' * 64
+    elif damage == 'workflow':
+        manifest['acquisition_runtime_root'] = str(root)
+        manifest['acquisition_runtime_manifest_sha256'] = manifest['runtime_manifest_sha256']
+    else:
+        (root / 'workflow/core/gg_genome_annotation_core.sh').write_text('changed')
+    original_run = subprocess.run
+    def boundary(argv, *, cwd, env, check):
+        command = ('source "$1"; gg_validate_explicit_runtime_release "$KFAUTO_RUNTIME_RELEASE_ROOT" '
+                   'gg_genome_annotation "$1" "$KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256"')
+        result = original_run(['bash', '-c', command, 'bootstrap',
+            str(root / 'workflow/support/gg_entrypoint_bootstrap.sh')], env=env, capture_output=True, text=True)
+        assert result.returncode != 0 and 'file changed' in result.stderr
+        raise ValueError('Real bootstrap rejected changed source')
+    monkeypatch.setattr(cohort.subprocess, 'run', boundary)
+    with pytest.raises(ValueError):
+        cohort.entrypoint(manifest, 'gg_input_generation' if damage == 'workflow' else 'gg_genome_annotation',
+                          cohort.environment(manifest, workspace))
+
+
 def test_unique_frozen_membership_and_exact_lineage(tmp_path):
     manifest, member, _ = fixture(tmp_path)
     assert cohort.select(manifest, 1) == member

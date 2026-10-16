@@ -102,10 +102,10 @@ def environment(manifest, workspace):
     env = dict(os.environ)
     # Do not let another analysis's scoped overrides leak into this phase.
     for key in list(env):
-        if key.startswith(('GG_INPUT_', 'GG_GENOME_ANNOTATION_')):
+        if key.startswith(('GG_INPUT_', 'GG_GENOME_ANNOTATION_', 'KFAUTO_RUNTIME_RELEASE_')):
             del env[key]
     env.update(gg_workspace_dir=str(workspace), gg_container_image_path=str(image), gg_debug_mode='0',
-               KFAUTO_RUNTIME_RELEASE_ROOT=str(runtime), GG_ARRAY_TASK_ID='1',
+               GG_ARRAY_TASK_ID='1',
                GG_COMMON_DOWNLOADS_ROOT=str(cache), GG_COMMON_TMP_ROOT='workspace',
                GG_COMMON_BUSCO_LINEAGE=manifest['busco_lineage'], GG_COMMON_GENETIC_CODE='1',
                GG_COMMON_REPRESENTATIVE_INPUTS='',
@@ -114,7 +114,32 @@ def environment(manifest, workspace):
 
 
 def entrypoint(manifest, name, env):
-    runtime = Path(manifest['runtime_root'])
+    acquisition = name == 'gg_input_generation'
+    prefix = 'acquisition_' if acquisition else ''
+    runtime = physical(manifest[prefix + 'runtime_root'], directory=True)
+    if not runtime.is_relative_to(Path(manifest['project_root'])):
+        raise ValueError('Owning runtime escapes the cohort project')
+    path = physical(runtime / '.kfauto-release.json')
+    if file_sha(path) != manifest[prefix + 'runtime_manifest_sha256']:
+        raise ValueError('Owning runtime inventory changed')
+    release = json.loads(path.read_text())
+    contract = {key: value for key, value in release.items() if key != 'contract_sha256'}
+    def canonical(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if (canonical(contract) != release['contract_sha256'] or release['workflow'] != name
+            or release['project_root'] != manifest['project_root'] or release['release_root'] != str(runtime)
+            or release['kind'] != 'immutable-genegalleon-runtime-release-v1'):
+        raise ValueError('Owning runtime workflow or contract changed')
+    required = {'VERSION', 'workflow/' + name + '_entrypoint.sh', 'workflow/core/' + name + '_core.sh',
+                'workflow/support/artifact_provenance.py', 'workflow/support/gg_entrypoint_bootstrap.sh',
+                'workflow/support/gg_util.sh'}
+    inventory = {item['path']: item['sha256'] for item in release['installed_files']}
+    snapshot = dict(schema_version=1, kind='gridengine-runtime-release-snapshot-v1',
+                    project_root=release['project_root'], workflow=name, release_root=str(runtime),
+                    target_ref=release['target_ref'], release_contract_sha256=release['contract_sha256'],
+                    file_sha256={path: inventory[path] for path in sorted(required)})
+    env = {**env, 'KFAUTO_RUNTIME_RELEASE_ROOT': str(runtime),
+           'KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256': canonical(snapshot)}
     subprocess.run(['bash', str(runtime / 'workflow' / (name + '_entrypoint.sh'))],
                    cwd=runtime, env=env, check=True)
 
@@ -136,6 +161,7 @@ def acquire(manifest, member, workspace):
             writer.writerow(row)
         env = environment(manifest, workspace)
         env.update(GG_INPUT_PROVIDER='direct', GG_INPUT_DOWNLOAD_MANIFEST=str(row_path),
+                   GG_INPUT_REPRESENTATIVE_INPUTS='',
                    GG_INPUT_DOWNLOAD_DIR=str(workspace / 'raw'), GG_INPUT_DOWNLOAD_ONLY='1',
                    GG_INPUT_DOWNLOAD_LIMIT_DIR=str(Path(manifest['downloads_root']) / 'input_download_limits'),
                    GG_INPUT_INPUT_GENERATION_MODE='single')
