@@ -125,6 +125,24 @@ def test_ortholog_r_rendering_is_collected_once_in_runtime(tmp_path, suite):
     assert ("::test_invalid_duplication_cutoff_fails_before_reading_inputs[" in result.stdout) == (suite == "fast")
 
 
+@pytest.mark.parametrize('suite', ['fast', 'runtime'])
+def test_rescue_admission_real_tool_fixtures_are_only_in_runtime(tmp_path, suite):
+    test_dir = tmp_path / 'workflow/tests'
+    test_dir.mkdir(parents=True)
+    for name in ('conftest.py', 'validation_manifest.json'):
+        shutil.copyfile(REPO_ROOT / 'workflow/tests' / name, test_dir / name)
+    for name, sentinel in (('test_rescue_admission_replay.py', 'requires_native_tool_identity'),
+                           ('test_rescue_model_store_patch.py', 'pure_store_update')):
+        (test_dir / name).write_text(f'def test_{sentinel}(): pass\n')
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '--collect-only', f'--gg-suite={suite}',
+                             '-c', str(REPO_ROOT / 'pyproject.toml'), '--rootdir', str(tmp_path),
+                             '--confcutdir', str(tmp_path), str(test_dir)],
+                            cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ('::test_requires_native_tool_identity' in result.stdout) == (suite == 'runtime')
+    assert ('::test_pure_store_update' in result.stdout) == (suite == 'fast')
+
+
 def test_dev_forwards_focused_arguments_through_the_container(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

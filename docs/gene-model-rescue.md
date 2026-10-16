@@ -710,6 +710,9 @@ unknown field, original ordinal, partial-reference order and no-alignment audit
 row survives. Unselected DNA bodies need not be reconstructed, but all source
 bytes and the final generation fence are verified. Immutable copies avoid shared
 writable files, and each worker retains an `admission_replay.json` proof.
+Earlier v1 stores with donor metrics inside shared bodies remain readable.
+Changed records may normalize that layout only after exact predictor/DNA
+comparison; unselected records and partial references retain their original order.
 Separately declared annotation ancestors in older integration publications are
 retained through frozen plan/worker receipts and matching genome/code identity.
 Their accepted CDS nominate historical paths only; current QC, donor support and

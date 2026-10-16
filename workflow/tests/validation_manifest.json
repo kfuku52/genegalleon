@@ -53,6 +53,7 @@
     "test_tree_plot_batch.py",
     "test_progress_summary_runtime.py",
     "test_rescue_gene_models_runtime.py",
+    "test_rescue_admission_replay.py",
     "test_rescue_model_evidence.py",
     "test_rescue_swissprot_evidence.py",
     "test_genome_format_streaming_runtime.py",

@@ -1,6 +1,7 @@
 """Immutable admission updates preserving raw ordinals and partial references."""
 import copy
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -63,6 +64,9 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             if store._digest(source_store / name) != manifest['files'][name]:
                 raise ValueError('Model-store overlay changed before patching')
         accepted = dict(store._iter(source, 'accepted', with_ordinals=True))
+        source_db = store._readonly(source_store / 'bodies.sqlite')
+        databases.append(source_db)
+        source_bodies = store._Bodies(source_db, manifest['body_codec'])
         for ordinal in changes:
             accepted.pop(ordinal, None)
         updates = {**changes, **{count + i: m for i, m in enumerate(appended)}}
@@ -74,6 +78,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             if model.get('status') == 'accepted':
                 accepted[ordinal] = model
         output = copy.deepcopy(manifest)
+        normalized = set()
         for shard in manifest['shards']:
             name = shard['path']
             affected = {i for i in changes if shard['first'] <= i < shard['first'] + shard['count']}
@@ -88,20 +93,41 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                         raise ValueError('Patch source candidate order changed')
                     if ordinal in affected:
                         replacement = packed[ordinal][1]
-                        if (replacement['body'] != envelope['body']
-                                or replacement['context'].get('partial_evidence') != envelope['context'].get('partial_evidence')):
+                        if replacement['context'].get('partial_evidence') != envelope['context'].get('partial_evidence'):
                             raise ValueError('Admission patch changed predictor/DNA or partial evidence')
+                        if replacement['body'] != envelope['body']:
+                            # Earlier v1 producers put donor metrics in shared
+                            # bodies. Prove the same predictor values before
+                            # normalizing just the changed candidate's layout.
+                            raw_body = source_bodies.read(envelope['body'])
+                            original = store._unpack(envelope, raw_body)
+                            body_keys = json.loads(raw_body)
+                            if (store._pack(original)[0] != packed[ordinal][0]
+                                    or any(k not in changes[ordinal]
+                                           or store._json(original[k]) != store._json(changes[ordinal][k])
+                                           for k in body_keys)):
+                                raise ValueError('Admission patch changed predictor/DNA values')
+                            normalized.add(ordinal)
+                        else:
+                            immutable = ('coverage', 'identity', 'query_span_coverage', 'query_start', 'query_end',
+                                         'query_length', 'query', 'id', 'paf', 'raw_prediction', 'genetic_code')
+                            a, b = envelope['context'], replacement['context']
+                            if any((k in a) != (k in b) or (k in a and store._json(a[k]) != store._json(b[k]))
+                                   for k in immutable):
+                                raise ValueError('Admission patch changed predictor/DNA values')
                         envelope = replacement
                     out.write(store._json(envelope) + b'\n')
                     seen += 1
             if seen != shard['count']:
                 raise ValueError('Patch source shard count changed')
+        source_db.close()
+        databases.remove(source_db)
         _copy(source_store / 'bodies.sqlite', temporary / 'bodies.sqlite', manifest['files']['bodies.sqlite'])
         body_db = store.sqlite3.connect(temporary / 'bodies.sqlite')
         databases.append(body_db)
         body_db.execute('PRAGMA journal_mode=OFF')
         body_db.execute('PRAGMA synchronous=OFF')
-        for ordinal in range(count, count + len(appended)):
+        for ordinal in [*sorted(normalized), *range(count, count + len(appended))]:
             store._insert_body(body_db, packed[ordinal][0], manifest['compression_level'], manifest['codec'])
         output['counts']['bodies'] = body_db.execute('SELECT COUNT(*) FROM bodies').fetchone()[0]
         body_db.commit()

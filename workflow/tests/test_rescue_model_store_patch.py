@@ -39,7 +39,7 @@ def test_patch_keeps_raw_order_unknown_fields_partials_and_independent_bytes(tmp
 def test_patch_rejects_changed_predictor_dna_and_partial_membership(tmp_path, field, value):
     row = model()
     source, _ = published(tmp_path, [row])
-    with pytest.raises(ValueError, match='predictor/DNA or partial'):
+    with pytest.raises(ValueError, match='predictor/DNA'):
         patch_model_store(source, tmp_path / 'output', {0: {**row, field: value}})
     assert not (tmp_path / 'output/model_store').exists()
 
@@ -107,3 +107,35 @@ def test_patch_rejects_overlap_and_bad_ordinals_before_write(tmp_path):
     for ordinal in (True, -1, 1):
         with pytest.raises(ValueError, match='ordinal'):
             patch_model_store(source, tmp_path / 'output', {ordinal: copy.deepcopy(model())})
+
+
+@pytest.mark.parametrize('alter_predictor', [False, True])
+def test_legacy_metric_shared_bodies_are_normalized_only_with_exact_predictor_values(tmp_path, monkeypatch, alter_predictor):
+    rows = [model(0), model(1, 'accepted')]
+    # This is the retained public v1 layout used by the archived producer,
+    # before donor metrics moved into per-candidate contexts. No old code runs.
+    with monkeypatch.context() as prior:
+        prior.setattr(store, 'BODY_FIELDS', store.BODY_FIELDS | {'coverage', 'identity', 'query_span_coverage',
+                                                              'query_start', 'query_end', 'query_length'})
+        source, _ = published(tmp_path, rows)
+    assert list(store.iter_models(source)) == rows
+    changed = {**rows[0], 'status': 'accepted'}
+    if alter_predictor:
+        changed['coverage'] = .2
+        with pytest.raises(ValueError, match='predictor/DNA'):
+            patch_model_store(source, tmp_path / 'output', {0: changed})
+        return
+    output = tmp_path / 'output'
+    patch_model_store(source, output, {0: changed})
+    receipt(output)
+    assert list(store.iter_models(output)) == [changed, rows[1]]
+    assert list(store.iter_accepted_models(output)) == [changed, rows[1]]
+    assert list(store.iter_partial_models(output)) == [rows[1]]
+
+
+@pytest.mark.parametrize('field,value', [('identity', .5), ('query', 'other'), ('coverage', .2)])
+def test_current_layout_also_rejects_changed_predictor_context(tmp_path, field, value):
+    row = model()
+    source, _ = published(tmp_path, [row])
+    with pytest.raises(ValueError, match='predictor/DNA'):
+        patch_model_store(source, tmp_path / 'output', {0: {**row, field: value}})
