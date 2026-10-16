@@ -22,7 +22,7 @@ def implementation_identity():
     support = Path(__file__).resolve().parent
     sources.extend(("support/" + str(path.relative_to(support)), path) for path in support.rglob("*.py"))
     versions = {"python": list(sys.version_info[:3])}
-    for package in ("kffractbias", "Bio", "pysam"):
+    for package in ("kffractbias", "Bio", "pysam", "cdskit"):
         spec = importlib.util.find_spec(package)
         if spec is None:
             versions[package] = "unavailable"
@@ -32,7 +32,7 @@ def implementation_identity():
             for path in root.rglob("*"):
                 if path.is_file() and path.suffix in {".py", ".so"}:
                     sources.append((package + "/" + str(path.relative_to(root)), path))
-    for package in ("biopython", "pysam", "kffractbias", "pandas", "polars"):
+    for package in ("biopython", "pysam", "kffractbias", "pandas", "polars", "cdskit"):
         try:
             versions[package + "_version"] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:

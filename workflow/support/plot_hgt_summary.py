@@ -201,7 +201,8 @@ def safe_read_tsv(path: str) -> pandas.DataFrame:
     if not path or not os.path.exists(path):
         return pandas.DataFrame()
     try:
-        return pandas.read_csv(path, sep="\t", low_memory=False)
+        return pandas.read_csv(path, sep="\t", low_memory=False,
+                               dtype={'analysis_donor_node': str, 'analysis_recipient_node': str})
     except pandas.errors.EmptyDataError:
         return pandas.DataFrame()
 
@@ -379,13 +380,23 @@ def build_transfer_edge_table(
     orthogroup_values = branch_df["orthogroup"] if "orthogroup" in branch_df.columns else pandas.Series(
         [""] * len(branch_df), index=branch_df.index
     )
-    for transfer, orthogroup in zip(
-        branch_df["generax_transfer"].tolist(), orthogroup_values.tolist(), strict=True
+    canonical = branch_df.reindex(columns=['analysis_donor_node', 'analysis_recipient_node', 'mapping_status'])
+    for transfer, orthogroup, mapped_donor, mapped_recipient, status in zip(
+        branch_df["generax_transfer"].tolist(), orthogroup_values.tolist(),
+        canonical['analysis_donor_node'].tolist(), canonical['analysis_recipient_node'].tolist(),
+        canonical['mapping_status'].tolist(), strict=True
     ):
         parsed = parse_generax_transfer(transfer)
         if parsed is None:
             continue
         donor, recipient = parsed
+        mapped_donor, mapped_recipient = normalize_tree_label(mapped_donor), normalize_tree_label(mapped_recipient)
+        if bool(mapped_donor) != bool(mapped_recipient):
+            raise ValueError('Incomplete analysis-tree endpoint mapping')
+        if mapped_donor:
+            if status != 'matched':
+                raise ValueError('Analysis-tree endpoints require a matched event')
+            donor, recipient = mapped_donor, mapped_recipient
         pair_counts[(donor, recipient)] += 1
         total_events += 1
         if orthogroup is not None and not pandas.isna(orthogroup):

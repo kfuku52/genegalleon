@@ -240,7 +240,8 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
     expected_order = {
         ("none", False): ["owned", "ambiguous_long", "ambiguous_short"],
         ("none", True): ["owned", "ambiguous_long", "ambiguous_short",
-                        "good_relative", "good_balanced", "partial", "owned"],
+                        "good_relative", "good_balanced", "partial",
+                        "owned"],
         ("partial", False): ["good_relative", "partial", "owned", "ambiguous_long", "ambiguous_short"],
         ("partial", True): ["good_relative", "partial", "owned", "ambiguous_long", "ambiguous_short",
                            "good_balanced", "owned"],
@@ -255,15 +256,20 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
     assert [m["query"] for m in models] == expected_order
     accepted = [m for m in models if m["status"] == "accepted"]
     independently_supported = cache in ("complete", "complete_genome_only") or fallback
-    assert len(accepted) == int(independently_supported) + 1
+    # Documented compatible-locus fallback retains both in-frame paths while
+    # keeping the primary representative explicitly ambiguous. It does not
+    # establish independent donor support for the separate intact locus.
+    assert len(accepted) == 1 + int(independently_supported)
     duplicates = int(independently_supported) + 2 * int(cache == "complete_genome_only")
-    expected_status = {"accepted": int(independently_supported) + 1, "accepted_alternative_path": 1,
-                       "unresolved": len(models) - int(independently_supported) - 2 - duplicates}
+    expected_status = {"accepted": 1 + int(independently_supported), "accepted_alternative_path": 1,
+                       "unresolved": len(models) - 2 - int(independently_supported) - duplicates}
     if duplicates:
         expected_status["duplicate_support"] = duplicates
     assert results["status_counts"] == expected_status
-    if independently_supported:
-        model, = [row for row in accepted if row["seqid"] == "chr_intact"]
+    intact = [m for m in accepted if m["seqid"] == "chr_intact"]
+    assert len(intact) == int(independently_supported)
+    if intact:
+        model = intact[0]
         assert model["seqid"] == "chr_intact" and model["strand"] == "+"
         assert model["sequence"] == "ATGAAATAA" and model["cds"] == [[0, 9, 0]]
         assert model["problems"] == []
@@ -287,12 +293,17 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
                  m["seqid"] == "chr_ambiguous"]
     assert {tuple(map(tuple, m["cds"])) for m in ambiguous} == {((0, 15, 0),), ((6, 15, 0),)}
     primary, = [m for m in ambiguous if m["status"] == "accepted"]
+    assert primary["query"] == "ambiguous_long" and primary["sequence"] == "ATGAAAATGCCCTAA"
     assert primary["path_selection"]["representative_status"] == "ambiguous"
+    assert primary["path_selection"]["ambiguity_reason"] == "ambiguous_coding_path_representative"
+    assert primary["path_selection"]["selection_policy"] == "longest_cds_then_coding_shape"
     assert primary["locus_support"]["independent_donor_species"] == ["Relative_species"]
-    assert len(primary["alternative_coding_paths"]) == 1
-    assert sum(m["status"] == "accepted_alternative_path" for m in ambiguous) == 1
-    # Both intact paths now resolve this donor query before genome fallback.
-    # Their MP sequence cannot nominate an unrelated owned-locus revision.
+    assert primary["locus_support"]["orthology"] == "unassigned"
+    alternative, = [m for m in ambiguous if m["status"] == "accepted_alternative_path"]
+    assert alternative["query"] == "ambiguous_short" and alternative["sequence"] == "ATGCCCTAA"
+    assert not primary["problems"] and not alternative["problems"]
+    assert sum(m["status"] == "duplicate_support" for m in ambiguous) == 2 * int(cache == "complete_genome_only")
+    # Resolved compatible paths do not enter redundant genome/GeMoMa searches.
     off_locus = [m for m in models if m["query"].startswith("ambiguous") and
                  m["seqid"] != "chr_ambiguous"]
     assert not off_locus

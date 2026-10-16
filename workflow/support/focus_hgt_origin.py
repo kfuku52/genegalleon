@@ -16,6 +16,7 @@ from pathlib import Path
 
 from focus_hgt_direction import key, known, read_taxonomy
 from focus_hgt_gene_trees import number, validate_link_identity
+from hgt_species_tree import event_species_branch
 
 SIDES = ('donor', 'recipient')
 STATUSES = ('compatible', 'incompatible', 'unresolved', 'missing', 'conflicting')
@@ -515,7 +516,7 @@ def annotate_origin(events, pairs, genes, nodes, links=(), mmseqs2_taxonomy_dir=
                                              for flag in assessment['origin_gene_attention_flags'].split(';') if flag.strip())
         row['origin_pair_review_flags'] = '; '.join(sorted(flags))
     for row in events:
-        donor, recipient = (nodes.get(key(row[f'generax_{side}_node'])) for side in SIDES)
+        donor, recipient = (nodes.get(event_species_branch(row, side)) for side in SIDES)
         relation = scope.endpoint_relation(donor, recipient)
         flags = event_flags[row['event_id']]
         if relation != 'incomparable_species_clades':

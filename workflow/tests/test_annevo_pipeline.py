@@ -23,10 +23,11 @@ def batch(tmp_path, monkeypatch):
 from pathlib import Path
 p=argparse.ArgumentParser()
 for n in ['-g','-p','-o','-t','-m','-l','-s','--batch_size','--num_workers','--min_intron_length','--min_prot_length']:p.add_argument(n)
-p.add_argument('--show_log',action='store_true');p.add_argument('--overlap_pred',action='store_true')
+p.add_argument('--show_log',action='store_true');p.add_argument('--overlap_pred',action='store_true');p.add_argument('--comp',action='store_true')
 a=p.parse_args();name=Path(a.g).stem
+child_umask=os.umask(0o077);os.umask(child_umask)
 def event(stage):
- with open(EVENTS,'a') as f:f.write(json.dumps({'event':stage,'name':name,'time':time.monotonic(),'cuda':os.environ.get('CUDA_VISIBLE_DEVICES')})+'\\n')
+ with open(EVENTS,'a') as f:f.write(json.dumps({'event':stage,'name':name,'time':time.monotonic(),'cuda':os.environ.get('CUDA_VISIBLE_DEVICES'),'jit':os.environ.get('NUMBA_CACHE_DIR'),'compression':a.comp,'umask':child_umask})+'\\n')
 '''.replace('EVENTS', repr(str(events)))
     (source / 'prediction.py').write_text("length_config={'Magnoliopsida':[30720,5120,32]}\n" + common + '''
 event('prediction-start');time.sleep(.12)
@@ -173,6 +174,94 @@ def test_decode_failure_retains_logs_and_does_not_publish_campaign_or_failed_pai
     assert (args.output/'fail/logs/decoding.stderr.txt').exists()
     assert json.loads((args.output/'pipeline.failed.json').read_text())['status'] == 'failed'
     assert not list(args.tmp_root.glob('gg-ap-*'))
+
+
+def test_largest_first_keeps_export_order_and_reuses_unchanged_pairs(batch):
+    make, events, _ = batch
+    args = make()
+    for name, copies in [('one', 2), ('two', 4), ('three', 1)]:
+        (args.tmp_root/(name+'.fa')).write_text('>seq\n'+'ATGAAATAA'*copies+'\n')
+    args.order = 'largest-first'
+    result = pipeline.run(args)
+    assert result['execution_order']==['two', 'one', 'three']
+    trace=[json.loads(line) for line in events.read_text().splitlines()]
+    assert [row['name'] for row in trace if row['event']=='prediction-start']==result['execution_order']
+    with (args.output/'candidate_inputs.tsv').open() as stream:
+        assert [row['species'] for row in csv.DictReader(stream,delimiter='\t')]==['one','two','three']
+    before=events.read_bytes()
+    args.order='input'
+    assert all(row['reused'] for row in pipeline.run(args)['species'].values())
+    assert events.read_bytes()==before
+
+
+def test_compression_is_forwarded_recorded_and_invalidates_an_existing_plain_pair(batch):
+    make, events, _ = batch
+    args=make(('one',))
+    args.compression='lzf'
+    pipeline.run(args)
+    trace=[json.loads(line) for line in events.read_text().splitlines()]
+    assert all(row['compression'] for row in trace if row['event'].startswith('prediction'))
+    receipt=json.loads((args.output/'one/native_prediction.json').read_text())
+    assert receipt['parameters']['compression']=='lzf' and '--comp' in receipt['argv']
+    args.compression='none'
+    with pytest.raises(ValueError,match='Stale pipeline'):
+        pipeline.run(args)
+
+
+def test_shared_jit_cache_is_bound_and_persists_without_touching_runtime(batch):
+    make, events, _ = batch
+    args=make()
+    args.jit_cache_root=args.tmp_root/'shared-jit'
+    pipeline.run(args)
+    trace=[json.loads(line) for line in events.read_text().splitlines()]
+    paths={row['jit'] for row in trace if row['event']=='decode-start'}
+    assert len(paths)==1
+    directory=Path(paths.pop())
+    assert directory.is_dir() and (directory/'cache_identity.json').is_file()
+    assert not directory.is_relative_to(args.tmp_root/'native')
+    for name in ['one','two','three']:
+        receipt=json.loads((args.output/name/'native_prediction.json').read_text())
+        assert receipt['pipeline']['jit_cache_directory']==str(directory)
+        assert receipt['pipeline']['jit_cache_key']==directory.name
+    assert not list(args.tmp_root.glob('gg-ap-*'))
+
+
+def test_native_children_use_private_umask_without_changing_parent_or_other_threads(batch):
+    make,events,_=batch
+    previous=os.umask(0o002)
+    try:
+        pipeline.run(make())
+        current=os.umask(0o002)
+        assert current==0o002
+    finally:
+        os.umask(previous)
+    trace=[json.loads(line) for line in events.read_text().splitlines()]
+    assert all(row['umask']==0o077 for row in trace)
+
+
+def test_schedule_rejects_genome_changes_before_native_prediction(batch,monkeypatch):
+    make,events,_=batch
+    args=make(('one',))
+    args.order='largest-first'
+    original=pipeline.genome_bases
+    def changing(path):
+        value=original(path)
+        Path(path).write_text('>seq\nATGCCCTAA\n')
+        return value
+    monkeypatch.setattr(pipeline,'genome_bases',changing)
+    with pytest.raises(ValueError,match='changed while scheduling'):
+        pipeline.run(args)
+    assert not events.exists()
+
+
+@pytest.mark.parametrize(('option','value'), [('order','unknown'),('compression','lossy')])
+def test_unknown_performance_options_reject_before_prediction(batch,option,value):
+    make,events,_=batch
+    args=make()
+    setattr(args,option,value)
+    with pytest.raises(ValueError,match='Unknown ANNEVO'):
+        pipeline.run(args)
+    assert not events.exists()
 
 
 def test_storage_budget_rejects_before_predicting(batch):

@@ -90,3 +90,46 @@ The 2026-10-08 saved-input benchmark and its raw trials are kept outside version
 control. These measurements describe rendering kernels and representative PDFs;
 they do not establish total runtime for a new cohort, remote acquisition speed,
 or SIF compatibility.
+
+## Per-family summary plots
+
+The ordinary summary renderer also uses a source-bound private candidate index.
+It reads each full candidate table once with the existing whole-table pandas
+inference and indexes exact family frames, retaining row order and dtypes.
+The majority-species prefix is computed once, including its existing lexical
+tie-break and nonempty-taxonomy rule. Original candidate tables and family
+artifacts remain the declared provenance inputs; the index is a disposable cache.
+Changed sources invalidate it, and damaged frame payloads fail before use.
+When either source timestamp has whole-second precision, readers also verify
+the original content digest with the shared streaming hash helper. Metadata
+cannot distinguish a same-size write with a restored mtime on these filesystems.
+This requires reading bytes again, while avoiding repeated pandas parsing and
+preserving whole-table types. Fine-precision inputs retain the metadata path.
+
+`hgt_summary_plot_workers=auto` bounds parallel rendering by allocated CPUs and
+one worker per 8 GiB of tool-memory budget. Workers use separate temporary
+render directories and one BLAS/OpenMP thread each. Failed workers propagate
+failure after all launched workers finish. Current completed family outputs
+retain their bytes and timestamps on resume; stale inputs still require the
+standard rebuild policy. No scientific score, family selection or plot setting
+changes with the worker count.
+
+The paired candidate-input benchmark includes cold index preparation and checks
+identical annotated TSV bytes. Run both modes with the same baseline ref and
+arguments, alternating their order for at least three trials:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_plot_inputs.py \
+  --baseline-ref BASELINE_COMMIT --mode baseline --families 32 --genes-per-family 1000
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_plot_inputs.py \
+  --baseline-ref BASELINE_COMMIT --mode indexed --families 32 --genes-per-family 1000
+```
+
+Report the source bytes, output SHA256, individual wall times and peak RSS.
+Add `--coarse-timestamps` to both modes to include strict content hashing in the
+comparison; do not apply fine-precision timing claims to that case.
+This measures candidate preparation/annotation, not total R rendering time or
+whole-project speed. Integration tests compare serial and concurrent native
+PDFs under the same RNG state after removing only creation/modification dates,
+and verify unchanged
+completed outputs on resume.

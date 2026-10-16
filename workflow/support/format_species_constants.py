@@ -423,6 +423,7 @@ SPECIES_SUMMARY_COLUMNS = (
     "overwrite",
     "dry_run",
     "paired_curation",
+    "cds_input_type",
 )
 
 PLASTID_GENETIC_CODE_LINEAGE_DEFAULTS = {

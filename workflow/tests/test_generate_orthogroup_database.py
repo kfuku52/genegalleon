@@ -1186,3 +1186,19 @@ def test_selected_catalog_scopes_audit_and_database_without_removing_old_results
     catalog.write_text('Orthogroup\tsp\nOG0001\t2\nOG0001\t2\n')
     with pytest.raises(ValueError, match='duplicate family'):
         pipeline.run(audit, db, record)
+
+
+def test_schema_specific_indexes_accept_empty_association_table(tmp_path, caplog):
+    mod = load_module()
+    mod.require_sqlalchemy()
+    engine = mod.sqlalchemy.create_engine("sqlite:///" + str(tmp_path / "tables.db"))
+    with engine.begin() as connection:
+        connection.execute(mod.sqlalchemy.text("CREATE TABLE tree (orthogroup TEXT)"))
+        connection.execute(mod.sqlalchemy.text("CREATE TABLE branch (orthogroup TEXT)"))
+        connection.execute(mod.sqlalchemy.text("CREATE TABLE pgls_association (tree_id TEXT)"))
+    mod.create_indexes(engine, ["tree", "branch", "pgls_association"])
+    with engine.connect() as connection:
+        for table, column in [("tree", "orthogroup"), ("branch", "orthogroup"), ("pgls_association", "tree_id")]:
+            assert connection.execute(mod.sqlalchemy.text(f"PRAGMA index_info(idx_{column}_{table})")).fetchone()[2] == column
+    assert "Failed to create index" not in caplog.text
+    engine.dispose()

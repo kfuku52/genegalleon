@@ -282,8 +282,11 @@ def create_indexes(engine, tables):
             if table == "aa_change_fdr_metadata":
                 continue
             try:
-                index_name = f"idx_orthogroup_{table}"
-                conn.execute(sqlalchemy.text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} (orthogroup);"))
+                # Association rows are keyed by tree_id, not orthogroup. This
+                # includes the intentionally empty association table.
+                column = "tree_id" if table == "pgls_association" else "orthogroup"
+                index_name = f"idx_{column}_{table}"
+                conn.execute(sqlalchemy.text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column});"))
                 logger.info(f"Created index '{index_name}' on table '{table}'.")
             except Exception as e:
                 logger.error(f"Failed to create index on table '{table}': {e}")

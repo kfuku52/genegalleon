@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import annevo_runtime as native
+from annevo_jit_cache import prepare as prepare_jit_cache
 from annevo_runtime_cache import RuntimeVerification, runtime_environment
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
@@ -70,9 +71,27 @@ def genome_bases(path):
 
 
 def parameters(args):
-    return dict(threads=args.decode_threads, batch_size=args.batch_size,
+    value = dict(threads=args.decode_threads, batch_size=args.batch_size,
                 sequence_threshold=args.sequence_threshold,
                 num_workers=min(2, args.predict_threads), min_intron_length=20, min_prot_length=100)
+    if getattr(args, 'compression', 'none') != 'none':
+        value['compression'] = args.compression
+    return value
+
+
+def schedule_rows(rows, order):
+    if order == 'input':
+        return rows
+    if order != 'largest-first':
+        raise ValueError('Unknown ANNEVO pipeline execution order')
+    scheduled = []
+    for row in rows:
+        before = file_sha(row['genome'])
+        bases = genome_bases(row['genome'])
+        if file_sha(row['genome']) != before:
+            raise ValueError('Genome changed while scheduling ANNEVO prediction')
+        scheduled.append({**row, '_bases': bases, '_schedule_genome_sha256': before})
+    return sorted(scheduled, key=lambda row: -row['_bases'])
 
 
 def existing_pair(output, receipt, expected):
@@ -100,7 +119,7 @@ def command(receipt, script, arguments):
 def execute(argv, env, work, logs, stage):
     start = time.monotonic()
     with (logs / (stage + '.stdout.txt')).open('w') as stdout, (logs / (stage + '.stderr.txt')).open('w') as stderr:
-        result = subprocess.run(argv, env=env, cwd=work, stdout=stdout, stderr=stderr)
+        result = subprocess.run(argv, env=env, cwd=work, stdout=stdout, stderr=stderr, umask=0o077)
     if result.returncode:
         raise RuntimeError('ANNEVO native ' + stage + ' failed; retained logs: ' + str(logs))
     return dict(stage=stage, argv=argv, seconds=time.monotonic() - start,
@@ -108,6 +127,11 @@ def execute(argv, env, work, logs, stage):
 
 
 def run(args):
+    compression = getattr(args, 'compression', 'none')
+    order = getattr(args, 'order', 'input')
+    jit_cache_root = getattr(args, 'jit_cache_root', None)
+    if compression not in {'none', 'lzf'} or order not in {'input', 'largest-first'}:
+        raise ValueError('Unknown ANNEVO pipeline compression or execution order')
     if not math.isfinite(args.max_tmp_gib) or min(args.predict_threads, args.decode_threads, args.decoder_workers,
            args.batch_size, args.sequence_threshold, args.max_tmp_gib) <= 0:
         raise ValueError('Pipeline thread, worker, batch and storage bounds must be positive')
@@ -140,7 +164,8 @@ def run(args):
     stats = dict(gpu_workers=1, decoder_workers=args.decoder_workers,
                  predict_threads=args.predict_threads, decode_threads=args.decode_threads,
                  cpu_budget=cpu_limit, max_tmp_bytes=budget, peak_reserved_bytes=0,
-                 max_inflight_species=0, input_sha256=table_sha)
+                 max_inflight_species=0, input_sha256=table_sha,
+                 intermediate_compression=compression, shared_jit_cache=bool(jit_cache_root))
 
     def reap(wait=False):
         nonlocal reserved
@@ -179,6 +204,8 @@ def run(args):
         if any(path.resolve().is_relative_to(Path(runtime['generation']).resolve()) for path in destinations):
             raise ValueError('Pipeline outputs must not overwrite the installed runtime')
         original_sha = file_sha(genome)
+        if row.get('_schedule_genome_sha256', original_sha) != original_sha:
+            raise ValueError('Genome changed after ANNEVO scheduling')
         settings = native.inference_settings(runtime, profile)
         expected = dict(runtime_digest=runtime['runtime_digest'], cache_key=runtime['cache_key'],
                         source_commit=runtime['source_commit'], model_sha256=runtime['model_sha256'],
@@ -198,7 +225,7 @@ def run(args):
                 lock.__exit__(None, None, None)
                 return
             sequence_identity = genome_sequence_digest(genome)
-            bp = genome_bases(genome)
+            bp = row['_bases'] if '_bases' in row else genome_bases(genome)
             if file_sha(genome) != original_sha:
                 raise RuntimeError('Pipeline genome changed during identity reading')
             # Native float16 probabilities: 15 classes, two strands = 60 B/base.
@@ -228,6 +255,10 @@ def run(args):
                        OPENBLAS_NUM_THREADS=str(args.predict_threads), TMPDIR=str(work),
                        NUMBA_CACHE_DIR=str(work / 'numba-cache'), TORCH_HOME=str(work / 'torch-cache'),
                        XDG_CACHE_HOME=str(work / 'xdg-cache'))
+            jit_directory, jit_key = (None, None)
+            if jit_cache_root is not None:
+                jit_directory, jit_key = prepare_jit_cache(jit_cache_root, runtime, protected)
+                env['NUMBA_CACHE_DIR'] = str(jit_directory)
             gpu = native.probe_gpu(runtime, env)
             predicted = work / 'probabilities.h5'
             pred_argv = command(runtime, 'prediction.py', ['-g', str(native_genome), '-m', runtime['model_path'],
@@ -235,6 +266,8 @@ def run(args):
                 '--batch_size', str(args.batch_size), '--num_workers', str(min(2, args.predict_threads))])
             if settings['overlap_pred']:
                 pred_argv.append('--overlap_pred')
+            if compression == 'lzf':
+                pred_argv.append('--comp')
             phase = execute(pred_argv, env, work, logs, 'prediction')
             if not predicted.is_file() or not predicted.stat().st_size:
                 raise RuntimeError('Native prediction produced no probabilities')
@@ -262,7 +295,8 @@ def run(args):
                              'genome_sequence_sha256': sequence_identity, 'native_genome_sha256': prepared_sha,
                              'genome_gzip': compressed, 'GFF_sha256': file_sha(gff), 'GFF_bytes': gff.stat().st_size,
                              'feature_counts': counts, 'native_wall_seconds': decoded['finished_monotonic'] - phase['started_monotonic'],
-                             'pipeline': {'gpu_workers': 1, 'phases': [phase, decoded], 'predict_threads': args.predict_threads},
+                             'pipeline': {'gpu_workers': 1, 'phases': [phase, decoded], 'predict_threads': args.predict_threads,
+                                          'jit_cache_key': jit_key, 'jit_cache_directory': str(jit_directory) if jit_directory else None},
                              'scientific_completion_verified': False}
                     native.read_selected(selected, verification=verification)
                     native.publish_pair(gff, output, receipt_path, value)
@@ -281,7 +315,9 @@ def run(args):
     with namespace_lock(root / '.pipeline.lock', exclusive=True, timeout=86400):
         try:
             with ThreadPoolExecutor(max_workers=args.decoder_workers) as executor:
-                for row in rows:
+                scheduled = schedule_rows(rows, order)
+                stats['execution_order'] = [row['species'] for row in scheduled]
+                for row in scheduled:
                     reap()
                     process(row, executor)
                 while pending:
@@ -325,6 +361,9 @@ def main():
     parser.add_argument('--sequence-threshold', type=int, default=25)
     parser.add_argument('--tmp-root', type=Path, default=Path('/tmp'))
     parser.add_argument('--max-tmp-gib', type=float, default=128)
+    parser.add_argument('--order', choices=('input', 'largest-first'), default='input')
+    parser.add_argument('--compression', choices=('none', 'lzf'), default='none')
+    parser.add_argument('--jit-cache-root', type=Path, help='Private shared Numba cache; omitted uses temporary per-species caches')
     try:
         result = run(parser.parse_args())
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

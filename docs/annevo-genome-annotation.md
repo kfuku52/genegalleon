@@ -218,6 +218,8 @@ and selected GFF/CDS bytes. Independent execution-receipt and raw GFF artifact
 identities are retained in the report. Native parallel decoding can reorder
 sequence-number comments; these identities are excluded from decision equality
 only after every native annotation field and model/genome input agrees.
+Indexing and donor placement finish before full annotation catalogs are retained,
+so their independent memory peaks do not overlap in bounded validation runtimes.
 Its placement graph remains explicitly
 approximate; a fixed alternative annotation is a regression control, not
 independent biological truth.
@@ -242,3 +244,64 @@ Geranium's fixed Helixer annotation was a regression control. In this input orde
 GPU prediction overlapped CPU decoding, but only one of the two decoder slots was
 active at a time. The large final genome and probability-file I/O limited the
 gain. This measurement does not establish steady-state throughput for 500 species.
+
+Additional pipeline options preserve the original configuration when omitted:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| --order | input | largest-first schedules longer assemblies earlier; candidate TSV rows retain the original input order. |
+| --compression | none | lzf passes native --comp for lossless probability storage; storage mode is recorded in prediction parameters. |
+| --jit-cache-root | omitted | A private shared cache for native Numba decoding; omitted retains per-species temporary caches. |
+
+For a comparison, use a new output directory rather than reusing predictions
+made with different storage parameters. Scheduling verifies input hashes before
+reusing assembly lengths. Shared JIT caches bind the installed runtime, source
+generation, CPU identity and Numba CPU overrides. Native Numba additionally
+checks compiler/CPU compatibility. Cache roots must be private, owned by the
+calling user and separate from inputs and the immutable installed environment.
+Select a local filesystem that preserves private POSIX permissions; output
+shares that create permissive directories despite a `0700` request are rejected.
+Changed identities select a new cache; unsafe members or modified identity
+records stop execution. No native program, model, prediction window, probability
+precision or admission threshold is changed by these options.
+
+For isolated effects and resource measurements, run
+workflow/benchmarks/benchmark_annevo_pipeline_optimizations.py in an existing GPU
+allocation with --inputs, a fresh --output, and --probability-proof-genome naming
+a qualified small matched-profile FASTA. It first verifies actual native plain/LZF
+probability bits, shapes, dtypes and metadata on that fixture outside timing.
+Two untimed native GPU/decode probes then verify cold/warm JIT reuse, GFF
+equivalence and resource sampling before full-genome trials. The harness keeps
+compiled caches under `--tmp-root`, separate from the GFF output share. Preflight
+and timed caches are separate, so the first optimized trial starts cold; timed
+trials share their cache until the harness exits and removes it.
+Four cumulative configurations run twice in reverse order: original settings,
+ordering only, ordering plus LZF, and ordering plus LZF plus shared JIT.
+Reports retain per-species phases, cache load/save events, GPU samples and
+one-second process-tree RSS/PSS. Sampled peaks are lower bounds and do not include
+whole-job page-cache/cgroup accounting. Large-genome output equivalence and actual
+rescue/refinement admission still require their recorded comparisons.
+
+The [2026-10-15 qualification](benchmarks/annevo-pipeline-2026-10-15.json)
+used the same three full genomes and RTX 6000 Ada, with two trials per setting:
+
+| Settings | Median minutes | Trial range, minutes |
+| --- | ---: | ---: |
+| Original pipeline | 27.16 | 24.05–30.26 |
+| Largest genome first | 21.98 | 20.23–23.73 |
+| Largest first and LZF | 23.44 | 18.83–28.06 |
+| Largest first, LZF and shared JIT | 26.56 | 19.98–33.15 |
+
+All 24 native GFFs retained identical annotation fields. The 1 Mb probability
+fixture retained identical bits and metadata with LZF, using 22.9 MB instead of
+60.0 MB. Native logs verified cache reuse between species and in the warm trial.
+The 2026-10-16 paired whole-genome assays also retained identical individual
+rescue/refinement admissions, representative choices and selected GFF/CDS bytes
+for all three species, using 2% gene/exon masks and unmasked controls. These
+assays use the approximate placement graph; Geranium's fixed Helixer annotation
+remains a regression control rather than independent biological truth.
+The order-only median was 19.1% lower; the combined median was only 2.2% lower
+with substantial timing variation. These observations do not establish a stable
+combined speedup. LZF and shared JIT remain optional; the first combined trial
+includes cold-cache startup and the second is warm. Sampled PSS peaks ranged
+from 8.9 to 10.9 GiB across settings, excluding whole-job page-cache accounting.

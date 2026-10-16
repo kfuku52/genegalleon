@@ -35,12 +35,26 @@ hgt_focus_allow_both_no_pfam="${hgt_focus_allow_both_no_pfam:-0}"
 hgt_focus_min_shared_pfam_coverage="${hgt_focus_min_shared_pfam_coverage:-0.5}"
 hgt_focus_require_length_ratio="${hgt_focus_require_length_ratio:-1}"
 hgt_focus_min_length_ratio="${hgt_focus_min_length_ratio:-0.5}"
-hgt_focus_direction_filter="${hgt_focus_direction_filter:-any}"
+hgt_focus_direction_filter="${hgt_focus_direction_filter:-off}"
+hgt_focus_direction_rules="${hgt_focus_direction_rules:-}"
 hgt_focus_species_taxonomy="${hgt_focus_species_taxonomy:-auto}"
 case "${hgt_focus_direction_filter}" in
-  any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda) ;;
+  off|any|custom|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda) ;;
   *) echo "Invalid focused HGT direction filter: ${hgt_focus_direction_filter}" >&2; exit 1 ;;
 esac
+if [[ "${hgt_focus_direction_filter}" != "custom" && -n "${hgt_focus_direction_rules}" ]]; then
+  echo "Direction rules require the explicit custom direction filter." >&2
+  exit 1
+fi
+hgt_plot_scope="${hgt_plot_scope:-all}"
+case "${hgt_plot_scope}" in
+  all|focused) ;;
+  *) echo "Invalid HGT plot scope: ${hgt_plot_scope}" >&2; exit 1 ;;
+esac
+if [[ "${hgt_plot_scope}" == "focused" && "${run_hgt_focus}" != "1" ]]; then
+  echo "Focused plot scope requires trait-focused HGT outputs." >&2
+  exit 1
+fi
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
 hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
@@ -474,6 +488,10 @@ elif [[ "${hgt_species_trait}" != "none" ]]; then
   fi
   hgt_species_trait_path="${hgt_species_trait}"
 fi
+if [[ "${hgt_plot_scope}" == "focused" && -z "${hgt_species_trait_path}" ]]; then
+  echo "Focused plot scope requires an explicit or auto-detected species trait table." >&2
+  exit 1
+fi
 gg_artifact_contract_init \
   hgt_summary_plot_provenance_args \
   "hgt_summary_plot" \
@@ -504,9 +522,11 @@ if [[ -n "${hgt_species_trait_path}" ]]; then
   gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_metadata" "${hgt_species_trait_path}.metadata.json"
   hgt_summary_plot_provenance_args+=(--input "trait_contract=${gg_support_dir}/species_trait_contract.py" --input "trait_schema=${gg_support_dir}/species_trait_schema.py")
 fi
-gg_artifact_prepare_stage hgt_summary_plot_needs_update run_hgt_plot "${hgt_summary_plot_provenance_args[@]}" || exit $?
+run_hgt_global_plot="${run_hgt_plot}"
+[[ "${hgt_plot_scope}" != "focused" ]] || run_hgt_global_plot=0
+gg_artifact_prepare_stage hgt_summary_plot_needs_update run_hgt_global_plot "${hgt_summary_plot_provenance_args[@]}" || exit $?
 
-if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
+if [[ ${run_hgt_global_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
   if [[ ! -s "${file_hgt_branch}" || ! -s "${file_hgt_gene}" ]]; then
     echo "Skipping HGT summary plotting because candidate tables were not found: ${file_hgt_branch}, ${file_hgt_gene}"
   else
@@ -550,6 +570,10 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
   [[ "${hgt_focus_event_tsv}" == "auto" ]] || hgt_focus_events="${hgt_focus_event_tsv}"
   [[ "${hgt_focus_event_gene_tsv}" == "auto" ]] || hgt_focus_links="${hgt_focus_event_gene_tsv}"
   if [[ ! -s "${hgt_focus_events}" || ! -s "${hgt_focus_links}" || -z "${hgt_species_tree_path}" ]]; then
+    if [[ "${hgt_plot_scope}" == "focused" ]]; then
+      echo "Focused plot scope requires event context tables and the analysis species tree." >&2
+      exit 1
+    fi
     if [[ "${hgt_focus_event_tsv}" != "auto" || "${hgt_focus_event_gene_tsv}" != "auto" ]]; then
       echo "Trait-focused HGT results require the supplied event tables and analysis species tree." >&2
       exit 1
@@ -561,9 +585,14 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
     if [[ "${hgt_focus_taxonomy_path}" == "auto" ]]; then
       hgt_focus_taxonomy_path="${gg_workspace_output_dir}/species_taxonomy/species_taxonomy.tsv"
     fi
-    if [[ "${hgt_focus_direction_filter}" != "any" && ! -s "${hgt_focus_taxonomy_path}" ]]; then
+    if [[ "${hgt_focus_direction_filter}" != "off" && "${hgt_focus_direction_filter}" != "any" && "${hgt_focus_direction_filter}" != "custom" && ! -s "${hgt_focus_taxonomy_path}" ]]; then
       echo "Focused species-branch direction filtering requires existing species taxonomy: ${hgt_focus_taxonomy_path}" >&2
       exit 1
+    fi
+    if [[ "${hgt_focus_direction_filter}" == "custom" ]]; then
+      PYTHONPATH="${gg_support_dir}${PYTHONPATH:+:${PYTHONPATH}}" python -c \
+        'import sys; from pathlib import Path; from focus_hgt_direction import validate_options; validate_options(sys.argv[1], sys.argv[2], sys.argv[3] if Path(sys.argv[3]).is_file() else "")' \
+        "${hgt_focus_direction_filter}" "${hgt_focus_direction_rules}" "${hgt_focus_taxonomy_path}"
     fi
     gg_artifact_contract_init hgt_focus_provenance_args "hgt_trait_focus" "all_category1_targets" \
       "${dir_hgt_provenance}/hgt_trait_focus.json"
@@ -585,6 +614,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --output "result_bundle=${dir_hgt_trait_focus}"
       --parameter "schema_version=1"
       --parameter "plots=${run_hgt_plot}"
+      --parameter "plot_scope=${hgt_plot_scope}"
       --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
       --parameter "require_shared_pfam=${hgt_focus_require_shared_pfam}"
       --parameter "allow_both_no_pfam=${hgt_focus_allow_both_no_pfam}"
@@ -593,7 +623,10 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --parameter "min_length_ratio=${hgt_focus_min_length_ratio}"
       --parameter "direction_filter=${hgt_focus_direction_filter}"
     )
-    if [[ "${hgt_focus_direction_filter}" != "any" ]]; then
+    if [[ "${hgt_focus_direction_filter}" == "custom" ]]; then
+      hgt_focus_provenance_args+=(--input "direction_rules=${hgt_focus_direction_rules}")
+    fi
+    if [[ "${hgt_focus_direction_filter}" != "off" && "${hgt_focus_direction_filter}" != "any" && -s "${hgt_focus_taxonomy_path}" ]]; then
       hgt_focus_provenance_args+=(--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}")
     else
       gg_artifact_add_input_if_present hgt_focus_provenance_args "origin_species_taxonomy" "${hgt_focus_taxonomy_path}"
@@ -650,6 +683,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --require_length_ratio "${hgt_focus_require_length_ratio}" \
         --min_length_ratio "${hgt_focus_min_length_ratio}" \
         --direction_filter "${hgt_focus_direction_filter}" \
+        --direction_rules "${hgt_focus_direction_rules}" \
         --species_taxonomy "${hgt_focus_existing_taxonomy}" \
         --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
       gg_artifact_record "${hgt_focus_provenance_args[@]}"
@@ -657,7 +691,253 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
   fi
 fi
 
-if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
+# Each worker owns its render directory and provenance-server connection.
+# Function stays in this core script so stage order and public entrypoints stay intact.
+hgt_plot_family() (
+  local og_id=$1
+  export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
+  [[ -z "${og_id}" ]] && return 0
+  file_hgt_stat_branch="${dir_hgt_tree_input}/${og_id}_hgt_stat.branch.tsv"
+  file_hgt_tree_plot="${dir_hgt_tree_plot}/${og_id}_hgt_tree_plot.pdf"
+  file_hgt_tree_manifest="${dir_hgt_provenance}/${og_id}.hgt_tree_plot.json"
+  hgt_tree_plot_run="${run_hgt_plot}"
+  if [[ ${hgt_tree_plot_run} -ne 1 \
+    && ! -e "${file_hgt_stat_branch}" \
+    && ! -e "${file_hgt_tree_plot}" \
+    && ! -e "${file_hgt_tree_manifest}" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${hgt_materialization_run_dir}" ]]; then
+    mkdir -p "${dir_hgt_tree_plot}" "${dir_hgt_tree_input}" "${dir_hgt_tmp}"
+    hgt_prepare_materialization_run
+  fi
+  dir_og_input_root="${dir_orthogroup}"
+  dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"
+  mkdir -p "${dir_hgt_materialized}/render"
+  trap 'hgt_cleanup_family_materialization "${hgt_current_materialized:-}"' EXIT
+  hgt_current_materialized="${dir_hgt_materialized}"
+  hgt_uses_gene_family_store=0
+  if [[ -d "${dir_orthogroup}/.gg_store" || -d "${dir_orthogroup}/.gg_archives" ]]; then
+    hgt_uses_gene_family_store=1
+    hgt_current_materialized="${dir_hgt_materialized}"
+    materialize_args=(
+      materialize-family
+      --root "${dir_orthogroup}"
+      --mode "${hgt_gene_family_mode}"
+      --family-id "${og_id}"
+      --destination-root "${dir_hgt_materialized}"
+      --subdirs "stat_branch,synteny,rpsblast,clipkit,orthogroup_extraction_fasta,maxalign,mafft,protein_fasta,cds_fasta,dated_tree,fimo,meme"
+    )
+    if [[ "${hgt_gene_family_mode}" == "query2family" ]]; then
+      materialize_args+=(--query-dir "${gg_workspace_input_dir}/query_gene")
+    fi
+    if ! python "${gg_support_dir}/gene_family_output_store.py" "${materialize_args[@]}"; then
+      echo "Skipping HGT tree plot for ${og_id}: failed to materialize ZIP-backed inputs." >&2
+      hgt_cleanup_family_materialization "${hgt_current_materialized}"
+      hgt_current_materialized=""
+      return 0
+    fi
+    dir_og_input_root="${dir_hgt_materialized}"
+  fi
+  file_og_stat_branch="${dir_og_input_root}/stat_branch/${og_id}_stat.branch.tsv"
+  file_og_synteny="${dir_og_input_root}/synteny/${og_id}_synteny.tsv"
+  file_og_rpsblast="${dir_og_input_root}/rpsblast/${og_id}_rpsblast.tsv"
+  file_og_clipkit="${dir_og_input_root}/clipkit/${og_id}_cds.clipkit.fa.gz"
+  file_og_orthogroup_extraction_fasta="${dir_og_input_root}/orthogroup_extraction_fasta/${og_id}_orthogroup_extraction.fa.gz"
+  file_og_maxalign="${dir_og_input_root}/maxalign/${og_id}_cds.maxalign.fa.gz"
+  file_og_mafft="${dir_og_input_root}/mafft/${og_id}_cds.aln.fa.gz"
+  file_og_pep_fasta="${dir_og_input_root}/protein_fasta/${og_id}_pep.fa.gz"
+  file_og_cds_fasta="${dir_og_input_root}/cds_fasta/${og_id}_cds.fa.gz"
+  file_og_dated_tree="${dir_og_input_root}/dated_tree/${og_id}_dated.nwk"
+  file_og_fimo="${dir_og_input_root}/fimo/${og_id}_fimo.tsv"
+  file_og_meme="${dir_og_input_root}/meme/${og_id}_meme.xml"
+  if [[ ! -s "${file_og_stat_branch}" ]]; then
+    echo "Skipping HGT tree plot for ${og_id}: stat_branch not found (${file_og_stat_branch})"
+    hgt_cleanup_family_materialization "${hgt_current_materialized}"
+    hgt_current_materialized=""
+    return 0
+  fi
+
+  hgt_tree_plot_provenance_args=()
+  gg_artifact_contract_init \
+    hgt_tree_plot_provenance_args \
+    "hgt_tree_plot" \
+    "${og_id}" \
+    "${file_hgt_tree_manifest}"
+  hgt_tree_plot_provenance_args+=(
+    --input "branch_candidates=${file_hgt_branch}"
+    --input "gene_candidates=${file_hgt_gene}"
+    --output "annotated_stat_branch=${file_hgt_stat_branch}"
+    --output "tree_plot=${file_hgt_tree_plot}"
+    --parameter "column_layout=physical-mm-v2-compact-legends"
+    --parameter "tree_width_mm=${hgt_tree_width_mm}"
+    --parameter "promoter_bp=${hgt_promoter_bp}"
+    --parameter "fimo_qvalue=${hgt_fimo_qvalue}"
+  )
+  hgt_family_input_specs=(
+    "stat_branch|stat_branch|${og_id}_stat.branch.tsv|${file_og_stat_branch}"
+    "synteny|synteny|${og_id}_synteny.tsv|${file_og_synteny}"
+    "rpsblast|rpsblast|${og_id}_rpsblast.tsv|${file_og_rpsblast}"
+    "clipkit_alignment|clipkit|${og_id}_cds.clipkit.fa.gz|${file_og_clipkit}"
+    "extracted_alignment|orthogroup_extraction_fasta|${og_id}_orthogroup_extraction.fa.gz|${file_og_orthogroup_extraction_fasta}"
+    "maxalign_alignment|maxalign|${og_id}_cds.maxalign.fa.gz|${file_og_maxalign}"
+    "mafft_alignment|mafft|${og_id}_cds.aln.fa.gz|${file_og_mafft}"
+    "protein_fasta|protein_fasta|${og_id}_pep.fa.gz|${file_og_pep_fasta}"
+    "cds_fasta|cds_fasta|${og_id}_cds.fa.gz|${file_og_cds_fasta}"
+    "dated_tree|dated_tree|${og_id}_dated.nwk|${file_og_dated_tree}"
+    "fimo|fimo|${og_id}_fimo.tsv|${file_og_fimo}"
+    "meme|meme|${og_id}_meme.xml|${file_og_meme}"
+  )
+  for hgt_family_input_spec in "${hgt_family_input_specs[@]}"; do
+    IFS='|' read -r hgt_input_label hgt_input_subdir hgt_input_name hgt_input_path <<< "${hgt_family_input_spec}"
+    [[ -e "${hgt_input_path}" ]] || continue
+    if [[ ${hgt_uses_gene_family_store} -eq 1 ]]; then
+      hgt_tree_plot_provenance_args+=(
+        --input-gene-family-artifact
+        "${hgt_input_label}=${dir_orthogroup}::${hgt_input_subdir}::${hgt_input_name}"
+      )
+    else
+      hgt_tree_plot_provenance_args+=(--input "${hgt_input_label}=${hgt_input_path}")
+    fi
+  done
+  gg_artifact_prepare_stage \
+    hgt_tree_plot_needs_update \
+    hgt_tree_plot_run \
+    "${hgt_tree_plot_provenance_args[@]}" || exit $?
+  if [[ ${hgt_tree_plot_run} -ne 1 || ${hgt_tree_plot_needs_update} -ne 1 ]]; then
+    hgt_cleanup_family_materialization "${hgt_current_materialized}"
+    hgt_current_materialized=""
+    return 0
+  fi
+
+  if [[ ${hgt_ggimage_available} -lt 0 ]]; then
+    if Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
+      hgt_ggimage_available=1
+    else
+      hgt_ggimage_available=0
+      echo "ggimage package is unavailable. Skipping HGT tree plots." >&2
+    fi
+  fi
+  if [[ ${hgt_ggimage_available} -eq 0 ]]; then
+    hgt_cleanup_family_materialization "${hgt_current_materialized}"
+    hgt_current_materialized=""
+    return 0
+  fi
+
+  rm -f -- "${file_hgt_stat_branch}" "${file_hgt_tree_plot}"
+  python "${gg_support_dir}/annotate_hgt_tree_plot.py" \
+    --stat_branch "${file_og_stat_branch}" \
+    --branch_tsv "${file_hgt_branch}" \
+    --gene_tsv "${file_hgt_gene}" \
+    --orthogroup "${og_id}" \
+    --candidate_index "${hgt_candidate_index}" \
+    --ortholog_prefix_out "${dir_hgt_materialized}/ortholog-prefix.txt" \
+    --outfile "${file_hgt_stat_branch}"
+  ortholog_prefix=$(cat "${dir_hgt_materialized}/ortholog-prefix.txt")
+  [[ -n "${ortholog_prefix}" ]] || ortholog_prefix="HGT_UNRESOLVED_"
+
+  num_tip_treeplot=$(hgt_count_tree_tips "${file_hgt_stat_branch}")
+  panel_trimmed_aln=$(hgt_select_alignment_input "${num_tip_treeplot}" \
+    "${file_og_clipkit}" \
+    "${file_og_orthogroup_extraction_fasta}" \
+    "${file_og_maxalign}" \
+    "${file_og_mafft}" \
+    "${file_og_pep_fasta}" \
+    "${file_og_cds_fasta}")
+  panel_untrimmed_aln=$(hgt_select_alignment_input "${num_tip_treeplot}" \
+    "${file_og_orthogroup_extraction_fasta}" \
+    "${file_og_mafft}" \
+    "${file_og_pep_fasta}" \
+    "${file_og_cds_fasta}")
+
+  (
+    cd "${dir_hgt_materialized}/render"
+    rm -f -- stat_branch2tree_plot.pdf
+    Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
+      --stat_branch="${file_hgt_stat_branch}" \
+      --max_delta_intron_present="-0.5" \
+      --panel_widths_mm="tree:${hgt_tree_width_mm}" \
+      --panel1="tree,bl_rooted,support_unrooted,species,L" \
+      --panel2="heatmap,no,abs,_,expression_,Expression" \
+      --panel3="pointplot,no,rel,_,expression_" \
+      --panel4="heatmap,no,colrel,_,hgt_,HGT evidence (column max=1)" \
+      --panel5="cluster_membership,100000" \
+      --panel6="synteny,${file_og_synteny},5" \
+      --panel7="tiplabel" \
+      --panel8="categorical,besthit_lca_rank_display,Hit LCA,-" \
+      --panel9="signal_peptide" \
+      --panel10="transmembrane_domain" \
+      --panel11="intron_number" \
+      --panel12="domain,${file_og_rpsblast}" \
+      --panel13="alignment,${panel_trimmed_aln},${panel_untrimmed_aln}" \
+      --panel14="fimo,${hgt_promoter_bp},${hgt_fimo_qvalue}" \
+      --panel15="meme,${file_og_meme}" \
+      --panel16="ortholog,${ortholog_prefix},${file_og_dated_tree}" \
+      --show_branch_id="yes" \
+      --event_method="generax" \
+      --species_color_table="PLACEHOLDER" \
+      --pie_chart_value_transformation="identity" \
+      --long_branch_display="auto" \
+      --long_branch_ref_quantile="0.95" \
+      --long_branch_detect_ratio="5" \
+      --long_branch_cap_ratio="2.5" \
+      --long_branch_tail_shrink="0.02" \
+      --long_branch_max_fraction="0.1"
+    if [[ -s "stat_branch2tree_plot.pdf" ]]; then
+      mv_out "stat_branch2tree_plot.pdf" "${file_hgt_tree_plot}"
+    else
+      echo "Warning: HGT tree plot was not generated for ${og_id}." >&2
+      exit 1
+    fi
+  )
+  if [[ -s "${file_hgt_stat_branch}" && -s "${file_hgt_tree_plot}" ]]; then
+    gg_artifact_record "${hgt_tree_plot_provenance_args[@]}"
+  else
+    echo "Warning: HGT tree plot outputs are incomplete for ${og_id}; provenance was not recorded." >&2
+    return 1
+  fi
+  hgt_cleanup_family_materialization "${hgt_current_materialized}"
+  hgt_current_materialized=""
+)
+
+hgt_plot_worker_limit() {
+  local requested=${hgt_plot_workers:-auto}
+  local cpus=${GG_TASK_CPUS:-1}
+  local memory=${GG_MEM_TOOL_GB:-8}
+  if ! [[ ${cpus} =~ ^[1-9][0-9]*$ && ${memory} =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid HGT CPU/memory allocation" >&2
+    return 1
+  fi
+  local limit=$((memory / 8))
+  ((limit > 0)) || limit=1
+  ((limit <= cpus)) || limit=${cpus}
+  if [[ ${requested} != auto ]]; then
+    if ! [[ ${requested} =~ ^[1-9][0-9]*$ ]] || ((requested > limit)); then
+      echo "hgt_plot_workers exceeds allocated CPUs or 8-GiB-per-worker budget: ${requested} > ${limit}" >&2
+      return 1
+    fi
+    limit=${requested}
+  fi
+  printf '%s\n' "${limit}"
+}
+
+# Poll only owned workers; reap every launched child before cleanup or failure.
+# Unlike FIFO waiting, a slow first family cannot leave other slots idle.
+hgt_reap_plot_workers() {
+  local pid
+  local active=()
+  for pid in "${hgt_plot_pids[@]}"; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      active+=("${pid}")
+    elif ! wait "${pid}"; then
+      hgt_plot_failed=1
+    fi
+  done
+  hgt_plot_pids=("${active[@]}")
+}
+
+if [[ "${hgt_plot_scope}" == "all" && -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
   hgt_orthogroups=()
   while IFS= read -r og_id; do
     [[ -z "${og_id}" ]] && continue
@@ -678,208 +958,39 @@ if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
   )
 
   hgt_ggimage_available=-1
+  if [[ ${run_hgt_plot} -eq 1 ]]; then
+    hgt_ggimage_available=0
+    if Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
+      hgt_ggimage_available=1
+    fi
+  fi
+  hgt_plot_limit=$(hgt_plot_worker_limit)
+  echo "HGT tree plots: families=${#hgt_orthogroups[@]}, workers=${hgt_plot_limit}, memory_per_worker_gib=8"
+  hgt_candidate_index="${dir_hgt_tmp}/candidate-inputs.sqlite3"
+  mkdir -p "${dir_hgt_tree_plot}" "${dir_hgt_tree_input}" "${dir_hgt_tmp}"
+  hgt_prepare_materialization_run
+  if [[ ${run_hgt_plot} -eq 1 ]] || compgen -G "${dir_hgt_tree_plot}/*_hgt_tree_plot.pdf" > /dev/null \
+    || compgen -G "${dir_hgt_tree_input}/*_hgt_stat.branch.tsv" > /dev/null \
+    || compgen -G "${dir_hgt_provenance}/*.hgt_tree_plot.json" > /dev/null; then
+    python "${gg_support_dir}/hgt_plot_inputs.py" --database "${hgt_candidate_index}" \
+      --branch-tsv "${file_hgt_branch}" --gene-tsv "${file_hgt_gene}"
+  fi
+  hgt_plot_pids=()
+  hgt_plot_failed=0
   for og_id in "${hgt_orthogroups[@]}"; do
-    [[ -z "${og_id}" ]] && continue
-    file_hgt_stat_branch="${dir_hgt_tree_input}/${og_id}_hgt_stat.branch.tsv"
-    file_hgt_tree_plot="${dir_hgt_tree_plot}/${og_id}_hgt_tree_plot.pdf"
-    file_hgt_tree_manifest="${dir_hgt_provenance}/${og_id}.hgt_tree_plot.json"
-    hgt_tree_plot_run="${run_hgt_plot}"
-    if [[ ${hgt_tree_plot_run} -ne 1 \
-      && ! -e "${file_hgt_stat_branch}" \
-      && ! -e "${file_hgt_tree_plot}" \
-      && ! -e "${file_hgt_tree_manifest}" ]]; then
-      continue
-    fi
-
-    if [[ -z "${hgt_materialization_run_dir}" ]]; then
-      mkdir -p "${dir_hgt_tree_plot}" "${dir_hgt_tree_input}" "${dir_hgt_tmp}"
-      hgt_prepare_materialization_run
-    fi
-    dir_og_input_root="${dir_orthogroup}"
-    dir_hgt_materialized="${hgt_materialization_run_dir}/${og_id}"
-    hgt_current_materialized=""
-    hgt_uses_gene_family_store=0
-    if [[ -d "${dir_orthogroup}/.gg_store" || -d "${dir_orthogroup}/.gg_archives" ]]; then
-      hgt_uses_gene_family_store=1
-      hgt_current_materialized="${dir_hgt_materialized}"
-      materialize_args=(
-        materialize-family
-        --root "${dir_orthogroup}"
-        --mode "${hgt_gene_family_mode}"
-        --family-id "${og_id}"
-        --destination-root "${dir_hgt_materialized}"
-        --subdirs "stat_branch,synteny,rpsblast,clipkit,orthogroup_extraction_fasta,maxalign,mafft,protein_fasta,cds_fasta,dated_tree,fimo,meme"
-      )
-      if [[ "${hgt_gene_family_mode}" == "query2family" ]]; then
-        materialize_args+=(--query-dir "${gg_workspace_input_dir}/query_gene")
-      fi
-      if ! python "${gg_support_dir}/gene_family_output_store.py" "${materialize_args[@]}"; then
-        echo "Skipping HGT tree plot for ${og_id}: failed to materialize ZIP-backed inputs." >&2
-        hgt_cleanup_family_materialization "${hgt_current_materialized}"
-        hgt_current_materialized=""
-        continue
-      fi
-      dir_og_input_root="${dir_hgt_materialized}"
-    fi
-    file_og_stat_branch="${dir_og_input_root}/stat_branch/${og_id}_stat.branch.tsv"
-    file_og_synteny="${dir_og_input_root}/synteny/${og_id}_synteny.tsv"
-    file_og_rpsblast="${dir_og_input_root}/rpsblast/${og_id}_rpsblast.tsv"
-    file_og_clipkit="${dir_og_input_root}/clipkit/${og_id}_cds.clipkit.fa.gz"
-    file_og_orthogroup_extraction_fasta="${dir_og_input_root}/orthogroup_extraction_fasta/${og_id}_orthogroup_extraction.fa.gz"
-    file_og_maxalign="${dir_og_input_root}/maxalign/${og_id}_cds.maxalign.fa.gz"
-    file_og_mafft="${dir_og_input_root}/mafft/${og_id}_cds.aln.fa.gz"
-    file_og_pep_fasta="${dir_og_input_root}/protein_fasta/${og_id}_pep.fa.gz"
-    file_og_cds_fasta="${dir_og_input_root}/cds_fasta/${og_id}_cds.fa.gz"
-    file_og_dated_tree="${dir_og_input_root}/dated_tree/${og_id}_dated.nwk"
-    file_og_fimo="${dir_og_input_root}/fimo/${og_id}_fimo.tsv"
-    file_og_meme="${dir_og_input_root}/meme/${og_id}_meme.xml"
-    if [[ ! -s "${file_og_stat_branch}" ]]; then
-      echo "Skipping HGT tree plot for ${og_id}: stat_branch not found (${file_og_stat_branch})"
-      hgt_cleanup_family_materialization "${hgt_current_materialized}"
-      hgt_current_materialized=""
-      continue
-    fi
-
-    hgt_tree_plot_provenance_args=()
-    gg_artifact_contract_init \
-      hgt_tree_plot_provenance_args \
-      "hgt_tree_plot" \
-      "${og_id}" \
-      "${file_hgt_tree_manifest}"
-    hgt_tree_plot_provenance_args+=(
-      --input "branch_candidates=${file_hgt_branch}"
-      --input "gene_candidates=${file_hgt_gene}"
-      --output "annotated_stat_branch=${file_hgt_stat_branch}"
-      --output "tree_plot=${file_hgt_tree_plot}"
-      --parameter "column_layout=physical-mm-v2-compact-legends"
-      --parameter "tree_width_mm=${hgt_tree_width_mm}"
-      --parameter "promoter_bp=${hgt_promoter_bp}"
-      --parameter "fimo_qvalue=${hgt_fimo_qvalue}"
-    )
-    hgt_family_input_specs=(
-      "stat_branch|stat_branch|${og_id}_stat.branch.tsv|${file_og_stat_branch}"
-      "synteny|synteny|${og_id}_synteny.tsv|${file_og_synteny}"
-      "rpsblast|rpsblast|${og_id}_rpsblast.tsv|${file_og_rpsblast}"
-      "clipkit_alignment|clipkit|${og_id}_cds.clipkit.fa.gz|${file_og_clipkit}"
-      "extracted_alignment|orthogroup_extraction_fasta|${og_id}_orthogroup_extraction.fa.gz|${file_og_orthogroup_extraction_fasta}"
-      "maxalign_alignment|maxalign|${og_id}_cds.maxalign.fa.gz|${file_og_maxalign}"
-      "mafft_alignment|mafft|${og_id}_cds.aln.fa.gz|${file_og_mafft}"
-      "protein_fasta|protein_fasta|${og_id}_pep.fa.gz|${file_og_pep_fasta}"
-      "cds_fasta|cds_fasta|${og_id}_cds.fa.gz|${file_og_cds_fasta}"
-      "dated_tree|dated_tree|${og_id}_dated.nwk|${file_og_dated_tree}"
-      "fimo|fimo|${og_id}_fimo.tsv|${file_og_fimo}"
-      "meme|meme|${og_id}_meme.xml|${file_og_meme}"
-    )
-    for hgt_family_input_spec in "${hgt_family_input_specs[@]}"; do
-      IFS='|' read -r hgt_input_label hgt_input_subdir hgt_input_name hgt_input_path <<< "${hgt_family_input_spec}"
-      [[ -e "${hgt_input_path}" ]] || continue
-      if [[ ${hgt_uses_gene_family_store} -eq 1 ]]; then
-        hgt_tree_plot_provenance_args+=(
-          --input-gene-family-artifact
-          "${hgt_input_label}=${dir_orthogroup}::${hgt_input_subdir}::${hgt_input_name}"
-        )
-      else
-        hgt_tree_plot_provenance_args+=(--input "${hgt_input_label}=${hgt_input_path}")
-      fi
+    while ((${#hgt_plot_pids[@]} >= hgt_plot_limit)); do
+      hgt_reap_plot_workers
+      ((hgt_plot_failed == 0)) || break
+      ((${#hgt_plot_pids[@]} < hgt_plot_limit)) || sleep 0.1
     done
-    gg_artifact_prepare_stage \
-      hgt_tree_plot_needs_update \
-      hgt_tree_plot_run \
-      "${hgt_tree_plot_provenance_args[@]}" || exit $?
-    if [[ ${hgt_tree_plot_run} -ne 1 || ${hgt_tree_plot_needs_update} -ne 1 ]]; then
-      hgt_cleanup_family_materialization "${hgt_current_materialized}"
-      hgt_current_materialized=""
-      continue
-    fi
-
-    if [[ ${hgt_ggimage_available} -lt 0 ]]; then
-      if Rscript -e "if (!requireNamespace('ggimage', quietly=TRUE)) quit(status=1)" > /dev/null 2>&1; then
-        hgt_ggimage_available=1
-      else
-        hgt_ggimage_available=0
-        echo "ggimage package is unavailable. Skipping HGT tree plots." >&2
-      fi
-    fi
-    if [[ ${hgt_ggimage_available} -eq 0 ]]; then
-      hgt_cleanup_family_materialization "${hgt_current_materialized}"
-      hgt_current_materialized=""
-      continue
-    fi
-
-    ortholog_prefix=$(hgt_majority_ortholog_prefix "${og_id}" "${file_hgt_gene}")
-    if [[ -z "${ortholog_prefix}" ]]; then
-      ortholog_prefix="HGT_UNRESOLVED_"
-    fi
-
-    rm -f -- "${file_hgt_stat_branch}" "${file_hgt_tree_plot}"
-    python "${gg_support_dir}/annotate_hgt_tree_plot.py" \
-      --stat_branch "${file_og_stat_branch}" \
-      --branch_tsv "${file_hgt_branch}" \
-      --gene_tsv "${file_hgt_gene}" \
-      --orthogroup "${og_id}" \
-      --outfile "${file_hgt_stat_branch}"
-
-    num_tip_treeplot=$(hgt_count_tree_tips "${file_hgt_stat_branch}")
-    panel_trimmed_aln=$(hgt_select_alignment_input "${num_tip_treeplot}" \
-      "${file_og_clipkit}" \
-      "${file_og_orthogroup_extraction_fasta}" \
-      "${file_og_maxalign}" \
-      "${file_og_mafft}" \
-      "${file_og_pep_fasta}" \
-      "${file_og_cds_fasta}")
-    panel_untrimmed_aln=$(hgt_select_alignment_input "${num_tip_treeplot}" \
-      "${file_og_orthogroup_extraction_fasta}" \
-      "${file_og_mafft}" \
-      "${file_og_pep_fasta}" \
-      "${file_og_cds_fasta}")
-
-    (
-      cd "${dir_hgt_tmp}"
-      rm -f -- stat_branch2tree_plot.pdf
-      Rscript "${gg_support_dir}/stat_branch2tree_plot.r" \
-        --stat_branch="${file_hgt_stat_branch}" \
-        --max_delta_intron_present="-0.5" \
-        --panel_widths_mm="tree:${hgt_tree_width_mm}" \
-        --panel1="tree,bl_rooted,support_unrooted,species,L" \
-        --panel2="heatmap,no,abs,_,expression_,Expression" \
-        --panel3="pointplot,no,rel,_,expression_" \
-        --panel4="heatmap,no,colrel,_,hgt_,HGT evidence (column max=1)" \
-        --panel5="cluster_membership,100000" \
-        --panel6="synteny,${file_og_synteny},5" \
-        --panel7="tiplabel" \
-        --panel8="categorical,besthit_lca_rank_display,Hit LCA,-" \
-        --panel9="signal_peptide" \
-        --panel10="transmembrane_domain" \
-        --panel11="intron_number" \
-        --panel12="domain,${file_og_rpsblast}" \
-        --panel13="alignment,${panel_trimmed_aln},${panel_untrimmed_aln}" \
-        --panel14="fimo,${hgt_promoter_bp},${hgt_fimo_qvalue}" \
-        --panel15="meme,${file_og_meme}" \
-        --panel16="ortholog,${ortholog_prefix},${file_og_dated_tree}" \
-        --show_branch_id="yes" \
-        --event_method="generax" \
-        --species_color_table="PLACEHOLDER" \
-        --pie_chart_value_transformation="identity" \
-        --long_branch_display="auto" \
-        --long_branch_ref_quantile="0.95" \
-        --long_branch_detect_ratio="5" \
-        --long_branch_cap_ratio="2.5" \
-        --long_branch_tail_shrink="0.02" \
-        --long_branch_max_fraction="0.1"
-      if [[ -s "stat_branch2tree_plot.pdf" ]]; then
-        mv_out "stat_branch2tree_plot.pdf" "${file_hgt_tree_plot}"
-      else
-        echo "Warning: HGT tree plot was not generated for ${og_id}."
-      fi
-    )
-    if [[ -s "${file_hgt_stat_branch}" && -s "${file_hgt_tree_plot}" ]]; then
-      gg_artifact_record "${hgt_tree_plot_provenance_args[@]}"
-    else
-      echo "Warning: HGT tree plot outputs are incomplete for ${og_id}; provenance was not recorded." >&2
-    fi
-    hgt_cleanup_family_materialization "${hgt_current_materialized}"
-    hgt_current_materialized=""
+    ((hgt_plot_failed == 0)) || break
+    hgt_plot_family "${og_id}" &
+    hgt_plot_pids+=("$!")
   done
+  for hgt_plot_pid in "${hgt_plot_pids[@]}"; do
+    wait "${hgt_plot_pid}" || hgt_plot_failed=1
+  done
+  ((hgt_plot_failed == 0)) || exit 1
 fi
 
 hgt_cleanup_materialization_run

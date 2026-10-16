@@ -1146,6 +1146,7 @@ run_format_stage_single() {
 run_validate_stage() {
   local task="Validate formatted species inputs"
   local mapping_stats_file=""
+  local longest_cds_stats_file=""
   local cmd=()
   local cds_files=()
   local gff_files=()
@@ -1194,7 +1195,7 @@ run_validate_stage() {
 
   if [[ ${#gff_files[@]} -eq 0 ]]; then
     echo "No species GFF files were detected in: ${species_gff_dir}"
-    if [[ ${strict} -eq 1 ]]; then
+    if [[ ${require_gff} -eq 1 ]]; then
       stage_validate_status="failed"
       exit 1
     fi
@@ -1202,7 +1203,7 @@ run_validate_stage() {
 
   if [[ ${#genome_files[@]} -eq 0 ]]; then
     echo "No species genome files were detected in: ${species_genome_dir}"
-    if [[ ${strict} -eq 1 ]]; then
+    if [[ ${require_genome} -eq 1 ]]; then
       stage_validate_status="failed"
       exit 1
     fi
@@ -1280,6 +1281,20 @@ run_validate_stage() {
       fi
       rm -f -- "${mapping_stats_file}"
       # Retain source-ownership coverage alongside the selection result.
+    fi
+  elif [[ ${#cds_files[@]} -gt 0 ]]; then
+    # CDS-only inputs retain full source-selection validation. Presence of
+    # genomic roles is controlled by require_gff/require_genome above.
+    longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
+    cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+    cmd+=(--species-cds-dir "${species_cds_dir}" --species-summary "${species_summary_output}")
+    cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --stats-output "${longest_cds_stats_file}")
+    cmd+=("${validation_reuse_args[@]}")
+    echo "Running: ${cmd[*]}"
+    if ! "${cmd[@]}"; then
+      stage_validate_status="failed"
+      echo "Failed: Validate longest CDS representative selection"
+      exit 1
     fi
   fi
   stage_validate_status="ok"

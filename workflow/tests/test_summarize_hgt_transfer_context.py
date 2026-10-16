@@ -199,3 +199,33 @@ def test_species_mismatch_holds_scaffold_but_preserves_source_gene_observations(
     assert row["host_scaffold_status"] == "gene_species_mismatch"
     assert "host_scaffold_id" not in row
     assert row["intron_supported"] == "False"
+
+
+def test_renamed_internal_branches_have_full_bijection_without_rewriting_event_identity(tmp_path):
+    root, branch, genes = fixture(tmp_path)
+    tree = tmp_path/'analysis.nwk'
+    tree.write_text('(D_species,(R_species,S_species)n58,T_species)n0;')
+    events, links = summarize([branch], genes, GeneFamilyOutputStore(root), str(tree))
+    event = events[0]
+    assert event['mapping_status'] == 'matched'
+    assert event['species_tree_mapping_basis'] == 'exact_rooted_clade_bijection'
+    assert event['generax_transfer'] == 'Y@D_species@007'
+    assert event['generax_recipient_node'] == '007' and event['analysis_recipient_node'] == 'n58'
+    assert event['event_id'] == 'OG0001:9:1'
+    assert all(row['analysis_recipient_node'] == 'n58' and row['generax_recipient_node'] == '007' for row in links)
+
+
+@pytest.mark.parametrize('newick', [
+    '(D_species,(R_species,T_species)n58,S_species)n0;',  # genuine rooted topology change
+    '(D_species,(R_species,S_species)n58)n0;',  # missing full species scope
+    '(D_species,(R_species,S_species)n58,T_species,Extra)n0;',
+    '(D_species,((R_species,S_species)n58)unary,T_species)n0;',  # ambiguous identical clades
+])
+def test_clade_correspondence_never_uses_pruning_or_ambiguous_ancestral_aliases(tmp_path, newick):
+    root, branch, genes = fixture(tmp_path)
+    tree = tmp_path/'analysis.nwk'
+    tree.write_text(newick)
+    events, links = summarize([branch], genes, GeneFamilyOutputStore(root), str(tree))
+    assert events[0]['mapping_reason'] == 'external_tree_mismatch'
+    assert 'analysis_recipient_node' not in events[0]
+    assert links == []
