@@ -11,6 +11,7 @@ import format_species_inputs as fsi
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS
 from input_generation_array_state import atomic_json, digest, digest_paths, load_plan
 from stage_input_generation_downloads import explicit_manifest_task
+from transcriptome_orfs import apply_input_type, verify_input_type
 
 
 def build_arg_parser():
@@ -118,6 +119,7 @@ def resolve_manifest_task(task, args, *, raw_input_error=None, batch=None):
         if cached.get("plan_sha256") != plan_sha256 or cached.get("task_index") != args.task_index:
             raise ValueError("Resolved download cache belongs to another plan/task")
         actual = deserialize_task(cached["task"])
+        verify_input_type(actual, task)
         if any(actual.get(key) != task.get(key) for key in ("species_prefix", "species_key", "provider")):
             raise ValueError("Resolved download cache species/provider mismatch")
         verify_task_inputs(task, actual, raw_input_error=raw_input_error, batch=batch)
@@ -162,6 +164,7 @@ def resolve_manifest_task(task, args, *, raw_input_error=None, batch=None):
     for key in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
         actual[key] = task[key]
     actual["genetic_code"] = int(task.get("genetic_code", 1))
+    apply_input_type(actual, task["manifest_row"])
     atomic_json(resolved, {"plan_sha256": plan_sha256, "task_index": args.task_index,
                           "task": {key: str(value) if isinstance(value, Path) else value for key, value in actual.items()}})
     return actual
@@ -212,6 +215,8 @@ def describe_task(args, *, batch=None, raw_input_error=None, write_meta=True):
     metadata = {"task_index": args.task_index, "task_count": plan["task_count"],
                 "species_prefix": task["species_prefix"], "species_key": task["species_key"],
                 "provider": task["provider"], **raw_paths, **expected_paths}
+    if task.get("cds_input_type") == "transcriptome":
+        metadata["orf_audit_output_path"] = expected_paths["cds_output_path"] + ".orf-extraction.json"
     if batch is not None:
         batch.check()
     if write_meta:
@@ -360,6 +365,7 @@ def main():
     write_json(
         args.task_meta_output,
         {
+            **metadata,
             "task_index": args.task_index,
             "task_count": len(tasks),
             "species_prefix": task["species_prefix"],

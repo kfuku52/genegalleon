@@ -57,6 +57,11 @@ def context(plan_path, index, root, stage, *, namespace_root=None):
     if meta.get("gff_output_path"):
         paths["gff"] = meta["gff_output_path"]
     if stage == "format":
+        if task.get("cds_input_type") == "transcriptome":
+            expected = meta["cds_output_path"] + ".orf-extraction.json"
+            if meta.get("orf_audit_output_path") != expected:
+                raise ValueError("Transcript ORF audit is missing from stage metadata")
+            paths["orf_audit"] = expected
         if meta.get("genome_output_path"):
             paths["genome"] = meta["genome_output_path"]
         paths.update({key: meta[key] for key in ("cds_path", "gff_path", "genome_path", "gbff_path") if meta.get(key)})
@@ -386,6 +391,15 @@ def start_worker(args):
 def _import_one(args, source_plan, source_root, source_namespace, source_settings,
                 target_settings, index, task, donor_task, old_index, imported, skipped):
     species = task["species_prefix"]
+    from transcriptome_orfs import input_type
+    if input_type(task) != input_type(donor_task):
+        raise ValueError("Source/target nucleotide input types differ: " + species)
+    if input_type(task) == "transcriptome":
+        # Cross-plan source/output paths are part of the ORF audit contract.
+        # Until audit rebinding is qualified, retain the donor and compute this
+        # new plan normally; same-plan format checkpoints still verify the audit.
+        skipped.append(species)
+        return
     before_copy = FreshDigestBatch()
     original_files = verified_snapshot(source_plan, old_index, source_root, "format", args.format_contract_version,
                                        namespace_root=source_namespace, batch=before_copy)

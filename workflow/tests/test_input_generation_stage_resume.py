@@ -46,6 +46,27 @@ def test_lineage_change_does_not_invalidate_upstream_stages(checkpoint, stage):
     assert resume.valid(plan, 1, root, stage, "10")
 
 
+def test_transcript_orf_checkpoint_requires_the_exact_audit(checkpoint):
+    plan, root, paths = checkpoint
+    value = json.loads(plan.read_text())
+    value["tasks"][0]["cds_input_type"] = "transcriptome"
+    plan.write_text(json.dumps(value))
+    meta = root / "tmp/task_meta_shards/1.json"
+    payload = json.loads(meta.read_text())
+    audit = Path(paths["cds_output_path"] + ".orf-extraction.json")
+    audit.write_text('{"native_orf_evidence": true}\n')
+    payload["orf_audit_output_path"] = str(audit)
+    meta.write_text(json.dumps(payload))
+    resume.record(plan, 1, root, "format", "10")
+    assert resume.valid(plan, 1, root, "format", "10")
+    audit.write_text('{"changed": true}\n')
+    assert not resume.valid(plan, 1, root, "format", "10")
+    payload.pop("orf_audit_output_path")
+    meta.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="ORF audit"):
+        resume.record(plan, 1, root, "format", "10")
+
+
 @pytest.mark.parametrize("old_contract", ["1", "2", "3"])
 def test_old_validation_checkpoint_cannot_bypass_source_gene_ownership_check(checkpoint, old_contract):
     plan, root, _ = checkpoint

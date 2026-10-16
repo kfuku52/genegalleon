@@ -18,6 +18,7 @@ from format_species_providers.catalogs import validate_coge_export_gff_file
 from input_generation_array_state import atomic_json, digest, digest_paths, export_manifest, load_plan
 from input_generation_staging_reuse import FreshReadFence, StagedProofReader
 from performance_metrics import measure
+from transcriptome_orfs import apply_input_type, verify_input_type
 
 
 def has_required_source(task, keys):
@@ -165,6 +166,7 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
             if observed_hashes[path] != expected:
                 raise ValueError("Local manifest input changed after planning: " + path)
         if cached is not None:
+            verify_input_type(cached["task"], task)
             for path, expected in cached["task"]["input_sha256"].items():
                 if observed_hashes[path] != expected:
                     raise ValueError("Staged raw input changed; use a new workspace: " + path)
@@ -287,6 +289,7 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
         for setting in ("gene_grouping_mode", "gff_repair_mode", "format_strict"):
             actual[setting] = task[setting]
         actual["genetic_code"] = int(task.get("genetic_code", 1))
+        apply_input_type(actual, task["manifest_row"])
         if fence:
             actual["staged_input_reuse"] = task["staged_input_reuse"]
         rows = [resolved_rows[key]]
