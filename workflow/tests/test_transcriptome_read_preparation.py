@@ -134,6 +134,7 @@ def test_cached_assembly_never_downloads_metadata_reads_or_runs_quantification(t
     manifest.update(input_mode=prep.ASSEMBLY_MODE, cache_parameters={'amalgkit_rrna_filter': 'no', 'amalgkit_contam_filter': 'no'})
     calls = []
     def entrypoint(native, name, env):
+        assert env['GG_COMMON_TMP_ROOT'] == 'auto'
         assert env['GG_TRANSCRIPTOME_RUN_AMALGKIT_GETFASTQ'] == '0'
         assert env['GG_TRANSCRIPTOME_RUN_AMALGKIT_METADATA_OR_INTEGRATE'] == '0'
         assert env['GG_TRANSCRIPTOME_RUN_AMALGKIT_QUANT'] == env['GG_TRANSCRIPTOME_RUN_AMALGKIT_MERGE'] == '0'

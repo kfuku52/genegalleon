@@ -60,6 +60,8 @@ def native_environment(manifest, *, generate):
                GG_TRANSCRIPTOME_TRANSCRIPTOME_GETFASTQ_CACHE_DIR=manifest['fastq_source_root'],
                GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR=manifest['fastq_source_root'])
     if manifest['input_mode'] == ASSEMBLY_MODE:
+        env['GG_COMMON_TMP_ROOT'] = manifest.get('tmp_root', 'auto')
+        env['GG_SITE_PROFILE'] = manifest.get('site_profile', '')
         env['GG_TRANSCRIPTOME_RUN_AMALGKIT_GETFASTQ'] = '0'
         for flag in ASSEMBLY_FLAGS:
             env['GG_TRANSCRIPTOME_RUN_' + flag] = '1'
