@@ -50,7 +50,9 @@ def prediction(workspace):
     for role in ('cds', 'gff', 'genome'):
         directory = formatted / ('species_' + role)
         directory.mkdir(parents=True)
-        (directory / ('Plant_one.' + role)).write_text('formatted fixture ' + role)
+        filename = 'Plant_one.gff3' if role == 'gff' else 'Plant_one.' + role + '.fa'
+        (directory / filename).write_text('formatted fixture ' + role)
+        (directory / (filename + '.audit.json')).write_text('formatter audit fixture')
     gff = root / 'Plant_one.gff3'
     gff.write_text('native fixture')
     genome = workspace / 'input/species_genome/Plant_one.genome.fa'
@@ -148,7 +150,7 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
         thread.join()
 
 
-@pytest.mark.parametrize('damage', ['missing', 'changed', 'wrong_lineage'])
+@pytest.mark.parametrize('damage', ['missing', 'changed', 'wrong_lineage', 'none'])
 def test_busco_requires_current_native_prediction_and_successful_native_proof(tmp_path, monkeypatch, damage):
     manifest, member, workspace = fixture(tmp_path)
     cohort.acquire(manifest, member, workspace)
@@ -161,19 +163,22 @@ def test_busco_requires_current_native_prediction_and_successful_native_proof(tm
         assert env['GG_COMMON_BUSCO_LINEAGE'] == 'embryophyta_odb12'
         assert Path(env['gg_workspace_dir']) == workspace / 'busco'
         assert env['GG_ARRAY_TASK_ID'] == '1'
-        if damage == 'wrong_lineage':
+        if damage in {'wrong_lineage', 'none'}:
             phase_workspace = workspace / 'busco'
             output = phase_workspace / 'output/short.txt'
             output.parent.mkdir(parents=True)
             output.write_text('BUSCO fixture')
             record(phase_workspace / 'output/artifact_provenance/genome_annotation/Plant_one.busco_cds.json',
                    phase_workspace, 'genome_annotation_busco_cds', [], [('short_summary', str(output))],
-                   {'lineage': 'eukaryota_odb12'})
+                   {'lineage': 'eukaryota_odb12' if damage == 'wrong_lineage' else 'embryophyta_odb12'})
     monkeypatch.setattr(cohort, 'entrypoint', native)
     if damage == 'changed':
         (root / 'Plant_one.gff3').write_text('tampered')
-    with pytest.raises((ValueError, FileNotFoundError, provenance.ProvenanceError)):
+    if damage == 'none':
         cohort.annotate(manifest, member, workspace, 'busco')
+    else:
+        with pytest.raises((ValueError, FileNotFoundError, provenance.ProvenanceError)):
+            cohort.annotate(manifest, member, workspace, 'busco')
     assert bool(calls) == (damage != 'changed')
 
 
