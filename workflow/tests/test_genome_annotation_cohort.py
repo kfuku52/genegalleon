@@ -82,6 +82,17 @@ def test_annotation_phases_bound_every_public_run_flag():
     assert {'RUN_' + name for name in cohort.ANNOTATION_RUN_FLAGS} == declared
 
 
+def test_phase_environment_does_not_enable_inherited_debug_steps(tmp_path, monkeypatch):
+    manifest, _, workspace = fixture(tmp_path)
+    monkeypatch.setenv('gg_debug_mode', '1')
+    env = cohort.environment(manifest, workspace)
+    result = subprocess.run(['bash', '-c', 'source "$1"; run_busco_cds=0; '
+                             'enable_all_run_flags_for_debug_mode; printf "%s" "$run_busco_cds"',
+                             'debug', str(SUPPORT / 'gg_util/08_execution_reporting.sh')],
+                            env=env, check=True, capture_output=True, text=True)
+    assert result.stdout == '0'
+
+
 def test_local_acquisition_is_physical_reusable_and_hash_bound(tmp_path):
     manifest, member, workspace = fixture(tmp_path)
     cohort.acquire(manifest, member, workspace)

@@ -104,7 +104,7 @@ def environment(manifest, workspace):
     for key in list(env):
         if key.startswith(('GG_INPUT_', 'GG_GENOME_ANNOTATION_')):
             del env[key]
-    env.update(gg_workspace_dir=str(workspace), gg_container_image_path=str(image),
+    env.update(gg_workspace_dir=str(workspace), gg_container_image_path=str(image), gg_debug_mode='0',
                KFAUTO_RUNTIME_RELEASE_ROOT=str(runtime), GG_ARRAY_TASK_ID='1',
                GG_COMMON_DOWNLOADS_ROOT=str(cache), GG_COMMON_TMP_ROOT='workspace',
                GG_COMMON_BUSCO_LINEAGE=manifest['busco_lineage'], GG_COMMON_GENETIC_CODE='1',
