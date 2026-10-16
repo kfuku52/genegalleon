@@ -30,6 +30,10 @@ def fixture(tmp_path):
                     busco_lineage='embryophyta_odb12', image_path=str(image), image_sha256=prep.file_sha(image),
                     container_binary='/fixture/apptainer', input_mode=prep.INPUT_MODE, species=[row],
                     managed_files={core: dict(sha256=prep.file_sha(root / core))})
+    from test_genome_annotation_cohort import owning_release
+    release = owning_release(manifest, 'gg_transcriptome_generation')
+    manifest['runtime_release_root'] = str(release)
+    manifest['runtime_release_manifest_sha256'] = prep.file_sha(release / '.kfauto-release.json')
     return manifest, row
 
 
@@ -103,3 +107,23 @@ def test_zero_exit_without_native_completion_does_not_count_as_prepared(tmp_path
     monkeypatch.setattr(prep, 'entrypoint', lambda *args: None)
     with pytest.raises((FileNotFoundError, ValueError, prep.ProvenanceError)):
         prep.prepare(manifest, row)
+
+
+def test_dispatch_preserves_owning_transcriptome_release_through_real_bootstrap(tmp_path, monkeypatch):
+    manifest, _ = fixture(tmp_path)
+    native, env = prep.native_environment(manifest, generate=True)
+    root = Path(manifest['runtime_release_root'])
+    original = subprocess.run
+    calls = []
+    def boundary(argv, *, cwd, env, check):
+        assert cwd == root
+        assert env['KFAUTO_RUNTIME_RELEASE_ROOT'] == str(root)
+        command = ('source "$1"; gg_validate_explicit_runtime_release "$KFAUTO_RUNTIME_RELEASE_ROOT" '
+                   'gg_transcriptome_generation "$1" "$KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256"')
+        result = original(['bash', '-c', command, 'bootstrap', str(root / 'workflow/support/gg_entrypoint_bootstrap.sh')],
+                          env=env, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        calls.append(argv)
+    monkeypatch.setattr(prep.subprocess, 'run', boundary)
+    prep.entrypoint(native, 'gg_transcriptome_generation', env)
+    assert len(calls) == 1

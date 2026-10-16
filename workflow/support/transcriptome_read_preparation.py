@@ -41,7 +41,9 @@ def inspect_metadata(path, expected_sha, expected_runs):
 
 def native_environment(manifest, *, generate):
     workspace = physical(manifest['workspace_root'], directory=True)
-    native = {**manifest, 'work_root': str(workspace), 'runtime_root': str(Path(manifest['root']) / 'runtime')}
+    native = {**manifest, 'work_root': str(workspace),
+              'runtime_root': manifest['runtime_release_root'],
+              'runtime_manifest_sha256': manifest['runtime_release_manifest_sha256']}
     env = environment(native, workspace)
     for key in list(env):
         if key.startswith('GG_TRANSCRIPTOME_'):
