@@ -79,14 +79,68 @@ def test_local_acquisition_is_physical_reusable_and_hash_bound(tmp_path):
     manifest, member, workspace = fixture(tmp_path)
     cohort.acquire(manifest, member, workspace)
     target = workspace / 'input/species_genome/Plant_one.genome.fa'
-    assert target.samefile(member['source']['local_path'])
+    source = Path(member['source']['local_path'])
+    original = source.read_bytes()
+    assert target.read_bytes() == original and not target.samefile(source)
     assert not target.is_symlink()
     first = (workspace / 'genome.acquired.json').read_bytes()
+    before = target.stat()
     cohort.acquire(manifest, member, workspace)
     assert first == (workspace / 'genome.acquired.json').read_bytes()
+    after = target.stat()
+    assert (after.st_ino, after.st_ctime_ns, after.st_mtime_ns, after.st_size) == (
+        before.st_ino, before.st_ctime_ns, before.st_mtime_ns, before.st_size)
     Path(member['source']['local_path']).write_text('changed')
+    assert target.read_bytes() == original
     with pytest.raises(ValueError, match='changed'):
         cohort.acquire(manifest, member, workspace)
+
+
+def test_acquisition_preserves_an_active_source_verification(tmp_path):
+    from input_generation_array_state import FreshDigestBatch
+
+    manifest, member, workspace = fixture(tmp_path)
+    source = Path(member['source']['local_path'])
+    before = source.stat()
+    proof = FreshDigestBatch()
+    proof.read([source])
+    cohort.acquire(manifest, member, workspace)
+    proof.check()
+    after = source.stat()
+    assert (after.st_ino, after.st_ctime_ns, after.st_nlink) == (before.st_ino, before.st_ctime_ns, before.st_nlink)
+    target = workspace / 'input/species_genome/Plant_one.genome.fa'
+    assert target.read_bytes() == source.read_bytes()
+    assert not target.samefile(source)
+
+
+@pytest.mark.parametrize('failure', ['copy_error', 'changed_copy', 'occupied', 'symlink'])
+def test_acquisition_never_publishes_partial_or_overwrites_existing_input(tmp_path, monkeypatch, failure):
+    manifest, member, workspace = fixture(tmp_path)
+    source = Path(member['source']['local_path'])
+    original = source.read_bytes()
+    target = workspace / 'input/species_genome/Plant_one.genome.fa'
+    target.parent.mkdir(parents=True)
+    if failure == 'occupied':
+        target.write_bytes(b'other')
+    elif failure == 'symlink':
+        target.symlink_to(source)
+    else:
+        def damaged(inp, out, length):
+            out.write(b'partial')
+            if failure == 'copy_error':
+                raise OSError('copy failed')
+        monkeypatch.setattr(cohort.shutil, 'copyfileobj', damaged)
+    with pytest.raises((ValueError, OSError)):
+        cohort.acquire(manifest, member, workspace)
+    assert source.read_bytes() == original
+    assert not (workspace / 'genome.acquired.json').exists()
+    assert not list(target.parent.glob('.cohort-input-*'))
+    if failure == 'occupied':
+        assert target.read_bytes() == b'other'
+    elif failure == 'symlink':
+        assert target.is_symlink()
+    else:
+        assert not target.exists()
 
 
 def test_public_acquisition_calls_native_download_only_and_rejects_bad_md5(tmp_path, monkeypatch):
