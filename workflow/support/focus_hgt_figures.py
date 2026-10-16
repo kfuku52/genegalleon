@@ -9,6 +9,7 @@ from collections import Counter
 
 import numpy as np
 from gene_family_output_store import GeneFamilyOutputStore, read_only_observation
+from hgt_species_tree import event_species_branch
 
 ORANGE = "#b34d00"
 BLUE = "#2b6ca3"
@@ -29,11 +30,11 @@ def write(path, rows, fields=None):
 
 def filtering_counts(source_events, selected, audit_path="", prefilter_selected=None, pfam_selected=None,
                      direction_selected=None, support_filter_enabled=False,
-                     direction_filter='non_arthropoda_to_insecta'):
-    from focus_hgt_direction import DIRECTION_CHOICES
+                     direction_filter='off'):
+    from focus_hgt_direction import DIRECTION_CHOICES, DISABLED, filter_label
     if direction_filter not in DIRECTION_CHOICES:
         raise ValueError('Invalid focused HGT direction filter')
-    if direction_selected is not None and direction_filter == 'any':
+    if direction_selected is not None and direction_filter in DISABLED:
         raise ValueError('Direction cohort supplied with disabled direction filter')
     def unique(rows):
         result = {row['event_id']: row for row in rows}
@@ -47,7 +48,8 @@ def filtering_counts(source_events, selected, audit_path="", prefilter_selected=
             if original is None:
                 raise ValueError('Focused input cohort is not a subset of its source events')
             for field in ('orthogroup', 'gene_tree_branch_id', 'branch_id', 'gene_tree_node', 'node_name',
-                          'generax_donor_node', 'generax_recipient_node', 'generax_transfer', 'event_index'):
+                          'generax_donor_node', 'generax_recipient_node', 'generax_transfer', 'event_index',
+                          'analysis_donor_node', 'analysis_recipient_node'):
                 if field in row and field in original and row[field] != original[field]:
                     raise ValueError('Filtering event identity disagrees: ' + field)
             for aliases in [('gene_tree_branch_id', 'branch_id'), ('gene_tree_node', 'node_name')]:
@@ -123,8 +125,7 @@ def filtering_counts(source_events, selected, audit_path="", prefilter_selected=
     if pfam_selected is not None:
         stages.append(("Event-gene pair Pfam filter", pfam_selected))
     if direction_selected is not None:
-        recipient_group = 'Arthropoda' if direction_filter == 'non_arthropoda_to_arthropoda' else 'Insecta'
-        stages.append((f'Non-Arthropoda donor → {recipient_group} recipient', direction_selected))
+        stages.append((filter_label(direction_filter), direction_selected))
     # Preserve the historical trait-first option for direct callers using it.
     stages.append(('Category = 1 recipients', selected if prefilter_selected is None else prefilter_selected))
     if prefilter_selected is not None:
@@ -175,7 +176,7 @@ def product_labels(families, links):
 def export_filtering_flow(directory, source_events, selected, trait, filter_audit='',
                           prefilter_selected=None, pfam_selected=None, direction_selected=None,
                           support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None,
-                          direction_filter='non_arthropoda_to_insecta'):
+                          direction_filter='off'):
     """Render exact-pair criteria, taxonomy and trait as distinct cohorts."""
     import matplotlib
     matplotlib.use('Agg')
@@ -263,7 +264,7 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
 def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit="",
                    context_annotations='', prefilter_selected=None, pfam_selected=None, direction_selected=None,
                    support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None,
-                   direction_filter='non_arthropoda_to_insecta'):
+                   direction_filter='off'):
     import hashlib
     import textwrap
 
@@ -430,7 +431,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     nodes = {node.name: [t.name for t in node.get_terminals()] for node in tree.find_clades() if node.name}
 
     def donor_group(event):
-        branch = event["generax_donor_node"]
+        branch = event_species_branch(event, 'donor')
         classes = event.get("donor_descendant_classes", "")
         return (
             classes.replace(";", " + ") + f" ({branch})"
@@ -439,17 +440,17 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
         )
 
     donors = sorted({donor_group(e) for e in selected})
-    recipients = sorted({e["generax_recipient_node"] for e in selected})
-    pairs = Counter((donor_group(e), e["generax_recipient_node"]) for e in selected)
+    recipients = sorted({event_species_branch(e, 'recipient') for e in selected})
+    pairs = Counter((donor_group(e), event_species_branch(e, 'recipient')) for e in selected)
     mapped = [
         dict(
             event_id=e["event_id"],
             orthogroup=e["orthogroup"],
             donor_group=donor_group(e),
-            donor_branch=e["generax_donor_node"],
-            recipient_branch=e["generax_recipient_node"],
-            donor_clade_tip_labels="; ".join(nodes.get(e["generax_donor_node"], [])),
-            recipient_clade_tip_labels="; ".join(nodes.get(e["generax_recipient_node"], [])),
+            donor_branch=event_species_branch(e, 'donor'),
+            recipient_branch=event_species_branch(e, 'recipient'),
+            donor_clade_tip_labels="; ".join(nodes.get(event_species_branch(e, 'donor'), [])),
+            recipient_clade_tip_labels="; ".join(nodes.get(event_species_branch(e, 'recipient'), [])),
         )
         for e in selected
     ]

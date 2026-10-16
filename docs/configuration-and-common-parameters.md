@@ -506,16 +506,24 @@ candidate-free background, missing-data semantics, and counting units.
   Saved query RPS-BLAST records are used; no additional search is run. Per-trait
   event/pair/gene audits retain exclusion reasons and source hashes, including
   when plotting is disabled.
-- `hgt_summary_focus_direction_filter` (default `any`): set
+- `hgt_summary_focus_direction_filter` (default `off`): `custom` uses the JSON file
+  in `hgt_summary_focus_direction_rules` to select donor and recipient taxonomy,
+  tip sets or exact branches. `any` remains an alias of off. See
+  [optional HGT direction filters](hgt-direction-filtering.md). The compatibility
+  presets retain their original behavior: set
   `non_arthropoda_to_arthropoda` to require modeled donor species branches
   entirely outside Arthropoda and recipients entirely within Arthropoda.
   `non_arthropoda_to_insecta` instead requires all recipient tips within
   Insecta. This taxonomy step follows the exact-pair filter, before the separate
   category-1 trait step. Mixed, unknown and unmapped branches are withheld.
+- `hgt_summary_focus_direction_rules` (default empty): versioned JSON selectors,
+  required only for `custom`; supplying it while filtering is off is an error.
+- `hgt_summary_plot_scope` (default `all`): `focused` omits all-candidate PDFs
+  and renders the focused reports only; requires `run_hgt_trait_focus=1`.
 - `hgt_summary_focus_species_taxonomy` (default `auto`): existing host-species
   taxonomy for the direction filter, normally
-  `output/species_taxonomy/species_taxonomy.tsv`. An enabled filter requires
-  this table even without plotting.
+  `output/species_taxonomy/species_taxonomy.tsv`. Taxonomy selectors and legacy presets require
+  this table even without plotting; explicit tip/branch selectors do not.
 
 The transfer plot counts branch-level GeneRax `Y@donor@recipient` records and
 sets each arrow's constant shaft width in proportion to that direction's event

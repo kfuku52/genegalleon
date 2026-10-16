@@ -35,12 +35,26 @@ hgt_focus_allow_both_no_pfam="${hgt_focus_allow_both_no_pfam:-0}"
 hgt_focus_min_shared_pfam_coverage="${hgt_focus_min_shared_pfam_coverage:-0.5}"
 hgt_focus_require_length_ratio="${hgt_focus_require_length_ratio:-1}"
 hgt_focus_min_length_ratio="${hgt_focus_min_length_ratio:-0.5}"
-hgt_focus_direction_filter="${hgt_focus_direction_filter:-any}"
+hgt_focus_direction_filter="${hgt_focus_direction_filter:-off}"
+hgt_focus_direction_rules="${hgt_focus_direction_rules:-}"
 hgt_focus_species_taxonomy="${hgt_focus_species_taxonomy:-auto}"
 case "${hgt_focus_direction_filter}" in
-  any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda) ;;
+  off|any|custom|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda) ;;
   *) echo "Invalid focused HGT direction filter: ${hgt_focus_direction_filter}" >&2; exit 1 ;;
 esac
+if [[ "${hgt_focus_direction_filter}" != "custom" && -n "${hgt_focus_direction_rules}" ]]; then
+  echo "Direction rules require the explicit custom direction filter." >&2
+  exit 1
+fi
+hgt_plot_scope="${hgt_plot_scope:-all}"
+case "${hgt_plot_scope}" in
+  all|focused) ;;
+  *) echo "Invalid HGT plot scope: ${hgt_plot_scope}" >&2; exit 1 ;;
+esac
+if [[ "${hgt_plot_scope}" == "focused" && "${run_hgt_focus}" != "1" ]]; then
+  echo "Focused plot scope requires trait-focused HGT outputs." >&2
+  exit 1
+fi
 hgt_transfer_tree_max_edges="${hgt_transfer_tree_max_edges:-200}"
 hgt_transfer_arrow_alpha="${hgt_transfer_arrow_alpha:-0.55}"
 hgt_tree_width_mm="${hgt_tree_width_mm:-60}"
@@ -474,6 +488,10 @@ elif [[ "${hgt_species_trait}" != "none" ]]; then
   fi
   hgt_species_trait_path="${hgt_species_trait}"
 fi
+if [[ "${hgt_plot_scope}" == "focused" && -z "${hgt_species_trait_path}" ]]; then
+  echo "Focused plot scope requires an explicit or auto-detected species trait table." >&2
+  exit 1
+fi
 gg_artifact_contract_init \
   hgt_summary_plot_provenance_args \
   "hgt_summary_plot" \
@@ -504,9 +522,11 @@ if [[ -n "${hgt_species_trait_path}" ]]; then
   gg_artifact_add_input_if_present hgt_summary_plot_provenance_args "species_trait_metadata" "${hgt_species_trait_path}.metadata.json"
   hgt_summary_plot_provenance_args+=(--input "trait_contract=${gg_support_dir}/species_trait_contract.py" --input "trait_schema=${gg_support_dir}/species_trait_schema.py")
 fi
-gg_artifact_prepare_stage hgt_summary_plot_needs_update run_hgt_plot "${hgt_summary_plot_provenance_args[@]}" || exit $?
+run_hgt_global_plot="${run_hgt_plot}"
+[[ "${hgt_plot_scope}" != "focused" ]] || run_hgt_global_plot=0
+gg_artifact_prepare_stage hgt_summary_plot_needs_update run_hgt_global_plot "${hgt_summary_plot_provenance_args[@]}" || exit $?
 
-if [[ ${run_hgt_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
+if [[ ${run_hgt_global_plot} -eq 1 && ${hgt_summary_plot_needs_update} -eq 1 ]]; then
   if [[ ! -s "${file_hgt_branch}" || ! -s "${file_hgt_gene}" ]]; then
     echo "Skipping HGT summary plotting because candidate tables were not found: ${file_hgt_branch}, ${file_hgt_gene}"
   else
@@ -550,6 +570,10 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
   [[ "${hgt_focus_event_tsv}" == "auto" ]] || hgt_focus_events="${hgt_focus_event_tsv}"
   [[ "${hgt_focus_event_gene_tsv}" == "auto" ]] || hgt_focus_links="${hgt_focus_event_gene_tsv}"
   if [[ ! -s "${hgt_focus_events}" || ! -s "${hgt_focus_links}" || -z "${hgt_species_tree_path}" ]]; then
+    if [[ "${hgt_plot_scope}" == "focused" ]]; then
+      echo "Focused plot scope requires event context tables and the analysis species tree." >&2
+      exit 1
+    fi
     if [[ "${hgt_focus_event_tsv}" != "auto" || "${hgt_focus_event_gene_tsv}" != "auto" ]]; then
       echo "Trait-focused HGT results require the supplied event tables and analysis species tree." >&2
       exit 1
@@ -561,9 +585,14 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
     if [[ "${hgt_focus_taxonomy_path}" == "auto" ]]; then
       hgt_focus_taxonomy_path="${gg_workspace_output_dir}/species_taxonomy/species_taxonomy.tsv"
     fi
-    if [[ "${hgt_focus_direction_filter}" != "any" && ! -s "${hgt_focus_taxonomy_path}" ]]; then
+    if [[ "${hgt_focus_direction_filter}" != "off" && "${hgt_focus_direction_filter}" != "any" && "${hgt_focus_direction_filter}" != "custom" && ! -s "${hgt_focus_taxonomy_path}" ]]; then
       echo "Focused species-branch direction filtering requires existing species taxonomy: ${hgt_focus_taxonomy_path}" >&2
       exit 1
+    fi
+    if [[ "${hgt_focus_direction_filter}" == "custom" ]]; then
+      PYTHONPATH="${gg_support_dir}${PYTHONPATH:+:${PYTHONPATH}}" python -c \
+        'import sys; from pathlib import Path; from focus_hgt_direction import validate_options; validate_options(sys.argv[1], sys.argv[2], sys.argv[3] if Path(sys.argv[3]).is_file() else "")' \
+        "${hgt_focus_direction_filter}" "${hgt_focus_direction_rules}" "${hgt_focus_taxonomy_path}"
     fi
     gg_artifact_contract_init hgt_focus_provenance_args "hgt_trait_focus" "all_category1_targets" \
       "${dir_hgt_provenance}/hgt_trait_focus.json"
@@ -585,6 +614,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --output "result_bundle=${dir_hgt_trait_focus}"
       --parameter "schema_version=1"
       --parameter "plots=${run_hgt_plot}"
+      --parameter "plot_scope=${hgt_plot_scope}"
       --parameter "transfer_arrow_alpha=${hgt_transfer_arrow_alpha}"
       --parameter "require_shared_pfam=${hgt_focus_require_shared_pfam}"
       --parameter "allow_both_no_pfam=${hgt_focus_allow_both_no_pfam}"
@@ -593,7 +623,10 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
       --parameter "min_length_ratio=${hgt_focus_min_length_ratio}"
       --parameter "direction_filter=${hgt_focus_direction_filter}"
     )
-    if [[ "${hgt_focus_direction_filter}" != "any" ]]; then
+    if [[ "${hgt_focus_direction_filter}" == "custom" ]]; then
+      hgt_focus_provenance_args+=(--input "direction_rules=${hgt_focus_direction_rules}")
+    fi
+    if [[ "${hgt_focus_direction_filter}" != "off" && "${hgt_focus_direction_filter}" != "any" && -s "${hgt_focus_taxonomy_path}" ]]; then
       hgt_focus_provenance_args+=(--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}")
     else
       gg_artifact_add_input_if_present hgt_focus_provenance_args "origin_species_taxonomy" "${hgt_focus_taxonomy_path}"
@@ -650,6 +683,7 @@ if [[ ${run_hgt_focus} -eq 1 && -n "${hgt_species_trait_path}" ]]; then
         --require_length_ratio "${hgt_focus_require_length_ratio}" \
         --min_length_ratio "${hgt_focus_min_length_ratio}" \
         --direction_filter "${hgt_focus_direction_filter}" \
+        --direction_rules "${hgt_focus_direction_rules}" \
         --species_taxonomy "${hgt_focus_existing_taxonomy}" \
         --transfer_arrow_alpha "${hgt_transfer_arrow_alpha}"
       gg_artifact_record "${hgt_focus_provenance_args[@]}"
@@ -903,7 +937,7 @@ hgt_reap_plot_workers() {
   hgt_plot_pids=("${active[@]}")
 }
 
-if [[ -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
+if [[ "${hgt_plot_scope}" == "all" && -s "${file_hgt_branch}" && -s "${file_hgt_gene}" ]]; then
   hgt_orthogroups=()
   while IFS= read -r og_id; do
     [[ -z "${og_id}" ]] && continue

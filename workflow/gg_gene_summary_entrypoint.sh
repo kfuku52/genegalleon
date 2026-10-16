@@ -168,10 +168,12 @@ hgt_summary_focus_allow_both_no_pfam="${hgt_summary_focus_allow_both_no_pfam:-0}
 hgt_summary_focus_min_shared_pfam_coverage="${hgt_summary_focus_min_shared_pfam_coverage:-0.5}" # Shared-domain query coverage on both proteins of the same pair, inclusive fraction.
 hgt_summary_focus_require_length_ratio="${hgt_summary_focus_require_length_ratio:-1}" # Require measured shorter/longer protein length ratio in the same bilateral event-gene pair, independently of Pfam.
 hgt_summary_focus_min_length_ratio="${hgt_summary_focus_min_length_ratio:-0.5}" # Inclusive minimum shorter/longer protein length ratio; missing/nonpositive lengths cannot pass.
-hgt_summary_focus_direction_filter="${hgt_summary_focus_direction_filter:-any}" # any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda; after exact-pair filters, before the separate trait step.
+hgt_summary_focus_direction_filter="${hgt_summary_focus_direction_filter:-off}" # off|custom; any and the two legacy Arthropoda presets remain supported. Opt-in after pair filters, before trait selection.
+hgt_summary_focus_direction_rules="${hgt_summary_focus_direction_rules:-}" # JSON donor/recipient selectors; used only with direction_filter=custom.
 hgt_summary_focus_species_taxonomy="${hgt_summary_focus_species_taxonomy:-auto}" # auto uses output/species_taxonomy/species_taxonomy.tsv for direction and focal donor-origin review.
 hgt_summary_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" # Maximum mapped donor-recipient edges drawn in the transfer plot; 0 draws all.
 hgt_summary_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" # Transfer-arrow opacity (0 transparent; 1 opaque).
+hgt_summary_plot_scope="${hgt_summary_plot_scope:-all}" # all|focused; focused renders only trait-focused reports and preserves global candidate tables.
 hgt_summary_plot_workers="${hgt_summary_plot_workers:-auto}" # Bounded by allocated CPUs and 8 GiB per concurrent family plot.
 hgt_summary_tree_width_mm="${hgt_summary_tree_width_mm:-60}" # Minimum tree data-panel width in mm; PDF width is automatic.
 hgt_summary_promoter_bp="${hgt_summary_promoter_bp:-2000}" # Promoter length used when re-rendering FIMO panels in HGT tree plots.

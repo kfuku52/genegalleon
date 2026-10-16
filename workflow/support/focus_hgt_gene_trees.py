@@ -75,7 +75,7 @@ def identity(event, project_name, native_name):
 def validate_link_identity(event, link):
     """Match native and project branch aliases without borrowing another event."""
     for field in ("event_id", "orthogroup", "generax_transfer", "event_index",
-                  "generax_donor_node", "generax_recipient_node"):
+                  "generax_donor_node", "generax_recipient_node", "analysis_donor_node", "analysis_recipient_node"):
         if field in link and field in event and link[field] != event[field]:
             raise ValueError("Event-gene identity mismatch: " + field)
     for aliases in (("branch_id", "gene_tree_branch_id"), ("node_name", "gene_tree_node")):

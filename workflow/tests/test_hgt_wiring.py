@@ -71,16 +71,18 @@ def test_shared_query_pfam_filter_defaults_and_provenance_apply_without_plotting
 def test_species_direction_configuration_and_taxonomy_provenance_apply_without_plotting():
     entry, summary, hgt = [read_text(path) for path in (GENE_SUMMARY_ENTRYPOINT, GENE_SUMMARY_CORE, HGT_CORE)]
     forwarded = (REPO_ROOT/'workflow/support/gg_entrypoint_config_vars.sh').read_text()
-    for suffix, default in [('direction_filter', 'any'), ('species_taxonomy', 'auto')]:
+    for suffix, default in [('direction_filter', 'off'), ('direction_rules', ''), ('species_taxonomy', 'auto')]:
         assert f'hgt_summary_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in entry
         assert f'hgt_focus_{suffix}="${{hgt_summary_focus_{suffix}:-{default}}}"' in summary
         assert f'hgt_summary_focus_{suffix}' in forwarded
     assert '--direction_filter "${hgt_focus_direction_filter}"' in hgt
+    assert '--direction_rules "${hgt_focus_direction_rules}"' in hgt
+    assert '--input "direction_rules=${hgt_focus_direction_rules}"' in hgt
     assert '--species_taxonomy "${hgt_focus_existing_taxonomy}"' in hgt
     assert '[[ -f "${hgt_focus_existing_taxonomy}" ]] || hgt_focus_existing_taxonomy=""' in hgt
     assert '--input "direction_species_taxonomy=${hgt_focus_taxonomy_path}"' in hgt
     assert '--parameter "direction_filter=${hgt_focus_direction_filter}"' in hgt
-    assert 'any|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda)' in hgt
+    assert 'off|any|custom|non_arthropoda_to_insecta|non_arthropoda_to_arthropoda)' in hgt
     taxonomy = hgt.index('--input "direction_species_taxonomy=')
     assert taxonomy < hgt.index('if [[ ${run_hgt_plot} -eq 1 ]]; then', taxonomy)
 

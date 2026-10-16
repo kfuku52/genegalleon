@@ -619,3 +619,41 @@ def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tm
         def canonical_pdf(path):
             return re.sub(rb'/(CreationDate|ModDate)\s*\(D:[^)]*\)', rb'/\1(D:TIME)', path.read_bytes())
         assert canonical_pdf(serial_root / 'tree_plot' / name) == canonical_pdf(root / 'tree_plot' / name)
+
+
+@pytest.mark.skipif(any(shutil.which(t) is None for t in ('seqkit', 'Rscript')), reason='native HGT runtime required')
+def test_custom_direction_focused_scope_preserves_tables_and_skips_all_candidate_rendering(tmp_path):
+    workspace = tmp_path/'workspace'
+    _write_workspace_fixture(workspace)
+    rules = tmp_path/'rules.json'
+    rules.write_text(json.dumps(dict(schema_version=1, donor=dict(kind='tips', values=['Escherichia_coli']),
+                                    recipient=dict(kind='tips', values=['Arabidopsis_thaliana']))))
+    env = dict(os.environ, gg_workspace_dir=str(workspace), run_hgt_eval='1', run_hgt_plot='1',
+               hgt_use_taxonomy_db='0', hgt_focus_direction_filter='custom', hgt_focus_direction_rules=str(rules),
+               hgt_focus_require_shared_pfam='0', hgt_focus_require_length_ratio='0', hgt_plot_scope='focused',
+               MPLCONFIGDIR=str(tmp_path/'mpl'), GG_OBSERVABILITY='1')
+    result = subprocess.run(['bash',str(HGT_CORE)],cwd=REPO_ROOT,env=env,capture_output=True,text=True)
+    assert result.returncode == 0, result.stderr
+    output = workspace/'output/hgt'
+    assert (output/'hgt_branch_candidates.tsv').is_file()
+    assert (output/'trait_focus/direction_event_audit.tsv').is_file()
+    # Missing XML is retained as unresolved; it cannot become a passing transfer.
+    selected = pandas.read_csv(output/'trait_focus/direction_events.tsv', sep='\t')
+    assert selected.empty
+    assert (output/'trait_focus/traits/test_trait/all_category1/plots/filtering_flow.pdf').is_file()
+    assert not (output/'plots/hgt_branch_overview.pdf').exists()
+    assert not (output/'tmp/candidate-inputs.sqlite3').exists()
+    assert not list((output/'tree_plot').glob('*.pdf'))
+
+
+@pytest.mark.skipif(any(shutil.which(t) is None for t in ('seqkit', 'Rscript')), reason='native HGT runtime required')
+def test_focused_scope_fails_when_foreground_table_is_missing(tmp_path):
+    workspace = tmp_path/'workspace'
+    _write_workspace_fixture(workspace)
+    (workspace/'input/species_trait/species_trait.tsv').unlink()
+    result = subprocess.run(['bash', str(HGT_CORE)], cwd=REPO_ROOT,
+                            env=dict(os.environ, gg_workspace_dir=str(workspace), run_hgt_eval='1',
+                                     run_hgt_plot='0', hgt_plot_scope='focused', hgt_use_taxonomy_db='0'),
+                            capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'Focused plot scope requires' in result.stderr
