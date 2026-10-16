@@ -338,6 +338,8 @@ never replaces these checks or adds donor support. A new conflicting prediction
 cannot invalidate such a CDS or join independent existing loci. If a historical
 path is absent from current valid predictions, its fixed CDS is reconstructed
 from the current genome and aligned anew to its still-available current donors.
+Current transfer searches finish before this reconstruction, so existing
+predictor mappings retain their provenance without redundant derived candidates.
 It must pass the same structural and coverage/identity policy. One optimal
 traceback can establish homology for these fixed coordinates; this does not
 infer new coding boundaries or reuse historical alignment metrics. These derived

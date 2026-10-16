@@ -1385,10 +1385,6 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 model["evidence"] = region
                 model["search"] = "synteny_interval"
                 validated.append(checked_prediction(model))
-            historical, historical_audit = revalidate_retained_coding_paths(
-                retained_paths, validated, genome, source['genetic_code'], params, proteins, name)
-            validated.extend(historical)
-            atomic_json(tmp / 'retained_path_revalidation.json', historical_audit)
             def unresolved_regions():
                 preview = [{**m, "problems": list(m["problems"])} for m in validated]
                 reassess_unanchored_models(preview, params["unanchored_min_species"], ownership=placement_ownership)
@@ -1444,6 +1440,13 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     if not (tmp / "genome.fa").exists():
                         (tmp / "genome.fa").symlink_to(os.fsdecode(genome.filename))
                     refine_gemoma(tmp, root, plan, source, gemoma_regions, genome, validated, cpus)
+            # Finish current transfer searches before reconstructing missing
+            # history, so a fresh mapping keeps its predictor provenance and
+            # does not acquire a redundant history-derived candidate.
+            historical, historical_audit = revalidate_retained_coding_paths(
+                retained_paths, validated, genome, source['genetic_code'], params, proteins, name)
+            validated.extend(historical)
+            atomic_json(tmp / 'retained_path_revalidation.json', historical_audit)
             # Boundary alternatives have already passed strict genomic QC.
             # Revalidate their donor proof, then let the same final locus rules
             # choose a reproducible representative while retaining all paths.
