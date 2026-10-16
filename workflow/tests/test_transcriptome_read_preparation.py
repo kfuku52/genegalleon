@@ -149,7 +149,7 @@ def test_cached_assembly_never_downloads_metadata_reads_or_runs_quantification(t
     assert len(calls) == 1
 
 
-def test_cached_preflight_runs_the_actual_native_content_validator(tmp_path):
+def test_cached_preflight_rechecks_the_native_index_and_verified_handoff_identity(tmp_path):
     import gzip
     manifest, row = fixture(tmp_path)
     cache = Path(manifest['fastq_source_root']) / row['species']
@@ -172,9 +172,14 @@ def test_cached_preflight_runs_the_actual_native_content_validator(tmp_path):
     contract.write_text('native cache parameter proof')
     value = dict(path=row['files'][0]['path'], sha256=row['files'][0]['sha256'], runs=row['runs'], cache=str(cache),
                  expected=dict(completion_sha256=prep.file_sha(completion), contract_sha256=prep.file_sha(contract)))
+    core = str(SUPPORT.parent / 'core/gg_transcriptome_generation_core.sh')
+    command = ['bash', '-c', 'GG_CORE_SOURCE_ONLY=1 source "$3"; validate_amalgkit_getfastq_completion_manifest_index "$1" "$2" yes',
+               'fixture', str(completion), value['path'], core]
+    value['expected']['content_stat_fingerprint'] = json.loads(subprocess.check_output(command, text=True))
     assert prep.inspect_cache(value)['prepared_cache'] == value['expected']
-    fastq.write_bytes(b'corrupt')
-    with pytest.raises(subprocess.CalledProcessError):
+    content = fastq.read_bytes()
+    fastq.write_bytes(content[:-1] + bytes([content[-1] ^ 1]))
+    with pytest.raises((subprocess.CalledProcessError, ValueError)):
         prep.inspect_cache(value)
 
 

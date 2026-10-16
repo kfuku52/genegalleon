@@ -156,9 +156,11 @@ def inspect_cache(value):
         if file_sha(physical(cache / name)) != expected[key]:
             raise ValueError('Prepared cache proof changed')
     command = ['bash', '-c', 'GG_CORE_SOURCE_ONLY=1 source "$3"; '
-               'validate_amalgkit_getfastq_completion_manifest "$1" "$2"', 'cache-check',
+               'validate_amalgkit_getfastq_completion_manifest_index "$1" "$2" yes', 'cache-check',
                str(cache / 'getfastq_completion.json'), value['path'], str(Path(__file__).resolve().parents[1] / 'core/gg_transcriptome_generation_core.sh')]
-    subprocess.run(command, check=True)
+    checked = subprocess.run(command, check=True, capture_output=True, text=True)
+    if json.loads(checked.stdout) != expected['content_stat_fingerprint']:
+        raise ValueError('Prepared cache files changed after the verified handoff')
     result['prepared_cache'] = expected
     return result
 

@@ -1140,3 +1140,12 @@ Gene-ID repair checks collisions against every GFF feature type, including
 alignment evidence. It retains only proposed source and target IDs; unrelated
 feature IDs do not accumulate in memory. This requires a second annotation
 pass and preserves the same conservative collision decisions.
+
+A separately qualified `metadata-cached-assembly` package consumes a transferred
+native getfastq cache. The handoff must bind the source preparation receipt,
+completion/file SHA contracts, exact selected metadata and native file identity
+index. It keeps metadata retrieval, public read acquisition and quantification
+disabled, and runs native assembly, longest CDS, statistics and
+`embryophyta_odb12` BUSCO. The native workflow retains its full cache validation
+and resume behavior. A changed transfer index or missing native result proof
+prevents an assembly completion receipt.
