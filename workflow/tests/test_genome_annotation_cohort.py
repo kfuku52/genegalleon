@@ -204,7 +204,7 @@ def test_native_public_download_and_warm_reuse_preserve_genome_bytes(tmp_path, m
         thread.join()
 
 
-@pytest.mark.parametrize('damage', ['missing', 'changed', 'wrong_lineage', 'none'])
+@pytest.mark.parametrize('damage', ['missing', 'changed', 'formatted_gff', 'formatted_genome', 'wrong_lineage', 'none'])
 def test_busco_requires_current_native_prediction_and_successful_native_proof(tmp_path, monkeypatch, damage):
     manifest, member, workspace = fixture(tmp_path)
     cohort.acquire(manifest, member, workspace)
@@ -217,6 +217,10 @@ def test_busco_requires_current_native_prediction_and_successful_native_proof(tm
         assert env['GG_COMMON_BUSCO_LINEAGE'] == 'embryophyta_odb12'
         assert Path(env['gg_workspace_dir']) == workspace / 'busco'
         assert env['GG_ARRAY_TASK_ID'] == '1'
+        inputs = workspace / 'busco/input'
+        assert {p.name for p in inputs.iterdir()} == {'species_cds'}
+        assert (inputs / 'species_cds/Plant_one.cds.fa').read_bytes() == (
+            root / 'formatted/generation/species_cds/Plant_one.cds.fa').read_bytes()
         if damage in {'wrong_lineage', 'none'}:
             phase_workspace = workspace / 'busco'
             output = phase_workspace / 'output/short.txt'
@@ -228,12 +232,16 @@ def test_busco_requires_current_native_prediction_and_successful_native_proof(tm
     monkeypatch.setattr(cohort, 'entrypoint', native)
     if damage == 'changed':
         (root / 'Plant_one.gff3').write_text('tampered')
+    elif damage in {'formatted_gff', 'formatted_genome'}:
+        role = damage.removeprefix('formatted_')
+        path = root / 'formatted/generation' / ('species_' + role)
+        next(p for p in path.iterdir() if not p.name.endswith('.json')).write_text('tampered')
     if damage == 'none':
         cohort.annotate(manifest, member, workspace, 'busco')
     else:
         with pytest.raises((ValueError, FileNotFoundError, provenance.ProvenanceError)):
             cohort.annotate(manifest, member, workspace, 'busco')
-    assert bool(calls) == (damage != 'changed')
+    assert bool(calls) == (damage not in {'changed', 'formatted_gff', 'formatted_genome'})
 
 
 def test_wrong_manifest_hash_rejected_without_creating_workspaces(tmp_path):

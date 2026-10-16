@@ -20,7 +20,7 @@ from pathlib import Path
 
 from annevo_runtime_download import atomic_json, file_sha
 from artifact_provenance import audit_manifest, load_manifest, resolve_reference, runtime_support_root
-from format_species_common import is_fasta_filename, is_gff_filename
+from format_species_common import is_fasta_filename
 from format_species_providers.common import provider_raw_dir
 from gene_family_output_store import GeneFamilyOutputStore
 from shared_namespace_lock import namespace_lock
@@ -176,13 +176,13 @@ def annotate(manifest, member, workspace, phase):
         entry = next(e for e in formatted['outputs'] if e['label'] == 'formatted')
         directory = resolve_reference(entry, workspace / 'output/.gg_global_artifacts', workspace)
         phase_workspace = workspace / 'busco'
-        for role in ('cds', 'gff', 'genome'):
-            accepted = is_gff_filename if role == 'gff' else is_fasta_filename
-            files = [p for p in (directory / ('species_' + role)).iterdir() if p.is_file() and not p.name.startswith('.')
-                     and accepted(p.name) and extract_species_label(p.name, strip_extension=True) == species]
-            if len(files) != 1:
-                raise ValueError('Expected one verified formatted file per role')
-            bind(files[0], phase_workspace / 'input' / ('species_' + role) / files[0].name)
+        # The audit above covers the complete formatted triplet. CPU CDS BUSCO
+        # consumes only CDS; duplicating the genome and GFF adds no evidence.
+        files = [p for p in (directory / 'species_cds').iterdir() if p.is_file() and not p.name.startswith('.')
+                 and is_fasta_filename(p.name) and extract_species_label(p.name, strip_extension=True) == species]
+        if len(files) != 1:
+            raise ValueError('Expected one verified formatted CDS file')
+        bind(files[0], phase_workspace / 'input/species_cds' / files[0].name)
     env = environment(manifest, phase_workspace)
     for flag in ('CDSKIT_LOCALIZE', 'SCAFFOLD_TAXONOMY', 'MULTISPECIES_SUMMARY'):
         env['GG_GENOME_ANNOTATION_RUN_' + flag] = '0'
