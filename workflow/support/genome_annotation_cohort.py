@@ -13,7 +13,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from annevo_runtime_download import atomic_json, file_sha
@@ -53,15 +55,34 @@ def select(manifest, task):
     return members[task - 1]
 
 
-def bind(source, target):
+def bind(source, target, *, expected_sha256=None):
     source = physical(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     physical(target.parent, directory=True)
+    expected = expected_sha256 or file_sha(source)
     if target.exists() or target.is_symlink():
-        if target.is_symlink() or not target.samefile(source):
+        if target.is_symlink() or file_sha(physical(target)) != expected:
             raise ValueError(f'Conflicting native input: {target}')
         return
-    os.link(source, target)
+    # A hardlink to the source changes its ctime and invalidates another
+    # command's live source proof. Publish a verified private copy instead.
+    fd, name = tempfile.mkstemp(prefix='.cohort-input-', dir=target.parent)
+    pending = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            with source.open('rb') as inp:
+                shutil.copyfileobj(inp, out, 8 * 1024 * 1024)
+            out.flush()
+            os.fsync(out.fileno())
+        if file_sha(pending) != expected:
+            raise ValueError('Source changed while preparing native input')
+        try:
+            os.link(pending, target)
+        except FileExistsError:
+            if target.is_symlink() or file_sha(physical(target)) != expected:
+                raise ValueError(f'Conflicting native input: {target}') from None
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def environment(manifest, workspace):
@@ -123,7 +144,7 @@ def acquire(manifest, member, workspace):
             if source.get('archive_member') or digest.hexdigest() != source['md5']:
                 raise ValueError('Downloaded genome does not match the published MD5')
     target = workspace / 'input/species_genome' / member['filename']
-    bind(genome, target)
+    bind(genome, target, expected_sha256=source.get('sha256') or file_sha(genome))
     atomic_json(workspace / 'genome.acquired.json',
                 dict(species=member['species'], source=source, path=str(target), sha256=file_sha(target)))
 
