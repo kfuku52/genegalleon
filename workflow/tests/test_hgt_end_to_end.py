@@ -553,7 +553,8 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
 
 @pytest.mark.skipif(any(shutil.which(tool) is None for tool in ('R', 'Rscript', 'seqkit')),
                     reason="R and seqkit are required for HGT rendering validation")
-def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tmp_path: Path):
+@pytest.mark.parametrize("layout", ["raw", "zip"])
+def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tmp_path: Path, layout):
     workspace = tmp_path / 'workspace'
     _write_workspace_fixture(workspace)
     family_root = workspace / 'output/orthogroup'
@@ -569,6 +570,9 @@ def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tm
         frame = pandas.read_sql_query('SELECT * FROM branch', connection)
         frame['orthogroup'] = 'OG0002'
         frame.to_sql('branch', connection, if_exists='append', index=False)
+    if layout == 'zip':
+        from workflow.support.gene_family_output_store import archive_completed_outputs, orthogroup_id_from_name
+        archive_completed_outputs(family_root, 'orthogroup', {'OG0001', 'OG0002'}, orthogroup_id_from_name)
     stub = _install_stub_ggimage(tmp_path)
     fake_conda = _install_fake_conda(tmp_path)
     # Point panels intentionally jitter. Hold the RNG equal for the serial /
@@ -579,6 +583,7 @@ def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tm
     env.update(gg_workspace_dir=str(workspace), run_hgt_eval='1', run_hgt_plot='1', run_hgt_focus='0',
                hgt_use_taxonomy_db='0', GG_TASK_CPUS='2', GG_MEM_TOTAL_GB='32', GG_MEM_TOOL_GB='28',
                hgt_plot_workers='2', NSLOTS='2', MEM_PER_SLOT='16', R_PROFILE_USER=str(profile),
+               GG_OBSERVABILITY='1',
                MPLCONFIGDIR=str(tmp_path / 'mpl'), R_LIBS_USER=str(stub),
                PATH=str(fake_conda) + os.pathsep + env['PATH'])
     def run():
