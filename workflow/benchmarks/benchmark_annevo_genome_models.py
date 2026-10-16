@@ -321,9 +321,15 @@ def main():
     if compared:
         files += [args.compare_annevo_gff, *compared['files']]
     hashes = rescue.digest_paths(files)
-    donors = [build_catalog(s, maps['cds'][s], maps['gff'][s], maps['genome'][s]) for s in sorted(maps['cds'])]
-    aliases = query_locus_map(donors)
     with indexed_genome(args.genome) as genome:
+        # Complete miniprot indexing/alignment before retaining the donor and
+        # whole-reference catalogs. Their independent memory peaks need not
+        # coexist in the same bounded validation runtime.
+        baseline, regions, proteins, placement = bm.donor_placements(args, args.output, genome)
+        dump_compressed(args.output / 'baseline.checked.json.gz', baseline)
+        print('PLACEMENT_READY', args.species, len(baseline), flush=True)
+        donors = [build_catalog(s, maps['cds'][s], maps['gff'][s], maps['genome'][s]) for s in sorted(maps['cds'])]
+        aliases = query_locus_map(donors)
         rows = bm.reference_rows(args.reference_gff, genome)
         gff, cds = bm.write_annotation(args.output / 'complete_reference', rows, genome)
         full = build_catalog(args.species, cds, gff, args.genome)
@@ -332,9 +338,6 @@ def main():
                  for g in full['loci'] if any(c['quality']['valid_orf'] for c in g['candidates'])}
         source_ids = {g['gene_id']: g['candidates'][0]['source_gene_id'] for g in full['loci']}
         print('SOURCE_CATALOG_READY', args.species, len(full['loci']), flush=True)
-        baseline, regions, proteins, placement = bm.donor_placements(args, args.output, genome)
-        dump_compressed(args.output / 'baseline.checked.json.gz', baseline)
-        print('PLACEMENT_READY', args.species, len(baseline), flush=True)
         checked, nomination = checked_native(frozen, args, regions, proteins, genome, baseline)
         dump_compressed(args.output / 'native.checked.json.gz', checked)
         rescue.atomic_json(args.output / 'nomination.json', nomination)

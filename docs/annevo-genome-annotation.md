@@ -218,6 +218,8 @@ and selected GFF/CDS bytes. Independent execution-receipt and raw GFF artifact
 identities are retained in the report. Native parallel decoding can reorder
 sequence-number comments; these identities are excluded from decision equality
 only after every native annotation field and model/genome input agrees.
+Indexing and donor placement finish before full annotation catalogs are retained,
+so their independent memory peaks do not overlap in bounded validation runtimes.
 Its placement graph remains explicitly
 approximate; a fixed alternative annotation is a regression control, not
 independent biological truth.
