@@ -190,7 +190,7 @@ gg_prepare_cmd_runtime() {
 	gg_workspace_layout_resolved=$(gg_resolve_workspace_layout "${gg_workspace_dir_local}")
 	gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir_local}")
 	gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir_local}")
-	gg_workspace_downloads_dir=$(workspace_downloads_root "${gg_workspace_dir_local}")
+	gg_workspace_downloads_dir=$(workspace_downloads_root "${gg_workspace_dir_local}") || return 1
 	export gg_workspace_layout_resolved gg_workspace_input_dir gg_workspace_output_dir gg_workspace_downloads_dir
 	: "${CSUBST_CACHE_DIR:=${gg_workspace_downloads_dir}/csubst}"
 	: "${HF_HOME:=${gg_workspace_downloads_dir}/huggingface}"

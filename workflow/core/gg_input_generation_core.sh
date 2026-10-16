@@ -1052,7 +1052,7 @@ run_format_stage_single() {
     echo "Staging formatted-input outputs before publication."
   fi
 
-  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+  if [[ ${download_only} -eq 0 ]] && ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
   fi
 

@@ -5,7 +5,7 @@ ensure_pfam_le_db() {
   local gg_workspace_dir=$1
   local sys_dir="/usr/local/db/Pfam_LE"
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_parent
   runtime_parent=$(workspace_pfam_root "${gg_workspace_dir}")
   local runtime_dir
@@ -186,7 +186,7 @@ _ensure_jaspar_file_named() {
   local jaspar_filename=$2
   local sys_file="/usr/local/db/jaspar/${jaspar_filename}"
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_file="${runtime_root}/jaspar/${jaspar_filename}"
   local lock_basename
   lock_basename=$(echo "${jaspar_filename}" | tr '/ ' '__')
@@ -275,7 +275,7 @@ _prepare_latest_jaspar_file_locked() {
 ensure_latest_jaspar_file() {
   local gg_workspace_dir=$1
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_dir="${runtime_root}/jaspar"
   local sys_dir="/usr/local/db/jaspar"
   local lock_file="${runtime_root}/locks/jaspar_latest.lock"
@@ -349,7 +349,7 @@ ensure_silva_rrna_ref_db() {
   local gg_workspace_dir=$1
   local sys_file="/usr/local/db/silva/rRNA_ref.fa.gz"
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_file="${runtime_root}/silva/rRNA_ref.fa.gz"
   local lock_file="${runtime_root}/locks/silva_rrna_ref.lock"
 
