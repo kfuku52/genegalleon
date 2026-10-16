@@ -444,6 +444,16 @@ uses zstd when its Python module is available, otherwise gzip; the manifest
 records the selected codec. Shards have a bounded target size, though a single
 record can exceed it.
 
+For targeted inspection, `rescue_model_store.iter_models(..., model_ids={...})`
+restores only matching `model_id` values, retaining their source order and all
+duplicate evidence records. Exhaust the iterator: it still verifies all raw
+shard bytes, the full body database and the enclosing producer generation.
+Only selected bodies are decompressed and layout-validated; omit `model_ids`
+for a full record-layout audit. Existing publications need no rewritten index.
+`workflow/benchmarks/benchmark_rescue_model_selection.py baseline` and `selected`,
+run through the normal runtime wrapper, reproduce a 35,000-candidate synthetic
+comparison with full input hashing and exact ordered output fingerprints.
+
 Within one immutable genome and genetic-code context, raw DNA validation also
 reuses exact candidate-independent results through a bounded cache (8,192 entries,
 32 MiB of conservatively accounted Python objects). Candidate evidence, terminal

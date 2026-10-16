@@ -574,7 +574,13 @@ def _stat(path):
     return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
-def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None):
+def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None, model_ids=None):
+    if model_ids is not None:
+        if isinstance(model_ids, (str, bytes)):
+            raise ValueError("Model IDs must be a collection of strings")
+        model_ids = frozenset(model_ids)
+        if any(not isinstance(value, str) for value in model_ids):
+            raise ValueError("Model IDs must be a collection of strings")
     root, store = _layout(directory)
     key = frozen_key or (frozen_model_store_key(directory, kind=kind) if verify or verification is not None else None)
     if key is not None:
@@ -600,7 +606,8 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                 if not isinstance(record, dict):
                     raise ValueError("Legacy model record is not an object")
                 if ((kind != "accepted" or record.get("status") == "accepted")
-                        and (statuses is None or record.get("status") in statuses)):
+                        and (statuses is None or record.get("status") in statuses)
+                        and (model_ids is None or record.get("model_id") in model_ids)):
                     yield record
             if key is not None and hasher is not None and hasher.hexdigest() != key["files"][member]:
                 raise ValueError("Legacy model checksum changed")
@@ -646,9 +653,20 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                     for envelope in _lines(path, manifest["codec"], expected):
                         if envelope.get("ordinal") != ordinal:
                             raise ValueError("Model-store candidate order changed")
-                        record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
                         ordinal += 1
                         count += 1
+                        if model_ids is not None:
+                            # Selection consumes and hashes every shard and the
+                            # complete body DB. Only selected body payloads need
+                            # decompression/reassembly; the full reader remains
+                            # available for validating every record's layout.
+                            if (set(envelope) - {"body", "context", "order", "raw_order", "ordinal"}
+                                    or not _SHA.fullmatch(str(envelope.get("body", "")))
+                                    or not isinstance(envelope.get("context"), dict)):
+                                raise ValueError("Malformed model-store envelope")
+                            if envelope["context"].get("model_id") not in model_ids:
+                                continue
+                        record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
                         if statuses is None or record.get("status") in statuses:
                             yield record
                     if count != shard["count"]:
@@ -739,8 +757,16 @@ def _partial_entries(root, store, manifest, key, refs):
             raise ValueError("Missing model-store partial line reference")
 
 
-def iter_models(directory, *, statuses=None, verify=True, frozen_key=None):
-    return _iter(directory, "models", statuses=statuses, verify=verify, frozen_key=frozen_key)
+def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model_ids=None):
+    """Read ordered candidates, optionally materializing only given model IDs.
+
+    ID selection preserves repeated matches and still consumes/checksums every
+    source shard and the complete body database. As with every streaming reader,
+    exhaust it to finish the generation fence. Unselected bodies are not decoded
+    or layout-validated; use the default full reader for a complete layout audit.
+    """
+    return _iter(directory, "models", statuses=statuses, verify=verify, frozen_key=frozen_key,
+                 model_ids=model_ids)
 
 
 def iter_accepted_models(directory, *, verify=True, frozen_key=None, verification=None):
