@@ -4,6 +4,7 @@ import hashlib
 import http.server
 import importlib
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -73,6 +74,12 @@ def test_unique_frozen_membership_and_exact_lineage(tmp_path):
             cohort.select({**manifest, **bad}, 1)
     with pytest.raises(ValueError):
         cohort.select(manifest, 2)
+
+
+def test_annotation_phases_bound_every_public_run_flag():
+    entrypoint = (SUPPORT.parent / 'gg_genome_annotation_entrypoint.sh').read_text()
+    declared = {name.upper() for name in re.findall(r'^(run_[a-z0-9_]+)=', entrypoint, re.MULTILINE)}
+    assert {'RUN_' + name for name in cohort.ANNOTATION_RUN_FLAGS} == declared
 
 
 def test_local_acquisition_is_physical_reusable_and_hash_bound(tmp_path):
@@ -212,6 +219,10 @@ def test_busco_requires_current_native_prediction_and_successful_native_proof(tm
     calls = []
     def native(manifest, name, env):
         calls.append(env)
+        assert env['GG_COMMON_REPRESENTATIVE_INPUTS'] == ''
+        assert env['GG_GENOME_ANNOTATION_REPRESENTATIVE_INPUTS'] == ''
+        assert all(env['GG_GENOME_ANNOTATION_RUN_' + flag] == ('1' if flag == 'BUSCO_CDS' else '0')
+                   for flag in cohort.ANNOTATION_RUN_FLAGS)
         assert env['GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND'] == 'none'
         assert env['GG_GENOME_ANNOTATION_RUN_BUSCO_CDS'] == '1'
         assert env['GG_COMMON_BUSCO_LINEAGE'] == 'embryophyta_odb12'

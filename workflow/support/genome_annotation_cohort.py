@@ -26,6 +26,13 @@ from gene_family_output_store import GeneFamilyOutputStore
 from shared_namespace_lock import namespace_lock
 from species_labeling import extract_species_label
 
+ANNOTATION_RUN_FLAGS = ('COLLECT_GFF_INFO', 'BUSCO_CDS', 'UNIPROT_ANNOTATION', 'CDSKIT_LOCALIZE',
+                        'CDS_FX2TAB', 'CDS_MMSEQS2TAXONOMY', 'SCAFFOLD_TAXONOMY',
+                        'CDS_CONTAMINATION_REMOVAL', 'ANNOTATION', 'WGD_KSD', 'BUSCO_GENOME',
+                        'SUBPHASER', 'GENOME_FX2TAB', 'SCAFFOLD_HISTOGRAM', 'GENOME_MMSEQS2TAXONOMY',
+                        'GENOME_CONTAMINATION_REMOVAL', 'JCVI_DOTPLOT', 'GENOMESCOPE', 'SMUDGEPLOT',
+                        'MULTISPECIES_SUMMARY')
+
 
 def physical(path, *, directory=False):
     path = Path(path)
@@ -101,6 +108,7 @@ def environment(manifest, workspace):
                KFAUTO_RUNTIME_RELEASE_ROOT=str(runtime), GG_ARRAY_TASK_ID='1',
                GG_COMMON_DOWNLOADS_ROOT=str(cache), GG_COMMON_TMP_ROOT='workspace',
                GG_COMMON_BUSCO_LINEAGE=manifest['busco_lineage'], GG_COMMON_GENETIC_CODE='1',
+               GG_COMMON_REPRESENTATIVE_INPUTS='',
                GG_CONTAINER_PROJECT_ROOT_BIND=f'{project}:{project}')
     return env
 
@@ -184,9 +192,10 @@ def annotate(manifest, member, workspace, phase):
             raise ValueError('Expected one verified formatted CDS file')
         bind(files[0], phase_workspace / 'input/species_cds' / files[0].name)
     env = environment(manifest, phase_workspace)
-    for flag in ('CDSKIT_LOCALIZE', 'SCAFFOLD_TAXONOMY', 'MULTISPECIES_SUMMARY'):
+    for flag in ANNOTATION_RUN_FLAGS:
         env['GG_GENOME_ANNOTATION_RUN_' + flag] = '0'
     env.update(GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND='oriongeno' if phase == 'predict' else 'none',
+               GG_GENOME_ANNOTATION_REPRESENTATIVE_INPUTS='',
                GG_GENOME_ANNOTATION_ORIONGENO_MODEL_PROFILE='plants',
                GG_GENOME_ANNOTATION_ORIONGENO_BATCH_SIZE='1',
                GG_GENOME_ANNOTATION_RUN_BUSCO_CDS='1' if phase == 'busco' else '0',
