@@ -539,6 +539,14 @@ For `mode_transcriptome_assembly="sraid"` and `mode_transcriptome_assembly="fast
 
 This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_transcriptome_assembly="metadata"` inputs.
 
+For separate acquisition and assembly hosts, the frozen-package runner
+`workflow/support/transcriptome_read_preparation.py` runs the native metadata
+workflow with only getfastq enabled, then repeats it with acquisition disabled
+to verify the persistent cache. It qualifies the exact metadata/RUN set inside
+the selected container and audits native completion with the same cache mounts.
+Its receipt reports read preparation; it does not certify assembly or expression
+analysis. Transfer the verified cache separately before starting assembly.
+
 Quant reference aliases preserve the capitalization of metadata `scientific_name`
 and follow AMALGKIT's filename-token rules, including an explicit `species_token`
 when supplied. Metadata names do not need to be lowercased. Species-key and
