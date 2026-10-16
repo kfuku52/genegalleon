@@ -9,11 +9,10 @@ import hashlib
 import json
 from pathlib import Path
 
-import h5py
-import numpy as np
-
 
 def attributes(obj):
+    import numpy as np
+
     result = {}
     for name, value in sorted(obj.attrs.items()):
         array = np.asarray(value)
@@ -29,6 +28,9 @@ def attributes(obj):
 
 
 def signature(path):
+    import h5py
+    import numpy as np
+
     path = Path(path)
     before = path.stat()
     result = {'schema': 1, 'groups': {}, 'datasets': {}}

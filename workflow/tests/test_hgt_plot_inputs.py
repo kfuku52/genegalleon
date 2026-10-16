@@ -108,7 +108,8 @@ def test_indexed_annotation_matches_original_cli_bytes(tmp_path):
 
 def shell_functions():
     source = (ROOT / 'workflow/core/gg_hgt_core.sh').read_text()
-    return source[source.index('hgt_plot_worker_limit() {'):source.index('\nif [[ -s "${file_hgt_branch}"', source.index('hgt_plot_worker_limit() {'))]
+    start = source.index('hgt_plot_worker_limit() {')
+    return source[start:source.index('\nif [[', start)]
 
 
 @pytest.mark.parametrize('cpus,memory,requested,expected', [(4, 60, 'auto', 4), (16, 60, 'auto', 7),

@@ -57,3 +57,20 @@ def test_support_script_help_smoke(script_name: str, tmp_path: Path):
     )
     assert "usage:" in proc.stdout.lower(), f"No CLI help for {script_name}: {proc.stdout}"
     assert created == [], f"--help created unexpected files for {script_name}: {created}"
+
+
+def test_optional_probability_digest_help_works_without_hdf5_or_numpy():
+    program = """
+import importlib.abc, runpy, sys
+class RejectOptional(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'h5py', 'numpy'}:
+            raise AssertionError('Optional runtime imported for CLI help: ' + fullname)
+sys.meta_path.insert(0, RejectOptional())
+sys.argv = [sys.argv[1], '--help']
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+    result = subprocess.run([sys.executable, '-I', '-S', '-c', program,
+                             str(SUPPORT_DIR/'annevo_probability_digest.py')], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert '--input' in result.stdout and '--output' in result.stdout
