@@ -285,9 +285,11 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
     request_headers = {k: v for k, v in (headers or {}).items()
                        if k.lower() not in ("range", "if-range", "accept-encoding")}
     request_headers["Accept-Encoding"] = "identity"
-    # Bound CNGB connection lifetimes; other providers retain streaming by default.
+    # Bound CNGB/CNCB connections; other providers retain streaming by default.
     host = urlparse(url).hostname or ""
     default_chunk = 128 * 1024 * 1024 if host == "cngb.org" or host.endswith(".cngb.org") else 0
+    if host == "cncb.ac.cn" or host.endswith(".cncb.ac.cn"):
+        default_chunk = 64 * 1024 * 1024
     try:
         chunk_size = max(0, int(os.environ.get("GG_DOWNLOAD_RANGE_CHUNK_BYTES", default_chunk)))
     except ValueError:

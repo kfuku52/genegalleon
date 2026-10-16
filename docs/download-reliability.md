@@ -40,8 +40,10 @@ partial files for a later run. A missing or changed resume validator causes a
 fresh transfer, even when another validator type is present. A 416 response triggers a fresh request rather than declaring success
 from the byte count alone.
 
-CNGB transfers use sequential 128 MiB ranges when the server supports validated
-ranges. Set `GG_DOWNLOAD_RANGE_CHUNK_BYTES=0` to stream, or a positive byte count
+CNGB transfers use sequential 128 MiB ranges and CNCB/GWH transfers use 64 MiB
+ranges when the server supports validated ranges. These bounded responses avoid
+repeatedly restarting long connections while retaining ETag/Last-Modified and
+byte-integrity checks. Set `GG_DOWNLOAD_RANGE_CHUNK_BYTES=0` to stream, or a positive byte count
 to select a range size for all providers. This bounds connection lifetimes;
 it does not imply measured improvements in throughput or failure rate. A server
 ignoring Range falls back to its full response. Existing

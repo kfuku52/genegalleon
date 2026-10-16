@@ -1,6 +1,7 @@
 """Fault injection for resumable downloads; all HTTP stays on loopback."""
 import gzip
 import json
+import os
 import sys
 import threading
 import time
@@ -66,6 +67,44 @@ def test_chunked_ranges_produce_exact_file(tmp_path, monkeypatch):
         download(url, tmp_path/'sequence')
     assert (tmp_path/'sequence').read_bytes() == payload
     assert requests[1] == ('bytes=7-13', '"v1"')
+    assert not list(tmp_path.glob('*.part*'))
+
+
+def test_cncb_default_survives_a_server_that_closes_unbounded_responses(tmp_path, monkeypatch):
+    import format_species_download.locking as locking
+    payload = b'>sequence\nACGTACGTACGT\n'
+    seen = []
+    parse = locking.urlparse
+    get = os.environ.get
+    monkeypatch.delenv('GG_DOWNLOAD_RANGE_CHUNK_BYTES', raising=False)
+    monkeypatch.setattr(locking, 'urlparse', lambda url: parse(url)._replace(netloc='download.cncb.ac.cn'))
+    # Scale only the real CNCB default, preserving its selection and transport.
+    monkeypatch.setattr(os.environ, 'get', lambda key, default=None:
+        '7' if key == 'GG_DOWNLOAD_RANGE_CHUNK_BYTES' and default == 64 * 1024 * 1024 else get(key, default))
+    def reply(h):
+        value = h.headers.get('Range', '')
+        seen.append((value, h.headers.get('If-Range')))
+        start, _, end = value.removeprefix('bytes=').partition('-')
+        if not value or not end:
+            h.send_response(200)
+            h.send_header('Content-Length', str(len(payload)))
+            h.send_header('ETag', '"stable"')
+            h.end_headers()
+            h.wfile.write(payload[:1])
+            h.close_connection = True
+            return
+        start, end = int(start), min(int(end), len(payload) - 1)
+        h.send_response(206)
+        h.send_header('Content-Range', f'bytes {start}-{end}/{len(payload)}')
+        h.send_header('Content-Length', str(end - start + 1))
+        h.send_header('ETag', '"stable"')
+        h.end_headers()
+        h.wfile.write(payload[start:end + 1])
+    with server(reply) as url:
+        download(url, tmp_path / 'sequence')
+    assert (tmp_path / 'sequence').read_bytes() == payload
+    assert seen == [('bytes=0-6', None), ('bytes=7-13', '"stable"'),
+                    ('bytes=14-20', '"stable"'), ('bytes=21-27', '"stable"')]
     assert not list(tmp_path.glob('*.part*'))
 
 
