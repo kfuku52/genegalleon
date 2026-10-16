@@ -460,9 +460,30 @@ def _core_env(
         "trait_species_source": "download_manifest",
         "trait_databases": "auto",
     }
+    # Parent plans and child workers must use the same explicitly selected
+    # Python dependencies, including separately qualified runtime extensions.
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
     if task_id is not None:
         env["GG_ARRAY_TASK_ID"] = str(task_id)
     return env
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_core_env_keeps_explicit_dependency_selection(tmp_path, monkeypatch, selected):
+    extension = tmp_path / "extension"
+    extension.mkdir()
+    (extension / "gg_fixture_dependency.py").write_text("VALUE = 'frozen'\n")
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    if selected:
+        monkeypatch.setenv("PYTHONPATH", str(extension))
+    env = _core_env(tmp_path, None, tmp_path / "fake", "single")
+    code = ("import importlib.util; "
+            "spec = importlib.util.find_spec('gg_fixture_dependency'); "
+            "print('base' if spec is None else 'frozen')")
+    result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
+                            env=env, capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == ("frozen" if selected else "base")
 
 
 def _run_core(
