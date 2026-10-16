@@ -245,7 +245,11 @@ The fast lane also installs Ubuntu's `seqkit` package for the real per-species
 genetic-code translation regression; these tool-dependent assertions remain enabled.
 
 Commit CI partitions fast tests across two jobs, workflow integrations across
-three, and SIF runtime Python tests across eight, with two pytest workers per job.
+three, and SIF runtime Python tests across four. These lanes use four pytest
+workers per hosted four-core job, retaining every test while using fewer runner
+minutes and repeating SIF setup four times instead of eight. Local and publication
+validation retain their existing worker defaults. R, extra runtime and 3Di jobs
+keep their independent execution and resource requirements.
 `--gg-shard INDEX/COUNT`
 assigns each selected pytest node ID to exactly one partition using a stable hash;
 lane selection and explicit paths still apply first. Each job reports slow test

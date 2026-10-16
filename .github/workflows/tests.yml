@@ -204,7 +204,7 @@ jobs:
           TEST_SHARD: ${{ matrix.shard }}/2
         run: |
           python -m pytest -q \
-            -n 2 \
+            -n 4 \
             --dist load \
             --gg-suite fast \
             --gg-shard="${TEST_SHARD}" \
@@ -273,7 +273,7 @@ jobs:
           TEST_SHARD: ${{ matrix.shard.partition }}
         run: |
           python -m pytest -q \
-            -n 2 \
+            -n 4 \
             --dist load \
             --gg-suite "${TEST_SUITE}" \
             --gg-shard="${TEST_SHARD}" \
@@ -408,7 +408,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,7 +418,8 @@ jobs:
         with:
           prepared-runtime-input: ${{ needs.prepare-sif.outputs.runtime-input }}
           validation-suite: runtime-python
-          shard: ${{ matrix.shard }}/8
+          shard: ${{ matrix.shard }}/4
+          workers: "4"
 
   sif-other:
     needs: [prepare-sif]

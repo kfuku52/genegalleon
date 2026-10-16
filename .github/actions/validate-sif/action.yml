@@ -19,6 +19,9 @@ inputs:
   shard:
     description: Optional INDEX/COUNT partition for runtime-python.
     default: ""
+  workers:
+    description: Pytest processes per SIF Python partition; other suites retain their own execution.
+    default: "2"
   prepared-runtime-input:
     description: Exact runtime input prepared once by an earlier job in this run.
     default: ""
@@ -350,8 +353,12 @@ runs:
         GG_RUNTIME_FRESHNESS: "off"
         VALIDATION_SUITE: ${{ inputs.validation-suite }}
         VALIDATION_SHARD: ${{ inputs.shard }}
+        VALIDATION_WORKERS: ${{ inputs.workers }}
       run: |
         args=()
+        if [[ "${VALIDATION_SUITE}" == "runtime-python" ]]; then
+          args+=("--workers=${VALIDATION_WORKERS}")
+        fi
         if [[ -n "${VALIDATION_SHARD}" ]]; then
           if [[ "${VALIDATION_SUITE}" != "runtime-python" ]]; then
             echo "Shards apply only to runtime-python; R and extra checks run separately."

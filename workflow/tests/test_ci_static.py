@@ -341,8 +341,14 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
     share = named_step(prepare, "Share uncached SIF with validation partitions")
     assert share["with"]["if-no-files-found"] == "error"
     assert share["with"]["retention-days"] == "1"
-    assert jobs["sif-python"]["strategy"]["matrix"]["shard"] == [str(i) for i in range(1, 9)]
+    assert jobs["sif-python"]["strategy"]["matrix"]["shard"] == [str(i) for i in range(1, 5)]
     assert set(jobs["sif-other"]["strategy"]["matrix"]["suite"]) == {"runtime-extra", "r", "3di"}
+    partition = named_step(jobs["sif-python"], "Validate SIF Python partition")["with"]
+    assert partition["shard"] == "${{ matrix.shard }}/4"
+    assert partition["workers"] == "4"
+    for lane, step in (("python-fast-shards", "Run fast Python tests"),
+                       ("python-heavy", "Run heavy Python tests")):
+        assert "-n 4" in step_run(jobs[lane], step)
     for name, step in (("sif-python", "Validate SIF Python partition"),
                        ("sif-other", "Validate independent SIF checks")):
         job = jobs[name]
@@ -730,6 +736,25 @@ def test_shared_sif_snapshot_is_verified_without_resolving_new_sources(tmp_path,
         assert not output.exists()
     else:
         assert output.read_text() == "value=" + "a" * 64 + "\n"
+
+
+def test_sif_python_worker_budget_reaches_the_existing_validation_runner(tmp_path):
+    job = load_workflow("tests.yml")["jobs"]["sif-python"]
+    wrapper = tmp_path / "workflow/tests/run_in_sif.sh"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text('printf "%s\\n" "$@" > "$CAPTURE"\n')
+    output = tmp_path / "command"
+    result = subprocess.run(
+        ["bash", "-e", "-c", step_run(job, "Run SIF validation checks")],
+        cwd=tmp_path, env=os.environ | {
+            "VALIDATION_SUITE": "runtime-python", "VALIDATION_SHARD": "2/4",
+            "VALIDATION_WORKERS": "4", "CAPTURE": str(output),
+        }, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    command = output.read_text().splitlines()
+    assert command[:3] == ["python", "workflow/tests/run_checks.py", "runtime-python"]
+    assert "--workers=4" in command and "--gg-shard=2/4" in command
 
 
 def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():
