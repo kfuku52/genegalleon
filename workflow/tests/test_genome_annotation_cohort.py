@@ -5,6 +5,7 @@ import http.server
 import importlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -80,19 +81,33 @@ def owning_release(manifest, name):
     return root
 
 
-@pytest.mark.parametrize('name', ['gg_input_generation', 'gg_genome_annotation'])
-def test_dispatch_passes_the_owning_snapshot_through_real_bootstrap(tmp_path, monkeypatch, name):
+@pytest.mark.parametrize('name', ['gg_input_generation', 'gg_genome_annotation', 'gg_transcriptome_generation'])
+@pytest.mark.parametrize('bare_host_path', [False, True])
+def test_dispatch_passes_the_owning_snapshot_through_real_bootstrap(tmp_path, monkeypatch, name, bare_host_path):
     manifest, _, workspace = fixture(tmp_path)
     owning_release(manifest, 'gg_genome_annotation')
     root = owning_release(manifest, name)
+    if bare_host_path:
+        binaries = tmp_path / 'host-bin'
+        binaries.mkdir()
+        (binaries / 'bash').symlink_to(shutil.which('bash'))
+        monkeypatch.setenv('PATH', str(binaries))
+        assert shutil.which('python') is None
     monkeypatch.setenv('KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256', '0' * 64)
     env = cohort.environment(manifest, workspace)
     assert 'KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256' not in env
     original_run = subprocess.run
     calls = []
+    aliases = []
     def boundary(argv, *, cwd, env, check):
         assert cwd == root and argv == ['bash', str(root / 'workflow' / (name + '_entrypoint.sh'))]
         assert env['KFAUTO_RUNTIME_RELEASE_ROOT'] == str(root)
+        alias = Path(shutil.which('python', path=env['PATH']))
+        assert alias.parent.name.startswith('.gg-host-python-')
+        probe = original_run([str(alias), '-c', 'import sys; print(sys.executable)'],
+                             env=env, check=True, capture_output=True, text=True)
+        assert probe.stdout.strip() == sys.executable
+        aliases.append(alias)
         command = ('source "$1"; gg_validate_explicit_runtime_release "$KFAUTO_RUNTIME_RELEASE_ROOT" '
                    '"$2" "$1" "$KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256"')
         result = original_run(['bash', '-c', command, 'bootstrap',
@@ -103,6 +118,7 @@ def test_dispatch_passes_the_owning_snapshot_through_real_bootstrap(tmp_path, mo
     monkeypatch.setattr(cohort.subprocess, 'run', boundary)
     cohort.entrypoint(manifest, name, env)
     assert len(calls) == 1
+    assert all(not alias.parent.exists() for alias in aliases)
 
 
 @pytest.mark.parametrize('damage', ['digest', 'workflow', 'source_file'])
@@ -128,6 +144,7 @@ def test_changed_owning_runtime_cannot_enter_a_native_stage(tmp_path, monkeypatc
     with pytest.raises(ValueError):
         cohort.entrypoint(manifest, 'gg_input_generation' if damage == 'workflow' else 'gg_genome_annotation',
                           cohort.environment(manifest, workspace))
+    assert not list(workspace.glob('.gg-host-python-*'))
 
 
 def test_unique_frozen_membership_and_exact_lineage(tmp_path):

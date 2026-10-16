@@ -129,6 +129,9 @@ either `local_path` plus `sha256`, or a public `url` with optional `md5` and
 `gg_input_generation` release. Each phase verifies its exact owning manifest and
 passes the normal release snapshot marker to the entrypoint; a different
 workflow or changed source fails the real bootstrap validation.
+Host bootstrap calls use the dispatcher's own Python through a short-lived
+private alias, so a site exposing only `python3` works without a system alias.
+The original interpreter and virtual-environment prefix remain intact.
 
 Acquisition records the actual genome hash and publishes a verified private copy
 without changing the original file's inode or link count. Prediction

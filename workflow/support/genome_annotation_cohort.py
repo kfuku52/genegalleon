@@ -13,8 +13,10 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -140,8 +142,16 @@ def entrypoint(manifest, name, env):
                     file_sha256={path: inventory[path] for path in sorted(required)})
     env = {**env, 'KFAUTO_RUNTIME_RELEASE_ROOT': str(runtime),
            'KFAUTO_RUNTIME_RELEASE_SNAPSHOT_SHA256': canonical(snapshot)}
-    subprocess.run(['bash', str(runtime / 'workflow' / (name + '_entrypoint.sh'))],
-                   cwd=runtime, env=env, check=True)
+    # Site launchers may expose only python3. Keep every host-side bootstrap
+    # call on this same interpreter, preserving its virtual-environment prefix.
+    with tempfile.TemporaryDirectory(prefix='.gg-host-python-',
+            dir=physical(env['gg_workspace_dir'], directory=True)) as tools:
+        python = Path(tools) / 'python'
+        python.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
+        python.chmod(0o500)
+        env['PATH'] = tools + os.pathsep + env.get('PATH', '/usr/local/bin:/usr/bin:/bin')
+        subprocess.run(['bash', str(runtime / 'workflow' / (name + '_entrypoint.sh'))],
+                       cwd=runtime, env=env, check=True)
 
 
 def acquire(manifest, member, workspace):
