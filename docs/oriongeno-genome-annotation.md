@@ -45,6 +45,37 @@ External Python paths retain their virtual-environment prefix. Preparation and
 prediction publication use the shared-filesystem namespace lock; all concurrent
 jobs sharing those paths must use the same lock protocol.
 
+For separate species workspaces, set `GG_COMMON_DOWNLOADS_ROOT` to one existing,
+owned physical absolute directory and bind that directory at the same path in
+the container. OrionGeno environments/checkpoints and downloaded BUSCO lineages
+then share the existing asset locks and provenance checks. The default remains
+each workspace's `downloads` directory. Keep one source/model snapshot per cache;
+use a new cache for an intentional upgrade.
+
+## Separate acquisition, GPU and CPU allocations
+
+`workflow/support/genome_annotation_cohort.py` runs one frozen member with
+`--manifest COHORT.json --manifest-sha256 SHA --task N --phase acquire|predict|busco`.
+It runs on the host and invokes the installed native entrypoints. It does not
+submit jobs. A scheduler can connect arrays with Slurm `aftercorr` so one slow
+download does not delay other species, and run BUSCO without reserving a GPU.
+
+The version-1 JSON contains `project_root`, `runtime_root`, `image_path`,
+`work_root`, `downloads_root`, `busco_lineage` (`embryophyta_odb12`) and `members`.
+All roots are existing physical absolute paths under the project, which is bound
+into the container at the same path. Each member has a consecutive 1-based `task`,
+unique `species`, `filename` (`SPECIES.genome.fa` or `.fa.gz`) and `source`:
+either `local_path` plus `sha256`, or a public `url` with optional `md5` and
+`archive_member`. MD5 applies to a directly downloaded file, not an archive member.
+
+Acquisition records the actual genome hash and hard-links its input. Prediction
+uses a separate species workspace and the shared native runtime/model cache.
+The CPU phase audits current prediction/formatting provenance before linking the
+formatted triplet into its own BUSCO workspace. A missing, changed or incorrectly
+labelled BUSCO artifact fails the phase even if its entrypoint returned zero.
+Original annotations remain separate. Resource limits, duplicate exclusion and
+accepted-job verification belong to the scheduler submitting these phases.
+
 Outputs are below `output/genome_prediction/oriongeno/SPECIES/`: native GFF3,
 execution receipt, prediction/formatter provenance, formatted GFF/CDS/genome,
 and `candidate_inputs.tsv`. These outputs do not establish annotation accuracy

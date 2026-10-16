@@ -58,6 +58,39 @@ def run_bash(cmd: str, cwd: Path):
     )
 
 
+def test_shared_download_cache_is_explicit_and_rejects_aliases(tmp_path):
+    cache = tmp_path / "assets"
+    cache.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(cache, target_is_directory=True)
+    source = f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+    default = run_bash(source + 'workspace_downloads_root /workspace', tmp_path)
+    assert default.returncode == 0
+    assert default.stdout.strip() == "/workspace/downloads"
+    shared = run_bash(source + f"GG_COMMON_DOWNLOADS_ROOT={shlex.quote(str(cache))}; "
+                      'workspace_downloads_root /workspace/one; workspace_downloads_root /workspace/two', tmp_path)
+    assert shared.returncode == 0, shared.stderr
+    assert shared.stdout.splitlines() == [str(cache), str(cache)]
+    for path in ("relative", "/", str(tmp_path / "missing"), str(alias), str(alias / ".." / "alias"), str(cache) + "/"):
+        result = run_bash(source + f"GG_COMMON_DOWNLOADS_ROOT={shlex.quote(path)}; workspace_downloads_root /workspace", tmp_path)
+        assert result.returncode != 0, path
+        assert result.stdout == ""
+
+
+def test_shared_download_cache_is_forwarded_to_both_container_engines(tmp_path):
+    cache = tmp_path / "assets"
+    cache.mkdir()
+    # Exercise the common-variable forwarding path used by real entrypoints.
+    command = (f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+               f"GG_COMMON_DOWNLOADS_ROOT={shlex.quote(str(cache))}; "
+               f'gg_workspace_dir={shlex.quote(str(tmp_path))}; gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}; gg_container_image_path={shlex.quote(str(GG_UTIL_PATH))}; '
+               'gg_configure_task_tmp_mount() { :; }; set_singularityenv; '
+               'printf "%s\\n" "${APPTAINERENV_GG_COMMON_DOWNLOADS_ROOT}" "${SINGULARITYENV_GG_COMMON_DOWNLOADS_ROOT}"')
+    result = run_bash(command, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-2:] == [str(cache), str(cache)]
+
+
 @pytest.mark.parametrize("cache_enabled", [True, False])
 def test_transcriptome_cache_bind_survives_container_runtime_reset(tmp_path, cache_enabled):
     entrypoint = (WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh").read_text()

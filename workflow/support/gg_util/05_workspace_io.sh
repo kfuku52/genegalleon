@@ -39,7 +39,24 @@ workspace_output_root() {
 
 workspace_downloads_root() {
   local gg_workspace_dir=$1
-  echo "${gg_workspace_dir}/downloads"
+  local shared_root=${GG_COMMON_DOWNLOADS_ROOT:-}
+  if [[ -z "${shared_root}" ]]; then
+    printf '%s\n' "${gg_workspace_dir}/downloads"
+    return
+  fi
+  # A physical, pre-created directory prevents workspace aliases from silently
+  # selecting another cache. Existing per-asset locks still serialize writers.
+  if [[ "${shared_root}" != /* || "${shared_root}" == / || ! -d "${shared_root}" || -L "${shared_root}" || ! -O "${shared_root}" ]]; then
+    echo "GG_COMMON_DOWNLOADS_ROOT must be an existing absolute owned physical directory." >&2
+    return 1
+  fi
+  local physical_root
+  physical_root=$(cd -- "${shared_root}" && pwd -P) || return 1
+  if [[ "${physical_root}" != "${shared_root}" ]]; then
+    echo "GG_COMMON_DOWNLOADS_ROOT must have no aliases, symlink parents or trailing slash." >&2
+    return 1
+  fi
+  printf '%s\n' "${physical_root}"
 }
 
 gg_resolve_workspace_layout() {
@@ -51,21 +68,21 @@ gg_resolve_workspace_layout() {
 workspace_taxonomy_root() {
   local gg_workspace_dir=$1
   local dir_db
-  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   echo "${dir_db}/ete_taxonomy"
 }
 
 workspace_pfam_root() {
   local gg_workspace_dir=$1
   local dir_db
-  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   echo "${dir_db}/pfam"
 }
 
 workspace_omark_root() {
   local gg_workspace_dir=$1
   local dir_db
-  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   echo "${dir_db}/omark"
 }
 
@@ -210,7 +227,7 @@ ensure_ete_taxonomy_db() {
   local taxdump_file
   local lock_file
 
-  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   dir_taxonomy=$(workspace_taxonomy_root "${gg_workspace_dir}")
   db_file=$(workspace_taxonomy_dbfile "${gg_workspace_dir}")
   taxdump_file=$(workspace_taxonomy_taxdumpfile "${gg_workspace_dir}")
@@ -318,7 +335,7 @@ gg_initialize_data_layout() {
   local dir_db
   dir_input=$(workspace_input_root "${gg_workspace_dir}")
   dir_output=$(workspace_output_root "${gg_workspace_dir}")
-  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   ensure_dir "${dir_input}"
   ensure_dir "${dir_output}"
   ensure_dir "${dir_db}"

@@ -181,7 +181,7 @@ ensure_uniprot_sprot_metadata_tsv() {
   local db_prefix="${2:-}"
   local sys_prefix="/usr/local/db/uniprot_sprot"
   local runtime_root
-  runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")"
+  runtime_root="$(workspace_downloads_root "${gg_workspace_dir}")" || return 1
   local runtime_prefix="${runtime_root}/uniprot_sprot/uniprot_sprot"
   local runtime_meta="${runtime_prefix}.meta.tsv.gz"
   local lock_file="${runtime_root}/locks/uniprot_sprot.meta.lock"
@@ -283,7 +283,7 @@ ensure_uniprot_sprot_db() {
   local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local lock_file="${runtime_root}/locks/uniprot_sprot.lock"
@@ -321,7 +321,7 @@ ensure_uniprot_sprot_mmseqs_db() {
   local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local runtime_pep="${runtime_prefix}.pep"
@@ -383,7 +383,7 @@ ensure_uniprot_sprot_blast_db() {
   local gg_workspace_dir=$1
   local sys_prefix="/usr/local/db/uniprot_sprot"
   local runtime_root
-  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}")
+  runtime_root=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   local runtime_dir="${runtime_root}/uniprot_sprot"
   local runtime_prefix="${runtime_dir}/uniprot_sprot"
   local runtime_pep="${runtime_prefix}.pep"
