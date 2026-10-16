@@ -216,6 +216,9 @@ def identities():
     versions["search_inputs_implementation"] = digest(sys.modules[local_record.__module__].__file__)
     versions["model_store_implementation"] = digest(sys.modules[write_model_store.__module__].__file__)
     versions["raw_validation_implementation"] = digest(sys.modules[RawValidationMemo.__module__].__file__)
+    for module in ('rescue_admission_replay', 'rescue_model_store_patch'):
+        versions[('admission_replay' if module == 'rescue_admission_replay' else 'admission_patch')
+                 + '_implementation'] = digest(Path(__file__).with_name(module + '.py'))
     for name, module in (("resolve_coding_paths", "rescue_coding_paths"),
                          ("protein_path_support", "rescue_path_compatibility"),
                          ("homology_problems", "rescue_homology_policy"),
@@ -1260,6 +1263,9 @@ def output_storage(plan):
 def rescue(root, plan, name, cpus, interval_workers=None):
     if name not in plan["species"]:
         raise ValueError("Unknown rescue species")
+    if plan['request'].get('admission_cache'):
+        import rescue_admission_replay
+        return rescue_admission_replay.rescue(root, plan, name, cpus)
     storage = output_storage(plan)
     donors = [name, *plan["donors"][name]]
     for donor in donors:
@@ -2160,6 +2166,13 @@ def parser():
     self_parser = sub.add_parser("self-align", help="Internal LAST preparation preserving high-identity paralogs")
     self_parser.add_argument("--cpus", type=int, default=1)
     self_parser.add_argument("--cscore", type=float, default=0.7)
+    replay = sub.add_parser('reclassify-plan', help='Freeze unchanged rescue evidence for current admission rules')
+    replay.add_argument('--previous-output', type=Path, required=True)
+    replay.add_argument('--producer-source', type=Path, required=True)
+    replay.add_argument('--output', type=Path, required=True)
+    replay = sub.add_parser('reclassify-prepare', help='Import verified, semantically unchanged prepared/comparison stages')
+    replay.add_argument('--output', type=Path, required=True)
+    replay.add_argument('--cpus', type=int, default=1)
     plan = sub.add_parser("plan", help="Freeze sources, five common references, nearest donors and self jobs")
     for name in ("cds-dir", "gff-dir", "genome-dir", "busco-dir", "tree", "output"):
         plan.add_argument("--" + name, type=Path, required=True)
@@ -2228,6 +2241,12 @@ def main():
             p.error("Invalid self alignment parameters")
         align_self(args.cpus, args.cscore)
         return
+    if args.command == 'reclassify-plan':
+        import rescue_admission_replay
+        plan = rescue_admission_replay.build_plan(args.previous_output, args.producer_source, args.output)
+        print(json.dumps({'species': len(plan['species']), 'comparisons': len(plan['synteny_jobs']),
+                          'admission_replay': True}))
+        return
     if args.command == "plan":
         if (args.common_references < 1 or args.nearest_references < 0 or not 0 <= args.minimum_busco <= 100
                 or not 0 < args.cscore <= 1 or args.min_anchors < 2 or args.distance < 1
@@ -2244,6 +2263,10 @@ def main():
     plan = load(root, inspect_only=args.command in {"export-search-inputs", "export-models"})
     if getattr(args, "cpus", 1) < 1:
         p.error("cpus must be positive")
+    if args.command == 'reclassify-prepare':
+        import rescue_admission_replay
+        rescue_admission_replay.prepare(root, plan, args.cpus)
+        return
     if getattr(args, "interval_workers", None) is not None and not 1 <= args.interval_workers <= args.cpus:
         p.error("interval-workers must be positive and no greater than cpus")
     if getattr(args, "task_index", None) is not None:

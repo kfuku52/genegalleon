@@ -574,7 +574,8 @@ def _stat(path):
     return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
 
 
-def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None, model_ids=None):
+def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verification=None, model_ids=None,
+          context_filter=None, with_ordinals=False):
     if model_ids is not None:
         if isinstance(model_ids, (str, bytes)):
             raise ValueError("Model IDs must be a collection of strings")
@@ -602,13 +603,14 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                   "revision": "revision_candidates.json"}[kind]
         if (root / member).is_file():
             hasher = hashlib.sha256() if verification is None else None
-            for record in stream_json_array(root / member, hasher=hasher):
+            for ordinal, record in enumerate(stream_json_array(root / member, hasher=hasher)):
                 if not isinstance(record, dict):
                     raise ValueError("Legacy model record is not an object")
                 if ((kind != "accepted" or record.get("status") == "accepted")
                         and (statuses is None or record.get("status") in statuses)
-                        and (model_ids is None or record.get("model_id") in model_ids)):
-                    yield record
+                        and (model_ids is None or record.get("model_id") in model_ids)
+                        and (context_filter is None or context_filter(_split_fields(record)[1]))):
+                    yield (ordinal, record) if with_ordinals else record
             if key is not None and hasher is not None and hasher.hexdigest() != key["files"][member]:
                 raise ValueError("Legacy model checksum changed")
     else:
@@ -632,7 +634,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                         raise ValueError("Non-primary record in accepted overlay")
                     count += 1
                     if statuses is None or record.get("status") in statuses:
-                        yield record
+                        yield (ordinal, record) if with_ordinals else record
                 if count != manifest["counts"][kind]:
                     raise ValueError("Model-store overlay count changed")
             finally:
@@ -655,7 +657,7 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                             raise ValueError("Model-store candidate order changed")
                         ordinal += 1
                         count += 1
-                        if model_ids is not None:
+                        if model_ids is not None or context_filter is not None:
                             # Selection consumes and hashes every shard and the
                             # complete body DB. Only selected body payloads need
                             # decompression/reassembly; the full reader remains
@@ -664,11 +666,13 @@ def _iter(directory, kind, *, statuses=None, verify=True, frozen_key=None, verif
                                     or not _SHA.fullmatch(str(envelope.get("body", "")))
                                     or not isinstance(envelope.get("context"), dict)):
                                 raise ValueError("Malformed model-store envelope")
-                            if envelope["context"].get("model_id") not in model_ids:
+                            if model_ids is not None and envelope["context"].get("model_id") not in model_ids:
+                                continue
+                            if context_filter is not None and not context_filter(envelope["context"]):
                                 continue
                         record = _unpack(envelope, bodies.read(envelope["body"]), _context_owned=True)
                         if statuses is None or record.get("status") in statuses:
-                            yield record
+                            yield (envelope["ordinal"], record) if with_ordinals else record
                     if count != shard["count"]:
                         raise ValueError("Model-store shard count changed")
                 if ordinal != manifest["counts"]["models"]:
@@ -767,6 +771,17 @@ def iter_models(directory, *, statuses=None, verify=True, frozen_key=None, model
     """
     return _iter(directory, "models", statuses=statuses, verify=verify, frozen_key=frozen_key,
                  model_ids=model_ids)
+
+
+def iter_model_items(directory, *, context_filter=None, frozen_key=None, verification=None):
+    """Yield original ordinals and selected models after full stream verification.
+
+    The predicate reads candidate context only and must not mutate it. Unselected
+    DNA bodies need not be restored, but every raw shard and body database is
+    freshly hashed. Exhaust before consuming decisions or publishing a result.
+    """
+    return _iter(directory, "models", context_filter=context_filter,
+                 frozen_key=frozen_key, verification=verification, with_ordinals=True)
 
 
 def iter_accepted_models(directory, *, verify=True, frozen_key=None, verification=None):

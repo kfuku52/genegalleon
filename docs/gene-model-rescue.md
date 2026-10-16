@@ -680,3 +680,37 @@ Frozen result and preparation files are hashed in groups, with full-byte reads
 and generation checks before and after each group and before cache use. This
 avoids repeated per-file scans of every previously verified pathname.
 This step does not assign orthology or relax coding-path compatibility.
+
+For an admission-only change, completed compact outputs can instead use the
+standard verified reclassification path:
+
+```bash
+python workflow/support/rescue_gene_models.py reclassify-plan \
+  --previous-output /previous/rescue --producer-source /previous/fixed/source \
+  --output /new/rescue
+python workflow/support/rescue_gene_models.py reclassify-prepare --output /new/rescue --cpus 4
+python workflow/support/rescue_gene_models.py rescue --output /new/rescue --cpus 4
+python workflow/support/rescue_gene_models.py finalize --output /new/rescue --cpus 4
+```
+
+The archived source must match the producer plan's implementation digests.
+Strict validation, boundary completion, donor alignments, native structure
+confirmation, preparation and comparison semantics must match the current
+implementation, with unchanged scientific parameters, inputs, donor graph and
+relevant runtime identities. Unknown or changed contracts fail before workers
+publish; use ordinary prediction-cache replay when raw evidence must change.
+GeMoMa and legacy JSON publications are not qualified by this narrower path.
+
+Reclassification imports full-byte-verified prepared and comparison outputs
+into the new plan, then runs current placement, ownership, coding-path admission
+and fresh genomic QC on admitted primary and alternative CDS. It preserves
+native structure decisions under the unchanged source-bound contract; it does
+not clear unconfirmed-native or structural failures. Every raw candidate,
+unknown field, original ordinal, partial-reference order and no-alignment audit
+row survives. Unselected DNA bodies need not be reconstructed, but all source
+bytes and the final generation fence are verified. Immutable copies avoid shared
+writable files, and each worker retains an `admission_replay.json` proof.
+Separately declared annotation ancestors in older integration publications are
+retained through frozen plan/worker receipts and matching genome/code identity.
+Their accepted CDS nominate historical paths only; current QC, donor support and
+admission still apply. They cannot supply reusable native support or extra donors.
