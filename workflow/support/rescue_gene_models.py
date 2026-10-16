@@ -1257,7 +1257,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         expanded_genome_sha256 = None
         atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
         atomic_json(tmp / "genome_search_nomination.json", nomination)
-        if not regions:
+        if not regions and not plan["request"].get("prediction_cache"):
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
             lengths = {}
@@ -1366,6 +1366,10 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 model["evidence"] = region
                 model["search"] = "synteny_interval"
                 validated.append(checked_prediction(model))
+            historical, historical_audit = revalidate_retained_coding_paths(
+                retained_paths, validated, genome, source['genetic_code'], params, proteins, name)
+            validated.extend(historical)
+            atomic_json(tmp / 'retained_path_revalidation.json', historical_audit)
             def unresolved_regions():
                 preview = [{**m, "problems": list(m["problems"])} for m in validated]
                 reassess_unanchored_models(preview, params["unanchored_min_species"], ownership=placement_ownership)
@@ -1567,8 +1571,13 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
             if shape in result and result[shape]['sequence_sha256'] != sequence_sha256:
                 raise ValueError('Previous annotations disagree on genomic CDS sequence')
             result.setdefault(shape, {'sequence_sha256': sequence_sha256, 'source_directory': str(directory),
-                                     'producer_receipt_sha256': expected_receipt_sha256, 'model_ids': []})
+                                     'producer_receipt_sha256': expected_receipt_sha256, 'model_ids': [],
+                                     'history_depth': len(_ancestors), 'donor_queries': []})
             result[shape]['model_ids'].append(path['model_id'])
+            for evidence in path.get('support') or [path.get('evidence', {})]:
+                pair = [evidence.get('donor'), evidence.get('query')]
+                if all(isinstance(value, str) and value for value in pair) and pair not in result[shape]['donor_queries']:
+                    result[shape]['donor_queries'].append(pair)
     if history_audit is not None:
         history_audit.append({'directory': str(directory), 'receipt_sha256': expected_receipt_sha256,
                               'status': 'verified', 'accepted_coding_paths': len(result)})
@@ -1630,6 +1639,85 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
                     history_audit.append({'directory': str(parent), 'status': 'incompatible_genome_history'})
     batch.check()
     return result
+
+
+def revalidate_retained_coding_paths(retained_paths, current, genome, code, params, proteins, species):
+    """Recover a verified annotation path missing from current valid predictions.
+
+    Historical coordinates nominate a fixed CDS, never a boundary search or
+    cached alignment. Reconstruct it from the current genome and require exact
+    DNA, the current strict validator, and a fresh alignment to an available
+    current donor. Ordinary ownership and competition still run afterwards.
+    """
+    from Bio.Align import PairwiseAligner
+
+    placement = {'unanchored_genome_search', 'outside_expected_synteny_interval'}
+    present = {coding_shape(model) for model in current if not set(model.get('problems', ())) - placement
+               and model.get('sequence') and coding_shape(model) in retained_paths
+               and hashlib.sha256(model['sequence'].encode()).hexdigest()
+               == retained_paths[coding_shape(model)]['sequence_sha256']}
+    result, audit = [], []
+    for shape, previous in retained_paths.items():
+        if shape in present:
+            continue
+        seqid, strand, blocks = shape
+        entry = {'shape': shape, 'previous_annotation': previous, 'donor_assessments': [], 'emitted': 0}
+        audit.append(entry)
+        base = {'seqid': seqid, 'strand': strand, 'cds': [list(block) for block in blocks],
+                'frameshift': False, 'coverage': 1.0, 'identity': 1.0}
+        structural = validate_model(base, genome, code, params)
+        if structural['problems'] or coding_shape(structural) != shape:
+            entry['reasons'] = structural['problems'] or ['changed_coding_boundaries']
+            continue
+        if hashlib.sha256(structural['sequence'].encode()).hexdigest() != previous['sequence_sha256']:
+            entry['reasons'] = ['previous_annotation_sequence_changed']
+            continue
+        protein = str(Seq(structural['sequence']).translate(table=code)).removesuffix('*')
+        for donor, query in sorted({tuple(pair) for pair in previous.get('donor_queries', ())}):
+            assessment = {'donor': donor, 'query': query}
+            entry['donor_assessments'].append(assessment)
+            donor_protein = proteins.get(donor, {}).get(query, '').upper().removesuffix('*')
+            if not donor_protein or set(donor_protein) - set('ACDEFGHIKLMNPQRSTVWY'):
+                assessment['reasons'] = ['current_donor_unavailable_or_ambiguous']
+                continue
+            if len(protein) * len(donor_protein) > params.get('terminal_max_alignment_cells', 25_000_000):
+                assessment['reasons'] = ['alignment_cell_budget_exceeded']
+                continue
+            translated = protein
+            if structural['sequence'][:3] in CodonTable.unambiguous_dna_by_id[code].start_codons and donor_protein.startswith('M'):
+                translated = 'M' + translated[1:]
+            aligner = PairwiseAligner(mode='global', match_score=2, mismatch_score=-1,
+                                     open_gap_score=-5, extend_gap_score=-.5)
+            # The genomic path is fixed. One optimal alignment establishes
+            # homology; tied tracebacks do not propose different CDS boundaries.
+            alignment = aligner.align(translated, donor_protein)[0]
+            pairs = [(int(a + offset), int(c + offset))
+                     for (a, b), (c, _) in zip(*alignment.aligned, strict=True)
+                     for offset in range(int(b - a))]
+            if not pairs:
+                assessment['reasons'] = ['no_aligned_residues']
+                continue
+            coverage = len(pairs) / len(donor_protein)
+            identity = sum(translated[a] == donor_protein[b] for a, b in pairs) / max(1, len(pairs))
+            problems = homology_problems(coverage, identity, params)
+            assessment.update(coverage=coverage, identity=identity, reasons=problems)
+            if problems:
+                continue
+            token = 'history_' + hashlib.sha256(repr((shape, donor, query)).encode()).hexdigest()[:20]
+            evidence = {'id': token, 'target': species, 'donor': donor, 'query': query, 'genome_only': True,
+                        'retained_annotation_candidate': True}
+            candidate = {**base, 'query': token, 'id': token, 'search': 'retained_annotation_revalidation',
+                         'coverage': coverage, 'identity': identity, 'evidence': evidence,
+                         'query_start': min(b for _, b in pairs), 'query_end': max(b for _, b in pairs) + 1,
+                         'query_length': len(donor_protein), 'retained_path_revalidation': {
+                             'basis': 'fixed_genomic_cds_current_donor_alignment', 'previous_annotation': previous},
+                         'partial_evidence': {'partial': False}}
+            checked = validate_model(candidate, genome, code, params)
+            if checked['problems'] or coding_shape(checked) != shape or checked['sequence'] != structural['sequence']:
+                raise ValueError('Historical path changed during current revalidation')
+            result.append(check_interval(checked))
+            entry['emitted'] += 1
+    return result, {'schema': 1, 'missing_valid_prediction_paths': len(audit), 'rows': audit}
 
 
 def consolidate(validated, existing, species, nearest=(), *, retained_paths=None):

@@ -584,13 +584,14 @@ def test_cache_uses_pristine_coordinates_before_terminal_completion(tmp_path):
     assert list(cache.iter_models())[0]["cds"] == [[0, 99, 0]]
 
 
-def test_cache_regenerates_boundary_alternatives_from_the_single_original(tmp_path):
+@pytest.mark.parametrize('marker', ['boundary_candidate', 'retained_path_revalidation'])
+def test_cache_regenerates_derived_paths_from_the_single_original(tmp_path, marker):
     old, new, plan, region = cache_fixture(tmp_path)
     directory = old / 'rescued' / 'T'
     path = directory / 'models.json'
     models = json.loads(path.read_text())
     derived = {**models[0], 'cds': [[3, 99, 0]],
-               'boundary_candidate': {'basis': 'strict_genomic_cds_and_complete_donor_alignment'}}
+               marker: {'basis': 'strict_genomic_cds_and_complete_donor_alignment'}}
     path.write_text(json.dumps([*models, derived]))
     write_receipt(directory, json.loads((directory / 'receipt.json').read_text())['key'])
     cache = verify_prediction_cache(old, new, plan, 'T', [region], PARAMS)

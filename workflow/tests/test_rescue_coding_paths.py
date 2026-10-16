@@ -330,6 +330,110 @@ def test_read_retained_paths_binds_primary_and_alternative_to_exact_source_recei
         proof.check()
 
 
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_old_bridge_cannot_fuse_recent_annotation_and_independent_historical_locus(reverse):
+    left = model('left', [[0, 60, 0]])
+    bridge = model('old_bridge', [[0, 60, 0], [120, 180, 0]])
+    right = model('old_right', [[120, 180, 0]])
+    for row, depth in [(left, 0), (bridge, 2), (right, 2)]:
+        row['retained_coding_path'] = {'history_depth': depth}
+    rows = [left, bridge, right]
+    paths.resolve_coding_paths(list(reversed(rows)) if reverse else rows)
+    assert left['status'] == right['status'] == 'accepted'
+    assert bridge['status'] == 'unresolved'
+    assert bridge['integration_conflict']['retained_model_ids'] == ['left', 'old_right']
+    assert bridge['retained_coding_path']['history_depth'] == 2
+    assert all('alternative_coding_paths' not in row for row in (left, right))
+
+
+def test_currently_valid_older_frame_conflict_stays_a_review_proposal():
+    recent, older = model('recent', [[0, 60, 0]]), model('older', [[1, 61, 0]])
+    recent['retained_coding_path'] = {'history_depth': 0}
+    older['retained_coding_path'] = {'history_depth': 3}
+    paths.resolve_coding_paths([older, recent])
+    assert recent['status'] == 'accepted' and older['status'] == 'unresolved'
+    assert older['integration_conflict']['retained_model_ids'] == ['recent']
+
+
+def test_conflicting_same_generation_prior_paths_are_preserved_for_review():
+    a, b = model('a', [[0, 60, 0]]), model('b', [[1, 61, 0]])
+    for row in (a, b):
+        row['retained_coding_path'] = {'history_depth': 2, 'source_directory': '/verified/old'}
+    paths.resolve_coding_paths([a, b])
+    assert all(row['status'] == 'unresolved' and row['sequence'] for row in (a, b))
+    assert all(row['retained_coding_path']['source_directory'] == '/verified/old' for row in (a, b))
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_missing_prior_path_is_reconstructed_with_current_donor_then_respects_ownership(strand):
+    from workflow.tests.test_rescue_boundary_revalidation import PARAMS, checked
+    dna = 'ATG' + 'GCT' * 30 + 'TAA'
+    original, genome = checked(dna, [[0, len(dna), 0]], 'M' + 'A' * 30, strand)
+    original['model_id'] = 'previous'
+    retained = retained_path(original)
+    metadata = retained[paths.coding_shape(original)]
+    metadata['donor_queries'] = [['Relative', 'gene'], ['Gone', 'removed']]
+    before = copy.deepcopy(retained)
+    proteins = {'Relative': {'gene': 'M' + 'A' * 30}}
+    candidates, audit = rescue.revalidate_retained_coding_paths(retained, [], genome, 1, PARAMS, proteins, 'Target')
+    assert len(candidates) == 1 and audit['rows'][0]['emitted'] == 1
+    candidate = candidates[0]
+    assert candidate['cds'] == original['cds'] and candidate['sequence'] == original['sequence']
+    assert candidate['coverage'] == candidate['identity'] == 1
+    assert candidate['evidence']['donor'] == 'Relative'
+    rescue.consolidate(candidates, [], 'Target', retained_paths=retained)
+    assert candidate['status'] == 'accepted'
+    assert retained == before
+    repeated, _ = rescue.revalidate_retained_coding_paths(retained, candidates, genome, 1, PARAMS, proteins, 'Target')
+    assert repeated == []
+    owners = [{'seqid': 'chr', 'strand': strand, 'start': 0, 'end': len(dna),
+               'gene_id': 'original_owner', 'cds': [[0, len(dna)]]}]
+    fresh, _ = rescue.revalidate_retained_coding_paths(retained, [], genome, 1, PARAMS, proteins, 'Target')
+    rescue.consolidate(fresh, owners, 'Target', retained_paths=retained)
+    assert fresh[0]['status'] == 'unresolved' and fresh[0]['revision_owner_ids'] == ['original_owner']
+
+
+@pytest.mark.parametrize('defect', ['DNA_change', 'internal_stop', 'donor_change', 'donor_missing', 'cell_budget'])
+def test_historical_status_never_overrides_current_structure_or_homology(defect):
+    from workflow.tests.test_rescue_boundary_revalidation import PARAMS, checked
+    dna = 'ATG' + 'GCT' * 30 + 'TAA'
+    old, genome = checked(dna, [[0, len(dna), 0]], 'M' + 'A' * 30)
+    old['model_id'] = 'previous'
+    retained = retained_path(old)
+    retained[paths.coding_shape(old)]['donor_queries'] = [['Relative', 'gene']]
+    donor = 'M' + 'A' * 30
+    params = dict(PARAMS)
+    if defect == 'DNA_change':
+        genome.dna = genome.dna.replace('GCT', 'GCC', 1)
+    elif defect == 'internal_stop':
+        genome.dna = genome.dna.replace('GCT', 'TAA', 1)
+    elif defect == 'donor_change':
+        donor = 'M' + 'D' * 30
+    elif defect == 'donor_missing':
+        donor = ''
+    else:
+        params['terminal_max_alignment_cells'] = 10
+    candidates, audit = rescue.revalidate_retained_coding_paths(
+        retained, [], genome, 1, params, {'Relative': {'gene': donor}}, 'Target')
+    assert candidates == [] and audit['rows'][0]['emitted'] == 0
+
+
+def test_fixed_previous_path_homology_does_not_require_unique_boundary_traceback():
+    from workflow.tests.test_rescue_boundary_revalidation import PARAMS, checked
+    dna = 'ATG' + 'GCT' * 30 + 'TAA'
+    donor = 'M' + 'A' * 28
+    original, genome = checked(dna, [[0, len(dna), 0]], donor)
+    original['model_id'] = 'previous'
+    retained = retained_path(original)
+    retained[paths.coding_shape(original)]['donor_queries'] = [['Relative', 'gene']]
+    candidates, _ = rescue.revalidate_retained_coding_paths(
+        retained, [], genome, 1, {**PARAMS, 'terminal_max_optimal_alignments': 1},
+        {'Relative': {'gene': donor}}, 'Target')
+    assert len(candidates) == 1
+    assert candidates[0]['cds'] == original['cds'] and candidates[0]['coverage'] == 1
+
+
 def retained_history_publication(root, records, parent=None, *, genome='same genome', legacy=False):
     from workflow.support import rescue_model_store as store
     from workflow.tests.test_rescue_model_store import receipt

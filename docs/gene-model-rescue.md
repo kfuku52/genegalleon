@@ -330,9 +330,17 @@ verification batch across writes or subsequent commands.
 They retain annotation position only after passing current genomic and homology
 checks with exactly the same CDS coordinates and nucleotide sequence. Old status
 never replaces these checks or adds donor support. A new conflicting prediction
-cannot invalidate such a CDS or join independent existing loci. Other new paths
-remain review proposals when they conflict. Conflicting historical annotations
-raise an error rather than silently choosing one. Retention does not assign
+cannot invalidate such a CDS or join independent existing loci. If a historical
+path is absent from current valid predictions, its fixed CDS is reconstructed
+from the current genome and aligned anew to its still-available current donors.
+It must pass the same structural and coverage/identity policy. One optimal
+traceback can establish homology for these fixed coordinates; this does not
+infer new coding boundaries or reuse historical alignment metrics. These derived
+candidates are regenerated, rather than replayed as pristine predictor output.
+Other paths remain review proposals when they conflict. Recent annotation
+anchors take priority over older conflicting paths. Older bridges cannot join
+independent annotations; conflicting paths from the same historical generation
+remain explicit review records without an arbitrary winner. Retention does not assign
 orthology or an expected copy, and original-annotation ownership still applies.
 New alternatives supported only by the target species cannot revoke a retained
 CDS. In a tied component without an external donor, only the currently validated

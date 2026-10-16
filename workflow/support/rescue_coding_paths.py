@@ -229,6 +229,58 @@ def transferred_support(model):
                and alignment_support({**model, 'support': [row]}) for row in evidence)
 
 
+def _coherent_retained_components(rows):
+    """Keep recent annotation anchors; older bridges remain explicit proposals."""
+    def coherent(group):
+        return all(compatible_paths(a, b) for i, a in enumerate(group) for b in group[i + 1:])
+
+    def hold(row, previous):
+        row['status'] = 'unresolved'
+        row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+        row['integration_conflict'] = {'disposition': 'retain_previous_validated_annotation',
+            'reason': 'conflicting_historical_coding_path',
+            'retained_model_ids': sorted(r['model_id'] for r in previous)}
+
+    for component in overlap_components(rows):
+        group = [rows[i] for i in component]
+        if coherent(group):
+            yield group
+            continue
+        depth = min(row['retained_coding_path'].get('history_depth', 0) for row in group)
+        anchors = [row for row in group if row['retained_coding_path'].get('history_depth', 0) == depth]
+        anchor_ids = {id(row) for row in anchors}
+        bases = []
+        for indexes in overlap_components(anchors):
+            nearest = [anchors[i] for i in indexes]
+            if coherent(nearest):
+                bases.append(nearest)
+            else:
+                # No historical priority can choose between conflicting paths
+                # from the same generation. Preserve their full review records.
+                for row in nearest:
+                    hold(row, [other for other in nearest if other is not row])
+        older = [row for row in group if id(row) not in anchor_ids]
+        independent = [row for row in older if not any(coding_overlap(row, anchor)[0] for anchor in anchors)]
+        independent_ids = {id(row) for row in independent}
+        bases.extend(_coherent_retained_components(independent))
+        additions = [[] for _ in bases]
+        for row in older:
+            if id(row) in independent_ids:
+                continue
+            owners = [i for i, base in enumerate(bases) if any(coding_overlap(row, other)[0] for other in base)]
+            if len(owners) == 1 and all(compatible_paths(row, other) for other in bases[owners[0]]):
+                additions[owners[0]].append(row)
+            else:
+                hold(row, [other for i in owners for other in bases[i]])
+        for base, proposed in zip(bases, additions, strict=True):
+            conflicting = {id(row) for row in proposed for other in proposed
+                           if row is not other and not compatible_paths(row, other)}
+            for row in proposed:
+                if id(row) in conflicting:
+                    hold(row, base)
+            yield [*base, *(row for row in proposed if id(row) not in conflicting)]
+
+
 def compatible_components(models):
     """Hold conflicting native additions without invalidating transferred CDS.
 
@@ -251,9 +303,7 @@ def compatible_components(models):
             continue
         retained = [row for row in valid if row.get('retained_coding_path')]
         if retained:
-            retained_groups = [[retained[i] for i in group] for group in overlap_components(retained)]
-            if not all(coherent(group) for group in retained_groups):
-                raise ValueError('Previously adopted coding paths conflict after current validation')
+            retained_groups = list(_coherent_retained_components(retained))
             additions = [[] for _ in retained_groups]
             independent = []
             def hold(row, previous):
