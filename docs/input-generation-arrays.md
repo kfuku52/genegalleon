@@ -92,7 +92,13 @@ The worker extracts one ORF per transcript through native CDSKIT, using the same
 complete-first policy as `gg_transcriptome_generation`, then applies the usual
 representative formatting, validation and BUSCO stages. The default remains
 `cds`; no input is classified from its filename or sequence length.
-The frozen plan and staged receipt retain this type. The `.orf-extraction.json`
+The frozen plan, staged receipt and species summary retain this type. The
+longest-CDS validator independently re-derives ORFs from the original transcripts
+and checks the audit; it does not compare CDS with full transcript lengths.
+Strict worker and final validation support CDS-only inputs when genomic roles
+are optional. `require_gff=1` and `require_genome=1` still require those outputs;
+CDS-only finalization retains source-selection validation.
+The `.orf-extraction.json`
 sidecar binds source/output hashes, genetic code, implementation and CDSKIT
 identity, with each selected ORF's strand and coordinates on its source transcript.
 These are predictions, and transcript coordinates are not genome annotation.
