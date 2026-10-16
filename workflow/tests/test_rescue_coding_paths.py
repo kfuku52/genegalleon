@@ -382,6 +382,7 @@ def test_missing_prior_path_is_reconstructed_with_current_donor_then_respects_ow
     assert candidate['cds'] == original['cds'] and candidate['sequence'] == original['sequence']
     assert candidate['coverage'] == candidate['identity'] == 1
     assert candidate['evidence']['donor'] == 'Relative'
+    assert not paths.transferred_support(candidate)
     rescue.consolidate(candidates, [], 'Target', retained_paths=retained)
     assert candidate['status'] == 'accepted'
     assert retained == before

@@ -320,6 +320,7 @@ def test_transfer_confirmation_needs_actual_same_query_and_junctions(tmp_path, s
     annevo.confirm_transferred_structure([positive], [transferred])
     assert positive['evidence']['annevo']['genomic_structure_transfer']['confirmed']
     for bad in [copy.deepcopy(checked), {**copy.deepcopy(transferred), 'evidence': {**region, 'query': 'other'}},
+                {**copy.deepcopy(transferred), 'evidence': {**region, 'retained_annotation_candidate': True}},
                 {**copy.deepcopy(transferred), 'problems': ['frameshift']},
                 {**copy.deepcopy(transferred), 'cds': [[30, 364, 0]]}]:
         negative = copy.deepcopy(checked)

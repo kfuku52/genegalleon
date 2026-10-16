@@ -351,7 +351,8 @@ def confirm_transferred_structure(native_models, transferred):
     allowed = {'missing_start', 'missing_stop', 'unanchored_genome_search'}
     by_query = defaultdict(list)
     for model in transferred:
-        if (not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')) and model.get('sequence') and model.get('cds')
+        if (not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno', 'retained_annotation_candidate'))
+                and model.get('sequence') and model.get('cds')
                 and not set(model.get('problems', [])) - allowed):
             by_query[key(model)].append(model)
     for model in native_models:

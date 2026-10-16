@@ -225,7 +225,8 @@ def path_rank(model, nearest=()):
 def transferred_support(model):
     """A native predictor flag cannot erase a checked donor genomic mapping."""
     evidence = model.get('support') or [model.get('evidence', {})]
-    return any(not (row.get('annevo') or row.get('oriongeno') or row.get('boundary_candidate'))
+    return any(not (row.get('annevo') or row.get('oriongeno') or row.get('boundary_candidate')
+                   or row.get('retained_annotation_candidate'))
                and alignment_support({**model, 'support': [row]}) for row in evidence)
 
 
