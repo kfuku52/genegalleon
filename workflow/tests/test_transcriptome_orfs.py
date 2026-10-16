@@ -17,6 +17,7 @@ from transcriptome_orfs import apply_input_type, extract_orf, input_type, verify
 def task(tmp_path, text=">TRINITY_DN1_c0_g1_i1\nCCCATGAAATAACCCC\n"):
     source = tmp_path / "source.fa"
     source.write_text(text)
+    (tmp_path / "out").mkdir(exist_ok=True)
     return dict(provider="local", species_key="Test_species", species_prefix="Test_species",
                 cds_path=source, gff_path=None, gbff_path=None, genome_path=None,
                 cds_input_type="transcriptome", genetic_code=1, format_strict=True)
