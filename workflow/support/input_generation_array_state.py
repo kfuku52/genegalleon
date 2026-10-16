@@ -156,14 +156,24 @@ def namespace_path(path, namespace_root=None):
 
 
 def verify_receipt(plan, index, plan_sha256=None, *, namespace_root=None):
+    """Verify one fresh receipt boundary, hashing each physical member once."""
     try:
-        receipt = json.loads(receipt_path(plan, index).read_text())
-        if receipt["plan_sha256"] != (plan_sha256 or digest(plan)) or receipt["task_index"] != index:
+        batch = FreshDigestBatch()
+        path = receipt_path(plan, index)
+        metadata = batch.read([path] if plan_sha256 else [path, plan])
+        receipt = json.loads(path.read_text())
+        if receipt["plan_sha256"] != (plan_sha256 or metadata[str(plan)]) or receipt["task_index"] != index:
             return False
         if not isinstance(receipt["files"], dict) or not receipt["files"]:
             return False
-        return all(namespace_path(path, namespace_root).is_file()
-                   and digest(namespace_path(path, namespace_root)) == value for path, value in receipt["files"].items())
+        for name, value in receipt["files"].items():
+            member = str(namespace_path(name, namespace_root))
+            if batch.read([member])[member] != value:
+                return False
+        # No saved digest survives this call. Fence metadata, all aliases and
+        # earlier members until even the last output has been read.
+        batch.check()
+        return True
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 

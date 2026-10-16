@@ -1,6 +1,7 @@
 import gzip
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -548,3 +549,73 @@ def test_hgt_core_end_to_end_generates_tables_and_pdfs(tmp_path: Path):
     assert transfer_edges.loc[0, "recipient_node"] == "Arabidopsis_thaliana"
     assert transfer_edges.loc[0, "hgt_event_count"] == 1
     assert transfer_edges.loc[0, "mapped_to_species_tree"] == 1
+
+
+@pytest.mark.skipif(any(shutil.which(tool) is None for tool in ('R', 'Rscript', 'seqkit')),
+                    reason="R and seqkit are required for HGT rendering validation")
+@pytest.mark.parametrize("layout", ["raw", "zip"])
+def test_hgt_parallel_family_plots_resume_without_rewriting_completed_results(tmp_path: Path, layout):
+    workspace = tmp_path / 'workspace'
+    _write_workspace_fixture(workspace)
+    family_root = workspace / 'output/orthogroup'
+    for path in list(family_root.rglob('OG0001*')):
+        if path.is_file():
+            target = path.with_name(path.name.replace('OG0001', 'OG0002'))
+            if path.suffix == '.gz':
+                with gzip.open(path, 'rt') as handle:
+                    _write_gzip_text(target, handle.read().replace('OG0001', 'OG0002'))
+            else:
+                target.write_text(path.read_text().replace('OG0001', 'OG0002'))
+    with sqlite3.connect(family_root / 'gg_orthogroup.db') as connection:
+        frame = pandas.read_sql_query('SELECT * FROM branch', connection)
+        frame['orthogroup'] = 'OG0002'
+        frame.to_sql('branch', connection, if_exists='append', index=False)
+    if layout == 'zip':
+        from workflow.support.gene_family_output_store import archive_completed_outputs, orthogroup_id_from_name
+        archive_completed_outputs(family_root, 'orthogroup', {'OG0001', 'OG0002'}, orthogroup_id_from_name)
+    stub = _install_stub_ggimage(tmp_path)
+    fake_conda = _install_fake_conda(tmp_path)
+    # Point panels intentionally jitter. Hold the RNG equal for the serial /
+    # concurrent PDF comparison, without changing production renderer defaults.
+    profile = tmp_path / 'comparison.Rprofile'
+    profile.write_text('set.seed(1)\n')
+    env = {key: value for key, value in os.environ.items() if not key.startswith(('CONDA', 'MAMBA'))}
+    env.update(gg_workspace_dir=str(workspace), run_hgt_eval='1', run_hgt_plot='1', run_hgt_focus='0',
+               hgt_use_taxonomy_db='0', GG_TASK_CPUS='2', GG_MEM_TOTAL_GB='32', GG_MEM_TOOL_GB='28',
+               hgt_plot_workers='2', NSLOTS='2', MEM_PER_SLOT='16', R_PROFILE_USER=str(profile),
+               GG_OBSERVABILITY='1',
+               MPLCONFIGDIR=str(tmp_path / 'mpl'), R_LIBS_USER=str(stub),
+               PATH=str(fake_conda) + os.pathsep + env['PATH'])
+    def run():
+        return subprocess.run(['bash', str(HGT_CORE)], cwd=REPO_ROOT, env=env,
+                              capture_output=True, text=True, timeout=180)
+    first = run()
+    assert first.returncode == 0, first.stderr
+    assert 'families=2, workers=2' in first.stdout
+    root = workspace / 'output/hgt'
+    paths = [root / 'tree_plot' / f'{family}_hgt_tree_plot.pdf' for family in ['OG0001', 'OG0002']]
+    paths += [root / 'tree_plot_input' / f'{family}_hgt_stat.branch.tsv' for family in ['OG0001', 'OG0002']]
+    before = {str(path): (path.stat().st_mtime_ns, path.read_bytes()) for path in paths}
+    for family in ['OG0001', 'OG0002']:
+        frame = pandas.read_csv(root / 'tree_plot_input' / f'{family}_hgt_stat.branch.tsv', sep='\t')
+        assert set(frame['orthogroup']) == {family}
+        manifest = json.loads((root / 'artifact_provenance' / f'{family}.hgt_tree_plot.json').read_text())
+        assert manifest['family_id'] == family
+    second = run()
+    assert second.returncode == 0, second.stderr
+    assert 'Artifact provenance is current:' in second.stderr
+    assert {str(path): (path.stat().st_mtime_ns, path.read_bytes()) for path in paths} == before
+    assert not (root / 'tmp/materialized').exists()
+    # A fresh serial export must be identical to the parallel export, apart
+    # from the PDF producer's wall-clock metadata.
+    serial_root = workspace / 'output/hgt_serial'
+    env.update(hgt_output_dir=str(serial_root), hgt_plot_workers='1')
+    serial = run()
+    assert serial.returncode == 0, serial.stderr
+    for family in ['OG0001', 'OG0002']:
+        name = f'{family}_hgt_stat.branch.tsv'
+        assert (serial_root / 'tree_plot_input' / name).read_bytes() == (root / 'tree_plot_input' / name).read_bytes()
+        name = f'{family}_hgt_tree_plot.pdf'
+        def canonical_pdf(path):
+            return re.sub(rb'/(CreationDate|ModDate)\s*\(D:[^)]*\)', rb'/\1(D:TIME)', path.read_bytes())
+        assert canonical_pdf(serial_root / 'tree_plot' / name) == canonical_pdf(root / 'tree_plot' / name)

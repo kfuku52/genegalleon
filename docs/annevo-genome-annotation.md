@@ -295,6 +295,11 @@ used the same three full genomes and RTX 6000 Ada, with two trials per setting:
 All 24 native GFFs retained identical annotation fields. The 1 Mb probability
 fixture retained identical bits and metadata with LZF, using 22.9 MB instead of
 60.0 MB. Native logs verified cache reuse between species and in the warm trial.
+The 2026-10-16 paired whole-genome assays also retained identical individual
+rescue/refinement admissions, representative choices and selected GFF/CDS bytes
+for all three species, using 2% gene/exon masks and unmasked controls. These
+assays use the approximate placement graph; Geranium's fixed Helixer annotation
+remains a regression control rather than independent biological truth.
 The order-only median was 19.1% lower; the combined median was only 2.2% lower
 with substantial timing variation. These observations do not establish a stable
 combined speedup. LZF and shared JIT remain optional; the first combined trial

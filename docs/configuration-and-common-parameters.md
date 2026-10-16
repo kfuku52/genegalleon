@@ -448,6 +448,12 @@ candidate-free background, missing-data semantics, and counting units.
 
 `workflow/gg_gene_summary_entrypoint.sh` exposes the HGT summary settings below:
 
+- `hgt_summary_plot_workers` (default `auto`): concurrent per-family HGT tree
+  plots. Auto uses at most the allocated CPUs and one worker per 8 GiB of
+  tool-memory budget (at least one). An explicit positive count must fit both
+  bounds. Each worker limits BLAS/OpenMP threads to one, owns its render
+  directory, and preserves the same per-family provenance/reuse checks.
+  See [rendering performance](hgt-rendering-performance.md).
 - `hgt_summary_species_tree` (default `auto`): Newick species tree used to map
   directed HGT links; `auto` searches the standard workspace species-tree
   outputs.

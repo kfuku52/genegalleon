@@ -1728,8 +1728,8 @@ def test_array_worker_reports_empty_cds_before_formatting_genome(tmp_path):
     assert not list(genome_dir.glob("*.fa.gz"))
 
 
-def test_completion_hashes_raw_receipt_alias_once(tmp_path, monkeypatch):
-    import input_generation_array_state as state
+def test_completion_hashes_raw_receipt_alias_once(tmp_path, monkeypatch, atomic_state):
+    state = atomic_state
 
     raw = tmp_path / "raw.fa"
     raw.write_text(">Species_a_gene1\nATG\n")
@@ -1757,6 +1757,133 @@ def test_completion_hashes_raw_receipt_alias_once(tmp_path, monkeypatch):
     assert receipt["files"] == {str(raw.resolve()): expected, str(alias): expected,
                                str(output.resolve()): original(output)}
     assert state.verify_receipt(plan, 1)
+
+
+@pytest.fixture
+def aliased_completion(tmp_path, atomic_state):
+    state = atomic_state
+    raw, alias, output, plan = (tmp_path / name for name in ("raw", "alias", "z-output", "plan.json"))
+    raw.write_bytes(b"original source")
+    alias.symlink_to(raw.name)
+    output.write_bytes(b"valid output")
+    state.atomic_json(plan, {"task_count": 1, "tasks": [{"species_prefix": "Species_a"}]})
+    receipt = state.receipt_path(plan, 1)
+    state.atomic_json(receipt, {"plan_sha256": state.digest(plan), "task_index": 1,
+                               "species_prefix": "Species_a", "files": {
+                                   str(raw): state.digest(raw), str(alias): state.digest(raw),
+                                   str(output): state.digest(output)}})
+    return state, raw, alias, output, plan, receipt
+
+
+@pytest.mark.parametrize("provided_plan_hash", [False, True])
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink", "workspace"])
+def test_verify_completion_hashes_physical_source_once(aliased_completion, monkeypatch,
+                                                      provided_plan_hash, alias_kind):
+    state, raw, alias, output, plan, receipt = aliased_completion
+    namespace = None
+    if alias_kind == "hardlink":
+        alias.unlink()
+        alias.hardlink_to(raw)
+    elif alias_kind == "workspace":
+        value = json.loads(receipt.read_text())
+        value["files"]["/workspace/raw"] = value["files"].pop(str(raw))
+        state.atomic_json(receipt, value)
+        namespace = raw.parent
+    original = state.digest
+    supplied = original(plan) if provided_plan_hash else None
+    calls = []
+
+    def counted(path):
+        calls.append(Path(path).stat().st_ino)
+        return original(path)
+
+    monkeypatch.setattr(state, "digest", counted)
+    frozen = receipt.read_bytes()
+    assert state.verify_receipt(plan, 1, supplied, namespace_root=namespace)
+    assert calls.count(raw.stat().st_ino) == 1
+    assert calls.count(output.stat().st_ino) == 1
+    assert receipt.read_bytes() == frozen
+
+
+@pytest.mark.parametrize("changed", ["source", "receipt", "plan", "alias", "replace"])
+def test_verify_completion_rejects_changes_during_later_hash(aliased_completion, monkeypatch, changed):
+    state, raw, alias, output, plan, receipt = aliased_completion
+    original = state.digest
+
+    def mutate(path):
+        value = original(path)
+        if Path(path).resolve() == output.resolve():
+            if changed == "source":
+                before = raw.stat()
+                raw.write_bytes(b"modified source")
+                state.os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
+            elif changed == "receipt":
+                receipt.write_text(receipt.read_text() + "\n")
+            elif changed == "plan":
+                plan.write_text(plan.read_text() + "\n")
+            else:
+                other = raw.with_name("replacement")
+                other.write_bytes(raw.read_bytes())
+                if changed == "alias":
+                    alias.unlink()
+                    alias.symlink_to(other.name)
+                else:
+                    other.replace(raw)
+        return value
+
+    monkeypatch.setattr(state, "digest", mutate)
+    assert not state.verify_receipt(plan, 1)
+
+
+def test_verify_completion_does_not_reuse_hashes_between_calls(aliased_completion):
+    state, raw, alias, output, plan, receipt = aliased_completion
+    assert state.verify_receipt(plan, 1)
+    before = raw.stat()
+    raw.write_bytes(b"modified source")
+    state.os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert not state.verify_receipt(plan, 1)
+
+
+def test_verify_completion_stops_reading_after_a_mismatch(aliased_completion, monkeypatch):
+    state, raw, alias, output, plan, receipt = aliased_completion
+    raw.write_bytes(b"modified source")
+    original = state.digest
+
+    def stop_at_invalid_source(path):
+        if Path(path).resolve() == output.resolve():
+            pytest.fail("An invalid earlier member must not read later large outputs")
+        return original(path)
+
+    monkeypatch.setattr(state, "digest", stop_at_invalid_source)
+    assert not state.verify_receipt(plan, 1)
+
+
+@pytest.mark.parametrize("changed", ["missing-receipt", "malformed-receipt", "wrong-plan", "wrong-index",
+                                   "empty-files", "conflicting-alias", "missing-source", "directory", "fifo"])
+def test_verify_completion_retains_fail_closed_behavior(aliased_completion, changed):
+    state, raw, alias, output, plan, receipt = aliased_completion
+    value = json.loads(receipt.read_text())
+    if changed == "missing-receipt":
+        receipt.unlink()
+    elif changed == "malformed-receipt":
+        receipt.write_text("{")
+    elif changed in {"wrong-plan", "wrong-index", "empty-files", "conflicting-alias"}:
+        if changed == "wrong-plan":
+            value["plan_sha256"] = "0" * 64
+        elif changed == "wrong-index":
+            value["task_index"] = 2
+        elif changed == "conflicting-alias":
+            value["files"][str(alias)] = "0" * 64
+        else:
+            value["files"] = {}
+        state.atomic_json(receipt, value)
+    else:
+        raw.unlink()
+        if changed == "directory":
+            raw.mkdir()
+        elif changed == "fifo":
+            state.os.mkfifo(raw)
+    assert not state.verify_receipt(plan, 1)
 
 
 def test_completion_rejects_source_mutation_while_hashing_later_output(tmp_path, monkeypatch):

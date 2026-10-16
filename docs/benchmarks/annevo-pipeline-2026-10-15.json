@@ -159,8 +159,55 @@
   "limitations": [
     "Two trials per configuration; timing variability is large, so no stable combined speedup is established.",
     "PSS/RSS peaks are one-second process-tree samples, not whole-job cgroup/page-cache memory.",
-    "Actual admission/selection requires separately verified paired assays; this audit covers native inference outputs.",
     "Cold and warm optimized trials are identified by native cache load/save events; they must not be treated as replicated steady-state measurements.",
-    "Node CPU and disk contention was not isolated. No 500-species throughput claim is made."
-  ]
+    "Node CPU and disk contention was not isolated. No 500-species throughput claim is made.",
+    "Admission assays verify optimization equivalence; the approximate placement graph and Geranium Helixer control do not establish independent biological accuracy."
+  ],
+  "admission_equivalence": {
+    "assay_date": "2026-10-16",
+    "source_commit": "3d30e3978085f9cb8bf2c74436baaae2d074eed1",
+    "mask_seed": 20261020,
+    "mask_fraction": 0.02,
+    "species": {
+      "Aethionema_arabicum": {
+        "accepted_models_by_scope": {
+          "unmasked_control/gene": 119,
+          "unmasked_control/exon": 51,
+          "gene_20261020": 290,
+          "exon_20261020": 94
+        },
+        "accepted_cases_identical": true,
+        "representative_selection_identical": true,
+        "selected_GFF_CDS_bytes_identical": true,
+        "comparison_sha256": "fe2eff37237937619e7d1dd8d7b3ecb9f7ccba15151750e12324228d91134a72"
+      },
+      "Brachypodium_stacei": {
+        "accepted_models_by_scope": {
+          "unmasked_control/gene": 33,
+          "unmasked_control/exon": 13,
+          "gene_20261020": 228,
+          "exon_20261020": 114
+        },
+        "accepted_cases_identical": true,
+        "representative_selection_identical": true,
+        "selected_GFF_CDS_bytes_identical": true,
+        "comparison_sha256": "67242b5d195aecbf0b39d3985f6594db4ba0eaed960a50d6e65fef00bdb71215"
+      },
+      "Geranium_dissectum": {
+        "accepted_models_by_scope": {
+          "unmasked_control/gene": 17,
+          "unmasked_control/exon": 7,
+          "gene_20261020": 120,
+          "exon_20261020": 43
+        },
+        "accepted_cases_identical": true,
+        "representative_selection_identical": true,
+        "selected_GFF_CDS_bytes_identical": true,
+        "comparison_sha256": "f8b2165306688db153e2580bbaba8224a4444664fbf64ae29e98e17ebbcd1410"
+      }
+    },
+    "all_paired_admissions_and_selected_artifacts_identical": true,
+    "scope": "Three whole genomes with real external donor genome/GFF/CDS; paired gene/exon masking and unmasked controls; approximate placement graph, not full cohort finalization",
+    "reference_limitation": "Geranium uses the fixed Helixer annotation as a regression control, not independent biological truth"
+  }
 }
