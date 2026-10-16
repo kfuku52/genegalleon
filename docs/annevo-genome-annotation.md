@@ -281,3 +281,22 @@ Reports retain per-species phases, cache load/save events, GPU samples and
 one-second process-tree RSS/PSS. Sampled peaks are lower bounds and do not include
 whole-job page-cache/cgroup accounting. Large-genome output equivalence and actual
 rescue/refinement admission still require their recorded comparisons.
+
+The [2026-10-15 qualification](benchmarks/annevo-pipeline-2026-10-15.json)
+used the same three full genomes and RTX 6000 Ada, with two trials per setting:
+
+| Settings | Median minutes | Trial range, minutes |
+| --- | ---: | ---: |
+| Original pipeline | 27.16 | 24.05–30.26 |
+| Largest genome first | 21.98 | 20.23–23.73 |
+| Largest first and LZF | 23.44 | 18.83–28.06 |
+| Largest first, LZF and shared JIT | 26.56 | 19.98–33.15 |
+
+All 24 native GFFs retained identical annotation fields. The 1 Mb probability
+fixture retained identical bits and metadata with LZF, using 22.9 MB instead of
+60.0 MB. Native logs verified cache reuse between species and in the warm trial.
+The order-only median was 19.1% lower; the combined median was only 2.2% lower
+with substantial timing variation. These observations do not establish a stable
+combined speedup. LZF and shared JIT remain optional; the first combined trial
+includes cold-cache startup and the second is warm. Sampled PSS peaks ranged
+from 8.9 to 10.9 GiB across settings, excluding whole-job page-cache accounting.
