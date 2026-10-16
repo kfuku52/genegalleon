@@ -5,6 +5,7 @@ Independent CLI. Input files and the first BUSCO/reference selection are frozen;
 no orthogroup, inferred species tree, or family-loss calls are required.
 """
 import argparse
+import copy
 import csv
 import gzip
 import hashlib
@@ -37,7 +38,7 @@ try:
     from fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from gene_model_species_profiles import parameters_for, read_profiles
     from gff_attribute_syntax import validate_gff
-    from input_generation_array_state import atomic_json, digest, digest_paths
+    from input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from pairwise_synteny import prepare_genome, safe_token, write_tsv
     from rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from rescue_anchor_admission import prepare_rescue_genome
@@ -51,7 +52,12 @@ try:
     )
     from rescue_homology_policy import homology_problems
     from rescue_model_quality import model_quality
-    from rescue_model_store import export_legacy_models, iter_accepted_models, write_model_store
+    from rescue_model_store import (
+        export_legacy_models,
+        frozen_model_store_key,
+        iter_accepted_models,
+        write_model_store,
+    )
     from rescue_prediction_cache import (
         MINIPROT_MAX_SECONDARY,
         MINIPROT_OUTPUT_SCORE_RATIO,
@@ -83,7 +89,7 @@ except ImportError:
     from .fasta_sequence_store import exclusive_lock, fasta_records, open_text
     from .gene_model_species_profiles import parameters_for, read_profiles
     from .gff_attribute_syntax import validate_gff
-    from .input_generation_array_state import atomic_json, digest, digest_paths
+    from .input_generation_array_state import FreshDigestBatch, atomic_json, digest, digest_paths
     from .pairwise_synteny import prepare_genome, safe_token, write_tsv
     from .rescue_additional_candidates import nominate_genome_only_candidates, reassess_unanchored_models
     from .rescue_anchor_admission import prepare_rescue_genome
@@ -97,7 +103,12 @@ except ImportError:
     )
     from .rescue_homology_policy import homology_problems
     from .rescue_model_quality import model_quality
-    from .rescue_model_store import export_legacy_models, iter_accepted_models, write_model_store
+    from .rescue_model_store import (
+        export_legacy_models,
+        frozen_model_store_key,
+        iter_accepted_models,
+        write_model_store,
+    )
     from .rescue_prediction_cache import (
         MINIPROT_MAX_SECONDARY,
         MINIPROT_OUTPUT_SCORE_RATIO,
@@ -1290,6 +1301,7 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         placement_ownership = OwnershipIndex(existing)
         proteins = {donor: {i: s for i, _, s in fasta_records(root / "prepared" / donor / "genes.pep")} for donor in donors}
         frozen_cache = plan["request"].get("prediction_cache")
+        retained_paths = {}
         with indexed_genome(source["genome"]) as genome:
             lengths = dict(zip(genome.references, genome.lengths, strict=True))
             positions = json.loads((root / "prepared" / name / "positions.json").read_text())
@@ -1302,6 +1314,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                     region["end"] = min(region["end"], genome.get_reference_length(region["seqid"]))
             cached = (verify_prediction_cache(frozen_cache["root"], root, plan, name, regions, params, frozen_cache)
                       if frozen_cache else None)
+            if cached:
+                retained_paths = read_retained_coding_paths(cached.directory, cached.frozen['receipt_sha256'],
+                                                           verification=cached.batch)
             cached_ids = cached.candidate_ids() if cached else set()
             cached_genome_ids = cached.genome_candidate_ids() if cached else set()
             atomic_json(tmp / "candidates.json", regions)
@@ -1352,7 +1367,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             def unresolved_regions():
                 preview = [{**m, "problems": list(m["problems"])} for m in validated]
                 reassess_unanchored_models(preview, params["unanchored_min_species"], ownership=placement_ownership)
-                preview = consolidate(preview, existing, name, plan.get("nearest_references", {}).get(name, ()))
+                preview = consolidate(preview, existing, name, plan.get("nearest_references", {}).get(name, ()),
+                                      retained_paths=retained_paths)
                 resolved = {m["query"] for m in preview if m["status"] in {"accepted", "duplicate_support", "accepted_alternative_path"}}
                 return [r for r in regions if r["id"] not in resolved]
             # A verified whole-genome cache already covers these queries,
@@ -1446,7 +1462,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         # Recheck sources before publication, including the target genome.
         verify_sources(plan, [name], ["genome", "fasta", "gff"])
         placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
-        models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()))
+        models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
+                             retained_paths=retained_paths)
         for model in models:
             model["quality_evidence"] = model_quality(model, source["genetic_code"])
         atomic_json(tmp / "placement_audit.json", placement)
@@ -1513,11 +1530,58 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                  lambda: require_same_key(key, rescue_key(root, plan, name)), hash_workers=cpus)
 
 
-def consolidate(validated, existing, species, nearest=()):
+def read_retained_coding_paths(directory, expected_receipt_sha256, *, verification=None):
+    """Read prior annotations separately from the pristine prediction cache.
+
+    The caller must first prove compatible source genomes and donor inputs.
+    This records existing annotation, not reusable QC or donor corroboration.
+    A current candidate still has to pass every structural/homology gate and
+    match the same genomic CDS and exact nucleotide sequence.
+    """
+    directory = Path(directory)
+    if digest(directory / 'receipt.json') != expected_receipt_sha256:
+        raise ValueError('Previous annotation receipt differs from verified prediction cache')
+    key = frozen_model_store_key(directory, kind='accepted')
+    if key['producer_receipt_sha256'] != expected_receipt_sha256:
+        raise ValueError('Previous annotation generation changed')
+    batch = verification if verification is not None else FreshDigestBatch()
+    expected = {str(directory / member): sha for member, sha in key['files'].items()}
+    expected[str(directory / 'receipt.json')] = expected_receipt_sha256
+    if batch.read(expected) != expected:
+        raise ValueError('Previous annotation content changed')
+    result = {}
+    for model in iter_accepted_models(directory, frozen_key=key):
+        for path in [model, *model.get('alternative_coding_paths', ())]:
+            if not path.get('sequence') or path.get('problems'):
+                raise ValueError('Previous accepted coding path lacks an intact sequence')
+            shape = coding_shape(path)
+            sequence_sha256 = hashlib.sha256(path['sequence'].encode()).hexdigest()
+            if shape in result and result[shape]['sequence_sha256'] != sequence_sha256:
+                raise ValueError('Previous annotations disagree on genomic CDS sequence')
+            result.setdefault(shape, {'sequence_sha256': sequence_sha256, 'source_directory': str(directory),
+                                     'producer_receipt_sha256': expected_receipt_sha256, 'model_ids': []})
+            result[shape]['model_ids'].append(path['model_id'])
+    batch.check()
+    return result
+
+
+def consolidate(validated, existing, species, nearest=(), *, retained_paths=None):
     ownership = OwnershipIndex(existing)
     unique = {}
     for model in validated:
         shape = coding_shape(model)
+        # Historical status cannot replace current QC. Only source-bound,
+        # unchanged complete CDS can retain their existing annotation position.
+        model.pop('retained_coding_path', None)
+        previous = (retained_paths or {}).get(shape)
+        placement_problems = {'unanchored_genome_search', 'outside_expected_synteny_interval'}
+        if (previous and not set(model['problems']) - placement_problems and model.get('sequence')
+                and hashlib.sha256(model['sequence'].encode()).hexdigest() == previous['sequence_sha256']):
+            model['problems'] = sorted(set(model['problems']) - placement_problems)
+            model['retained_coding_path'] = copy.deepcopy(previous)
+            model['placement_evidence'] = {'classification': 'retained_annotation',
+                'basis': 'source_bound_previously_adopted_cds', 'orthology': 'unassigned', 'expected_copy': 'unassigned',
+                'current_assessment': model.get('placement_evidence')}
         model["start"] = min((e[0] for e in model["cds"]), default=0)
         model["end"] = max((e[1] for e in model["cds"]), default=0)
         owners = ownership.overlapping(model)

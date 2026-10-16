@@ -189,11 +189,12 @@ def test_native_duplicate_of_previous_long_path_cannot_remove_it_or_its_short_is
 
 
 @pytest.mark.parametrize('bridge', [False, True])
-def test_conflicting_native_addition_cannot_drop_or_fuse_transferred_cds(bridge):
+@pytest.mark.parametrize('engine', ['annevo', 'oriongeno', 'boundary_candidate'])
+def test_conflicting_new_addition_cannot_drop_or_fuse_transferred_cds(bridge, engine):
     left = model('left', [[0, 60, 0]])
     native = model('native', [[30, 150, 0]] if bridge else [[1, 61, 0]])
-    native['support'][0]['annevo'] = {'native_transcript_id': 'new.t'}
-    native['evidence']['annevo'] = native['support'][0]['annevo']
+    native['support'][0][engine] = {'native_transcript_id': 'new.t'}
+    native['evidence'][engine] = native['support'][0][engine]
     rows = [left, native]
     if bridge:
         rows.append(model('right', [[120, 180, 0]]))
@@ -201,6 +202,108 @@ def test_conflicting_native_addition_cannot_drop_or_fuse_transferred_cds(bridge)
     assert native['status'] == 'unresolved' and native['problems'] == ['competing_new_models']
     assert all(row['status'] == 'accepted' and row['problems'] == [] for row in rows if row is not native)
     assert all('alternative_coding_paths' not in row for row in rows)
+
+
+def retained_path(row):
+    return {paths.coding_shape(row): {'sequence_sha256': rescue.hashlib.sha256(row['sequence'].encode()).hexdigest(),
+            'producer_receipt_sha256': '1' * 64, 'model_ids': ['previous'], 'source_directory': '/frozen/previous'}}
+
+
+def test_prior_native_annotation_survives_conflicting_new_transfer_and_independent_locus():
+    old = model('old_native', [[0, 60, 0]])
+    old['evidence']['annevo'] = {'native_transcript_id': 'prior.t'}
+    bridge = model('new_bridge', [[30, 150, 0]])
+    independent = model('new_independent', [[120, 180, 0]])
+    rescue.consolidate([old, bridge, independent], [], 'Target', retained_paths=retained_path(old))
+    assert old['status'] == independent['status'] == 'accepted'
+    assert bridge['status'] == 'unresolved' and bridge['problems'] == ['competing_new_models']
+    assert bridge['integration_conflict']['disposition'] == 'retain_previous_validated_annotation'
+    assert old['retained_coding_path']['model_ids'] == ['previous']
+    assert len(old['support']) == 1  # History is not another donor or another alignment.
+
+
+def test_existing_valid_annotation_does_not_require_a_new_unique_paralog_assignment():
+    old, new = model('old', [[0, 60, 0]]), model('new', [[120, 180, 0]])
+    prior = retained_path(old)
+    for row in (old, new):
+        row['problems'] = ['unanchored_genome_search']
+    rescue.consolidate([old, new], [], 'Target', retained_paths=prior)
+    assert old['status'] == 'accepted' and old['placement_evidence']['classification'] == 'retained_annotation'
+    assert old['placement_evidence']['orthology'] == old['placement_evidence']['expected_copy'] == 'unassigned'
+    assert new['status'] == 'unresolved' and new['problems'] == ['unanchored_genome_search']
+
+
+def test_a_bad_new_path_does_not_disqualify_another_compatible_alternative():
+    old = model('old', [[0, 90, 0]])
+    compatible = model('compatible', [[6, 90, 0]])
+    shifted = model('shifted', [[1, 91, 0]])
+    rescue.consolidate([old, compatible, shifted], [], 'Target', retained_paths=retained_path(old))
+    assert old['status'] == 'accepted' and compatible['status'] == 'accepted_alternative_path'
+    assert shifted['status'] == 'unresolved'
+
+
+def test_new_paths_that_compete_with_each_other_cannot_split_a_previous_locus():
+    old = model('old', [[0, 180, 0]])
+    a, b = model('a', [[0, 90, 0]]), model('b', [[90, 180, 0]])
+    rescue.consolidate([old, a, b], [], 'Target', retained_paths=retained_path(old))
+    assert old['status'] == 'accepted'
+    assert a['status'] == b['status'] == 'unresolved'
+
+
+@pytest.mark.parametrize('problem', ['missing_start', 'missing_stop', 'internal_stop', 'low_coverage', 'invalid_phase'])
+def test_previous_adoption_cannot_override_current_failed_cds_or_homology_gate(problem):
+    row = model('old', [[0, 60, 0]])
+    prior = retained_path(row)
+    row['problems'] = ['unanchored_genome_search', problem]
+    rescue.consolidate([row], [], 'Target', retained_paths=prior)
+    assert row['status'] == 'unresolved' and problem in row['problems']
+    assert 'retained_coding_path' not in row
+
+
+@pytest.mark.parametrize('change', ['sequence', 'coordinates', 'ownership'])
+def test_retention_requires_same_sequence_and_coordinates_and_respects_original_owner(change):
+    row = model('old', [[0, 60, 0]])
+    prior = retained_path(row)
+    owners = []
+    if change == 'sequence':
+        row['sequence'] = 'C' + row['sequence'][1:]
+    elif change == 'coordinates':
+        row['cds'] = [[3, 63, 0]]
+    else:
+        owners = [{'seqid': 'chr1', 'strand': '+', 'start': 0, 'end': 60,
+                   'gene_id': 'original', 'cds': [[0, 60]]}]
+    row['problems'] = ['unanchored_genome_search']
+    rescue.consolidate([row], owners, 'Target', retained_paths=prior)
+    assert row['status'] == 'unresolved'
+    assert 'overlap_existing_annotation' in row['problems'] if change == 'ownership' else 'retained_coding_path' not in row
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_read_retained_paths_binds_primary_and_alternative_to_exact_source_receipt(tmp_path, legacy):
+    from workflow.support import rescue_model_store as store
+    from workflow.tests.test_rescue_model_store import receipt
+    long, short = validated_pair()
+    for i, row in enumerate((long, short)):
+        row['model_id'] = 'old_' + str(i)
+    long['alternative_coding_paths'] = [short]
+    directory = tmp_path / 'previous'
+    directory.mkdir()
+    if legacy:
+        (directory / 'models.json').write_text(json.dumps([long]))
+    else:
+        store.write_model_store(directory, [long])
+    receipt(directory)
+    expected = rescue.digest(directory / 'receipt.json')
+    proof = rescue.FreshDigestBatch()
+    retained = rescue.read_retained_coding_paths(directory, expected, verification=proof)
+    assert set(retained) == {paths.coding_shape(long), paths.coding_shape(short)}
+    assert all(row['producer_receipt_sha256'] == expected for row in retained.values())
+    with pytest.raises(ValueError, match='receipt differs'):
+        rescue.read_retained_coding_paths(directory, '0' * 64)
+    member = directory / ('models.json' if legacy else 'model_store/accepted.sqlite')
+    member.touch()
+    with pytest.raises(OSError):
+        proof.check()
 
 
 def test_duplicate_queries_do_not_inflate_species_and_self_cannot_supply_external_support():

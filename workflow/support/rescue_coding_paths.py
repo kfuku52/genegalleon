@@ -225,7 +225,7 @@ def path_rank(model, nearest=()):
 def transferred_support(model):
     """A native predictor flag cannot erase a checked donor genomic mapping."""
     evidence = model.get('support') or [model.get('evidence', {})]
-    return any(not (row.get('annevo') or row.get('oriongeno'))
+    return any(not (row.get('annevo') or row.get('oriongeno') or row.get('boundary_candidate'))
                and alignment_support({**model, 'support': [row]}) for row in evidence)
 
 
@@ -248,6 +248,41 @@ def compatible_components(models):
             return all(compatible_paths(a, b) for i, a in enumerate(group) for b in group[i + 1:])
         if coherent(valid):
             yield valid
+            continue
+        retained = [row for row in valid if row.get('retained_coding_path')]
+        if retained:
+            retained_groups = [[retained[i] for i in group] for group in overlap_components(retained)]
+            if not all(coherent(group) for group in retained_groups):
+                raise ValueError('Previously adopted coding paths conflict after current validation')
+            additions = [[] for _ in retained_groups]
+            independent = []
+            def hold(row, previous):
+                row['status'] = 'unresolved'
+                row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+                row['integration_conflict'] = {'disposition': 'retain_previous_validated_annotation',
+                    'retained_model_ids': sorted(r['model_id'] for r in previous)}
+            for row in valid:
+                if row.get('retained_coding_path'):
+                    continue
+                owners = [i for i, group in enumerate(retained_groups)
+                          if any(coding_overlap(row, other)[0] for other in group)]
+                if not owners:
+                    independent.append(row)
+                    continue
+                if len(owners) == 1 and all(compatible_paths(row, other) for other in retained_groups[owners[0]]):
+                    additions[owners[0]].append(row)
+                else:
+                    hold(row, [other for i in owners for other in retained_groups[i]])
+            # Existing independent genes remain separate even when a new
+            # bridging prediction connected them in the combined graph.
+            for previous, proposed in zip(retained_groups, additions, strict=True):
+                conflicting = {id(row) for row in proposed for other in proposed
+                               if row is not other and not compatible_paths(row, other)}
+                for row in proposed:
+                    if id(row) in conflicting:
+                        hold(row, previous)
+                yield [*previous, *(row for row in proposed if id(row) not in conflicting)]
+            yield from compatible_components(independent)
             continue
         transferred = [row for row in valid if transferred_support(row)]
         if transferred and len(transferred) < len(valid):
@@ -308,7 +343,7 @@ def resolve_coding_paths(models, nearest=()):
             row['parent_model_id'] = best['model_id']
             alternatives.append({k: row[k] for k in ('model_id', 'seqid', 'strand', 'cds', 'sequence', 'support', 'coverage', 'identity',
                                                     'evidence', 'placement_evidence', 'problems', 'boundary_candidate',
-                                                    'boundary_revalidation', 'partial_evidence') if k in row})
+                                                    'boundary_revalidation', 'partial_evidence', 'retained_coding_path') if k in row})
         best['alternative_coding_paths'] = alternatives
         best['locus_support'] = {'counting_unit': 'independent_donor_species',
                                  'independent_donor_species': donors, 'minimum_species_for_fallback': 1,

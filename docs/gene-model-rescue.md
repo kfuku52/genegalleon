@@ -314,6 +314,15 @@ preserve the original locus evidence. The new transcript retains only its own
 path support; the old representative ambiguity is historical evidence and does
 not determine the new path's status. A subsequent catalog import keeps these
 two sources of evidence separate. Existing gene IDs are retained.
+When reusing a compatible prediction cache, its previously adopted primary and
+alternative CDS are read from their separately verified annotation publication.
+They retain annotation position only after passing current genomic and homology
+checks with exactly the same CDS coordinates and nucleotide sequence. Old status
+never replaces these checks or adds donor support. A new conflicting prediction
+cannot invalidate such a CDS or join independent existing loci. Other new paths
+remain review proposals when they conflict. Conflicting historical annotations
+raise an error rather than silently choosing one. Retention does not assign
+orthology or an expected copy, and original-annotation ownership still applies.
 Identical coordinates from multiple donors are consolidated with each donor's
 own coverage and identity. Accepted IDs are stable hashes of genomic exon
 coordinates; neither orthogroup IDs nor run order define them.

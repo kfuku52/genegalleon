@@ -355,5 +355,6 @@ def validated_boundary_candidates(model, genome, genetic_code, params, donor_pro
                                            'representative_status': 'ambiguous'},
                        partial_evidence={'partial': False, 'completed_from_partial': bool(set(model['problems']) & {'missing_start', 'missing_stop'}),
                                          'original_missing_termini': sorted(set(model['problems']) & {'missing_start', 'missing_stop'})})
+        checked['evidence'] = {**checked.get('evidence', {}), 'boundary_candidate': checked['boundary_candidate']}
         result.append(checked)
     return result
