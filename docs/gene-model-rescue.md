@@ -314,6 +314,47 @@ preserve the original locus evidence. The new transcript retains only its own
 path support; the old representative ambiguity is historical evidence and does
 not determine the new path's status. A subsequent catalog import keeps these
 two sources of evidence separate. Existing gene IDs are retained.
+When reusing a compatible prediction cache, its previously adopted primary and
+alternative CDS are read from their separately verified annotation publication.
+Verified cache history is followed while the source-genome checksum is unchanged,
+so a CDS lost before the immediate cache can still retain its annotation position.
+Each ancestor is bound through the saved plan and worker-receipt checksums; the
+closest producer supplies model IDs when a path appears more than once. Missing
+archived history stops discovery and is recorded in `retained_annotation_sources.json`.
+Available history with a checksum failure is rejected, rather than skipped.
+The accepted-model reader shares the caller's live verification batch: every
+consumed physical file is freshly hashed once, then checked for changes through
+the end of reading and publication. This avoids duplicate hashing within one
+command without trusting saved digests, changing selected records, or reusing a
+verification batch across writes or subsequent commands.
+Finalization also retains independently verified prepared, synteny and rescue
+publications within that command. Repeated dependency guards check the observed
+generations instead of rescanning all their contents. Original and native inputs
+keep a separate fresh byte proof. Both scopes are fenced before publication and
+when reusing an existing export, and a later command starts from full verification.
+They retain annotation position only after passing current genomic and homology
+checks with exactly the same CDS coordinates and nucleotide sequence. Old status
+never replaces these checks or adds donor support. A new conflicting prediction
+cannot invalidate such a CDS or join independent existing loci. If a historical
+path is absent from current valid predictions, its fixed CDS is reconstructed
+from the current genome and aligned anew to its still-available current donors.
+Current transfer searches finish before this reconstruction, so existing
+predictor mappings retain their provenance without redundant derived candidates.
+It must pass the same structural and coverage/identity policy. One optimal
+traceback can establish homology for these fixed coordinates; this does not
+infer new coding boundaries or reuse historical alignment metrics. These derived
+candidates may align to a donor containing X. Aligned X supplies no identity,
+and the target CDS must remain unambiguous. These candidates are regenerated,
+rather than replayed as pristine predictor output.
+Other paths remain review proposals when they conflict. Recent annotation
+anchors take priority over older conflicting paths. Older bridges cannot join
+independent annotations; conflicting paths from the same historical generation
+remain explicit review records without an arbitrary winner. Retention does not assign
+orthology or an expected copy, and original-annotation ownership still applies.
+New alternatives supported only by the target species cannot revoke a retained
+CDS. In a tied component without an external donor, only the currently validated
+prior paths remain annotated; the new self-only alternatives stay unresolved.
+This retention is explicitly recorded and contributes no external donor support.
 Identical coordinates from multiple donors are consolidated with each donor's
 own coverage and identity. Accepted IDs are stable hashes of genomic exon
 coordinates; neither orthogroup IDs nor run order define them.

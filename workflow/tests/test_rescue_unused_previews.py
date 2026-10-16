@@ -114,6 +114,9 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
         rows["good_relative"]["cds"][0][1] = len(inputs["dna"]["chr_intact"]) + 3
 
     class Cache:
+        directory = root / 'toy_cache'
+        frozen = {'receipt_sha256': '0' * 64}
+        batch = None
         search_contract = {"toy": "exact_complete_coverage_with_empty_result"}
         local_search_compatible = True
         genome_search_compatible = True
@@ -191,6 +194,8 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
         patch.setattr(module, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
         patch.setattr(module, "verify_sources", sources_guard)
         patch.setattr(module, "verify_prediction_cache", lambda *_: Cache())
+        # This controlled search cache has no previously adopted annotation.
+        patch.setattr(module, "read_retained_coding_paths", lambda *_args, **_kwargs: {})
         patch.setattr(module, "search_intervals", interval_predictions)
         patch.setattr(module, "run", external_run)
         patch.setattr(module, "refine_gemoma", gemoma_spy)
@@ -287,14 +292,14 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
     ambiguous = [m for m in models if m["query"].startswith("ambiguous") and
                  m["seqid"] == "chr_ambiguous"]
     assert {tuple(map(tuple, m["cds"])) for m in ambiguous} == {((0, 15, 0),), ((6, 15, 0),)}
-    primary = next(m for m in ambiguous if m["status"] == "accepted")
+    primary, = [m for m in ambiguous if m["status"] == "accepted"]
     assert primary["query"] == "ambiguous_long" and primary["sequence"] == "ATGAAAATGCCCTAA"
     assert primary["path_selection"]["representative_status"] == "ambiguous"
     assert primary["path_selection"]["ambiguity_reason"] == "ambiguous_coding_path_representative"
     assert primary["path_selection"]["selection_policy"] == "longest_cds_then_coding_shape"
     assert primary["locus_support"]["independent_donor_species"] == ["Relative_species"]
     assert primary["locus_support"]["orthology"] == "unassigned"
-    alternative = next(m for m in ambiguous if m["status"] == "accepted_alternative_path")
+    alternative, = [m for m in ambiguous if m["status"] == "accepted_alternative_path"]
     assert alternative["query"] == "ambiguous_short" and alternative["sequence"] == "ATGCCCTAA"
     assert not primary["problems"] and not alternative["problems"]
     assert sum(m["status"] == "duplicate_support" for m in ambiguous) == 2 * int(cache == "complete_genome_only")

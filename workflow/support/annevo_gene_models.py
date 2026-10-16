@@ -138,13 +138,13 @@ def freeze_inputs(path, sources, *, engine="annevo"):
     return {'table': str(table), 'predictions': result, 'files': files}
 
 
-def verify_inputs(frozen, names=None):
+def verify_inputs(frozen, names=None, *, verification=None):
     if not frozen:
         return
     selected = frozen['predictions'] if names is None else {n: frozen['predictions'][n] for n in names if n in frozen['predictions']}
     paths = [*frozen.get('tables', [frozen['table']]), *(p[role] for p in selected.values() for role in ('gff', 'receipt'))]
     expected = {p: frozen['files'][p] for p in paths}
-    if digest_paths(expected) != expected:
+    if (verification.read(expected) if verification is not None else digest_paths(expected)) != expected:
         raise ValueError('Frozen ANNEVO candidate input changed')
 
 
@@ -351,7 +351,8 @@ def confirm_transferred_structure(native_models, transferred):
     allowed = {'missing_start', 'missing_stop', 'unanchored_genome_search'}
     by_query = defaultdict(list)
     for model in transferred:
-        if (not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')) and model.get('sequence') and model.get('cds')
+        if (not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno', 'retained_annotation_candidate'))
+                and model.get('sequence') and model.get('cds')
                 and not set(model.get('problems', [])) - allowed):
             by_query[key(model)].append(model)
     for model in native_models:

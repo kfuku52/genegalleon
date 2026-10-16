@@ -16,7 +16,10 @@ busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
 genome_annotation_backend="${genome_annotation_backend:-oriongeno}"
-oriongeno_model_profile="${oriongeno_model_profile:-plants}"
+oriongeno_model_profile="${oriongeno_model_profile:-auto}"
+oriongeno_taxid_map="${oriongeno_taxid_map:-}"
+oriongeno_genome_metadata="${oriongeno_genome_metadata:-}"
+oriongeno_taxonomy_db="${oriongeno_taxonomy_db:-}"
 oriongeno_source_ref="${oriongeno_source_ref:-}"
 oriongeno_python="${oriongeno_python:-}"
 oriongeno_checkpoint="${oriongeno_checkpoint:-}"
@@ -124,7 +127,7 @@ gg_validate_genome_annotation_backend() {
   fi
   if [[ "${genome_annotation_backend}" == oriongeno ]]; then
     case "${oriongeno_model_profile}" in
-      plants|mammals|birds|fish|other_vertebrates|arthropods|other_invertebrates|fungi) ;;
+      auto|plants|mammals|birds|fish|other_vertebrates|arthropods|other_invertebrates|fungi) ;;
       *) echo "Unsupported oriongeno_model_profile: ${oriongeno_model_profile}" >&2; return 1 ;;
     esac
     if [[ "${genetic_code}" != 1 || ! "${oriongeno_batch_size}" =~ ^[1-9][0-9]*$ || ( "${oriongeno_no_download}" != 0 && "${oriongeno_no_download}" != 1 ) ]]; then
@@ -206,15 +209,23 @@ gg_generate_annevo_annotation() {
     }
     trap cleanup_annevo_prediction_lock EXIT
     local resolved_profile="${annevo_model_profile}"
+    local taxid_map="${annevo_taxid_map}" genome_metadata="${annevo_genome_metadata}"
+    local taxonomy_db="${annevo_taxonomy_db}" no_download="${annevo_no_download}"
+    if [[ "${genome_annotation_backend}" == oriongeno ]]; then
+      resolved_profile="${oriongeno_model_profile}"
+      taxid_map="${oriongeno_taxid_map}"
+      genome_metadata="${oriongeno_genome_metadata}"
+      taxonomy_db="${oriongeno_taxonomy_db}"
+      no_download="${oriongeno_no_download}"
+    fi
     local selection_receipt="${prediction_dir}/model_selection.json"
     local -a selection_inputs=() selection_run_args=()
-    if [[ "${genome_annotation_backend}" == annevo && "${annevo_model_profile}" == auto ]]; then
-      local taxonomy_db="${annevo_taxonomy_db}"
+    if [[ "${resolved_profile}" == auto ]]; then
       local taxonomy_selection_lock=""
       if [[ -z "${taxonomy_db}" ]]; then
         taxonomy_db=$(workspace_taxonomy_dbfile "${gg_workspace_dir}") || exit $?
         taxonomy_selection_lock="${gg_workspace_downloads_dir}/locks/ete_taxonomy.lock"
-        if [[ ! -s "${taxonomy_db}" && "${annevo_no_download}" != 1 && ( -n "${annevo_taxid_map}" || -n "${annevo_genome_metadata}" ) ]]; then
+        if [[ ! -s "${taxonomy_db}" && "${no_download}" != 1 && ( -n "${taxid_map}" || -n "${genome_metadata}" ) ]]; then
           ensure_ete_taxonomy_db "${gg_workspace_dir}" || exit $?
         fi
       fi
@@ -223,7 +234,7 @@ gg_generate_annevo_annotation() {
         # Readers must wait for that existing writer, even if the file is nonempty.
         trap - EXIT
         if [[ -n "${taxonomy_selection_lock}" ]]; then
-          gg_shared_lock_acquire "${taxonomy_selection_lock}" "ANNEVO taxonomy snapshot" || exit 1
+          gg_shared_lock_acquire "${taxonomy_selection_lock}" "${prediction_label} taxonomy snapshot" || exit 1
           gg_shared_lock_start_heartbeat "${taxonomy_selection_lock}" || exit 1
           taxonomy_selection_heartbeat="${GG_SHARED_LOCK_HEARTBEAT_PID:-}"
           cleanup_annevo_taxonomy_selection_lock() {
@@ -233,8 +244,9 @@ gg_generate_annevo_annotation() {
           trap cleanup_annevo_taxonomy_selection_lock EXIT
         fi
         python "${gg_support_dir}/annevo_model_selection.py" \
+          --engine "${genome_annotation_backend}" \
           --species "${sp_ub}" --genome "${file_sp_genome}" --model-profile auto \
-          --taxid-map "${annevo_taxid_map}" --genome-metadata "${annevo_genome_metadata}" \
+          --taxid-map "${taxid_map}" --genome-metadata "${genome_metadata}" \
           --taxonomy-db "${taxonomy_db}" --output "${selection_receipt}"
       ) || exit $?
       resolved_profile=$(python - "${selection_receipt}" <<'PYPROFILE'
@@ -256,7 +268,6 @@ PYPROFILE
     local -a prepare_args=() native_args=()
     if [[ "${genome_annotation_backend}" == oriongeno ]]; then
       runner="${gg_support_dir}/oriongeno_runtime.py"
-      resolved_profile="${oriongeno_model_profile}"
       batch_size="${oriongeno_batch_size}"
       runtime_receipt="${cache_root}/selected/${resolved_profile}.json"
       prepare_args=(prepare --cache-root "${cache_root}/${resolved_profile}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
@@ -264,6 +275,7 @@ PYPROFILE
       [[ -z "${oriongeno_python}" ]] || prepare_args+=(--python "${oriongeno_python}" --source-commit "${oriongeno_source_commit}")
       [[ -z "${oriongeno_checkpoint}" ]] || prepare_args+=(--checkpoint "${oriongeno_checkpoint}")
       [[ "${oriongeno_no_download}" != 1 ]] || prepare_args+=(--no-download)
+      native_args=("${selection_run_args[@]}")
     else
       prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
       [[ -z "${annevo_runtime_manifest}" ]] || prepare_args+=(--runtime-manifest "${annevo_runtime_manifest}")

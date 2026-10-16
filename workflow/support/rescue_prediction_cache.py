@@ -311,7 +311,7 @@ RAW_FIELDS = ("coverage", "query_span_coverage", "query_start", "query_end", "qu
 def _raw_prediction(model, regions):
     if not isinstance(model, dict) or model.get("query") not in regions:
         return None
-    if model.get('boundary_candidate'):
+    if model.get('boundary_candidate') or model.get('retained_path_revalidation'):
         # Derived alternatives are re-created from the separately retained
         # source prediction, never replayed as additional independent searches.
         return None

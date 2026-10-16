@@ -16,7 +16,15 @@ import time
 import uuid
 from pathlib import Path
 
-from annevo_model_selection import OVERLAP_PROFILES, PROFILES, protect_outputs, stable_signature, taxonomy_sha
+from annevo_model_selection import (
+    OVERLAP_PROFILES,
+    PROFILES,
+    protect_outputs,
+    require_quiescent_taxonomy,
+    stable_signature,
+    taxonomy_sha,
+    verified_input_sha,
+)
 from annevo_runtime_cache import RuntimeVerification, prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
@@ -141,28 +149,43 @@ def inference_settings(runtime, profile):
                 prediction_source_sha256=file_sha(source))
 
 
-def selection_record(args, genome):
+def selection_record(args, genome, *, engine="annevo", model_profile=None, verification=None):
+    """Read fresh evidence, or reuse hashes only inside a fenced invocation."""
     path = getattr(args, "selection_receipt", "")
     if not path:
         return None, None
-    path = Path(path)
-    before = stable_signature(path)
-    receipt_sha = file_sha(path)
-    value = json.loads(path.read_text())
-    if (value.get("kind") != "genegalleon-annevo-model-selection" or value.get("schema_version") != 1
-            or value.get("status") != "selected" or value.get("model_profile") != args.model_profile
-            or value.get("species") != getattr(args, "species", "")
-            or value.get("genome_sha256") != file_sha(genome)
-            or value.get("overlap_pred") != (args.model_profile in OVERLAP_PROFILES)):
-        raise ValueError("ANNEVO species/model selection differs from prediction inputs")
-    for evidence in value.get("evidence", []):
-        if file_sha(evidence["path"]) != evidence["sha256"]:
-            raise ValueError("ANNEVO taxonomy evidence changed after model selection")
-    if value.get("taxonomy") and taxonomy_sha(value["taxonomy"]["path"]) != value["taxonomy"]["sha256"]:
-        raise ValueError("ANNEVO taxonomy evidence changed after model selection")
-    if stable_signature(path) != before or file_sha(path) != receipt_sha:
-        raise ValueError("ANNEVO model selection changed while reading")
-    return value, receipt_sha
+    verification = verification if verification is not None else RuntimeVerification()
+    with verification.guard():
+        path = Path(path)
+        before = stable_signature(path)
+        def sha(path):
+            return verified_input_sha(path, verification)
+        receipt_sha = sha(path)
+        value = json.loads(path.read_text())
+        profile = model_profile if model_profile is not None else args.model_profile
+        label = "ANNEVO" if engine == "annevo" else "OrionGeno"
+        if (value.get("kind") != f"genegalleon-{engine}-model-selection" or value.get("schema_version") != 1
+                or value.get("status") != "selected" or value.get("model_profile") != profile
+                or value.get("species") != getattr(args, "species", "")
+                or value.get("genome_sha256") != sha(genome)
+                or (engine == "annevo" and value.get("overlap_pred") != (profile in OVERLAP_PROFILES))):
+            raise ValueError(f"{label} species/model selection differs from prediction inputs")
+        for evidence in value.get("evidence", []):
+            if sha(evidence["path"]) != evidence["sha256"]:
+                raise ValueError(f"{label} taxonomy evidence changed after model selection")
+        if (value.get("taxonomy") and taxonomy_sha(value["taxonomy"]["path"], verification=verification)
+                != value["taxonomy"]["sha256"]):
+            raise ValueError(f"{label} taxonomy evidence changed after model selection")
+        if stable_signature(path) != before or sha(path) != receipt_sha:
+            raise ValueError(f"{label} model selection changed while reading")
+        # On coarse filesystems an earlier input can change while a later one
+        # is read without changing its generation stamp.
+        for input_path in (genome, *(row["path"] for row in value.get("evidence", []))):
+            sha(input_path)
+        verification.check()
+        if value.get("taxonomy"):
+            require_quiescent_taxonomy(Path(value["taxonomy"]["path"]))
+        return value, receipt_sha
 
 
 def run(args):

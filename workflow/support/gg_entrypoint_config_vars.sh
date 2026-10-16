@@ -325,6 +325,9 @@ EOF
 representative_inputs
 genome_annotation_backend
 oriongeno_model_profile
+oriongeno_taxid_map
+oriongeno_genome_metadata
+oriongeno_taxonomy_db
 oriongeno_source_ref
 oriongeno_python
 oriongeno_checkpoint

@@ -197,7 +197,8 @@ def test_native_failure_preserves_previous_complete_pair(local_runtime, tmp_path
 
 
 @pytest.mark.parametrize('compressed', [False, True])
-def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime, tmp_path, monkeypatch, compressed):
+@pytest.mark.parametrize('auto_selected', [False, True])
+def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime, tmp_path, monkeypatch, compressed, auto_selected):
     from test_transcript_utrs import model
 
     setup, _package, _model = local_runtime
@@ -216,7 +217,17 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
             return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
         return original_execute(argv, env, **kwargs)
     monkeypatch.setattr(native, 'execute', execute)
+    monkeypatch.setenv('ORIONGENO_SPECIES_NAME', 'Unrelated_species')
     args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(gff), output_receipt=str(receipt), threads=2, batch_size=1)
+    if auto_selected:
+        from test_oriongeno_model_selection import fixture, selection
+
+        selected = fixture(tmp_path, 3702)
+        # The fixture creates a genome too; retain the sequence under test.
+        genome.write_bytes(gzip.compress(sequence) if compressed else sequence)
+        selected.genome = str(genome)
+        record = selection.select(selected)
+        args.selection_receipt, args.species = selected.output, selected.species
     value = native.run(args)
     assert json.loads(receipt.read_text()) == value
     assert value['kind'] == 'genegalleon-oriongeno-native-prediction'
@@ -224,6 +235,87 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
     assert value['GFF_sha256'] == native.file_sha(gff)
     assert value['runtime_digest'] == runtime['runtime_digest']
     assert value['feature_counts']['CDS'] == 1
+    assert value['argv'][value['argv'].index('--species-name')+1] == ''
+    if auto_selected:
+        assert value['model_selection'] == record
+        assert value['model_selection_sha256'] == native.file_sha(args.selection_receipt)
+        assert value['species'] == 'Test_species'
+
+
+@pytest.mark.parametrize('changed', ['mapping', 'selection', 'taxonomy'])
+def test_auto_selection_change_during_native_prediction_preserves_previous_pair(local_runtime, tmp_path, monkeypatch, changed):
+    import sqlite3
+
+    from test_oriongeno_model_selection import fixture, selection
+    from test_transcript_utrs import model
+
+    setup, _package, _model = local_runtime
+    native.prepare(setup)
+    selected = fixture(tmp_path, 3702)
+    selection.select(selected)
+    gff, receipt = tmp_path/'native.gff3', tmp_path/'native.json'
+    gff.write_text('previous GFF')
+    receipt.write_text('previous receipt')
+    original_execute = native.execute
+    def execute(argv, env, **kwargs):
+        if '--output' in argv:
+            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            if changed == 'taxonomy':
+                with sqlite3.connect(selected.taxonomy_db) as conn:
+                    conn.execute("INSERT INTO synonym VALUES(3702,'late synonym')")
+            else:
+                target = Path(selected.taxid_map if changed == 'mapping' else selected.output)
+                target.write_text(target.read_text()+'\n')
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        return original_execute(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    args = argparse.Namespace(receipt=setup.receipt, genome=selected.genome, output=str(gff), output_receipt=str(receipt),
+                              threads=2, batch_size=1, selection_receipt=selected.output, species=selected.species)
+    with pytest.raises((OSError, ValueError, RuntimeError), match='changed'):
+        native.run(args)
+    assert gff.read_text() == 'previous GFF' and receipt.read_text() == 'previous receipt'
+
+
+@pytest.mark.parametrize('changed', ['mapping', 'selection', 'taxonomy', 'taxonomy-wal', 'genome'])
+def test_final_runtime_inventory_cannot_hide_changed_selection_inputs(local_runtime, tmp_path, monkeypatch, changed):
+    from test_oriongeno_model_selection import fixture, selection
+    from test_transcript_utrs import model
+
+    setup, _package, _model = local_runtime
+    native.prepare(setup)
+    selected = fixture(tmp_path, 3702)
+    selection.select(selected)
+    gff, receipt = tmp_path/'native.gff3', tmp_path/'native.json'
+    gff.write_text('previous GFF')
+    receipt.write_text('previous receipt')
+    original_execute = native.execute
+    inventories = 0
+    def execute(argv, env, **kwargs):
+        nonlocal inventories
+        if '--output' in argv:
+            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        result = original_execute(argv, env, **kwargs)
+        if 'freeze' in argv:
+            inventories += 1
+            if inventories == 2:
+                if changed == 'taxonomy-wal':
+                    Path(selected.taxonomy_db+'-wal').write_bytes(b'active writer')
+                else:
+                    target = Path({'mapping': selected.taxid_map, 'selection': selected.output,
+                                   'taxonomy': selected.taxonomy_db, 'genome': selected.genome}[changed])
+                    target.write_bytes(target.read_bytes()+b'\n')
+        return result
+    monkeypatch.setattr(native, 'execute', execute)
+    args = argparse.Namespace(receipt=setup.receipt, genome=selected.genome, output=str(gff), output_receipt=str(receipt),
+                              threads=2, batch_size=1, selection_receipt=selected.output, species=selected.species)
+    with pytest.raises((OSError, ValueError, RuntimeError), match='changed|active transaction'):
+        native.run(args)
+    assert gff.read_text() == 'previous GFF' and receipt.read_text() == 'previous receipt'
 
 
 def test_external_virtualenv_keeps_its_own_package_environment(tmp_path):

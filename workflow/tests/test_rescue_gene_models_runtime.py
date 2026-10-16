@@ -2015,3 +2015,66 @@ def test_new_producer_predictions_can_be_reused_transitively_without_search(hidd
         assert not (directory / "logs").exists()
         assert json.loads((directory / "prediction_reuse.json").read_text())["searched_local_windows"] == 0
         previous = output
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("target", ["raw_source", "stage_member"])
+def test_finalization_fences_inputs_through_publication_and_reuse(hidden_models, monkeypatch, reuse, target):
+    root, _species, _sequences = hidden_models
+    output, names, _ = make_plan(hidden_models)
+    name = names[0]
+    plan = rescue.load(output)
+    plan["donors"][name] = []
+    plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
+    rescue.prepared(output, plan, name)
+
+    def empty_worker(directory):
+        (directory / "models.json").write_text("[]\n")
+        (directory / "audit.tsv").write_text("candidate\tstatus\n")
+    rescue.stage(output, Path("rescued") / name, rescue.rescue_key(output, plan, name), empty_worker)
+    baseline = rescue.finalize(output, plan, [name], Path("baseline"))
+    before = {p.relative_to(baseline).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in baseline.rglob("*") if p.is_file()}
+    path = (Path(plan["request"]["sources"][name]["fasta"]) if target == "raw_source"
+            else output / "rescued" / name / "audit.tsv")
+    original = path.read_bytes()
+    destination = Path("baseline" if reuse else "new_view")
+    changed = []
+
+    def mutate():
+        assert not changed
+        path.write_bytes(original + b"\n")
+        changed.append(True)
+
+    with monkeypatch.context() as patch:
+        if reuse:
+            real = rescue.verified
+            def verify(directory, key, *args, **kwargs):
+                valid = real(directory, key, *args, **kwargs)
+                if directory == baseline and valid:
+                    mutate()
+                return valid
+            patch.setattr(rescue, "verified", verify)
+        else:
+            real = rescue.hash_outputs
+            def hashed(directory, *args, **kwargs):
+                result = real(directory, *args, **kwargs)
+                if directory.parent == output and directory.name.startswith(".working-"):
+                    mutate()
+                return result
+            # Preserve the implementation owner's module identity while injecting
+            # a source race after output hashing, just before publication.
+            hashed.__module__ = real.__module__
+            patch.setattr(rescue, "hash_outputs", hashed)
+        with pytest.raises((OSError, ValueError), match="changed"):
+            rescue.finalize(output, plan, [name], destination)
+    assert changed
+    assert before == {p.relative_to(baseline).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in baseline.rglob("*") if p.is_file()}
+    if not reuse:
+        assert not (output / destination / "receipt.json").exists()
+    path.write_bytes(original)
+    # A later command performs a new full proof, rather than inheriting the
+    # earlier failed command's verification state.
+    assert rescue.finalize(output, plan, [name], Path("baseline")) == baseline

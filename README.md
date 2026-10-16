@@ -1,6 +1,6 @@
 # GeneGalleon
 
-![GeneGalleon logo](logo/logo.png)
+![GeneGalleon banner](logo/banner.png)
 
 GeneGalleon is a container-first comparative genomics and phylogenomics workflow suite.
 It provides scheduler-ready staged pipelines for:

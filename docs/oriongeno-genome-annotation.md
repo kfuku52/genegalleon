@@ -22,7 +22,10 @@ for its GPU/driver requirements and non-commercial license.
 | Entrypoint variable | Default | Meaning |
 | --- | --- | --- |
 | `genome_annotation_backend` | `oriongeno` | `none`, `annevo`, or `oriongeno`. |
-| `oriongeno_model_profile` | `plants` | Explicit checkpoint: `plants`, `mammals`, `birds`, `fish`, `other_vertebrates`, `arthropods`, `other_invertebrates`, or `fungi`. |
+| `oriongeno_model_profile` | `auto` | Per-species NCBI ancestor selection, or an explicit checkpoint: `plants`, `mammals`, `birds`, `fish`, `other_vertebrates`, `arthropods`, `other_invertebrates`, or `fungi`. |
+| `oriongeno_taxid_map` | blank | Explicit TSV with `species` and positive `taxid` columns. |
+| `oriongeno_genome_metadata` | blank | Trusted TSV with `species`, `taxid`, `genome_sha256`, and optional `scientific_name`. |
+| `oriongeno_taxonomy_db` | blank | Read-only ETE NCBI SQLite snapshot; blank uses the shared workspace taxonomy cache. |
 | `oriongeno_source_ref` | declared branch | Moving branch read from `container/source_branches.env` on the host and forwarded into the container. |
 | `oriongeno_batch_size` | `1` | Native prediction batch size. |
 | `oriongeno_no_download` | `0` | `1` requires verified local runtime/model assets. |
@@ -31,10 +34,62 @@ for its GPU/driver requirements and non-commercial license.
 | `oriongeno_source_commit` | blank | Source provenance required for an external installation. This is a one-off override, never a repository source default. |
 
 Scoped overrides use `GG_GENOME_ANNOTATION_`, for example
-`GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND=annevo`. The explicit default
-profile is for plants; choose the correct profile for other lineages. Different
-lineages can be submitted as separate tasks with their own profile overrides.
+`GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND=annevo`.
 The integrated native/candidate path requires nuclear genetic code 1.
+
+### Automatic model selection
+
+The default `oriongeno_model_profile="auto"` uses the same verified TaxID evidence
+and shared taxonomy lock as [ANNEVO auto selection](annevo-genome-annotation.md#select-a-model-automatically).
+Supply `oriongeno_taxid_map` or `oriongeno_genome_metadata`; species keys must
+match genome filenames without FASTA/compression extensions. A single map
+supports a mixed-species array:
+
+```tsv
+species	taxid
+Homo_sapiens	9606
+Gallus_gallus	9031
+Arabidopsis_thaliana	3702
+```
+
+For example, set `GG_GENOME_ANNOTATION_ORIONGENO_TAXID_MAP=/absolute/path/taxids.tsv`.
+Species labels are not guessed. Missing, conflicting, unsupported or clade-only
+TaxIDs stop before runtime/model downloads or prediction, retaining a failed
+selection receipt. An explicit profile such as `plants` preserves manual operation
+without taxonomy evidence.
+
+| NCBI ancestor | TaxID | Checkpoint |
+| --- | --- | --- |
+| Viridiplantae | 33090 | `plants` |
+| Mammalia | 40674 | `mammals` |
+| Aves | 8782 | `birds` |
+| Actinopterygii | 7898 | `fish` |
+| Vertebrata, excluding the three groups above | 7742 | `other_vertebrates` |
+| Arthropoda | 6656 | `arthropods` |
+| Metazoa, excluding Vertebrata and Arthropoda | 33208 | `other_invertebrates` |
+| Fungi | 4751 | `fungi` |
+
+The most specific supported ancestor wins. The fish mapping follows the
+[upstream benchmark's Actinopterygii group](https://github.com/BGIResearch/OrionGeno/blob/main/docs/benchmark.md);
+other fish lineages use `other_vertebrates`. This maps checkpoint groups and does
+not establish accuracy in every species. Optional native `--species-name`
+conditioning is explicitly disabled, so an inherited `ORIONGENO_SPECIES_NAME`
+cannot condition a different genome.
+
+Automatic selection publishes `model_selection.json` per species, recording
+original/resolved TaxIDs, ancestor chain, chosen anchor, selector/profile hashes,
+genome identity and evidence/taxonomy hashes. Native prediction verifies these
+inputs again and binds the selection into its execution receipt. Unchanged
+offline reruns reuse predictions; changed taxonomy, mapping or genome triggers
+the existing stale-artifact policy. `oriongeno_no_download=1` also requires a
+cached taxonomy snapshot. A blank taxonomy path uses the shared workspace cache,
+acquiring it only when evidence is supplied and downloads are enabled; existing
+snapshots are reused without refresh. Active SQLite transactions are rejected.
+Prediction hashes each selection input once per invocation and checks its file
+identity again at subsequent boundaries, including after the final native
+package inventory. SQLite sidecars are rechecked there too. A new invocation
+always reads input bytes afresh; no selection proof persists between runs.
+Whole-second timestamps retain fresh content checks at every boundary.
 
 Source, checkpoint and installed-runtime identities are frozen on first use.
 Unchanged reruns verify and reuse them offline; use a new cache/receipt location
@@ -83,6 +138,30 @@ or BUSCO completeness by themselves.
 Native GFFs can encode UTRs through exon sequence outside CDSs without separate
 UTR feature rows. Representative completion derives those intervals and emits
 explicit UTR rows in its final GFF views.
+
+### Verification benchmark
+
+A bounded Docker Linux/arm64 check on 2026-10-16 compared the pre-optimization
+support snapshot with this implementation using a generated 128-MiB FASTA and
+a 128-MiB SQLite payload, two selection boundaries and repeated genome checks.
+One warmup and three measured fresh processes per version alternated execution
+order without concurrent tests. All logical outputs matched after normalizing
+temporary workspace paths; raw receipt hashes were also checked independently.
+The [saved measurements](benchmarks/oriongeno-selection-verification-2026-10-16.json)
+include source hashes, environment and individual trials.
+
+| Median metric | Before | After |
+| --- | --- | --- |
+| Verification wall time | 0.570 s | 0.135 s |
+| Full SHA-256 reads | 13 | 4 |
+| Hashed data | 896.3 MiB | 256.1 MiB |
+| Peak RSS, including fixture setup/imports | 85.4 MiB | 85.2 MiB |
+
+This measures input verification, not GPU prediction or whole-workflow speed.
+The reuse applies within one invocation on files with precise timestamps;
+whole-second timestamps retain fresh content reads. To compare another saved
+support snapshot, run the existing benchmark with `--cases predictor-selection
+--mib 128 --boundaries 2 --repeats 3` and `--baseline-support /path/to/snapshot`.
 
 ## Connect the whole cohort to representative selection
 
