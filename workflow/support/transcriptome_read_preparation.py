@@ -21,6 +21,9 @@ from genome_annotation_cohort import audit, entrypoint, environment, physical
 from shared_namespace_lock import namespace_lock
 
 INPUT_MODE = 'metadata-read-preparation'
+ASSEMBLY_MODE = 'metadata-cached-assembly'
+ASSEMBLY_FLAGS = ('ASSEMBLY', 'LONGESTCDS', 'LONGESTCDS_FX2TAB', 'BUSCO_ISOFORMS',
+                  'BUSCO_LONGEST_CDS', 'ASSEMBLY_STAT')
 DISABLED = ('ASSEMBLY', 'LONGESTCDS', 'LONGESTCDS_FX2TAB', 'LONGESTCDS_MMSEQS2TAXONOMY',
             'LONGESTCDS_CONTAMINATION_REMOVAL', 'BUSCO_ISOFORMS', 'BUSCO_LONGEST_CDS',
             'BUSCO_CONTAMINATION_REMOVED_LONGEST_CDS', 'ASSEMBLY_STAT', 'AMALGKIT_QUANT',
@@ -56,6 +59,12 @@ def native_environment(manifest, *, generate):
                GG_TRANSCRIPTOME_REPRESENTATIVE_INPUTS='', GG_COMMON_REPRESENTATIVE_INPUTS='',
                GG_TRANSCRIPTOME_TRANSCRIPTOME_GETFASTQ_CACHE_DIR=manifest['fastq_source_root'],
                GG_TRANSCRIPTOME_GETFASTQ_CACHE_DIR=manifest['fastq_source_root'])
+    if manifest['input_mode'] == ASSEMBLY_MODE:
+        env['GG_TRANSCRIPTOME_RUN_AMALGKIT_GETFASTQ'] = '0'
+        for flag in ASSEMBLY_FLAGS:
+            env['GG_TRANSCRIPTOME_RUN_' + flag] = '1'
+        for name, value in manifest['cache_parameters'].items():
+            env['GG_TRANSCRIPTOME_' + name.upper()] = str(value)
     return native, env
 
 
@@ -68,13 +77,20 @@ def container_preflight(manifest, row, manifest_sha):
     command = container_command(manifest) + ['python', '-B',
                '/script/support/transcriptome_read_preparation.py', '--inspect-json',
                json.dumps(dict(path=str(metadata), sha256=source['sha256'], runs=row['runs']))]
-    result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    if manifest['input_mode'] == ASSEMBLY_MODE:
+        command = container_command(manifest) + ['python', '-B', '/script/support/transcriptome_read_preparation.py',
+                  '--inspect-cache-json', json.dumps(dict(path=str(metadata), sha256=source['sha256'], runs=row['runs'],
+                      cache=str(Path(manifest['fastq_source_root']) / row['species']), expected=row['prepared_cache']))]
+    result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=1800)
     actual = json.loads(result.stdout)
     expected = inspect_metadata(metadata, source['sha256'], row['runs'])
+    if manifest['input_mode'] == ASSEMBLY_MODE:
+        expected['prepared_cache'] = row['prepared_cache']
     if actual != expected:
-        raise ValueError('Container metadata view differs from the frozen input')
+        raise ValueError('Container input view differs from the frozen input')
     core = 'runtime/workflow/core/gg_transcriptome_generation_core.sh'
-    return dict(schema_version=2, input_mode=INPUT_MODE, manifest_sha256=manifest_sha,
+    return dict(schema_version=3 if manifest['input_mode'] == ASSEMBLY_MODE else 2,
+                input_mode=manifest['input_mode'], manifest_sha256=manifest_sha,
                 image_sha256=manifest['image_sha256'], core_sha256=manifest['managed_files'][core]['sha256'],
                 task_id=row['task_id'], species=row['species'], **actual)
 
@@ -88,31 +104,63 @@ def container_command(manifest):
 
 def verify_native(manifest, row):
     workspace = Path(manifest['workspace_root'])
-    proof = physical(workspace / 'output/transcriptome_assembly/artifact_provenance' / (row['species'] + '.getfastq.json'))
-    completion = physical(Path(manifest['fastq_source_root']) / row['species'] / 'getfastq_completion.json')
-    expected = dict(native_provenance_sha256=file_sha(proof), completion_manifest_sha256=file_sha(completion))
+    expected = native_proofs(workspace, Path(manifest['fastq_source_root']), row['species'], manifest['input_mode'], audit_proofs=False)
     command = container_command(manifest) + ['python', '-B', '/script/support/transcriptome_read_preparation.py',
-                                           '--verify-json', json.dumps(dict(species=row['species']))]
+                                           '--verify-json', json.dumps(dict(species=row['species'], input_mode=manifest['input_mode']))]
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
-    if json.loads(result.stdout) != expected or file_sha(proof) != expected['native_provenance_sha256'] or file_sha(completion) != expected['completion_manifest_sha256']:
+    if (json.loads(result.stdout) != expected
+            or native_proofs(workspace, Path(manifest['fastq_source_root']), row['species'], manifest['input_mode'], audit_proofs=False) != expected):
         raise ValueError('Native read preparation changed during verification')
     return expected
 
 
 def prepare(manifest, row):
     root = Path(manifest['root'])
-    native, env = native_environment(manifest, generate=True)
-    env['GG_ARRAY_TASK_ID'] = str(row['task_id'])
-    entrypoint(native, 'gg_transcriptome_generation', env)
+    if manifest['input_mode'] == INPUT_MODE:
+        native, env = native_environment(manifest, generate=True)
+        env['GG_ARRAY_TASK_ID'] = str(row['task_id'])
+        entrypoint(native, 'gg_transcriptome_generation', env)
     native, env = native_environment(manifest, generate=False)
     env['GG_ARRAY_TASK_ID'] = str(row['task_id'])
     entrypoint(native, 'gg_transcriptome_generation', env)
     proof = verify_native(manifest, row)
     completion = physical(Path(manifest['fastq_source_root']) / row['species'] / 'getfastq_completion.json')
-    return dict(status='read-preparation-completed', species=row['species'], runs=row['runs'],
+    assembly = manifest['input_mode'] == ASSEMBLY_MODE
+    return dict(status='cached-assembly-completed' if assembly else 'read-preparation-completed', species=row['species'], runs=row['runs'],
                 metadata_sha256=row['files'][0]['sha256'], completion_manifest=str(completion),
                 **proof,
-                root=str(root), assembly_complete=False)
+                root=str(root), assembly_complete=assembly)
+
+
+def native_proofs(workspace, cache, species, mode, *, audit_proofs):
+    directory = workspace / 'output/transcriptome_assembly/artifact_provenance'
+    proof = physical(directory / (species + '.getfastq.json'))
+    completion = physical(cache / species / 'getfastq_completion.json')
+    result = dict(native_provenance_sha256=file_sha(proof), completion_manifest_sha256=file_sha(completion))
+    stages = ['getfastq'] + (['assembly', 'longest_cds', 'busco_isoforms', 'busco_longest_cds'] if mode == ASSEMBLY_MODE else [])
+    for stage in stages:
+        path = physical(directory / (species + '.' + stage + '.json'))
+        if audit_proofs:
+            value = audit(path, workspace, 'transcriptome_' + stage, species)
+            if stage.startswith('busco_') and value['parameters'].get('lineage') != 'embryophyta_odb12':
+                raise ValueError('Transcriptome BUSCO has the wrong lineage')
+        result[stage + '_provenance_sha256'] = file_sha(path)
+    return result
+
+
+def inspect_cache(value):
+    result = inspect_metadata(value['path'], value['sha256'], value['runs'])
+    cache = physical(value['cache'], directory=True)
+    expected = value['expected']
+    for name, key in [('getfastq_completion.json', 'completion_sha256'), ('.getfastq_cache_contract.json', 'contract_sha256')]:
+        if file_sha(physical(cache / name)) != expected[key]:
+            raise ValueError('Prepared cache proof changed')
+    command = ['bash', '-c', 'GG_CORE_SOURCE_ONLY=1 source "$3"; '
+               'validate_amalgkit_getfastq_completion_manifest "$1" "$2"', 'cache-check',
+               str(cache / 'getfastq_completion.json'), value['path'], str(Path(__file__).resolve().parents[1] / 'core/gg_transcriptome_generation_core.sh')]
+    subprocess.run(command, check=True)
+    result['prepared_cache'] = expected
+    return result
 
 
 def main():
@@ -122,15 +170,17 @@ def main():
     parser.add_argument('--task-id', type=int)
     parser.add_argument('--preflight-only', action='store_true')
     parser.add_argument('--inspect-json')
+    parser.add_argument('--inspect-cache-json')
     parser.add_argument('--verify-json')
     args = parser.parse_args()
     if args.verify_json:
-        species = json.loads(args.verify_json)['species']
-        workspace = Path('/workspace')
-        proof = workspace / 'output/transcriptome_assembly/artifact_provenance' / (species + '.getfastq.json')
-        audit(proof, workspace, 'transcriptome_getfastq', species)
-        completion = physical(Path('/gg_transcriptome_getfastq_cache') / species / 'getfastq_completion.json')
-        print(json.dumps(dict(native_provenance_sha256=file_sha(proof), completion_manifest_sha256=file_sha(completion)), sort_keys=True))
+        value = json.loads(args.verify_json)
+        result = native_proofs(Path('/workspace'), Path('/gg_transcriptome_getfastq_cache'), value['species'],
+                               value.get('input_mode', INPUT_MODE), audit_proofs=True)
+        print(json.dumps(result, sort_keys=True))
+        return
+    if args.inspect_cache_json:
+        print(json.dumps(inspect_cache(json.loads(args.inspect_cache_json)), sort_keys=True))
         return
     if args.inspect_json:
         value = json.loads(args.inspect_json)
@@ -143,8 +193,13 @@ def main():
     if file_sha(path) != args.manifest_sha256:
         parser.error('Read preparation manifest changed')
     manifest = json.loads(path.read_text())
-    if manifest['root'] != str(root) or manifest['input_mode'] != INPUT_MODE or manifest['busco_lineage'] != 'embryophyta_odb12':
+    if manifest['root'] != str(root) or manifest['input_mode'] not in (INPUT_MODE, ASSEMBLY_MODE) or manifest['busco_lineage'] != 'embryophyta_odb12':
         parser.error('Read preparation package identity changed')
+    if manifest['input_mode'] == ASSEMBLY_MODE:
+        allowed = {'AMALGKIT_RRNA_FILTER', 'AMALGKIT_CONTAM_FILTER', 'AMALGKIT_RRNA_FILTER_JOBS',
+                   'AMALGKIT_RRNA_FILTER_CHUNK_SPOTS', 'AMALGKIT_RRNA_FILTER_MEMORY_LIMIT', 'CONTAMINATION_REMOVAL_RANK'}
+        if {key.upper() for key in manifest['cache_parameters']} != allowed:
+            parser.error('Prepared cache must freeze the native read preparation parameters')
     rows = manifest['species']
     if [r['task_id'] for r in rows] != list(range(1, len(rows) + 1)) or len({r['species'] for r in rows}) != len(rows):
         parser.error('Frozen species mapping changed')

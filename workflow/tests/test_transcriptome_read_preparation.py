@@ -127,3 +127,60 @@ def test_dispatch_preserves_owning_transcriptome_release_through_real_bootstrap(
     monkeypatch.setattr(prep.subprocess, 'run', boundary)
     prep.entrypoint(native, 'gg_transcriptome_generation', env)
     assert len(calls) == 1
+
+
+def test_cached_assembly_never_downloads_metadata_reads_or_runs_quantification(tmp_path, monkeypatch):
+    manifest, row = fixture(tmp_path)
+    manifest.update(input_mode=prep.ASSEMBLY_MODE, cache_parameters={'amalgkit_rrna_filter': 'no', 'amalgkit_contam_filter': 'no'})
+    calls = []
+    def entrypoint(native, name, env):
+        assert env['GG_TRANSCRIPTOME_RUN_AMALGKIT_GETFASTQ'] == '0'
+        assert env['GG_TRANSCRIPTOME_RUN_AMALGKIT_METADATA_OR_INTEGRATE'] == '0'
+        assert env['GG_TRANSCRIPTOME_RUN_AMALGKIT_QUANT'] == env['GG_TRANSCRIPTOME_RUN_AMALGKIT_MERGE'] == '0'
+        assert env['GG_TRANSCRIPTOME_AMALGKIT_RRNA_FILTER'] == 'no'
+        assert all(env['GG_TRANSCRIPTOME_RUN_' + flag] == '1' for flag in prep.ASSEMBLY_FLAGS)
+        calls.append(env)
+    monkeypatch.setattr(prep, 'entrypoint', entrypoint)
+    monkeypatch.setattr(prep, 'verify_native', lambda *args: dict(verified=True))
+    completion = Path(manifest['fastq_source_root']) / row['species'] / 'getfastq_completion.json'
+    completion.parent.mkdir()
+    completion.write_text('native completion fixture')
+    assert prep.prepare(manifest, row)['assembly_complete'] is True
+    assert len(calls) == 1
+
+
+def test_cached_preflight_runs_the_actual_native_content_validator(tmp_path):
+    import gzip
+    manifest, row = fixture(tmp_path)
+    cache = Path(manifest['fastq_source_root']) / row['species']
+    cache.mkdir()
+    entries = []
+    for run in row['runs']:
+        directory = cache / run
+        directory.mkdir()
+        fastq = directory / (run + '.amalgkit.fastq.gz')
+        with gzip.open(fastq, 'wb') as stream:
+            stream.write(b'@read\nACGT\n+\n!!!!\n')
+        stats = directory / 'getfastq_stats.tsv'
+        stats.write_text('run\tnum_written\tbp_fastp_in\n' + run + '\t1\t4\n')
+        def contract(path):
+            return dict(path=str(path.relative_to(cache)), size=path.stat().st_size, sha256=prep.file_sha(path))
+        entries.append(dict(run=run, status='complete', files=[contract(fastq)], stats=contract(stats)))
+    completion = cache / 'getfastq_completion.json'
+    completion.write_text(json.dumps(dict(schema_version=4, read_source='amalgkit', status='complete', run_count=3, runs=entries)))
+    contract = cache / '.getfastq_cache_contract.json'
+    contract.write_text('native cache parameter proof')
+    value = dict(path=row['files'][0]['path'], sha256=row['files'][0]['sha256'], runs=row['runs'], cache=str(cache),
+                 expected=dict(completion_sha256=prep.file_sha(completion), contract_sha256=prep.file_sha(contract)))
+    assert prep.inspect_cache(value)['prepared_cache'] == value['expected']
+    fastq.write_bytes(b'corrupt')
+    with pytest.raises(subprocess.CalledProcessError):
+        prep.inspect_cache(value)
+
+
+def test_cached_assembly_cannot_claim_completion_without_all_native_proofs(tmp_path, monkeypatch):
+    manifest, row = fixture(tmp_path)
+    manifest.update(input_mode=prep.ASSEMBLY_MODE, cache_parameters={})
+    monkeypatch.setattr(prep, 'entrypoint', lambda *args: None)
+    with pytest.raises((FileNotFoundError, ValueError)):
+        prep.prepare(manifest, row)
