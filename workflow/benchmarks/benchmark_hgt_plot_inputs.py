@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import resource
 import subprocess
 import sys
@@ -48,10 +49,15 @@ def main():
     parser.add_argument('--families', type=int, default=32)
     parser.add_argument('--genes-per-family', type=int, default=1000)
     parser.add_argument('--mode', choices=['baseline', 'indexed'], required=True)
+    parser.add_argument('--coarse-timestamps', action='store_true', help='Include strict whole-second source hashing')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         branch, gene = fixture(root, args.families, args.genes_per_family)
+        if args.coarse_timestamps:
+            for path in (branch, gene):
+                stamp = path.stat().st_mtime_ns // 1_000_000_000 * 1_000_000_000
+                os.utime(path, ns=(stamp, stamp))
         old = root / 'baseline.py'
         old.write_bytes(subprocess.check_output(['git', '-c', 'safe.directory=' + str(SUPPORT.parents[1]), 'show', args.baseline_ref +
                                                  ':workflow/support/annotate_hgt_tree_plot.py']))
@@ -72,6 +78,7 @@ def main():
             out = module.annotate_leaf_rows(module.annotate_branch_rows(stat, branches, family), genes, family)
             digest.update(out.to_csv(sep='\t', index=False).encode())
         result = dict(mode=args.mode, families=args.families, genes_per_family=args.genes_per_family,
+                      coarse_timestamps=args.coarse_timestamps,
                       source_bytes=branch.stat().st_size + gene.stat().st_size,
                       seconds=time.monotonic() - started, peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                       output_sha256=digest.hexdigest(), baseline_ref=args.baseline_ref)

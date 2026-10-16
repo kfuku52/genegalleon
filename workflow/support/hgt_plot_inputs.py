@@ -22,7 +22,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pandas
-from content_digest_cache import cached_sha256_file
+from content_digest_cache import _sha256_stream, cached_sha256_file
 from shared_namespace_lock import namespace_lock
 
 SCHEMA = 1
@@ -64,7 +64,15 @@ def validate_sources(proof, branch, gene):
         raise ValueError('Unsupported HGT candidate index schema')
     for key, path in [('branch', branch), ('gene', gene)]:
         expected = proof['sources'][key]
-        if str(Path(path).absolute()) != expected['path'] or signature(path) != expected['signature']:
+        current = signature(path)
+        changed = str(Path(path).absolute()) != expected['path'] or current != expected['signature']
+        # Match the shared digest cache's coarse-filesystem contract. Metadata
+        # alone cannot distinguish a same-size write with a restored mtime.
+        if not changed and any(value % 1_000_000_000 == 0 for value in current[3:]):
+            with Path(path).open('rb') as handle:
+                digest, size = _sha256_stream(handle)
+            changed = (signature(path) != current or digest != expected['sha256'] or size != expected['size'])
+        if changed:
             raise ValueError(f'Candidate input changed since index preparation: {path}')
 
 

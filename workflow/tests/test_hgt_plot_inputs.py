@@ -64,6 +64,32 @@ def test_same_size_source_replacement_rejects_old_index_then_rebuilds(tmp_path):
     assert 'B species' in index.read_family(db, branch, gene, 'OG1')[1].gene_taxon.tolist()
 
 
+@pytest.mark.parametrize('coarse_field', [3, 4])
+def test_coarse_metadata_cannot_hide_a_same_size_content_change(tmp_path, monkeypatch, coarse_field):
+    branch, gene = candidates(tmp_path)
+    original = index.signature
+    fixed = {}
+    for path in (branch, gene):
+        value = original(path)
+        value[coarse_field] = value[coarse_field] // 1_000_000_000 * 1_000_000_000
+        fixed[str(path.absolute())] = value
+    def coarse(path):
+        value = original(path)
+        if str(Path(path).absolute()) in fixed:
+            value[3:] = fixed[str(Path(path).absolute())][3:]
+        return value
+    monkeypatch.setattr(index, 'signature', coarse)
+    db = tmp_path / 'index.db'
+    index.prepare(db, branch, gene)
+    before = db.read_bytes()
+    gene.write_text(gene.read_text().replace('Z species', 'B species'))
+    with pytest.raises(ValueError, match='changed since index'):
+        index.read_family(db, branch, gene, 'OG1')
+    assert db.read_bytes() == before
+    index.prepare(db, branch, gene)
+    assert 'B species' in index.read_family(db, branch, gene, 'OG1')[1].gene_taxon.tolist()
+
+
 def test_corrupt_spool_payload_is_rejected_before_deserialization(tmp_path):
     branch, gene = candidates(tmp_path)
     db = tmp_path / 'index.db'

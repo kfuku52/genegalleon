@@ -100,6 +100,11 @@ The majority-species prefix is computed once, including its existing lexical
 tie-break and nonempty-taxonomy rule. Original candidate tables and family
 artifacts remain the declared provenance inputs; the index is a disposable cache.
 Changed sources invalidate it, and damaged frame payloads fail before use.
+When either source timestamp has whole-second precision, readers also verify
+the original content digest with the shared streaming hash helper. Metadata
+cannot distinguish a same-size write with a restored mtime on these filesystems.
+This requires reading bytes again, while avoiding repeated pandas parsing and
+preserving whole-table types. Fine-precision inputs retain the metadata path.
 
 `hgt_summary_plot_workers=auto` bounds parallel rendering by allocated CPUs and
 one worker per 8 GiB of tool-memory budget. Workers use separate temporary
@@ -121,6 +126,8 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_hgt_p
 ```
 
 Report the source bytes, output SHA256, individual wall times and peak RSS.
+Add `--coarse-timestamps` to both modes to include strict content hashing in the
+comparison; do not apply fine-precision timing claims to that case.
 This measures candidate preparation/annotation, not total R rendering time or
 whole-project speed. Integration tests compare serial and concurrent native
 PDFs under the same RNG state after removing only creation/modification dates,
