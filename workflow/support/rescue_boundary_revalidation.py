@@ -310,3 +310,50 @@ def revalidate_boundaries(model, genome, genetic_code, params, donor_protein, va
     selected["partial_evidence"] = {"partial": False, "completed_from_partial": bool(problems & {"missing_start", "missing_stop"}),
                                     "original_missing_termini": sorted(problems & {"missing_start", "missing_stop"})}
     return selected
+
+
+def validated_boundary_candidates(model, genome, genetic_code, params, donor_protein, validate_model):
+    """Expose complete competing boundary paths to the final locus selection.
+
+    The failed source prediction remains in the audit. Only a fully examined
+    boundary search with a path-score tie qualifies. Recheck source DNA and
+    donor alignment for every emitted path; a saved presence flag alone never
+    admits a model, and an exhausted search budget still abstains.
+    """
+    audit = model.get('boundary_revalidation', {})
+    if (model.get('boundary_candidate') or audit.get('status') != 'ambiguous'
+            or audit.get('reasons') != ['alternative_genomic_boundary_paths_within_score_margin']
+            or set(model.get('problems', ())) - _RECHECKABLE - {'unanchored_genome_search', 'outside_expected_synteny_interval'}):
+        return []
+    donor = str(donor_protein or '').upper().removesuffix('*')
+    if not donor or set(donor) - _AMINO_ACIDS:
+        return []
+    result = []
+    for attempt in audit.get('attempts', ()):
+        alignment = attempt.get('alignment') or {}
+        if (attempt.get('problems') or attempt.get('reasons') or not alignment.get('donor_termini_supported')
+                or alignment.get('optimal_alignments_truncated') is not False):
+            continue
+        candidate = copy.deepcopy(model)
+        candidate.update(cds=copy.deepcopy(attempt['cds']), coverage=alignment['coverage'], identity=alignment['identity'])
+        checked = validate_model(candidate, genome, genetic_code, params)
+        if checked['problems'] or _sha(checked['sequence']) != attempt.get('sequence_sha256'):
+            continue
+        protein = str(Seq(checked['sequence']).translate(table=genetic_code)).removesuffix('*')
+        codons = CodonTable.unambiguous_dna_by_id[genetic_code]
+        if checked['sequence'][:3] in codons.start_codons and donor.startswith('M'):
+            protein = 'M' + protein[1:]
+        fresh, error = _alignment(protein, donor, params, params.get('terminal_max_unaligned_c_overhang', 2))
+        if error:
+            continue
+        checked.update(coverage=fresh['coverage'], identity=fresh['identity'],
+                       query_start=fresh['query_start'], query_end=fresh['query_end'], query_length=len(donor),
+                       query_span_coverage=(fresh['query_end'] - fresh['query_start']) / len(donor),
+                       alignment_source='boundary_revalidation_global',
+                       boundary_candidate={'basis': 'strict_genomic_cds_and_complete_donor_alignment',
+                                           'source_cds': copy.deepcopy(model['cds']),
+                                           'representative_status': 'ambiguous'},
+                       partial_evidence={'partial': False, 'completed_from_partial': bool(set(model['problems']) & {'missing_start', 'missing_stop'}),
+                                         'original_missing_termini': sorted(set(model['problems']) & {'missing_start', 'missing_stop'})})
+        result.append(checked)
+    return result

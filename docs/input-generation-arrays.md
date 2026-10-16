@@ -84,6 +84,30 @@ flowchart LR
 This applies to `gg_input_generation`. RNA `amalgkit getfastq` belongs to
 `gg_transcriptome_generation` and is not changed by this execution model.
 
+### Assembled transcripts
+
+An explicit manifest row can set `cds_input_type=transcriptome` and supply the
+assembled nucleotide FASTA through `cds_url` (including bound local sources).
+The worker extracts one ORF per transcript through native CDSKIT, using the same
+complete-first policy as `gg_transcriptome_generation`, then applies the usual
+representative formatting, validation and BUSCO stages. The default remains
+`cds`; no input is classified from its filename or sequence length.
+The frozen plan, staged receipt and species summary retain this type. The
+longest-CDS validator independently re-derives ORFs from the original transcripts
+and checks the audit; it does not compare CDS with full transcript lengths.
+Strict worker and final validation support CDS-only inputs when genomic roles
+are optional. `require_gff=1` and `require_genome=1` still require those outputs;
+CDS-only finalization retains source-selection validation.
+The `.orf-extraction.json`
+sidecar binds source/output hashes, genetic code, implementation and CDSKIT
+identity, with each selected ORF's strand and coordinates on its source transcript.
+These are predictions, and transcript coordinates are not genome annotation.
+Transcript mode rejects genomic GFF/GBFF/genome roles. Changing type or source
+requires a new workspace or explicit rebuild; an existing CDS file alone is
+insufficient evidence to reuse a predicted ORF result.
+Same-plan stage checkpoints verify the ORF audit. Cross-plan format imports
+currently recompute transcript ORFs rather than transplanting a path-bound audit.
+
 ## Slurm submission
 
 Use the usual `GG_INPUT_*` overrides and shared workspace configuration. Run the

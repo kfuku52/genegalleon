@@ -2766,6 +2766,48 @@ def test_provided_cds_gff_grouping_rejects_unmapped_records_by_default(tmp_path)
     assert "unexpected_unmapped=1 ambiguous=0" in strict.stderr
 
 
+@pytest.mark.parametrize("provider", ["local", "direct", "phycocosm"])
+@pytest.mark.parametrize("portal", ["Praco1", "Zygcir1559_1"])
+@pytest.mark.parametrize("prefixed", [False, True])
+def test_jgi_namespace_links_raw_and_reused_cds_to_gene_catalog(tmp_path, provider, portal, prefixed):
+    module = load_module()
+    species = "Example_species"
+    header = (species + "_jgi_" + portal + "_14279_external_transcript" if prefixed
+              else "jgi|" + portal + "|14279|external_transcript")
+    cds = tmp_path / "source.cds.fa"
+    cds.write_text(">" + header + "\nATGAAATAA\n")
+    gff = tmp_path / "source.gff3"
+    gff.write_text("chr1\tJGI\tgene\t1\t9\t.\t+\t.\tID=gene1;Name=jgi.p|" + portal + "|14279\n"
+                   "chr1\tJGI\tmRNA\t1\t9\t.\t+\t.\tID=mRNA1;Parent=gene1\n"
+                   "chr1\tJGI\tCDS\t1\t9\t.\t+\t0\tParent=mRNA1\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    task = dict(provider=provider, species_key=species, species_prefix=species,
+                cds_path=cds, gff_path=gff, gene_grouping_mode="strict", genetic_code=1)
+    result = module.format_cds(task, output, overwrite=False, dry_run=False, strict=True)
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.readline().strip() == ">Example_species_gene1"
+    # A different portal never borrows the same numeric protein identifier.
+    cds.write_text(">" + header.replace(portal, "OtherPortal") + "\nATGAAATAA\n")
+    with pytest.raises(ValueError, match="unexpected_unmapped=1"):
+        module.format_cds(task, output, overwrite=True, dry_run=False, strict=True)
+
+
+def test_jgi_encoded_portal_boundaries_preserve_conflicting_gene_evidence(tmp_path):
+    module = load_module()
+    gff = tmp_path / "source.gff3"
+    lines = []
+    for index, name in enumerate(["jgi.p|Portal|1", "jgi.p|Portal_1|10001"], 1):
+        lines += [f"chr1\tJGI\tgene\t{index*20}\t{index*20+8}\t.\t+\t.\tID=G{index};Name={name}",
+                  f"chr1\tJGI\tmRNA\t{index*20}\t{index*20+8}\t.\t+\t.\tID=T{index};Parent=G{index}",
+                  f"chr1\tJGI\tCDS\t{index*20}\t{index*20+8}\t.\t+\t0\tParent=T{index}"]
+    gff.write_text("\n".join(lines) + "\n")
+    task = dict(provider="local", species_prefix="Example_species", gff_path=gff, gene_grouping_mode="strict")
+    index = module.build_gff_cds_grouping_index(task)
+    result = module.resolve_cds_header_gff_gene(task, "Example_species_jgi_Portal_1_10001_T", index)
+    assert result["status"] == "ambiguous"
+
+
 def test_provided_cds_gff_grouping_tolerates_only_low_rate_residual_mismatch(tmp_path):
     module = load_module()
     cds_path = tmp_path / "models.cds.fa"

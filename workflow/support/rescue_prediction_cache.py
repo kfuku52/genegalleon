@@ -311,6 +311,10 @@ RAW_FIELDS = ("coverage", "query_span_coverage", "query_start", "query_end", "qu
 def _raw_prediction(model, regions):
     if not isinstance(model, dict) or model.get("query") not in regions:
         return None
+    if model.get('boundary_candidate'):
+        # Derived alternatives are re-created from the separately retained
+        # source prediction, never replayed as additional independent searches.
+        return None
     completion = model.get("terminal_completion")
     if ("raw_prediction" not in model and isinstance(completion, dict)
             and (completion.get("status") in {"completed", "accepted"} or "selected_cds" in completion)):
@@ -389,6 +393,8 @@ class VerifiedPredictionCache:
                 if not bindings:
                     continue  # Expanded old duplicates are supplied once below.
                 original = _raw_prediction(model, self._old_genome_regions)
+                if original is None:
+                    continue
                 for candidate in bindings:
                     row = {**original, "cds": [list(exon) for exon in original["cds"]],
                            "query": candidate, "evidence": self.regions[candidate]}

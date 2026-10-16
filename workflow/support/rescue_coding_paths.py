@@ -222,6 +222,53 @@ def path_rank(model, nearest=()):
     return len(donors & set(nearest)), len(donors), identity, coverage
 
 
+def transferred_support(model):
+    """A native predictor flag cannot erase a checked donor genomic mapping."""
+    evidence = model.get('support') or [model.get('evidence', {})]
+    return any(not (row.get('annevo') or row.get('oriongeno'))
+               and alignment_support({**model, 'support': [row]}) for row in evidence)
+
+
+def compatible_components(models):
+    """Hold conflicting native additions without invalidating transferred CDS.
+
+    Reassess the transferred paths as their own coding components. This also
+    prevents a native bridge from joining two otherwise independent loci. A
+    conflict among transferred paths themselves still requires review.
+    """
+    for component in overlap_components(models):
+        rows = [models[i] for i in component]
+        valid = []
+        for row in rows:
+            if row.get('status') == 'accepted' and not row.get('problems'):
+                valid.append(row)
+            else:
+                row['status'] = 'unresolved'
+        def coherent(group):
+            return all(compatible_paths(a, b) for i, a in enumerate(group) for b in group[i + 1:])
+        if coherent(valid):
+            yield valid
+            continue
+        transferred = [row for row in valid if transferred_support(row)]
+        if transferred and len(transferred) < len(valid):
+            for row in valid:
+                if not transferred_support(row):
+                    row['status'] = 'unresolved'
+                    row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+                    row['integration_conflict'] = {'disposition': 'retain_transferred_coding_paths',
+                        'transferred_model_ids': sorted(r['model_id'] for r in transferred)}
+            groups = [[transferred[i] for i in group] for group in overlap_components(transferred)]
+        else:
+            groups = [valid]
+        for group in groups:
+            if coherent(group):
+                yield group
+            else:
+                for row in group:
+                    row['status'] = 'unresolved'
+                    row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+
+
 def resolve_coding_paths(models, nearest=()):
     """Admit a supported locus separately from ranking its coding paths.
 
@@ -229,42 +276,21 @@ def resolve_coding_paths(models, nearest=()):
     original annotation ownership. A canonical fallback establishes neither
     translation initiation nor orthology; its support remains path-specific.
     """
-    for component in overlap_components(models):
-        if len(component) < 2:
-            continue
-        rows = [models[i] for i in component]
-        # Pairwise compatibility prevents a bridging fusion from silently
-        # joining two independent loci into one rescued gene.
-        # Coding-connected components contain at least one collision. A pair
-        # with no shared coding bases also fails compatibility, so this tests
-        # the same clique/fusion rule without storing O(n^2) pair objects.
-        if (not all(row.get('status') == 'accepted' and not row.get('problems') for row in rows)
-                or not all(compatible_paths(a, b) for i, a in enumerate(rows) for b in rows[i + 1:])):
-            for row in rows:
-                row['status'] = 'unresolved'
-                row['problems'].append('competing_new_models')
+    for rows in compatible_components(models):
+        if len(rows) < 2:
             continue
         ranked = sorted(rows, key=lambda r: (path_rank(r, nearest), repr(coding_shape(r))), reverse=True)
         best, second = ranked[:2]
         first_rank, second_rank = path_rank(best, nearest), path_rank(second, nearest)
         decisive = first_rank[:2] > second_rank[:2] or first_rank[2] - second_rank[2] >= .10
-        # Distinct donor species corroborate existence of this coding locus.
-        # They do not corroborate every path in it. Self evidence cannot supply
-        # the independent cross-species support required for this fallback.
+        # One external species can support a complete, coherent genomic locus.
+        # Locus admission does not establish a biologically preferred isoform.
         targets = {evidence['target'] for row in rows
                    for evidence in [row.get('evidence', {}), *row.get('support', [])]
                    if evidence.get('target')}
         donors = sorted({donor for row in rows for donor, _, _ in alignment_support(row)} - targets)
         if not decisive:
-            if any(evidence.get('annevo') or evidence.get('oriongeno') for row in rows
-                   for evidence in [row.get('evidence', {}), *row.get('support', [])]):
-                # A new predictor must not make an unresolved initiation/splice
-                # choice publishable through the longest-path fallback.
-                for row in rows:
-                    row['status'] = 'unresolved'
-                    row['problems'].append('ambiguous_annevo_coding_path_representative')
-                continue
-            if len(donors) < 2:
+            if not donors:
                 for row in rows:
                     row['status'] = 'unresolved'
                     row['problems'].append('ambiguous_coding_path_representative')
@@ -281,10 +307,11 @@ def resolve_coding_paths(models, nearest=()):
             row['status'] = 'accepted_alternative_path'
             row['parent_model_id'] = best['model_id']
             alternatives.append({k: row[k] for k in ('model_id', 'seqid', 'strand', 'cds', 'sequence', 'support', 'coverage', 'identity',
-                                                    'evidence', 'placement_evidence', 'problems') if k in row})
+                                                    'evidence', 'placement_evidence', 'problems', 'boundary_candidate',
+                                                    'boundary_revalidation', 'partial_evidence') if k in row})
         best['alternative_coding_paths'] = alternatives
         best['locus_support'] = {'counting_unit': 'independent_donor_species',
-                                 'independent_donor_species': donors, 'minimum_species_for_fallback': 2,
+                                 'independent_donor_species': donors, 'minimum_species_for_fallback': 1,
                                  'orthology': 'unassigned', 'expected_copy': 'unassigned'}
         best['path_selection'] = {
             'reason': 'supported_same_locus_coding_paths' if decisive else 'compatible_locus_canonical_fallback',

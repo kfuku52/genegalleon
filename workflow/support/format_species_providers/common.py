@@ -91,6 +91,7 @@ def provider_raw_dir(provider, download_root, species_key):
         "dictybase",
         "insectbase",
         ORYZA_MINUTA_PROVIDER,
+        "onekp",
         "direct",
         "local",
     ):

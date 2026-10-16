@@ -54,6 +54,7 @@ from format_species_summary import (
     write_species_summary_rows,
 )
 from format_species_taxonomy import SpeciesTaxonomyMetadataResolver
+from transcriptome_orfs import apply_input_type
 
 # Preserve the exact legacy star-import order and its two explicitly imported
 # helper groups. CLI dependencies stay explicit above, while existing callers
@@ -179,6 +180,14 @@ def main():
             allowed_species_keys=allowed_species_keys,
         )
         for task in tasks:
+            if manifest_rows_for_provider_inputs is not None:
+                matches = [row for row in manifest_rows_for_provider_inputs
+                           if row["provider"] == provider and row["species_key"] == task["species_key"]
+                           and str(row.get("cds_input_type") or "cds").strip().lower() == "transcriptome"]
+                if matches:
+                    if len(matches) != 1:
+                        raise ValueError("Transcript task has no unique resolved input manifest row")
+                    apply_input_type(task, matches[0])
             task["genetic_code"] = args.genetic_code
             task["gene_grouping_mode"] = args.gene_grouping_mode
             task["gff_repair_mode"] = args.gff_repair_mode

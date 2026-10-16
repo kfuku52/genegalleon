@@ -34,7 +34,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from artifact_audit_runtime import AuditDigests, AuditProgress, source_identity
+from artifact_audit_runtime import AuditCapacityError, AuditDigests, AuditProgress, source_identity
 from artifact_audit_runtime import signature as audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
@@ -108,7 +108,7 @@ def _runtime_path(path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def digest_observation(*, workers=1, progress=None):
+def digest_observation(*, workers=1, progress=None, spill_guards=False):
     """Share content reads within one query, then rehash every unique source.
 
     Never reuse persistent digests as read-only verification evidence. Nested
@@ -118,7 +118,7 @@ def digest_observation(*, workers=1, progress=None):
     if existing is not None:
         yield existing
         return
-    memo = AuditDigests()
+    memo = AuditDigests(spill_guards=spill_guards)
     previous = digest_cache()
     configure_digest_cache(None)
     token = _DIGEST_OBSERVATION.set(memo)
@@ -128,6 +128,7 @@ def digest_observation(*, workers=1, progress=None):
     finally:
         _DIGEST_OBSERVATION.reset(token)
         configure_digest_cache(previous.database if previous is not None else None)
+        memo.close()
 
 
 def without_digest_reuse(compute):
@@ -1386,6 +1387,8 @@ def audit_manifest(
                         digest, size, member_count = gene_family_store_digest(store_path)
                 except FileNotFoundError:
                     return "missing_input", label
+                except AuditCapacityError:
+                    raise
                 except Exception as exc:
                     return "invalid_manifest", f"{label}: {exc}"
                 if (
@@ -1402,6 +1405,8 @@ def audit_manifest(
                 digest, size = audit_entry_digest(entry, store, logical_root, workspace_root, memo)
             except FileNotFoundError:
                 return f"missing_{collection_name[:-1]}", label
+            except AuditCapacityError:
+                raise
             except Exception as exc:
                 return "invalid_manifest", f"{label}: {exc}"
             if digest != entry.get("sha256") or size != entry.get("size_bytes"):
@@ -1423,6 +1428,8 @@ def audit_manifest(
             if state == "absent":
                 continue
             return "missing_optional_output", label
+        except AuditCapacityError:
+            raise
         except Exception as exc:
             return "invalid_manifest", f"{label}: {exc}"
         if state == "absent":
@@ -1551,7 +1558,7 @@ def branch_identity_rows(
 def audit(args: argparse.Namespace) -> int:
     workers = getattr(args, "workers", 1)
     interval = getattr(args, "progress_interval", 10)
-    memo = AuditDigests()
+    memo = AuditDigests(spill_guards=True)
     source_sha256 = source_identity(SCRIPT_DIR)
     previous_cache = digest_cache()
     previous_path = previous_cache.database if previous_cache is not None else None
@@ -1563,6 +1570,7 @@ def audit(args: argparse.Namespace) -> int:
             return _audit(args, memo, progress, workers)
     finally:
         configure_digest_cache(previous_path)
+        memo.close()
 
 
 def _audit(args, memo, progress, workers):
@@ -1608,6 +1616,8 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
             if not family_id or not step:
                 raise ProvenanceError("family_id and step are required")
             status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo)
+        except AuditCapacityError:
+            raise
         except Exception as exc:
             family_id, step = infer_orthogroup_id(name) or "-", "unknown"
             if args.mode == "query2family" and query_matcher_list:

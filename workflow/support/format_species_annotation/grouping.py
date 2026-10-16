@@ -718,6 +718,18 @@ def extract_cds_header_alias_tiers(task, header):
             add(primary, token)
 
     raw_token = first_token(header)
+    # JGI GFF names retain the portal plus numeric protein identity even when
+    # a CDS was previously exported with a species-prefixed, sanitized header.
+    # Reconstruct only that explicit namespace; arbitrary suffixes are not IDs.
+    jgi = re.fullmatch(r"jgi\|([^|]+)\|([0-9]+)\|.+", raw_token)
+    if jgi is not None:
+        primary.append("jgi.p|{}|{}".format(jgi.group(1), jgi.group(2)))
+    envelope = str(task.get("species_prefix", "")) + "_jgi_"
+    if task.get("species_prefix") and raw_token.startswith(envelope):
+        payload = raw_token[len(envelope):]
+        for boundary in re.finditer(r"(?=_([0-9]+)_)", payload):
+            if boundary.start() and payload[boundary.start() + len(boundary.group(1)) + 2:]:
+                primary.append("jgi.p|{}|{}".format(payload[:boundary.start()], boundary.group(1)))
     ncbi_cds_match = re.search(r"_cds_([^\s]+?)(?:_[0-9]+)?$", raw_token)
     if ncbi_cds_match is not None:
         add(primary, ncbi_cds_match.group(1))

@@ -40,6 +40,7 @@ from .fernbase_oryza import (
 from .gwh import (
     resolve_gwh_download_urls_from_id,
 )
+from .onekp import resolve_onekp_download_urls_from_id
 from .web import (
     resolve_figshare_download_urls_from_id,
     resolve_insectbase_download_urls_from_id,
@@ -65,6 +66,7 @@ class ProviderIdResolver:
 
 
 PROVIDER_ID_RESOLVERS = {
+    "onekp": ProviderIdResolver(resolve_onekp_download_urls_from_id),
     "coge": ProviderIdResolver(resolve_coge_download_urls_from_id),
     "cngb": ProviderIdResolver(resolve_cngb_download_urls_from_id, accepts_species_key=False),
     "ddbj": ProviderIdResolver(resolve_ddbj_download_urls_from_id),

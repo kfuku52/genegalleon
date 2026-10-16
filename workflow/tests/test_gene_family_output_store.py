@@ -616,6 +616,14 @@ def test_materialize_family_never_stats_unselected_live_files(tmp_path: Path, mo
         return original_stat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", fail_if_unselected)
+    original_lstat = Path.lstat
+
+    def fail_if_unselected_lstat(path, *args, **kwargs):
+        if path in (unrelated, shared_lock):
+            raise FileNotFoundError("unselected metadata disappeared concurrently")
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", fail_if_unselected_lstat)
     destination = tmp_path / "selected"
     restored = GeneFamilyOutputStore(root).materialize_family(
         "OG0000001", orthogroup_id_from_name, destination_root=destination
@@ -628,14 +636,16 @@ def test_materialize_family_never_stats_unselected_live_files(tmp_path: Path, mo
 def test_materialize_family_does_not_hide_selected_source_errors(tmp_path: Path, monkeypatch):
     root = tmp_path / "orthogroup"
     paths = _write_family_outputs(root, "OG0000001", complete=True)
-    original_stat = Path.stat
+    original_lstat = Path.lstat
 
     def fail_selected(path, *args, **kwargs):
         if path == paths["stat_branch"]:
             raise OSError("selected artifact is unreadable")
-        return original_stat(path, *args, **kwargs)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "stat", fail_selected)
+    # Fail the source metadata read even when directory enumeration supplies
+    # its file type without a separate stat call.
+    monkeypatch.setattr(Path, "lstat", fail_selected)
     with pytest.raises(OSError, match="selected artifact is unreadable"):
         GeneFamilyOutputStore(root).materialize_family(
             "OG0000001", orthogroup_id_from_name, destination_root=tmp_path / "selected"

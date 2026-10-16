@@ -159,12 +159,16 @@ def read_download_manifest_xlsx(path):
 
 
 def read_download_manifest(path):
+    from transcriptome_orfs import validate_manifest_row
     if path.suffix.lower() == ".xlsx":
-        return read_download_manifest_xlsx(path)
-    delimiter = detect_manifest_delimiter(path)
-    with open(path, "rt", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter=delimiter)
-        rows = [row for row in reader]
+        rows = read_download_manifest_xlsx(path)
+    else:
+        delimiter = detect_manifest_delimiter(path)
+        with open(path, "rt", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle, delimiter=delimiter)
+            rows = [row for row in reader]
+    for row in rows:
+        validate_manifest_row(row)
     return rows
 
 

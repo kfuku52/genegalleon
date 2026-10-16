@@ -131,8 +131,12 @@ def _write_minimal_ete_taxonomy_db(workspace: Path) -> None:
         cur.executemany(
             "INSERT INTO species (taxid, spname, common, rank, track) VALUES (?, ?, ?, ?, ?)",
             [
-                (3702, "Arabidopsis thaliana", "", "species", "1,131567,2759,33090,35493,3700,3701,3702"),
-                (4530, "Oryza sativa", "", "species", "1,131567,2759,33090,35493,4527,4528,4530"),
+                (1, "root", "", "no rank", "1"),
+                (33090, "Viridiplantae", "", "kingdom", "33090,1"),
+                (3701, "Arabidopsis", "", "genus", "3701,33090,1"),
+                (4527, "Oryza", "", "genus", "4527,33090,1"),
+                (3702, "Arabidopsis thaliana", "", "species", "3702,3701,33090,1"),
+                (4530, "Oryza sativa", "", "species", "4530,4527,33090,1"),
             ],
         )
         cur.executemany(
@@ -986,6 +990,50 @@ def test_array_cds_only_validates_and_completes_busco_with_native_receipts(tmp_p
     assert run["num_species_busco_full"] == "2"
     assert run["num_species_busco_short"] == "2"
     assert all(row["qc_status"] == "not_recorded" for row in _read_tsv_rows(root / "species_mapping_qc.tsv"))
+
+
+def test_array_transcript_orf_audits_are_required_completion_outputs(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        _write_text(input_dir / species / f"{species}.cds.fa",
+                    ">forward\nCCCATGAAATAACCCC\n>reverse\nGGGGTTATTTCATGGG\n")
+    workspace = tmp_path / "transcript_orfs"
+    workspace.mkdir()
+    manifest = workspace / "transcripts.tsv"
+    with manifest.open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["provider", "id", "species_key", "cds_url", "cds_input_type"], delimiter="\t")
+        writer.writeheader()
+        for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+            writer.writerow(dict(provider="local", id=species, species_key=species,
+                                 cds_url=(input_dir / species / f"{species}.cds.fa").as_uri(),
+                                 cds_input_type="transcriptome"))
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    for mode, task_id in (("array_prepare", None), ("array_worker", 1),
+                          ("array_worker", 2), ("array_finalize", None)):
+        env = _core_env(workspace, None, fake_bin, mode, task_id, require_cds=True)
+        env.update(provider="all", download_manifest=str(manifest), download_dir=str(workspace / "downloads"),
+                   strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True, timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+    plan = workspace / "output/input_generation/tmp/task_plan.json"
+    rows = _read_tsv_rows(workspace / "output/input_generation/gg_input_generation_species.tsv")
+    assert all(row["cds_input_type"] == "transcriptome" for row in rows)
+    for row in rows:
+        with gzip.open(row["cds_output_path"], "rt") as stream:
+            assert [line.strip() for line in stream if not line.startswith(">")] == ["ATGAAATAA", "ATGAAATAA"]
+    for index in (1, 2):
+        receipt = json.loads(Path(str(plan) + f".completed/{index}.json").read_text())
+        audits = [path for path in receipt["files"] if path.endswith(".orf-extraction.json")]
+        assert len(audits) == 1
+        assert json.loads(Path(audits[0]).read_text())["coordinate_system"] == "source transcript; not genomic"
+        command = [sys.executable, str(REPO_ROOT / "workflow/support/input_generation_array_state.py"),
+                   "verify", "--task-plan", str(plan), "--task-index", str(index)]
+        assert subprocess.run(command, capture_output=True).returncode == 0
+        Path(audits[0]).write_text("{}\n")
+        assert subprocess.run(command, capture_output=True).returncode != 0
 
 
 def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):

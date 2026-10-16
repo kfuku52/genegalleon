@@ -113,11 +113,12 @@ def test_rank_counts_species_once_and_never_borrows_another_alignment_quality():
     assert paths.path_rank(a, ['Relative']) == (1, 1, 1.0, 1.0)
 
 
-def test_ambiguous_same_locus_paths_remain_proposals_and_missing_provenance_cannot_break_tie():
+def test_one_external_donor_admits_compatible_paths_but_missing_provenance_does_not():
     a, b = model('a', [[0, 60, 0]]), model('b', [[6, 60, 0]])
     paths.resolve_coding_paths([a, b], nearest=['Relative'])
-    assert a['status'] == b['status'] == 'unresolved'
-    assert a['problems'] == b['problems'] == ['ambiguous_coding_path_representative']
+    assert a['status'] == 'accepted' and b['status'] == 'accepted_alternative_path'
+    assert a['path_selection']['representative_status'] == 'ambiguous'
+    assert a['locus_support']['independent_donor_species'] == ['Relative']
     a, b = model('a', [[0, 60, 0]], donors=(), identity=1), model('b', [[6, 60, 0]], donors=(), identity=.8)
     paths.resolve_coding_paths([a, b])
     assert a['status'] == b['status'] == 'unresolved'
@@ -135,7 +136,7 @@ def test_independent_locus_support_admits_compatible_paths_without_inflating_pat
     assert short['parent_model_id'] == 'long'
     assert long['alternative_coding_paths'][0]['model_id'] == 'short'
     assert long['locus_support'] == {'counting_unit': 'independent_donor_species',
-        'independent_donor_species': ['Phylogenetic', 'Relative'], 'minimum_species_for_fallback': 2,
+        'independent_donor_species': ['Phylogenetic', 'Relative'], 'minimum_species_for_fallback': 1,
         'orthology': 'unassigned', 'expected_copy': 'unassigned'}
     selection = long['path_selection']
     assert selection['reason'] == 'compatible_locus_canonical_fallback'
@@ -159,16 +160,50 @@ def test_canonical_equal_length_tie_is_coordinate_deterministic(reverse):
     assert a['path_selection']['representative_status'] == 'ambiguous'
 
 
-def test_native_predictor_cannot_enable_an_ambiguous_longest_path_fallback():
+@pytest.mark.parametrize('engine', ['annevo', 'oriongeno'])
+def test_native_support_preserves_valid_paths_with_ambiguous_representative(engine):
     a = model('a', [[0, 90, 0]], ('Relative', 'Phylogenetic'), identity=.74)
     b = model('b', [[6, 90, 0]], ('Relative', 'Phylogenetic'), identity=.76)
-    b['support'][0]['annevo'] = {'native_transcript_id': 'native.t'}
+    b['support'][0][engine] = {'native_transcript_id': 'native.t'}
     paths.resolve_coding_paths([a, b])
-    assert all(row['status'] == 'unresolved' for row in (a, b))
-    assert all('ambiguous_annevo_coding_path_representative' in row['problems'] for row in (a, b))
+    assert a['status'] == 'accepted' and b['status'] == 'accepted_alternative_path'
+    assert a['path_selection']['representative_status'] == 'ambiguous'
+    assert a['alternative_coding_paths'][0]['support'] == b['support']
 
 
-def test_duplicate_queries_and_self_do_not_supply_independent_fallback_species():
+@pytest.mark.parametrize('reverse', [False, True])
+def test_native_duplicate_of_previous_long_path_cannot_remove_it_or_its_short_isoform(reverse):
+    # Ancistrocladus Tripe_34502 regression: the new engine supports an
+    # existing geometry, while donor identity does not choose a unique path.
+    long = model('long', [[0, 30, 0], [90, 153, 0]], ('Relative',), identity=.82)
+    short = model('short', [[93, 153, 0]], ('Phylogenetic',), identity=.826)
+    native = copy.deepcopy(long['support'][0])
+    native['annevo'] = {'native_transcript_id': 'native.long'}
+    long['support'].append(native)
+    original = copy.deepcopy([long, short])
+    paths.resolve_coding_paths([short, long] if reverse else [long, short])
+    assert long['status'] == 'accepted' and short['status'] == 'accepted_alternative_path'
+    for row, before in zip([long, short], original, strict=True):
+        for key in ['cds', 'sequence', 'support', 'evidence']:
+            assert row[key] == before[key]
+
+
+@pytest.mark.parametrize('bridge', [False, True])
+def test_conflicting_native_addition_cannot_drop_or_fuse_transferred_cds(bridge):
+    left = model('left', [[0, 60, 0]])
+    native = model('native', [[30, 150, 0]] if bridge else [[1, 61, 0]])
+    native['support'][0]['annevo'] = {'native_transcript_id': 'new.t'}
+    native['evidence']['annevo'] = native['support'][0]['annevo']
+    rows = [left, native]
+    if bridge:
+        rows.append(model('right', [[120, 180, 0]]))
+    paths.resolve_coding_paths(rows)
+    assert native['status'] == 'unresolved' and native['problems'] == ['competing_new_models']
+    assert all(row['status'] == 'accepted' and row['problems'] == [] for row in rows if row is not native)
+    assert all('alternative_coding_paths' not in row for row in rows)
+
+
+def test_duplicate_queries_do_not_inflate_species_and_self_cannot_supply_external_support():
     a = model('a', [[0, 60, 0]], ('Relative',))
     b = model('b', [[6, 60, 0]], ('Relative',))
     b['support'].extend([{'donor': 'Relative', 'query': 'isoform2',
@@ -178,9 +213,16 @@ def test_duplicate_queries_and_self_do_not_supply_independent_fallback_species()
                         {'donor': 'Invalid', 'query': 'isoform',
                          'alignment': {'coverage': True, 'identity': 1., 'problems': []}}])
     paths.resolve_coding_paths([a, b])
-    assert all(row['status'] == 'unresolved' for row in (a, b))
+    assert a['status'] == 'accepted' and b['status'] == 'accepted_alternative_path'
+    assert a['locus_support']['independent_donor_species'] == ['Relative']
     a = model('a', [[0, 60, 0]], ('Self',))
     b = model('b', [[6, 60, 0]], ('Relative',))
+    for row in (a, b):
+        row['evidence']['target'] = 'Self'
+    paths.resolve_coding_paths([a, b])
+    assert a['status'] == 'accepted' and b['status'] == 'accepted_alternative_path'
+    a = model('a', [[0, 60, 0]], ('Self',))
+    b = model('b', [[6, 60, 0]], ('Self',))
     for row in (a, b):
         row['evidence']['target'] = 'Self'
     paths.resolve_coding_paths([a, b])
@@ -194,7 +236,7 @@ def test_canonical_fallback_never_promotes_failed_path_or_masks_its_gate(problem
     b = model('b', [[6, 60, 0]], ('Phylogenetic',))
     b['problems'].append(problem)
     paths.resolve_coding_paths([a, b])
-    assert all(row['status'] == 'unresolved' for row in (a, b))
+    assert a['status'] == 'accepted' and b['status'] == 'unresolved'
     assert problem in b['problems']
     assert all('alternative_coding_paths' not in row for row in (a, b))
 

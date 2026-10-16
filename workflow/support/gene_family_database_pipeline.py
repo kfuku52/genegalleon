@@ -11,9 +11,49 @@ from pathlib import Path
 import artifact_provenance as provenance
 import generate_orthogroup_database as database
 from artifact_audit_runtime import AuditProgress, source_identity
-from gene_family_output_store import GeneFamilyOutputStore
+from artifact_audit_runtime import signature as source_signature
+from gene_family_output_store import GeneFamilyOutputStore, orthogroup_id_from_name, orthogroup_ids_from_genecount
 from shared_namespace_lock import namespace_lock
 from workflow_observation import observe_files, record_contract_result, report_error
+
+
+class CatalogStore(GeneFamilyOutputStore):
+    """A read-only enumeration scope; old raw and ZIP material stays intact."""
+    def __init__(self, root, families):
+        super().__init__(root)
+        self.families = frozenset(families)
+
+    def _file_names_unlocked(self, subdir, *, family_ids=None, family_from_name=None):
+        selected = self.families if family_ids is None else self.families.intersection(family_ids)
+        return super()._file_names_unlocked(subdir, family_ids=selected,
+                                            family_from_name=orthogroup_id_from_name)
+
+
+def catalog_store(root, record, mode):
+    inputs = dict(provenance.parse_path_pairs(record.input, '--input'))
+    parameters = dict(provenance.parse_path_pairs(record.parameter, '--parameter'))
+    scope = parameters.get('family_scope')
+    if scope is None:
+        return GeneFamilyOutputStore(root), None
+    if scope != 'selected_orthogroups_v1' or mode != 'orthogroup' or record.family_id != 'orthogroup':
+        raise ValueError('Invalid selected orthogroup database scope')
+    catalog = inputs.get('family_catalog')
+    if catalog is None:
+        raise ValueError('Selected orthogroup database requires its bound family catalog')
+    path = Path(catalog)
+    def identity():
+        before = source_signature(path)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if source_signature(path) != before:
+            raise ValueError('Family catalog changed while reading')
+        return before, digest
+    before = identity()
+    families = orthogroup_ids_from_genecount(path)
+    if not families or any(orthogroup_id_from_name(family) != family for family in families):
+        raise ValueError('Family catalog must contain nonempty, exact orthogroup identities')
+    if identity() != before:
+        raise ValueError('Family catalog changed before selection')
+    return CatalogStore(root, families), ((str(path.absolute()), 'family_catalog'), before, identity)
 
 
 def run(audit_argv, database_argv, record_argv):
@@ -32,7 +72,6 @@ def run(audit_argv, database_argv, record_argv):
             or audit.workspace_root.resolve() != record.workspace_root.resolve()):
         raise ValueError('Audit, database and record must describe the same workspace, store and sole database output')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    store = GeneFamilyOutputStore(root)
     rows = []
     inventory = hashlib.sha256()
     build = None
@@ -43,8 +82,19 @@ def run(audit_argv, database_argv, record_argv):
                           interval=audit.progress_interval, attempt_dir=os.environ.get('GG_OBSERVATION_ATTEMPT_DIR'),
                           workers=audit.workers, source_sha256=source_identity(provenance.SCRIPT_DIR)) as progress:
         try:
-            with store.read_snapshot(), observe_files(), provenance.digest_observation(workers=audit.workers, progress=progress) as memo:
+            store, catalog_guard = catalog_store(root, record, audit.mode)
+            with store.read_snapshot(), observe_files(), provenance.digest_observation(
+                    workers=audit.workers, progress=progress, spill_guards=True) as memo:
+                if catalog_guard is not None:
+                    memo.guard(*catalog_guard)
                 provenance._collect_audit_rows(audit, memo, progress, audit.workers, store, rows, inventory, revalidate=False)
+                if isinstance(store, CatalogStore):
+                    if any(row['family_id'] not in store.families and row['family_id'] != '-' for row in rows):
+                        raise ValueError('Manifest family differs from the selected catalog')
+                    for subdir in ('stat_tree', 'stat_branch'):
+                        actual = {orthogroup_id_from_name(name) for name in store.file_names(subdir)}
+                        if actual != store.families:
+                            raise ValueError('Selected family statistics are incomplete: ' + subdir)
                 # Structural or stale-policy failures are evaluated before any DB build.
                 if provenance.audit_failures(audit, rows):
                     raise ValueError('Gene-family artifact provenance audit failed')

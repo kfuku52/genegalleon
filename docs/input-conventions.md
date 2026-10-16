@@ -139,6 +139,9 @@ exact input hashes; ordinary input-generation reference checks remain unchanged.
 Direct/local CDS downloads retain model identity from structured CoGe headers;
 the transport provider does not replace the CoGe model ID with the species name.
 Malformed structured CDS identities and identifier sanitization collisions fail.
+JGI GeneCatalog names also retain their portal and numeric protein identity when
+CDS inputs arrive through direct/local transport or carry a previous species
+prefix. Grouping uses that complete JGI namespace; conflicting matches still fail.
 For supplied CDS, an explicit RNA-to-gene Parent remains usable when its GFF
 omits CDS blocks; this does not invent missing genomic coding coordinates.
 
@@ -511,6 +514,13 @@ same detected or declared factor levels and reference coding.
   - by default, GeneGalleon appends `amalgkit_sra_strategy_query` to keep transcriptome-oriented SRA strategies (`RNA-seq`, `EST`, `CLONE`); set that variable empty or broaden it if you intentionally need other strategies
 - `mode_transcriptome_assembly="fastq"`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
+  - accepts regular files and readable absolute or relative symlinks to regular
+    FASTQ files at that directory's first level; hidden files and nested files
+    are excluded. Broken, unreadable or non-file FASTQ links stop discovery.
+    External link targets must also be visible inside the execution container.
+    Launchers can source the core with `GG_CORE_SOURCE_ONLY=1` and call
+    `discover_native_fastq_files INPUT_DIRECTORY` inside that same container to
+    qualify the exact discovery path without starting analysis.
 - `mode_transcriptome_assembly="metadata"`
   - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
   - for a reviewed cohort within the same workspace, set
@@ -528,6 +538,13 @@ For `mode_transcriptome_assembly="sraid"` and `mode_transcriptome_assembly="fast
 - `workspace/output/transcriptome_assembly/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
 
 This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_transcriptome_assembly="metadata"` inputs.
+
+Quant reference aliases preserve the capitalization of metadata `scientific_name`
+and follow AMALGKIT's filename-token rules, including an explicit `species_token`
+when supplied. Metadata names do not need to be lowercased. Species-key and
+TaxID validation still checks that every reference alias belongs to the selected
+species. `quant/reference_aliases.tsv` records the actual staged prefix; merge
+uses a temporary metadata table that groups validated aliases under that species.
 
 ### Automated provider formatting helper
 
@@ -756,6 +773,14 @@ python workflow/support/format_species_inputs.py \
 ```
 
 Manifest required columns:
+
+For 1KP, use `provider=onekp`, the original four-letter sample code as `id`,
+and an explicit curated `species_key` when a published name has changed. The
+resolver uses the official CNGB sample index and downloads the published
+`CODE-translated-nucleotides.fa.gz` CDS. It records the reported species and
+sample code in the resolved manifest, rejects flagged or unknown sample identities,
+and never treats SOAP transcript assemblies or translated proteins as CDS.
+Explicit local/public `cds_url` values remain supported for already verified CDS.
 
 - `provider` (required; first column in XLSX templates)
 - `id` (required; second column in XLSX templates)

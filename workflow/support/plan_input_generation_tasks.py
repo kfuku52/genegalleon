@@ -11,6 +11,7 @@ from format_species_provider_config import DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS
 from format_species_taxonomy import invalid_species_key_error, normalize_species_key_for_runtime
 from input_generation_array_state import atomic_json, digest_paths, safe_component
 from input_generation_staging_reuse import StagedProofReader
+from transcriptome_orfs import apply_input_type
 
 
 def build_arg_parser():
@@ -148,6 +149,7 @@ def main():
                               "gene_grouping_mode": args.gene_grouping_mode,
                               "gff_repair_mode": args.gff_repair_mode, "format_strict": bool(args.strict),
                               "genetic_code": args.genetic_code}
+            apply_input_type(task, row)
             reuse = reuse_reader.resolve(task)
             if reuse is not None:
                 if not args.stage_downloads:

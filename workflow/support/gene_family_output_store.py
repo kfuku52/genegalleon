@@ -2032,14 +2032,14 @@ class GeneFamilyOutputStore:
         live_names: Set[str] = set()
         live_dir = self.root / subdir
         if live_dir.is_dir():
-            live_names.update(
-                entry.name
-                for entry in live_dir.iterdir()
-                if not entry.name.startswith(".")
-                and selected_name(entry.name)
-                and entry.is_file()
-                and not entry.is_symlink()
-            )
+            with os.scandir(live_dir) as entries:
+                live_names.update(
+                    entry.name
+                    for entry in entries
+                    if not entry.name.startswith(".")
+                    and selected_name(entry.name)
+                    and entry.is_file(follow_symlinks=False)
+                )
         if self.family_filter is None:
             archived_values = self._load_subdir_artifacts(subdir).values()
         else:

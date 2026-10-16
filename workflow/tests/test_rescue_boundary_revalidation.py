@@ -5,7 +5,7 @@ import pytest
 from Bio.Seq import Seq
 
 from workflow.support import rescue_boundary_revalidation as boundaries
-from workflow.support.rescue_boundary_revalidation import revalidate_boundaries
+from workflow.support.rescue_boundary_revalidation import revalidate_boundaries, validated_boundary_candidates
 from workflow.support.rescue_gene_models import validate_model
 from workflow.support.rescue_terminal_completion import complete_terminals
 
@@ -130,6 +130,43 @@ def test_distinct_complete_start_paths_remain_ambiguous():
     assert result["boundary_revalidation"]["reasons"] == ["alternative_genomic_boundary_paths_within_score_margin"]
     assert result["boundary_revalidation"]["supports_intact_homolog"] is True
     assert len(result["boundary_revalidation"]["intact_donor_supported_paths"]) > 1
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_complete_boundary_alternatives_enter_final_selection_without_rewriting_source(strand):
+    from workflow.support.rescue_gene_models import consolidate
+    donor = 'M' + 'A' * 90
+    core = 'GCT' * 90 + 'TAA'
+    model, genome = checked('TAAATGATGATG' + core, [[12, 12 + len(core), 0]], donor, strand, begin=1)
+    source = recheck(model, genome, donor)
+    original = copy.deepcopy(source)
+    source['query'] = 'region'
+    candidates = validated_boundary_candidates(source, genome, 1, PARAMS, donor, validate_model)
+    assert len(candidates) > 1 and all(not row['problems'] for row in candidates)
+    consolidate(candidates, [], 'Target')
+    primary, = [row for row in candidates if row['status'] == 'accepted']
+    assert primary['path_selection']['representative_status'] == 'ambiguous'
+    assert len(primary['alternative_coding_paths']) == len(candidates) - 1
+    assert source == {**original, 'query': 'region'}
+    assert all(row['boundary_candidate']['representative_status'] == 'ambiguous' for row in candidates)
+
+
+@pytest.mark.parametrize('failure', ['budget', 'changed_source', 'disruption', 'missing_donor'])
+def test_boundary_presence_flag_alone_cannot_admit_candidates(failure):
+    donor = 'M' + 'A' * 90
+    core = 'GCT' * 90 + 'TAA'
+    model, genome = checked('TAAATGATGATG' + core, [[12, 12 + len(core), 0]], donor, begin=1)
+    source = recheck(model, genome, donor)
+    assert source['boundary_revalidation']['supports_intact_homolog']
+    if failure == 'budget':
+        source['boundary_revalidation']['reasons'] = ['unresolved_donor_alignment_budget']
+    elif failure == 'changed_source':
+        genome.dna = genome.dna.replace('GCT', 'GAT')
+    elif failure == 'disruption':
+        source['problems'].append('frameshift')
+    elif failure == 'missing_donor':
+        donor = ''
+    assert validated_boundary_candidates(source, genome, 1, PARAMS, donor, validate_model) == []
 
 
 def test_unexamined_optimal_alignments_cannot_select_a_path():

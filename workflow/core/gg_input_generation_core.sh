@@ -1146,6 +1146,7 @@ run_format_stage_single() {
 run_validate_stage() {
   local task="Validate formatted species inputs"
   local mapping_stats_file=""
+  local longest_cds_stats_file=""
   local cmd=()
   local cds_files=()
   local gff_files=()
@@ -1194,7 +1195,7 @@ run_validate_stage() {
 
   if [[ ${#gff_files[@]} -eq 0 ]]; then
     echo "No species GFF files were detected in: ${species_gff_dir}"
-    if [[ ${strict} -eq 1 ]]; then
+    if [[ ${require_gff} -eq 1 ]]; then
       stage_validate_status="failed"
       exit 1
     fi
@@ -1202,7 +1203,7 @@ run_validate_stage() {
 
   if [[ ${#genome_files[@]} -eq 0 ]]; then
     echo "No species genome files were detected in: ${species_genome_dir}"
-    if [[ ${strict} -eq 1 ]]; then
+    if [[ ${require_genome} -eq 1 ]]; then
       stage_validate_status="failed"
       exit 1
     fi
@@ -1280,6 +1281,20 @@ run_validate_stage() {
       fi
       rm -f -- "${mapping_stats_file}"
       # Retain source-ownership coverage alongside the selection result.
+    fi
+  elif [[ ${#cds_files[@]} -gt 0 ]]; then
+    # CDS-only inputs retain full source-selection validation. Presence of
+    # genomic roles is controlled by require_gff/require_genome above.
+    longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
+    cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+    cmd+=(--species-cds-dir "${species_cds_dir}" --species-summary "${species_summary_output}")
+    cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --stats-output "${longest_cds_stats_file}")
+    cmd+=("${validation_reuse_args[@]}")
+    echo "Running: ${cmd[*]}"
+    if ! "${cmd[@]}"; then
+      stage_validate_status="failed"
+      echo "Failed: Validate longest CDS representative selection"
+      exit 1
     fi
   fi
   stage_validate_status="ok"
@@ -2195,6 +2210,7 @@ run_array_worker_mode() {
   local cds_output_path=""
   local gff_output_path=""
   local genome_output_path=""
+  local orf_audit_output_path=""
   local format_provenance_manifest=""
   local -a format_provenance_args=()
 
@@ -2246,7 +2262,7 @@ run_array_worker_mode() {
   fi
   read_stats_json_fields "${task_meta_file}" species_prefix cds_input_path=cds_path \
     gff_input_path=gff_path gbff_input_path=gbff_path genome_input_path=genome_path \
-    cds_output_path gff_output_path genome_output_path || exit $?
+    cds_output_path gff_output_path genome_output_path orf_audit_output_path || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" || ( ${require_gff} -eq 1 && -z "${gff_output_path}" ) ]]; then
     stage_format_status="failed"
     echo "Array task description is missing required species or output paths: ${task_meta_file}"
@@ -2278,6 +2294,7 @@ run_array_worker_mode() {
     gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
     gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
     format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
+    [[ -z "${orf_audit_output_path}" ]] || format_provenance_args+=(--output "orf_audit=${orf_audit_output_path}")
     if [[ -n "${gff_output_path}" ]]; then
       if [[ ${require_gff} -eq 1 || -n "${gff_input_path}" ]]; then
         format_provenance_args+=(--output "formatted_gff=${gff_output_path}")
@@ -2368,6 +2385,10 @@ run_array_worker_mode() {
     --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
     --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
     --file "${cds_output_path}")
+  if [[ -n "${orf_audit_output_path}" ]]; then
+    [[ -s "${orf_audit_output_path}" ]] || { echo "Transcript ORF audit is missing" >&2; exit 1; }
+    receipt_cmd+=(--file "${orf_audit_output_path}")
+  fi
   [[ -z "${gff_output_path}" || ! -s "${gff_output_path}" ]] || receipt_cmd+=(--file "${gff_output_path}")
   if [[ ${stage_validate_status} == "ok" ]]; then
     [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.longest.json" ]] || {
