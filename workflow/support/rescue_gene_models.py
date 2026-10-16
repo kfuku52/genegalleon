@@ -1677,7 +1677,9 @@ def revalidate_retained_coding_paths(retained_paths, current, genome, code, para
             assessment = {'donor': donor, 'query': query}
             entry['donor_assessments'].append(assessment)
             donor_protein = proteins.get(donor, {}).get(query, '').upper().removesuffix('*')
-            if not donor_protein or set(donor_protein) - set('ACDEFGHIKLMNPQRSTVWY'):
+            # Aligned X in a current donor counts as a mismatch to the unambiguous
+            # target protein. It cannot supply identity or relax target DNA QC.
+            if not donor_protein or set(donor_protein) - set('ACDEFGHIKLMNPQRSTVWYX'):
                 assessment['reasons'] = ['current_donor_unavailable_or_ambiguous']
                 continue
             if len(protein) * len(donor_protein) > params.get('terminal_max_alignment_cells', 25_000_000):

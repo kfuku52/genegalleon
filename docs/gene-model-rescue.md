@@ -336,7 +336,9 @@ from the current genome and aligned anew to its still-available current donors.
 It must pass the same structural and coverage/identity policy. One optimal
 traceback can establish homology for these fixed coordinates; this does not
 infer new coding boundaries or reuse historical alignment metrics. These derived
-candidates are regenerated, rather than replayed as pristine predictor output.
+candidates may align to a donor containing X. Aligned X supplies no identity,
+and the target CDS must remain unambiguous. These candidates are regenerated,
+rather than replayed as pristine predictor output.
 Other paths remain review proposals when they conflict. Recent annotation
 anchors take priority over older conflicting paths. Older bridges cannot join
 independent annotations; conflicting paths from the same historical generation

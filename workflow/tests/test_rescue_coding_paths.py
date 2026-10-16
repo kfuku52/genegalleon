@@ -435,6 +435,23 @@ def test_fixed_previous_path_homology_does_not_require_unique_boundary_traceback
     assert candidates[0]['cds'] == original['cds'] and candidates[0]['coverage'] == 1
 
 
+@pytest.mark.parametrize('unknowns,accepted', [(1, True), (30, False)])
+def test_fixed_history_donor_unknowns_supply_no_identity_or_target_sequence(unknowns, accepted):
+    from workflow.tests.test_rescue_boundary_revalidation import PARAMS, checked
+    dna = 'ATG' + 'GCT' * 30 + 'TAA'
+    donor = 'M' + 'A' * (30 - unknowns) + 'X' * unknowns
+    original, genome = checked(dna, [[0, len(dna), 0]], donor)
+    original['model_id'] = 'previous'
+    retained = retained_path(original)
+    retained[paths.coding_shape(original)]['donor_queries'] = [['Relative', 'gene']]
+    candidates, _ = rescue.revalidate_retained_coding_paths(
+        retained, [], genome, 1, PARAMS, {'Relative': {'gene': donor}}, 'Target')
+    assert bool(candidates) is accepted
+    if accepted:
+        assert candidates[0]['sequence'] == dna
+        assert candidates[0]['identity'] == pytest.approx(30 / 31)
+
+
 def retained_history_publication(root, records, parent=None, *, genome='same genome', legacy=False):
     from workflow.support import rescue_model_store as store
     from workflow.tests.test_rescue_model_store import receipt
