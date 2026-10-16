@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -134,6 +136,53 @@ def prepare(manifest, row):
                 root=str(root), assembly_complete=assembly)
 
 
+def recover_prepared_cache(manifest, row):
+    """Verify native completed reads without restarting download or the workflow.
+
+    This is artifact readiness, not a claim that the original allocation exited
+    successfully. The CLI retains both source and verification allocation IDs.
+    """
+    if manifest['input_mode'] != INPUT_MODE:
+        raise ValueError('Only a metadata read-preparation cache can be recovered')
+    proof = verify_native(manifest, row)
+    workspace, species = Path(manifest['workspace_root']), row['species']
+    raw = physical(workspace / 'output/transcriptome_assembly/artifact_provenance' /
+                   (species + '.getfastq.json')).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != proof['getfastq_provenance_sha256']:
+        raise ValueError('Audited read preparation provenance changed')
+    provenance = json.loads(raw)
+    cache = physical(Path(manifest['fastq_source_root']) / species, directory=True)
+    path = physical(cache / '.getfastq_cache_contract.json')
+    raw = path.read_bytes()
+    contract_sha = hashlib.sha256(raw).hexdigest()
+    contract = json.loads(raw)
+    keys = ('rrna_filter', 'rrna_filter_jobs', 'rrna_filter_chunk_spots', 'rrna_filter_memory_limit',
+            'contam_filter', 'contam_filter_rank', 'read_name', 'remove_sra', 'remove_tmp',
+            'dump_print', 'aws', 'ncbi', 'ena', 'redo')
+    parameters = provenance.get('parameters', {})
+    if (contract.get('schema_version') != 1 or contract.get('species') != species
+            or contract.get('metadata_sha256') != row['files'][0]['sha256']
+            or contract.get('metadata_size_bytes') != row['files'][0]['size']
+            or contract.get('completion_manifest') != 'getfastq_completion.json'
+            or not set(keys) <= set(parameters)
+            or contract.get('parameters') != {key: parameters[key] for key in keys}):
+        raise ValueError('Prepared cache differs from its audited native parameter/metadata contract')
+    expected = dict(completion_sha256=proof['completion_manifest_sha256'], contract_sha256=contract_sha,
+                    content_stat_fingerprint=json.loads(contract['content_stat_fingerprint']))
+    source = row['files'][0]
+    value = dict(path=source['path'], sha256=source['sha256'], runs=row['runs'], cache=str(cache), expected=expected)
+    command = container_command(manifest) + ['python', '-B', '/script/support/transcriptome_read_preparation.py',
+                                           '--inspect-cache-json', json.dumps(value)]
+    checked = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120)
+    if (json.loads(checked.stdout) != {**inspect_metadata(source['path'], source['sha256'], row['runs']),
+                                     'prepared_cache': expected}
+            or verify_native(manifest, row) != proof or file_sha(path) != expected['contract_sha256']):
+        raise ValueError('Native completed reads changed during recovery verification')
+    return dict(status='read-preparation-completed', species=species, runs=row['runs'],
+                metadata_sha256=source['sha256'], completion_manifest=str(cache / 'getfastq_completion.json'),
+                **proof, root=manifest['root'], assembly_complete=False)
+
+
 def native_proofs(workspace, cache, species, mode, *, audit_proofs):
     directory = workspace / 'output/transcriptome_assembly/artifact_provenance'
     proof = physical(directory / (species + '.getfastq.json'))
@@ -173,6 +222,7 @@ def main():
     parser.add_argument('--manifest-sha256')
     parser.add_argument('--task-id', type=int)
     parser.add_argument('--preflight-only', action='store_true')
+    parser.add_argument('--recover-source-job-id')
     parser.add_argument('--inspect-json')
     parser.add_argument('--inspect-cache-json')
     parser.add_argument('--verify-json')
@@ -199,6 +249,9 @@ def main():
     manifest = json.loads(path.read_text())
     if manifest['root'] != str(root) or manifest['input_mode'] not in (INPUT_MODE, ASSEMBLY_MODE) or manifest['busco_lineage'] != 'embryophyta_odb12':
         parser.error('Read preparation package identity changed')
+    if args.recover_source_job_id and (not re.fullmatch(r'[1-9][0-9]*', args.recover_source_job_id)
+                                      or manifest['input_mode'] != INPUT_MODE):
+        parser.error('Recovery requires the original metadata read-preparation allocation')
     if manifest['input_mode'] == ASSEMBLY_MODE:
         allowed = {'AMALGKIT_RRNA_FILTER', 'AMALGKIT_CONTAM_FILTER', 'AMALGKIT_RRNA_FILTER_JOBS',
                    'AMALGKIT_RRNA_FILTER_CHUNK_SPOTS', 'AMALGKIT_RRNA_FILTER_MEMORY_LIMIT', 'CONTAMINATION_REMOVAL_RANK'}
@@ -220,12 +273,28 @@ def main():
         parser.error('An exact scheduler task allocation is required')
     receipt = root / 'receipts' / (row['species'] + '.json')
     with namespace_lock(root / 'task-locks' / (row['species'] + '.lock'), exclusive=True, timeout=1):
-        if receipt.exists() or receipt.is_symlink():
+        if receipt.is_symlink() or (receipt.exists() and not args.recover_source_job_id):
             parser.error('A prior preparation attempt exists; reconcile it first')
-        result = prepare(manifest, row)
-        atomic_json(receipt, {**result, 'manifest_sha256': args.manifest_sha256,
-                             'job_id': os.environ.get('SLURM_ARRAY_JOB_ID', os.environ['SLURM_JOB_ID']),
-                             'task_id': args.task_id, 'container_input_preflight': preflight})
+        current_job = os.environ.get('SLURM_ARRAY_JOB_ID', os.environ['SLURM_JOB_ID'])
+        if args.recover_source_job_id and (not current_job.isdigit() or current_job == args.recover_source_job_id):
+            parser.error('Cache recovery requires a separate verification allocation')
+        result = recover_prepared_cache(manifest, row) if args.recover_source_job_id else prepare(manifest, row)
+        result.update(manifest_sha256=args.manifest_sha256, job_id=current_job,
+                      task_id=args.task_id, container_input_preflight=preflight)
+        recovery_fields = {'source_job_id', 'recovery_job_id', 'recovery_kind', 'recovery_helper_sha256'}
+        if args.recover_source_job_id:
+            result.update(source_job_id=args.recover_source_job_id, recovery_job_id=current_job,
+                          recovery_kind='native-read-cache-verification-v1', recovery_helper_sha256=file_sha(Path(__file__)))
+        if receipt.exists():
+            existing = json.loads(physical(receipt).read_text())
+            expected = result
+            if not recovery_fields.intersection(existing):
+                expected = {key: value for key, value in result.items() if key not in recovery_fields}
+                expected['job_id'] = args.recover_source_job_id
+            if any(existing.get(key) != value for key, value in expected.items()):
+                parser.error('Prior preparation receipt differs from the verified native cache')
+            return
+        atomic_json(receipt, result)
 
 
 if __name__ == '__main__':

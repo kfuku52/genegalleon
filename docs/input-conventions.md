@@ -560,6 +560,20 @@ the selected container and audits native completion with the same cache mounts.
 Its receipt reports read preparation; it does not certify assembly or expression
 analysis. Transfer the verified cache separately before starting assembly.
 
+If cleanup failed after getfastq completed, the same runner's
+`--recover-source-job-id ORIGINAL_ARRAY_ID` mode verifies existing reads in a
+separate Slurm allocation. Run it after the source allocation has terminated.
+It audits native provenance, selected metadata/RUNs, preprocessing parameters
+and the container's current cache index without starting acquisition or assembly.
+A new receipt records its verification `job_id` and the original `source_job_id`
+separately; an already valid original receipt is preserved. Artifact readiness
+does not change the source allocation's failed exit status.
+
+Completed scratch is moved to a private sibling while its active lock is held,
+then the lock is closed before deletion. This avoids an open lock becoming an
+undeletable `.nfs` file. A failed retirement/deletion retains the affected tree
+and propagates the error; persistent read caches remain outside that tree.
+
 Quant reference aliases preserve the capitalization of metadata `scientific_name`
 and follow AMALGKIT's filename-token rules, including an explicit `species_token`
 when supplied. Metadata names do not need to be lowercased. Species-key and

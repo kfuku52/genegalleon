@@ -1034,6 +1034,7 @@ import pathlib
 import re
 import shutil
 import sys
+import tempfile
 import time
 
 root = pathlib.Path(sys.argv[1])
@@ -1101,16 +1102,28 @@ for candidate, _, _, size, files in sorted(entries, key=lambda item: (-item[2], 
     kept_bytes += size
     kept_files += files
 
+closed = set()
 try:
     for candidate, fd, newest, _, _ in entries:
         expired = cutoff is not None and newest < cutoff
         excess = limited and candidate not in keep
         if expired or excess:
-            shutil.rmtree(candidate)
+            # Unlinking our own open lock creates a .nfs file on NFS. Move the
+            # exclusively held tree away first, then close before deleting it.
+            retired = pathlib.Path(tempfile.mkdtemp(prefix=".gg-tmp-retire-", dir=root))
+            retired.chmod(0o700)
+            candidate.rename(retired / "scratch")
+            os.close(fd)
+            closed.add(fd)
+            shutil.rmtree(retired)
             print("Removed expired transcriptome scratch: {}".format(candidate))
-        os.close(fd)
+        else:
+            os.close(fd)
+            closed.add(fd)
 finally:
     for _, fd, _, _, _ in entries:
+        if fd in closed:
+            continue
         try:
             os.close(fd)
         except OSError:
@@ -1140,6 +1153,27 @@ release_transcriptome_tmp_lock() {
     eval "exec ${transcriptome_tmp_lock_fd}>&-" 2>/dev/null || true
     transcriptome_tmp_lock_fd=""
   fi
+}
+
+retire_transcriptome_tmp() {
+  python - "${dir_tmp}" "${transcriptome_tmp_root}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+import tempfile
+
+source, root = (pathlib.Path(value) for value in sys.argv[1:])
+if (not source.is_absolute() or source.is_symlink() or not source.is_dir()
+        or source.parent != root or root.is_symlink() or not root.is_dir()
+        or not re.fullmatch(r'[0-9]+_.+', source.name)
+        or source.stat().st_uid != os.getuid()):
+    raise SystemExit('Refusing an unsafe transcriptome scratch retirement')
+retired = pathlib.Path(tempfile.mkdtemp(prefix='.gg-tmp-retire-', dir=root))
+retired.chmod(0o700)
+source.rename(retired / 'scratch')
+print(retired)
+PY
 }
 
 write_getfastq_cache_contract() {
@@ -5442,7 +5476,10 @@ fi
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
   echo "delete_tmp_dir=1: Normal completion. Deleting ${dir_tmp}"
   if [[ -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then
-    rm -rf -- "${dir_tmp}"
+    cd "${transcriptome_tmp_root}"
+    retired_transcriptome_tmp=$(retire_transcriptome_tmp) || exit 1
+    release_transcriptome_tmp_lock
+    rm -rf -- "${retired_transcriptome_tmp}"
   else
     echo "Refusing to delete unsafe tmp directory: '${dir_tmp:-}'"
   fi

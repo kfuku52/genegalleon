@@ -109,6 +109,96 @@ def test_zero_exit_without_native_completion_does_not_count_as_prepared(tmp_path
         prep.prepare(manifest, row)
 
 
+def recovered_fixture(tmp_path, monkeypatch):
+    manifest, row = fixture(tmp_path)
+    cache = Path(manifest['fastq_source_root']) / row['species']
+    cache.mkdir(parents=True)
+    (cache / 'getfastq_completion.json').write_text('completed native manifest')
+    parameters = dict(rrna_filter='no', rrna_filter_jobs='1', rrna_filter_chunk_spots='5000000',
+        rrna_filter_memory_limit='32G', contam_filter='no', contam_filter_rank='domain',
+        read_name='trinity', remove_sra='yes', remove_tmp='yes', dump_print='yes',
+        aws='yes', ncbi='yes', ena='yes', redo='no')
+    provenance = Path(manifest['workspace_root']) / 'output/transcriptome_assembly/artifact_provenance/Plant_one.getfastq.json'
+    provenance.parent.mkdir(parents=True)
+    provenance.write_text(json.dumps(dict(parameters=parameters)))
+    contract = cache / '.getfastq_cache_contract.json'
+    contract.write_text(json.dumps(dict(schema_version=1, species=row['species'],
+        metadata_sha256=row['files'][0]['sha256'], metadata_size_bytes=row['files'][0]['size'],
+        completion_manifest='getfastq_completion.json', content_stat_fingerprint='[]', parameters=parameters)))
+    def verify(*args):
+        return dict(native_provenance_sha256=prep.file_sha(provenance),
+                    getfastq_provenance_sha256=prep.file_sha(provenance),
+                    completion_manifest_sha256=prep.file_sha(cache / 'getfastq_completion.json'))
+    monkeypatch.setattr(prep, 'verify_native', verify)
+    monkeypatch.setattr(prep, 'entrypoint', lambda *args: pytest.fail('recovery must not run the workflow'))
+    def run(command, **kwargs):
+        assert command[-2] == '--inspect-cache-json'
+        value = json.loads(command[-1])
+        return subprocess.CompletedProcess(command, 0, json.dumps({
+            **prep.inspect_metadata(value['path'], value['sha256'], value['runs']),
+            'prepared_cache': value['expected']}), '')
+    monkeypatch.setattr(prep.subprocess, 'run', run)
+    return manifest, row, contract
+
+
+def test_recovery_only_verifies_native_cache_and_preserves_every_existing_byte(tmp_path, monkeypatch):
+    manifest, row, _ = recovered_fixture(tmp_path, monkeypatch)
+    before = {str(path): (path.stat(), path.read_bytes()) for path in tmp_path.rglob('*') if path.is_file()}
+    result = prep.recover_prepared_cache(manifest, row)
+    assert result['status'] == 'read-preparation-completed' and result['assembly_complete'] is False
+    assert result['runs'] == row['runs']
+    assert before == {str(path): (path.stat(), path.read_bytes()) for path in tmp_path.rglob('*') if path.is_file()}
+
+
+@pytest.mark.parametrize('key,value', [('metadata_sha256', '0' * 64), ('species', 'Other_plant'),
+    ('metadata_size_bytes', 0), ('parameters', {}), ('completion_manifest', 'other.json')])
+def test_recovery_rejects_cache_parameter_or_metadata_drift(tmp_path, monkeypatch, key, value):
+    manifest, row, contract = recovered_fixture(tmp_path, monkeypatch)
+    original = json.loads(contract.read_text())
+    contract.write_text(json.dumps({**original, key: value}))
+    with pytest.raises(ValueError, match='contract'):
+        prep.recover_prepared_cache(manifest, row)
+
+
+def test_recovery_rejects_failed_native_audit_and_changed_cache_view(tmp_path, monkeypatch):
+    manifest, row, _ = recovered_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(prep.subprocess, 'run', lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '{}', ''))
+    with pytest.raises(ValueError, match='changed'):
+        prep.recover_prepared_cache(manifest, row)
+    monkeypatch.setattr(prep, 'verify_native', lambda *args: (_ for _ in ()).throw(ValueError('native audit failed')))
+    with pytest.raises(ValueError, match='native audit'):
+        prep.recover_prepared_cache(manifest, row)
+
+
+def test_recovery_receipt_retains_source_failure_identity_and_separate_verification_job(tmp_path, monkeypatch):
+    manifest, row, _ = recovered_fixture(tmp_path, monkeypatch)
+    for name, record in manifest['managed_files'].items():
+        record['sha256'] = prep.file_sha(tmp_path / name)
+    path = tmp_path / 'manifest.json'
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setenv('SLURM_JOB_ID', '778')
+    monkeypatch.setenv('SLURM_ARRAY_JOB_ID', '777')
+    monkeypatch.setenv('SLURM_ARRAY_TASK_ID', '1')
+    monkeypatch.setattr(prep, 'container_preflight', lambda *args: dict(native_input_verified=True))
+    monkeypatch.setattr(sys, 'argv', ['native-prep', '--package-root', str(tmp_path), '--manifest-sha256',
+        prep.file_sha(path), '--task-id', '1', '--recover-source-job-id', '123'])
+    prep.main()
+    receipt = tmp_path / 'receipts/Plant_one.json'
+    value = json.loads(receipt.read_text())
+    assert value['job_id'] == value['recovery_job_id'] == '777' and value['source_job_id'] == '123'
+    assert value['recovery_kind'] == 'native-read-cache-verification-v1'
+    before = receipt.stat(), receipt.read_bytes()
+    prep.main()
+    assert before == (receipt.stat(), receipt.read_bytes())
+    original = {key: item for key, item in value.items()
+                if key not in {'source_job_id', 'recovery_job_id', 'recovery_kind', 'recovery_helper_sha256'}}
+    original['job_id'] = '123'
+    receipt.write_text(json.dumps(original))
+    before = receipt.stat(), receipt.read_bytes()
+    prep.main()
+    assert before == (receipt.stat(), receipt.read_bytes())
+
+
 def test_dispatch_preserves_owning_transcriptome_release_through_real_bootstrap(tmp_path, monkeypatch):
     manifest, _ = fixture(tmp_path)
     native, env = prep.native_environment(manifest, generate=True)
