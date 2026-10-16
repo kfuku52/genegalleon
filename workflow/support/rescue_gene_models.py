@@ -1594,8 +1594,13 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
                 raise ValueError('Previous annotations disagree on genomic CDS sequence')
             result.setdefault(shape, {'sequence_sha256': sequence_sha256, 'source_directory': str(directory),
                                      'producer_receipt_sha256': expected_receipt_sha256, 'model_ids': [],
-                                     'history_depth': len(_ancestors), 'donor_queries': []})
+                                     'history_depth': len(_ancestors), 'donor_queries': [],
+                                     'locus_model_ids': [], 'primary_model_ids': []})
             result[shape]['model_ids'].append(path['model_id'])
+            if model['model_id'] not in result[shape]['locus_model_ids']:
+                result[shape]['locus_model_ids'].append(model['model_id'])
+            if path is model and model['model_id'] not in result[shape]['primary_model_ids']:
+                result[shape]['primary_model_ids'].append(model['model_id'])
             for evidence in path.get('support') or [path.get('evidence', {})]:
                 pair = [evidence.get('donor'), evidence.get('query')]
                 if all(isinstance(value, str) and value for value in pair) and pair not in result[shape]['donor_queries']:

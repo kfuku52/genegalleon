@@ -349,7 +349,14 @@ rather than replayed as pristine predictor output.
 Other paths remain review proposals when they conflict. Recent annotation
 anchors take priority over older conflicting paths. Older bridges cannot join
 independent annotations; conflicting paths from the same historical generation
-remain explicit review records without an arbitrary winner. Retention does not assign
+remain explicit review records without an arbitrary winner. Verified prior
+publications also retain each path's primary/alternative locus membership. When
+the current primary and every alternative pass fresh QC and each alternative
+agrees with that primary, the existing locus remains intact. Two short paths
+need not overlap each other merely because both agree with a longer primary.
+Separate prior loci remain separate; overlapping primary conflicts, missing
+primary witnesses and ambiguous membership still use the strict conflict review.
+Retention does not assign
 orthology or an expected copy, and original-annotation ownership still applies.
 New alternatives supported only by the target species cannot revoke a retained
 CDS. In a tied component without an external donor, only the currently validated
