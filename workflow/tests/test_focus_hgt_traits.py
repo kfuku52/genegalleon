@@ -674,7 +674,11 @@ def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, m
     jobs = [dict(id=family, output=str(tmp_path / f'{family}.pdf')) for family in ('OG1', 'OG2')]
 
     def run(command, **kwargs):
+        if command[:3] == ['R', 'CMD', 'INSTALL']:
+            assert Path(command[-1]).name == 'treevis'
+            return SimpleNamespace(returncode=0, stdout='complete owning package installed')
         assert Path(command[1]).name == 'tree_plot_batch.r'
+        assert Path(kwargs['env']['R_LIBS'].split(':')[0]).is_dir()
         rows = [dict(job, exit_code=0) for job in jobs]
         if problem == 'reordered':
             rows.reverse()
@@ -690,6 +694,27 @@ def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, m
     monkeypatch.setattr(exporter.subprocess, 'run', run)
     with pytest.raises(RuntimeError, match='Native focused gene-tree'):
         exporter.render_native_batch(jobs, tmp_path)
+
+
+def test_native_batch_never_falls_back_after_package_installation_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import focus_hgt_gene_trees as exporter
+
+    output = tmp_path / 'existing.pdf'
+    output.write_bytes(b'preserve previous output')
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=1, stdout='deliberate R package installation failure')
+
+    monkeypatch.setattr(exporter.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='package installation failed'):
+        exporter.render_native_batch([dict(id='OG1', output=str(output))], tmp_path)
+    assert len(calls) == 1 and calls[0][:3] == ['R', 'CMD', 'INSTALL']
+    assert output.read_bytes() == b'preserve previous output'
+    assert not list(tmp_path.glob('treevis-library-*'))
 
 
 @pytest.fixture
