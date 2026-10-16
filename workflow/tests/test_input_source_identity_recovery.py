@@ -134,6 +134,33 @@ def test_onekp_explicit_transcriptome_selects_assembly_for_native_orfs(monkeypat
         onekp.resolve_onekp_download_urls_from_id('YKSS', 'Osmunda_regalis', 30, {}, row={'cds_input_type': kind})
 
 
+def test_native_planner_accepts_onekp_sample_id_for_transcriptome(tmp_path):
+    import json
+    import subprocess
+    import sys
+
+    manifest = tmp_path / 'manifest.tsv'
+    manifest.write_text('provider\tid\tspecies_key\tcds_input_type\n'
+                        'onekp\tYKSS\tOsmunda_regalis\ttranscriptome\n')
+    plan = tmp_path / 'plan.json'
+    script = Path(__file__).resolve().parents[1] / 'support/plan_input_generation_tasks.py'
+    result = subprocess.run([sys.executable, str(script), '--provider', 'all',
+        '--download-manifest', str(manifest), '--download-dir', str(tmp_path / 'downloads'),
+        '--stage-downloads', '--strict', '--outfile', str(plan)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    task = json.loads(plan.read_text())['tasks'][0]
+    assert task['cds_input_type'] == 'transcriptome'
+    assert task['manifest_row']['id'] == 'YKSS'
+
+
+@pytest.mark.parametrize('provider,code', [('local', 'YKSS'), ('unknown', 'YKSS'), ('onekp', ''), ('onekp', 'YKSS-extra')])
+def test_transcript_source_still_requires_a_supported_explicit_identity(provider, code):
+    load_module()
+    from transcriptome_orfs import validate_manifest_row
+    with pytest.raises(ValueError, match='explicit sequence URL/path'):
+        validate_manifest_row(dict(provider=provider, id=code, cds_input_type='transcriptome'))
+
+
 @pytest.mark.parametrize('recompute', ['changed_kind', 'unvalidated'])
 def test_new_plan_recomputes_changed_input_kind_and_reuses_unchanged_species(tmp_path, recompute):
     import csv

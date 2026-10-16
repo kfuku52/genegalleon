@@ -803,7 +803,10 @@ sample code in the resolved manifest, rejects flagged or unknown sample identiti
 and keeps translated proteins separate from nucleotide inputs. An explicit
 `cds_input_type=transcriptome` selects `CODE-SOAPdenovo-Trans-assembly.fa.gz` and sends
 it through the native audited ORF extractor. This is useful when the published
-translated CDS set is incomplete. There is no automatic source switch after a
+translated CDS set is incomplete. The four-letter 1KP sample `id` is sufficient;
+the planner accepts it without requiring a redundant explicit `cds_url`, and
+staging verifies the sample through the official provider resolver.
+There is no automatic source switch after a
 validation failure; the input kind and source remain frozen in the manifest/plan.
 When a new plan changes a species from supplied CDS to transcriptome input,
 that species is computed afresh; verified compatible species in `resume_from`
