@@ -330,6 +330,129 @@ def test_read_retained_paths_binds_primary_and_alternative_to_exact_source_recei
         proof.check()
 
 
+def retained_history_publication(root, records, parent=None, *, genome='same genome', legacy=False):
+    from workflow.support import rescue_model_store as store
+    from workflow.tests.test_rescue_model_store import receipt
+    directory = root / 'rescued' / 'Target'
+    directory.mkdir(parents=True)
+    genome_path = root / 'genome.fa'
+    genome_path.write_text(genome)
+    request = {'sources': {'Target': {'genome': str(genome_path)}},
+               'files': {str(genome_path): rescue.digest(genome_path)}}
+    if parent is not None:
+        request['prediction_cache'] = {'root': str(parent.parent.parent),
+            'plan_sha256': rescue.digest(parent.parent.parent / 'plan.json'),
+            'species': {'Target': {'receipt_sha256': rescue.digest(parent / 'receipt.json')}}}
+    (root / 'plan.json').write_text(json.dumps({'request': request}))
+    if legacy:
+        (directory / 'models.json').write_text(json.dumps(records))
+    else:
+        store.write_model_store(directory, records)
+    receipt(directory)
+    value = json.loads((directory / 'receipt.json').read_text())
+    value['key']['plan'] = rescue.digest(root / 'plan.json')
+    (directory / 'receipt.json').write_text(json.dumps(value))
+    return directory
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_retained_history_restores_a_path_lost_before_the_immediate_cache(tmp_path, legacy):
+    long, short = validated_pair()
+    long['model_id'], short['model_id'] = 'old_long', 'old_short'
+    oldest = retained_history_publication(tmp_path / 'oldest', [long, short], legacy=legacy)
+    middle = retained_history_publication(tmp_path / 'middle', [short], oldest, legacy=legacy)
+    current = copy.deepcopy(short)
+    current['model_id'] = 'current_short'
+    latest = retained_history_publication(tmp_path / 'latest', [current], middle, legacy=legacy)
+    proof, audit = rescue.FreshDigestBatch(), []
+    retained = rescue.read_retained_coding_paths(latest, rescue.digest(latest / 'receipt.json'),
+                                               verification=proof, history_audit=audit)
+    assert set(retained) == {paths.coding_shape(long), paths.coding_shape(short)}
+    assert retained[paths.coding_shape(long)]['source_directory'] == str(oldest)
+    assert retained[paths.coding_shape(short)]['model_ids'] == ['current_short']
+    assert len(audit) == 3 and all(row['status'] == 'verified' for row in audit)
+    candidate = copy.deepcopy(long)
+    candidate['problems'] = ['outside_expected_synteny_interval']
+    rescue.consolidate([candidate], [], 'Target', retained_paths=retained)
+    assert candidate['status'] == 'accepted'
+    assert candidate['retained_coding_path']['producer_receipt_sha256'] == rescue.digest(oldest / 'receipt.json')
+    failed = copy.deepcopy(long)
+    failed['problems'] = ['low_coverage', 'outside_expected_synteny_interval']
+    rescue.consolidate([failed], [], 'Target', retained_paths=retained)
+    assert failed['status'] == 'unresolved' and 'retained_coding_path' not in failed
+    member = oldest / ('models.json' if legacy else 'model_store/accepted.sqlite')
+    member.touch()
+    with pytest.raises(OSError):
+        proof.check()
+
+
+def test_retained_history_does_not_cross_genome_changes(tmp_path):
+    long, short = validated_pair()
+    long['model_id'], short['model_id'] = 'old_long', 'current_short'
+    oldest = retained_history_publication(tmp_path / 'oldest', [long], genome='old genome')
+    latest = retained_history_publication(tmp_path / 'latest', [short], oldest, genome='new genome')
+    audit = []
+    retained = rescue.read_retained_coding_paths(latest, rescue.digest(latest / 'receipt.json'), history_audit=audit)
+    assert set(retained) == {paths.coding_shape(short)}
+    assert audit[-1]['status'] == 'incompatible_genome_history'
+
+
+@pytest.mark.parametrize('member', ['plan.json', 'accepted'])
+def test_available_retained_history_rejects_corruption_instead_of_skipping_it(tmp_path, member):
+    long, short = validated_pair()
+    long['model_id'], short['model_id'] = 'old_long', 'current_short'
+    oldest = retained_history_publication(tmp_path / 'oldest', [long])
+    latest = retained_history_publication(tmp_path / 'latest', [short], oldest)
+    path = oldest.parent.parent / 'plan.json' if member == 'plan.json' else oldest / 'model_store/accepted.sqlite'
+    path.write_bytes(path.read_bytes() + b'changed')
+    with pytest.raises(ValueError, match='changed'):
+        rescue.read_retained_coding_paths(latest, rescue.digest(latest / 'receipt.json'))
+
+
+def test_unavailable_archived_history_is_reported_without_consuming_it(tmp_path):
+    long, short = validated_pair()
+    long['model_id'], short['model_id'] = 'old_long', 'current_short'
+    oldest = retained_history_publication(tmp_path / 'oldest', [long])
+    latest = retained_history_publication(tmp_path / 'latest', [short], oldest)
+    (oldest / 'receipt.json').unlink()
+    audit = []
+    retained = rescue.read_retained_coding_paths(latest, rescue.digest(latest / 'receipt.json'), history_audit=audit)
+    assert set(retained) == {paths.coding_shape(short)}
+    assert audit[-1] == {'directory': str(oldest), 'status': 'unavailable_history'}
+
+
+def test_unbound_legacy_plan_cannot_extend_an_explicitly_verified_publication(tmp_path):
+    long, short = validated_pair()
+    long['model_id'], short['model_id'] = 'old_long', 'current_short'
+    oldest = retained_history_publication(tmp_path / 'oldest', [long])
+    latest = retained_history_publication(tmp_path / 'latest', [short], oldest)
+    path = latest / 'receipt.json'
+    value = json.loads(path.read_text())
+    value['key'].pop('plan')
+    path.write_text(json.dumps(value))
+    audit = []
+    retained = rescue.read_retained_coding_paths(latest, rescue.digest(path), history_audit=audit)
+    assert set(retained) == {paths.coding_shape(short)}
+    assert audit[-1]['status'] == 'unbound_plan_history'
+
+
+def test_cyclic_retained_history_is_rejected(tmp_path):
+    long, _ = validated_pair()
+    long['model_id'] = 'old_long'
+    directory = retained_history_publication(tmp_path / 'cycle', [long])
+    plan = directory.parent.parent / 'plan.json'
+    value = json.loads(plan.read_text())
+    value['request']['prediction_cache'] = {'root': str(directory.parent.parent), 'plan_sha256': '0' * 64,
+                                          'species': {'Target': {'receipt_sha256': '0' * 64}}}
+    plan.write_text(json.dumps(value))
+    path = directory / 'receipt.json'
+    receipt = json.loads(path.read_text())
+    receipt['key']['plan'] = rescue.digest(plan)
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='Cyclic'):
+        rescue.read_retained_coding_paths(directory, rescue.digest(path))
+
+
 def test_duplicate_queries_do_not_inflate_species_and_self_cannot_supply_external_support():
     a = model('a', [[0, 60, 0]], ('Relative',))
     b = model('b', [[6, 60, 0]], ('Relative',))

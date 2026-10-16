@@ -1315,8 +1315,10 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             cached = (verify_prediction_cache(frozen_cache["root"], root, plan, name, regions, params, frozen_cache)
                       if frozen_cache else None)
             if cached:
+                retained_history = []
                 retained_paths = read_retained_coding_paths(cached.directory, cached.frozen['receipt_sha256'],
-                                                           verification=cached.batch)
+                                                           verification=cached.batch, history_audit=retained_history)
+                atomic_json(tmp / 'retained_annotation_sources.json', retained_history)
             cached_ids = cached.candidate_ids() if cached else set()
             cached_genome_ids = cached.genome_candidate_ids() if cached else set()
             atomic_json(tmp / "candidates.json", regions)
@@ -1530,15 +1532,21 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                  lambda: require_same_key(key, rescue_key(root, plan, name)), hash_workers=cpus)
 
 
-def read_retained_coding_paths(directory, expected_receipt_sha256, *, verification=None):
+def read_retained_coding_paths(directory, expected_receipt_sha256, *, verification=None,
+                              history_audit=None, _ancestors=()):
     """Read prior annotations separately from the pristine prediction cache.
 
     The caller must first prove compatible source genomes and donor inputs.
-    This records existing annotation, not reusable QC or donor corroboration.
+    Available, genome-compatible cache ancestors are followed through their
+    frozen plan and worker-receipt identities. This records existing annotation,
+    not reusable QC or donor corroboration.
     A current candidate still has to pass every structural/homology gate and
     match the same genomic CDS and exact nucleotide sequence.
     """
     directory = Path(directory)
+    identity = directory.resolve()
+    if identity in _ancestors or len(_ancestors) >= 64:
+        raise ValueError('Cyclic or excessive previous-annotation cache history')
     if digest(directory / 'receipt.json') != expected_receipt_sha256:
         raise ValueError('Previous annotation receipt differs from verified prediction cache')
     key = frozen_model_store_key(directory, kind='accepted')
@@ -1561,6 +1569,65 @@ def read_retained_coding_paths(directory, expected_receipt_sha256, *, verificati
             result.setdefault(shape, {'sequence_sha256': sequence_sha256, 'source_directory': str(directory),
                                      'producer_receipt_sha256': expected_receipt_sha256, 'model_ids': []})
             result[shape]['model_ids'].append(path['model_id'])
+    if history_audit is not None:
+        history_audit.append({'directory': str(directory), 'receipt_sha256': expected_receipt_sha256,
+                              'status': 'verified', 'accepted_coding_paths': len(result)})
+    # A standalone publication has no discoverable workflow ancestry. Its
+    # explicitly bound accepted view remains usable through the existing API.
+    root = directory.parent.parent
+    plan_path = root / 'plan.json'
+    if directory.parent.name == 'rescued' and plan_path.is_file():
+        receipt = json.loads((directory / 'receipt.json').read_text())
+        plan_sha = receipt['key'].get('plan')
+        if plan_sha is None:
+            # Generic/legacy model-store receipts need not describe a workflow
+            # plan. Nearby unbound metadata cannot extend their trusted scope.
+            if history_audit is not None:
+                history_audit.append({'directory': str(directory), 'status': 'unbound_plan_history'})
+            batch.check()
+            return result
+        expected_plan = {str(plan_path): plan_sha}
+        if not plan_sha or batch.read(expected_plan) != expected_plan:
+            raise ValueError('Previous annotation is not bound to its producer plan')
+        plan = json.loads(plan_path.read_text())
+        cache = plan.get('request', {}).get('prediction_cache')
+        name = directory.name
+        if cache and name in cache.get('species', {}):
+            parent_root = Path(cache['root'])
+            if not parent_root.is_absolute():
+                parent_root = root / parent_root
+            parent = parent_root / 'rescued' / name
+            if parent.resolve() in (*_ancestors, identity):
+                raise ValueError('Cyclic or excessive previous-annotation cache history')
+            parent_plan_path = parent_root / 'plan.json'
+            unavailable = not parent_plan_path.is_file() or not (parent / 'receipt.json').is_file()
+            if unavailable:
+                if history_audit is not None:
+                    history_audit.append({'directory': str(parent), 'status': 'unavailable_history'})
+            else:
+                expected_parent = {str(parent_plan_path): cache['plan_sha256'],
+                                   str(parent / 'receipt.json'): cache['species'][name]['receipt_sha256']}
+                if batch.read(expected_parent) != expected_parent:
+                    raise ValueError('Previous annotation cache history changed')
+                parent_plan = json.loads(parent_plan_path.read_text())
+
+                def genome_sha(value):
+                    request = value.get('request', {})
+                    genome = request.get('sources', {}).get(name, {}).get('genome')
+                    return request.get('files', {}).get(genome)
+                genome = genome_sha(plan)
+                if genome is not None and genome == genome_sha(parent_plan):
+                    previous = read_retained_coding_paths(
+                        parent, cache['species'][name]['receipt_sha256'], verification=batch,
+                        history_audit=history_audit, _ancestors=(*_ancestors, identity))
+                    for shape, source in previous.items():
+                        if shape in result and result[shape]['sequence_sha256'] != source['sequence_sha256']:
+                            raise ValueError('Previous annotations disagree on genomic CDS sequence')
+                        # The closest producer owns the recorded model IDs.
+                        # An older copy supplies no extra donor corroboration.
+                        result.setdefault(shape, source)
+                elif history_audit is not None:
+                    history_audit.append({'directory': str(parent), 'status': 'incompatible_genome_history'})
     batch.check()
     return result
 

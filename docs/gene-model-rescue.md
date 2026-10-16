@@ -316,6 +316,12 @@ not determine the new path's status. A subsequent catalog import keeps these
 two sources of evidence separate. Existing gene IDs are retained.
 When reusing a compatible prediction cache, its previously adopted primary and
 alternative CDS are read from their separately verified annotation publication.
+Verified cache history is followed while the source-genome checksum is unchanged,
+so a CDS lost before the immediate cache can still retain its annotation position.
+Each ancestor is bound through the saved plan and worker-receipt checksums; the
+closest producer supplies model IDs when a path appears more than once. Missing
+archived history stops discovery and is recorded in `retained_annotation_sources.json`.
+Available history with a checksum failure is rejected, rather than skipped.
 They retain annotation position only after passing current genomic and homology
 checks with exactly the same CDS coordinates and nucleotide sequence. Old status
 never replaces these checks or adds donor support. A new conflicting prediction
