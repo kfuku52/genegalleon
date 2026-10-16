@@ -18,9 +18,11 @@ from pathlib import Path
 
 from annevo_runtime_download import atomic_json, file_sha
 from artifact_provenance import audit_manifest, load_manifest, resolve_reference, runtime_support_root
+from format_species_common import is_fasta_filename, is_gff_filename
 from format_species_providers.common import provider_raw_dir
 from gene_family_output_store import GeneFamilyOutputStore
 from shared_namespace_lock import namespace_lock
+from species_labeling import extract_species_label
 
 
 def physical(path, *, directory=False):
@@ -44,6 +46,8 @@ def select(manifest, task):
             raise ValueError('Invalid species label')
         if member['filename'] not in (member['species'] + '.genome.fa', member['species'] + '.genome.fa.gz'):
             raise ValueError('Genome filename must bind the frozen species and role')
+        if extract_species_label(member['filename'], strip_extension=True) != member['species']:
+            raise ValueError('Species differs from the native filename parser')
     if type(task) is not int or not 1 <= task <= len(members):
         raise ValueError('Task is outside the frozen cohort')
     return members[task - 1]
@@ -152,7 +156,9 @@ def annotate(manifest, member, workspace, phase):
         directory = resolve_reference(entry, workspace / 'output/.gg_global_artifacts', workspace)
         phase_workspace = workspace / 'busco'
         for role in ('cds', 'gff', 'genome'):
-            files = [p for p in (directory / ('species_' + role)).iterdir() if p.is_file() and not p.name.startswith('.')]
+            accepted = is_gff_filename if role == 'gff' else is_fasta_filename
+            files = [p for p in (directory / ('species_' + role)).iterdir() if p.is_file() and not p.name.startswith('.')
+                     and accepted(p.name) and extract_species_label(p.name, strip_extension=True) == species]
             if len(files) != 1:
                 raise ValueError('Expected one verified formatted file per role')
             bind(files[0], phase_workspace / 'input' / ('species_' + role) / files[0].name)
