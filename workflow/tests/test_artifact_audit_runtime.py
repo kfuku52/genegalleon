@@ -568,3 +568,137 @@ def test_progress_validation_rejects_false_counts_and_attempt(tmp_path):
         row["completed"] = True
         with pytest.raises(ValueError):
             validate_observation(row, attempt)
+
+
+def collection_fixture(root, layout='raw', families=64):
+    logical = fixture(root, families=families)
+    for subdir, suffix in [('stat_tree', '_stat.tree.tsv'), ('alignment', '.fa')]:
+        directory = logical / subdir
+        directory.mkdir()
+        for index in range(families):
+            (directory / f'OG{index:07d}{suffix}').write_text(f'family {index}: {subdir}\n')
+    if layout != 'raw':
+        catalog = root / 'families.txt'
+        catalog.write_text(''.join(f'OG{index:07d}\n' for index in range(families)))
+        subprocess.run([sys.executable, str(SUPPORT / 'gene_family_output_store.py'),
+            'convert-storage', '--root', str(logical), '--mode', 'orthogroup', '--to', 'zip',
+            '--family-id-file', str(catalog), '--progress-interval', '0'], check=True, capture_output=True)
+        if layout == 'mixed':
+            (logical / 'stat_tree').mkdir(exist_ok=True)
+            (logical / 'stat_tree/OG0000000_stat.tree.tsv').write_text('live override\n')
+    return logical
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip', 'mixed'])
+def test_parallel_whole_store_digest_retains_canonical_bytes_and_readonly_context(tmp_path, monkeypatch, layout):
+    logical = collection_fixture(tmp_path, layout)
+    with store_module.read_only_observation():
+        expected = provenance.gene_family_store_digest(logical, workers=1)
+    original = provenance._store_artifact_digest
+    seen, lock = [], threading.Lock()
+    def read(store, artifact):
+        assert provenance.observing_files()
+        assert provenance._DIGEST_OBSERVATION.get() is not None
+        assert provenance._RUNTIME_SUPPORT_ROOT.get() == SUPPORT.resolve()
+        result = original(store, artifact)
+        with lock:
+            seen.append(artifact.logical_path)
+        return result
+    monkeypatch.setattr(provenance, '_store_artifact_digest', read)
+    before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+    with store_module.read_only_observation(), provenance.runtime_support_root(SUPPORT):
+        with provenance.digest_observation(workers=4, spill_guards=True) as memo:
+            assert provenance.gene_family_store_digest(logical, workers=4) == expected
+    assert expected[2] == len(seen) == len(set(seen)) == 128
+    assert memo.metrics()['digest_revalidation_reads'] == 128
+    assert before == sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+
+
+def test_whole_store_io_workers_are_bounded_by_allocated_cpus_and_keep_order(tmp_path, monkeypatch):
+    logical = collection_fixture(tmp_path)
+    with store_module.read_only_observation():
+        expected = provenance.gene_family_store_digest(logical, workers=1)
+    original = provenance._store_member_digest
+    barrier, lock = threading.Barrier(4), threading.Lock()
+    active = peak = entered = 0
+    def read(*args):
+        nonlocal active, peak, entered
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            entered += 1
+            initial = entered <= 4
+        try:
+            if initial:
+                barrier.wait(timeout=10)
+            if args[-1].startswith('OG0000000'):
+                time.sleep(0.01)
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    monkeypatch.setenv('GG_TASK_CPUS', '16')
+    with store_module.read_only_observation():
+        assert provenance.gene_family_store_digest(logical) == expected
+    assert peak == 4 and active == 0 and entered == 128
+
+
+@pytest.mark.parametrize('marker', [INDEX_EPOCH_FILE, INDEX_UPDATE_FILE])
+def test_parallel_whole_store_digest_retains_publication_fence(tmp_path, monkeypatch, marker):
+    logical = collection_fixture(tmp_path)
+    store = GeneFamilyOutputStore(logical)
+    store.archive_root.mkdir(exist_ok=True)
+    monkeypatch.setattr(provenance, 'GeneFamilyOutputStore', lambda root: store)
+    original, lock = provenance._store_member_digest, threading.Lock()
+    changed = False
+    def read(*args):
+        nonlocal changed
+        result = original(*args)
+        with lock:
+            if not changed:
+                (store.archive_root / marker).write_text('changed')
+                changed = True
+        return result
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    with pytest.raises(ArchiveStoreError), store_module.read_only_observation():
+        provenance.gene_family_store_digest(logical, workers=4)
+    assert store._read_snapshot_epoch is None and not store._snapshot_zip_readers
+
+
+def test_parallel_whole_store_member_failure_joins_workers_before_snapshot_closes(tmp_path, monkeypatch):
+    logical = collection_fixture(tmp_path, 'zip')
+    store = GeneFamilyOutputStore(logical)
+    monkeypatch.setattr(provenance, 'GeneFamilyOutputStore', lambda root: store)
+    original, lock = provenance._store_member_digest, threading.Lock()
+    active = 0
+    def read(*args):
+        nonlocal active
+        with lock:
+            active += 1
+        try:
+            if args[-1].startswith('OG0000003'):
+                raise OSError('unreadable member')
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    with store_module.read_only_observation(), pytest.raises(OSError, match='unreadable member'):
+        provenance.gene_family_store_digest(logical, workers=4)
+    assert active == 0 and store._read_snapshot_epoch is None and not store._snapshot_zip_readers
+
+
+def test_parallel_whole_store_query_rehashes_content_before_publication(tmp_path):
+    logical = collection_fixture(tmp_path)
+    with pytest.raises(ValueError, match='changed'), store_module.read_only_observation():
+        with provenance.digest_observation(workers=4, spill_guards=True):
+            provenance.gene_family_store_digest(logical, workers=4)
+            path = logical / 'stat_tree/OG0000000_stat.tree.tsv'
+            path.write_bytes(b'x' * path.stat().st_size)
+
+
+@pytest.mark.parametrize('workers', [0, -1, True, '4', 1.5])
+def test_whole_store_digest_rejects_invalid_explicit_worker_counts(tmp_path, workers):
+    with pytest.raises(ValueError, match='positive integer'):
+        provenance.gene_family_store_digest(tmp_path, workers=workers)
