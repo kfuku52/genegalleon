@@ -244,12 +244,17 @@ commits remain temporary build metadata, never repository defaults.
 The fast lane also installs Ubuntu's `seqkit` package for the real per-species
 genetic-code translation regression; these tool-dependent assertions remain enabled.
 
-Commit CI partitions fast tests across two jobs, workflow integrations across
-three, and SIF runtime Python tests across four. These lanes use four pytest
-workers per hosted four-core job, retaining every test while using fewer runner
-minutes and repeating SIF setup four times instead of eight. Local and publication
-validation retain their existing worker defaults. R, extra runtime and 3Di jobs
-keep their independent execution and resource requirements.
+Commit CI uses one four-worker job per complete fast, workflow-integration and
+SIF Python suite, plus a separate download/traits job. This avoids repeated
+collection, dependency installation and SIF setup in many short partitions.
+Local and publication validation retain their existing worker defaults.
+R, extra runtime and real 3Di checks retain their independent execution and
+resource requirements. Fewer concurrent runners favor total Actions minutes;
+the complete SIF Python job may finish later than the former eight-way split.
+Default-branch and manual runs finish their active validation so a long runtime
+build can populate the exact cache. GitHub keeps one pending run per ref and
+replaces intermediate waiting runs with the latest. Superseded PR validation
+still cancels. This avoids repeatedly discarding cold builds before they finish.
 `--gg-shard INDEX/COUNT`
 assigns each selected pytest node ID to exactly one partition using a stable hash;
 lane selection and explicit paths still apply first. Each job reports slow test

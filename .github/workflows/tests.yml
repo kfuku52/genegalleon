@@ -17,7 +17,9 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: true
+  # Let the active default-branch build finish and warm the exact SIF cache.
+  # GitHub coalesces waiting runs; superseded PR validation can still stop.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   runtime-change-filter:
@@ -163,13 +165,9 @@ jobs:
 
   python-fast-shards:
     needs: [python-smoke, python-wheels]
-    name: python-fast (Python 3.12, ${{ matrix.shard }}/2)
+    name: python-fast (Python 3.12, complete suite)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
 
     steps:
       - name: Checkout
@@ -201,7 +199,7 @@ jobs:
 
       - name: Run fast Python tests
         env:
-          TEST_SHARD: ${{ matrix.shard }}/2
+          TEST_SHARD: 1/1
         run: |
           python -m pytest -q \
             -n 4 \
@@ -235,15 +233,9 @@ jobs:
           - name: download-and-traits
             suite: integration-download
             partition: 1/1
-          - name: workflow-integrations-1
+          - name: workflow-integrations
             suite: integration-workflow
-            partition: 1/3
-          - name: workflow-integrations-2
-            suite: integration-workflow
-            partition: 2/3
-          - name: workflow-integrations-3
-            suite: integration-workflow
-            partition: 3/3
+            partition: 1/1
 
     steps:
       - name: Checkout
@@ -405,10 +397,6 @@ jobs:
     needs: [prepare-sif]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -418,7 +406,7 @@ jobs:
         with:
           prepared-runtime-input: ${{ needs.prepare-sif.outputs.runtime-input }}
           validation-suite: runtime-python
-          shard: ${{ matrix.shard }}/4
+          shard: 1/1
           workers: "4"
 
   sif-other:
