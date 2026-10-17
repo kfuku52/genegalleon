@@ -1,5 +1,11 @@
 # Input generation with species arrays
 
+Namespace-lock coordination directories are explicitly restricted to the owner,
+including on NFS mounts whose inherited ACLs override `mkdir` permissions. This
+does not change the enclosing workspace's permissions. An interrupted owner is
+still retained: inspect the exact owner and prove all workspace users stopped
+before using the existing token-bound release API. Age never authorizes removal.
+
 The read-only `workflow/support/workflow_api.py input-inventory --request-json`
 command counts publication receipts over a fixed species cohort. Its request
 binds `cohort` and `sources` lists of absolute task-plan paths and SHA-256 values,
