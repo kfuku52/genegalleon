@@ -9,6 +9,26 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "validate_cds_gff_mapping.py"
 
 
+def test_final_qc_cannot_omit_a_declared_genome(tmp_path):
+    cds, gff, genome = (tmp_path / name for name in ("cds", "gff", "genome"))
+    for directory in (cds, gff, genome):
+        directory.mkdir()
+    cds_file, gff_file, genome_file = cds / "Test_species.fa", gff / "Test_species.gff", genome / "Test_species.fa"
+    cds_file.write_text(">Test_species_gene1\nATGAAATAA\n")
+    gff_file.write_text("chr1\ts\tCDS\t1\t9\t.\t+\t0\tParent=gene1\n")
+    genome_file.write_text(">chr1\nATGAAATAA\n")
+    summary = tmp_path / "species.tsv"
+    summary.write_text("species_prefix\tcds_output_path\tgff_output_path\tgenome_output_path\n"
+                       f"Test_species\t{cds_file}\t{gff_file}\t{genome_file}\n")
+    mapping, ownership = tmp_path / "mapping.json", tmp_path / "ownership.json"
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH.with_name("input_validation_reuse.py")),
+        "--species-cds-dir", str(cds), "--species-gff-dir", str(gff), "--species-summary", str(summary),
+        "--mapping-stats-output", str(mapping), "--ownership-stats-output", str(ownership), "--strict"],
+        capture_output=True, text=True)
+    assert result.returncode != 0 and "declares genome outputs" in result.stderr
+    assert not mapping.exists() and not ownership.exists()
+
+
 @pytest.mark.parametrize("seqid,end,message", [("Chr1", 3, "absent from genome"), ("acc1", 4, "exceed genome")])
 def test_mapping_validation_checks_formatted_genome_even_without_strict(tmp_path, seqid, end, message):
     module = load_module()

@@ -16,7 +16,7 @@ from .organelle import iter_non_organelle_gff_lines
 from .reference import gff_reference_mapping
 from .source_identity import task_annotation_path
 
-VERSION = 6
+VERSION = 7
 
 
 def audit_path(cds_path):
@@ -98,23 +98,36 @@ def cds_changes(normaliser, key, offset, trailing, reason):
     return updates
 
 
-def phase_only_changes(normaliser, sequence, keys):
+def phase_only_changes(normaliser, sequence, keys, *, supplied=False):
     """Canonicalise one anchored model only after exact genomic identity."""
     if len(keys) != 1:
         return {}
     key = next(iter(keys))
     blocks = normaliser.models[key]
-    if (blocks[0]["phase"] != "0" or phase_conventions(blocks) != {"complementary"}
+    conventions = phase_conventions(blocks)
+    if ("gff3" in conventions or any(row["phase"] not in {"0", "1", "2"} for row in blocks)
+            or normaliser.exceptional(key)
             or any("," in row["attributes"].get("Parent", "") for row in blocks)
+            or any(row["attributes"].get("part") or row["attributes"].get("is_ordered", "").lower() == "true"
+                   for row in blocks)
             or len({(row["seqid"], row["strand"]) for row in blocks}) != 1
             or blocks[0]["strand"] not in {"+", "-"}):
         return {}
+    if blocks[0]["phase"] != "0":
+        # An independently supplied CDS can prove that a contradictory first
+        # phase is an export error. Do not choose between viable coding frames.
+        code = normaliser.source["genetic_code"]
+        if (not supplied or len(sequence) % 3 or not protein(sequence, code)
+                or any(protein(sequence[offset:], code, partial=True) for offset in (1, 2))):
+            return {}
     ascending = sorted(blocks, key=lambda row: row["start"])
     if any(a["end"] > b["start"] for a, b in zip(ascending, ascending[1:], strict=False)):
         return {}
     if normaliser.fetch(blocks) != sequence:
         return {}
-    return cds_changes(normaliser, key, 0, 0, "complementary_cds_phase")
+    reason = ("provided_cds_frame_phase" if blocks[0]["phase"] != "0"
+              else "complementary_cds_phase" if conventions == {"complementary"} else "anchored_cds_phase")
+    return cds_changes(normaliser, key, 0, 0, reason)
 
 
 def iter_normalised_cds_records(task, state=None):
@@ -195,16 +208,16 @@ def iter_normalised_cds_records(task, state=None):
                 if decision["status"] == "excluded":
                     decision["status"] = "retained_unresolved"
                 if (decision["reason"] == "valid_original_translation"
-                      or (decision["reason"] == "genomic_internal_stop_or_incomplete_codon"
-                          and len(raw) % 3 and protein(raw, code, partial=True))):
-                    changes = phase_only_changes(normaliser, raw, keys)
+                      or (len(raw) % 3 and protein(raw, code, partial=True))):
+                    changes = phase_only_changes(normaliser, raw, keys, supplied=task.get("cds_path") is not None)
                     if changes:
                         for source_line, update in changes.items():
                             if source_line in updates and updates[source_line] != update:
                                 raise ValueError("Conflicting CDS/GFF normalisations: " + update["transcript"])
                             updates[source_line] = update
                         # CDS bases, coordinates and identifiers are unchanged.
-                        decision.update(reason="complementary_cds_phase", gff_phase_normalised=True)
+                        decision.update(source_reason=decision["reason"],
+                                        reason=next(iter(changes.values()))["reason"], gff_phase_normalised=True)
             yield header, raw, decision
         if contract(task) != frozen:
             raise OSError("Inputs changed during CDS normalisation")

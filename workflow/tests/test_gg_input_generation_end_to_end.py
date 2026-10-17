@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import json
 import os
 import sqlite3
@@ -1011,6 +1012,44 @@ def test_array_cds_only_validates_and_completes_busco_with_native_receipts(tmp_p
     assert run["num_species_busco_full"] == "2"
     assert run["num_species_busco_short"] == "2"
     assert all(row["qc_status"] == "not_recorded" for row in _read_tsv_rows(root / "species_mapping_qc.tsv"))
+
+
+def test_array_cds_gff_without_optional_genomes_finalizes_with_native_receipts(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    for genome in input_dir.glob("*/*.genome.fa"):
+        genome.unlink()
+    workspace = tmp_path / "cds_gff_without_genomes"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    def run(mode, task_id=None):
+        env = _core_env(workspace, input_dir, fake_bin, mode, task_id, require_cds=True)
+        env.update(strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True, timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    for mode, index in (("array_prepare", None), ("array_worker", 1), ("array_worker", 2)):
+        run(mode, index)
+    root = workspace / "output/input_generation"
+    # Imported CDS/GFF-only workers need not create an unused genome directory.
+    optional = root / "species_genome"
+    if optional.exists():
+        optional.rmdir()
+    receipts = [json.loads((root / f"tmp/task_plan.json.completed/{i}.json").read_text())
+                for i in (1, 2)]
+    assert all(not any("/species_genome/" in path for path in receipt["files"]) for receipt in receipts)
+    for _ in range(2):
+        run("array_finalize")
+        for receipt in receipts:
+            assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha
+                       for path, sha in receipt["files"].items())
+    assert all(row["genome_output_path"] == "" for row in
+               _read_tsv_rows(root / "gg_input_generation_species.tsv"))
+    qc = _read_tsv_rows(root / "species_mapping_qc.tsv")
+    assert len(qc) == 2 and all(row["qc_status"] == "available" for row in qc)
+    assert (workspace / "output/species_taxonomy/species_taxonomy.tsv").is_file()
 
 
 def test_array_transcript_orf_audits_are_required_completion_outputs(tmp_path: Path):

@@ -98,6 +98,9 @@ and checks the audit; it does not compare CDS with full transcript lengths.
 Strict worker and final validation support CDS-only inputs when genomic roles
 are optional. `require_gff=1` and `require_genome=1` still require those outputs;
 CDS-only finalization retains source-selection validation.
+CDS and GFF inputs can also finalize without genomes when genomes are optional;
+an absent unused genome directory does not request genome-based validation.
+Declared genome outputs still require genome-based validation.
 The `.orf-extraction.json`
 sidecar binds source/output hashes, genetic code, implementation and CDSKIT
 identity, with each selected ORF's strand and coordinates on its source transcript.

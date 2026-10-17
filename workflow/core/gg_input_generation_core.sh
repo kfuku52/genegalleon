@@ -1153,6 +1153,7 @@ run_validate_stage() {
   local genome_files=()
   local set_status=0
   local validation_reuse_args=()
+  local validation_genome_args=()
 
   if [[ ${run_validate_inputs} -ne 1 || ${run_format_inputs} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
@@ -1181,6 +1182,9 @@ run_validate_stage() {
   num_species_cds=${#cds_files[@]}
   num_species_gff=${#gff_files[@]}
   num_species_genome=${#genome_files[@]}
+  if [[ ${#genome_files[@]} -gt 0 ]]; then
+    validation_genome_args=(--species-genome-dir "${species_genome_dir}")
+  fi
   echo "Detected ${#cds_files[@]} species CDS files, ${#gff_files[@]} species GFF files, and ${#genome_files[@]} species genome files."
 
   if [[ ${#cds_files[@]} -eq 0 ]]; then
@@ -1229,7 +1233,7 @@ run_validate_stage() {
       if [[ "${input_generation_mode}" == array_finalize ]]; then
         cmd=(python "${gg_support_dir}/input_validation_reuse.py")
         cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
-        cmd+=(--species-genome-dir "${species_genome_dir}" --species-summary "${species_summary_output}")
+        cmd+=("${validation_genome_args[@]}" --species-summary "${species_summary_output}")
         cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
         cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
         [[ ${strict} -ne 1 ]] || cmd+=(--strict)
@@ -1243,7 +1247,7 @@ run_validate_stage() {
         cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
         cmd+=(--species-cds-dir "${species_cds_dir}")
         cmd+=(--species-gff-dir "${species_gff_dir}")
-        cmd+=(--species-genome-dir "${species_genome_dir}")
+        cmd+=("${validation_genome_args[@]}")
         cmd+=(--species-summary "${species_summary_output}")
         cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
         cmd+=(--stats-output "${mapping_stats_file}")

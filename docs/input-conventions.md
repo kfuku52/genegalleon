@@ -182,11 +182,14 @@ RNA on the same contig and strand. Only the RNA ID changes; its original ID is
 retained in attributes and the locus-identity audit. Ambiguous names, shared
 children, collisions and inconsistent geometry remain unresolved.
 
-Complementary phase fields can be canonicalized for a partial terminal codon
-as well as a complete CDS. The existing proof still requires one exact genomic
-model, first phase zero, an unambiguous complementary convention and no internal
-translation stop. Coordinates and all source CDS bases stay intact; ordinary
-terminal padding and partial-model status remain visible in the CDS audit.
+Complementary or inconsistent numeric phase fields can be canonicalized for a
+partial terminal codon as well as a complete CDS. The proof requires one exact
+genomic model, a declared first phase of zero and no internal translation stop.
+An independently supplied CDS can also correct a contradictory first phase when
+it matches that entire genomic CDS and only frame zero has a valid translation.
+Shared, ordered, exceptional, nonnumeric or mismatched models are not corrected.
+Coordinates and all source CDS bases stay intact; ordinary terminal padding,
+partial-model status and the original decision remain visible in the CDS audit.
 
 For a gene/exon-only GFF supplied with a genome and published CDS, safe/strict
 formatting can reconstruct coding bounds when gene, exon-parent and CDS IDs
@@ -734,11 +737,10 @@ Notes:
   corresponding GFF CDS boundaries and recompute standard GFF3 phases. Genome
   sequence and downloaded sources remain unchanged. This runs independently of
   `GG_INPUT_RUN_GENE_MODEL_RESCUE`, including provided and GFF-derived CDS,
-- a complete, uniquely bound CDS model with complementary frame fields is
-  converted to standard GFF3 phases when its genomic CDS exactly matches the
-  valid supplied or derived sequence. This phase-only correction preserves
-  bases, coordinates and IDs, and is recorded separately from sequence changes.
-  Shared, ambiguous, exceptional or mismatched models remain unchanged,
+- a uniquely bound CDS model with complementary or inconsistent numeric phase
+  fields is converted to standard GFF3 phases under the genomic sequence and
+  coding-frame proof described above. This phase-only correction preserves
+  bases, coordinates and IDs, and is recorded separately from sequence changes,
 - `*.fa.gz.cds-normalisation.json` records source/output SHA-256 hashes,
   translation code, corrections, GFF coordinate changes and unresolved records.
   Translation exceptions, pseudogenes, ambiguous phase conventions and

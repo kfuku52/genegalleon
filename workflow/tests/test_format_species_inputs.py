@@ -390,7 +390,86 @@ def test_valid_cds_canonicalises_complementary_phases_without_changing_model(tmp
     assert {name: Path(task[name]).read_bytes() for name in originals} == originals
 
 
-@pytest.mark.parametrize("mutation", ["genomic_mismatch", "shared_parent", "ambiguous", "exception", "canonical"])
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("provided", [False, True])
+@pytest.mark.parametrize("partial", [False, True])
+def test_mixed_numeric_phases_require_exact_declared_zero_frame(tmp_path, strand, provided, partial):
+    module = load_module()
+    sequence = "ATGAAAGCTAAACCCTAA"
+    if partial:
+        sequence = sequence[:-1]
+    task = normalisation_bundle(tmp_path, [{"blocks": [(sequence[:4], 0), (sequence[4:], 0)],
+                                          "strand": strand}], provided=provided)
+    original = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path")}
+    out = tmp_path / "mixed_phases"
+    out.mkdir()
+    cds = module.format_cds(task, out, False, False)
+    gff = module.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    assert list(module.iter_fasta_records(cds["output_path"]))[0][1] == sequence + ("N" if partial else "")
+    with gzip.open(gff["output_path"], "rt") as stream:
+        rows = [line.rstrip().split("\t") for line in stream if "\tCDS\t" in line]
+    rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [row[7] for row in rows] == ["0", "2"]
+    assert all("gg_cds_normalisation=anchored_cds_phase" in row[8] for row in rows)
+    assert {name: Path(task[name]).read_bytes() for name in original} == original
+    audit = json.loads(Path(str(cds["output_path"]) + ".cds-normalisation.json").read_text())
+    if partial:
+        assert audit["records"][0]["status"] == "retained_unresolved"
+        assert audit["records"][0]["source_reason"] == "inconsistent_or_missing_phase"
+    from validate_cds_gff_mapping import validate_single_species
+    result = validate_single_species(dict(index=1, species_prefix="Test_species", cds_file=cds["output_path"],
+                                         gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert result["ok"], result
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("first", [1, 2])
+def test_independent_cds_proves_unique_zero_frame_for_inconsistent_first_phase(tmp_path, strand, first):
+    module = load_module()
+    sequence = "ATGAAAGCTAAACCCTAA"
+    task = normalisation_bundle(tmp_path, [{"blocks": [(sequence[:4], first), (sequence[4:], 2)],
+                                          "strand": strand}])
+    original = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path", "cds_path")}
+    out = tmp_path / "provided_frame"
+    out.mkdir()
+    cds = module.format_cds(task, out, False, False)
+    gff = module.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    assert list(module.iter_fasta_records(cds["output_path"]))[0][1] == sequence
+    with gzip.open(gff["output_path"], "rt") as stream:
+        rows = [line.rstrip().split("\t") for line in stream if "\tCDS\t" in line]
+    rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [row[7] for row in rows] == ["0", "2"]
+    assert all("gg_cds_normalisation=provided_cds_frame_phase" in row[8] for row in rows)
+    assert {name: Path(task[name]).read_bytes() for name in original} == original
+    from validate_cds_gff_mapping import validate_single_species
+    result = validate_single_species(dict(index=1, species_prefix="Test_species", cds_file=cds["output_path"],
+                                         gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert result["ok"], result
+
+
+@pytest.mark.parametrize("provided", [False, True])
+def test_first_phase_is_not_inferred_without_independent_unique_cds_frame(tmp_path, provided):
+    load_module()
+    from format_species_annotation.cds_normalisation import iter_normalised_cds_records
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGA", 1), ("AATAA", 2)]}], provided=provided)
+    state = {}
+    list(iter_normalised_cds_records(task, state))
+    assert state["gff_updates"] == {}
+
+
+@pytest.mark.parametrize("provided", [False, True])
+def test_mixed_phase_correction_does_not_hide_an_internal_translation_stop(tmp_path, provided):
+    load_module()
+    from format_species_annotation.cds_normalisation import iter_normalised_cds_records
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGT", 0), ("AACCCTAA", 0)]}], provided=provided)
+    state = {}
+    records = list(iter_normalised_cds_records(task, state))
+    assert records[0][1] == "ATGTAACCCTAA"
+    assert records[0][2]["status"] == "retained_unresolved"
+    assert state["gff_updates"] == {}
+
+
+@pytest.mark.parametrize("mutation", ["genomic_mismatch", "shared_parent", "ambiguous", "exception", "ordered", "canonical"])
 def test_phase_only_normalisation_requires_unambiguous_same_model_evidence(tmp_path, mutation, monkeypatch):
     load_module()
     from cds_model_normalisation import CdsModelNormaliser
@@ -407,8 +486,10 @@ def test_phase_only_normalisation_requires_unambiguous_same_model_evidence(tmp_p
         text = text.replace("\t1\tParent=t1", "\t.\tParent=t1")
     elif mutation == "exception":
         text = text.replace("ID=t1;Parent=g1", "ID=t1;Parent=g1;exception=ribosomal_slippage")
+    elif mutation == "ordered":
+        text = text.replace("Parent=t1", "Parent=t1;part=1/2")
     task["gff_path"].write_text(text)
-    if mutation in {"shared_parent", "ambiguous", "exception", "canonical"}:
+    if mutation in {"shared_parent", "ambiguous", "exception", "ordered", "canonical"}:
         def forbidden_fetch(*_args):
             raise AssertionError("unsupported or canonical models must not fetch genomic evidence")
         monkeypatch.setattr(CdsModelNormaliser, "fetch", forbidden_fetch)
