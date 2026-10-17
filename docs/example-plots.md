@@ -49,6 +49,8 @@ rendered from the bundled quick-start `AHA` query2family test output.
 
 This synthetic three-tip example shows focal genes (black), other recorded
 neighbors (gray), shared similarity groups (colors), and same-group links.
+By default, links fade as vertical separation between connected rows increases,
+emphasizing nearby connections while keeping distant ones visible.
 The bottom legend has no title; its `Same gene family` entry includes the
 search cutoff, here `E-value <= 1e-10`.
 
@@ -61,7 +63,8 @@ Rscript workflow/tests/test_treevis_synteny.R output/examples/synteny-legend
 ```
 
 This also exercises the workflow's `stat_branch2tree_plot.r` driver and writes
-its PDF alongside the compact PNG/PDF example and input TSVs.
+its PDF alongside the compact PNG/PDF example and input TSVs. A second PNG,
+`neighboring-genes-distance.png`, shows the distance fading on a 13-tip fixture.
 
 ## Gene-family presence/absence summary
 

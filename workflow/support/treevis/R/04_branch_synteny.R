@@ -344,25 +344,17 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
         return(g)
     }
 
-    pick_nearest_offset = function(df) {
-        if (nrow(df) <= 1) {
-            return(df[1, , drop=FALSE])
-        }
-        if ('neighbor_gene' %in% colnames(df)) {
-            df = df[order(abs(df[['offset']]), df[['neighbor_gene']], method='radix'), , drop=FALSE]
-        } else {
-            df = df[order(abs(df[['offset']]), method='radix'), , drop=FALSE]
-        }
-        return(df[1, , drop=FALSE])
-    }
-
     # Keep one marker per (tip, direction, group), nearest to the focal gene.
+    # One ordering avoids splitting and rebuilding a data frame for every marker.
+    # Factor levels retain the same key order as split(), including its collation.
     key = paste(df_syn[['node_name']], df_syn[['direction']], df_syn[['group_id']], sep='__')
-    df_syn_split = split(df_syn, key, drop=TRUE)
-    df_syn = do.call(
-        rbind,
-        lapply(df_syn_split, pick_nearest_offset)
-    )
+    if ('neighbor_gene' %in% colnames(df_syn)) {
+        nearest_order = order(factor(key), abs(df_syn[['offset']]), df_syn[['neighbor_gene']], method='radix')
+    } else {
+        nearest_order = order(factor(key), abs(df_syn[['offset']]), method='radix')
+    }
+    nearest_rows = nearest_order[!duplicated(key[nearest_order])]
+    df_syn = df_syn[nearest_rows, , drop=FALSE]
     rownames(df_syn) = NULL
 
     link_parts = list()
@@ -379,26 +371,24 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
                 next
             }
             df_grp = df_grp[order(df_grp[['y']], method='radix'), , drop=FALSE]
-            for (i in seq_len(nrow(df_grp) - 1)) {
-                x_a = suppressWarnings(as.numeric(df_grp[i, 'x']))
-                x_b = suppressWarnings(as.numeric(df_grp[i + 1, 'x']))
-                y_a = suppressWarnings(as.numeric(df_grp[i, 'y']))
-                y_b = suppressWarnings(as.numeric(df_grp[i + 1, 'y']))
-                if (!(is.finite(x_a) && is.finite(x_b) && is.finite(y_a) && is.finite(y_b))) {
-                    next
-                }
-                link_parts[[link_id]] = data.frame(
-                    x = x_a,
-                    y = y_a,
-                    xend = x_b,
-                    yend = y_b,
-                    direction = direction_name,
-                    link_id = paste0('synteny_link_', link_id),
-                    group_id = gid,
-                    stringsAsFactors=FALSE
-                )
-                link_id = link_id + 1L
-            }
+            # Coordinates are already finite after input filtering. Build all
+            # consecutive links together, rather than one data frame per edge.
+            link_count = nrow(df_grp) - 1L
+            from_rows = seq_len(link_count)
+            to_rows = from_rows + 1L
+            x_values = as.numeric(df_grp[['x']])
+            y_values = as.numeric(df_grp[['y']])
+            link_parts[[length(link_parts) + 1L]] = data.frame(
+                x = x_values[from_rows],
+                y = y_values[from_rows],
+                xend = x_values[to_rows],
+                yend = y_values[to_rows],
+                direction = direction_name,
+                link_id = paste0('synteny_link_', seq.int(link_id, length.out=link_count)),
+                group_id = gid,
+                stringsAsFactors=FALSE
+            )
+            link_id = link_id + link_count
         }
     }
     if (length(link_parts) > 0) {
@@ -414,6 +404,12 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
             stringsAsFactors=FALSE
         )
     }
+    # Use displayed row separation, independent of the tree's total tip count.
+    # Adjacent rows stay prominent; long links remain visible without dominating.
+    row_gap = pmax(1, abs(df_link[['yend']] - df_link[['y']]))
+    df_link[['link_alpha']] = pmax(0.04, 0.7 / row_gap^0.75)
+    # Draw faint links first so nearby connections stay readable at crossings.
+    df_link = df_link[order(df_link[['link_alpha']], method='radix'), , drop=FALSE]
 
     df_point = df_syn[, c('x', 'y', 'group_id', 'node_name', 'offset', 'direction'), drop=FALSE]
     df_point = df_point[order(df_point[['y']], df_point[['x']], method='radix'), , drop=FALSE]
@@ -444,10 +440,10 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
     if (nrow(df_link) > 0) {
         link_layer = geom_segment(
             data=df_link,
-            mapping=aes(x=x, y=y, xend=xend, yend=yend, color=group_id, group=link_id),
+            mapping=aes(x=x, y=y, xend=xend, yend=yend, color=group_id, group=link_id,
+                        alpha=.data[['link_alpha']]),
             linewidth=1.8,
-            lineend='round',
-            alpha=0.5
+            lineend='round'
         )
     }
     node_size = 1.5
@@ -489,6 +485,7 @@ add_synteny_column = function(g, args, gname, path_synteny, synteny_window = 5) 
         scale_shape_manual(values=c(16, 16, 16, 95), breaks=legend_labels,
                            labels=legend_display, name=NULL) +
         scale_color_manual(values=point_palette) +
+        scale_alpha_identity() +
         xlab('Neighboring genes') +
         theme_minimal(base_size=args[['font_size']]) +
         guides(

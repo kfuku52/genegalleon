@@ -25,6 +25,11 @@ built <- ggplot_build(plot)
 # Semantic legend entries never add plotted points or alter neighbor occupancy.
 stopifnot(nrow(built$data[[4]]) == nrow(syn), nrow(built$data[[5]]) == 3,
           nrow(built$data[[6]]) == 9)
+# A panel containing only adjacent links must retain their opacity, without
+# rescaling it to the range of distances present in this particular tree.
+stopifnot(all(built$data[[3]]$alpha > 0.5),
+          all(built$data[[4]]$alpha == 1), all(built$data[[5]]$alpha == 1),
+          all(built$data[[6]]$alpha == 1))
 legend <- cowplot::get_legend(plot)
 stopifnot(inherits(legend, 'gtable'))
 combined <- cowplot::plot_grid(g$tree + ggtree::geom_tiplab() + xlim(0, 2.25), plot,
@@ -88,6 +93,47 @@ write.table(variant,infile,sep='\t',quote=FALSE,row.names=FALSE)
 panel <- add_synteny_column(g,args,'synteny',infile,1)$synteny
 stopifnot(inherits(ggplotGrob(panel),'gtable'), nrow(panel$data)==2)
 write.table(syn,infile,sep='\t',quote=FALSE,row.names=FALSE)
+
+# Opacity follows displayed vertical separation, including within one family.
+# Horizontal shifts must not affect opacity, and faint links render underneath.
+distance_tree <- ape::read.tree(text=paste0('(', paste0('t', 1:13, ':1', collapse=','), ');'))
+distance_g <- list(tree=ggtree::ggtree(distance_tree))
+tip_rows <- get_df_tip(distance_g$tree)
+distance_syn <- data.frame(
+    node_name=as.character(tip_rows$label[c(1,2,6,1,3,11,4,5)]),
+    offset=c(-1,-1,-2,1,2,3,-3,-1),
+    group_id=c('A','A','A','B','B','B','C','C'), evalue_cutoff=1e-10)
+distance_infile <- file.path(outdir, 'synteny-distance.tsv')
+write.table(distance_syn,distance_infile,sep='\t',quote=FALSE,row.names=FALSE)
+distance_panel <- add_synteny_column(distance_g,args,'synteny',distance_infile,3)$synteny
+distance_built <- ggplot_build(distance_panel)
+distance_links <- distance_built$data[[3]]
+gaps <- abs(distance_links$yend-distance_links$y)
+opacity <- vapply(sort(unique(gaps)), function(gap) unique(distance_links$alpha[gaps == gap]), numeric(1))
+stopifnot(identical(sort(unique(gaps)), c(1,2,4,8)),
+          all(diff(opacity) < 0), opacity[1] > 0.5, tail(opacity,1) < 0.2,
+          all(is.finite(distance_links$alpha)), all(distance_links$alpha > 0),
+          all(distance_links$alpha <= 1), all(diff(distance_links$alpha) >= 0),
+          all(distance_built$data[[6]]$alpha == 1),
+          nrow(distance_panel$data) == nrow(distance_syn))
+# Batched marker/link assembly keeps the same geometry with shuffled rows,
+# duplicate records and farther copies of a family on the same side.
+copies <- distance_syn[abs(distance_syn$offset) < 3,]
+copies$offset <- copies$offset + sign(copies$offset)
+variant <- rbind(distance_syn, distance_syn, copies)
+variant$neighbor_gene <- paste0('neighbor',seq_len(nrow(variant)))
+variant <- variant[rev(seq_len(nrow(variant))),]
+write.table(variant,distance_infile,sep='\t',quote=FALSE,row.names=FALSE)
+batched_panel <- add_synteny_column(distance_g,args,'synteny',distance_infile,3)$synteny
+stopifnot(identical(distance_panel$data,batched_panel$data),
+          identical(distance_links,ggplot_build(batched_panel)$data[[3]]))
+write.table(distance_syn,distance_infile,sep='\t',quote=FALSE,row.names=FALSE)
+distance_example <- cowplot::plot_grid(
+    distance_g$tree + ggtree::geom_tiplab(), distance_panel,
+    nrow=1, align='h', axis='bt', rel_widths=c(1.5,1))
+ggsave(file.path(outdir,'neighboring-genes-distance.png'), distance_example,
+       width=6,height=6,dpi=180,bg='white')
+cat('Synteny link opacity decreases with displayed row distance.\n')
 
 # Exercise the actual workflow plot driver, including its reserved legend height.
 test_file <- sub('^--file=', '', grep('^--file=', commandArgs(), value=TRUE)[1])
