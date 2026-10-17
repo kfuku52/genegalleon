@@ -208,7 +208,10 @@ def import_fx2tab(source_root, target_root, species, source_cds, target_cds, sou
 def import_busco(source_root, target_root, species, source_cds, target_cds, source_settings, target_settings):
     """Reuse only the identical lineage/mode contract and freshly verified CDS."""
     if (source_settings.get("run_species_busco") != "1" or target_settings.get("run_species_busco") != "1"
-            or source_settings.get("busco_lineage") != target_settings.get("busco_lineage")):
+            or source_settings.get("busco_lineage") != target_settings.get("busco_lineage")
+            or source_settings.get("species_busco_mode", "transcriptome") != target_settings.get("species_busco_mode", "transcriptome")
+            or (target_settings.get("species_busco_mode") == "proteins"
+                and source_settings.get("genetic_code", "1") != target_settings.get("genetic_code", "1"))):
         return False
     manifest = source_root / "artifact_provenance" / f"busco.{species}.json"
     if not manifest.is_file():
@@ -220,7 +223,9 @@ def import_busco(source_root, target_root, species, source_cds, target_cds, sour
     if not source_lineage or source_lineage != target_lineage:
         return False
     expected = dict(busco_lineage_request=target_settings["busco_lineage"], busco_lineage_resolved=target_lineage,
-                    busco_mode="transcriptome", evalue="1e-03", limit="20")
+                    busco_mode=target_settings.get("species_busco_mode", "transcriptome"), evalue="1e-03", limit="20")
+    if expected["busco_mode"] == "proteins":
+        expected["genetic_code"] = target_settings.get("genetic_code", "1")
     payload = json.loads(manifest.read_text())
     if (payload.get("schema_version") != 1 or payload.get("step") != "input_generation_species_busco"
             or payload.get("family_id") != species or payload.get("parameters") != expected):

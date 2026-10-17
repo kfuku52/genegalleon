@@ -72,6 +72,7 @@ require_cds="${require_cds:-0}"
 require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
 run_species_busco="${run_species_busco:-1}"
+species_busco_mode="${species_busco_mode:-transcriptome}"
 busco_timeout_seconds="${busco_timeout_seconds:-0}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
 species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
@@ -185,6 +186,10 @@ for requirement in require_cds require_gff require_genome; do
     *) echo "${requirement} must be 0 or 1" >&2; exit 1 ;;
   esac
 done
+case "${species_busco_mode}" in
+  transcriptome|proteins) ;;
+  *) echo "species_busco_mode must be transcriptome or proteins." >&2; exit 1 ;;
+esac
 if [[ ! "${busco_timeout_seconds}" =~ ^(0|[1-9][0-9]*)$ ]]; then
   echo "busco_timeout_seconds must be 0 or a positive integer." >&2
   exit 1
@@ -1599,10 +1604,13 @@ run_species_busco_for_one_file() {
     --output "busco_short=${file_sp_busco_short}"
     --parameter "busco_lineage_request=${busco_lineage}"
     --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
-    --parameter "busco_mode=transcriptome"
+    --parameter "busco_mode=${species_busco_mode}"
     --parameter "evalue=1e-03"
     --parameter "limit=20"
   )
+  if [[ "${species_busco_mode}" == proteins ]]; then
+    busco_provenance_args+=(--parameter "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
+  fi
   [[ ${busco_requires_single_copy} -ne 1 ]] || busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   if [[ ${overwrite} -eq 1 ]]; then
     busco_needs_update=1
@@ -1622,7 +1630,12 @@ run_species_busco_for_one_file() {
   busco_work_root=$(mktemp -d "${download_tmp_root}/busco.${species_name}.XXXXXX")
   busco_input_fasta="${busco_work_root}/input.fasta"
   busco_output_dir="${busco_work_root}/busco_tmp"
-  seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}"
+  if [[ "${species_busco_mode}" == proteins ]]; then
+    seqkit translate --transl-table "${GG_COMMON_GENETIC_CODE:-1}" --threads "${busco_threads}" \
+      "${seq_full}" --out-file "${busco_input_fasta}" || return $?
+  else
+    seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}" || return $?
+  fi
 
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
@@ -1631,11 +1644,11 @@ run_species_busco_for_one_file() {
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  (
+  if (
     cd "${busco_work_root}"
     GG_BUSCO_TIMEOUT_SECONDS="${busco_timeout_seconds}" gg_run_busco_with_metaeuk_modified_fas_compat \
       --in "input.fasta" \
-      --mode "transcriptome" \
+      --mode "${species_busco_mode}" \
       --out "busco_tmp" \
       --cpu "${busco_threads}" \
       --force \
@@ -1653,7 +1666,15 @@ run_species_busco_for_one_file() {
             for (i = first; i <= NR; i++) print tail_lines[i % 50]
           }
         }'
-  )
+  ); then
+    :
+  else
+    local busco_exit_code=$?
+    python "${gg_support_dir}/busco_failure_context.py" --root "${busco_work_root}" \
+      --mode "${species_busco_mode}" --lineage "${busco_lineage_resolved}" --exit-code "${busco_exit_code}" || true
+    echo "BUSCO failed for ${species_name}; mode=${species_busco_mode}; retained diagnostics: ${busco_work_root}" >&2
+    return "${busco_exit_code}"
+  fi
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
     python "${gg_support_dir}/busco_guide_tree.py" preserve \
@@ -1663,9 +1684,10 @@ run_species_busco_for_one_file() {
     rm -rf -- "${busco_work_root}"
     gg_artifact_record "${busco_provenance_args[@]}"
   else
-    echo "Failed to locate normalized BUSCO outputs for ${species_name}. Exiting."
-    rm -rf -- "${busco_work_root}"
-    exit 1
+    python "${gg_support_dir}/busco_failure_context.py" --root "${busco_work_root}" \
+      --mode "${species_busco_mode}" --lineage "${busco_lineage_resolved}" --exit-code 1 || true
+    echo "Failed to locate normalized BUSCO outputs for ${species_name}; retained diagnostics: ${busco_work_root}" >&2
+    return 1
   fi
 }
 
@@ -2772,6 +2794,9 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  if [[ "${species_busco_mode}" != transcriptome ]]; then
+    array_settings_cmd+=(--setting "species_busco_mode=${species_busco_mode}")
+  fi
   array_settings_cmd+=(--setting "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
   # Do not add empty resume fields to old immutable settings documents.
   for resume_prefix in resume_from resume_fallback; do

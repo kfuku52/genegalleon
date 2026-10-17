@@ -431,3 +431,19 @@ remain errors. Both imports retain the same content, parameter, task-ownership
 and BUSCO checks; new settings are written only when configured. Shared phase
 admission waits up to 30 seconds for reader-registration contention while still
 excluding prepare/finalize writers. Task-owner conflicts remain immediate errors.
+
+### BUSCO input mode
+
+`species_busco_mode="transcriptome"` retains the default nucleotide CDS evaluation
+with BUSCO's transcriptome predictor. Set `GG_INPUT_SPECIES_BUSCO_MODE=proteins`
+for a new cohort to translate the formatted CDS in frame 1 with
+`GG_COMMON_GENETIC_CODE` and evaluate those proteins directly. This avoids a
+second ORF prediction; it does not evaluate the original untranslated assembly.
+The mode and protein translation code are frozen in array settings and BUSCO
+provenance. Resume cannot import BUSCO results from a different mode or code;
+formatting, validation and fx2tab remain reusable. Quality comparisons must keep
+BUSCO mode, version and lineage consistent.
+
+Failed BUSCO attempts retain native scratch files and `failure-context.json`,
+including mode, exit code and available prediction-file sizes. Empty predictions
+remain a failed evaluation and never become a zero-percent completeness result.
