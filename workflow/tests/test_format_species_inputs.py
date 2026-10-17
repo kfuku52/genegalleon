@@ -1493,10 +1493,11 @@ def test_infer_provider_from_ensemblgenomes_prefix_and_url():
     )
 
 
-def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path):
+@pytest.mark.parametrize("species_key", ["Amoeba_sp", "Amoeba_sp.", "Amoeba_SP."])
+def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path, species_key):
     mod = load_module()
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
-    species_dir = input_dir / "Amoeba_sp"
+    species_dir = input_dir / species_key
     species_dir.mkdir(parents=True, exist_ok=True)
     (species_dir / "GCA_000000001.1_demo_cds_from_genomic.fna.gz").write_text("", encoding="utf-8")
     (species_dir / "GCA_000000001.1_demo_genomic.gff.gz").write_text("", encoding="utf-8")

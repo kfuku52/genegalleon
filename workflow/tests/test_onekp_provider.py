@@ -56,3 +56,19 @@ def test_provider_discovers_only_coding_nucleotides(tmp_path):
     tasks, _, errors = fsi.discover_tasks('onekp', tmp_path)
     assert not errors
     assert tasks[0]['cds_path'].name == 'BMJR.cds.fa.gz'
+
+
+@pytest.mark.parametrize('label,expected', [
+    ('Osmunda_sp.', 'Osmunda_sp_unknown'),
+    ('Osmunda_sp', 'Osmunda_sp_unknown'),
+    ('Osmunda_sp._sample1', 'Osmunda_sp._sample1'),
+    ('Osmunda_regalis', 'Osmunda_regalis'),
+])
+def test_unresolved_onekp_labels_keep_a_complete_species_boundary(tmp_path, label, expected):
+    species = tmp_path / label
+    species.mkdir()
+    (species/'UOMY.cds.fa.gz').write_bytes(b'fixture')
+    tasks, _, errors = fsi.discover_tasks('onekp', tmp_path)
+    assert not errors
+    assert tasks[0]['species_key'] == expected
+    assert tasks[0]['species_prefix'] == expected

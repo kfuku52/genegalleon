@@ -17,6 +17,24 @@ REQUIRE_GENOMES_SCRIPT = SUPPORT_DIR / "validate_required_genomes.py"
 REQUIRE_OUTPUTS_SCRIPT = SUPPORT_DIR / "validate_required_species_outputs.py"
 
 
+def test_manifest_plan_normalizes_dotted_genus_only_label_and_preserves_sample_id(tmp_path):
+    source = tmp_path / 'UOMY.cds.fa'
+    source.write_text('>scaffold-UOMY-1-Osmunda_sp.\nATGAAATAA\n')
+    manifest = tmp_path / 'manifest.tsv'
+    manifest.write_text('provider\tid\tspecies_key\tcds_url\tbind_local_sources\n'
+                        f'onekp\tUOMY\tOsmunda_sp.\t{source.as_uri()}\t1\n')
+    plan = tmp_path / 'plan.json'
+    result = run_python(PLAN_SCRIPT, '--provider', 'all', '--download-manifest', str(manifest),
+                        '--download-dir', str(tmp_path / 'downloads'), '--stage-downloads', '--outfile', str(plan))
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(plan.read_text())
+    assert payload['species'] == ['Osmunda_sp_unknown']
+    row = payload['tasks'][0]['manifest_row']
+    assert row['species_key'] == 'Osmunda_sp_unknown'
+    assert row['id'] == 'UOMY'
+    assert row['cds_url'] == source.as_uri()
+
+
 @pytest.fixture
 def atomic_state(monkeypatch):
     monkeypatch.syspath_prepend(str(SUPPORT_DIR))
