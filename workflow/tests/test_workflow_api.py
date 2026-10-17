@@ -1,5 +1,7 @@
 """Compatibility and read-only contracts for the scheduler-neutral public API."""
+import concurrent.futures
 import hashlib
+import importlib.util
 import json
 import os
 import shlex
@@ -7,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -17,6 +20,134 @@ SUPPORT = Path(__file__).resolve().parents[1] / "support"
 API = SUPPORT / "workflow_api.py"
 OBSERVER = SUPPORT / "workflow_observation.py"
 PROVENANCE = SUPPORT / "artifact_provenance.py"
+
+
+@pytest.fixture
+def observer_module():
+    spec = importlib.util.spec_from_file_location('observation_under_test', OBSERVER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(('budget', 'count', 'limit'), [(None, 96, 1), ('1', 96, 1), ('4', 32, 1),
+                                                    ('4', 96, 4), ('100', 96, 4), ('bad', 96, 1), ('0', 96, 1)])
+def test_metadata_fence_checks_every_path_with_bounded_IO(tmp_path, monkeypatch, observer_module, budget, count, limit):
+    if budget is None:
+        monkeypatch.delenv('GG_TASK_CPUS', raising=False)
+    else:
+        monkeypatch.setenv('GG_TASK_CPUS', budget)
+    module = observer_module
+    paths = [tmp_path / str(index) for index in range(count)]
+    for path in paths:
+        path.write_bytes(b'unchanged')
+    original = module.path_signature
+    final = False
+    active = peak = 0
+    seen = []
+    lock = threading.Lock()
+    def read(path):
+        nonlocal active, peak
+        if not final:
+            return original(path)
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            seen.append(path)
+        try:
+            time.sleep(0.003)
+            return original(path)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(module, 'path_signature', read)
+    with module.observe_files():
+        for path in paths:
+            module.observe_path(path)
+        final = True
+    assert len(seen) == len(paths) and set(seen) == set(paths)
+    assert active == 0 and 1 <= peak <= limit
+    assert peak > 1 if limit > 1 else peak == 1
+    assert module._OBSERVED_PATHS.get() is None
+
+
+def test_metadata_fence_inside_existing_worker_stays_serial(tmp_path, monkeypatch, observer_module):
+    monkeypatch.setenv('GG_TASK_CPUS', '100')
+    paths = [tmp_path / str(index) for index in range(96)]
+    for path in paths:
+        path.write_bytes(b'stable')
+    original = observer_module.path_signature
+    threads = []
+    def read(source):
+        threads.append(threading.get_ident())
+        return original(source)
+    monkeypatch.setattr(observer_module, 'path_signature', read)
+    def check():
+        with observer_module.observe_files():
+            for path in paths:
+                observer_module.observe_path(path)
+        return threading.get_ident()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        worker = pool.submit(check).result()
+    assert len(threads) == len(paths) * 2 and set(threads) == {worker}
+
+
+def test_fast_metadata_fence_does_not_dispatch_threads(tmp_path, monkeypatch, observer_module):
+    from types import SimpleNamespace
+    monkeypatch.setenv('GG_TASK_CPUS', '4')
+    monkeypatch.setattr(observer_module, 'time', SimpleNamespace(perf_counter=lambda: 0))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('fast signatures must stay serial')
+    monkeypatch.setattr(concurrent.futures, 'ThreadPoolExecutor', forbidden)
+    original = observer_module.path_signature
+    seen = []
+    def read(path):
+        seen.append(path)
+        return original(path)
+    monkeypatch.setattr(observer_module, 'path_signature', read)
+    paths = [tmp_path / str(index) for index in range(96)]
+    with observer_module.observe_files():
+        for path in paths:
+            observer_module.observe_path(path)
+    assert seen == paths * 2
+
+
+@pytest.mark.parametrize('change', ['replace', 'remove', 'create', 'symlink'])
+def test_parallel_metadata_fence_preserves_first_error_and_joins_workers(tmp_path, monkeypatch, observer_module, change):
+    monkeypatch.setenv('GG_TASK_CPUS', '4')
+    paths = [tmp_path / str(index) for index in range(96)]
+    for path in paths:
+        if path != paths[40] or change != 'create':
+            path.write_bytes(b'x')
+    original = observer_module.path_signature
+    final = False
+    def read(path):
+        if final:
+            time.sleep(0.001)
+            if path == paths[40]:
+                time.sleep(0.02)
+        return original(path)
+    monkeypatch.setattr(observer_module, 'path_signature', read)
+    with pytest.raises(ValueError, match='Path changed during observation; retry:') as error:
+        with observer_module.observe_files():
+            for path in paths:
+                observer_module.observe_path(path)
+            if change == 'replace':
+                replacement = tmp_path / 'replacement'
+                replacement.write_bytes(b'changed')
+                os.replace(replacement, paths[40])
+            elif change == 'remove':
+                paths[40].unlink()
+            elif change == 'create':
+                paths[40].write_bytes(b'created')
+            else:
+                paths[40].unlink()
+                paths[40].symlink_to(paths[42])
+            paths[41].write_bytes(b'also changed')
+            final = True
+    assert str(paths[40]) in str(error.value)
+    assert observer_module._OBSERVED_PATHS.get() is None
+    assert not any(thread.name.startswith('gg-metadata-fence') for thread in threading.enumerate())
 
 
 def cli(script, *args, env=None, input=None):

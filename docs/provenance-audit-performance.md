@@ -1,5 +1,49 @@
 # Full provenance audit performance and progress
 
+## Final metadata fence
+
+The final cross-query namespace fence retains every fresh `lstat` signature,
+including absent paths. With a usable `GG_TASK_CPUS` hint it can overlap at most
+four metadata readers. Fences with fewer than 64 paths, unconfigured hints and
+calls inside existing workers stay serial. The first 32 signatures are checked
+serially; when their average cost is below 100 microseconds the rest also remain
+serial to avoid thread overhead on warm local storage. The sample is part of the
+fence: no signature is skipped, duplicated or reused from an earlier query.
+
+Parallel work uses batches of at most eight paths per reader. Ordered results
+preserve the first failing path, and all workers join before errors escape.
+Regular-file replacement, removal, absent-to-present changes, symlinks, nested
+workers and CPU bounds remain covered by the existing workflow API test module.
+This changes only signature-read scheduling; content rehashes and archive fences
+remain mandatory.
+
+A Linux aarch64 / Python 3.12.15 Docker fixture compared `7d8864d7` with this
+implementation using the same 4,000 files, four CPUs and 8 GiB. One discarded
+warmup per revision and three alternating fresh-process trials per scenario
+produced these medians. Every complete fresh-signature-set SHA256 matched.
+
+| Per-signature modeled delay | Before (s) | After (s) | Peak RSS before/after (KiB) |
+| --- | ---: | ---: | ---: |
+| none | 0.01479 | 0.01406 | 26,496 / 26,596 |
+| 1 ms | 4.9765 | 1.3925 | 26,544 / 27,492 |
+
+OS caches were not forcibly cleared. The warm local measurements overlap and
+do not establish a speedup. The latency fixture improved by 3.57x with about
+1 MiB more peak RSS; this is not an end-to-end audit or measured HPC speedup.
+Heterogeneous metadata latency can leave the serial mode selected after a fast
+sample; correctness and the complete signature fence are unchanged.
+
+Create a private fixture once, then alternate support roots with the same
+current benchmark runner and `GG_TASK_CPUS=4`:
+
+```bash
+python -B workflow/benchmarks/benchmark_observation_fence.py \
+  --workspace /tmp/gg-observation-fixture --create
+GG_TASK_CPUS=4 python -B workflow/benchmarks/benchmark_observation_fence.py \
+  --workspace /tmp/gg-observation-fixture --support-root /path/to/workflow/support \
+  --metadata-delay-ms 1
+```
+
 ## Large inventory guard lookup
 
 The temporary SQLite source-guard store now keeps its key index separate from
