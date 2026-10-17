@@ -88,3 +88,51 @@ returns these as attempt evidence, with strict bounds and identity validation.
 Neither progress completion nor a successful audit result proves that the full
 workflow or database generation finished. Existing jobs retain their immutable
 source and observation coverage.
+
+## Whole-store fingerprints, 2026-10-17
+
+Database reuse and HGT transfer-context preparation also fingerprint the whole
+logical family store before their stage begins. This previously resolved and
+hashed every member serially. Whole-store fingerprints now use up to four I/O
+workers, bounded by `GG_TASK_CPUS` (one when unset). Direct Python callers may
+request `gene_family_store_digest(root, workers=1)` for serial execution.
+Subdirectory fingerprints remain serial inside already parallel family audits.
+
+Every logical member still participates in the same sorted SHA256 stream, byte
+count and member count. Submission windows contain at most eight tasks per
+worker. Workers retain read-only, digest-proof and runtime-path contexts; all
+workers stop before the store closes snapshot ZIP readers. Pending archive
+updates, final index/content fences, live overrides and read failures still
+invalidate the complete operation. This does not reuse older verification
+receipts or alter a running job's pinned source.
+
+Private 1,000-member / 16,384,000-byte fixtures used the same Linux/amd64
+GeneGalleon Docker image on macOS ARM64, Python 3.12, 4 CPUs and 16 GiB. The
+baseline is `3b2ad80510a0c6aa02292c72d7927627eefa0d54`. Each scenario used a
+fresh process, one discarded warmup and three measurements; no OS cache was
+forcibly cleared and read-only fingerprints used no persistent digest cache.
+
+| Layout / per-member delay | Serial median | Four-worker median |
+| --- | ---: | ---: |
+| Raw / none | 0.331 s | 0.337 s |
+| Mixed raw/ZIP / none | 0.398 s | 0.426 s |
+| Raw / synthetic 1 ms | 2.552 s | 0.546 s |
+| Mixed raw/ZIP / synthetic 1 ms | 2.499 s | 0.626 s |
+
+All 32 measurements, including warmups, returned the same SHA256, byte count
+and member count. Peak parent RSS was below 56 MiB. The 4.0–4.7x speedup models latency between member reads; it is not a measured
+HPC speedup or a running-job ETA. The small warm local trials had overlapping
+ranges and no established benefit; their medians increased by 6–28 ms. Compare
+on the target filesystem before extrapolating.
+
+Use the existing fixture creator above, then run each revision against the same
+private workspace and support tree:
+
+```bash
+python -B workflow/benchmarks/benchmark_provenance_audit.py \
+  --workspace /tmp/gg-audit-benchmark-raw --support-root workflow/support \
+  --operation store-digest --workers 4 --member-delay-ms 1 --label trial-1
+```
+
+Omit `--member-delay-ms` for a real filesystem measurement. The optional delay
+is confined to this synthetic benchmark; production fingerprints never add it.

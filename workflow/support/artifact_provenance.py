@@ -441,8 +441,16 @@ def describe_optional_paths(
     return entries
 
 
-def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
-    return _gene_family_collection_digest(root)
+def gene_family_store_digest(root: Path, *, workers: int | None = None) -> tuple[str, int, int]:
+    """Hash every logical member in canonical order with bounded I/O workers.
+
+    Workflow calls use at most their allocated CPUs (capped at four). Small
+    per-family/subdirectory digests remain serial inside parallel full audits.
+    """
+    requested = int(os.environ.get("GG_TASK_CPUS", "1")) if workers is None else workers
+    if type(requested) is not int or requested < 1:
+        raise ValueError("store digest workers must be a positive integer")
+    return _gene_family_collection_digest(root, workers=min(4, requested))
 
 
 def _store_artifact_digest(store, artifact):
@@ -458,12 +466,24 @@ def _store_artifact_digest(store, artifact):
         return sha256_stream(handle)
 
 
-def _gene_family_collection_digest(root, subdir=None):
+def _store_member_digest(store, subdir, name):
+    artifact = store.source_artifact(subdir, name)
+    if artifact is None:
+        raise FileNotFoundError(store.root / subdir / name)
+    digest, size = _store_artifact_digest(store, artifact)
+    return artifact.logical_path, digest, size
+
+
+def _gene_family_collection_digest(root, subdir=None, *, workers=1):
     store = GeneFamilyOutputStore(root)
     digest = hashlib.sha256()
     total_size = 0
     member_count = 0
-    with store.read_snapshot():
+    pool = (concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+            if workers > 1 else contextlib.nullcontext(None))
+    # Join every worker before the store closes its snapshot ZIP readers,
+    # including exceptions while the coordinator combines member digests.
+    with store.read_snapshot(), pool as executor:
         subdirs = [subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]
         memo = _DIGEST_OBSERVATION.get()
         if memo is not None:
@@ -474,18 +494,23 @@ def _gene_family_collection_digest(root, subdir=None):
             if memo is not None:
                 memo.guard((str(store.root), "collection_inventory", selected), tuple(names),
                            lambda selected=selected: tuple(store.file_names(selected)))
-            for name in names:
-                artifact = store.source_artifact(selected, name)
-                if artifact is None:
-                    raise FileNotFoundError(store.root / selected / name)
-                artifact_digest, artifact_size = _store_artifact_digest(store, artifact)
-                logical_path = artifact.logical_path.encode("utf-8")
-                digest.update(len(logical_path).to_bytes(8, "big"))
-                digest.update(logical_path)
-                digest.update(bytes.fromhex(str(artifact_digest)))
-                digest.update(int(artifact_size).to_bytes(8, "big"))
-                total_size += int(artifact_size)
-                member_count += 1
+            context = contextvars.copy_context()
+            def read_member(name, selected=selected, context=context):
+                return context.copy().run(_store_member_digest, store, selected, name)
+            for offset in range(0, len(names), workers * 8):
+                batch = names[offset:offset + workers * 8]
+                # map retains canonical input order; batching bounds futures and
+                # keeps read-only/runtime-path contexts in every worker.
+                members = (executor.map(read_member, batch) if executor and len(batch) > 1
+                           else map(read_member, batch))
+                for name, artifact_digest, artifact_size in members:
+                    logical_path = name.encode("utf-8")
+                    digest.update(len(logical_path).to_bytes(8, "big"))
+                    digest.update(logical_path)
+                    digest.update(bytes.fromhex(str(artifact_digest)))
+                    digest.update(int(artifact_size).to_bytes(8, "big"))
+                    total_size += int(artifact_size)
+                    member_count += 1
     return digest.hexdigest(), total_size, member_count
 
 
