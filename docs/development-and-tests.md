@@ -408,6 +408,12 @@ metadata because the checkout is mounted at test time. A cache miss may reuse
 the published daily image only when its runtime label matches exactly;
 otherwise CI builds the current container before conversion. The cache is
 saved only after all SIF validation checks succeed on the default branch.
+BuildKit's Actions cache exports use `mode=min` for both commit validation and
+container publishing. Observed `mode=max` exports exceeded the shared 10 GB
+allowance, alongside missing build blobs and disappearing SIF cache entries;
+one observed export alone took over 20 minutes. Keeping final-image layers
+reduces that competition, at the cost of fewer intermediate-stage cache hits
+when a new runtime must be built. Local disk cache policy is unchanged.
 The daily publisher primes that same cache from its immutable multi-architecture
 image, passing the already resolved runtime identity and security epoch. It
 does not resolve moving branches a second time during SIF preparation. Each

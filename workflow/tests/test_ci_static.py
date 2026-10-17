@@ -266,6 +266,20 @@ def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
         assert "Refusing to overwrite immutable image tag with different content" in publish_run
 
 
+def test_published_build_cache_excludes_intermediate_layers():
+    writers = [
+        step["with"]["cache-to"]
+        for step in workflow_steps(load_workflow("container-ghcr.yml"))
+        if "cache-to" in step.get("with", {})
+    ]
+    assert writers
+    for writer in writers:
+        options = dict(part.split("=", 1) for part in writer.split(","))
+        assert options["type"] == "gha"
+        assert options["mode"] == "min"
+        assert options["scope"] == "container-${{ steps.platform.outputs.pair }}"
+
+
 def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_current():
     jobs = load_workflow("tests.yml")["jobs"]
     sif_job = jobs["prepare-sif"]
@@ -296,7 +310,7 @@ def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_cur
     assert "bash ./gg_container_build_entrypoint.sh" in build_run
     assert "validation-image.outputs.source == 'local'" in build_step["if"]
     assert build_step["env"]["CACHE_FROM"] == "type=gha,scope=container-linux-amd64"
-    assert "type=gha,mode=max,scope=container-linux-amd64" in build_step["env"]["CACHE_TO"]
+    assert "type=gha,mode=min,scope=container-linux-amd64" in build_step["env"]["CACHE_TO"]
     assert "event_name != 'pull_request'" in build_step["env"]["CACHE_TO"]
     assert named_step(sif_job, "Expose GitHub runtime for BuildKit cache")["uses"].startswith(
         "crazy-max/ghaction-github-runtime@"
