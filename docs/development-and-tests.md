@@ -255,6 +255,9 @@ Default-branch and manual runs finish their active validation so a long runtime
 build can populate the exact cache. GitHub keeps one pending run per ref and
 replaces intermediate waiting runs with the latest. Superseded PR validation
 still cancels. This avoids repeatedly discarding cold builds before they finish.
+Main-branch runtime selection compares against the last ancestor whose complete
+SIF check succeeded, so coalescing cannot hide an intermediate code change behind
+a documentation-only push. If that proof is unavailable, all runtime checks run.
 `--gg-shard INDEX/COUNT`
 assigns each selected pytest node ID to exactly one partition using a stable hash;
 lane selection and explicit paths still apply first. Each job reports slow test
@@ -411,7 +414,7 @@ saved only after all SIF validation checks succeed on the default branch.
 BuildKit's Actions cache exports use `mode=min` for both commit validation and
 container publishing. Observed `mode=max` exports exceeded the shared 10 GB
 allowance, alongside missing build blobs and disappearing SIF cache entries;
-one observed export alone took over 20 minutes. Keeping final-image layers
+one observed export alone took about 19.5 minutes. Keeping final-image layers
 reduces that competition, at the cost of fewer intermediate-stage cache hits
 when a new runtime must be built. Local disk cache policy is unchanged.
 The daily publisher primes that same cache from its immutable multi-architecture

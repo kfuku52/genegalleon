@@ -24,6 +24,9 @@ concurrency:
 jobs:
   runtime-change-filter:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     outputs:
       should_run: ${{ steps.filter.outputs.should_run }}
 
@@ -39,14 +42,44 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Pending pushes can be coalesced. Compare with the last successful
+          # complete runtime check, rather than losing changes in a skipped run.
+          if [[ "${EVENT_NAME}" == push ]]; then
+            BASE_SHA=""
+            if candidates="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/tests.yml/runs?branch=${GITHUB_REF_NAME}&event=push&status=success&per_page=100" \
+              --jq '.workflow_runs[] | [.id, .head_sha] | @tsv')"; then
+              while IFS=$'\t' read -r run_id candidate; do
+                if [[ ! "${run_id}" =~ ^[0-9]+$ || ! "${candidate}" =~ ^[0-9a-f]{40}$ ]]; then
+                  continue
+                fi
+                if ! git merge-base --is-ancestor "${candidate}" "${GITHUB_SHA}"; then
+                  continue
+                fi
+                if ! complete="$(gh api \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
+                  --jq 'any(.jobs[]; .name == "sif-runtime-validation" and .conclusion == "success")')"; then
+                  break
+                fi
+                if [[ "${complete}" == true ]]; then
+                  BASE_SHA="${candidate}"
+                  break
+                fi
+              done <<< "${candidates}"
+            fi
+            # No proof is an instruction to run every runtime check.
+            echo "Last complete runtime validation: ${BASE_SHA:-unavailable; running full validation}"
+          fi
           should_run=0
           if [[ "${EVENT_NAME}" == "workflow_dispatch" || -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
             should_run=1
           elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             should_run=1
           else
+            changed_paths="$(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")"
             while IFS= read -r path; do
               case "${path}" in
                 .dockerignore|dev|pyproject.toml|gg_container_build_entrypoint.sh|container/*|workflow/*|.github/workflows/tests.yml|.github/actions/*)
@@ -54,7 +87,7 @@ jobs:
                   break
                   ;;
               esac
-            done < <(git diff --name-only "${BASE_SHA}" "${GITHUB_SHA}")
+            done <<< "${changed_paths}"
           fi
           echo "should_run=${should_run}" >> "${GITHUB_OUTPUT}"
 

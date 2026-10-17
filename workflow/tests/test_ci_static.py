@@ -280,6 +280,74 @@ def test_published_build_cache_excludes_intermediate_layers():
         assert options["scope"] == "container-${{ steps.platform.outputs.pair }}"
 
 
+@pytest.mark.parametrize(
+    ("event", "last_full", "api_mode", "expected"),
+    [
+        ("push", "initial", "ok", "1"),
+        ("push", "code", "ok", "0"),
+        ("push", "code", "skipped", "1"),
+        ("push", "code", "newest_skipped", "1"),
+        ("push", "code", "unavailable", "1"),
+        ("push", "code", "jobs_unavailable", "1"),
+        ("pull_request", "initial", "unavailable", "1"),
+        ("pull_request", "code", "unavailable", "0"),
+        ("workflow_dispatch", "code", "unavailable", "1"),
+    ],
+)
+def test_runtime_selection_preserves_coalesced_code_changes(
+    tmp_path, event, last_full, api_mode, expected
+):
+    job = load_workflow("tests.yml")["jobs"]["runtime-change-filter"]
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    script = step_run(job, "Detect container-runtime changes")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for key, value in (("user.name", "Test"), ("user.email", "test@example.invalid")):
+        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+    commits = {}
+    for label, path in (
+        ("initial", ".dockerignore"), ("code", "workflow/changed.sh"), ("docs", "README.md")
+    ):
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(label + "\n")
+        subprocess.run(["git", "-C", str(repo), "add", path], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", label], check=True)
+        commits[label] = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    gh.write_text("""#!/usr/bin/env python3
+import os
+import sys
+mode = os.environ['FAKE_API_MODE']
+endpoint = sys.argv[2]
+if mode == 'unavailable' or (mode == 'jobs_unavailable' and '/jobs?' in endpoint):
+    sys.exit(1)
+if '/workflows/' in endpoint:
+    print('7\\t' + os.environ['FAKE_LAST_FULL'])
+    if mode == 'newest_skipped':
+        print('6\\t' + os.environ['FAKE_INITIAL'])
+else:
+    skipped = mode == 'skipped' or (mode == 'newest_skipped' and '/7/' in endpoint)
+    print('false' if skipped else 'true')
+""")
+    gh.chmod(0o755)
+    output = tmp_path / "output"
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", EVENT_NAME=event,
+               BASE_SHA=commits[last_full] if event == "pull_request" else commits["code"],
+               GITHUB_REPOSITORY="example/project", GITHUB_REF_NAME="main",
+               GITHUB_SHA=commits["docs"], GITHUB_OUTPUT=str(output),
+               FAKE_API_MODE=api_mode, FAKE_LAST_FULL=commits[last_full],
+               FAKE_INITIAL=commits["initial"])
+    subprocess.run(["bash", "-c", script], cwd=repo, env=env, check=True,
+                   capture_output=True, text=True)
+    assert output.read_text().strip() == f"should_run={expected}"
+
+
 def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_current():
     jobs = load_workflow("tests.yml")["jobs"]
     sif_job = jobs["prepare-sif"]
