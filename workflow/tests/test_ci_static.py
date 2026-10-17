@@ -190,11 +190,18 @@ def test_workflows_limit_github_token_permissions_by_default():
 
 
 def test_tests_workflow_avoids_duplicate_branch_push_and_pull_request_runs():
-    triggers = load_workflow("tests.yml")["on"]
+    workflow = load_workflow("tests.yml")
+    triggers = workflow["on"]
 
     assert triggers["push"]["branches"] == ["main"]
     assert "pull_request" in triggers
     assert "workflow_dispatch" in triggers
+    # Default-branch/manual builds retain progress through repeated pushes.
+    # Waiting runs remain coalesced by the same repository/ref group.
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.event.pull_request.head.repo.full_name || github.repository" in concurrency["group"]
+    assert "github.event.pull_request.head.ref || github.ref_name" in concurrency["group"]
 
 
 def test_workflow_run_blocks_do_not_interpolate_untrusted_event_data():
@@ -341,10 +348,10 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
     share = named_step(prepare, "Share uncached SIF with validation partitions")
     assert share["with"]["if-no-files-found"] == "error"
     assert share["with"]["retention-days"] == "1"
-    assert jobs["sif-python"]["strategy"]["matrix"]["shard"] == [str(i) for i in range(1, 5)]
+    assert "strategy" not in jobs["sif-python"]
     assert set(jobs["sif-other"]["strategy"]["matrix"]["suite"]) == {"runtime-extra", "r", "3di"}
     partition = named_step(jobs["sif-python"], "Validate SIF Python partition")["with"]
-    assert partition["shard"] == "${{ matrix.shard }}/4"
+    assert partition["shard"] == "1/1"
     assert partition["workers"] == "4"
     for lane, step in (("python-fast-shards", "Run fast Python tests"),
                        ("python-heavy", "Run heavy Python tests")):
@@ -353,7 +360,8 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
                        ("sif-other", "Validate independent SIF checks")):
         job = jobs[name]
         assert job["needs"] == ["prepare-sif"]
-        assert job["strategy"]["fail-fast"] == "false"
+        if "strategy" in job:
+            assert job["strategy"]["fail-fast"] == "false"
         assert named_step(job, step)["with"]["prepared-runtime-input"] == (
             "${{ needs.prepare-sif.outputs.runtime-input }}"
         )
@@ -371,11 +379,12 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
         prepare, "Save validated SIF by exact runtime input"
     )["if"]
     fast = jobs["python-fast-shards"]
-    assert fast["strategy"]["matrix"]["shard"] == ["1", "2"]
+    assert "strategy" not in fast
+    assert named_step(fast, "Run fast Python tests")["env"]["TEST_SHARD"] == "1/1"
     assert jobs["python-fast"]["needs"] == ["python-fast-shards"]
     workflow = [entry["partition"] for entry in jobs["python-heavy"]["strategy"]["matrix"]["shard"]
                 if entry["suite"] == "integration-workflow"]
-    assert set(workflow) == {"1/3", "2/3", "3/3"}
+    assert workflow == ["1/1"]
 
 
 @pytest.mark.parametrize("failed", [None, "PREPARE_RESULT", "PYTHON_RESULT", "OTHER_RESULT"])
