@@ -534,6 +534,9 @@ same detected or declared factor levels and reference coding.
     FASTQ files at that directory's first level; hidden files and nested files
     are excluded. Broken, unreadable or non-file FASTQ links stop discovery.
     External link targets must also be visible inside the execution container.
+    Metadata provenance hashes each physical FASTQ target and records its input
+    basename. Link retargeting or a changed FASTQ inventory during metadata
+    generation stops publication; ordinary directory-provenance checks stay strict.
     Launchers can source the core with `GG_CORE_SOURCE_ONLY=1` and call
     `discover_native_fastq_files INPUT_DIRECTORY` inside that same container to
     qualify the exact discovery path without starting analysis.
