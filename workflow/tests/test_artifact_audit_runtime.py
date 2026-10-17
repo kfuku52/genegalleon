@@ -702,3 +702,65 @@ def test_parallel_whole_store_query_rehashes_content_before_publication(tmp_path
 def test_whole_store_digest_rejects_invalid_explicit_worker_counts(tmp_path, workers):
     with pytest.raises(ValueError, match='positive integer'):
         provenance.gene_family_store_digest(tmp_path, workers=workers)
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip', 'mixed'])
+def test_subdirectory_parallel_digest_preserves_bytes_and_final_content_fence(tmp_path, monkeypatch, layout):
+    logical = collection_fixture(tmp_path, layout)
+    monkeypatch.setenv('GG_TASK_CPUS', '1')
+    with store_module.read_only_observation():
+        expected = provenance.gene_family_subdir_digest(logical, 'stat_tree')
+    monkeypatch.setenv('GG_TASK_CPUS', '4')
+    with store_module.read_only_observation(), provenance.digest_observation(workers=4) as memo:
+        assert provenance.gene_family_subdir_digest(logical, 'stat_tree') == expected
+    assert expected[2] == memo.metrics()['digest_revalidation_reads'] == 64
+    with pytest.raises(ValueError, match='changed'), store_module.read_only_observation():
+        with provenance.digest_observation(workers=4):
+            provenance.gene_family_subdir_digest(logical, 'stat_tree')
+            # A raw override must invalidate the query even for a ZIP fixture.
+            path = logical / 'stat_tree/OG0000000_stat.tree.tsv'
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(b'x' * len(b'family 0: stat_tree\n'))
+
+
+@pytest.mark.parametrize('outer_parallel', [False, True])
+def test_subdirectory_io_does_not_multiply_outer_audit_parallelism(tmp_path, monkeypatch, outer_parallel):
+    logical = collection_fixture(tmp_path)
+    monkeypatch.setenv('GG_TASK_CPUS', '16')
+    original = provenance._store_member_digest
+    barrier, lock = threading.Barrier(4), threading.Lock()
+    active = peak = entered = 0
+    def read(*args):
+        nonlocal active, peak, entered
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            entered += 1
+            initial = entered <= 4
+        try:
+            if initial:
+                barrier.wait(timeout=10)
+            time.sleep(0.001)
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    def digest(_index):
+        with store_module.read_only_observation():
+            return provenance.gene_family_subdir_digest(logical, 'stat_tree')
+    if outer_parallel:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(digest, range(4)))
+        assert len(set(results)) == 1
+    else:
+        digest(0)
+    assert peak == 4 and active == 0
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'invalid'])
+def test_subdirectory_digest_rejects_invalid_allocated_cpu_count(tmp_path, monkeypatch, value):
+    logical = collection_fixture(tmp_path)
+    monkeypatch.setenv('GG_TASK_CPUS', value)
+    with pytest.raises(ValueError):
+        provenance.gene_family_subdir_digest(logical, 'stat_tree')

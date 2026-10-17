@@ -25,6 +25,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -467,7 +468,16 @@ def _store_artifact_digest(store, artifact):
 
 
 def _store_member_digest(store, subdir, name):
-    artifact = store.source_artifact(subdir, name)
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is None:
+        artifact = store.source_artifact(subdir, name)
+    else:
+        # Seed the same resolver used by audit_entry_digest. Re-resolving each
+        # member here repeats metadata I/O, including on a content-cache hit.
+        def resolve_source():
+            artifact = store.source_artifact(subdir, name)
+            return artifact, _audit_artifact_identity(artifact)
+        artifact, _identity = memo.resolve((str(store.root), f"{subdir}/{name}"), resolve_source)
     if artifact is None:
         raise FileNotFoundError(store.root / subdir / name)
     digest, size = _store_artifact_digest(store, artifact)
@@ -526,7 +536,13 @@ def gene_family_subdir_digest(root: Path, subdir: str) -> tuple[str, int, int]:
         raise ProvenanceError(f"Unsafe gene-family logical subdirectory: {subdir!r}")
     if not root.is_dir() or root.is_symlink():
         raise FileNotFoundError(root)
-    return _gene_family_collection_digest(root, subdir)
+    requested = int(os.environ.get("GG_TASK_CPUS", "1"))
+    if requested < 1:
+        raise ValueError("store digest workers must be a positive integer")
+    # Full audits already parallelize families. Only a scalar caller overlaps
+    # subdirectory I/O, keeping nested audit workers within their original cap.
+    workers = min(4, requested) if threading.current_thread() is threading.main_thread() else 1
+    return _gene_family_collection_digest(root, subdir, workers=workers)
 
 
 def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str, int]:

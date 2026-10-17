@@ -1,5 +1,42 @@
 # Full provenance audit performance and progress
 
+## Scalar subdirectory preflight reads
+
+Read-only preflight profiling found 144,073 metadata calls consuming 37.79 of
+80.0 sampled seconds; file reads consumed another 19.49 seconds. The sample
+was deliberately interrupted for diagnosis and is not a completion proof.
+Subdirectory inputs were still serial, and collection traversal resolved each
+member again before the query's existing source resolver. Scalar subdirectory
+digests now overlap at most four readers within `GG_TASK_CPUS`; callers already
+running in audit worker threads remain serial to avoid multiplying concurrency.
+Member traversal shares the original query resolver. All content reads, final
+rehashes, raw overrides, inventory/epoch guards and failure propagation remain.
+
+A paired Linux aarch64 / Python 3.12.15 Docker benchmark used four CPUs, 512
+families, two provenance steps, a 1 MiB shared input and a synthetic 1 ms
+per-member I/O delay. Against `e266142db9cfffa238f5b50ce685ea10b2bb40d5`,
+one discarded warmup and three alternating trials per layout gave these medians.
+Every logical digest, byte count and 512 final content revalidations matched.
+
+| Layout | Before (s) | After (s) | Peak RSS before/after (KiB) |
+| --- | ---: | ---: | ---: |
+| raw | 1.8063 | 1.1090 | 44,360 / 44,560 |
+| ZIP | 1.8594 | 1.1282 | 45,132 / 45,468 |
+| mixed | 1.7476 | 1.2938 | 45,056 / 45,308 |
+
+These fixture measurements do not establish end-to-end HPC speedup. Each trial
+starts a fresh query; the OS cache is not forcibly cleared. More overlapping
+readers increase simultaneous I/O and a small amount of memory. Reproduce with
+the existing fixture creator below and this operation, alternating old and new
+support roots while retaining the same current benchmark runner:
+
+```bash
+python -B workflow/benchmarks/benchmark_provenance_audit.py \
+  --workspace /tmp/gg-audit-fixture --support-root /path/to/support \
+  --operation subdir-digest --subdir stat_branch --query-observation \
+  --workers 4 --member-delay-ms 1
+```
+
 `artifact_provenance.py audit` preserves the TSV columns, sorting, scientific
 hashes, stale-policy classifications and CSUBST branch checks. It hashes shared
 declared sources once during classification, then rereads every unique source
