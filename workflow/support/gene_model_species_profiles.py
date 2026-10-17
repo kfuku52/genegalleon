@@ -5,6 +5,7 @@ from pathlib import Path
 
 FIELDS = {"max_intron": int, "max_interval": int, "padding": int,
           "minimum_coverage": float, "minimum_identity": float,
+          "minimum_broad_coverage": float, "minimum_lower_coverage_identity": float,
           "min_support": int, "candidate_limit": int, "max_genome_queries": int}
 
 

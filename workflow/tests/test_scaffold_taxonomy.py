@@ -287,7 +287,7 @@ def test_cli_raw_taxonomy_to_hgt_scorer(tmp_path, raw_gff_present):
     env.update({flag: "0" for flag in set(re.findall(r"\brun_[a-z0-9_]+\b", core.read_text()))})
     # This fixture launches the core directly, without the scratch supervisor.
     env.update(GG_COMMON_TMP_ROOT="workspace", gg_workspace_dir=str(workspace), GG_ARRAY_TASK_ID="1", run_scaffold_taxonomy="1", delete_tmp_dir="0",
-               gg_support_dir=str(root / "workflow/support"))
+               genome_annotation_backend="none", gg_support_dir=str(root / "workflow/support"))
     env["scaffold_host_taxid"] = "3"
     env["PATH"] = f"{_install_fake_conda(tmp_path)}{os.pathsep}{env['PATH']}"
     scaffold_output = workspace / "output/species_scaffold_taxonomy/Host_species_scaffold_taxonomy.tsv"

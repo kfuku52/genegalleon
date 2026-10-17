@@ -52,7 +52,9 @@ gene_model_rescue_retain_search_inputs="${gene_model_rescue_retain_search_inputs
 gene_model_rescue_common_references="${gene_model_rescue_common_references:-5}"
 gene_model_rescue_nearest_references="${gene_model_rescue_nearest_references:-3}"
 gene_model_rescue_minimum_busco="${gene_model_rescue_minimum_busco:-90}"
-gene_model_rescue_minimum_coverage="${gene_model_rescue_minimum_coverage:-0.95}"
+gene_model_rescue_minimum_coverage="${gene_model_rescue_minimum_coverage:-0.70}"
+gene_model_rescue_minimum_broad_coverage="${gene_model_rescue_minimum_broad_coverage:-0.90}"
+gene_model_rescue_minimum_lower_coverage_identity="${gene_model_rescue_minimum_lower_coverage_identity:-0.70}"
 gene_model_rescue_minimum_identity="${gene_model_rescue_minimum_identity:-0.5}"
 gene_model_rescue_max_interval="${gene_model_rescue_max_interval:-200000}"
 gene_model_rescue_max_intron="${gene_model_rescue_max_intron:-20000}"
@@ -61,7 +63,7 @@ gene_model_genome_index_cache="${gene_model_genome_index_cache:-}"
 [[ -z "${gene_model_genome_index_cache}" ]] || export GG_GENOME_INDEX_CACHE="${gene_model_genome_index_cache}"
 gene_model_rescue_genome_fallback="${gene_model_rescue_genome_fallback:-1}"
 gene_model_rescue_max_genome_queries="${gene_model_rescue_max_genome_queries:-20000}"
-gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-2}"
+gene_model_rescue_unanchored_min_species="${gene_model_rescue_unanchored_min_species:-1}"
 gene_model_rescue_terminal_max_extension="${gene_model_rescue_terminal_max_extension:-300}"
 gene_model_rescue_terminal_max_unaligned_c_overhang="${gene_model_rescue_terminal_max_unaligned_c_overhang:-2}"
 gene_model_rescue_gemoma_jar="${gene_model_rescue_gemoma_jar:-}"
@@ -70,6 +72,7 @@ require_cds="${require_cds:-0}"
 require_gff="${require_gff:-0}"
 require_genome="${require_genome:-0}"
 run_species_busco="${run_species_busco:-1}"
+species_busco_mode="${species_busco_mode:-transcriptome}"
 busco_timeout_seconds="${busco_timeout_seconds:-0}"
 species_busco_parallel_jobs="${species_busco_parallel_jobs:-auto}"
 species_busco_memory_gb_per_job="${species_busco_memory_gb_per_job:-4}"
@@ -183,6 +186,10 @@ for requirement in require_cds require_gff require_genome; do
     *) echo "${requirement} must be 0 or 1" >&2; exit 1 ;;
   esac
 done
+case "${species_busco_mode}" in
+  transcriptome|proteins) ;;
+  *) echo "species_busco_mode must be transcriptome or proteins." >&2; exit 1 ;;
+esac
 if [[ ! "${busco_timeout_seconds}" =~ ^(0|[1-9][0-9]*)$ ]]; then
   echo "busco_timeout_seconds must be 0 or a positive integer." >&2
   exit 1
@@ -1050,7 +1057,7 @@ run_format_stage_single() {
     echo "Staging formatted-input outputs before publication."
   fi
 
-  if ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
+  if [[ ${download_only} -eq 0 ]] && ! ensure_ete_taxonomy_db "${gg_workspace_dir}"; then
     echo "Warning: Failed to prepare ETE taxonomy DB for species_summary taxonomy metadata. Continuing without taxid/genetic code annotation." >&2
   fi
 
@@ -1144,12 +1151,14 @@ run_format_stage_single() {
 run_validate_stage() {
   local task="Validate formatted species inputs"
   local mapping_stats_file=""
+  local longest_cds_stats_file=""
   local cmd=()
   local cds_files=()
   local gff_files=()
   local genome_files=()
   local set_status=0
   local validation_reuse_args=()
+  local validation_genome_args=()
 
   if [[ ${run_validate_inputs} -ne 1 || ${run_format_inputs} -ne 1 || ${download_only} -ne 0 || ${dry_run} -ne 0 ]]; then
     gg_step_skip "${task}"
@@ -1178,6 +1187,9 @@ run_validate_stage() {
   num_species_cds=${#cds_files[@]}
   num_species_gff=${#gff_files[@]}
   num_species_genome=${#genome_files[@]}
+  if [[ ${#genome_files[@]} -gt 0 ]]; then
+    validation_genome_args=(--species-genome-dir "${species_genome_dir}")
+  fi
   echo "Detected ${#cds_files[@]} species CDS files, ${#gff_files[@]} species GFF files, and ${#genome_files[@]} species genome files."
 
   if [[ ${#cds_files[@]} -eq 0 ]]; then
@@ -1192,7 +1204,7 @@ run_validate_stage() {
 
   if [[ ${#gff_files[@]} -eq 0 ]]; then
     echo "No species GFF files were detected in: ${species_gff_dir}"
-    if [[ ${strict} -eq 1 ]]; then
+    if [[ ${require_gff} -eq 1 ]]; then
       stage_validate_status="failed"
       exit 1
     fi
@@ -1200,7 +1212,7 @@ run_validate_stage() {
 
   if [[ ${#genome_files[@]} -eq 0 ]]; then
     echo "No species genome files were detected in: ${species_genome_dir}"
-    if [[ ${strict} -eq 1 ]]; then
+    if [[ ${require_genome} -eq 1 ]]; then
       stage_validate_status="failed"
       exit 1
     fi
@@ -1226,7 +1238,7 @@ run_validate_stage() {
       if [[ "${input_generation_mode}" == array_finalize ]]; then
         cmd=(python "${gg_support_dir}/input_validation_reuse.py")
         cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
-        cmd+=(--species-genome-dir "${species_genome_dir}" --species-summary "${species_summary_output}")
+        cmd+=("${validation_genome_args[@]}" --species-summary "${species_summary_output}")
         cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
         cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
         [[ ${strict} -ne 1 ]] || cmd+=(--strict)
@@ -1240,7 +1252,7 @@ run_validate_stage() {
         cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
         cmd+=(--species-cds-dir "${species_cds_dir}")
         cmd+=(--species-gff-dir "${species_gff_dir}")
-        cmd+=(--species-genome-dir "${species_genome_dir}")
+        cmd+=("${validation_genome_args[@]}")
         cmd+=(--species-summary "${species_summary_output}")
         cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
         cmd+=(--stats-output "${mapping_stats_file}")
@@ -1278,6 +1290,20 @@ run_validate_stage() {
       fi
       rm -f -- "${mapping_stats_file}"
       # Retain source-ownership coverage alongside the selection result.
+    fi
+  elif [[ ${#cds_files[@]} -gt 0 ]]; then
+    # CDS-only inputs retain full source-selection validation. Presence of
+    # genomic roles is controlled by require_gff/require_genome above.
+    longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
+    cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+    cmd+=(--species-cds-dir "${species_cds_dir}" --species-summary "${species_summary_output}")
+    cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --stats-output "${longest_cds_stats_file}")
+    cmd+=("${validation_reuse_args[@]}")
+    echo "Running: ${cmd[*]}"
+    if ! "${cmd[@]}"; then
+      stage_validate_status="failed"
+      echo "Failed: Validate longest CDS representative selection"
+      exit 1
     fi
   fi
   stage_validate_status="ok"
@@ -1578,10 +1604,13 @@ run_species_busco_for_one_file() {
     --output "busco_short=${file_sp_busco_short}"
     --parameter "busco_lineage_request=${busco_lineage}"
     --parameter "busco_lineage_resolved=${busco_lineage_resolved}"
-    --parameter "busco_mode=transcriptome"
+    --parameter "busco_mode=${species_busco_mode}"
     --parameter "evalue=1e-03"
     --parameter "limit=20"
   )
+  if [[ "${species_busco_mode}" == proteins ]]; then
+    busco_provenance_args+=(--parameter "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
+  fi
   [[ ${busco_requires_single_copy} -ne 1 ]] || busco_provenance_args+=(--output "busco_single_copy=${file_sp_busco_proteins}")
   if [[ ${overwrite} -eq 1 ]]; then
     busco_needs_update=1
@@ -1601,7 +1630,12 @@ run_species_busco_for_one_file() {
   busco_work_root=$(mktemp -d "${download_tmp_root}/busco.${species_name}.XXXXXX")
   busco_input_fasta="${busco_work_root}/input.fasta"
   busco_output_dir="${busco_work_root}/busco_tmp"
-  seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}"
+  if [[ "${species_busco_mode}" == proteins ]]; then
+    seqkit translate --transl-table "${GG_COMMON_GENETIC_CODE:-1}" --threads "${busco_threads}" \
+      "${seq_full}" --out-file "${busco_input_fasta}" || return $?
+  else
+    seqkit seq --threads "${busco_threads}" "${seq_full}" --out-file "${busco_input_fasta}" || return $?
+  fi
 
   if ! dir_busco_db=$(ensure_busco_download_path "${gg_workspace_dir}" "${busco_lineage_resolved}"); then
     echo "Failed to prepare BUSCO dataset: ${busco_lineage_resolved}"
@@ -1610,11 +1644,11 @@ run_species_busco_for_one_file() {
   fi
   dir_busco_lineage="${dir_busco_db}/lineages/${busco_lineage_resolved}"
 
-  (
+  if (
     cd "${busco_work_root}"
     GG_BUSCO_TIMEOUT_SECONDS="${busco_timeout_seconds}" gg_run_busco_with_metaeuk_modified_fas_compat \
       --in "input.fasta" \
-      --mode "transcriptome" \
+      --mode "${species_busco_mode}" \
       --out "busco_tmp" \
       --cpu "${busco_threads}" \
       --force \
@@ -1632,7 +1666,15 @@ run_species_busco_for_one_file() {
             for (i = first; i <= NR; i++) print tail_lines[i % 50]
           }
         }'
-  )
+  ); then
+    :
+  else
+    local busco_exit_code=$?
+    python "${gg_support_dir}/busco_failure_context.py" --root "${busco_work_root}" \
+      --mode "${species_busco_mode}" --lineage "${busco_lineage_resolved}" --exit-code "${busco_exit_code}" || true
+    echo "BUSCO failed for ${species_name}; mode=${species_busco_mode}; retained diagnostics: ${busco_work_root}" >&2
+    return "${busco_exit_code}"
+  fi
 
   if copy_busco_tables "${busco_output_dir}" "${busco_lineage_resolved}" "${file_sp_busco_full}" "${file_sp_busco_short}"; then
     python "${gg_support_dir}/busco_guide_tree.py" preserve \
@@ -1642,9 +1684,10 @@ run_species_busco_for_one_file() {
     rm -rf -- "${busco_work_root}"
     gg_artifact_record "${busco_provenance_args[@]}"
   else
-    echo "Failed to locate normalized BUSCO outputs for ${species_name}. Exiting."
-    rm -rf -- "${busco_work_root}"
-    exit 1
+    python "${gg_support_dir}/busco_failure_context.py" --root "${busco_work_root}" \
+      --mode "${species_busco_mode}" --lineage "${busco_lineage_resolved}" --exit-code 1 || true
+    echo "Failed to locate normalized BUSCO outputs for ${species_name}; retained diagnostics: ${busco_work_root}" >&2
+    return 1
   fi
 }
 
@@ -2193,6 +2236,7 @@ run_array_worker_mode() {
   local cds_output_path=""
   local gff_output_path=""
   local genome_output_path=""
+  local orf_audit_output_path=""
   local format_provenance_manifest=""
   local -a format_provenance_args=()
 
@@ -2244,7 +2288,7 @@ run_array_worker_mode() {
   fi
   read_stats_json_fields "${task_meta_file}" species_prefix cds_input_path=cds_path \
     gff_input_path=gff_path gbff_input_path=gbff_path genome_input_path=genome_path \
-    cds_output_path gff_output_path genome_output_path || exit $?
+    cds_output_path gff_output_path genome_output_path orf_audit_output_path || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" || ( ${require_gff} -eq 1 && -z "${gff_output_path}" ) ]]; then
     stage_format_status="failed"
     echo "Array task description is missing required species or output paths: ${task_meta_file}"
@@ -2276,6 +2320,7 @@ run_array_worker_mode() {
     gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
     gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
     format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
+    [[ -z "${orf_audit_output_path}" ]] || format_provenance_args+=(--output "orf_audit=${orf_audit_output_path}")
     if [[ -n "${gff_output_path}" ]]; then
       if [[ ${require_gff} -eq 1 || -n "${gff_input_path}" ]]; then
         format_provenance_args+=(--output "formatted_gff=${gff_output_path}")
@@ -2366,6 +2411,10 @@ run_array_worker_mode() {
     --task-plan "${task_plan_output}" --task-index "${GG_ARRAY_TASK_ID}"
     --file "${task_plan_output}.settings.json" --file "${task_stats_file}" --file "${task_summary_file}" --file "${task_meta_file}"
     --file "${cds_output_path}")
+  if [[ -n "${orf_audit_output_path}" ]]; then
+    [[ -s "${orf_audit_output_path}" ]] || { echo "Transcript ORF audit is missing" >&2; exit 1; }
+    receipt_cmd+=(--file "${orf_audit_output_path}")
+  fi
   [[ -z "${gff_output_path}" || ! -s "${gff_output_path}" ]] || receipt_cmd+=(--file "${gff_output_path}")
   if [[ ${stage_validate_status} == "ok" ]]; then
     [[ -s "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.longest.json" ]] || {
@@ -2517,6 +2566,18 @@ run_array_finalize_mode() {
 }
 
 # Serialize shared stages against active species workers in this output workspace.
+resolve_oriongeno_candidate_inputs() {
+  local configured="${gene_model_oriongeno_inputs-auto}"
+  if [[ "${configured}" == auto ]]; then
+    local prediction_root="${gg_workspace_output_dir}/genome_prediction/oriongeno"
+    local tables=("${prediction_root}"/*/candidate_inputs.tsv)
+    [[ -f "${tables[0]}" ]] || return 0
+    printf '%s\n' "${prediction_root}"
+  else
+    printf '%s\n' "${configured}"
+  fi
+}
+
 prepare_gene_model_rescue() {
   local rescue_tree="${gene_model_rescue_tree}"
   local -a rescue_args=()
@@ -2541,12 +2602,17 @@ prepare_gene_model_rescue() {
     --common-references "${gene_model_rescue_common_references}" --nearest-references "${gene_model_rescue_nearest_references}"
     --minimum-busco "${gene_model_rescue_minimum_busco}" --minimum-coverage "${gene_model_rescue_minimum_coverage}"
     --minimum-identity "${gene_model_rescue_minimum_identity}" --max-interval "${gene_model_rescue_max_interval}"
+    --minimum-broad-coverage "${gene_model_rescue_minimum_broad_coverage}"
+    --minimum-lower-coverage-identity "${gene_model_rescue_minimum_lower_coverage_identity}"
     --max-intron "${gene_model_rescue_max_intron}" --genome-fallback "${gene_model_rescue_genome_fallback}"
     --max-genome-queries "${gene_model_rescue_max_genome_queries}"
     --unanchored-min-species "${gene_model_rescue_unanchored_min_species}"
     --terminal-max-extension "${gene_model_rescue_terminal_max_extension}"
     --terminal-max-unaligned-c-overhang "${gene_model_rescue_terminal_max_unaligned_c_overhang}")
   [[ -z "${gene_model_rescue_prediction_cache}" ]] || rescue_args+=(--prediction-cache "${gene_model_rescue_prediction_cache}")
+  local oriongeno_inputs
+  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+  [[ -z "${oriongeno_inputs}" ]] || rescue_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || rescue_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ "${gene_model_rescue_retain_search_inputs}" != "1" ]] || rescue_args+=(--retain-search-inputs)
   [[ -z "${gene_model_rescue_gemoma_jar}" ]] || rescue_args+=(--gemoma-jar "${gene_model_rescue_gemoma_jar}" --gemoma-java "${gene_model_rescue_gemoma_java}")
@@ -2619,6 +2685,8 @@ prepare_gene_model_refinement() {
     --min-margin "${gene_model_refinement_min_margin}" --min-support "${gene_model_refinement_min_support}"
     --candidate-limit "${gene_model_refinement_candidate_limit}" --padding "${gene_model_refinement_padding}"
     --minimum-coverage "${gene_model_rescue_minimum_coverage}" --minimum-identity "${gene_model_rescue_minimum_identity}"
+    --minimum-broad-coverage "${gene_model_rescue_minimum_broad_coverage}"
+    --minimum-lower-coverage-identity "${gene_model_rescue_minimum_lower_coverage_identity}"
     --max-intron "${gene_model_rescue_max_intron}" --max-interval "${gene_model_rescue_max_interval}")
   if [[ -n "${gene_model_refinement_inputs}" ]]; then
     refinement_args+=(--inputs "${gene_model_refinement_inputs}")
@@ -2632,6 +2700,9 @@ prepare_gene_model_refinement() {
   fi
   [[ -z "${gene_model_refinement_edges}" ]] || refinement_args+=(--edges "${gene_model_refinement_edges}")
   [[ -z "${gene_model_refinement_rna}" ]] || refinement_args+=(--rna "${gene_model_refinement_rna}")
+  local oriongeno_inputs
+  oriongeno_inputs=$(resolve_oriongeno_candidate_inputs) || return $?
+  [[ -z "${oriongeno_inputs}" ]] || refinement_args+=(--oriongeno-inputs "${oriongeno_inputs}")
   [[ -z "${gene_model_annevo_inputs:-}" ]] || refinement_args+=(--annevo-inputs "${gene_model_annevo_inputs}")
   [[ -z "${gene_model_species_profiles}" ]] || refinement_args+=(--species-profiles "${gene_model_species_profiles}")
   python "${gg_support_dir}/gene_model_refinement.py" "${refinement_args[@]}"
@@ -2723,6 +2794,9 @@ if [[ "${input_generation_mode}" == array_* ]]; then
     gbif_year_min gbif_year_max gbif_countries gbif_include_basis_of_record gbif_exclude_basis_of_record gbif_include_establishment_means gbif_missing_date gbif_missing_uncertainty gbif_missing_centroid_distance gbif_use_cache gbif_require_complete gbif_occurrence_file gbif_taxon_map gbif_download_metadata; do
     array_settings_cmd+=(--setting "${array_setting}=${!array_setting}")
   done
+  if [[ "${species_busco_mode}" != transcriptome ]]; then
+    array_settings_cmd+=(--setting "species_busco_mode=${species_busco_mode}")
+  fi
   array_settings_cmd+=(--setting "genetic_code=${GG_COMMON_GENETIC_CODE:-1}")
   # Do not add empty resume fields to old immutable settings documents.
   for resume_prefix in resume_from resume_fallback; do

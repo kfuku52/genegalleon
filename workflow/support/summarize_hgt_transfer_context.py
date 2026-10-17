@@ -23,12 +23,13 @@ from hgt_species_tree import read_species_tree
 from scaffold_taxonomy import CONTEXT_COLUMNS, GENE_COLUMNS, METRICS, RANKS, species_key
 
 IDENTITY_COLUMNS = ["event_id", "orthogroup", "branch_id", "node_name", "event_index",
-                    "generax_transfer", "generax_donor_node", "generax_recipient_node"]
+                    "generax_transfer", "generax_donor_node", "generax_recipient_node",
+                    "analysis_donor_node", "analysis_recipient_node"]
 SIDE_COLUMNS = ["branch_type", "evidence_basis", "descendant_species", "context_status",
                 "all_descendant_gene_count", "retained_gene_count", "excluded_gene_count",
                 "mapped_gene_count", "scaffold_count", "retained_genes"]
 EVENT_COLUMNS = [*IDENTITY_COLUMNS, "mapping_status", "mapping_reason", "xml_event_id",
-                 "species_tree_mapping_status", "generax_xml_sha256", "stat_branch_sha256",
+                 "species_tree_mapping_status", "species_tree_mapping_basis", "generax_xml_sha256", "stat_branch_sha256",
                  "reconciliation_species_tree_sha256", "support_generax_ufboot",
                  "support_status", "support_source",
                  *[f"{side}_{c}" for side in ("donor", "recipient")
@@ -145,6 +146,24 @@ def external_nodes(path):
     tree = read_species_tree(path)
     return {species_key(n.name): frozenset(species_key(t.name) for t in n.get_terminals())
             for n in tree.find_clades() if n.name}
+
+
+def branch_correspondence(nodes, expected):
+    """Require a full bijection of rooted clades, never label guessing/pruning."""
+    if not expected:
+        return {name: name for name in nodes}
+    source, target = {}, {}
+    for name, (tips, _) in nodes.items():
+        if not tips or tips in source:
+            return None
+        source[tips] = name
+    for name, tips in expected.items():
+        if not tips or tips in target:
+            return None
+        target[tips] = name
+    if set(source) != set(target):
+        return None
+    return {name: target[tips] for tips, name in source.items()}
 
 
 def numeric(value):
@@ -268,6 +287,7 @@ def summarize(branches, gene_rows, store, species_tree=""):
         except FileNotFoundError:
             pass
         parsed = parse_reconciliation(xml_text) if xml_text is not None else None
+        correspondence = branch_correspondence(parsed[0], expected_nodes) if parsed else None
         stats = {}
         if stat_text is not None:
             for stat in csv.DictReader(io.StringIO(stat_text), delimiter="\t"):
@@ -313,7 +333,7 @@ def summarize(branches, gene_rows, store, species_tree=""):
                 if donor not in nodes or recipient not in nodes:
                     event["mapping_reason"] = "species_branch_unresolved"
                     continue
-                compatible = not expected_nodes or all(expected_nodes.get(n) == leaves for n, (leaves, _) in nodes.items())
+                compatible = correspondence is not None
                 event["species_tree_mapping_status"] = ("matched_external_tree" if expected_nodes and compatible else
                                                         "xml_species_tree_only" if compatible else "external_tree_mismatch")
                 if not compatible:
@@ -324,7 +344,9 @@ def summarize(branches, gene_rows, store, species_tree=""):
                     event["mapping_reason"] = "xml_event_missing" if not matched else "xml_event_ambiguous"
                     continue
                 event.update(mapping_status="matched", mapping_reason="exact_transfer_and_branch_descendants",
-                             xml_event_id=matched[0]["xml_event_id"])
+                             xml_event_id=matched[0]["xml_event_id"],
+                             analysis_donor_node=correspondence[donor], analysis_recipient_node=correspondence[recipient],
+                             species_tree_mapping_basis='exact_rooted_clade_bijection' if expected_nodes else 'xml_species_tree_only')
                 for side in ("donor", "recipient"):
                     links.extend(summarize_side(event, side, matched[0], nodes, gene_species, leafsets, genes))
     return events, links

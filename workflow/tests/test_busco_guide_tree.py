@@ -2,6 +2,7 @@
 import gzip
 import inspect
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,41 @@ from workflow.support import busco_guide_tree as guide
 from workflow.support import busco_reference_quality as quality
 from workflow.support import pairwise_synteny, rescue_gene_models
 from workflow.support.rescue_gene_models import patristic_distances
+
+
+def test_matching_sketch_proof_reuses_only_its_first_content_read(tmp_path, monkeypatch):
+    payload, meta = tmp_path / 'sketch.bin', tmp_path / 'sketch.json'
+    payload.write_bytes(b'cached sketch')
+    meta.write_text(json.dumps({'sha256': guide.digest(payload)}))
+    state = sys.modules[guide.FreshDigestBatch.__module__]
+    original = state.digest
+    reads = []
+    def digest(path):
+        reads.append(Path(path))
+        return original(path)
+    monkeypatch.setattr(state, 'digest', digest)
+    proof = guide.FreshDigestBatch()
+    assert guide.cache_matches(payload, meta, proof=proof)
+    assert proof.read([payload, meta])[str(payload)] == original(payload)
+    assert reads.count(payload) == 1
+    # The separate pre-comparison boundary still reads complete cache bytes.
+    guide.FreshDigestBatch().read([payload])
+    assert reads.count(payload) == 2
+
+
+@pytest.mark.parametrize('changed', ['sketch', 'metadata'])
+def test_matching_sketch_proof_rejects_same_byte_replacements(tmp_path, changed):
+    payload, meta = tmp_path / 'sketch.bin', tmp_path / 'sketch.json'
+    payload.write_bytes(b'cached sketch')
+    meta.write_text(json.dumps({'sha256': guide.digest(payload)}))
+    proof = guide.FreshDigestBatch()
+    assert guide.cache_matches(payload, meta, proof=proof)
+    path = payload if changed == 'sketch' else meta
+    replacement = tmp_path / 'replacement'
+    replacement.write_bytes(path.read_bytes())
+    replacement.replace(path)
+    with pytest.raises(OSError, match='changed'):
+        proof.read([payload, meta])
 
 
 def test_existing_quality_and_identifier_imports_keep_the_same_implementations():
@@ -90,11 +126,13 @@ def test_preserve_exact_busco_protein_and_mapping_deterministically(tmp_path):
     assert records["BUSCO2"]["sequence"] == "MXXDEK"
 
 
-@pytest.mark.parametrize("packed", [False, True])
-def test_resume_imports_verified_single_copy_archive_and_legacy_tables(tmp_path, packed):
+@pytest.mark.parametrize("packed,mode", [(False, "transcriptome"), (True, "transcriptome"), (False, "proteins")])
+def test_resume_imports_verified_single_copy_archive_and_legacy_tables(tmp_path, packed, mode):
     from workflow.support import input_generation_stage_resume as resume
     name = "Plant_example"
     args = make_archive(tmp_path / "source-data", name, {"BUSCO1": "MDEK"})
+    if mode == "proteins":
+        args.short.write_text(args.short.read_text().replace("mode: transcriptome", "mode: proteins"))
     source_root, target_root = tmp_path / "source-output", tmp_path / "target-output"
     for root in (source_root, target_root):
         (root / "tmp").mkdir(parents=True)
@@ -107,11 +145,16 @@ def test_resume_imports_verified_single_copy_archive_and_legacy_tables(tmp_path,
                     species_busco_full_dir=str(args.full.parent), species_busco_short_dir=str(args.short.parent))
     target_settings = {**settings, "species_busco_full_dir": str(tmp_path / "target-full"),
                        "species_busco_short_dir": str(tmp_path / "target-short")}
+    if mode == "proteins":
+        settings.update(species_busco_mode=mode, genetic_code="1")
+        target_settings.update(species_busco_mode=mode, genetic_code="1")
     entries = [("busco_full", args.full), ("busco_short", args.short)]
     if packed:
         entries.append(("busco_single_copy", args.output))
     parameters = dict(busco_lineage_request="test_odb12", busco_lineage_resolved="test_odb12",
-                      busco_mode="transcriptome", evalue="1e-03", limit="20")
+                      busco_mode=mode, evalue="1e-03", limit="20")
+    if mode == "proteins":
+        parameters["genetic_code"] = "1"
     payload = dict(schema_version=1, step="input_generation_species_busco", family_id=name,
                    inputs=[dict(label="species_cds", sha256=guide.digest(args.input))],
                    outputs=[dict(label=label, sha256=guide.digest(path)) for label, path in entries],

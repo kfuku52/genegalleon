@@ -113,7 +113,12 @@ static void compare(const std::string& list, const std::string& output, size_t c
     size_t n = species.size();
     if (n < 3 || n > 10000) throw std::runtime_error("Need 3..10000 species");
     struct Result { double sum[2] = {0,0}; size_t count[2] = {0,0}, saturated = 0; };
-    std::vector<Result> results(n*n);
+    // Only unordered pairs are used; retain row-major i<j order without
+    // allocating the unused diagonal and lower half of the matrix.
+    auto pair_index = [n](size_t i, size_t j) {
+        return i * (2 * n - i - 1) / 2 + j - i - 1;
+    };
+    std::vector<Result> results(n * (n - 1) / 2);
     std::atomic<size_t> next{0};
     std::vector<std::thread> workers;
     for (size_t t = 0; t < std::min(cpus, n); ++t) workers.emplace_back([&]() {
@@ -121,7 +126,7 @@ static void compare(const std::string& list, const std::string& output, size_t c
             size_t i = next.fetch_add(1);
             if (i >= n) break;
             for (size_t j = i+1; j < n; ++j) {
-                Result& r = results[i*n+j];
+                Result& r = results[pair_index(i,j)];
                 for (size_t g = 0; g < markers; ++g) {
                     const Sketch& a = species[i][g]; const Sketch& b = species[j][g];
                     if (a.empty() || b.empty()) continue;
@@ -137,7 +142,7 @@ static void compare(const std::string& list, const std::string& output, size_t c
     if (!out) throw std::runtime_error("Cannot open distances output");
     out << "i\tj\tdistance\tshared\tsaturated\tpanel_0\tcount_0\tpanel_1\tcount_1\n" << std::setprecision(17);
     for (size_t i = 0; i < n; ++i) for (size_t j = i+1; j < n; ++j) {
-        const Result& r = results[i*n+j]; size_t count = r.count[0] + r.count[1];
+        const Result& r = results[pair_index(i,j)]; size_t count = r.count[0] + r.count[1];
         out << i << '\t' << j << '\t' << (count ? (r.sum[0]+r.sum[1])/count : -1) << '\t' << count << '\t' << r.saturated;
         for (int panel = 0; panel < 2; ++panel) out << '\t' << (r.count[panel] ? r.sum[panel]/r.count[panel] : -1) << '\t' << r.count[panel];
         out << '\n';

@@ -211,7 +211,8 @@ def test_transcriptome_failed_scratch_has_locked_ttl_and_size_limits():
     assert "acquire_transcriptome_tmp_lock()" in core
     assert '".gg_active.lock"' in core
     assert "LOCK_NB" in core
-    assert "shutil.rmtree(candidate)" in core
+    assert 'candidate.rename(retired / "scratch")' in core
+    assert "shutil.rmtree(retired)" in core
     assert 'transcriptome_tmp_retention_days="${transcriptome_tmp_retention_days:-7}"' in entrypoint
     assert 'transcriptome_tmp_max_dirs="${transcriptome_tmp_max_dirs:-100}"' in entrypoint
     assert 'transcriptome_tmp_max_bytes="${transcriptome_tmp_max_bytes:-1099511627776}"' in entrypoint
@@ -643,9 +644,10 @@ def test_transcriptome_core_guards_array_task_id_range_before_array_indexing():
         in text
     )
     assert (
-        'mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name \'.*\' \\( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \\) | sort)'
+        'native_fastq_listing=$(discover_native_fastq_files "${dir_species_fastq}") || exit 1'
         in text
     )
+    assert 'mapfile -t files_fastq <<< "${native_fastq_listing}"' in text
     assert (
         "mapfile -t sra_mode_files < <(find \"${dir_input_sra_list}\" -mindepth 1 -maxdepth 1 -type f ! -name '.*' | sort)"
         in text

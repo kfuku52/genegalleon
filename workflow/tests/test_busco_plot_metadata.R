@@ -56,3 +56,41 @@ check_summary_producer <- function(with_lineage=TRUE) {
 check_summary_producer()
 check_summary_producer(FALSE)
 cat('BUSCO plot metadata checks passed.\n')
+
+# Compare the production annotation reader with the original full-table counts,
+# including missing columns, comments, quoted text and numeric/NA inference.
+check_annotation_counts <- function() {
+    fixture <- tempfile('annotation-column-counts-')
+    dir.create(fixture)
+    on.exit(unlink(fixture, recursive=TRUE), add=TRUE)
+    env <- new.env(parent=globalenv())
+    source(file.path(dirname(script), '..', 'support', 'species_label_utils.r'), local=env)
+    env$path_exists_or_null <- function(path) dir.exists(path)
+    expressions <- parse(file.path(dirname(script), '..', 'support', 'annotation_summary.r'))
+    assignment <- Filter(function(expr) is.call(expr) && length(expr)>=3 &&
+        identical(expr[[2]], as.name('generate_annotation_summary')), expressions)[[1]]
+    eval(assignment, envir=env)
+    fn <- env$generate_annotation_summary
+    expressions <- as.list(body(fn))
+    cut <- which(vapply(expressions, function(expr) is.call(expr) &&
+        identical(expr[[1]], as.name('write.table')), logical(1)))[1]
+    body(fn) <- as.call(c(expressions[seq_len(cut-1)], list(quote(df))))
+    cases <- list(
+        c('gene_id\torthogroup\tsprot_best\tbusco_id\textra',
+          'g1\t001\tNA\t"id1"\tunused', 'g2\t\tP1\t2\t# comment'),
+        c('gene_id\textra', 'g1\tunused', 'g2\tNA'),
+        c('extra', 'unused', 'NA'),
+        c('gene_id\tbusco_id', 'g1\t1', 'g2\tNA'))
+    columns <- c('gene_id', 'orthogroup', 'sprot_best', 'cdskit_localize_predicted_class', 'busco_id')
+    for (lines in cases) {
+        path <- file.path(fixture, 'Species_a.tsv')
+        writeLines(lines, path)
+        original <- read.table(path, sep='\t', header=TRUE, comment.char='#', fill=TRUE, quote='')
+        expected <- apply(original, 2, function(x) sum(!is.na(x) & x!=''))[columns]
+        expected[is.na(expected)] <- 0
+        invisible(capture.output(actual <- fn(fixture, 'unused')))
+        stopifnot(identical(as.integer(actual[1, -1]), as.integer(expected)))
+    }
+}
+check_annotation_counts()
+cat('Selective annotation count checks passed.\n')

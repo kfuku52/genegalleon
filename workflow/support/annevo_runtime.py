@@ -16,30 +16,43 @@ import time
 import uuid
 from pathlib import Path
 
-from annevo_model_selection import OVERLAP_PROFILES, PROFILES
-from annevo_runtime_cache import prepare, runtime_environment, verify_ready
+from annevo_model_selection import (
+    OVERLAP_PROFILES,
+    PROFILES,
+    protect_outputs,
+    require_quiescent_taxonomy,
+    stable_signature,
+    taxonomy_sha,
+    verified_input_sha,
+)
+from annevo_runtime_cache import RuntimeVerification, prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
 from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
 
 
-def read_selected(path):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise RuntimeError("ANNEVO runtime receipt is missing or redirected")
-    receipt = json.loads(path.read_text())
-    if receipt.get("schema_version") != 1 or receipt.get("kind") != "genegalleon-annevo-installed-runtime":
-        raise RuntimeError("Invalid ANNEVO selected runtime receipt")
-    verify_ready(receipt)
-    model = Path(receipt["model_path"])
-    expected_model = receipt["manifest"]["models"][receipt["model_profile"]]
-    expected_path = Path(receipt["cache_root"]) / "models" / expected_model["sha256"] / Path(expected_model["path"]).name
-    if (model != expected_path or receipt["model_sha256"] != expected_model["sha256"]
-            or receipt["model_size"] != expected_model["size"]):
-        raise RuntimeError("ANNEVO selected model identity changed")
-    if model.is_symlink() or not model.is_file() or model.stat().st_size != receipt["model_size"] or file_sha(model) != receipt["model_sha256"]:
-        raise RuntimeError("ANNEVO model checksum changed")
-    return receipt
+def read_selected(path, *, verification=None):
+    verification = verification if verification is not None else RuntimeVerification()
+    with verification.guard():
+        path = Path(path)
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("ANNEVO runtime receipt is missing or redirected")
+        verification.file_sha(path)
+        receipt = json.loads(path.read_text())
+        if receipt.get("schema_version") != 1 or receipt.get("kind") != "genegalleon-annevo-installed-runtime":
+            raise RuntimeError("Invalid ANNEVO selected runtime receipt")
+        verify_ready(receipt, verification=verification)
+        model = Path(receipt["model_path"])
+        expected_model = receipt["manifest"]["models"][receipt["model_profile"]]
+        expected_path = Path(receipt["cache_root"]) / "models" / expected_model["sha256"] / Path(expected_model["path"]).name
+        if (model != expected_path or receipt["model_sha256"] != expected_model["sha256"]
+                or receipt["model_size"] != expected_model["size"]):
+            raise RuntimeError("ANNEVO selected model identity changed")
+        if (model.is_symlink() or not model.is_file() or model.stat().st_size != receipt["model_size"]
+                or verification.file_sha(model) != receipt["model_sha256"]):
+            raise RuntimeError("ANNEVO model checksum changed")
+        verification.check()
+        return receipt
 
 
 def probe_gpu(receipt, env):
@@ -136,27 +149,49 @@ def inference_settings(runtime, profile):
                 prediction_source_sha256=file_sha(source))
 
 
-def selection_record(args, genome):
+def selection_record(args, genome, *, engine="annevo", model_profile=None, verification=None):
+    """Read fresh evidence, or reuse hashes only inside a fenced invocation."""
     path = getattr(args, "selection_receipt", "")
     if not path:
         return None, None
-    path = Path(path)
-    value = json.loads(path.read_text())
-    if (value.get("kind") != "genegalleon-annevo-model-selection" or value.get("schema_version") != 1
-            or value.get("status") != "selected" or value.get("model_profile") != args.model_profile
-            or value.get("species") != getattr(args, "species", "")
-            or value.get("genome_sha256") != file_sha(genome)
-            or value.get("overlap_pred") != (args.model_profile in OVERLAP_PROFILES)):
-        raise ValueError("ANNEVO species/model selection differs from prediction inputs")
-    for evidence in [*value.get("evidence", []), *([value["taxonomy"]] if value.get("taxonomy") else [])]:
-        if file_sha(evidence["path"]) != evidence["sha256"]:
-            raise ValueError("ANNEVO taxonomy evidence changed after model selection")
-    return value, file_sha(path)
+    verification = verification if verification is not None else RuntimeVerification()
+    with verification.guard():
+        path = Path(path)
+        before = stable_signature(path)
+        def sha(path):
+            return verified_input_sha(path, verification)
+        receipt_sha = sha(path)
+        value = json.loads(path.read_text())
+        profile = model_profile if model_profile is not None else args.model_profile
+        label = "ANNEVO" if engine == "annevo" else "OrionGeno"
+        if (value.get("kind") != f"genegalleon-{engine}-model-selection" or value.get("schema_version") != 1
+                or value.get("status") != "selected" or value.get("model_profile") != profile
+                or value.get("species") != getattr(args, "species", "")
+                or value.get("genome_sha256") != sha(genome)
+                or (engine == "annevo" and value.get("overlap_pred") != (profile in OVERLAP_PROFILES))):
+            raise ValueError(f"{label} species/model selection differs from prediction inputs")
+        for evidence in value.get("evidence", []):
+            if sha(evidence["path"]) != evidence["sha256"]:
+                raise ValueError(f"{label} taxonomy evidence changed after model selection")
+        if (value.get("taxonomy") and taxonomy_sha(value["taxonomy"]["path"], verification=verification)
+                != value["taxonomy"]["sha256"]):
+            raise ValueError(f"{label} taxonomy evidence changed after model selection")
+        if stable_signature(path) != before or sha(path) != receipt_sha:
+            raise ValueError(f"{label} model selection changed while reading")
+        # On coarse filesystems an earlier input can change while a later one
+        # is read without changing its generation stamp.
+        for input_path in (genome, *(row["path"] for row in value.get("evidence", []))):
+            sha(input_path)
+        verification.check()
+        if value.get("taxonomy"):
+            require_quiescent_taxonomy(Path(value["taxonomy"]["path"]))
+        return value, receipt_sha
 
 
 def run(args):
     selected = Path(args.receipt)
-    runtime = read_selected(selected)
+    verification = RuntimeVerification()
+    runtime = read_selected(selected, verification=verification)
     if args.model_profile != runtime["model_profile"]:
         raise ValueError("ANNEVO selected model profile changed")
     for value in (args.threads, args.batch_size, args.sequence_threshold):
@@ -170,10 +205,16 @@ def run(args):
     protected = {genome.resolve(), selected.resolve(), Path(runtime["model_path"]).resolve()}
     if getattr(args, "selection_receipt", ""):
         protected.add(Path(args.selection_receipt).resolve())
+        protected.update(Path(evidence["path"]).resolve() for evidence in selection.get("evidence", []))
+        if selection.get("taxonomy"):
+            protected.add(Path(selection["taxonomy"]["path"]).resolve())
     generation = Path(runtime["generation"]).resolve()
+    log_root = output.with_name(output.name + ".logs")
+    destinations = (output, output_receipt, log_root,
+                    log_root / "native.stdout.txt", log_root / "native.stderr.txt")
+    protect_outputs(destinations, protected)
     if (output.resolve() == output_receipt.resolve()
-            or any(p.resolve() in protected or p.resolve().is_relative_to(generation)
-                   for p in (output, output_receipt))):
+            or any(p.resolve().is_relative_to(generation) for p in destinations)):
         raise ValueError("ANNEVO outputs must not overwrite inputs or the installed runtime")
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     output_receipt.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -209,7 +250,6 @@ def run(args):
             env["NUMBA_CACHE_DIR"] = str(work / "numba-cache")
             env["TORCH_HOME"] = str(work / "torch-cache")
             env["XDG_CACHE_HOME"] = str(work / "xdg-cache")
-            log_root = output.with_name(output.name + ".logs")
             log_root.mkdir(mode=0o700, exist_ok=True)
             started = time.monotonic()
             with (log_root / "native.stdout.txt").open("w") as stdout, (log_root / "native.stderr.txt").open("w") as stderr:
@@ -217,7 +257,6 @@ def run(args):
             if result.returncode or not predicted.is_file() or predicted.stat().st_size == 0:
                 raise RuntimeError("ANNEVO native prediction failed; retained logs: " + str(log_root))
             counts = gff_counts(predicted)
-            read_selected(selected)
             if selection_sha is not None:
                 _, current_selection_sha = selection_record(args, genome)
                 if current_selection_sha != selection_sha:
@@ -241,6 +280,7 @@ def run(args):
                        "scientific_completion_verified": False}
             if selection is not None:
                 receipt.update(model_selection=selection, model_selection_sha256=selection_sha, species=args.species)
+            read_selected(selected, verification=verification)
             publish_pair(predicted, output, output_receipt, receipt)
     return receipt
 

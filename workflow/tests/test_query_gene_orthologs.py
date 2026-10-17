@@ -111,17 +111,308 @@ def weak_duplication_fixture(tmp_path):
                 long_table=long_table, weak_branch=next(row["branch_id"] for row in rows if row["node_name"] == "weak_duplication"))
 
 
-def collect_weak_fixture(fixture, out_dir, threshold, basis="reference_species"):
-    mod = load_module("query_gene_orthologs.py")
-    mod.run(SimpleNamespace(
+def collect_weak_fixture(fixture, out_dir, threshold, basis="reference_species", module=None, **options):
+    mod = module or load_module("query_gene_orthologs.py")
+    arguments = dict(
         basis=basis, dir_gene_family=str(fixture["output_root"]), dir_query_gene=str(fixture["query_dir"]),
         family_file="", reference_species="Reference_species", dup_conf_score_threshold=threshold,
         out_columns=str(out_dir / "columns.tsv"), out_glyphs=str(out_dir / "glyphs.tsv"),
         out_tree=str(out_dir / "tree.tsv"), out_synteny=str(out_dir / "synteny.tsv"),
         out_ufboot=str(out_dir / "ufboot.tsv"), out_dup_conf=str(out_dir / "dup_conf.tsv"),
         out_query_map=str(out_dir / "query_map.tsv"),
-    ))
+    )
+    arguments.update(options)
+    mod.run(SimpleNamespace(**arguments))
     return out_dir
+
+
+def test_long_table_uses_the_same_species_tree_as_query_selection(weak_duplication_fixture, tmp_path, monkeypatch):
+    from Bio import Phylo
+
+    fixture = weak_duplication_fixture
+    tree = fixture['species_tree']
+    tree.write_text(tree.read_text().replace(')n0;', ',Absent_species:1)n0;'))
+    original, reads = Phylo.read, []
+    def counted(*args, **kwargs):
+        reads.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(Phylo, 'read', counted)
+    output = tmp_path / 'result'
+    collect_weak_fixture(fixture, output, 0, 'query_gene',
+                         species_tree=str(tree), target_species='Reference_species', query_selection='closest',
+                         out_selection=str(output / 'selection.tsv'), out_long=str(output / 'long.tsv'))
+    assert len(reads) == 1
+    absent = pandas.read_csv(output / 'long.tsv', sep='\t').query("species == 'Absent_species'")
+    assert len(absent) == 1
+    assert absent.iloc[0].copy_number == 0
+
+
+@pytest.mark.parametrize('failure', ['missing', 'replaced-during-read'])
+def test_long_tree_failure_preserves_every_existing_table(weak_duplication_fixture, tmp_path, monkeypatch, failure):
+    from Bio import Phylo
+
+    fixture = weak_duplication_fixture
+    output = collect_weak_fixture(fixture, tmp_path / 'result', 0, 'query_gene')
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    tree = fixture['species_tree']
+    if failure == 'missing':
+        tree.unlink()
+    else:
+        original = Phylo.read
+        def replaced(*args, **kwargs):
+            result = original(*args, **kwargs)
+            replacement = tmp_path / 'replacement.nwk'
+            replacement.write_bytes(tree.read_bytes())
+            replacement.replace(tree)
+            return result
+        monkeypatch.setattr(Phylo, 'read', replaced)
+    with pytest.raises(OSError):
+        collect_weak_fixture(fixture, output, .05, 'query_gene',
+                             species_tree=str(tree), out_long=str(output / 'long.tsv'))
+    assert {path: path.read_bytes() for path in previous} == previous
+    assert not (output / 'long.tsv').exists()
+
+
+@pytest.mark.parametrize('basis', ['reference_species', 'query_gene'])
+def test_summary_table_write_failure_rolls_back_the_complete_set(weak_duplication_fixture, tmp_path, monkeypatch, basis):
+    mod = load_module('query_gene_orthologs.py')
+    output = collect_weak_fixture(weak_duplication_fixture, tmp_path / 'result', 0, basis, mod)
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    original = mod.write_tsv
+    def failed(path, fields, rows):
+        original(path, fields, rows)
+        if 'orthology_mrca_event' in fields:
+            raise OSError('simulated final table write failure')
+    monkeypatch.setattr(mod, 'write_tsv', failed)
+    with pytest.raises(OSError, match='final table write failure'):
+        collect_weak_fixture(weak_duplication_fixture, output, .05, basis, mod)
+    assert {path: path.read_bytes() for path in previous} == previous
+
+
+def test_summary_table_install_failure_restores_all_previous_outputs(weak_duplication_fixture, tmp_path, monkeypatch):
+    import nwkit.output_transaction as transaction
+
+    fixture = weak_duplication_fixture
+    output = collect_weak_fixture(fixture, tmp_path / 'result', 0, 'query_gene')
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    original = transaction.os.replace
+    def failed(source, destination):
+        if Path(destination) == output / 'ufboot.tsv' and '.stage.' in Path(source).name:
+            raise OSError('simulated table installation failure')
+        return original(source, destination)
+    monkeypatch.setattr(transaction.os, 'replace', failed)
+    with pytest.raises(OSError, match='installation failure'):
+        collect_weak_fixture(fixture, output, .05, 'query_gene')
+    assert {path: path.read_bytes() for path in previous} == previous
+
+
+@pytest.mark.parametrize('role', ['stat_branch', 'species_tree', 'query'])
+def test_summary_input_changes_during_table_writes_abort_publication(weak_duplication_fixture, tmp_path, monkeypatch, role):
+    fixture, output = weak_duplication_fixture, tmp_path / 'result'
+    options = dict(species_tree=str(fixture['species_tree']), target_species='Reference_species',
+                   query_selection='closest', out_selection=str(output / 'selection.tsv'),
+                   out_long=str(output / 'long.tsv'))
+    collect_weak_fixture(fixture, output, 0, 'query_gene', **options)
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    source = {'stat_branch': fixture['output_root'] / 'stat_branch/FAM_stat.branch.tsv',
+              'species_tree': fixture['species_tree'], 'query': fixture['query_dir'] / 'FAM'}[role]
+    mod = load_module('query_gene_orthologs.py')
+    original = mod.write_tsv
+    def replaced(path, fields, rows):
+        original(path, fields, rows)
+        if fields is mod.QUERY_COLUMN_FIELDS:
+            replacement = tmp_path / 'replacement'
+            replacement.write_bytes(source.read_bytes())
+            replacement.replace(source)
+    monkeypatch.setattr(mod, 'write_tsv', replaced)
+    with pytest.raises((OSError, ValueError), match='changed'):
+        collect_weak_fixture(fixture, output, .05, 'query_gene', mod, **options)
+    assert {path: path.read_bytes() for path in previous} == previous
+    assert mod._SUMMARY_SOURCES.get() is None
+
+
+def test_query_map_path_keeps_its_existing_whitespace_normalization(weak_duplication_fixture, tmp_path):
+    output = tmp_path / 'result'
+    collect_weak_fixture(weak_duplication_fixture, output, 0, 'query_gene',
+                         out_query_map=' ' + str(output / 'query_map.tsv') + ' ')
+    assert pandas.read_csv(output / 'query_map.tsv', sep='\t').query_id.tolist() == ['q1', 'q2']
+
+
+def test_summary_rejects_overlapping_output_roles_before_writing(weak_duplication_fixture, tmp_path):
+    output = collect_weak_fixture(weak_duplication_fixture, tmp_path / 'result', 0, 'query_gene')
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    with pytest.raises(ValueError, match='distinct'):
+        collect_weak_fixture(weak_duplication_fixture, output, .05, 'query_gene',
+                             out_query_map=str(output / 'columns.tsv'))
+    assert {path: path.read_bytes() for path in previous} == previous
+
+
+@pytest.mark.parametrize('changed', ['query', 'metadata', 'family-file', 'manifest'])
+def test_summary_fences_query_and_selection_inputs(weak_duplication_fixture, tmp_path, monkeypatch, changed):
+    fixture = weak_duplication_fixture
+    output = collect_weak_fixture(fixture, tmp_path / 'result', 0, 'query_gene')
+    previous = {path: path.read_bytes() for path in output.iterdir()}
+    options = {}
+    if changed == 'query':
+        source = fixture['query_dir'] / 'FAM'
+    elif changed == 'metadata':
+        source = tmp_path / 'metadata.tsv'
+        source.write_text('family_id\tquery_id\tsource_species\nFAM\tq1\tReference_species\n')
+        options['query_metadata'] = str(source)
+    elif changed == 'family-file':
+        source = tmp_path / 'family_ids.txt'
+        source.write_text('FAM\n')
+        options['family_file'] = str(source)
+    else:
+        source = tmp_path / 'manifest.tsv'
+        source.write_text('family_id\tsource_dir\tsource_family_id\tquery_file\n'
+                          f'FAM\t{fixture["output_root"]}\tFAM\t{fixture["query_dir"] / "FAM"}\n')
+        options['family_manifest'] = str(source)
+    mod = load_module('query_gene_orthologs.py')
+    original = mod.FamilyEvidence.process
+    def replaced(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+        return result
+    monkeypatch.setattr(mod.FamilyEvidence, 'process', replaced)
+    with pytest.raises(ValueError, match='changed'):
+        collect_weak_fixture(fixture, output, .05, 'query_gene', mod, **options)
+    assert {path: path.read_bytes() for path in previous} == previous
+
+
+@pytest.mark.parametrize('basis', ['reference_species', 'query_gene'])
+@pytest.mark.parametrize('role', ['query', 'stat_branch', 'cds_fasta'])
+def test_summary_outputs_cannot_replace_family_inputs(weak_duplication_fixture, tmp_path, role, basis):
+    fixture = weak_duplication_fixture
+    source = (fixture['query_dir'] / 'FAM' if role == 'query' else fixture['output_root'] / role /
+              ('FAM_stat.branch.tsv' if role == 'stat_branch' else 'FAM_cds.fasta'))
+    previous = source.read_bytes()
+    with pytest.raises(ValueError, match='overwrite input'):
+        collect_weak_fixture(fixture, tmp_path / 'result', 0, basis, out_columns=str(source))
+    assert source.read_bytes() == previous
+
+
+@pytest.mark.parametrize('basis', ['reference_species', 'query_gene'])
+def test_summary_reads_and_validates_one_family_once(weak_duplication_fixture, tmp_path, monkeypatch, basis):
+    mod = load_module('query_gene_orthologs.py')
+    calls = {}
+    for name in ('_read_stat_branch', '_read_family_cds_fasta_ids', '_build_tree_index'):
+        original = getattr(mod, name)
+        calls[name] = 0
+        def counted(*args, _name=name, _original=original, **kwargs):
+            calls[_name] += 1
+            return _original(*args, **kwargs)
+        monkeypatch.setattr(mod, name, counted)
+    collect_weak_fixture(weak_duplication_fixture, tmp_path / 'first', .05, basis, mod)
+    assert set(calls.values()) == {1}
+    collect_weak_fixture(weak_duplication_fixture, tmp_path / 'later', .05, basis, mod)
+    assert set(calls.values()) == {2}
+    assert mod._FAMILY_INPUTS.get() is None
+    assert mod._SPECIES_INPUTS.get() is None
+
+
+@pytest.mark.parametrize('role', ['stat_branch', 'cds_fasta'])
+def test_summary_rejects_cached_source_replacement_before_writing_outputs(
+        weak_duplication_fixture, tmp_path, monkeypatch, role):
+    fixture = weak_duplication_fixture
+    mod = load_module('query_gene_orthologs.py')
+    source = fixture['output_root'] / role / ('FAM_stat.branch.tsv' if role == 'stat_branch' else 'FAM_cds.fasta')
+    original = mod.collect_reference_ufboot_evidence
+    def changed(*args, **kwargs):
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(mod, 'collect_reference_ufboot_evidence', changed)
+    output = tmp_path / 'result'
+    output.mkdir()
+    previous = output / 'columns.tsv'
+    previous.write_text('previous columns')
+    with pytest.raises(ValueError, match='changed'):
+        collect_weak_fixture(fixture, output, .05, module=mod)
+    assert previous.read_text() == 'previous columns'
+    assert sorted(path.name for path in output.iterdir()) == ['columns.tsv']
+
+
+def test_prior_family_changes_are_fenced_after_its_cache_is_released(weak_duplication_fixture, tmp_path, monkeypatch):
+    fixture = weak_duplication_fixture
+    for subdir, suffix in (('stat_branch', '_stat.branch.tsv'), ('cds_fasta', '_cds.fasta')):
+        shutil.copyfile(fixture['output_root'] / subdir / ('FAM' + suffix),
+                        fixture['output_root'] / subdir / ('SECOND' + suffix))
+    shutil.copyfile(fixture['query_dir'] / 'FAM', fixture['query_dir'] / 'SECOND')
+    mod = load_module('query_gene_orthologs.py')
+    original, released = mod.FamilyEvidence.process, []
+    def changed(self, store, columns, glyphs, tree_nodes):
+        if released:
+            assert not released[0].values
+            path = fixture['output_root'] / 'stat_branch/FAM_stat.branch.tsv'
+            replacement = tmp_path / 'replacement'
+            replacement.write_bytes(path.read_bytes())
+            replacement.replace(path)
+        result = original(self, store, columns, glyphs, tree_nodes)
+        released.append(mod._FAMILY_INPUTS.get())
+        return result
+    monkeypatch.setattr(mod.FamilyEvidence, 'process', changed)
+    with pytest.raises(ValueError, match='changed'):
+        collect_weak_fixture(fixture, tmp_path / 'result', .05, module=mod)
+    assert not (tmp_path / 'result').exists()
+
+
+def test_species_tree_is_shared_only_within_one_command_and_changes_are_rejected(
+        weak_duplication_fixture, tmp_path, monkeypatch):
+    from Bio import Phylo
+
+    fixture = weak_duplication_fixture
+    mod = load_module('query_gene_orthologs.py')
+    rows = mod.read_stat_branch(mod.GeneFamilyOutputStore(fixture['output_root']), 'FAM')
+    definitions = mod.read_query_definitions(fixture['query_dir'] / 'FAM')
+    original, reads = Phylo.read, []
+    def counted(*args, **kwargs):
+        reads.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(Phylo, 'read', counted)
+    def select():
+        return mod.select_closest_queries(rows, definitions, 'FAM', fixture['species_tree'], 'Reference_species',
+                                          selection_species='Reference_species', policy='closest')
+    with mod.species_inputs():
+        first = select()
+        assert select() == first
+        assert len(reads) == 1
+    with mod.species_inputs():
+        assert select() == first
+    assert len(reads) == 2
+    with pytest.raises(OSError, match='changed'):
+        with mod.species_inputs():
+            select()
+            replacement = tmp_path / 'replacement'
+            replacement.write_bytes(fixture['species_tree'].read_bytes())
+            replacement.replace(fixture['species_tree'])
+            select()
+
+
+def test_cached_zip_family_rejects_replaced_archive(weak_duplication_fixture, tmp_path):
+    from workflow.support.gene_family_output_store import archive_completed_outputs, family_context
+
+    fixture = weak_duplication_fixture
+    for subdir, suffix in (('stat_tree', '_stat.tree.tsv'), ('tree_plot', '_tree_plot.pdf')):
+        path = fixture['output_root'] / subdir / ('FAM' + suffix)
+        path.parent.mkdir()
+        path.write_text('bounded completed fixture')
+    family_ids, matcher = family_context('query2family', query_dir=fixture['query_dir'])
+    archive_completed_outputs(fixture['output_root'], 'query2family', family_ids, matcher)
+    mod = load_module('query_gene_orthologs.py')
+    store = mod.GeneFamilyOutputStore(fixture['output_root'])
+    artifact = store.artifact('stat_branch', 'FAM_stat.branch.tsv')
+    assert artifact.zip_path is not None
+    with pytest.raises(ValueError, match='changed'):
+        with mod.read_only_observation(), mod.FamilyInputs(store, 'FAM'):
+            assert mod.read_stat_branch(store, 'FAM')
+            replacement = tmp_path / 'replacement.zip'
+            replacement.write_bytes(artifact.zip_path.read_bytes())
+            replacement.replace(artifact.zip_path)
+            mod.read_stat_branch(store, 'FAM')
 
 
 @pytest.mark.parametrize("basis", ["reference_species", "query_gene"])

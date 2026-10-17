@@ -9,6 +9,7 @@ from format_species_annotations import describe_task_genome_input, describe_task
 from format_species_constants import SPECIES_SUMMARY_COLUMNS
 from format_species_discovery import utc_now_iso
 from format_species_taxonomy import blank_species_taxonomy_metadata
+from transcriptome_orfs import input_type
 
 
 def species_row_key(provider, species_key, species_prefix):
@@ -131,6 +132,7 @@ def build_species_summary_row(
         "plastid_genetic_code_id": metadata["plastid_genetic_code_id"],
         "plastid_genetic_code_name": metadata["plastid_genetic_code_name"],
         "cds_input_path": str(cds_result.get("input_path") or ""),
+        "cds_input_type": input_type(task),
         "cds_genetic_code": str(task.get("genetic_code", 1)),
         "cds_normalised_records": str(cds_result.get("cds_normalised_records", 0)),
         "cds_unresolved_records": str(cds_result.get("cds_unresolved_records", 0)),

@@ -1,4 +1,4 @@
-"""Resolve ANNEVO profiles from explicit, genome-bound NCBI taxonomy evidence."""
+"""Resolve genome predictor profiles from explicit, genome-bound NCBI taxonomy evidence."""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +20,44 @@ OVERLAP_PROFILES = {"Mammalia", "Actinopteri"}
 def stable_signature(path):
     info = path.stat()
     return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def require_quiescent_taxonomy(path):
+    if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-journal")):
+        raise ValueError("Taxonomy database has an active transaction; use a quiescent snapshot")
+
+
+def verified_input_sha(path, verification):
+    """Reuse a command-local hash only when its timestamp granularity permits it."""
+    with verification.guard():
+        before = stable_signature(Path(path))
+        digest = verification.file_sha(path)
+        # Whole-second timestamps cannot distinguish same-size writes within
+        # one tick. Keep fresh byte checks for these files at every boundary.
+        if any(value % 1_000_000_000 == 0 for value in before[3:]):
+            if file_sha(path) != digest or stable_signature(Path(path)) != before:
+                raise ValueError('Prediction input changed while verifying: ' + str(path))
+        return digest
+
+
+def taxonomy_sha(path, *, verification=None):
+    path = Path(path)
+    require_quiescent_taxonomy(path)
+    before = stable_signature(path)
+    digest = verified_input_sha(path, verification) if verification is not None else file_sha(path)
+    require_quiescent_taxonomy(path)
+    if stable_signature(path) != before:
+        raise ValueError("Taxonomy database changed while hashing")
+    return digest
+
+
+def protect_outputs(outputs, inputs):
+    protected = {Path(path).expanduser().resolve() for path in inputs if path}
+    for path in outputs:
+        path = Path(path).expanduser().resolve()
+        if path in protected or (path.exists() and any(
+                target.exists() and path.samefile(target) for target in protected)):
+            raise ValueError("ANNEVO outputs must not overwrite inputs")
 
 
 def write_unchanged(path, value):
@@ -63,8 +101,12 @@ def evidence_rows(path, species, genome_sha, *, metadata=False):
 
 class Taxonomy:
     def __init__(self, path):
-        self.conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+        # Read the exact main-file snapshot whose bytes are hashed, never a WAL
+        # that appeared after the initial sidecar check. External main-file or
+        # sidecar changes still invalidate selection at the closing fence.
+        self.conn = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("BEGIN")
         self.tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
     def node(self, taxid):
@@ -108,15 +150,31 @@ class Taxonomy:
 
 
 def select(args):
+    engine = getattr(args, "engine", "annevo")
+    if engine not in {"annevo", "oriongeno"}:
+        raise ValueError("Unsupported genome predictor: " + engine)
+    label = "ANNEVO" if engine == "annevo" else "OrionGeno"
+    profiles = PROFILES
+    if engine == "oriongeno":
+        import oriongeno_model_profiles
+        profiles = oriongeno_model_profiles.PROFILES
+    # Protect both publication paths, including the error receipt, before any
+    # exception handler can write to a caller-supplied input path.
+    selector_inputs = [args.genome, args.taxid_map, args.genome_metadata, args.taxonomy_db, __file__]
+    if engine == "oriongeno":
+        selector_inputs.append(oriongeno_model_profiles.__file__)
+    protect_outputs([args.output, str(args.output) + ".failed.json"], selector_inputs)
     genome = Path(args.genome).absolute()
-    record = {"schema_version": 1, "kind": "genegalleon-annevo-model-selection",
+    record = {"schema_version": 1, "kind": f"genegalleon-{engine}-model-selection",
               "species": args.species, "requested_profile": args.model_profile,
               "genome_path": str(genome), "genome_sha256": file_sha(genome),
               "selector_sha256": file_sha(Path(__file__)), "status": "unresolved", "evidence": []}
+    if engine == "oriongeno":
+        record["profiles_sha256"] = file_sha(Path(oriongeno_model_profiles.__file__))
     try:
         if args.model_profile != "auto":
-            if args.model_profile not in PROFILES:
-                raise ValueError("Unsupported explicit ANNEVO model profile")
+            if args.model_profile not in profiles:
+                raise ValueError(f"Unsupported explicit {label} model profile")
             record.update(model_profile=args.model_profile, reason="explicit_model_profile", taxid=None,
                           lineage=[], taxonomy=None)
         else:
@@ -130,11 +188,9 @@ def select(args):
                 raise ValueError("TaxID unresolved: supply an explicit species/TaxID map or hash-bound genome metadata; species labels are not guessed")
             db = Path(args.taxonomy_db).expanduser().absolute()
             if not db.is_file() or not db.stat().st_size:
-                raise ValueError("NCBI taxonomy cache is missing; prepare it online or provide annevo_taxonomy_db")
-            if Path(str(db) + "-wal").exists() or Path(str(db) + "-journal").exists():
-                raise ValueError("Taxonomy database has an active transaction; use a quiescent snapshot")
+                raise ValueError(f"NCBI taxonomy cache is missing; prepare it online or provide {engine}_taxonomy_db")
             before = stable_signature(db)
-            record["taxonomy"] = {"path": str(db), "sha256": file_sha(db), "format": "ETE NCBI SQLite"}
+            record["taxonomy"] = {"path": str(db), "sha256": taxonomy_sha(db), "format": "ETE NCBI SQLite"}
             taxonomy = Taxonomy(db)
             try:
                 resolved = [taxonomy.resolve(int(row["taxid"])) for row in candidates]
@@ -148,19 +204,26 @@ def select(args):
                               scientific_name=lineage[-1]["spname"], lineage=lineage)
                 for row in candidates:
                     taxonomy.check_name(row.get("scientific_name", ""), lineage)
-                matches = [profile for profile, anchor in PROFILES.items() if anchor in {n["taxid"] for n in lineage}]
-                if len(matches) != 1:
-                    raise ValueError("No supported ANNEVO model in NCBI ancestors" if not matches else "Conflicting ANNEVO clades in NCBI ancestors")
-                profile = matches[0]
-                anchor = next(n for n in lineage if n["taxid"] == PROFILES[profile])
-                if anchor["spname"] != profile:
-                    raise ValueError("NCBI model anchor name contradicts its TaxID")
-                record.update(model_profile=profile, anchor_taxid=PROFILES[profile], reason="ncbi_ancestor_taxid")
+                if engine == "oriongeno":
+                    profile, anchor_taxid = oriongeno_model_profiles.profile_for_lineage(lineage)
+                else:
+                    matches = [profile for profile, anchor in PROFILES.items() if anchor in {n["taxid"] for n in lineage}]
+                    if len(matches) != 1:
+                        raise ValueError("No supported ANNEVO model in NCBI ancestors" if not matches else "Conflicting ANNEVO clades in NCBI ancestors")
+                    profile = matches[0]
+                    anchor_taxid = PROFILES[profile]
+                    anchor = next(n for n in lineage if n["taxid"] == anchor_taxid)
+                    if anchor["spname"] != profile:
+                        raise ValueError("NCBI model anchor name contradicts its TaxID")
+                record.update(model_profile=profile, anchor_taxid=anchor_taxid, reason="ncbi_ancestor_taxid")
             finally:
                 taxonomy.conn.close()
+            require_quiescent_taxonomy(db)
             if stable_signature(db) != before:
                 raise ValueError("Taxonomy database changed during model selection")
-        record.update(status="selected", overlap_pred=record["model_profile"] in OVERLAP_PROFILES)
+        record.update(status="selected")
+        if engine == "annevo":
+            record["overlap_pred"] = record["model_profile"] in OVERLAP_PROFILES
         write_unchanged(args.output, record)
         return record
     except (OSError, ValueError, sqlite3.Error) as exc:
@@ -174,6 +237,7 @@ def parser():
     for name in ("species", "genome", "output"):
         result.add_argument("--" + name, required=True)
     result.add_argument("--model-profile", default="auto")
+    result.add_argument("--engine", choices=["annevo", "oriongeno"], default="annevo")
     for name in ("taxonomy-db", "taxid-map", "genome-metadata"):
         result.add_argument("--" + name, default="")
     return result
@@ -183,5 +247,5 @@ if __name__ == "__main__":
     try:
         print(json.dumps(select(parser().parse_args()), sort_keys=True))
     except (OSError, ValueError, RuntimeError) as exc:
-        print("ANNEVO model selection: " + str(exc), file=sys.stderr)
+        print("Genome predictor model selection: " + str(exc), file=sys.stderr)
         raise SystemExit(1) from None

@@ -11,9 +11,15 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy
 import pandas
-from scaffold_taxonomy import BRANCH_COLUMNS as HOST_SCAFFOLD_BRANCH_COLUMNS
-from scaffold_taxonomy import GENE_COLUMNS as HOST_SCAFFOLD_GENE_COLUMNS
-from scaffold_taxonomy import attach_context
+
+if __package__:
+    from .scaffold_taxonomy import BRANCH_COLUMNS as HOST_SCAFFOLD_BRANCH_COLUMNS
+    from .scaffold_taxonomy import GENE_COLUMNS as HOST_SCAFFOLD_GENE_COLUMNS
+    from .scaffold_taxonomy import attach_context
+else:
+    from scaffold_taxonomy import BRANCH_COLUMNS as HOST_SCAFFOLD_BRANCH_COLUMNS
+    from scaffold_taxonomy import GENE_COLUMNS as HOST_SCAFFOLD_GENE_COLUMNS
+    from scaffold_taxonomy import attach_context
 
 try:
     from ete4 import NCBITaxa

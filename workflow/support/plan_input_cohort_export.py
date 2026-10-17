@@ -108,8 +108,8 @@ def build(args):
         if abs(percentage - quality["busco_complete_pct"]) > 0.5 * 10 ** (-precision) + 1e-9:
             raise ValueError("BUSCO short/full complete counts disagree for " + species)
         lineage_mode.add((quality["lineage"], quality["mode"]))
-        if not quality["lineage"] or quality["mode"] != "transcriptome":
-            raise ValueError("Expected a named lineage and CDS transcriptome BUSCO for " + species)
+        if not quality["lineage"] or quality["mode"] not in {"transcriptome", "proteins"}:
+            raise ValueError("Expected a named lineage and supported CDS BUSCO mode for " + species)
         if (provenance.get("schema_version") != 1 or provenance.get("step") != "input_generation_species_busco"
                 or provenance.get("family_id") != species
                 or provenance.get("parameters", {}).get("busco_mode") != quality["mode"]

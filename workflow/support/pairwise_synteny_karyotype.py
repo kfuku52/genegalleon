@@ -11,9 +11,11 @@ from contextlib import ExitStack
 from pathlib import Path
 
 try:
+    from input_generation_array_state import FreshDigestBatch
     from pairwise_synteny_dotplot import homoeolog_order
     from pairwise_synteny_style import SOFT_COLORS, STYLE, style_text
 except ImportError:
+    from .input_generation_array_state import FreshDigestBatch
     from .pairwise_synteny_dotplot import homoeolog_order
     from .pairwise_synteny_style import SOFT_COLORS, STYLE, style_text
 
@@ -124,7 +126,7 @@ def resolved_layout(directory):
 
 
 def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis=None, track_order="target-query",
-                     *, layout_report=None):
+                     *, layout_report=None, input_guard=None):
     directory = Path(directory).resolve()
     if fmt not in {"pdf", "svg", "png"}:
         raise ValueError("Karyotype format must be pdf, svg or png")
@@ -344,7 +346,41 @@ def render_karyotype(directory, pair, fmt, colors, scale_mode="shared", analysis
             if layout_report is not None:
                 Path(staged[Path(layout_report)]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
                                                            encoding="utf-8")
+            if input_guard is not None:
+                input_guard()
         return report
+
+
+def render_formats(directory, pair, formats, scale_mode="shared", analysis=None, track_order="target-query",
+                   *, layout_report=None):
+    """Share imports, retaining fresh figures and atomic publication per format."""
+    from nwkit.file_paths import validate_distinct_output_paths, validate_outputs_do_not_replace_inputs
+
+    formats = tuple(formats)
+    if not formats or len(formats) != len(set(formats)) or set(formats) - {'pdf', 'svg', 'png'}:
+        raise ValueError('formats must be a unique nonempty subset of pdf,svg,png')
+    directory = Path(directory).resolve()
+    outputs = [(fmt, directory / ('karyotype.' + fmt)) for fmt in formats]
+    if layout_report is not None:
+        outputs.append(('layout_report', layout_report))
+    validate_distinct_output_paths(outputs)
+    proof = FreshDigestBatch()
+    colors_path = directory / 'karyotype_colors.json'
+    proof.read([directory / 'layout', directory / 'seqids', colors_path])
+    _layout, inputs = resolved_layout(directory)
+    paths = [path for _name, path in inputs]
+    if analysis is not None:
+        paths += [Path(analysis) / name for name in ('summary.json', 'logs/01.mcscan.log')]
+    validate_outputs_do_not_replace_inputs([('input', path) for path in [*paths, colors_path]], outputs)
+    proof.read(paths)
+    colors = json.loads(colors_path.read_text(encoding='utf-8'))
+    results = []
+    for fmt in formats:
+        proof.check()
+        results.append(render_karyotype(directory, pair, fmt, colors, scale_mode, analysis, track_order,
+                                       layout_report=layout_report, input_guard=proof.check))
+    proof.check()
+    return results
 
 
 def main():
@@ -352,12 +388,18 @@ def main():
     parser.add_argument("--directory", required=True, type=Path)
     parser.add_argument("--target-species", required=True)
     parser.add_argument("--query-species", required=True)
-    parser.add_argument("--format", choices=("pdf", "png", "svg"), required=True)
+    formats = parser.add_mutually_exclusive_group(required=True)
+    formats.add_argument("--format", choices=("pdf", "png", "svg"))
+    formats.add_argument("--formats", help="Comma-separated formats rendered in one process, e.g. pdf,png,svg")
     parser.add_argument("--scale", choices=("shared", "independent"), default="shared")
     parser.add_argument("--track-order", choices=("target-query", "query-target"), default="target-query",
                         help="Top-to-bottom display order; analysis inputs and ribbon endpoints are unchanged.")
     parser.add_argument("--analysis", type=Path, help="Recorded analysis directory for the connection legend")
     args = parser.parse_args()
+    if args.formats is not None:
+        render_formats(args.directory, vars(args), args.formats.split(','), args.scale, args.analysis, args.track_order,
+                       layout_report=args.directory / 'karyotype_style.json')
+        return
     colors = json.loads((args.directory / "karyotype_colors.json").read_text(encoding="utf-8"))
     render_karyotype(args.directory, vars(args), args.format, colors, args.scale, args.analysis, args.track_order,
                      layout_report=args.directory / "karyotype_style.json")

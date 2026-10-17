@@ -506,7 +506,11 @@ def test_genome_only_search_uses_fallback_inputs_without_local_diagnostics(hidde
     assert [row["candidate"] for row in rescue.table(directory / "genome_query_mapping.tsv")] == [region["id"]]
     models = json.loads((directory / "models.json").read_text())
     assert any(m["search"] == "genome_fallback" and m["sequence"] == sequences[8] for m in models)
-    assert all(m["status"] != "accepted" and "unanchored_genome_search" in m["problems"] for m in models)
+    accepted = [m for m in models if m["status"] == "accepted"]
+    assert len(accepted) == 1 and accepted[0]["sequence"] == sequences[8]
+    assert accepted[0]["placement_evidence"]["minimum_species"] == 1
+    assert accepted[0]["placement_evidence"]["orthology"] == 'unassigned'
+    assert accepted[0]["placement_evidence"]["expected_copy"] == 'unassigned'
 
 
 def test_broader_genome_contract_researches_cached_positive_and_empty_coverage(hidden_models, monkeypatch):
@@ -1381,7 +1385,7 @@ def test_real_unquota_self_synteny_finds_missing_copy_despite_retained_copy(hidd
     assert any(r["query"] == species[1] + "_g8" and r["seqid"] == "chr1" for r in found)
 
 
-def test_padding_does_not_accept_a_model_outside_its_flanking_anchors(hidden_models, monkeypatch):
+def test_padding_outside_flanking_anchors_cannot_supply_synteny_placement(hidden_models, monkeypatch):
     output, names, sequences = make_plan(hidden_models)
     plan = rescue.load(output)
     plan["donors"][names[0]] = [names[1]]
@@ -1396,8 +1400,12 @@ def test_padding_does_not_accept_a_model_outside_its_flanking_anchors(hidden_mod
     directory = rescue.rescue(output, plan, names[0], 1)
     models = json.loads((directory / "models.json").read_text())
     assert any(m["sequence"] == sequences[8] for m in models)
-    assert all(m["status"] != "accepted" for m in models)
-    assert any("outside_expected_synteny_interval" in m["problems"] for m in models)
+    accepted = [m for m in models if m["status"] == "accepted"]
+    assert accepted
+    assert all(m["placement_evidence"]["classification"] == "unanchored" for m in accepted)
+    assert all(m["placement_evidence"]["orthology"] == "unassigned" for m in accepted)
+    assert all(m["placement_evidence"]["expected_copy"] == "unassigned" for m in accepted)
+    assert all(m["placement_evidence"]["minimum_species"] == 1 for m in accepted)
 
 
 @pytest.mark.parametrize("query,fallback", [(8, False), (11, False), (8, True)])
@@ -2007,3 +2015,66 @@ def test_new_producer_predictions_can_be_reused_transitively_without_search(hidd
         assert not (directory / "logs").exists()
         assert json.loads((directory / "prediction_reuse.json").read_text())["searched_local_windows"] == 0
         previous = output
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("target", ["raw_source", "stage_member"])
+def test_finalization_fences_inputs_through_publication_and_reuse(hidden_models, monkeypatch, reuse, target):
+    root, _species, _sequences = hidden_models
+    output, names, _ = make_plan(hidden_models)
+    name = names[0]
+    plan = rescue.load(output)
+    plan["donors"][name] = []
+    plan["synteny_jobs"] = []
+    rescue.atomic_json(output / "plan.json", plan)
+    rescue.prepared(output, plan, name)
+
+    def empty_worker(directory):
+        (directory / "models.json").write_text("[]\n")
+        (directory / "audit.tsv").write_text("candidate\tstatus\n")
+    rescue.stage(output, Path("rescued") / name, rescue.rescue_key(output, plan, name), empty_worker)
+    baseline = rescue.finalize(output, plan, [name], Path("baseline"))
+    before = {p.relative_to(baseline).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in baseline.rglob("*") if p.is_file()}
+    path = (Path(plan["request"]["sources"][name]["fasta"]) if target == "raw_source"
+            else output / "rescued" / name / "audit.tsv")
+    original = path.read_bytes()
+    destination = Path("baseline" if reuse else "new_view")
+    changed = []
+
+    def mutate():
+        assert not changed
+        path.write_bytes(original + b"\n")
+        changed.append(True)
+
+    with monkeypatch.context() as patch:
+        if reuse:
+            real = rescue.verified
+            def verify(directory, key, *args, **kwargs):
+                valid = real(directory, key, *args, **kwargs)
+                if directory == baseline and valid:
+                    mutate()
+                return valid
+            patch.setattr(rescue, "verified", verify)
+        else:
+            real = rescue.hash_outputs
+            def hashed(directory, *args, **kwargs):
+                result = real(directory, *args, **kwargs)
+                if directory.parent == output and directory.name.startswith(".working-"):
+                    mutate()
+                return result
+            # Preserve the implementation owner's module identity while injecting
+            # a source race after output hashing, just before publication.
+            hashed.__module__ = real.__module__
+            patch.setattr(rescue, "hash_outputs", hashed)
+        with pytest.raises((OSError, ValueError), match="changed"):
+            rescue.finalize(output, plan, [name], destination)
+    assert changed
+    assert before == {p.relative_to(baseline).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in baseline.rglob("*") if p.is_file()}
+    if not reuse:
+        assert not (output / destination / "receipt.json").exists()
+    path.write_bytes(original)
+    # A later command performs a new full proof, rather than inheriting the
+    # earlier failed command's verification state.
+    assert rescue.finalize(output, plan, [name], Path("baseline")) == baseline

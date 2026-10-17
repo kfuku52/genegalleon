@@ -11,17 +11,20 @@ import subprocess
 import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 
 try:
     from pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
-    from wgd_evidence import branch_for_ks, combine_node, number, read_table, summarize_events, valid_position
+    from parallel_io import ordered_bounded_results
+    from wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from wgd_mul_diagnostics import run_diagnostics
 except ImportError:
     from .pairwise_synteny import digest, prepare_genome, safe_token, source_file, write_json
     from .pairwise_synteny_ds import DS_STATUSES, PAIR_COLUMNS, align_pair, ds_tool_identity, load_cds
-    from .wgd_evidence import branch_for_ks, combine_node, number, read_table, summarize_events, valid_position
+    from .parallel_io import ordered_bounded_results
+    from .wgd_evidence import KsBranchPlacer, combine_node, number, read_table, summarize_events, valid_position
     from .wgd_mul_diagnostics import run_diagnostics
 
 
@@ -421,8 +424,10 @@ def estimate_ks(plan, output, sequences, anchors, cpus):
             continue
         pairs_file, ds_file = output / f"aligned_pairs.code{code}.tsv", output / f"pair_ds.code{code}.tsv"
         with ThreadPoolExecutor(max_workers=cpus) as pool:
-            aligned = pool.map(lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]], code), selected)
-            write_table(pairs_file, aligned, PAIR_COLUMNS)
+            with closing(ordered_bounded_results(pool,
+                    lambda item, code=code: align_pair(item[0], [sequences[item[1][0]], sequences[item[1][1]]], code),
+                    ((item,) for item in selected), max_pending=cpus * 8)) as aligned:
+                write_table(pairs_file, aligned, PAIR_COLUMNS)
         run_tool(["cdskit", "dnds", "--pairs_file", pairs_file,
                   "--codon_table", str(code), "--threads", str(cpus), "--out_file", ds_file], output, f"dnds.code{code}")
         expected = {"|".join(pair) for pair, _ in selected}
@@ -504,13 +509,14 @@ def run_analysis(plan, output, cpus):
                   "--outfile", output / "ks_boundaries.tsv", "--trios-out", output / "ks_trios.tsv",
                   "--model-out", output / "ks_model.json"], output, "ksrate")
         bounds = {(row["focal"], row["species_event_id"]): row for row in read_table(output / "ks_boundaries.tsv")}
+    ks_placer = KsBranchPlacer(tree, bounds)
     for row in anchors:
         report = reports.get(row["gene_a"] + "|" + row["gene_b"])
         row["ks"] = report["dS"] if report else "NA"
         row["ks_status"] = report["status"] if report else (
             "cds_unavailable" if any(gene not in sequences.get(row["species"], {}) for gene in (row["gene_a"], row["gene_b"]))
             else "not_sampled")
-        branch, status = branch_for_ks(row["species"], number(row["ks"]), tree, bounds) if row["ks_status"] == "ok" else (None, "missing_ks")
+        branch, status = ks_placer.place(row["species"], number(row["ks"])) if row["ks_status"] == "ok" else (None, "missing_ks")
         row.update(species_event_id=branch or "", placement_status=status)
     write_table(output / "anchor_evidence.tsv", anchors,
                 ["species", "block_id", "gene_a", "gene_b", "ks", "ks_status", "species_event_id", "placement_status"])
@@ -527,6 +533,19 @@ def run_analysis(plan, output, cpus):
         "ks_boundary_ci_methods": sorted({row.get("ci_method", "not_reported") for row in bounds.values()}),
         "num_WGD_supported_candidates": sum(row["event_support"] == "WGD-supported" for row in candidates),
         "interpretation": "Experimental one-event-at-a-time count scan plus branch-matched unquota synteny and Ks. Not a posterior, joint multi-event history, ploidy estimate, or validated allopolyploid model. Single-copy family contrasts may retain hidden paralogy. Missing synteny is not SSD evidence."})
+
+
+def same_species_cross_child_pairs(node, positions):
+    """Select positioned pairs in the original left-leaf/right-leaf order."""
+    right_by_species = defaultdict(list)
+    for leaf in node.children[1].leaves():
+        if leaf.name in positions:
+            right_by_species[positions[leaf.name]["species"]].append(leaf.name)
+    pairs = []
+    for leaf in node.children[0].leaves():
+        if leaf.name in positions:
+            pairs.extend((leaf.name, right) for right in right_by_species.get(positions[leaf.name]["species"], ()))
+    return pairs
 
 
 def classify(args):
@@ -612,8 +631,7 @@ def classify(args):
         if row["event_type"] != "duplication":
             continue
         node = nodes[row["gene_clade_id"]]
-        pairs = [(a.name, b.name) for a in node.children[0].leaves() for b in node.children[1].leaves()
-                 if a.name in positions and b.name in positions and positions[a.name]["species"] == positions[b.name]["species"]]
+        pairs = same_species_cross_child_pairs(node, positions)
         status, reason, features, supported = combine_node(row["species_event_id"], pairs, positions, anchors, events,
             args.proximal_distance, terminal_cherry=len(list(node.leaves())) == 2 and row["species_event_id"] in terminal_branches)
         if row["mapping_status"] != "mapped" or row["event_status"] != "resolved":

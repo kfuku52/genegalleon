@@ -114,6 +114,9 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
         rows["good_relative"]["cds"][0][1] = len(inputs["dna"]["chr_intact"]) + 3
 
     class Cache:
+        directory = root / 'toy_cache'
+        frozen = {'receipt_sha256': '0' * 64}
+        batch = None
         search_contract = {"toy": "exact_complete_coverage_with_empty_result"}
         local_search_compatible = True
         genome_search_compatible = True
@@ -191,6 +194,8 @@ def execute(module, root, inputs, monkeypatch, *, cache, gemoma, fallback,
         patch.setattr(module, "nominate_genome_only_candidates", lambda *_: ([], {"nominated": 0}))
         patch.setattr(module, "verify_sources", sources_guard)
         patch.setattr(module, "verify_prediction_cache", lambda *_: Cache())
+        # This controlled search cache has no previously adopted annotation.
+        patch.setattr(module, "read_retained_coding_paths", lambda *_args, **_kwargs: {})
         patch.setattr(module, "search_intervals", interval_predictions)
         patch.setattr(module, "run", external_run)
         patch.setattr(module, "refine_gemoma", gemoma_spy)
@@ -236,10 +241,10 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
         ("none", False): ["owned", "ambiguous_long", "ambiguous_short"],
         ("none", True): ["owned", "ambiguous_long", "ambiguous_short",
                         "good_relative", "good_balanced", "partial",
-                        "owned", "ambiguous_long", "ambiguous_short"],
+                        "owned"],
         ("partial", False): ["good_relative", "partial", "owned", "ambiguous_long", "ambiguous_short"],
         ("partial", True): ["good_relative", "partial", "owned", "ambiguous_long", "ambiguous_short",
-                           "good_balanced", "owned", "ambiguous_long", "ambiguous_short"],
+                           "good_balanced", "owned"],
         ("complete", False): ["good_relative", "good_balanced", "partial", "owned", "ambiguous_long", "ambiguous_short"],
         ("complete", True): ["good_relative", "good_balanced", "partial", "owned", "ambiguous_long", "ambiguous_short"],
         ("complete_genome_only", False): ["good_relative", "good_balanced", "partial", "owned", "ambiguous_long", "ambiguous_short",
@@ -251,12 +256,20 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
     assert [m["query"] for m in models] == expected_order
     accepted = [m for m in models if m["status"] == "accepted"]
     independently_supported = cache in ("complete", "complete_genome_only") or fallback
-    assert len(accepted) == int(independently_supported)
-    expected_status = ({"accepted": 1, "duplicate_support": 1, "unresolved": len(models) - 2}
-                       if independently_supported else {"unresolved": len(models)})
+    # Documented compatible-locus fallback retains both in-frame paths while
+    # keeping the primary representative explicitly ambiguous. It does not
+    # establish independent donor support for the separate intact locus.
+    assert len(accepted) == 1 + int(independently_supported)
+    duplicates = int(independently_supported) + 2 * int(cache == "complete_genome_only")
+    expected_status = {"accepted": 1 + int(independently_supported), "accepted_alternative_path": 1,
+                       "unresolved": len(models) - 2 - int(independently_supported) - duplicates}
+    if duplicates:
+        expected_status["duplicate_support"] = duplicates
     assert results["status_counts"] == expected_status
-    if accepted:
-        model = accepted[0]
+    intact = [m for m in accepted if m["seqid"] == "chr_intact"]
+    assert len(intact) == int(independently_supported)
+    if intact:
+        model = intact[0]
         assert model["seqid"] == "chr_intact" and model["strand"] == "+"
         assert model["sequence"] == "ATGAAATAA" and model["cds"] == [[0, 9, 0]]
         assert model["problems"] == []
@@ -279,20 +292,21 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
     ambiguous = [m for m in models if m["query"].startswith("ambiguous") and
                  m["seqid"] == "chr_ambiguous"]
     assert {tuple(map(tuple, m["cds"])) for m in ambiguous} == {((0, 15, 0),), ((6, 15, 0),)}
-    assert all(m["status"] == "unresolved" and
-               "ambiguous_coding_path_representative" in m["problems"] for m in ambiguous)
-    # The same MP donor protein also maps to the original annotated locus.
-    # Genome-query deduplication restores that placement to its short alias.
-    # It is outside the alias's anchor and cannot become an accepted path or
-    # contribute support to an existing-model revision.
+    primary, = [m for m in ambiguous if m["status"] == "accepted"]
+    assert primary["query"] == "ambiguous_long" and primary["sequence"] == "ATGAAAATGCCCTAA"
+    assert primary["path_selection"]["representative_status"] == "ambiguous"
+    assert primary["path_selection"]["ambiguity_reason"] == "ambiguous_coding_path_representative"
+    assert primary["path_selection"]["selection_policy"] == "longest_cds_then_coding_shape"
+    assert primary["locus_support"]["independent_donor_species"] == ["Relative_species"]
+    assert primary["locus_support"]["orthology"] == "unassigned"
+    alternative, = [m for m in ambiguous if m["status"] == "accepted_alternative_path"]
+    assert alternative["query"] == "ambiguous_short" and alternative["sequence"] == "ATGCCCTAA"
+    assert not primary["problems"] and not alternative["problems"]
+    assert sum(m["status"] == "duplicate_support" for m in ambiguous) == 2 * int(cache == "complete_genome_only")
+    # Resolved compatible paths do not enter redundant genome/GeMoMa searches.
     off_locus = [m for m in models if m["query"].startswith("ambiguous") and
                  m["seqid"] != "chr_ambiguous"]
-    assert len(off_locus) == int(fallback and cache in ("none", "partial"))
-    for model in off_locus:
-        assert model["query"] == "ambiguous_short" and model["seqid"] == "chr_owned"
-        assert model["cds"] == [[0, 9, 0]] and model["sequence"] == "ATGCCCTAA"
-        assert model["status"] == "unresolved" and model["revision_owner_ids"] == ["original_owner"]
-        assert set(model["problems"]) == {"outside_expected_synteny_interval", "overlap_existing_annotation"}
+    assert not off_locus
     assert all(row["id"] == "owned" for revision in results["revisions"] for row in revision["support"])
     partials = results["partials"]
     assert len(partials) == int(cache != "none" or fallback)
@@ -307,7 +321,7 @@ def test_rescue_admission_preserves_intact_partial_owned_ambiguous_and_empty_evi
     assert empty == [["empty", "empty", "unresolved", "no_alignment", "", "", ""]]
     assert "empty" not in {m["query"] for m in models}
     assert len(results["quality_flags"].decode().splitlines()) == len(models) + 1
-    expected_gemoma = ([["owned", "ambiguous_long", "ambiguous_short"]]
+    expected_gemoma = ([["owned"]]
                        if gemoma and cache in ("none", "partial") else [])
     assert calls["gemoma_regions"] == expected_gemoma
     assert {p: Path(p).read_bytes() for p in inputs["files"]} == before

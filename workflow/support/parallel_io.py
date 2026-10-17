@@ -1,8 +1,34 @@
 """Bound queued I/O work without retaining every completed future."""
 
 import weakref
+from collections import deque
 from itertools import islice
 from queue import SimpleQueue
+
+
+def ordered_bounded_results(executor, function, arguments, max_pending):
+    """Yield input-order results while bounding queued and completed work.
+
+    Arguments are tuples, as for bounded_results. The limit includes completed
+    results waiting behind a slow earlier task. Closing cancels queued work;
+    the caller still owns the executor and waits for active tasks.
+    """
+    if max_pending < 1:
+        raise ValueError("max_pending must be positive")
+    arguments = iter(arguments)
+    pending = deque()
+    try:
+        for args in islice(arguments, max_pending):
+            pending.append(executor.submit(function, *args))
+        while pending:
+            future = pending.popleft()
+            yield future.result()
+            del future
+            for args in islice(arguments, 1):
+                pending.append(executor.submit(function, *args))
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 def bounded_results(executor, function, arguments, max_pending):

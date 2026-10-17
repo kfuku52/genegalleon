@@ -190,11 +190,18 @@ def test_workflows_limit_github_token_permissions_by_default():
 
 
 def test_tests_workflow_avoids_duplicate_branch_push_and_pull_request_runs():
-    triggers = load_workflow("tests.yml")["on"]
+    workflow = load_workflow("tests.yml")
+    triggers = workflow["on"]
 
     assert triggers["push"]["branches"] == ["main"]
     assert "pull_request" in triggers
     assert "workflow_dispatch" in triggers
+    # Default-branch/manual builds retain progress through repeated pushes.
+    # Waiting runs remain coalesced by the same repository/ref group.
+    concurrency = workflow["concurrency"]
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.event.pull_request.head.repo.full_name || github.repository" in concurrency["group"]
+    assert "github.event.pull_request.head.ref || github.ref_name" in concurrency["group"]
 
 
 def test_workflow_run_blocks_do_not_interpolate_untrusted_event_data():
@@ -259,6 +266,88 @@ def test_immutable_image_tags_fingerprint_resolved_upstream_sources():
         assert "Refusing to overwrite immutable image tag with different content" in publish_run
 
 
+def test_published_build_cache_excludes_intermediate_layers():
+    writers = [
+        step["with"]["cache-to"]
+        for step in workflow_steps(load_workflow("container-ghcr.yml"))
+        if "cache-to" in step.get("with", {})
+    ]
+    assert writers
+    for writer in writers:
+        options = dict(part.split("=", 1) for part in writer.split(","))
+        assert options["type"] == "gha"
+        assert options["mode"] == "min"
+        assert options["scope"] == "container-${{ steps.platform.outputs.pair }}"
+
+
+@pytest.mark.parametrize(
+    ("event", "last_full", "api_mode", "expected"),
+    [
+        ("push", "initial", "ok", "1"),
+        ("push", "code", "ok", "0"),
+        ("push", "code", "skipped", "1"),
+        ("push", "code", "newest_skipped", "1"),
+        ("push", "code", "unavailable", "1"),
+        ("push", "code", "jobs_unavailable", "1"),
+        ("pull_request", "initial", "unavailable", "1"),
+        ("pull_request", "code", "unavailable", "0"),
+        ("workflow_dispatch", "code", "unavailable", "1"),
+    ],
+)
+def test_runtime_selection_preserves_coalesced_code_changes(
+    tmp_path, event, last_full, api_mode, expected
+):
+    job = load_workflow("tests.yml")["jobs"]["runtime-change-filter"]
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    script = step_run(job, "Detect container-runtime changes")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for key, value in (("user.name", "Test"), ("user.email", "test@example.invalid")):
+        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+    commits = {}
+    for label, path in (
+        ("initial", ".dockerignore"), ("code", "workflow/changed.sh"), ("docs", "README.md")
+    ):
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(label + "\n")
+        subprocess.run(["git", "-C", str(repo), "add", path], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", label], check=True)
+        commits[label] = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+        ).strip()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    gh.write_text("""#!/usr/bin/env python3
+import os
+import sys
+mode = os.environ['FAKE_API_MODE']
+endpoint = sys.argv[2]
+if mode == 'unavailable' or (mode == 'jobs_unavailable' and '/jobs?' in endpoint):
+    sys.exit(1)
+if '/workflows/' in endpoint:
+    print('7\\t' + os.environ['FAKE_LAST_FULL'])
+    if mode == 'newest_skipped':
+        print('6\\t' + os.environ['FAKE_INITIAL'])
+else:
+    skipped = mode == 'skipped' or (mode == 'newest_skipped' and '/7/' in endpoint)
+    print('false' if skipped else 'true')
+""")
+    gh.chmod(0o755)
+    output = tmp_path / "output"
+    env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}", EVENT_NAME=event,
+               BASE_SHA=commits[last_full] if event == "pull_request" else commits["code"],
+               GITHUB_REPOSITORY="example/project", GITHUB_REF_NAME="main",
+               GITHUB_SHA=commits["docs"], GITHUB_OUTPUT=str(output),
+               FAKE_API_MODE=api_mode, FAKE_LAST_FULL=commits[last_full],
+               FAKE_INITIAL=commits["initial"])
+    subprocess.run(["bash", "-c", script], cwd=repo, env=env, check=True,
+                   capture_output=True, text=True)
+    assert output.read_text().strip() == f"should_run={expected}"
+
+
 def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_current():
     jobs = load_workflow("tests.yml")["jobs"]
     sif_job = jobs["prepare-sif"]
@@ -289,7 +378,7 @@ def test_sif_runtime_validation_reuses_only_an_exact_runtime_image_or_builds_cur
     assert "bash ./gg_container_build_entrypoint.sh" in build_run
     assert "validation-image.outputs.source == 'local'" in build_step["if"]
     assert build_step["env"]["CACHE_FROM"] == "type=gha,scope=container-linux-amd64"
-    assert "type=gha,mode=max,scope=container-linux-amd64" in build_step["env"]["CACHE_TO"]
+    assert "type=gha,mode=min,scope=container-linux-amd64" in build_step["env"]["CACHE_TO"]
     assert "event_name != 'pull_request'" in build_step["env"]["CACHE_TO"]
     assert named_step(sif_job, "Expose GitHub runtime for BuildKit cache")["uses"].startswith(
         "crazy-max/ghaction-github-runtime@"
@@ -341,13 +430,20 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
     share = named_step(prepare, "Share uncached SIF with validation partitions")
     assert share["with"]["if-no-files-found"] == "error"
     assert share["with"]["retention-days"] == "1"
-    assert jobs["sif-python"]["strategy"]["matrix"]["shard"] == [str(i) for i in range(1, 9)]
+    assert "strategy" not in jobs["sif-python"]
     assert set(jobs["sif-other"]["strategy"]["matrix"]["suite"]) == {"runtime-extra", "r", "3di"}
+    partition = named_step(jobs["sif-python"], "Validate SIF Python partition")["with"]
+    assert partition["shard"] == "1/1"
+    assert partition["workers"] == "4"
+    for lane, step in (("python-fast-shards", "Run fast Python tests"),
+                       ("python-heavy", "Run heavy Python tests")):
+        assert "-n 4" in step_run(jobs[lane], step)
     for name, step in (("sif-python", "Validate SIF Python partition"),
                        ("sif-other", "Validate independent SIF checks")):
         job = jobs[name]
         assert job["needs"] == ["prepare-sif"]
-        assert job["strategy"]["fail-fast"] == "false"
+        if "strategy" in job:
+            assert job["strategy"]["fail-fast"] == "false"
         assert named_step(job, step)["with"]["prepared-runtime-input"] == (
             "${{ needs.prepare-sif.outputs.runtime-input }}"
         )
@@ -365,11 +461,12 @@ def test_ci_partitions_preserve_coverage_and_share_one_exact_sif():
         prepare, "Save validated SIF by exact runtime input"
     )["if"]
     fast = jobs["python-fast-shards"]
-    assert fast["strategy"]["matrix"]["shard"] == ["1", "2"]
+    assert "strategy" not in fast
+    assert named_step(fast, "Run fast Python tests")["env"]["TEST_SHARD"] == "1/1"
     assert jobs["python-fast"]["needs"] == ["python-fast-shards"]
     workflow = [entry["partition"] for entry in jobs["python-heavy"]["strategy"]["matrix"]["shard"]
                 if entry["suite"] == "integration-workflow"]
-    assert set(workflow) == {"1/3", "2/3", "3/3"}
+    assert workflow == ["1/1"]
 
 
 @pytest.mark.parametrize("failed", [None, "PREPARE_RESULT", "PYTHON_RESULT", "OTHER_RESULT"])
@@ -730,6 +827,25 @@ def test_shared_sif_snapshot_is_verified_without_resolving_new_sources(tmp_path,
         assert not output.exists()
     else:
         assert output.read_text() == "value=" + "a" * 64 + "\n"
+
+
+def test_sif_python_worker_budget_reaches_the_existing_validation_runner(tmp_path):
+    job = load_workflow("tests.yml")["jobs"]["sif-python"]
+    wrapper = tmp_path / "workflow/tests/run_in_sif.sh"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text('printf "%s\\n" "$@" > "$CAPTURE"\n')
+    output = tmp_path / "command"
+    result = subprocess.run(
+        ["bash", "-e", "-c", step_run(job, "Run SIF validation checks")],
+        cwd=tmp_path, env=os.environ | {
+            "VALIDATION_SUITE": "runtime-python", "VALIDATION_SHARD": "2/4",
+            "VALIDATION_WORKERS": "4", "CAPTURE": str(output),
+        }, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    command = output.read_text().splitlines()
+    assert command[:3] == ["python", "workflow/tests/run_checks.py", "runtime-python"]
+    assert "--workers=4" in command and "--gg-shard=2/4" in command
 
 
 def test_sif_checks_skip_re_resolution_only_after_verifying_exact_identity():

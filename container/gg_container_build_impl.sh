@@ -121,7 +121,10 @@ resolve_container_engine() {
 }
 
 docker_buildx_available() {
-  command -v docker >/dev/null 2>&1 && docker buildx ls >/dev/null 2>&1
+  # Listing builders can succeed even when their Docker endpoint is unavailable.
+  # Probe the selected builder itself; remote builders do not require a local daemon.
+  command -v docker >/dev/null 2>&1 && docker buildx inspect --bootstrap 2>/dev/null |
+    awk '/^Status:[[:space:]]+running[[:space:]]*$/ {ready = 1} END {exit !ready}'
 }
 
 image_looks_remote() {

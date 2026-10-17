@@ -10,6 +10,21 @@ The scientific design and related methods are described in the
 experimental conservative annotation aid. Its score cutoffs are ranking rules,
 not calibrated probabilities or estimates of annotation accuracy.
 
+Prediction homology uses the rescue coverage/identity policy by default:
+90% coverage with 50% identity, or 70% coverage with 70% identity. The configured
+hard coverage/identity floors remain binding. This does not change RNA adoption,
+independent donor, copy/span, score-margin or positive-gain gates for replacing a
+representative. See [rescue homology support](gene-model-rescue.md) for fixed
+cutoff compatibility and the separate coding-path integration criterion.
+
+Original annotations using complementary frame fields are interpreted as GFF3
+phases only when the same annotated coding path is bound to an agreeing source
+CDS. The interpretation retains source fields and sequence hashes; generated
+GeneGalleon paths and unsupported or ambiguous phase conventions remain strict.
+Frozen rescue publications can be consumed after a downstream helper update:
+their schema, plan, source inputs and dependency receipts are still verified,
+while producer execution continues to require its own recorded tool identities.
+
 ## Workflow
 
 ```mermaid
@@ -52,7 +67,7 @@ flowchart LR
 4. **Effective inputs:** retain original transcripts in `full_annotation`, add
    accepted paths with stable assembly/coordinate/phase/CDS-derived IDs, and
    publish a selected GFF with the exact transcript behind every representative.
-   Original selected transcripts retain their source exon/UTR metadata. CDSs of
+   Selected transcripts receive [longest projected UTRs](oriongeno-genome-annotation.md#longest-projected-utr-per-side) from existing annotation and optional OrionGeno predictions; original exon/UTR metadata stays archived. CDSs of
    unresolved biological negatives remain unchanged; unusable translations are
    excluded from the analysis protein FASTA with an explicit admission audit.
    An unexplained source-CDS/genome disagreement or unreconstructible locus is
@@ -433,6 +448,7 @@ and the locus evidence alongside completeness.
 - `representative_map.tsv`, with one explicit locus-to-transcript choice;
 - `species_genetic_code.tsv`;
 - `full_annotation`, `all_candidates`, `changes.json`, `translation_admission.tsv`;
+- `species_transcript`, `utr_audit`, and `utr_summary.tsv` for projected representative UTRs;
 - exact supplied CDS files in `source_cds`, decoded original GFF in
   `source_annotation`, `effective_exclusions.tsv`, `gene_bounds_changes.json`.
 

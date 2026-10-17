@@ -3,6 +3,11 @@
 from Bio import Phylo
 
 
+def event_species_branch(event, side):
+    """Use a verified analysis-tree ID without changing original GeneRax identity."""
+    return str(event.get(f'analysis_{side}_node') or event[f'generax_{side}_node']).strip().replace(' ', '_')
+
+
 def read_species_tree(path):
     # Bio.Phylo normally converts numeric internal names into float confidence
     # values, losing leading zeros and precision. This documented parser mode

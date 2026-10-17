@@ -104,7 +104,7 @@ ensure_busco_dataset_mapping_files() {
   local remote_odb_version=""
   local odb_version=""
 
-  dir_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads"
+  dir_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads" || return 1
   mapping_dir=$(workspace_busco_placement_root "${gg_workspace_dir}")
   lock_file="${dir_db}/locks/busco_dataset_mappings.lock"
 
@@ -613,7 +613,7 @@ ensure_busco_download_path() {
     return 0
   fi
 
-  runtime_busco_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads"
+  runtime_busco_db="$(workspace_downloads_root "${gg_workspace_dir}")/busco_downloads" || return 1
   runtime_busco_lineage="${runtime_busco_db}/lineages/${busco_lineage}"
   runtime_ready_marker="${runtime_busco_lineage}/.download.ready"
   lock_file="${runtime_busco_db}/lineages/.busco_${busco_lineage}.download.lock"

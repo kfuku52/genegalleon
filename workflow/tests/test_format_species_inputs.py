@@ -354,6 +354,150 @@ def test_formatting_normalises_partial_cds_and_paired_gff_without_rescue_flag(tm
     assert not list(tmp_path.glob("*.fai"))
 
 
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("provided", [False, True])
+def test_valid_cds_canonicalises_complementary_phases_without_changing_model(tmp_path, strand, provided):
+    module = load_module()
+    from validate_cds_gff_mapping import validate_single_species
+
+    sequence = "ATG" + "AAA" * 282 + "TAA"
+    boundaries = [0, 199, 312, 512, 852]
+    blocks = [(sequence[start:end], phase) for start, end, phase in
+              zip(boundaries, boundaries[1:], [0, 1, 0, 2], strict=False)]
+    task = normalisation_bundle(tmp_path, [{"blocks": blocks, "strand": strand}], provided=provided)
+    originals = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path")}
+    output = tmp_path / "output"
+    output.mkdir()
+    cds = module.format_cds(task, output, False, False)
+    assert dict(module.iter_fasta_records(cds["output_path"])) == {"Test_species_g1": sequence}
+    assert cds["cds_normalised_records"] == 0  # No sequence correction.
+    gff = module.format_gff(task, output, False, False, formatted_cds_path=cds["output_path"])
+    with gzip.open(gff["output_path"], "rt") as handle:
+        formatted = [line.rstrip().split("\t") for line in handle if "\tCDS\t" in line]
+    source = [line.split("\t") for line in originals["gff_path"].decode().splitlines() if "\tCDS\t" in line]
+    for rows in (formatted, source):
+        rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [row[7] for row in formatted] == ["0", "2", "0", "1"]
+    assert [row[:7] for row in formatted] == [row[:7] for row in source]
+    assert all("Parent=t1" in row[8] and "gg_cds_normalisation=complementary_cds_phase" in row[8]
+               for row in formatted)
+    mapping = validate_single_species(dict(index=1, species_prefix="Test_species",
+        cds_file=cds["output_path"], gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert mapping["ok"], mapping.get("error")
+    audit = json.loads(Path(str(cds["output_path"]) + ".cds-normalisation.json").read_text())
+    assert audit["records"][0]["gff_phase_normalised"] is True
+    assert audit["records"][0]["status"] == "unchanged"
+    assert {name: Path(task[name]).read_bytes() for name in originals} == originals
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("provided", [False, True])
+@pytest.mark.parametrize("partial", [False, True])
+def test_mixed_numeric_phases_require_exact_declared_zero_frame(tmp_path, strand, provided, partial):
+    module = load_module()
+    sequence = "ATGAAAGCTAAACCCTAA"
+    if partial:
+        sequence = sequence[:-1]
+    task = normalisation_bundle(tmp_path, [{"blocks": [(sequence[:4], 0), (sequence[4:], 0)],
+                                          "strand": strand}], provided=provided)
+    original = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path")}
+    out = tmp_path / "mixed_phases"
+    out.mkdir()
+    cds = module.format_cds(task, out, False, False)
+    gff = module.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    assert list(module.iter_fasta_records(cds["output_path"]))[0][1] == sequence + ("N" if partial else "")
+    with gzip.open(gff["output_path"], "rt") as stream:
+        rows = [line.rstrip().split("\t") for line in stream if "\tCDS\t" in line]
+    rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [row[7] for row in rows] == ["0", "2"]
+    assert all("gg_cds_normalisation=anchored_cds_phase" in row[8] for row in rows)
+    assert {name: Path(task[name]).read_bytes() for name in original} == original
+    audit = json.loads(Path(str(cds["output_path"]) + ".cds-normalisation.json").read_text())
+    if partial:
+        assert audit["records"][0]["status"] == "retained_unresolved"
+        assert audit["records"][0]["source_reason"] == "inconsistent_or_missing_phase"
+    from validate_cds_gff_mapping import validate_single_species
+    result = validate_single_species(dict(index=1, species_prefix="Test_species", cds_file=cds["output_path"],
+                                         gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert result["ok"], result
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("first", [1, 2])
+def test_independent_cds_proves_unique_zero_frame_for_inconsistent_first_phase(tmp_path, strand, first):
+    module = load_module()
+    sequence = "ATGAAAGCTAAACCCTAA"
+    task = normalisation_bundle(tmp_path, [{"blocks": [(sequence[:4], first), (sequence[4:], 2)],
+                                          "strand": strand}])
+    original = {name: Path(task[name]).read_bytes() for name in ("gff_path", "genome_path", "cds_path")}
+    out = tmp_path / "provided_frame"
+    out.mkdir()
+    cds = module.format_cds(task, out, False, False)
+    gff = module.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    assert list(module.iter_fasta_records(cds["output_path"]))[0][1] == sequence
+    with gzip.open(gff["output_path"], "rt") as stream:
+        rows = [line.rstrip().split("\t") for line in stream if "\tCDS\t" in line]
+    rows.sort(key=lambda row: int(row[3]), reverse=strand == "-")
+    assert [row[7] for row in rows] == ["0", "2"]
+    assert all("gg_cds_normalisation=provided_cds_frame_phase" in row[8] for row in rows)
+    assert {name: Path(task[name]).read_bytes() for name in original} == original
+    from validate_cds_gff_mapping import validate_single_species
+    result = validate_single_species(dict(index=1, species_prefix="Test_species", cds_file=cds["output_path"],
+                                         gff_file=gff["output_path"], genome_file=task["genome_path"], strict=True), 10)
+    assert result["ok"], result
+
+
+@pytest.mark.parametrize("provided", [False, True])
+def test_first_phase_is_not_inferred_without_independent_unique_cds_frame(tmp_path, provided):
+    load_module()
+    from format_species_annotation.cds_normalisation import iter_normalised_cds_records
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGA", 1), ("AATAA", 2)]}], provided=provided)
+    state = {}
+    list(iter_normalised_cds_records(task, state))
+    assert state["gff_updates"] == {}
+
+
+@pytest.mark.parametrize("provided", [False, True])
+def test_mixed_phase_correction_does_not_hide_an_internal_translation_stop(tmp_path, provided):
+    load_module()
+    from format_species_annotation.cds_normalisation import iter_normalised_cds_records
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGT", 0), ("AACCCTAA", 0)]}], provided=provided)
+    state = {}
+    records = list(iter_normalised_cds_records(task, state))
+    assert records[0][1] == "ATGTAACCCTAA"
+    assert records[0][2]["status"] == "retained_unresolved"
+    assert state["gff_updates"] == {}
+
+
+@pytest.mark.parametrize("mutation", ["genomic_mismatch", "shared_parent", "ambiguous", "exception", "ordered", "canonical"])
+def test_phase_only_normalisation_requires_unambiguous_same_model_evidence(tmp_path, mutation, monkeypatch):
+    load_module()
+    from cds_model_normalisation import CdsModelNormaliser
+    from format_species_annotation.cds_normalisation import iter_normalised_cds_records
+
+    phases = [0, 2] if mutation == "canonical" else [0, 1]
+    task = normalisation_bundle(tmp_path, [{"blocks": [("ATGA", phases[0]), ("AATAA", phases[1])]}])
+    text = task["gff_path"].read_text()
+    if mutation == "genomic_mismatch":
+        task["cds_path"].write_text(">t1\nATGCCCTAA\n")
+    elif mutation == "shared_parent":
+        text = text.replace("Parent=t1", "Parent=t1,t2")
+    elif mutation == "ambiguous":
+        text = text.replace("\t1\tParent=t1", "\t.\tParent=t1")
+    elif mutation == "exception":
+        text = text.replace("ID=t1;Parent=g1", "ID=t1;Parent=g1;exception=ribosomal_slippage")
+    elif mutation == "ordered":
+        text = text.replace("Parent=t1", "Parent=t1;part=1/2")
+    task["gff_path"].write_text(text)
+    if mutation in {"shared_parent", "ambiguous", "exception", "ordered", "canonical"}:
+        def forbidden_fetch(*_args):
+            raise AssertionError("unsupported or canonical models must not fetch genomic evidence")
+        monkeypatch.setattr(CdsModelNormaliser, "fetch", forbidden_fetch)
+    state = {}
+    list(iter_normalised_cds_records(task, state))
+    assert state["gff_updates"] == {}
+
+
 @pytest.mark.parametrize("explicit", [False, True])
 def test_cds_normalisation_uses_task_scratch_for_genome_reconstruction(tmp_path, monkeypatch, explicit):
     import tempfile
@@ -1349,10 +1493,11 @@ def test_infer_provider_from_ensemblgenomes_prefix_and_url():
     )
 
 
-def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path):
+@pytest.mark.parametrize("species_key", ["Amoeba_sp", "Amoeba_sp.", "Amoeba_SP."])
+def test_discover_ncbi_like_tasks_normalizes_bare_sp_species_key(tmp_path, species_key):
     mod = load_module()
     input_dir = tmp_path / "NCBI_Genome" / "species_wise_original"
-    species_dir = input_dir / "Amoeba_sp"
+    species_dir = input_dir / species_key
     species_dir.mkdir(parents=True, exist_ok=True)
     (species_dir / "GCA_000000001.1_demo_cds_from_genomic.fna.gz").write_text("", encoding="utf-8")
     (species_dir / "GCA_000000001.1_demo_genomic.gff.gz").write_text("", encoding="utf-8")
@@ -2701,6 +2846,48 @@ def test_provided_cds_gff_grouping_rejects_unmapped_records_by_default(tmp_path)
     )
     assert strict.returncode != 0
     assert "unexpected_unmapped=1 ambiguous=0" in strict.stderr
+
+
+@pytest.mark.parametrize("provider", ["local", "direct", "phycocosm"])
+@pytest.mark.parametrize("portal", ["Praco1", "Zygcir1559_1"])
+@pytest.mark.parametrize("prefixed", [False, True])
+def test_jgi_namespace_links_raw_and_reused_cds_to_gene_catalog(tmp_path, provider, portal, prefixed):
+    module = load_module()
+    species = "Example_species"
+    header = (species + "_jgi_" + portal + "_14279_external_transcript" if prefixed
+              else "jgi|" + portal + "|14279|external_transcript")
+    cds = tmp_path / "source.cds.fa"
+    cds.write_text(">" + header + "\nATGAAATAA\n")
+    gff = tmp_path / "source.gff3"
+    gff.write_text("chr1\tJGI\tgene\t1\t9\t.\t+\t.\tID=gene1;Name=jgi.p|" + portal + "|14279\n"
+                   "chr1\tJGI\tmRNA\t1\t9\t.\t+\t.\tID=mRNA1;Parent=gene1\n"
+                   "chr1\tJGI\tCDS\t1\t9\t.\t+\t0\tParent=mRNA1\n")
+    output = tmp_path / "out"
+    output.mkdir()
+    task = dict(provider=provider, species_key=species, species_prefix=species,
+                cds_path=cds, gff_path=gff, gene_grouping_mode="strict", genetic_code=1)
+    result = module.format_cds(task, output, overwrite=False, dry_run=False, strict=True)
+    with gzip.open(result["output_path"], "rt") as handle:
+        assert handle.readline().strip() == ">Example_species_gene1"
+    # A different portal never borrows the same numeric protein identifier.
+    cds.write_text(">" + header.replace(portal, "OtherPortal") + "\nATGAAATAA\n")
+    with pytest.raises(ValueError, match="unexpected_unmapped=1"):
+        module.format_cds(task, output, overwrite=True, dry_run=False, strict=True)
+
+
+def test_jgi_encoded_portal_boundaries_preserve_conflicting_gene_evidence(tmp_path):
+    module = load_module()
+    gff = tmp_path / "source.gff3"
+    lines = []
+    for index, name in enumerate(["jgi.p|Portal|1", "jgi.p|Portal_1|10001"], 1):
+        lines += [f"chr1\tJGI\tgene\t{index*20}\t{index*20+8}\t.\t+\t.\tID=G{index};Name={name}",
+                  f"chr1\tJGI\tmRNA\t{index*20}\t{index*20+8}\t.\t+\t.\tID=T{index};Parent=G{index}",
+                  f"chr1\tJGI\tCDS\t{index*20}\t{index*20+8}\t.\t+\t0\tParent=T{index}"]
+    gff.write_text("\n".join(lines) + "\n")
+    task = dict(provider="local", species_prefix="Example_species", gff_path=gff, gene_grouping_mode="strict")
+    index = module.build_gff_cds_grouping_index(task)
+    result = module.resolve_cds_header_gff_gene(task, "Example_species_jgi_Portal_1_10001_T", index)
+    assert result["status"] == "ambiguous"
 
 
 def test_provided_cds_gff_grouping_tolerates_only_low_rate_residual_mismatch(tmp_path):

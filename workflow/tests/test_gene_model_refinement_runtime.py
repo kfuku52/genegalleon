@@ -34,7 +34,7 @@ def test_refinement_cli_help_uses_real_runtime_without_outputs(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path):
+def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path, monkeypatch):
     fixture = import_module('test_rescue_gene_models_runtime')
     data = fixture.hidden_models.__wrapped__(tmp_path)
     anchor_root, names, truth = fixture.make_plan(data)
@@ -44,13 +44,22 @@ def test_refinement_preserves_missing_models_from_completed_real_rescue(tmp_path
     accepted = [model for model in models if model['status'] == 'accepted']
     assert len(accepted) == 1 and accepted[0]['sequence'] == truth[8]
     root = tmp_path / 'refinement'
-    cli('plan', '--rescue-output', anchor_root, '--output', root, '--mode', 'off')
+    producer_plan = (anchor_root / 'plan.json').read_bytes()
+    identities = refinement.rescue.identities()
+    monkeypatch.setattr(refinement.rescue, 'identities', lambda: {
+        **identities, 'genome_index_implementation': 'downstream-catalogue-update'})
+    with pytest.raises(ValueError, match='Rescue schema/tools changed'):
+        refinement.rescue.load(anchor_root)
+    # Published producers remain readable after a downstream-only helper update.
+    refinement.plan(root, rescue_output=anchor_root, mode='off')
     value = refinement.load(root)
     source = value['request']['sources'][names[0]]
     assert Path(source['fasta']).is_relative_to(anchor_root / 'augmented')
     assert Path(source['gff']).is_relative_to(anchor_root / 'augmented')
     cli('run', '--output', root, '--cpus', 2)
     cli('qc', '--output', root)
+    assert all(refinement.inspect_stages(root, refinement.load(root)).values())
+    assert (anchor_root / 'plan.json').read_bytes() == producer_plan
     records = {identifier: sequence for identifier, _header, sequence in
                fasta_records(root / 'effective/species_cds' / (names[0] + '.fa'))}
     assert truth[8] in records.values()

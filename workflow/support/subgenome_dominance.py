@@ -225,6 +225,16 @@ def sign_flip(sums, rng, replicates, exact_max_states):
             "mc_p_ci_high": min(1, centre + radius)}
 
 
+def bootstrap_estimates(sums, counts, replicates, rng):
+    estimates = np.empty(replicates)
+    batch_size = max(1, min(256, 1000000 // len(sums)))
+    for start in range(0, replicates, batch_size):
+        stop = min(start + batch_size, replicates)
+        draws = rng.integers(0, len(sums), (stop - start, len(sums)))
+        estimates[start:stop] = sums[draws].sum(axis=1) / counts[draws].sum(axis=1)
+    return estimates
+
+
 def inference(values, blocks, replicates, rng, *, null_rng=None,
               permutation_replicates=DEFAULT_PERMUTATIONS, exact_max_states=DEFAULT_EXACT_STATES):
     """Locus-weighted mean, cluster bootstrap CI and block sign-flip null test.
@@ -254,8 +264,9 @@ def inference(values, blocks, replicates, rng, *, null_rng=None,
     keys = sorted(grouped, key=lambda k: json.dumps(k, sort_keys=True))
     sums = np.array([math.fsum(grouped[k]) for k in keys])
     counts = np.array([len(grouped[k]) for k in keys])
-    draws = rng.integers(0, len(sums), (replicates, len(sums)))
-    estimates = sums[draws].sum(axis=1) / counts[draws].sum(axis=1)
+    # Draw complete rows in bounded batches, preserving the generator stream
+    # and per-replicate summation order used by the full bootstrap matrix.
+    estimates = bootstrap_estimates(sums, counts, replicates, rng)
     result["ci_low"], result["ci_high"] = map(float, np.quantile(estimates, [0.025, 0.975]))
     result.update(sign_flip(sums, null_rng, permutation_replicates, exact_max_states),
                   status="estimated", bootstrap_replicates=replicates)

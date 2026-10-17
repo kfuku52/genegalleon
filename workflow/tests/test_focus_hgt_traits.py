@@ -52,7 +52,7 @@ def test_direction_uses_exact_species_branches_and_withholds_unknown_tips(tmp_pa
     event = dict(event_id='OG1:3:1', orthogroup='OG1', generax_donor_node=donor, generax_recipient_node=recipient,
                  generax_transfer=f'Y@{donor}@{recipient}', donor_phylum='Arthropoda', donor_class='Insecta')
     before = path.read_bytes()
-    selected, audit, branches, _ = filter_events([event], nodes, path)
+    selected, audit, branches, _ = filter_events([event], nodes, path, 'non_arthropoda_to_insecta')
     assert audit[0]['direction_filter_status'] == status and audit[0]['direction_filter_reason'] == reason
     assert bool(selected) == (status == 'passed')
     assert 'direction_filter_status' not in event and path.read_bytes() == before
@@ -103,7 +103,7 @@ def test_arthropoda_direction_does_not_require_a_resolved_recipient_class(tmp_pa
     selected, audit, _, _ = filter_events([event], {'D': ('D',), 'C': ('C',)}, path,
                                          'non_arthropoda_to_arthropoda')
     assert len(selected) == 1 and audit[0]['direction_recipient_insecta_status'] == 'unknown'
-    assert filter_events([event], {'D': ('D',), 'C': ('C',)}, path)[0] == []
+    assert filter_events([event], {'D': ('D',), 'C': ('C',)}, path, 'non_arthropoda_to_insecta')[0] == []
     any_events = filter_events([event], {'D': ('D',), 'C': ('C',)}, path, 'any')[0]
     assert any_events[0]['direction_filter_reason'] == 'direction_filter_disabled'
     with pytest.raises(ValueError, match='Invalid focused HGT direction'):
@@ -183,11 +183,11 @@ def test_direction_filter_flow_is_post_pfam_and_rejects_cohort_mismatches(direct
     assert [r['event_count'] for r in counts] == [4, 3, 2, 1]
     assert [r['orthogroup_count'] for r in counts] == [4, 3, 2, 1]
     with pytest.raises(ValueError, match='subset'):
-        filtering_counts(events, events[:1], pfam_selected=events[:1], direction_selected=events[:2])
+        filtering_counts(events, events[:1], pfam_selected=events[:1], direction_selected=events[:2], direction_filter=direction)
     with pytest.raises(ValueError, match='subset'):
-        filtering_counts(events, events[2:3], pfam_selected=events[:3], direction_selected=events[:2])
+        filtering_counts(events, events[2:3], pfam_selected=events[:3], direction_selected=events[:2], direction_filter=direction)
     with pytest.raises(ValueError, match='identity'):
-        filtering_counts(events, events[:1], direction_selected=[dict(events[0], orthogroup='changed')])
+        filtering_counts(events, events[:1], direction_selected=[dict(events[0], orthogroup='changed')], direction_filter=direction)
     with pytest.raises(ValueError, match='disabled direction filter'):
         filtering_counts(events, events[:1], direction_selected=events[:2], direction_filter='any')
     empty = filtering_counts(events, [], pfam_selected=events[:3], direction_selected=[], direction_filter=direction)
@@ -207,7 +207,7 @@ def test_split_flow_keeps_verified_support_grain_and_historical_audit(tmp_path):
     write_tsv(path, list(audit[0]), audit)
     original = path.read_bytes()
     counts = export_filtering_flow(tmp_path/'plots', events, events[:1], 'gall', path,
-                                   pfam_selected=events, direction_selected=events[:1], support_filter_enabled=True)
+                                   pfam_selected=events, direction_selected=events[:1], support_filter_enabled=True, direction_filter='non_arthropoda_to_insecta')
     assert [r['event_count'] for r in counts] == [3, 2, 2, 2, 1, 1]
     assert counts[-2]['stage'] == 'Non-Arthropoda donor → Insecta recipient'
     assert counts[-1]['stage'] == 'gall = 1 recipients'
@@ -674,7 +674,11 @@ def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, m
     jobs = [dict(id=family, output=str(tmp_path / f'{family}.pdf')) for family in ('OG1', 'OG2')]
 
     def run(command, **kwargs):
+        if command[:3] == ['R', 'CMD', 'INSTALL']:
+            assert Path(command[-1]).name == 'treevis'
+            return SimpleNamespace(returncode=0, stdout='complete owning package installed')
         assert Path(command[1]).name == 'tree_plot_batch.r'
+        assert Path(kwargs['env']['R_LIBS'].split(':')[0]).is_dir()
         rows = [dict(job, exit_code=0) for job in jobs]
         if problem == 'reordered':
             rows.reverse()
@@ -690,6 +694,27 @@ def test_native_batch_rejects_missing_mismatched_and_failed_receipts(tmp_path, m
     monkeypatch.setattr(exporter.subprocess, 'run', run)
     with pytest.raises(RuntimeError, match='Native focused gene-tree'):
         exporter.render_native_batch(jobs, tmp_path)
+
+
+def test_native_batch_never_falls_back_after_package_installation_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import focus_hgt_gene_trees as exporter
+
+    output = tmp_path / 'existing.pdf'
+    output.write_bytes(b'preserve previous output')
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=1, stdout='deliberate R package installation failure')
+
+    monkeypatch.setattr(exporter.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='package installation failed'):
+        exporter.render_native_batch([dict(id='OG1', output=str(output))], tmp_path)
+    assert len(calls) == 1 and calls[0][:3] == ['R', 'CMD', 'INSTALL']
+    assert output.read_bytes() == b'preserve previous output'
+    assert not list(tmp_path.glob('treevis-library-*'))
 
 
 @pytest.fixture
@@ -1798,7 +1823,7 @@ def test_no_ufb_flow_has_analyzed_ogs_zero_step_and_preserves_cohort(tmp_path):
     output = tmp_path/'plots'
     counts = export_filtering_flow(output, events, events, 'gall', audit,
                                   pfam_selected=events, direction_selected=events,
-                                  analyzed_orthogroups=['OG1', 'OG_without_transfers'])
+                                  analyzed_orthogroups=['OG1', 'OG_without_transfers'], direction_filter='non_arthropoda_to_insecta')
     displayed = read_tsv(output/'filtering_flow.tsv')[1]
     assert displayed[0] == dict(step='00', stage='All analyzed orthogroups', event_count='NA', orthogroup_count='2')
     assert displayed[-1]['event_count'] == '1'
@@ -2121,3 +2146,164 @@ def test_origin_source_changed_after_assessment_preserves_previous_bundle(source
     with pytest.raises(ValueError, match='Origin taxonomy input changed'):
         generate_filtered(*source, plots=False, gene_family_root=root, mmseqs2_taxonomy_dir=sequence)
     assert (source[-1] / 'manifest.json').read_bytes() == previous
+
+
+def custom_direction_rules(path, donor=None, recipient=None):
+    path.write_text(json.dumps(dict(schema_version=1,
+        donor=donor or dict(kind='taxonomy', rank='kingdom', values=['Fungi']),
+        recipient=recipient or dict(kind='tips', values=['A', 'B']))))
+    return path
+
+
+def kingdom_taxonomy(path):
+    fields, rows = read_tsv(saved_species_taxonomy(path))
+    for row in rows:
+        row['kingdom'] = 'Fungi' if row['species'] == 'D' else '' if row['species'] == 'U' else 'Viridiplantae'
+    write_tsv(path, fields + ['kingdom'], rows)
+    return path
+
+
+def test_direction_is_off_by_default_and_never_reads_taxonomy(tmp_path):
+    from focus_hgt_direction import filter_events
+    event = dict(event_id='event', generax_donor_node='unmapped', generax_recipient_node='also_unmapped',
+                 generax_transfer='Y@unmapped@also_unmapped', mapping_status='unresolved')
+    for mode in (None, 'off', 'any'):
+        args = {} if mode is None else dict(direction_filter=mode)
+        selected, audit, branches, sha = filter_events([event], {}, tmp_path/'not_present', **args)
+        assert selected == audit and len(selected) == 1
+        assert selected[0]['mapping_status'] == 'unresolved'
+        assert not branches and not sha and 'direction_filter_status' not in event
+
+
+@pytest.mark.parametrize('donor,recipient,expected', [
+    ('D', 'A', 'passed'), ('D', 'nGastrodia', 'passed'), ('fungal_ancestor', 'B', 'passed'),
+    ('C', 'A', 'excluded_direction'), ('mixed_donor', 'A', 'withheld'),
+    ('U', 'A', 'withheld'), ('missing', 'A', 'withheld'), ('D', 'mixed_recipient', 'withheld'),
+    ('D', 'C', 'excluded_direction'),
+])
+def test_generic_fungal_direction_uses_full_clades_and_preserves_unknowns(tmp_path, donor, recipient, expected):
+    from focus_hgt_direction import filter_events
+    rules = custom_direction_rules(tmp_path/'rules.json')
+    taxonomy = kingdom_taxonomy(tmp_path/'taxonomy.tsv')
+    nodes = {n: (n,) for n in ('A', 'B', 'C', 'D', 'U')}
+    nodes.update(nGastrodia=('A', 'B'), fungal_ancestor=('D',), mixed_donor=('D', 'C'), mixed_recipient=('B', 'C'))
+    event = dict(event_id='event', orthogroup='OG1', generax_donor_node=donor, generax_recipient_node=recipient,
+                 generax_transfer=f'Y@{donor}@{recipient}', mapping_status='matched')
+    before = rules.read_bytes(), taxonomy.read_bytes()
+    selected, audit, branches, sha = filter_events([event], nodes, taxonomy, 'custom', rules)
+    assert audit[0]['direction_filter_status'] == expected and bool(selected) == (expected == 'passed')
+    assert 'direction_filter_status' not in event and before == (rules.read_bytes(), taxonomy.read_bytes())
+    assert audit[0]['direction_rules_sha256'] and sha
+    assert next(r for r in branches if r['species_branch'] == 'mixed_donor')['donor_status'] == 'mixed'
+
+
+def test_generic_direction_accepts_saved_rank_arrays_and_explicit_branch_sets(tmp_path):
+    from focus_hgt_direction import filter_events
+    taxonomy = kingdom_taxonomy(tmp_path/'taxonomy.tsv')
+    fields, rows = read_tsv(taxonomy)
+    next(r for r in rows if r['species'] == 'D')['kingdom'] = '["Opisthokonta", "Fungi"]'
+    write_tsv(taxonomy, fields, rows)
+    rules = custom_direction_rules(tmp_path/'rules.json', recipient=dict(kind='branches', values=['stem']))
+    nodes = dict(D=('D',), A=('A',), stem=('A', 'B'))
+    events = [dict(event_id=str(i), generax_donor_node='D', generax_recipient_node=n,
+                   generax_transfer='Y@D@'+n) for i, n in enumerate(('stem', 'A'))]
+    assert [r['event_id'] for r in filter_events(events, nodes, taxonomy, 'custom', rules)[0]] == ['0']
+    rules = custom_direction_rules(rules, donor=dict(kind='tips', values=['A', 'B'], match='outside'),
+                                   recipient=dict(kind='branches', values=['stem']))
+    assert len(filter_events(events, nodes, '', 'custom', rules)[0]) == 1
+    events[0]['mapping_status'] = 'unresolved'
+    assert not filter_events(events, nodes, '', 'custom', rules)[0]
+
+
+@pytest.mark.parametrize('value', [
+    {}, {'schema_version': True, 'donor': {'kind': 'any'}, 'recipient': {'kind': 'any'}},
+    {'schema_version': 1, 'donor': {'kind': 'taxonomy', 'rank': 'kingdom', 'values': []}, 'recipient': {'kind': 'any'}},
+    {'schema_version': 1, 'donor': {'kind': 'any', 'values': ['A']}, 'recipient': {'kind': 'any'}},
+    {'schema_version': 1, 'donor': {'kind': 'tips', 'values': ['A B', 'A_B']}, 'recipient': {'kind': 'any'}},
+    {'schema_version': 1, 'donor': {'kind': 'taxonomy', 'rank': 'resolution_status', 'values': ['resolved']}, 'recipient': {'kind': 'any'}},
+])
+def test_generic_direction_rejects_malformed_rules(tmp_path, value):
+    from focus_hgt_direction import read_rules
+    rules = tmp_path/'rules.json'
+    rules.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        read_rules(rules)
+    rules.write_text('{"schema_version":1,"donor":{"kind":"any"},"donor":{"kind":"any"},"recipient":{"kind":"any"}}')
+    with pytest.raises(ValueError, match='Duplicate'):
+        read_rules(rules)
+
+
+def test_generic_direction_rejects_missing_identities_rank_and_implicit_enabling(tmp_path):
+    from focus_hgt_direction import filter_events
+    rules = custom_direction_rules(tmp_path/'rules.json', donor=dict(kind='tips', values=['missing']))
+    with pytest.raises(ValueError, match='absent'):
+        filter_events([], dict(A=('A',), B=('B',)), '', 'custom', rules)
+    with pytest.raises(ValueError, match='explicit custom'):
+        filter_events([], {}, '', 'off', rules)
+    with pytest.raises(ValueError, match='direction_rules'):
+        filter_events([], {}, '', 'custom')
+    rules = custom_direction_rules(rules)
+    with pytest.raises(ValueError, match='taxonomy'):
+        filter_events([], {}, '', 'custom', rules)
+    with pytest.raises(ValueError, match='taxonomy columns'):
+        filter_events([], dict(A=('A',), B=('B',)), saved_species_taxonomy(tmp_path/'taxonomy.tsv'), 'custom', rules)
+
+
+def test_generic_focus_reuses_ancestors_with_one_event_id_and_seals_rules(source):
+    rules = custom_direction_rules(source[0].parent/'rules.json')
+    taxonomy = kingdom_taxonomy(source[0].parent/'taxonomy.tsv')
+    report = generate(*source, plots=False, direction_filter='custom', direction_rules=rules, species_taxonomy=taxonomy)
+    output = source[-1]
+    events = read_tsv(output/'traits/binary/all_category1/events.tsv')[1]
+    assert {r['event_id'] for r in events} == {'OG1:3:1', 'OG1:3:2', 'OG1:3:4'}
+    assert next(r for r in events if r['event_id'] == 'OG1:3:2')['recipient_clade_tip_labels'] == 'A; B'
+    assert report['shared_direction_filter']['rules_sha256']
+    assert json.loads((output/'direction_rules.json').read_text()) == json.loads(rules.read_text())
+    assert str(rules.resolve()) in report['inputs_sha256']
+    # An ancestor has one aggregate identity even though both tip contexts retain it.
+    assert len(read_tsv(output/'traits/binary/tips/A/ancestral_recipient_events.tsv')[1]) == 1
+    assert len(read_tsv(output/'traits/binary/tips/B/ancestral_recipient_events.tsv')[1]) == 1
+    from focus_hgt_figures import filtering_counts
+    counts = filtering_counts(events, events, direction_selected=events, direction_filter='custom')
+    assert next(r for r in counts if r['stage'] == 'Configured donor → recipient')['event_count'] == 3
+
+
+def test_generic_focus_rules_are_content_fenced(source, monkeypatch):
+    import focus_hgt_traits
+    rules = custom_direction_rules(source[0].parent/'rules.json', donor=dict(kind='any'))
+    original = focus_hgt_traits.export_bundle
+    def mutate(*args, **kwargs):
+        rules.write_text(rules.read_text()+'\n')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(focus_hgt_traits, 'export_bundle', mutate)
+    with pytest.raises(ValueError, match='inputs changed'):
+        generate(*source, plots=False, direction_filter='custom', direction_rules=rules)
+    assert not source[-1].exists()
+
+
+def test_generic_filter_and_foreground_use_analysis_ids_and_preserve_original_gene_tree_tokens(source):
+    from hgt_species_tree import event_species_branch
+    fields, events = read_tsv(source[0])
+    for event in events:
+        event['analysis_donor_node'] = event['generax_donor_node']
+        event['analysis_recipient_node'] = event['generax_recipient_node']
+        if event['generax_recipient_node'] == '0042':
+            event['generax_recipient_node'] = 'xml_ancestor'
+            event['generax_transfer'] = 'Y@D@xml_ancestor'
+    write_tsv(source[0], fields+['analysis_donor_node','analysis_recipient_node'], events)
+    link_fields, links = read_tsv(source[1])
+    by_id = {e['event_id']: e for e in events}
+    for row in links:
+        event = by_id[row['event_id']]
+        for field in ('generax_recipient_node','generax_transfer'):
+            if field in row:
+                row[field] = event[field]
+    write_tsv(source[1], link_fields, links)
+    rules = custom_direction_rules(source[0].parent/'rules.json', donor=dict(kind='any'))
+    generate(*source, plots=False, direction_filter='custom', direction_rules=rules)
+    selected = read_tsv(source[-1]/'traits/binary/all_category1/events.tsv')[1]
+    ancestor = next(e for e in selected if e['event_id'] == 'OG1:3:2')
+    assert ancestor['generax_transfer'] == 'Y@D@xml_ancestor'
+    assert event_species_branch(ancestor, 'recipient') == '0042'
+    assert read_tsv(source[-1]/'traits/binary/internal_branches/0042/events.tsv')[1][0]['event_id'] == 'OG1:3:2'
+    assert len(read_tsv(source[-1]/'traits/binary/tips/A/ancestral_recipient_events.tsv')[1]) == 1

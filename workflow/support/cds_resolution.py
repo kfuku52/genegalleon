@@ -26,6 +26,8 @@ from cdskit.pad import process_record_padding
 from content_digest_cache import cached_sha256_file
 from fasta_sequence_store import fasta_records
 from gff2genestat import disable_structure, process_single_gff
+from input_generation_array_state import FreshDigestBatch
+from workflow_observation import path_signature
 
 POLICY_VERSION = 1
 GFF_COLUMNS = ['sequence', 'source', 'feature', 'start', 'end', 'score', 'strand', 'phase', 'attributes']
@@ -262,17 +264,37 @@ def resolve(cds, gff, genome, output_dir, code=1, representative_map=None):
     return destination, traits_path, report_path
 
 
+def _verify_view(destination, selected):
+    """A content-addressed view must contain exactly its regular FASTA files."""
+    if destination.is_symlink() or not destination.is_dir():
+        raise ValueError(f'Invalid CDS input view: {destination}')
+    before = path_signature(destination)
+    members = {path.name: path for path in destination.iterdir()}
+    if set(members) != set(selected) or any(path.is_symlink() or not path.is_file() for path in members.values()):
+        raise ValueError(f'Changed CDS input view membership: {destination}')
+    proof = FreshDigestBatch()
+    hashes = proof.read(members.values())
+    for name, entry in selected.items():
+        if hashes[str(members[name])] != entry['sha256']:
+            raise ValueError(f'Changed CDS input view: {name}')
+    proof.check()
+    if destination.is_symlink() or path_signature(destination) != before:
+        raise ValueError(f'Changed CDS input view membership: {destination}')
+
+
 def resolved_view(source_dir, resolution_dir, view_dir):
     """Bind downstream inputs to verified resolutions; preserve unprocessed species."""
     source_dir, resolution_dir, view_dir = map(Path, (source_dir, resolution_dir, view_dir))
     view_dir.mkdir(parents=True, exist_ok=True)
     selected = {}
+    proofs = {}
     for source in sorted(source_dir.iterdir()):
         if not source.is_file() or not re.search(r'\.(fa|fas|fasta|fna)(\.gz)?$', source.name):
             continue
         target = source.resolve()
         report_path = resolution_dir / (source.name + '.resolution.meta.json')
-        if report_path.exists():
+        has_report = report_path.exists()
+        if has_report:
             report = json.loads(report_path.read_text())
             for entry in report['contract']['sources'].values():
                 if digest(entry['path']) != entry['sha256']:
@@ -280,31 +302,51 @@ def resolved_view(source_dir, resolution_dir, view_dir):
             if report['contract']['sources']['cds']['path'] != str(source.resolve()):
                 raise ValueError(f'CDS resolution source changed: {source.name}')
             target = (resolution_dir / source.name).resolve()
-            if digest(target) != report['output_sha256']:
+        proof = FreshDigestBatch()
+        target_hash = proof.read([target])[str(target)]
+        if has_report:
+            if target_hash != report['output_sha256']:
                 raise ValueError(f'Changed resolved CDS: {source.name}')
-        selected[source.name] = {'path': str(target), 'sha256': digest(target)}
+        selected[source.name] = {'path': str(target), 'sha256': target_hash}
+        proofs[source.name] = proof
+    for proof in proofs.values():
+        proof.check()
     identity = hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
     destination = view_dir / identity
-    if destination.exists():
-        for name, entry in selected.items():
-            if digest(destination / name) != entry['sha256']:
-                raise ValueError(f'Changed CDS input view: {name}')
+    if destination.exists() or destination.is_symlink():
+        _verify_view(destination, selected)
+        for proof in proofs.values():
+            proof.check()
         return destination
     # Regular hardlinks keep the existing FASTA-store/no-symlink contract.
     # Each view has an immutable content identity; no user source is rewritten.
     with tempfile.TemporaryDirectory(prefix='.view-', dir=view_dir) as temporary:
         staged = Path(temporary) / 'files'
         staged.mkdir()
+        for proof in proofs.values():
+            proof.check()
         for name, entry in selected.items():
             os.link(entry['path'], staged / name)
+        # Linking intentionally changes inode ctime. Start a fresh byte proof
+        # after these writes; never refresh the earlier checksum from stat data.
+        publication = FreshDigestBatch()
+        hashes = publication.read(staged / name for name in selected)
+        for name, entry in selected.items():
+            before, original_target = proofs[name].paths[entry['path']]
+            current = os.stat(entry['path'])
+            if ((current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != before[:4]
+                    or str(Path(entry['path']).resolve(strict=True)) != original_target
+                    or (staged / name).is_symlink()
+                    or hashes[str(staged / name)] != entry['sha256']):
+                raise ValueError(f'CDS input changed while creating view: {name}')
+        publication.check()
         try:
             os.rename(staged, destination)
         except OSError:
             if not destination.is_dir():
                 raise
-            for name, entry in selected.items():
-                if digest(destination / name) != entry['sha256']:
-                    raise ValueError(f'Concurrent CDS view differs: {name}') from None
+            _verify_view(destination, selected)
+            publication.check()
     return destination
 
 

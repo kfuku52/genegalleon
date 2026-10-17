@@ -29,6 +29,7 @@ def run_download_stage(
         dry_run=args.dry_run,
         jobs=parallel_jobs,
         resolved_manifest_output_path=resolved_manifest_output_path,
+        allow_genome_only=bool(args.download_only),
     )
     for warning in report["warnings"]:
         stderr.write("Warning: {}\n".format(warning))

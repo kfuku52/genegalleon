@@ -106,3 +106,45 @@ Use `benchmark_native_efficiency.py --mode final` as documented in
 Tests retain ordinary fallback for absent/old QC, changed implementation/options,
 summary and genome evidence, plus rejection of changes between the combined
 validators. Source summary rows are parsed from exact bytes bound to the proof.
+
+## Completion receipt aliases
+
+Worker completion records can contain both a raw source's resolved path and its
+original alias. Completion verification now hashes each physical file once per
+receipt, including symlink, hard-link and explicitly mapped `/workspace` aliases.
+Each declared path must still match its own expected SHA-256. The receipt and all
+member identities/targets are checked again after reading the last output, so a
+change to an earlier source cannot be accepted. No checksum is retained between
+calls. Existing receipt schemas, retry selection and scientific validators are
+unchanged; a supplied plan hash retains its existing caller-owned binding.
+
+A 2026-10-16 comparison against v0.8.276 (`7f2fa685`) used Docker Linux/arm64,
+Python 3.12.15 and runtime
+`sha256:a28e1760f1cf2cca40798943bc8e48d594b160147c00baf0441820ada07e41a7`.
+Eight synthetic receipts each covered a 64 MiB source and a 1 MiB output.
+One warmup preceded five alternating fresh-process trials in a warm filesystem.
+
+| Receipt workload | Before median | After median | SHA-256 bytes before / after |
+|---|---:|---:|---:|
+| Source plus one alias | 0.519 s | 0.274 s | 1,082,133,880 / 545,267,336 |
+| Source without aliases | 0.273 s | 0.273 s | 545,262,968 / 545,266,304 |
+
+The alias workload reduced verification time by 47% and hash bytes by 50%.
+Median process peak RSS was 24.3 / 24.6 MiB, including fixture setup. The control
+has effectively unchanged elapsed time and small additional receipt reads for
+mutation detection. Both implementations accepted the same valid receipts,
+rejected changed output content and left receipt bytes unchanged. These figures
+measure receipt verification, not ORF prediction, whole-job time or NAS throughput.
+Regression tests additionally reject changes to earlier files, receipt metadata,
+plan content and alias targets during verification.
+
+Keep the baseline support tree visible to the runtime and use a new output path:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/data/baseline \
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_native_efficiency.py \
+  --mode receipt --baseline-repo /data/baseline \
+  --species 8 --genome-mib 64 --trials 5 --output tmp/receipt-comparison.json
+```
+
+Repeat with `--receipt-aliases 0` and a different output path for the control.

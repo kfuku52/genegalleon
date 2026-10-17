@@ -504,3 +504,17 @@ def test_unhighlighted_arrows_use_one_color_at_different_distances(tmp_path, mon
     saved = pandas.read_csv(edges, sep="\t")
     assert saved.phylogenetic_distance.nunique() == 2
     assert saved.hgt_event_count.sum() == 2 and saved.displayed.eq(1).all()
+
+
+def test_verified_analysis_endpoints_map_edges_without_changing_generax_event_identity():
+    event = dict(event_id='OG1:4:1', orthogroup='OG1', generax_transfer='Y@xml_donor@xml_recipient',
+                 mapping_status='matched', analysis_donor_node='nFungi', analysis_recipient_node='0042')
+    frame = pandas.DataFrame([event])
+    edges = plotter.build_transfer_edge_table(frame, {'nFungi':'nFungi','0042':'0042'})
+    assert edges.iloc[0]['donor_node'] == 'nFungi'
+    assert edges.iloc[0]['recipient_node'] == '0042'
+    assert edges.iloc[0]['mapped_to_species_tree'] == 1
+    assert frame.iloc[0]['generax_transfer'] == event['generax_transfer']
+    frame.loc[0,'mapping_status'] = 'unresolved'
+    with pytest.raises(ValueError, match='matched event'):
+        plotter.build_transfer_edge_table(frame)

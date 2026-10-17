@@ -83,6 +83,32 @@ print(json.dumps({'status':status,'seconds':time.perf_counter()-begin,
     if args.no_progress:
         command.extend(["--progress-interval", "0"])
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    if args.operation in {"store-digest", "subdir-digest"}:
+        code = r'''
+import contextlib,json,resource,sys,time
+sys.path.insert(0,sys.argv[1])
+import artifact_provenance as p
+from gene_family_output_store import read_only_observation
+delay=float(sys.argv[3])/1000
+original=p._store_artifact_digest
+def read(store,artifact):
+    if delay: time.sleep(delay)
+    return original(store,artifact)
+p._store_artifact_digest=read
+begin=time.perf_counter()
+with read_only_observation(), (p.digest_observation(workers=int(sys.argv[6]), spill_guards=True)
+                              if sys.argv[5]=='query' else contextlib.nullcontext()) as memo:
+    result=(p.gene_family_subdir_digest(p.Path(sys.argv[2]),sys.argv[4])
+            if sys.argv[4] else p.gene_family_store_digest(p.Path(sys.argv[2])))
+print(json.dumps({'status':0,'seconds':time.perf_counter()-begin,'store_digest':result,
+                 'metrics':memo.metrics() if memo is not None else None,
+                 'peak_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}))
+'''
+        command = [sys.executable, "-B", "-c", code, str(support),
+                   str(root / "output/orthogroup"), str(args.member_delay_ms),
+                   args.subdir if args.operation == "subdir-digest" else "",
+                   "query" if args.query_observation else "direct", str(args.workers or 1)]
+        env["GG_TASK_CPUS"] = str(args.workers or 1)
     began = time.perf_counter()
     completed = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
     if completed.returncode:
@@ -91,10 +117,13 @@ print(json.dumps({'status':status,'seconds':time.perf_counter()-begin,
     if result["status"] != 0:
         raise RuntimeError(completed.stderr + completed.stdout)
     result.update(label=args.label, wall_seconds=time.perf_counter()-began,
-                  report_sha256=digest(report.read_bytes()), fixture=marker,
+                  report_sha256=digest(report.read_bytes()) if args.operation == "audit" else None, fixture=marker,
                   python=sys.version.split()[0], support_root=str(support),
                   command=command[4:], cpu_limit=os.environ.get("GG_BENCHMARK_CPU_LIMIT"),
-                  cache_condition="run-scoped RAM cache empty; baseline persistent digest cache warm after warmup; OS cache not forcibly cleared")
+                  operation=args.operation, workers=args.workers, member_delay_ms=args.member_delay_ms,
+                  cache_condition=("fresh process, no persistent digest reuse, discarded warmup; OS cache not forcibly cleared"
+                                   if args.operation != "audit" else
+                                   "run-scoped RAM cache empty; baseline persistent digest cache warm after warmup; OS cache not forcibly cleared"))
     print(json.dumps(result, sort_keys=True))
 
 
@@ -110,7 +139,19 @@ def main():
     parser.add_argument("--label", default="trial")
     parser.add_argument("--workers", type=int)
     parser.add_argument("--no-progress", action="store_true")
+    parser.add_argument("--operation", choices=["audit", "store-digest", "subdir-digest"], default="audit")
+    parser.add_argument("--subdir", default="stat_branch", help="Logical subdirectory for subdir-digest")
+    parser.add_argument("--query-observation", action="store_true",
+                        help="Include the standard query cache and final full content revalidation")
+    parser.add_argument("--member-delay-ms", type=float, default=0,
+                        help="Synthetic per-member I/O delay for store-digest only; not a real filesystem measurement")
     args = parser.parse_args()
+    if args.query_observation and args.operation == "audit":
+        parser.error("query-observation applies to digest operations; audit already owns its query")
+    if not 0 <= args.member_delay_ms <= 100 or (args.operation == "audit" and args.member_delay_ms):
+        parser.error("member delay requires a digest operation and must be between 0 and 100 ms")
+    if args.workers is not None and not 1 <= args.workers <= 64:
+        parser.error("workers must be between 1 and 64")
     if args.create:
         create_fixture(args.workspace, args.families, args.steps, args.shared_mib, args.layout, args.support_root)
     else:

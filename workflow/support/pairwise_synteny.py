@@ -11,18 +11,20 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
-from dataclasses import replace
+from dataclasses import asdict, replace
 from fractions import Fraction
 from pathlib import Path
 
 from Bio.Data import CodonTable
 from Bio.Seq import Seq
-from kffractbias.io import annotation_to_genes, natural_key, select_isoforms, write_bed
+from kffractbias.io import Gene, annotation_to_genes, natural_key, select_isoforms, write_bed
 
 try:
     from busco_reference_quality import safe_token
     from fasta_sequence_store import fasta_records
+    from input_generation_array_state import FreshDigestBatch
     from pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from pairwise_synteny_karyotype import chromosome_colors
     from pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
@@ -36,6 +38,7 @@ try:
 except ImportError:  # package imports in tests
     from .busco_reference_quality import safe_token
     from .fasta_sequence_store import fasta_records
+    from .input_generation_array_state import FreshDigestBatch
     from .pairwise_synteny_dotplot import chromosome_lengths, prepare_dotplot
     from .pairwise_synteny_karyotype import chromosome_colors
     from .pairwise_synteny_layout import FIGSIZE, order_by_ribbon_length
@@ -124,12 +127,14 @@ def build_plan(args):
     if not formats or len(set(formats)) != len(formats) or set(formats) - {"pdf", "svg", "png"}:
         raise ValueError("formats must be a unique comma-separated subset of pdf,svg,png")
     workspace = args.workspace.resolve()
+    boundary = FreshDigestBatch()
     effective_manifest = getattr(args, "representative_inputs", "")
     effective_inputs = {}
     if effective_manifest:
         effective_manifest = Path(effective_manifest)
         effective_manifest = (effective_manifest if effective_manifest.is_absolute()
                               else workspace / effective_manifest).resolve()
+        boundary.read([effective_manifest])
         effective_inputs = load_effective_inputs(effective_manifest)
         if any(int(row["genetic_code"]) not in CodonTable.generic_by_id for row in effective_inputs.values()):
             raise ValueError("Effective inputs manifest has an unknown NCBI genetic code")
@@ -138,9 +143,10 @@ def build_plan(args):
         representative_path = Path(representative_path)
         representative_path = (representative_path if representative_path.is_absolute()
                                else workspace / representative_path).resolve()
+        boundary.read([representative_path])
         load_representative_map(representative_path)
     pairs_file = args.pairs if args.pairs.is_absolute() else workspace / args.pairs
-    pairs_digest = digest(pairs_file)
+    pairs_digest = boundary.read([pairs_file])[str(pairs_file)]
     with pairs_file.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         fields = reader.fieldnames or []
@@ -161,7 +167,7 @@ def build_plan(args):
     code_digest = None
     code_file = workspace / "input/species_genetic_code/species_genetic_code.tsv"
     if code_file.is_file():
-        code_digest = digest(code_file)
+        code_digest = boundary.read([code_file])[str(code_file)]
         with code_file.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle, delimiter="\t")
             if len(reader.fieldnames or ()) != 2 or set(reader.fieldnames or ()) != {"species", "genetic_code"}:
@@ -243,21 +249,21 @@ def build_plan(args):
                 raise ValueError("dS estimation requires the same genetic code for both species; use orientation coloring for mixed-code pairs")
         pairs.append(pair)
     layout_source = Path(__file__).with_name("pairwise_synteny_layout.py").resolve()
-    inputs = {str(Path(__file__).resolve()): digest(__file__), str(layout_source): digest(layout_source),
+    inputs = {str(Path(__file__).resolve()): None, str(layout_source): None,
               str(pairs_file.resolve()): pairs_digest}
     dotplot_source = Path(__file__).with_name("pairwise_synteny_dotplot.py").resolve()
-    inputs[str(dotplot_source)] = digest(dotplot_source)
+    inputs[str(dotplot_source)] = None
     for helper in ("pairwise_synteny_karyotype.py", "pairwise_synteny_style.py", "pairwise_synteny_layout.py",
                    "busco_reference_quality.py"):
         path = Path(__file__).with_name(helper).resolve()
-        inputs[str(path)] = digest(path)
+        inputs[str(path)] = None
     reader_source = Path(__file__).with_name("fasta_sequence_store.py").resolve()
-    inputs[str(reader_source)] = digest(reader_source)
+    inputs[str(reader_source)] = None
     if representative_path or effective_inputs:
         if representative_path:
-            inputs[str(representative_path)] = digest(representative_path)
+            inputs[str(representative_path)] = None
         if effective_manifest:
-            inputs[str(effective_manifest)] = digest(effective_manifest)
+            inputs[str(effective_manifest)] = None
             for sources in effective_inputs.values():
                 for role in ("cds", "protein", "gff", "genome", "representative_map"):
                     inputs[sources[role]] = sources[role + "_sha256"]
@@ -266,16 +272,16 @@ def build_plan(args):
                         inputs[sources[role]] = sources[role + '_sha256']
         for helper in ("representative_selection.py", "gff2genestat.py", "gff_feature_structure.py"):
             path = Path(__file__).with_name(helper).resolve()
-            inputs[str(path)] = digest(path)
+            inputs[str(path)] = None
     if code_digest is not None:
         inputs[str(code_file.resolve())] = code_digest
     for pair in pairs:
         for side in ("target", "query"):
             for kind in ("fasta", "gff"):
                 path = pair[side][kind]
-                inputs[path] = digest(path)
+                inputs.setdefault(path, None)
             path = pair["dotplot_lengths"][side]["path"]
-            inputs[path] = digest(path)
+            inputs.setdefault(path, None)
     ds_tools = {}
     if dotplot_color == "ds":
         try:
@@ -286,7 +292,11 @@ def build_plan(args):
         inputs.update(ds_tools["source_hashes"])
         for pair in pairs:
             for side in ("target", "query"):
-                inputs[pair["ds"][side]["fasta"]] = digest(pair["ds"][side]["fasta"])
+                inputs.setdefault(pair["ds"][side]["fasta"], None)
+    observed = boundary.read(inputs)
+    if any(expected is not None and observed[path] != expected for path, expected in inputs.items()):
+        raise ValueError('Pairwise synteny input changed while planning')
+    inputs = observed
     plan = {
         "workspace": str(workspace), "pairs": sorted(pairs, key=lambda p: p["analysis_id"]),
         "parameters": {"cscore": args.cscore, "min_anchors": args.min_anchors, "distance": args.distance,
@@ -301,6 +311,7 @@ def build_plan(args):
     }
     if effective_manifest:
         plan["representative_inputs"] = str(effective_manifest)
+    boundary.check()
     return plan
 
 
@@ -596,26 +607,81 @@ def summarize_anchors(directory, genomes):
             "syntenic_gene_fraction": [len({row[index + 1] for row in rows}) / len(genome) for index, genome in enumerate(genomes)]}
 
 
+class PreparedGenomes:
+    """Private, command-local preparations; raw sequences are never retained.
+
+    Cache keys include the complete source description and mapping threshold.
+    Sources and generated files are fenced through use; copies keep native tools
+    from changing the generation shared by later pairs.
+    """
+
+    def __init__(self, directory, input_hashes=None):
+        self.directory = Path(directory)
+        self.input_hashes = input_hashes or {}
+        self.inputs = FreshDigestBatch()
+        self.generated = FreshDigestBatch()
+        self.entries = {}
+
+    def check(self):
+        self.inputs.check()
+        self.generated.check()
+
+    def prepare(self, source, directory, side, minimum_mapping_fraction):
+        paths = [source[name] for name in ('fasta', 'gff', 'representative_map', 'admitted_protein') if source.get(name)]
+        observed = self.inputs.read(paths)
+        if any(path in self.input_hashes and observed[path] != self.input_hashes[path] for path in observed):
+            raise ValueError('Pairwise synteny input changed before preparation')
+        key = json.dumps([source, minimum_mapping_fraction], sort_keys=True)
+        if key not in self.entries:
+            generation = self.directory / hashlib.sha256(key.encode()).hexdigest()
+            generation.mkdir()
+            genes, metadata = prepare_genome(source, generation, 'source', minimum_mapping_fraction)
+            if (metadata['fasta_sha256'] != observed[str(source['fasta'])]
+                    or metadata['gff_sha256'] != observed[str(source['gff'])]):
+                raise ValueError('Pairwise synteny source changed during preparation')
+            write_json(generation / 'genes.json', [asdict(gene) for gene in genes])
+            write_json(generation / 'metadata.json', metadata)
+            self.inputs.check()
+            self.generated.read(generation / name for name in
+                                ('source.bed', 'source.pep', 'source.id_map.tsv', 'genes.json', 'metadata.json'))
+            self.entries[key] = generation
+        generation = self.entries[key]
+        self.check()
+        genes = tuple(Gene(**row) for row in json.loads((generation / 'genes.json').read_text()))
+        metadata = json.loads((generation / 'metadata.json').read_text())
+        for suffix in ('.bed', '.pep', '.id_map.tsv'):
+            cached, destination = generation / ('source' + suffix), directory / (side + suffix)
+            expected = self.generated.read([cached])[str(cached)]
+            shutil.copyfile(cached, destination)
+            if digest(destination) != expected:
+                raise ValueError('Prepared synteny copy changed: ' + str(destination))
+        self.check()
+        return genes, metadata
+
+
 def analyze(plan, output, cpus):
     output.mkdir(parents=True)
-    for pair in plan["pairs"]:
-        directory = output / pair["analysis_id"]
-        directory.mkdir()
-        target, target_info = prepare_genome(pair["target"], directory, "target", plan["parameters"]["minimum_mapping_fraction"])
-        query, query_info = prepare_genome(pair["query"], directory, "query", plan["parameters"]["minimum_mapping_fraction"])
-        if {g.gene_id for g in target} & {g.gene_id for g in query}:
-            raise ValueError("Target and query normalized identifiers overlap")
-        parameters = plan["parameters"]
-        commands = []
-        run_command([sys.executable, "-m", "jcvi.compara.catalog", "ortholog", "target", "query", "--dbtype=prot",
-                     "--align_soft=diamond_blastp", "--no_strip_names", "--no_dotplot", f"--cpus={cpus}",
-                     f"--cscore={parameters['cscore']}", f"--min_size={parameters['min_anchors']}", f"--dist={parameters['distance']}"],
-                    directory, commands, "mcscan")
-        counts = summarize_anchors(directory, (target, query))
-        run_command([sys.executable, "-m", "jcvi.compara.synteny", "screen", "--minspan=0", "--minsize=0", "--simple",
-                     "target.query.lifted.anchors", "target.query.screened.anchors"], directory, commands, "blocks")
-        write_json(directory / "summary.json", {"schema_version": 1, "analysis_id": pair["analysis_id"], "target": target_info,
-                   "query": query_info, "parameters": parameters, "tools": plan["tools"], **counts})
+    with tempfile.TemporaryDirectory(prefix='.prepared-', dir=output.parent) as temporary:
+        prepared = PreparedGenomes(temporary, plan.get('input_hashes'))
+        for pair in plan["pairs"]:
+            directory = output / pair["analysis_id"]
+            directory.mkdir()
+            target, target_info = prepared.prepare(pair["target"], directory, "target", plan["parameters"]["minimum_mapping_fraction"])
+            query, query_info = prepared.prepare(pair["query"], directory, "query", plan["parameters"]["minimum_mapping_fraction"])
+            if {g.gene_id for g in target} & {g.gene_id for g in query}:
+                raise ValueError("Target and query normalized identifiers overlap")
+            parameters = plan["parameters"]
+            commands = []
+            run_command([sys.executable, "-m", "jcvi.compara.catalog", "ortholog", "target", "query", "--dbtype=prot",
+                         "--align_soft=diamond_blastp", "--no_strip_names", "--no_dotplot", f"--cpus={cpus}",
+                         f"--cscore={parameters['cscore']}", f"--min_size={parameters['min_anchors']}", f"--dist={parameters['distance']}"],
+                        directory, commands, "mcscan")
+            counts = summarize_anchors(directory, (target, query))
+            run_command([sys.executable, "-m", "jcvi.compara.synteny", "screen", "--minspan=0", "--minsize=0", "--simple",
+                         "target.query.lifted.anchors", "target.query.screened.anchors"], directory, commands, "blocks")
+            write_json(directory / "summary.json", {"schema_version": 1, "analysis_id": pair["analysis_id"], "target": target_info,
+                       "query": query_info, "parameters": parameters, "tools": plan["tools"], **counts})
+            prepared.check()
 
 
 def selected_seqids(value, genes):
@@ -745,12 +811,18 @@ def render(plan, output):
                 except ImportError:
                     from .pairwise_synteny_dotplot import render_orientation_pdf
                 render_orientation_pdf(directory, pair, fmt=fmt)
-            run_command([sys.executable, str(Path(__file__).with_name("pairwise_synteny_karyotype.py").resolve()),
-                         "--directory", str(directory.resolve()), "--target-species", pair["target_species"],
-                         "--query-species", pair["query_species"], "--format", fmt,
-                         "--scale", plan.get("karyotype_scale", "shared"),
-                         "--track-order", plan.get("karyotype_track_order", "target-query"),
-                         "--analysis", str(source.resolve())], directory, commands, f"karyotype-{fmt}")
+            if not (directory / f"dotplot.{fmt}").is_file() or not (directory / f"dotplot.{fmt}").stat().st_size:
+                raise ValueError(f"Missing or empty dotplot.{fmt}")
+        format_args = (["--format", plan['formats'][0]] if len(plan['formats']) == 1 else
+                       ["--formats", ','.join(plan['formats'])])
+        label = f"karyotype-{plan['formats'][0]}" if len(plan['formats']) == 1 else 'karyotype-batch'
+        run_command([sys.executable, str(Path(__file__).with_name("pairwise_synteny_karyotype.py").resolve()),
+                     "--directory", str(directory.resolve()), "--target-species", pair["target_species"],
+                     "--query-species", pair["query_species"], *format_args,
+                     "--scale", plan.get("karyotype_scale", "shared"),
+                     "--track-order", plan.get("karyotype_track_order", "target-query"),
+                     "--analysis", str(source.resolve())], directory, commands, label)
+        for fmt in plan['formats']:
             for name in ("dotplot", "karyotype"):
                 if not (directory / f"{name}.{fmt}").is_file() or not (directory / f"{name}.{fmt}").stat().st_size:
                     raise ValueError(f"Missing or empty {name}.{fmt}")

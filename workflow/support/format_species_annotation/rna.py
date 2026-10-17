@@ -80,6 +80,9 @@ def build_rna_coding_index(gff_path):
 def extract_input_cds(task, header, sequence):
     """Return CDS, or None for a declared transcript with no coding annotation."""
     sequence = re.sub(r"\s+", "", sequence).upper()
+    from transcriptome_orfs import extract_orf, input_type
+    if input_type(task) == "transcriptome":
+        return extract_orf(task, first_token(header), sequence)
     span = re.search(r"(?:^|\s)CDS=(\d+)-(\d+)(?:\s|$)", header)
     conversion = task.setdefault("_rna_conversion_audit", dict(trimmed=[], excluded_noncoding=[]))
     identifier = first_token(header)
