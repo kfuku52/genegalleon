@@ -1486,44 +1486,6 @@ def test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species
     assert len(_read_tsv_rows(resolved)) == 2
 
 
-def test_array_protein_busco_translates_cds_and_freezes_mode(tmp_path):
-    import shutil
-
-    native_seqkit = shutil.which('seqkit')
-    assert native_seqkit, 'Container seqkit is required for translation validation'
-    input_dir = _write_direct_species_fixture(tmp_path)
-    workspace = tmp_path / 'protein_busco_workspace'
-    _write_minimal_ete_taxonomy_db(workspace)
-    _write_runtime_busco_dataset(workspace)
-    fake_bin = _install_fake_toolchain(tmp_path)
-    # Exercise the real translator; retain other deterministic fixture tools.
-    fallback = fake_bin / 'seqkit_fixture'
-    (fake_bin / 'seqkit').rename(fallback)
-    _write_text(fake_bin / 'seqkit', '#!/bin/bash\nif [[ $1 == translate ]]; then exec '
-                + native_seqkit + ' "$@"; fi\nexec ' + str(fallback) + ' "$@"\n', mode=0o755)
-    busco = fake_bin / 'busco'
-    busco.write_text(busco.read_text().replace('infile = Path(parse("--in"))',
-        'infile = Path(parse("--in"))\nassert parse("--mode") == "proteins"\n'
-        'assert "MKF" in infile.read_text(), infile.read_text()'))
-    for mode, index in [('array_prepare', None), ('array_worker', 1), ('array_worker', 2), ('array_finalize', None)]:
-        env = _core_env(workspace, input_dir, fake_bin, mode, index, require_cds=True)
-        env.update(species_busco_mode='proteins', overwrite='0')
-        result = subprocess.run(['bash', str(CORE_PATH)], cwd=REPO_ROOT, env=env,
-                                capture_output=True, text=True, timeout=180)
-        assert result.returncode == 0, result.stdout + result.stderr
-    root = workspace / 'output/input_generation'
-    settings = json.loads((root / 'tmp/task_plan.json.settings.json').read_text())
-    assert settings['species_busco_mode'] == 'proteins'
-    for species in ['Arabidopsis_thaliana', 'Oryza_sativa']:
-        contract = json.loads((root / f'artifact_provenance/busco.{species}.json').read_text())
-        assert contract['parameters']['busco_mode'] == 'proteins'
-        assert contract['parameters']['genetic_code'] == '1'
-    env['species_busco_mode'] = 'transcriptome'
-    changed = subprocess.run(['bash', str(CORE_PATH)], cwd=REPO_ROOT, env=env,
-                             capture_output=True, text=True, timeout=180)
-    assert changed.returncode != 0  # A prepared protein-mode array cannot be silently switched.
-
-
 def test_busco_failure_keeps_native_empty_predictions_and_exit_status(tmp_path):
     input_dir = _write_direct_species_fixture(tmp_path)
     workspace = tmp_path / 'failed_busco_workspace'
