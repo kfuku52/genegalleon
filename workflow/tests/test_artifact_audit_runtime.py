@@ -410,6 +410,34 @@ def test_spill_inventory_loss_is_never_accepted():
         memo.close()
 
 
+def test_large_spilled_inventory_does_not_amplify_unrelated_guard_reads():
+    from artifact_audit_guards import GuardSpill, encode
+    inventory = tuple(f'OG{index:07d}.summary_statistics.json' for index in range(107841))
+    spill = GuardSpill()
+    io_path = Path('/proc/self/io')
+    def read_chars():
+        return int(dict(line.split(':', 1) for line in io_path.read_text().splitlines())['rchar'])
+    try:
+        spill.guard(('logical', 'collection_inventory', 'artifact_provenance'), inventory, lambda: inventory)
+        before = read_chars() if io_path.exists() else None
+        for index in range(512):
+            identity = (index, 'source')
+            spill.guard(('logical', f'artifact_provenance/OG{index:07d}.json'), identity,
+                        lambda identity=identity: identity)
+        if before is not None:
+            # A large inline B-tree payload used to cause >4 GiB of reads here,
+            # even from the OS cache. This generous I/O bound is not a timer.
+            assert read_chars() - before < 128 * 1024 * 1024
+        values = list(spill.values())
+        assert len(values) == 513
+        assert all(expected == encode(reader()) for expected, reader in values)
+        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] == 131072
+        with pytest.raises(ValueError, match='changed during'):
+            spill.guard(('logical', 'collection_inventory', 'artifact_provenance'), (), lambda: ())
+    finally:
+        spill.close()
+
+
 def test_audit_capacity_is_one_structural_error_not_invalid_families(tmp_path, monkeypatch):
     logical = fixture(tmp_path, families=10)
     def full(*args, **kwargs):

@@ -1,5 +1,33 @@
 # Full provenance audit performance and progress
 
+## Large inventory guard lookup
+
+The temporary SQLite source-guard store now keeps its key index separate from
+large inventory identities. A `WITHOUT ROWID` table placed multi-megabyte
+identities in the key B-tree, causing unrelated small guard lookups and inserts
+to repeatedly traverse overflow pages. The ordinary rowid table retains unique,
+non-null keys, unique reader indices, type-preserving identities, all final
+reader checks, the 512 MiB disk budget and the two-million-reader bound. This is
+private query storage; no persisted workflow format or scientific output changes.
+
+A paired Linux aarch64 / Python 3.12.15 Docker fixture used 107,841 inventory
+members and 1,000 smaller guards, four CPUs and 8 GiB. Against `8cf1e617`, one
+discarded warmup per revision and three alternating trials in fresh processes
+measured median insertion time 1.3383 / 0.03385 seconds. Median process read
+characters fell from 9,498,598,116 to 32,116 and read syscalls from 2,322,002 to
+2,002. These counters include OS-cached reads, not physical disk traffic.
+Median peak RSS was 65,708 / 65,672 KiB. Every complete identity set SHA256 and
+reader result matched; OS caches were not forcibly cleared. This isolated
+lookup measurement is not an end-to-end audit or HPC speedup claim.
+
+Run the same current benchmark runner in separate processes with old/new
+`--support-root` paths, alternating revisions under the same runtime limits:
+
+```bash
+python -B workflow/benchmarks/benchmark_guard_spill.py \
+  --support-root /path/to/workflow/support
+```
+
 ## Scalar subdirectory preflight reads
 
 Read-only preflight profiling found 144,073 metadata calls consuming 37.79 of
