@@ -453,3 +453,16 @@ BUSCO mode, version and lineage consistent.
 Failed BUSCO attempts retain native scratch files and `failure-context.json`,
 including mode, exit code and available prediction-file sizes. Empty predictions
 remain a failed evaluation and never become a zero-percent completeness result.
+
+## Acquisition-only code recovery
+
+A frozen genome annotation cohort can use a newly qualified input-generation
+release for acquisition only. Pass `--acquisition-runtime-root` and
+`--acquisition-runtime-manifest-sha256` to the native
+`genome_annotation_cohort.py --phase acquire` driver. Both arguments are
+required together. The owned release must remain inside the cohort project
+and declare `gg_input_generation`; the regular entrypoint verifies its complete
+source inventory before execution. Prediction and BUSCO reject this override.
+The frozen cohort, source identities, existing workspace/cache and scientific
+parameters remain unchanged. The launcher and its scheduler claim must bind
+the exact new release; never overwrite a previously submitted launcher.

@@ -246,17 +246,44 @@ def annotate(manifest, member, workspace, phase):
             raise ValueError('BUSCO artifact has the wrong lineage')
 
 
+def acquisition_runtime(manifest, phase, root=None, sha256=None):
+    """Bind a new acquisition-only release without rewriting a frozen cohort."""
+    if root is None and sha256 is None:
+        return manifest
+    if phase != 'acquire' or root is None or not re.fullmatch(r'[0-9a-f]{64}', sha256 or ''):
+        raise ValueError('Acquisition runtime override requires its exact release digest and acquire phase')
+    release = physical(root, directory=True)
+    project = physical(manifest['project_root'], directory=True)
+    if release == project or not release.is_relative_to(project):
+        raise ValueError('Acquisition runtime override escapes the bound project')
+    path = physical(release / '.kfauto-release.json')
+    if path.stat().st_size > 4 * 1024**2 or file_sha(path) != sha256:
+        raise ValueError('Acquisition runtime override changed')
+    value = json.loads(path.read_text())
+    contract = {k: v for k, v in value.items() if k != 'contract_sha256'}
+    canonical = hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if (value['kind'] != 'immutable-genegalleon-runtime-release-v1'
+            or value['workflow'] != 'gg_input_generation' or value['project_root'] != str(project)
+            or value['release_root'] != str(release) or canonical != value['contract_sha256']):
+        raise ValueError('Acquisition runtime override contract changed')
+    return dict(manifest, acquisition_runtime_root=str(release), acquisition_runtime_manifest_sha256=sha256)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--task', type=int, required=True)
     parser.add_argument('--phase', choices=('acquire', 'predict', 'busco'), required=True)
+    parser.add_argument('--acquisition-runtime-root', type=Path)
+    parser.add_argument('--acquisition-runtime-manifest-sha256')
     args = parser.parse_args()
     path = physical(args.manifest)
     if file_sha(path) != args.manifest_sha256:
         parser.error('Cohort manifest changed')
     manifest = json.loads(path.read_text())
+    manifest = acquisition_runtime(manifest, args.phase, args.acquisition_runtime_root,
+                                   args.acquisition_runtime_manifest_sha256)
     member = select(manifest, args.task)
     work_root = physical(manifest['work_root'], directory=True)
     workspace = work_root / member['species']

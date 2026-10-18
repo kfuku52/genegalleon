@@ -81,6 +81,27 @@ def owning_release(manifest, name):
     return root
 
 
+@pytest.mark.parametrize('damage', ['none', 'digest', 'phase', 'workflow', 'missing'])
+def test_acquisition_override_preserves_frozen_manifest_and_prediction_runtime(tmp_path, damage):
+    manifest, _, _ = fixture(tmp_path)
+    updated = dict(manifest)
+    root = owning_release(updated, 'gg_input_generation')
+    if damage == 'workflow':
+        root = owning_release(updated, 'gg_genome_annotation')
+    digest = cohort.file_sha(root / '.kfauto-release.json')
+    before = json.dumps(manifest, sort_keys=True)
+    if damage == 'none':
+        result = cohort.acquisition_runtime(manifest, 'acquire', root, digest)
+        assert result['acquisition_runtime_root'] == str(root)
+        assert result['runtime_root'] == manifest['runtime_root']
+        assert result['members'] == manifest['members']
+        assert json.dumps(manifest, sort_keys=True) == before
+    else:
+        with pytest.raises(ValueError):
+            cohort.acquisition_runtime(manifest, 'predict' if damage == 'phase' else 'acquire', root,
+                None if damage == 'missing' else '0' * 64 if damage == 'digest' else digest)
+
+
 @pytest.mark.parametrize('name', ['gg_input_generation', 'gg_genome_annotation', 'gg_transcriptome_generation'])
 @pytest.mark.parametrize('bare_host_path', [False, True])
 def test_dispatch_passes_the_owning_snapshot_through_real_bootstrap(tmp_path, monkeypatch, name, bare_host_path):

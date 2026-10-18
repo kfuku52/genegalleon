@@ -1,7 +1,14 @@
 # Reliable input downloads
 
 Input generation retains one bounded retry budget per downloaded file, including
-body interruptions. `GG_DOWNLOAD_ATTEMPTS` defaults to four. Transient failures
+body interruptions. `GG_DOWNLOAD_ATTEMPTS` defaults to four consecutive failures
+without meaningful resumable progress. A stable ETag/Last-Modified transfer
+replenishes this budget after `GG_DOWNLOAD_MIN_PROGRESS_BYTES` (default 1 MiB).
+`GG_DOWNLOAD_STALL_SECONDS` (default 900) rejects a tiny trickle or no progress,
+and `GG_DOWNLOAD_MAX_TOTAL_SECONDS` (default 21600) bounds total recovery time.
+These settings must be finite and positive. Unvalidated restarts and failed
+integrity checks cannot replenish the retry budget. Transient backoff is shared
+with other species through the existing provider admission limiter. Transient failures
 use exponential backoff with jitter, capped at 300 seconds before applying a
 server's `Retry-After` minimum. Permanent HTTP errors are not repeatedly retried.
 The shared database limiter still applies cooldowns and per-database concurrency.
