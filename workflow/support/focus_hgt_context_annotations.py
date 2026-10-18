@@ -67,7 +67,7 @@ class ContextAnnotations:
         self.sequence_cache = {}
         self._annotation_source = None
         self.uniprot_fasta = Path(uniprot_fasta).resolve() if uniprot_fasta else None
-        self._reference_names, self._reference_identity = None, None
+        self._reference_names = None
         self.taxonomy_path = Path(taxonomy_dbfile).resolve() if taxonomy_dbfile else None
         if self.taxonomy_path is not None and not self.taxonomy_path.is_file():
             raise FileNotFoundError(self.taxonomy_path)
@@ -119,7 +119,6 @@ class ContextAnnotations:
             self._reference_names = read_uniprot_descriptions(str(path))
             if before != self.reference_identity(path):
                 raise ValueError('Swiss-Prot reference changed while loading names')
-            self._reference_identity = before
             self.sources[str(path)] = sha
         result.update(swissprot_best_hit_protein_name=self._reference_names.get(uniprot_accession(accession), ''),
                       swissprot_name_source=str(path), swissprot_name_source_sha256=self.sources[str(path)])
@@ -339,12 +338,9 @@ class ContextAnnotations:
         for path, expected in self.sources.items():
             if paths is not None and path not in paths:
                 continue
-            # Per-page checks use a descriptor fence; the final unrestricted
-            # check rehashes the complete reference. Do not rescan it per gene.
-            if records is not None and self.uniprot_fasta is not None and path == str(self.uniprot_fasta):
-                if self.reference_identity(self.uniprot_fasta) != self._reference_identity:
-                    raise ValueError('Swiss-Prot reference changed during rendering')
-                continue
+            # Shared filesystems may retain the same descriptor metadata for
+            # same-size writes within one timestamp tick. Hash each page's
+            # reference once, rather than trusting metadata or hashing per gene.
             if source_digest(path) != expected:
                 raise ValueError('Context annotation input changed during rendering')
         for logical, expected in self.family_sources.items():

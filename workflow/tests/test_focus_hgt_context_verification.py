@@ -36,10 +36,23 @@ def test_existing_hit_missing_product_is_resolved_from_fenced_reference_only(tmp
     annotations.verify(records=[row])
     annotations.verify()
     reference.write_text(original.replace('oxidoreductase', 'different name'))
-    with pytest.raises(ValueError, match='reference changed'):
+    with pytest.raises(ValueError, match='input changed'):
         annotations.verify(records=[row])
     with pytest.raises(ValueError, match='input changed'):
         annotations.verify()
+
+
+def test_page_verification_rehashes_reference_when_filesystem_metadata_is_unchanged(tmp_path, monkeypatch):
+    reference = tmp_path/'reference.fa'
+    reference.write_text('>sp|P1|HIT First name OS=Species\nMKT\n')
+    annotations = ContextAnnotations(uniprot_fasta=reference)
+    leaf = dict(node_name='A_gene', child1='-999', child2='-999', sprot_best='P1')
+    row = annotations.get('A_gene', 'OG1', leaf)
+    recorded_identity = annotations.reference_identity(reference)
+    monkeypatch.setattr(annotations, 'reference_identity', lambda path: recorded_identity)
+    reference.write_text(reference.read_text().replace('First name', 'Other name'))
+    with pytest.raises(ValueError, match='input changed'):
+        annotations.verify(records=[row])
 
 
 def test_reference_name_does_not_override_recorded_product_or_borrow_from_gff(tmp_path):
