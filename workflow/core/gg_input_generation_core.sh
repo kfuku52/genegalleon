@@ -1156,7 +1156,6 @@ run_validate_stage() {
   local cds_files=()
   local gff_files=()
   local genome_files=()
-  local set_status=0
   local validation_reuse_args=()
   local validation_genome_args=()
 
@@ -1218,79 +1217,81 @@ run_validate_stage() {
     fi
   fi
 
-  if [[ ${#cds_files[@]} -gt 0 && ${#gff_files[@]} -gt 0 ]]; then
-    if is_species_set_identical "${species_cds_dir}" "${species_gff_dir}"; then
-      set_status=0
-    else
-      set_status=$?
-    fi
-    if [[ ${set_status} -ne 0 && ${strict} -eq 1 ]]; then
-      echo "Species set mismatch between species_cds and species_gff. Exiting due to strict mode."
+  if [[ ${strict} -eq 1 ]]; then
+    cmd=(python "${gg_support_dir}/validate_species_role_coverage.py")
+    cmd+=(--species-summary "${species_summary_output}" --species-cds-dir "${species_cds_dir}")
+    cmd+=(--species-gff-dir "${species_gff_dir}" --species-genome-dir "${species_genome_dir}")
+    [[ ${require_cds} -ne 1 ]] || cmd+=(--require-cds)
+    [[ ${require_gff} -ne 1 ]] || cmd+=(--require-gff)
+    [[ ${require_genome} -ne 1 ]] || cmd+=(--require-genome)
+    if ! "${cmd[@]}"; then
       stage_validate_status="failed"
+      echo "Failed: Validate declared species output coverage"
       exit 1
     fi
-    if [[ ${set_status} -eq 0 ]]; then
-      mapping_stats_file="${download_tmp_root}/gg_input_generation_mapping_stats.json"
-      longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
-      ensure_parent_dir "${mapping_stats_file}"
-      rm -f -- "${mapping_stats_file}"
-      rm -f -- "${longest_cds_stats_file}"
-      if [[ "${input_generation_mode}" == array_finalize ]]; then
-        cmd=(python "${gg_support_dir}/input_validation_reuse.py")
-        cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
-        cmd+=("${validation_genome_args[@]}" --species-summary "${species_summary_output}")
-        cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
-        cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
-        [[ ${strict} -ne 1 ]] || cmd+=(--strict)
-        echo "Running: ${cmd[*]}"
-        if ! "${cmd[@]}"; then
-          stage_validate_status="failed"
-          echo "Failed: Validate formatted species inputs"
-          exit 1
-        fi
-      else
-        cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
-        cmd+=(--species-cds-dir "${species_cds_dir}")
-        cmd+=(--species-gff-dir "${species_gff_dir}")
-        cmd+=("${validation_genome_args[@]}")
-        cmd+=(--species-summary "${species_summary_output}")
-        cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
-        cmd+=(--stats-output "${mapping_stats_file}")
-        cmd+=("${validation_reuse_args[@]}")
-        if [[ ${strict} -eq 1 ]]; then
-          cmd+=(--strict)
-        fi
-        echo "Running: ${cmd[*]}"
-        if "${cmd[@]}"; then
-          :
-        else
-          stage_validate_status="failed"
-          echo "Failed: Validate CDS-to-GFF mapping compatibility"
-          exit 1
-        fi
-        if [[ ! -s "${species_summary_output}" ]]; then
-          stage_validate_status="failed"
-          echo "Species summary not found for longest CDS validation: ${species_summary_output}"
-          exit 1
-        fi
-        cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
-        cmd+=(--species-cds-dir "${species_cds_dir}")
-        cmd+=(--species-summary "${species_summary_output}")
-        cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
-        cmd+=(--stats-output "${longest_cds_stats_file}")
-        cmd+=("${validation_reuse_args[@]}")
-        echo "Running: ${cmd[*]}"
-        if "${cmd[@]}"; then
-          :
-        else
-          stage_validate_status="failed"
-          echo "Failed: Validate longest CDS representative selection"
-          exit 1
-        fi
+  fi
+
+  if [[ ${#cds_files[@]} -gt 0 && ${#gff_files[@]} -gt 0 ]]; then
+    mapping_stats_file="${download_tmp_root}/gg_input_generation_mapping_stats.json"
+    longest_cds_stats_file="${download_tmp_root}/gg_input_generation_longest_cds_stats.json"
+    ensure_parent_dir "${mapping_stats_file}"
+    rm -f -- "${mapping_stats_file}"
+    rm -f -- "${longest_cds_stats_file}"
+    if [[ "${input_generation_mode}" == array_finalize ]]; then
+      cmd=(python "${gg_support_dir}/input_validation_reuse.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}" --species-gff-dir "${species_gff_dir}")
+      cmd+=("${validation_genome_args[@]}" --species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}" --mapping-stats-output "${mapping_stats_file}")
+      cmd+=(--ownership-stats-output "${longest_cds_stats_file}" "${validation_reuse_args[@]}")
+      [[ ${strict} -ne 1 ]] || cmd+=(--strict)
+      echo "Running: ${cmd[*]}"
+      if ! "${cmd[@]}"; then
+        stage_validate_status="failed"
+        echo "Failed: Validate formatted species inputs"
+        exit 1
       fi
-      rm -f -- "${mapping_stats_file}"
-      # Retain source-ownership coverage alongside the selection result.
+    else
+      cmd=(python "${gg_support_dir}/validate_cds_gff_mapping.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}")
+      cmd+=(--species-gff-dir "${species_gff_dir}")
+      cmd+=("${validation_genome_args[@]}")
+      cmd+=(--species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+      cmd+=(--stats-output "${mapping_stats_file}")
+      cmd+=("${validation_reuse_args[@]}")
+      if [[ ${strict} -eq 1 ]]; then
+        cmd+=(--strict)
+      fi
+      echo "Running: ${cmd[*]}"
+      if "${cmd[@]}"; then
+        :
+      else
+        stage_validate_status="failed"
+        echo "Failed: Validate CDS-to-GFF mapping compatibility"
+        exit 1
+      fi
+      if [[ ! -s "${species_summary_output}" ]]; then
+        stage_validate_status="failed"
+        echo "Species summary not found for longest CDS validation: ${species_summary_output}"
+        exit 1
+      fi
+      cmd=(python "${gg_support_dir}/validate_longest_cds_selection.py")
+      cmd+=(--species-cds-dir "${species_cds_dir}")
+      cmd+=(--species-summary "${species_summary_output}")
+      cmd+=(--nthreads "${GG_TASK_CPUS:-1}")
+      cmd+=(--stats-output "${longest_cds_stats_file}")
+      cmd+=("${validation_reuse_args[@]}")
+      echo "Running: ${cmd[*]}"
+      if "${cmd[@]}"; then
+        :
+      else
+        stage_validate_status="failed"
+        echo "Failed: Validate longest CDS representative selection"
+        exit 1
+      fi
     fi
+    rm -f -- "${mapping_stats_file}"
+    # Retain source-ownership coverage alongside the selection result.
   elif [[ ${#cds_files[@]} -gt 0 ]]; then
     # CDS-only inputs retain full source-selection validation. Presence of
     # genomic roles is controlled by require_gff/require_genome above.

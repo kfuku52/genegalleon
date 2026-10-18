@@ -417,6 +417,11 @@ CDS-only species can run validation and BUSCO with `require_cds=1` and
 `require_gff=0`. Workers still validate longest-CDS selection; CDS-to-GFF
 mapping QC is produced and receipt-bound only when that task supplies a GFF.
 A supplied or required GFF that is missing still fails validation.
+Strict cohorts may mix CDS-only species with species that supply GFFs or genomes.
+Final validation checks each declared output against its species-summary row,
+rejects undeclared or misplaced files, validates CDS/GFF mapping for the paired
+species, and validates source representative selection for every CDS species.
+Optional roles do not require identical species sets across output directories.
 
 For native arrays with this project bind on audrey1 or NIG, explicitly declared local CDS, GFF,
 GenBank/EMBL and genome files are mounted individually read-only. Prepare reads

@@ -1052,6 +1052,53 @@ def test_array_cds_gff_without_optional_genomes_finalizes_with_native_receipts(t
     assert (workspace / "output/species_taxonomy/species_taxonomy.tsv").is_file()
 
 
+@pytest.mark.parametrize("mode", ["single", "array"])
+def test_strict_mixed_optional_gff_inputs_validate_every_species(tmp_path: Path, mode):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    (input_dir / "Arabidopsis_thaliana/Arabidopsis_thaliana.gff").unlink()
+    for genome in input_dir.glob("*/*.genome.fa"):
+        genome.unlink()
+    workspace = tmp_path / "strict_mixed_roles"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    def run(phase, index=None, succeeds=True):
+        env = _core_env(workspace, input_dir, fake_bin, phase, index, require_cds=True)
+        env.update(strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True, timeout=180)
+        assert (result.returncode == 0) == succeeds, result.stdout + result.stderr
+        return result
+
+    root = workspace / "output/input_generation"
+    if mode == "array":
+        for phase, index in (("array_prepare", None), ("array_worker", 1), ("array_worker", 2)):
+            run(phase, index)
+        receipts = [json.loads((root / f"tmp/task_plan.json.completed/{i}.json").read_text()) for i in (1, 2)]
+        before = {path: (hashlib.sha256(Path(path).read_bytes()).hexdigest(), Path(path).stat().st_mtime_ns)
+                  for receipt in receipts for path in receipt["files"]}
+        for _ in range(2):
+            result = run("array_finalize")
+            assert before == {path: (hashlib.sha256(Path(path).read_bytes()).hexdigest(), Path(path).stat().st_mtime_ns)
+                              for path in before}
+    else:
+        result = run("single")
+    rows = _read_tsv_rows(root / "gg_input_generation_species.tsv")
+    assert len(rows) == 2
+    assert sum(bool(row["gff_output_path"]) for row in rows) == 1
+    assert not any(row["genome_output_path"] for row in rows)
+    assert (workspace / "output/species_taxonomy/species_taxonomy.tsv").is_file()
+    assert "Longest CDS validation summary: species_checked=2, species_passed=2" in result.stdout
+    assert "CDS-to-GFF mapping validation summary: species_checked=1, species_passed=1" in result.stdout
+    assert _read_tsv_rows(root / "gg_input_generation_runs.tsv")[-1]["stage_validate_status"] == "ok"
+    if mode == "array":
+        source = next((root / "species_gff").glob("*.gff.gz"))
+        (source.parent / "Orphan_extra.gff.gz").write_bytes(source.read_bytes())
+        failed = run("array_finalize", succeeds=False)
+        assert "Undeclared formatted GFF outputs" in failed.stderr
+
+
 def test_array_transcript_orf_audits_are_required_completion_outputs(tmp_path: Path):
     input_dir = _write_direct_species_fixture(tmp_path)
     for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
