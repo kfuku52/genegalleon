@@ -182,6 +182,44 @@ RNA on the same contig and strand. Only the RNA ID changes; its original ID is
 retained in attributes and the locus-identity audit. Ambiguous names, shared
 children, collisions and inconsistent geometry remain unresolved.
 
+### Sequence-supported UTR coordinate curation
+
+An erroneous source UTR can be curated explicitly with
+`workflow/support/curate_gff_utr_coordinates.py`. This is separate from automatic
+safe formatting. Supply the original GFF, genome, published CDS and independently
+supplied full transcript FASTA; CDS and transcript records must use the exact
+RNA ID. The tool requires unique RNA/UTR identities, consistent CDS phases,
+complete stop-free coding sequence, exact genome/exon/RNA agreement and one
+contiguous CDS occurrence in that RNA. Every proposed UTR interval must equal
+the resulting strand-aware exon projection. Missing, shared, partial or
+contradictory evidence fails without publishing a corrected GFF.
+
+The proposal JSON binds the compressed-or-plain GFF SHA-256 and exact source
+line, feature ID and coordinates:
+
+```json
+{"schema_version":1,"gff_sha256":"SOURCE_SHA256","changes":[
+  {"line":123,"transcript_id":"tx1","feature_id":"tx1.utr3p1",
+   "old_start":100,"old_end":900,"new_start":801,"new_end":900}
+]}
+```
+
+Run in the GeneGalleon container:
+
+```bash
+python workflow/support/curate_gff_utr_coordinates.py \
+  --gff original.gff.gz --genome genome.fa.gz --cds published_cds.fa.gz \
+  --transcripts published_transcripts.fa.gz --proposal corrections.json \
+  --outfile corrected.gff.gz --audit corrected.gff.gz.curation.json
+```
+
+Only the proposed UTR coordinate columns change. CDS sequence files and all
+CDS, exon, RNA and gene rows remain intact. The audit retains input hashes,
+sequence proof, original/proposed coordinates and the output hash. Outputs must
+be new paths. Preserve the original dataset and frozen plans, publish the audit
+with the corrected input, and use a new ordinary input-generation plan with
+unchanged strict validation before adopting the result.
+
 Complementary or inconsistent numeric phase fields can be canonicalized for a
 partial terminal codon as well as a complete CDS. The proof requires one exact
 genomic model, a declared first phase of zero and no internal translation stop.
