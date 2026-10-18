@@ -264,7 +264,7 @@ def export_filtering_flow(directory, source_events, selected, trait, filter_audi
 def export_figures(directory, source_events, selected, links, tree, values, family_root, trait, filter_audit="",
                    context_annotations='', prefilter_selected=None, pfam_selected=None, direction_selected=None,
                    support_filter_enabled=False, analyzed_orthogroups=None, pair_filter_label=None,
-                   direction_filter='off'):
+                   direction_filter='off', uniprot_fasta=''):
     import hashlib
     import textwrap
 
@@ -298,7 +298,7 @@ def export_figures(directory, source_events, selected, links, tree, values, fami
     from focus_hgt_gene_trees import validated_event_links
     annotation_links = [dict(r) for r in validated_event_links(selected, links)]
     from focus_hgt_context_annotations import ContextAnnotations, available
-    annotations = ContextAnnotations(context_annotations)
+    annotations = ContextAnnotations(context_annotations, uniprot_fasta=uniprot_fasta)
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)
         with store.read_snapshot():

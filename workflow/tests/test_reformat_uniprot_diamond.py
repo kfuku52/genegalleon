@@ -9,6 +9,39 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "reformat_uniprot_diamond.py"
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('prefix', ['sp', 'tr'])
+def test_official_uniprot_headers_match_saved_accessions_and_retain_product(tmp_path, compressed, prefix):
+    reference = tmp_path / ('uniprot.fa.gz' if compressed else 'uniprot.fa')
+    text = (f'>{prefix}|P77526|YFCG_ECOLI Disulfide-bond oxidoreductase YfcG '
+            'OS=Escherichia coli (strain K12) OX=83333 GN=yfcG PE=1 SV=1\nMKT\n')
+    if compressed:
+        with gzip.open(reference, 'wt') as handle:
+            handle.write(text)
+    else:
+        reference.write_text(text)
+    hits = tmp_path / 'hits.tsv'
+    hits.write_text('gene1\tP77526\t48.2\t208\t3.447e-52\t200\t218\n')
+    output = tmp_path / 'annotations.tsv'
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), '--diamond_tsv', str(hits),
+                             '--uniprot_fasta', str(reference), '--outfile', str(output)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    row = pandas.read_csv(output, sep='\t', dtype=str, keep_default_na=False).iloc[0]
+    assert row.sprot_best == 'P77526'
+    assert row.sprot_recname == 'Disulfide-bond oxidoreductase YfcG'
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+    token = f'{prefix}|P77526|YFCG_ECOLI'
+    assert read_uniprot_descriptions(str(reference), {token}) == {token: row.sprot_recname}
+
+
+def test_description_reader_does_not_reinterpret_non_uniprot_pipe_ids(tmp_path):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+    reference = tmp_path / 'local.fa'
+    reference.write_text('>custom|P1|ENTRY Local protein OS=literal text\nMKT\n')
+    assert read_uniprot_descriptions(str(reference), {'P1'}) == {}
+    assert read_uniprot_descriptions(str(reference)) == {'custom|P1|ENTRY': 'Local protein OS=literal text'}
+
+
 @pytest.mark.parametrize('with_query_fasta', [False, True])
 @pytest.mark.parametrize('with_metadata', [False, True])
 def test_no_hits_preserve_queries_and_empty_annotations(tmp_path, with_query_fasta, with_metadata):

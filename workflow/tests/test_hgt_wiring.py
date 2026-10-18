@@ -36,6 +36,9 @@ def test_category1_focus_is_default_and_preserves_project_cohort_forwarding():
     assert '--context_annotations_tsv "${hgt_focus_context_annotations_tsv}"' in hgt
     assert '--input "context_annotations=${hgt_focus_context_annotations_tsv}"' in hgt
     assert '--input "gene_context_annotations=${gg_support_dir}/focus_hgt_context_annotations.py"' in hgt
+    assert '--uniprot_fasta "${hgt_focus_uniprot_fasta}"' in hgt
+    assert '"context_uniprot_fasta" "${hgt_focus_uniprot_fasta}"' in hgt
+    assert '--input "uniprot_name_reader=${gg_support_dir}/reformat_uniprot_diamond.py"' in hgt
     assert '--mmseqs2_taxonomy_dir "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"' in hgt
     assert '--scaffold_taxonomy_dir "${gg_workspace_output_dir}/species_scaffold_taxonomy"' in hgt
     assert '"context_mmseqs2_classifications" "${gg_workspace_output_dir}/species_cds_mmseqs2taxonomy"' in hgt

@@ -59,13 +59,15 @@ def source_digest(path):
 class ContextAnnotations:
     """Exact gene IDs only; neighbor genes never inherit focal annotations."""
 
-    def __init__(self, path='', store=None, mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile=''):
+    def __init__(self, path='', store=None, mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', uniprot_fasta=''):
         self.rows, self.sources, self.display_audit = {}, {}, []
         self.store, self.leaf_cache, self.family_sources = store, {}, {}
         self.sequence_root = Path(mmseqs2_taxonomy_dir) if mmseqs2_taxonomy_dir else None
         self.host_root = Path(scaffold_taxonomy_dir) if scaffold_taxonomy_dir else None
         self.sequence_cache = {}
         self._annotation_source = None
+        self.uniprot_fasta = Path(uniprot_fasta).resolve() if uniprot_fasta else None
+        self._reference_names, self._reference_identity = None, None
         self.taxonomy_path = Path(taxonomy_dbfile).resolve() if taxonomy_dbfile else None
         if self.taxonomy_path is not None and not self.taxonomy_path.is_file():
             raise FileNotFoundError(self.taxonomy_path)
@@ -97,6 +99,31 @@ class ContextAnnotations:
                         and not available(row['besthit_accession']):
                     raise ValueError('Best-hit organism/taxonomy requires the same hit accession')
                 self.rows[gene] = row
+
+    @staticmethod
+    def reference_identity(path):
+        stat = path.stat()
+        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+    def fill_missing_hit_name(self, result):
+        """Recover a saved hit's name from the exact local reference, never GFF."""
+        accession = result['besthit_accession']
+        if not accession or result['swissprot_best_hit_protein_name'] or self.uniprot_fasta is None:
+            return result
+        from reformat_uniprot_diamond import read_uniprot_descriptions, uniprot_accession
+
+        path = self.uniprot_fasta
+        if self._reference_names is None:
+            before = self.reference_identity(path)
+            sha = source_digest(path)
+            self._reference_names = read_uniprot_descriptions(str(path))
+            if before != self.reference_identity(path):
+                raise ValueError('Swiss-Prot reference changed while loading names')
+            self._reference_identity = before
+            self.sources[str(path)] = sha
+        result.update(swissprot_best_hit_protein_name=self._reference_names.get(uniprot_accession(accession), ''),
+                      swissprot_name_source=str(path), swissprot_name_source_sha256=self.sources[str(path)])
+        return result
 
     @lru_cache(maxsize=None)
     def query_lineage(self, assigned, saved_lineage):
@@ -275,7 +302,7 @@ class ContextAnnotations:
                     result[field] = result[field] or available(leaf.get(native))
             result['annotation_validation_status'] = validation
             result.update(self.sequence_taxonomy(gene, species))
-            return result
+            return self.fill_missing_hit_name(result)
         result = dict.fromkeys(FIELDS, '')
         result.update(gene_id=gene, orthogroup=family, protein_product_status='annotation_unavailable',
                       besthit_status='annotation_unavailable', annotation_validation_status=validation)
@@ -289,7 +316,7 @@ class ContextAnnotations:
                           besthit_source='existing exact family stat.branch.tsv leaf',
                           besthit_status='existing_family_leaf_hit' if available(leaf.get('sprot_best')) else 'no_existing_hit')
         result.update(self.sequence_taxonomy(gene, species))
-        return result
+        return self.fill_missing_hit_name(result)
 
     def verify(self, records=None):
         """Verify one page's exact dependencies, or every accumulated input.
@@ -311,6 +338,12 @@ class ContextAnnotations:
                     families.add('stat_branch/' + family + '_stat.branch.tsv')
         for path, expected in self.sources.items():
             if paths is not None and path not in paths:
+                continue
+            # Per-page checks use a descriptor fence; the final unrestricted
+            # check rehashes the complete reference. Do not rescan it per gene.
+            if records is not None and self.uniprot_fasta is not None and path == str(self.uniprot_fasta):
+                if self.reference_identity(self.uniprot_fasta) != self._reference_identity:
+                    raise ValueError('Swiss-Prot reference changed during rendering')
                 continue
             if source_digest(path) != expected:
                 raise ValueError('Context annotation input changed during rendering')
