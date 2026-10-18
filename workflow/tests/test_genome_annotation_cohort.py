@@ -102,6 +102,34 @@ def test_acquisition_override_preserves_frozen_manifest_and_prediction_runtime(t
                 None if damage == 'missing' else '0' * 64 if damage == 'digest' else digest)
 
 
+@pytest.mark.parametrize('phase', ['predict', 'busco'])
+@pytest.mark.parametrize('damage', ['none', 'digest', 'phase', 'workflow', 'missing', 'contract'])
+def test_annotation_override_keeps_frozen_inputs_workspace_and_acquisition(tmp_path, phase, damage):
+    manifest, _, _ = fixture(tmp_path)
+    manifest.update(acquisition_runtime_root='retained-acquisition', acquisition_runtime_manifest_sha256='a' * 64)
+    updated = dict(manifest)
+    root = owning_release(updated, 'gg_input_generation' if damage == 'workflow' else 'gg_genome_annotation')
+    path = root / '.kfauto-release.json'
+    if damage == 'contract':
+        value = json.loads(path.read_text())
+        value['project_root'] = '/another-project'
+        path.write_text(json.dumps(value))
+    digest = cohort.file_sha(path)
+    before = json.dumps(manifest, sort_keys=True)
+    if damage == 'none':
+        result = cohort.annotation_runtime(manifest, phase, root, digest)
+        assert result['runtime_root'] == str(root)
+        assert result['runtime_manifest_sha256'] == digest
+        for key in ('members', 'work_root', 'downloads_root', 'busco_lineage', 'image_path',
+                    'acquisition_runtime_root', 'acquisition_runtime_manifest_sha256'):
+            assert result[key] == manifest[key]
+        assert json.dumps(manifest, sort_keys=True) == before
+    else:
+        with pytest.raises(ValueError):
+            cohort.annotation_runtime(manifest, 'acquire' if damage == 'phase' else phase, root,
+                None if damage == 'missing' else '0' * 64 if damage == 'digest' else digest)
+
+
 @pytest.mark.parametrize('name', ['gg_input_generation', 'gg_genome_annotation', 'gg_transcriptome_generation'])
 @pytest.mark.parametrize('bare_host_path', [False, True])
 def test_dispatch_passes_the_owning_snapshot_through_real_bootstrap(tmp_path, monkeypatch, name, bare_host_path):
