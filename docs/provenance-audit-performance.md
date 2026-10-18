@@ -1,5 +1,41 @@
 # Full provenance audit performance and progress
 
+## Revalidation with uneven read latency
+
+Run-scoped content and logical-source revalidation keep an ordered rolling
+window of at most eight submissions per existing reader. A completed source
+allows the next source into that window without waiting for an entire batch.
+Reader counts, inventory limits, the content-before-guard barrier, every final
+content read and every identity check are unchanged. The first failing input
+still determines the reported error; all submitted readers join before it
+escapes. No result from an earlier observation replaces a read.
+
+A Linux aarch64 / Python 3.12.15 Docker comparison against `7775c7db` used
+four CPUs, 8 GiB, 1,024 real 8 KiB sources and 1,024 logical guards. One warmup
+per revision/case preceded three alternating fresh-process trials. The tail
+case adds 0.5 ms per final read and 20 ms instead for each 32nd source/guard.
+This models uneven storage latency, not an end-to-end HPC measurement.
+
+| Final-read latency | Before (s) | After (s) | Median peak RSS before/after (MiB) |
+| --- | ---: | ---: | ---: |
+| local, no added delay | 0.12673 | 0.12998 | 22.72 / 23.39 |
+| modeled uneven latency | 2.16572 | 1.70619 | 22.79 / 23.41 |
+
+The modeled case took 21.2% less time (1.27x). Local timings overlap and do not
+establish a local-storage speedup. Every complete source-set SHA256 matched;
+each content source was read twice and every logical guard was checked once.
+OS caches were not forcibly cleared. Both revisions used the same existing
+runtime; this standard-library benchmark is separate from runtime freshness
+and SIF compatibility qualification.
+
+Run the same current runner against immutable baseline/candidate support trees
+under the same CPU/memory limits, alternating revisions and discarding warmups:
+
+```bash
+python -B workflow/benchmarks/benchmark_audit_revalidation.py \
+  --support-root /path/to/workflow/support --latency tails --workers 4
+```
+
 ## Final metadata fence
 
 The final cross-query namespace fence retains every fresh `lstat` signature,
