@@ -1,0 +1,126 @@
+{
+  "environment": {
+    "platform": "Linux-7.0.12-linuxkit-aarch64-with-glibc2.39",
+    "python": "3.12.15"
+  },
+  "configuration": {
+    "mib": 128,
+    "files": 4096,
+    "boundaries": 2,
+    "repeats": 3,
+    "warmups": 1
+  },
+  "workloads": {
+    "predictor-selection": {
+      "baseline": {
+        "trials": [
+          {
+            "seconds": 0.5974561670000185,
+            "peak_rss_kib": 87400,
+            "logical_sha256": "818893dd40216e12f4eca66ed4f61757cff65853f54b2842eb45f5aaa4704af6",
+            "sha256_reads": 13,
+            "sha256_bytes": 939805445,
+            "directory_scans": 0
+          },
+          {
+            "seconds": 0.5704367920000095,
+            "peak_rss_kib": 87456,
+            "logical_sha256": "818893dd40216e12f4eca66ed4f61757cff65853f54b2842eb45f5aaa4704af6",
+            "sha256_reads": 13,
+            "sha256_bytes": 939805445,
+            "directory_scans": 0
+          },
+          {
+            "seconds": 0.5547804999998789,
+            "peak_rss_kib": 87432,
+            "logical_sha256": "818893dd40216e12f4eca66ed4f61757cff65853f54b2842eb45f5aaa4704af6",
+            "sha256_reads": 13,
+            "sha256_bytes": 939805445,
+            "directory_scans": 0
+          }
+        ],
+        "medians": {
+          "seconds": 0.5704367920000095,
+          "peak_rss_kib": 87432,
+          "sha256_reads": 13,
+          "sha256_bytes": 939805445,
+          "directory_scans": 0
+        }
+      },
+      "current": {
+        "trials": [
+          {
+            "seconds": 0.13540295799998603,
+            "peak_rss_kib": 87132,
+            "logical_sha256": "818893dd40216e12f4eca66ed4f61757cff65853f54b2842eb45f5aaa4704af6",
+            "sha256_reads": 4,
+            "sha256_bytes": 268575408,
+            "directory_scans": 0
+          },
+          {
+            "seconds": 0.12998575000005985,
+            "peak_rss_kib": 87328,
+            "logical_sha256": "818893dd40216e12f4eca66ed4f61757cff65853f54b2842eb45f5aaa4704af6",
+            "sha256_reads": 4,
+            "sha256_bytes": 268575408,
+            "directory_scans": 0
+          },
+          {
+            "seconds": 0.14153333400008705,
+            "peak_rss_kib": 87288,
+            "logical_sha256": "818893dd40216e12f4eca66ed4f61757cff65853f54b2842eb45f5aaa4704af6",
+            "sha256_reads": 4,
+            "sha256_bytes": 268575408,
+            "directory_scans": 0
+          }
+        ],
+        "medians": {
+          "seconds": 0.13540295799998603,
+          "peak_rss_kib": 87288,
+          "sha256_reads": 4,
+          "sha256_bytes": 268575408,
+          "directory_scans": 0
+        }
+      }
+    }
+  },
+  "source_sha256": {
+    "baseline": {
+      "annevo_runtime_cache.py": "cec7a5b6ea73be0a0d2ee45f18dec6f08704428ba6401a619fb3aa78fdfa5b76",
+      "annevo_runtime.py": "4cdc7d14b05ef9d537d52937135faafa8428b499685fe17d5d3ed64bebf0a921",
+      "annevo_model_selection.py": "2efe2ec7d99dd2088fbb240a2a274bd8fec3cf1f8dcdfb58de5b7599a7637d5b",
+      "annevo_pipeline.py": "4e9daed18edacfae9a9cb90b11f130fd80310a13b02363337b7d0436cd3c830d",
+      "oriongeno_model_profiles.py": "227fcc861926eea0815b7724a76f646b438c642f08f228151cc31bd745979445",
+      "oriongeno_runtime.py": "4e2c33023e9eb9e488e839e581cbc29b07b75cffd35a2d23b1c33254273d9652",
+      "gene_model_catalog.py": "affaa896f5211262015906348459a3854f5b0513faac3f8876d7266778f6be6d",
+      "pairwise_synteny.py": "3040772cb3b76c9963dc5c3400a4a691cc37155bc923733d54da0f2c28ce0687",
+      "cds_resolution.py": "ca3d36e77a16f5afdf244f46f44144285e597bbd6432d9e09dcbb1ee256df914",
+      "artifact_provenance.py": "65cec12a6249d13d45754d0f8a289b67d8229fda22675d613b6c19c0fe670b31",
+      "busco_guide_tree.py": "e2c9426fa25e13a9cf2b85532fd64fc2e49777e5445f8f5c6d605cb54cf36b4e"
+    },
+    "current": {
+      "annevo_runtime_cache.py": "cec7a5b6ea73be0a0d2ee45f18dec6f08704428ba6401a619fb3aa78fdfa5b76",
+      "annevo_runtime.py": "ce6c3a1c7d290b95e06594520a97468ff223990cff0886c2cbd72a49c9903a21",
+      "annevo_model_selection.py": "5cd798f66b0073ee5ffe1f6aa628b23032dda9079b7eba2e44c41a2f80921bd4",
+      "annevo_pipeline.py": "4e9daed18edacfae9a9cb90b11f130fd80310a13b02363337b7d0436cd3c830d",
+      "oriongeno_model_profiles.py": "227fcc861926eea0815b7724a76f646b438c642f08f228151cc31bd745979445",
+      "oriongeno_runtime.py": "5a8caef47b4cc77c8ed39aba422e80f25c5d4fc0827b6c50d972f267cfe3a8c1",
+      "gene_model_catalog.py": "affaa896f5211262015906348459a3854f5b0513faac3f8876d7266778f6be6d",
+      "pairwise_synteny.py": "3040772cb3b76c9963dc5c3400a4a691cc37155bc923733d54da0f2c28ce0687",
+      "cds_resolution.py": "ca3d36e77a16f5afdf244f46f44144285e597bbd6432d9e09dcbb1ee256df914",
+      "artifact_provenance.py": "65cec12a6249d13d45754d0f8a289b67d8229fda22675d613b6c19c0fe670b31",
+      "busco_guide_tree.py": "e2c9426fa25e13a9cf2b85532fd64fc2e49777e5445f8f5c6d605cb54cf36b4e"
+    }
+  },
+  "measurement_notes": {
+    "date": "2026-10-16",
+    "runtime": "Docker local/genegalleon:dev; sha256:a28e1760f1cf2cca40798943bc8e48d594b160147c00baf0441820ada07e41a7",
+    "baseline": "Pre-optimization working-tree support snapshot; exact source hashes are recorded.",
+    "scope": "Selection receipt and input verification only; no CUDA or model inference.",
+    "workload": "128 MiB generated FASTA, 128 MiB generated SQLite payload, two selection boundaries and three repeated genome checks.",
+    "comparison": "One warmup and three measured fresh processes per version, alternating execution order, without concurrent checks.",
+    "normalization": "Only temporary workspace paths are normalized in logical output fingerprints; raw receipt SHA is separately checked.",
+    "peak_rss": "Includes setup and imports; SQLite fixture generation is outside timed verification.",
+    "command": "bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_verification_boundaries.py --baseline-support <baseline-support> --cases predictor-selection --output <result.json> --mib 128 --boundaries 2 --repeats 3"
+  }
+}

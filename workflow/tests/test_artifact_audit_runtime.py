@@ -24,6 +24,57 @@ ArchiveStoreError, GeneFamilyOutputStore = store_module.ArchiveStoreError, store
 INDEX_EPOCH_FILE, INDEX_UPDATE_FILE = store_module.INDEX_EPOCH_FILE, store_module.INDEX_UPDATE_FILE
 
 
+def test_raw_directory_hash_and_count_share_one_walk(tmp_path, monkeypatch):
+    root = tmp_path / 'alignments'
+    (root / 'nested').mkdir(parents=True)
+    (root / 'a.fa').write_text('>a\nAA\n')
+    (root / 'nested/b.fa').write_text('>b\nBB\n')
+    expected = provenance.sha256_path(root)
+    original = Path.rglob
+    walks = []
+    def walk(path, *a, **kw):
+        if path == root:
+            walks.append(path)
+        return original(path, *a, **kw)
+    monkeypatch.setattr(Path, 'rglob', walk)
+    assert provenance.raw_or_zip_directory_digest(root) == (*expected[:2], 2)
+    assert len(walks) == 1
+
+
+def test_directory_digest_shapes_share_query_proof_and_final_content_fence(tmp_path, monkeypatch):
+    root = tmp_path / 'alignments'
+    root.mkdir()
+    source = root / 'a.fa'
+    source.write_bytes(b'abc')
+    original = provenance.cached_sha256_file
+    reads = []
+    def digest(path):
+        reads.append(path)
+        return original(path)
+    monkeypatch.setattr(provenance, 'cached_sha256_file', digest)
+    with provenance.digest_observation() as memo:
+        logical = provenance.raw_or_zip_directory_digest(root)
+        assert provenance.sha256_path(root) == (*logical[:2], 'directory')
+        assert len(reads) == 1
+    assert len(reads) == 2
+    assert memo.metrics()['digest_revalidation_reads'] == 1
+
+
+def test_directory_query_rehashes_content_even_with_unchanged_metadata(tmp_path, monkeypatch):
+    root = tmp_path / 'alignments'
+    root.mkdir()
+    source = root / 'a.fa'
+    source.write_bytes(b'abc')
+    before = runtime.signature(root)
+    members = runtime.directory_signature(root)
+    monkeypatch.setattr(runtime, 'signature', lambda _path: before)
+    monkeypatch.setattr(runtime, 'directory_signature', lambda _path: members)
+    with pytest.raises(ValueError, match='content changed before publication'):
+        with provenance.digest_observation():
+            provenance.raw_or_zip_directory_digest(root)
+            source.write_bytes(b'xyz')
+
+
 def test_query_digest_session_rehashes_unique_sources_and_never_reuses_across_queries(tmp_path, monkeypatch):
     path = tmp_path / 'source'
     path.write_bytes(b'abc')
@@ -66,7 +117,6 @@ def test_query_digest_session_restores_persistent_cache_on_error(tmp_path):
         assert provenance._DIGEST_OBSERVATION.get() is None
     finally:
         provenance.configure_digest_cache(None)
-
 
 @pytest.mark.parametrize('layout', ['raw', 'zip'])
 def test_whole_store_fingerprint_reads_each_content_once_without_metadata_hashing(tmp_path, monkeypatch, layout):
@@ -163,6 +213,42 @@ def test_verify_common_input_is_read_once_then_fenced_and_attempt_bound(tmp_path
         assert all(row['attempt_bound'] for row in result['contracts'])
 
 
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+@pytest.mark.parametrize('workers', [1, 2])
+def test_batched_logical_digest_final_reads_preserve_readonly_observation(tmp_path, monkeypatch, layout, workers):
+    logical = fixture(tmp_path, families=2)
+    entries = []
+    for index in range(2):
+        family = f"OG{index:07d}"
+        name = family + "_stat.tree.tsv"
+        path = logical / 'stat_tree' / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(f"family\n{family}\n".encode())
+        entries.append({'label': 'output', 'scope': 'logical', 'path': 'stat_tree/' + name,
+                        'artifact_type': 'file'})
+    if layout == 'zip':
+        catalog = tmp_path / 'families.txt'
+        catalog.write_text('OG0000000\nOG0000001\n')
+        subprocess.run([sys.executable, str(SUPPORT / 'gene_family_output_store.py'),
+            'convert-storage', '--root', str(logical), '--mode', 'orthogroup', '--to', 'zip',
+            '--family-id-file', str(catalog), '--progress-interval', '0'], check=True, capture_output=True)
+    # Any namespace-lock attempt would write on the real read-only mount.
+    # Do not stub the validator, digest computation or final content fence.
+    def reject_lock(*args, **kwargs):
+        raise AssertionError('read-only batch attempted a namespace-lock write')
+    monkeypatch.setattr(store_module, 'namespace_lock', reject_lock)
+    before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+    with store_module.read_only_observation():
+        with provenance.digest_observation(workers=workers) as memo:
+            for index, entry in enumerate(entries):
+                store = GeneFamilyOutputStore(logical, family_filter=f"OG{index:07d}")
+                with store.read_snapshot():
+                    expected = provenance.audit_entry_digest(entry, store, logical, tmp_path)
+                    assert provenance.audit_entry_digest(entry, store, logical, tmp_path, memo) == expected
+        assert memo.metrics()['digest_revalidation_reads'] == 2
+    assert before == sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+
+
 def fixture(root, families=8):
     logical = root / "output/orthogroup"
     manifests = logical / "artifact_provenance"
@@ -248,6 +334,224 @@ def test_guard_capacity_fails_closed_instead_of_dropping_source_checks():
     memo.guard("one", 1, lambda: 1)
     with pytest.raises(ValueError, match="bounded capacity"):
         memo.guard("two", 2, lambda: 2)
+
+
+@pytest.mark.parametrize('kind', ['content', 'guards', 'spilled_guards'])
+def test_final_revalidation_refills_idle_workers_before_a_slow_window_tail(tmp_path, kind):
+    """A late slow source must not leave every other reader idle at a batch boundary."""
+    memo = AuditDigests(limit=2 if kind == 'spilled_guards' else 64,
+                        spill_guards=kind == 'spilled_guards')
+    next_window_started = threading.Event()
+    validating = False
+    checked = []
+
+    def check(index):
+        if index == 15:
+            assert next_window_started.wait(5), 'idle readers waited for the whole batch'
+        if index == 16:
+            next_window_started.set()
+        checked.append(index)
+
+    try:
+        for index in range(40):
+            if kind == 'content':
+                path = tmp_path / str(index)
+                path.write_text(str(index))
+
+                def compute(path=path, index=index):
+                    if validating:
+                        check(index)
+                    raw = path.read_bytes()
+                    return hashlib.sha256(raw).hexdigest(), len(raw)
+
+                memo.read(path, compute)
+            else:
+                def read(index=index):
+                    check(index)
+                    return index
+                memo.guard(str(index), index, read)
+        validating = True
+        memo.validate(workers=2)
+        assert sorted(checked) == list(range(40))
+        if kind == 'content':
+            assert memo.metrics()['digest_revalidation_reads'] == 40
+    finally:
+        memo.close()
+
+
+def test_revalidation_submission_window_does_not_eagerly_consume_all_sources():
+    consumed, results, errors = [], [], []
+    window_ready, release = threading.Event(), threading.Event()
+
+    def sources():
+        for index in range(100):
+            consumed.append(index)
+            if len(consumed) == 16:
+                window_ready.set()
+            yield index
+
+    def check(index):
+        if index == 0:
+            assert release.wait(5)
+        return index
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        def consume():
+            try:
+                results.extend(runtime._validation_results(pool, check, sources(), 16))
+            except BaseException as exc:
+                errors.append(exc)
+        thread = threading.Thread(target=consume)
+        thread.start()
+        try:
+            assert window_ready.wait(5)
+            assert consumed == list(range(16))
+        finally:
+            release.set()
+            thread.join(5)
+        assert not thread.is_alive() and not errors
+    assert results == list(range(100))
+
+
+def test_revalidation_reports_first_input_failure_and_joins_submitted_readers():
+    later_failure = threading.Event()
+    consumed, finished = [], []
+
+    def sources():
+        for index in range(100):
+            consumed.append(index)
+            yield index
+
+    def check(index):
+        if index == 0:
+            assert later_failure.wait(5)
+            raise ValueError('first source failed')
+        if index == 1:
+            later_failure.set()
+            raise ValueError('second source failed earlier')
+        time.sleep(0.001)
+        finished.append(index)
+
+    with pytest.raises(ValueError, match='^first source failed$'):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            list(runtime._validation_results(pool, check, sources(), 16))
+    assert consumed == list(range(16))
+    assert sorted(finished) == list(range(2, 16))
+
+
+@pytest.mark.parametrize('workers', [1, 4])
+def test_spilled_guards_retain_every_final_check_and_detect_late_mutation(workers):
+    memo = AuditDigests(limit=2, spill_guards=True)
+    values = {str(index): (index, 'same') for index in range(19)}
+    calls = []
+    try:
+        for key, identity in values.items():
+            def read(key=key):
+                calls.append(key)
+                return values[key]
+            memo.guard(('logical', key), identity, read)
+        assert not memo.guards
+        assert memo.metrics()['source_guard_count'] == 19
+        memo.validate(workers=workers)
+        assert sorted(calls) == sorted(values)
+        memo.guard(('logical', '0'), values['0'], lambda: values['0'])
+        assert memo.metrics()['source_guard_count'] == 19
+        with pytest.raises(ValueError, match='changed during'):
+            memo.guard(('logical', '0'), (0, 'different'), lambda: (0, 'different'))
+        values['0'] = (0, 'changed after audit')
+        with pytest.raises(ValueError, match='changed before publication'):
+            memo.validate(workers=workers)
+        directory = Path(memo.guard_spill.directory.name)
+        assert directory.is_dir()
+    finally:
+        memo.close()
+    assert not directory.exists()
+
+
+def test_full_audit_spill_exceeds_old_capacity_without_dropping_fences():
+    memo = AuditDigests(spill_guards=True)
+    checked = set()
+    try:
+        for index in range(250001):
+            def read(index=index):
+                checked.add(index)
+                return (index, 'source')
+            memo.guard(('source', index), (index, 'source'), read)
+        memo.validate(workers=4)
+        assert len(checked) == 250001
+        assert memo.metrics()['source_guard_count'] == 250001
+        assert memo.metrics()['source_guard_spilled'] == 1
+    finally:
+        memo.close()
+
+
+def test_spill_failure_and_identity_types_fail_closed(monkeypatch):
+    from artifact_audit_guards import GuardSpill, encode
+    assert encode((True,)) != encode((1,))
+    assert encode(('a',)) != encode(['a'])
+    spill = GuardSpill()
+    try:
+        class Full:
+            def __len__(self):
+                return 2_000_000
+        spill.readers = Full()
+        with pytest.raises(ValueError, match='bounded capacity'):
+            spill.guard('over', 1, lambda: 1)
+    finally:
+        spill.close()
+
+
+def test_spill_inventory_loss_is_never_accepted():
+    memo = AuditDigests(limit=1, spill_guards=True)
+    try:
+        memo.guard('one', 1, lambda: 1)
+        memo.guard('two', 2, lambda: 2)
+        memo.guard_spill.database.execute('DELETE FROM guards WHERE reader=0')
+        with pytest.raises(ValueError, match='inventory changed'):
+            memo.validate()
+    finally:
+        memo.close()
+
+
+def test_large_spilled_inventory_does_not_amplify_unrelated_guard_reads():
+    from artifact_audit_guards import GuardSpill, encode
+    inventory = tuple(f'OG{index:07d}.summary_statistics.json' for index in range(107841))
+    spill = GuardSpill()
+    io_path = Path('/proc/self/io')
+    def read_chars():
+        return int(dict(line.split(':', 1) for line in io_path.read_text().splitlines())['rchar'])
+    try:
+        spill.guard(('logical', 'collection_inventory', 'artifact_provenance'), inventory, lambda: inventory)
+        before = read_chars() if io_path.exists() else None
+        for index in range(512):
+            identity = (index, 'source')
+            spill.guard(('logical', f'artifact_provenance/OG{index:07d}.json'), identity,
+                        lambda identity=identity: identity)
+        if before is not None:
+            # A large inline B-tree payload used to cause >4 GiB of reads here,
+            # even from the OS cache. This generous I/O bound is not a timer.
+            assert read_chars() - before < 128 * 1024 * 1024
+        values = list(spill.values())
+        assert len(values) == 513
+        assert all(expected == encode(reader()) for expected, reader in values)
+        assert spill.database.execute('PRAGMA max_page_count').fetchone()[0] == 131072
+        with pytest.raises(ValueError, match='changed during'):
+            spill.guard(('logical', 'collection_inventory', 'artifact_provenance'), (), lambda: ())
+    finally:
+        spill.close()
+
+
+def test_audit_capacity_is_one_structural_error_not_invalid_families(tmp_path, monkeypatch):
+    logical = fixture(tmp_path, families=10)
+    def full(*args, **kwargs):
+        raise runtime.AuditCapacityError('Audit source guard spill exceeds its bounded capacity')
+    monkeypatch.setattr(AuditDigests, 'guard', full)
+    report = tmp_path / 'audit.tsv'
+    assert provenance.audit(arguments(tmp_path, logical, report)) == 1
+    rows = report.read_text().splitlines()
+    assert len(rows) == 2
+    assert '\tsnapshot_identity\taudit_error\t' in rows[1]
+    assert 'invalid_manifest' not in report.read_text()
 
 
 def test_digest_capacity_fails_closed_even_for_concurrent_first_reads(tmp_path):
@@ -395,3 +699,199 @@ def test_progress_validation_rejects_false_counts_and_attempt(tmp_path):
         row["completed"] = True
         with pytest.raises(ValueError):
             validate_observation(row, attempt)
+
+
+def collection_fixture(root, layout='raw', families=64):
+    logical = fixture(root, families=families)
+    for subdir, suffix in [('stat_tree', '_stat.tree.tsv'), ('alignment', '.fa')]:
+        directory = logical / subdir
+        directory.mkdir()
+        for index in range(families):
+            (directory / f'OG{index:07d}{suffix}').write_text(f'family {index}: {subdir}\n')
+    if layout != 'raw':
+        catalog = root / 'families.txt'
+        catalog.write_text(''.join(f'OG{index:07d}\n' for index in range(families)))
+        subprocess.run([sys.executable, str(SUPPORT / 'gene_family_output_store.py'),
+            'convert-storage', '--root', str(logical), '--mode', 'orthogroup', '--to', 'zip',
+            '--family-id-file', str(catalog), '--progress-interval', '0'], check=True, capture_output=True)
+        if layout == 'mixed':
+            (logical / 'stat_tree').mkdir(exist_ok=True)
+            (logical / 'stat_tree/OG0000000_stat.tree.tsv').write_text('live override\n')
+    return logical
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip', 'mixed'])
+def test_parallel_whole_store_digest_retains_canonical_bytes_and_readonly_context(tmp_path, monkeypatch, layout):
+    logical = collection_fixture(tmp_path, layout)
+    with store_module.read_only_observation():
+        expected = provenance.gene_family_store_digest(logical, workers=1)
+    original = provenance._store_artifact_digest
+    seen, lock = [], threading.Lock()
+    def read(store, artifact):
+        assert provenance.observing_files()
+        assert provenance._DIGEST_OBSERVATION.get() is not None
+        assert provenance._RUNTIME_SUPPORT_ROOT.get() == SUPPORT.resolve()
+        result = original(store, artifact)
+        with lock:
+            seen.append(artifact.logical_path)
+        return result
+    monkeypatch.setattr(provenance, '_store_artifact_digest', read)
+    before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+    with store_module.read_only_observation(), provenance.runtime_support_root(SUPPORT):
+        with provenance.digest_observation(workers=4, spill_guards=True) as memo:
+            assert provenance.gene_family_store_digest(logical, workers=4) == expected
+    assert expected[2] == len(seen) == len(set(seen)) == 128
+    assert memo.metrics()['digest_revalidation_reads'] == 128
+    assert before == sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
+
+
+def test_whole_store_io_workers_are_bounded_by_allocated_cpus_and_keep_order(tmp_path, monkeypatch):
+    logical = collection_fixture(tmp_path)
+    with store_module.read_only_observation():
+        expected = provenance.gene_family_store_digest(logical, workers=1)
+    original = provenance._store_member_digest
+    barrier, lock = threading.Barrier(4), threading.Lock()
+    active = peak = entered = 0
+    def read(*args):
+        nonlocal active, peak, entered
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            entered += 1
+            initial = entered <= 4
+        try:
+            if initial:
+                barrier.wait(timeout=10)
+            if args[-1].startswith('OG0000000'):
+                time.sleep(0.01)
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    monkeypatch.setenv('GG_TASK_CPUS', '16')
+    with store_module.read_only_observation():
+        assert provenance.gene_family_store_digest(logical) == expected
+    assert peak == 4 and active == 0 and entered == 128
+
+
+@pytest.mark.parametrize('marker', [INDEX_EPOCH_FILE, INDEX_UPDATE_FILE])
+def test_parallel_whole_store_digest_retains_publication_fence(tmp_path, monkeypatch, marker):
+    logical = collection_fixture(tmp_path)
+    store = GeneFamilyOutputStore(logical)
+    store.archive_root.mkdir(exist_ok=True)
+    monkeypatch.setattr(provenance, 'GeneFamilyOutputStore', lambda root: store)
+    original, lock = provenance._store_member_digest, threading.Lock()
+    changed = False
+    def read(*args):
+        nonlocal changed
+        result = original(*args)
+        with lock:
+            if not changed:
+                (store.archive_root / marker).write_text('changed')
+                changed = True
+        return result
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    with pytest.raises(ArchiveStoreError), store_module.read_only_observation():
+        provenance.gene_family_store_digest(logical, workers=4)
+    assert store._read_snapshot_epoch is None and not store._snapshot_zip_readers
+
+
+def test_parallel_whole_store_member_failure_joins_workers_before_snapshot_closes(tmp_path, monkeypatch):
+    logical = collection_fixture(tmp_path, 'zip')
+    store = GeneFamilyOutputStore(logical)
+    monkeypatch.setattr(provenance, 'GeneFamilyOutputStore', lambda root: store)
+    original, lock = provenance._store_member_digest, threading.Lock()
+    active = 0
+    def read(*args):
+        nonlocal active
+        with lock:
+            active += 1
+        try:
+            if args[-1].startswith('OG0000003'):
+                raise OSError('unreadable member')
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    with store_module.read_only_observation(), pytest.raises(OSError, match='unreadable member'):
+        provenance.gene_family_store_digest(logical, workers=4)
+    assert active == 0 and store._read_snapshot_epoch is None and not store._snapshot_zip_readers
+
+
+def test_parallel_whole_store_query_rehashes_content_before_publication(tmp_path):
+    logical = collection_fixture(tmp_path)
+    with pytest.raises(ValueError, match='changed'), store_module.read_only_observation():
+        with provenance.digest_observation(workers=4, spill_guards=True):
+            provenance.gene_family_store_digest(logical, workers=4)
+            path = logical / 'stat_tree/OG0000000_stat.tree.tsv'
+            path.write_bytes(b'x' * path.stat().st_size)
+
+
+@pytest.mark.parametrize('workers', [0, -1, True, '4', 1.5])
+def test_whole_store_digest_rejects_invalid_explicit_worker_counts(tmp_path, workers):
+    with pytest.raises(ValueError, match='positive integer'):
+        provenance.gene_family_store_digest(tmp_path, workers=workers)
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip', 'mixed'])
+def test_subdirectory_parallel_digest_preserves_bytes_and_final_content_fence(tmp_path, monkeypatch, layout):
+    logical = collection_fixture(tmp_path, layout)
+    monkeypatch.setenv('GG_TASK_CPUS', '1')
+    with store_module.read_only_observation():
+        expected = provenance.gene_family_subdir_digest(logical, 'stat_tree')
+    monkeypatch.setenv('GG_TASK_CPUS', '4')
+    with store_module.read_only_observation(), provenance.digest_observation(workers=4) as memo:
+        assert provenance.gene_family_subdir_digest(logical, 'stat_tree') == expected
+    assert expected[2] == memo.metrics()['digest_revalidation_reads'] == 64
+    with pytest.raises(ValueError, match='changed'), store_module.read_only_observation():
+        with provenance.digest_observation(workers=4):
+            provenance.gene_family_subdir_digest(logical, 'stat_tree')
+            # A raw override must invalidate the query even for a ZIP fixture.
+            path = logical / 'stat_tree/OG0000000_stat.tree.tsv'
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(b'x' * len(b'family 0: stat_tree\n'))
+
+
+@pytest.mark.parametrize('outer_parallel', [False, True])
+def test_subdirectory_io_does_not_multiply_outer_audit_parallelism(tmp_path, monkeypatch, outer_parallel):
+    logical = collection_fixture(tmp_path)
+    monkeypatch.setenv('GG_TASK_CPUS', '16')
+    original = provenance._store_member_digest
+    barrier, lock = threading.Barrier(4), threading.Lock()
+    active = peak = entered = 0
+    def read(*args):
+        nonlocal active, peak, entered
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            entered += 1
+            initial = entered <= 4
+        try:
+            if initial:
+                barrier.wait(timeout=10)
+            time.sleep(0.001)
+            return original(*args)
+        finally:
+            with lock:
+                active -= 1
+    monkeypatch.setattr(provenance, '_store_member_digest', read)
+    def digest(_index):
+        with store_module.read_only_observation():
+            return provenance.gene_family_subdir_digest(logical, 'stat_tree')
+    if outer_parallel:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(digest, range(4)))
+        assert len(set(results)) == 1
+    else:
+        digest(0)
+    assert peak == 4 and active == 0
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'invalid'])
+def test_subdirectory_digest_rejects_invalid_allocated_cpu_count(tmp_path, monkeypatch, value):
+    logical = collection_fixture(tmp_path)
+    monkeypatch.setenv('GG_TASK_CPUS', value)
+    with pytest.raises(ValueError):
+        provenance.gene_family_subdir_digest(logical, 'stat_tree')

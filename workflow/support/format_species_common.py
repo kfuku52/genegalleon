@@ -14,7 +14,7 @@ from format_species_constants import (
     GFF_EXTENSIONS,
     TRANSIENT_HTTP_STATUS_CODES,
 )
-from format_species_provider_config import ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
+from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS, ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
 
 FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
     r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
@@ -351,3 +351,35 @@ def pick_single_file(matches, provider, species_key, label, warnings):
             "[{}] {}: multiple {} files found. Using '{}'".format(provider, species_key, label, ordered[0].name)
         )
     return ordered[0]
+
+def provider_raw_dir(provider, download_root, species_key):
+    if provider in ENSEMBL_LIKE_PROVIDERS:
+        return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider]
+    if provider in (
+        "phycocosm",
+        "phytozome",
+        "ncbi",
+        "ddbj",
+        "refseq",
+        "genbank",
+        "coge",
+        "cngb",
+        "gwh",
+        "citrusgenomedb",
+        "figshare",
+        "plantgarden",
+        "plantaedb",
+        "flybase",
+        "wormbase",
+        "vectorbase",
+        "fernbase",
+        "veupathdb",
+        "dictybase",
+        "insectbase",
+        ORYZA_MINUTA_PROVIDER,
+        "onekp",
+        "direct",
+        "local",
+    ):
+        return download_root / DEFAULT_INPUT_RELATIVE_DIRS[provider] / species_key
+    raise ValueError("Unknown provider: {}".format(provider))

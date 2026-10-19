@@ -134,3 +134,87 @@ def test_native_selection_requires_same_species_genome_and_model(tmp_path):
     run_args.species = "Other_species"
     with pytest.raises(ValueError, match="differs"):
         runtime.selection_record(run_args, args.genome)
+
+
+@pytest.mark.parametrize("boundary", ["hash", "lineage"])
+def test_wal_writer_cannot_publish_a_selection_from_unhashed_bytes(tmp_path, monkeypatch, boundary):
+    args = fixture(tmp_path)
+    db = Path(args.taxonomy_db)
+    conn = sqlite3.connect(db)
+    assert conn.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    conn.close()
+    selection.select(args)
+    previous = Path(args.output).read_bytes()
+    before = selection.stable_signature(db)
+    writers = []
+
+    def update():
+        if not writers:
+            writer = sqlite3.connect(db)
+            writer.execute("UPDATE species SET track='1000000,4751,1' WHERE taxid=1000000")
+            writer.commit()
+            writers.append(writer)
+
+    if boundary == "hash":
+        real_sha = selection.file_sha
+        def hash_then_update(path):
+            digest = real_sha(path)
+            if Path(path) == db:
+                update()
+            return digest
+        monkeypatch.setattr(selection, "file_sha", hash_then_update)
+    else:
+        real_node = selection.Taxonomy.node
+        def node_then_update(self, taxid):
+            node = real_node(self, taxid)
+            update()
+            return node
+        monkeypatch.setattr(selection.Taxonomy, "node", node_then_update)
+    try:
+        with pytest.raises(ValueError, match="active transaction"):
+            selection.select(args)
+        assert selection.stable_signature(db) == before
+        assert Path(args.output).read_bytes() == previous
+        assert json.loads(Path(args.output + ".failed.json").read_text())["status"] == "error"
+    finally:
+        for writer in writers:
+            writer.close()
+
+
+def test_wal_change_after_selection_is_rejected_by_prediction(tmp_path):
+    args = fixture(tmp_path)
+    db = Path(args.taxonomy_db)
+    writer = sqlite3.connect(db)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.close()
+    selection.select(args)
+    writer = sqlite3.connect(db)
+    try:
+        writer.execute("INSERT INTO synonym VALUES(1000000,'late synonym')")
+        writer.commit()
+        run_args = argparse.Namespace(selection_receipt=args.output, species=args.species, model_profile="Mammalia")
+        with pytest.raises(ValueError, match="active transaction"):
+            runtime.selection_record(run_args, args.genome)
+    finally:
+        writer.close()
+
+
+@pytest.mark.parametrize("role", ["genome", "taxid_map", "genome_metadata", "taxonomy_db"])
+@pytest.mark.parametrize("publication", ["selected", "failed"])
+def test_selector_output_cannot_replace_any_input(tmp_path, role, publication):
+    args = fixture(tmp_path)
+    metadata = tmp_path / "metadata.tsv"
+    metadata.write_text("species\ttaxid\tgenome_sha256\nTest_species\t1000000\t" + selection.file_sha(args.genome) + "\n")
+    args.genome_metadata = str(metadata)
+    if publication == "failed":
+        renamed = tmp_path / "protected.failed.json"
+        Path(getattr(args, role)).rename(renamed)
+        setattr(args, role, str(renamed))
+        args.output = str(renamed).removesuffix(".failed.json")
+    else:
+        args.output = getattr(args, role)
+    inputs = [Path(getattr(args, name)) for name in ("genome", "taxid_map", "genome_metadata", "taxonomy_db")]
+    before = {p: p.read_bytes() for p in inputs}
+    with pytest.raises(ValueError, match="outputs must not overwrite inputs"):
+        selection.select(args)
+    assert {p: p.read_bytes() for p in inputs} == before

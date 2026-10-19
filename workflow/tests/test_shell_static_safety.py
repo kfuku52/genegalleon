@@ -839,7 +839,7 @@ def test_orthogroup_summaries_do_not_write_augmented_tables_into_orthofinder():
     progress = _read_text(CORE_DIR / "gg_progress_summary_core.sh")
     gene_summary = _read_text(CORE_DIR / "gg_gene_summary_core.sh")
 
-    assert "--updated-genecount-out orthogroup_genecount.alignment_stats.tsv" in progress
+    assert '--updated-genecount-out "${gg_workspace_dir}/orthogroup_genecount.alignment_stats.tsv"' in progress
     assert '--updated-genecount-out "${summary_output_dir}/orthogroup_genecount.alignment_stats.tsv"' in gene_summary
 
 
@@ -1193,7 +1193,7 @@ def test_common_params_and_rooting_helpers_expose_shared_species_label_parser():
     assert '--species-parser "${species_label_parser}" \\' in genome_core
     assert '"--species-parser", args.species_parser' in rooting_helper
     assert 'parser.add_argument("--species-parser", default="taxonomic")' in rooting_helper
-    assert '"nwkit", "rootcompare"' in rooting_helper
+    assert '"rootcompare", "--infile"' in rooting_helper
     assert 'species_label_parser="${species_label_parser:-${GG_COMMON_SPECIES_LABEL_PARSER:-taxonomic}}"' in gene_core
     assert 'species_label_regex="${species_label_regex:-${GG_COMMON_SPECIES_LABEL_REGEX:-}}"' in gene_core
     assert 'species_label_map_tsv="${species_label_map_tsv:-${GG_COMMON_SPECIES_LABEL_MAP_TSV:-}}"' in gene_core

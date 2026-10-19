@@ -12,9 +12,11 @@ from pathlib import Path
 try:
     from fasta_sequence_store import fasta_records
     from rescue_coding_paths import coding_shape, compatible_paths, overlap_components
+    from rescue_homology_policy import homology_supported
 except ImportError:
     from .fasta_sequence_store import fasta_records
     from .rescue_coding_paths import coding_shape, compatible_paths, overlap_components
+    from .rescue_homology_policy import homology_supported
 
 
 def _proteins(path):
@@ -57,8 +59,7 @@ def _representation(path, target_lengths, donor_lengths, reverse, params):
     result = {}
     unique_target_owners = defaultdict(set)
     for donor, values in matches.items():
-        full = [m for m in values.values() if m["coverage"] >= params["minimum_coverage"]
-                and m["identity"] >= params["minimum_identity"]]
+        full = [m for m in values.values() if homology_supported(m["coverage"], m["identity"], params)]
         best = max((m["bitscore"] for m in full), default=0)
         contenders = [m for m in full if m["bitscore"] >= best * params.get("cscore", .7)]
         if len(contenders) == 1:
@@ -186,8 +187,8 @@ def nominate_genome_only_candidates(root, plan, name, regions, params):
                                                 "reason": r["nomination"]["reason"], "priority": r["screen_priority"]} for r in deferred]}
 
 
-def reassess_unanchored_models(models, minimum_species=2, *, ownership=None):
-    """Admit only intact, unique paths corroborated by independent species.
+def reassess_unanchored_models(models, minimum_species=1, *, ownership=None):
+    """Admit intact, unique paths with checked support from an external species.
 
     Compatible coding paths may corroborate annotation placement. A donor
     protein mapping to multiple unannotated loci cannot corroborate uniqueness.
@@ -195,8 +196,8 @@ def reassess_unanchored_models(models, minimum_species=2, *, ownership=None):
     revision nominations. Missing-gene annotation uses unannotated loci only;
     neither assessment assigns orthology or an expected copy.
     """
-    if isinstance(minimum_species, bool) or not isinstance(minimum_species, int) or minimum_species < 2:
-        raise ValueError("Unanchored placement needs at least two donor species")
+    if isinstance(minimum_species, bool) or not isinstance(minimum_species, int) or minimum_species < 1:
+        raise ValueError("Unanchored placement needs at least one donor species")
     placement_problems = {"outside_expected_synteny_interval", "unanchored_genome_search"}
     eligible = [m for m in models if m.get("sequence") and m.get("cds")
                 and not (set(m.get("problems", ())) - placement_problems)
@@ -212,6 +213,7 @@ def reassess_unanchored_models(models, minimum_species=2, *, ownership=None):
     for row in unique:
         row["start"] = min(e[0] for e in row["cds"])
         row["end"] = max(e[1] for e in row["cds"])
+    owners = ({coding_shape(path): ownership.overlapping(path) for path in unique} if ownership is not None else {})
     def assessments(paths):
         components = overlap_components(paths)
         query_loci = defaultdict(set)
@@ -228,7 +230,10 @@ def reassess_unanchored_models(models, minimum_species=2, *, ownership=None):
             # Only placement is reassessed, using verified primary alignment
             # metrics. Per-path support and scores remain unchanged.
             clean = [{**path, "problems": [], "support": []} for path in component]
-            coherent = all(compatible_paths(a, b) for i, a in enumerate(clean) for b in clean[i + 1:])
+            coherent = all(compatible_paths(a, b,
+                owners_a=[r['gene_id'] for r in owners.get(coding_shape(a), ()) if r.get('gene_id')],
+                owners_b=[r['gene_id'] for r in owners.get(coding_shape(b), ()) if r.get('gene_id')])
+                for i, a in enumerate(clean) for b in clean[i + 1:])
             records = (m for path in component for m in shapes[coding_shape(path)]["records"])
             support = set()
             for model in records:
@@ -243,7 +248,6 @@ def reassess_unanchored_models(models, minimum_species=2, *, ownership=None):
                 result[coding_shape(path)] = {"reason": reason, "independent_donor_species": sorted(support)}
         return result
     original = assessments(unique)
-    owners = ({coding_shape(path): ownership.overlapping(path) for path in unique} if ownership is not None else {})
     unannotated = [path for path in unique if not owners.get(coding_shape(path))]
     missing = assessments(unannotated) if ownership is not None else original
     counts = Counter()

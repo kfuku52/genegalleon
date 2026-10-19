@@ -782,6 +782,12 @@ run_gene_family_database_for_source() {
     --parameter "row_threshold=8000"
     --parameter "cutoff_stat=OCNany2spe,0.8"
   )
+  if [[ "${gene_family_source}" == "orthogroup" && -n "${file_orthogroup_genecount_selected}" ]]; then
+    database_provenance_args+=(
+      --input "family_catalog=${file_orthogroup_genecount_selected}"
+      --parameter "family_scope=selected_orthogroups_v1"
+    )
+  fi
   gg_artifact_prepare_stage database_needs_update run_gene_family_database_build "${database_provenance_args[@]}" || return $?
   if [[ ${run_gene_family_database_build} -ne 1 ]]; then
     echo "Skipping database prep because run_gene_family_database_build=0."
@@ -797,6 +803,7 @@ run_gene_family_database_for_source() {
     --workspace-root "${gg_workspace_dir}"
     --output-tsv "${provenance_report}"
     --mode "${gene_family_source}"
+    --workers "${GG_TASK_CPUS:-1}"
     --check-csubst-branches
   )
   if [[ "${gene_family_source}" == "query2family" ]]; then
@@ -949,10 +956,13 @@ run_hgt_summary_for_source() {
   hgt_focus_min_shared_pfam_coverage="${hgt_summary_focus_min_shared_pfam_coverage:-0.5}" \
   hgt_focus_require_length_ratio="${hgt_summary_focus_require_length_ratio:-1}" \
   hgt_focus_min_length_ratio="${hgt_summary_focus_min_length_ratio:-0.5}" \
-  hgt_focus_direction_filter="${hgt_summary_focus_direction_filter:-any}" \
+  hgt_focus_direction_filter="${hgt_summary_focus_direction_filter:-off}" \
+  hgt_focus_direction_rules="${hgt_summary_focus_direction_rules:-}" \
   hgt_focus_species_taxonomy="${hgt_summary_focus_species_taxonomy:-auto}" \
   hgt_transfer_tree_max_edges="${hgt_summary_transfer_tree_max_edges:-200}" \
   hgt_transfer_arrow_alpha="${hgt_summary_transfer_arrow_alpha:-0.55}" \
+  hgt_plot_scope="${hgt_summary_plot_scope:-all}" \
+  hgt_plot_workers="${hgt_summary_plot_workers:-auto}" \
   hgt_tree_width_mm="${hgt_summary_tree_width_mm:-60}" \
   hgt_promoter_bp="${hgt_summary_promoter_bp:-2000}" \
   hgt_fimo_qvalue="${hgt_summary_fimo_qvalue:-0.05}" \

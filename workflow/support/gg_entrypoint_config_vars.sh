@@ -59,12 +59,15 @@ hgt_summary_focus_min_shared_pfam_coverage
 hgt_summary_focus_require_length_ratio
 hgt_summary_focus_min_length_ratio
 hgt_summary_focus_direction_filter
+hgt_summary_focus_direction_rules
 hgt_summary_focus_species_taxonomy
 hgt_summary_taxonomy_flow_max_categories
 hgt_summary_taxonomy_flow_rank
 hgt_summary_transfer_tree_max_edges
 hgt_summary_transfer_arrow_alpha
 hgt_summary_tree_width_mm
+hgt_summary_plot_workers
+hgt_summary_plot_scope
 hgt_summary_use_taxonomy_db
 presence_absence_busco_table
 presence_absence_dup_conf_score_threshold
@@ -321,6 +324,16 @@ EOF
       cat <<'EOF'
 representative_inputs
 genome_annotation_backend
+oriongeno_model_profile
+oriongeno_taxid_map
+oriongeno_genome_metadata
+oriongeno_taxonomy_db
+oriongeno_source_ref
+oriongeno_python
+oriongeno_checkpoint
+oriongeno_source_commit
+oriongeno_no_download
+oriongeno_batch_size
 annevo_model_profile
 annevo_taxid_map
 annevo_genome_metadata
@@ -558,6 +571,7 @@ gene_model_refinement_edges
 gene_model_refinement_rescue_dir
 gene_model_refinement_rna
 gene_model_annevo_inputs
+gene_model_oriongeno_inputs
 gene_model_refinement_min_margin
 gene_model_refinement_min_support
 gene_model_refinement_candidate_limit
@@ -583,6 +597,8 @@ gene_model_rescue_common_references
 gene_model_rescue_nearest_references
 gene_model_rescue_minimum_busco
 gene_model_rescue_minimum_coverage
+gene_model_rescue_minimum_broad_coverage
+gene_model_rescue_minimum_lower_coverage_identity
 gene_model_rescue_minimum_identity
 gene_model_rescue_max_interval
 gene_model_rescue_max_intron
@@ -632,6 +648,7 @@ gbif_min_match_confidence
 gbif_page_size
 gene_grouping_mode
 gff_repair_mode
+species_busco_mode
 busco_timeout_seconds
 http_header
 input_dir

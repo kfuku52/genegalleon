@@ -112,6 +112,7 @@ HEADER_COMMENTS = {
             "- dictybase: Dictyostelium_discoideum",
             "- insectbase: IBG_00001",
             "- oryza_minuta: gramene_tetraploids",
+            "- onekp: original four-letter 1KP sample code, for example BMJR",
             "- direct: stable label or index URL token for explicit URLs",
             "- local: local species directory ID or path-style ID",
             "The drop-down is provider-specific, but any valid value can still be typed manually.",
@@ -393,6 +394,7 @@ EXAMPLE_ONLY_PROVIDERS = LARGE_ID_PROVIDERS + ("coge", "cngb")
 DDBJ_WGS_MASTER_ACCESSION_PATTERN = re.compile(r"([A-Z]{4,6})0{8,9}(?:\.[0-9]+)?", re.IGNORECASE)
 
 ID_EXAMPLES_BY_PROVIDER = {
+    "onekp": (("BMJR", "Adiantum raddianum (1KP BMJR)"),),
     "ensembl": (("homo_sapiens", "Homo sapiens"), ("mus_musculus", "Mus musculus")),
     "ensemblplants": (("Ostreococcus_lucimarinus", "Ostreococcus lucimarinus"),),
     "ensemblmetazoa": (("anopheles_gambiae", "Anopheles gambiae"),),

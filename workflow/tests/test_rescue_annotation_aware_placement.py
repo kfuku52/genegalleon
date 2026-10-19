@@ -70,7 +70,7 @@ def test_010425_true_unannotated_alternatives_still_hold_even_after_owned_paths_
     rows = [model("Trip", "010425", length=1518), model("Nep", "short", length=555),
             model("Nep", "short", 3000, 555), model("Nep", "short", 5000, 555),
             model("Nep", "short", 8000, 555)]
-    reassess_unanchored_models(rows, ownership=OwnershipIndex([owner("existing", 8000, 8555)]))
+    reassess_unanchored_models(rows, minimum_species=2, ownership=OwnershipIndex([owner("existing", 8000, 8555)]))
     assert all(row["problems"] for row in rows)
     assert rows[0]["placement_evidence"]["independent_donor_species"] == ["Trip"]
     assert rows[0]["placement_evidence"]["reason"] == "insufficient_unique_donor_support"
@@ -124,7 +124,7 @@ def test_hard_qc_failure_neither_supplies_support_nor_blocks_unique_placement():
 
 def test_one_species_paralogs_and_self_never_meet_two_species_threshold():
     rows = [model("D", "q1"), model("D", "q2"), model("T", "self")]
-    reassess_unanchored_models(rows, ownership=OwnershipIndex([]))
+    reassess_unanchored_models(rows, minimum_species=2, ownership=OwnershipIndex([]))
     assert all(row["problems"] for row in rows)
     assert rows[0]["placement_evidence"]["independent_donor_species"] == ["D"]
 

@@ -191,6 +191,20 @@ search, BUSCO and multispecies plots are disabled in this small qualification;
 the exact overrides, twelve exit records and artifacts remain in its new output
 directory. Existing execution records and caches are never reused or overwritten.
 
+For all eight real entrypoints, the registered executor can opt into
+`workflow/tests/qualify_all_entrypoints_gpu.py` with a sealed snapshot containing
+the checked-in seven-species inputs. In the same bounded GPU allocation it runs
+local input formatting/validation, one local RNA-seq assembly with longest-CDS
+extraction and quantification, the existing small fractionation fixture,
+OrthoFinder and orthogroup selection, YABBY query retrieval/alignment/tree/summary,
+gene summaries, progress summaries, and the six-profile annotation qualification.
+Each enabled producer must emit its required output and each wrapper must finish
+with its version report. Exact overrides and 19 entrypoint exit records stay in
+a fresh qualification root. BUSCO, remote annotation databases, localization,
+dating and other optional scientific analyses are outside this small execution
+check; their absence does not establish scientific completion. The biological
+seed files and prior execution records remain unchanged.
+
 ## Install test dependencies
 
 Python-side test dependencies are listed in:
@@ -230,8 +244,20 @@ commits remain temporary build metadata, never repository defaults.
 The fast lane also installs Ubuntu's `seqkit` package for the real per-species
 genetic-code translation regression; these tool-dependent assertions remain enabled.
 
-Commit CI partitions fast tests across two jobs, workflow integrations across
-three, and SIF runtime Python tests across eight, with two pytest workers per job.
+Commit CI uses one four-worker job per complete fast, workflow-integration and
+SIF Python suite, plus a separate download/traits job. This avoids repeated
+collection, dependency installation and SIF setup in many short partitions.
+Local and publication validation retain their existing worker defaults.
+R, extra runtime and real 3Di checks retain their independent execution and
+resource requirements. Fewer concurrent runners favor total Actions minutes;
+the complete SIF Python job may finish later than the former eight-way split.
+Default-branch and manual runs finish their active validation so a long runtime
+build can populate the exact cache. GitHub keeps one pending run per ref and
+replaces intermediate waiting runs with the latest. Superseded PR validation
+still cancels. This avoids repeatedly discarding cold builds before they finish.
+Main-branch runtime selection compares against the last ancestor whose complete
+SIF check succeeded, so coalescing cannot hide an intermediate code change behind
+a documentation-only push. If that proof is unavailable, all runtime checks run.
 `--gg-shard INDEX/COUNT`
 assigns each selected pytest node ID to exactly one partition using a stable hash;
 lane selection and explicit paths still apply first. Each job reports slow test
@@ -385,6 +411,12 @@ metadata because the checkout is mounted at test time. A cache miss may reuse
 the published daily image only when its runtime label matches exactly;
 otherwise CI builds the current container before conversion. The cache is
 saved only after all SIF validation checks succeed on the default branch.
+BuildKit's Actions cache exports use `mode=min` for both commit validation and
+container publishing. Observed `mode=max` exports exceeded the shared 10 GB
+allowance, alongside missing build blobs and disappearing SIF cache entries;
+one observed export alone took about 19.5 minutes. Keeping final-image layers
+reduces that competition, at the cost of fewer intermediate-stage cache hits
+when a new runtime must be built. Local disk cache policy is unchanged.
 The daily publisher primes that same cache from its immutable multi-architecture
 image, passing the already resolved runtime identity and security epoch. It
 does not resolve moving branches a second time during SIF preparation. Each
@@ -503,6 +535,13 @@ checks equivalent logical outputs and separates parent/child peak RSS.
 
 For profiling native two-page HGT PDFs and verifying exact drawing/audit
 equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
+
+## Reference annotation comparisons
+
+For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot
+metadata retention, see [reference annotation performance](reference-annotation-performance.md).
+Its benchmark compares exact outputs across saved/current support directories,
+reports time and process peak RSS, and includes a dense annotation control.
 
 ## Input staging comparisons
 

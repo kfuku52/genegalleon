@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "qualification_date": "2026-10-15",
+  "qualification_source_commit": "365a82e63329a73b555306ee24506ab58f8e7ffd",
+  "command": "python workflow/benchmarks/benchmark_annevo_pipeline_optimizations.py --inputs INPUT.tsv --output NEW_OUTPUT --repeats 2 --tmp-root /tmp --max-tmp-gib 128 --probability-proof-genome FIXTURE.fa",
+  "environment": {
+    "GPU": "NVIDIA RTX 6000 Ada Generation",
+    "allocated_cpus": 16,
+    "allocated_memory_GiB": 64,
+    "GPU_producers": 1,
+    "CPU_decoders": 2,
+    "threads_per_decoder": 4,
+    "runtime_input_sha256": "cad1c02a96bc7d2751bf71982bb1d0255195394e9638b593ee2df815b7dcac1a",
+    "native_identity": {
+      "runtime_digest": "fb57181dcc42895b66ac97c94354e0958121af00945682c023c4060bf5466672",
+      "model_sha256": "db83c8fb74058a73a9c771cf99fd67d98ccb05d0028efc671b6d352d5d73c86e",
+      "ANNEVO_source_commit": "42c920f70f52f96c7c06c665a639ec47d9304fff",
+      "model_profile": "Magnoliopsida"
+    }
+  },
+  "inputs_genome_sha256": {
+    "Aethionema_arabicum": "15b747e926e7fdfbb5d9ccad767029ed45cd67176a7155932bccb41c19c92659",
+    "Brachypodium_stacei": "8754647e650eea798d8bdf97913ad3ea37b2b208a7b9dcb2ce55bed97dc319dc",
+    "Geranium_dissectum": "b04e0354794a8e5cd6571c0fa6b507dbc501d5c2890a6932bb45d291900b425b"
+  },
+  "inference_parameters": {
+    "batch_size": 32,
+    "min_intron_length": 20,
+    "min_prot_length": 100,
+    "num_workers": 2,
+    "sequence_threshold": 25,
+    "threads": 4
+  },
+  "configurations": {
+    "baseline": {
+      "wall_seconds": [
+        1442.9451301940717,
+        1815.6629065852612
+      ],
+      "median_seconds": 1629.3040183896665,
+      "relative_to_baseline_median": 1.0,
+      "peak_PSS_GiB": [
+        9.977533340454102,
+        9.044121742248535
+      ],
+      "peak_RSS_GiB": [
+        24.696510314941406,
+        22.607769012451172
+      ],
+      "peak_GPU_MiB": [
+        5455.0,
+        5455.0
+      ],
+      "cache_load_events": [
+        0,
+        0
+      ],
+      "cache_save_events": [
+        12,
+        12
+      ]
+    },
+    "order_only": {
+      "wall_seconds": [
+        1213.7471730019897,
+        1423.5740531617776
+      ],
+      "median_seconds": 1318.6606130818836,
+      "relative_to_baseline_median": 0.8093398151593529,
+      "peak_PSS_GiB": [
+        8.955373764038086,
+        10.26220989227295
+      ],
+      "peak_RSS_GiB": [
+        22.496150970458984,
+        22.612831115722656
+      ],
+      "peak_GPU_MiB": [
+        5455.0,
+        5455.0
+      ],
+      "cache_load_events": [
+        0,
+        0
+      ],
+      "cache_save_events": [
+        12,
+        12
+      ]
+    },
+    "order_lzf": {
+      "wall_seconds": [
+        1129.860763233155,
+        1683.4157744082622
+      ],
+      "median_seconds": 1406.6382688207086,
+      "relative_to_baseline_median": 0.8633368928967406,
+      "peak_PSS_GiB": [
+        8.859746932983398,
+        10.862386703491211
+      ],
+      "peak_RSS_GiB": [
+        22.462677001953125,
+        22.54186248779297
+      ],
+      "peak_GPU_MiB": [
+        5455.0,
+        5455.0
+      ],
+      "cache_load_events": [
+        0,
+        0
+      ],
+      "cache_save_events": [
+        12,
+        12
+      ]
+    },
+    "optimized": {
+      "wall_seconds": [
+        1989.0080571882427,
+        1198.7133746817708
+      ],
+      "median_seconds": 1593.8607159350067,
+      "relative_to_baseline_median": 0.9782463542379952,
+      "peak_PSS_GiB": [
+        8.951099395751953,
+        9.188043594360352
+      ],
+      "peak_RSS_GiB": [
+        22.44280242919922,
+        22.580310821533203
+      ],
+      "peak_GPU_MiB": [
+        5455.0,
+        5455.0
+      ],
+      "cache_load_events": [
+        8,
+        12
+      ],
+      "cache_save_events": [
+        4,
+        0
+      ]
+    }
+  },
+  "native_equivalence": {
+    "all_24_native_GFF_annotation_features_identical": true,
+    "raw_GFF_bytes_identical": false,
+    "raw_byte_difference_scope": "Non-feature comments and row ordering; all nine annotation columns and multiplicities retained",
+    "fixture_probability_bits_and_metadata_identical": true,
+    "fixture_probability_stored_bytes": {
+      "lzf": 22888194,
+      "none": 60004480
+    },
+    "native_cold_warm_cache_reuse_demonstrated": true
+  },
+  "limitations": [
+    "Two trials per configuration; timing variability is large, so no stable combined speedup is established.",
+    "PSS/RSS peaks are one-second process-tree samples, not whole-job cgroup/page-cache memory.",
+    "Cold and warm optimized trials are identified by native cache load/save events; they must not be treated as replicated steady-state measurements.",
+    "Node CPU and disk contention was not isolated. No 500-species throughput claim is made.",
+    "Admission assays verify optimization equivalence; the approximate placement graph and Geranium Helixer control do not establish independent biological accuracy."
+  ],
+  "admission_equivalence": {
+    "assay_date": "2026-10-16",
+    "source_commit": "3d30e3978085f9cb8bf2c74436baaae2d074eed1",
+    "mask_seed": 20261020,
+    "mask_fraction": 0.02,
+    "species": {
+      "Aethionema_arabicum": {
+        "accepted_models_by_scope": {
+          "unmasked_control/gene": 119,
+          "unmasked_control/exon": 51,
+          "gene_20261020": 290,
+          "exon_20261020": 94
+        },
+        "accepted_cases_identical": true,
+        "representative_selection_identical": true,
+        "selected_GFF_CDS_bytes_identical": true,
+        "comparison_sha256": "fe2eff37237937619e7d1dd8d7b3ecb9f7ccba15151750e12324228d91134a72"
+      },
+      "Brachypodium_stacei": {
+        "accepted_models_by_scope": {
+          "unmasked_control/gene": 33,
+          "unmasked_control/exon": 13,
+          "gene_20261020": 228,
+          "exon_20261020": 114
+        },
+        "accepted_cases_identical": true,
+        "representative_selection_identical": true,
+        "selected_GFF_CDS_bytes_identical": true,
+        "comparison_sha256": "67242b5d195aecbf0b39d3985f6594db4ba0eaed960a50d6e65fef00bdb71215"
+      },
+      "Geranium_dissectum": {
+        "accepted_models_by_scope": {
+          "unmasked_control/gene": 17,
+          "unmasked_control/exon": 7,
+          "gene_20261020": 120,
+          "exon_20261020": 43
+        },
+        "accepted_cases_identical": true,
+        "representative_selection_identical": true,
+        "selected_GFF_CDS_bytes_identical": true,
+        "comparison_sha256": "f8b2165306688db153e2580bbaba8224a4444664fbf64ae29e98e17ebbcd1410"
+      }
+    },
+    "all_paired_admissions_and_selected_artifacts_identical": true,
+    "scope": "Three whole genomes with real external donor genome/GFF/CDS; paired gene/exon masking and unmasked controls; approximate placement graph, not full cohort finalization",
+    "reference_limitation": "Geranium uses the fixed Helixer annotation as a regression control, not independent biological truth"
+  }
+}

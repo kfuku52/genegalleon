@@ -8,16 +8,28 @@ An empty or invalid candidate collection is an error, not a fallback.
 import argparse
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from input_generation_array_state import FreshDigestBatch
 
 
 def select_root(args):
     from nwkit.clade_mapping import canonical_split, projected_root_split
+    from nwkit.cli import parser as nwkit_parser
     from nwkit.file_paths import validate_outputs_do_not_replace_inputs
     from nwkit.output_transaction import output_transaction, validate_output_targets
-    from nwkit.util import read_tree, read_tree_strings
+    from nwkit.root import root_main
+    from nwkit.root_compare import root_compare_main
+    from nwkit.util import get_tree_property_names, read_tree, read_tree_strings, write_tree
 
+    inputs = FreshDigestBatch()
+    inputs.read([args.in_tree, args.candidate_trees])
     candidate_strings = read_tree_strings(str(args.candidate_trees))
     if not candidate_strings:
         raise ValueError("Reconciliation candidate tree collection is empty.")
@@ -35,14 +47,30 @@ def select_root(args):
             path = work / f"candidate.{index}.nwk"
             path.write_text(text + "\n", encoding="utf-8")
             candidates.append(path)
+        native_trees = {}
+        comparison_args = nwkit_parser.parse_args([
+            "rootcompare", "--infile", str(args.in_tree),
+            "--methods", "midpoint,mad", "--species-parser", args.species_parser,
+            "--outfile", str(work / "comparison.tsv"),
+            "--figure-out", str(work / "comparison.pdf"),
+        ])
+        root_compare_main(comparison_args, rooted_trees=native_trees)
+        original_tree = read_tree(str(args.in_tree), "auto", True, quiet=True)
+        preserve_unary = any(len(node.children) == 1 and not node.is_root for node in original_tree.traverse())
         roots = {}
-        for method in ("mad", "midpoint"):
+        for method, tree in native_trees.items():
             roots[method] = work / f"{method}.nwk"
-            subprocess.run([
-                "nwkit", "root", "--method", method, "--infile", str(args.in_tree),
+            output_args = nwkit_parser.parse_args([
+                "root", "--method", method, "--infile", str(args.in_tree),
                 "--outfile", str(roots[method]),
-            ], check=True)
-        native_trees = {method: read_tree(str(path), "auto", True) for method, path in roots.items()}
+            ])
+            if preserve_unary:
+                # rootcompare contracts internal singleton nodes for comparison.
+                # Native selection must retain the original CLI tree shape.
+                root_main(output_args)
+                native_trees[method] = read_tree(str(roots[method]), "auto", True, quiet=True)
+            else:
+                write_tree(tree, output_args, format=output_args.outformat, props=get_tree_property_names(tree))
         leaves = frozenset(native_trees["mad"].leaf_names())
         if any(len(tree) != len(leaves) or frozenset(tree.leaf_names()) != leaves for tree in native_trees.values()):
             raise ValueError("NWKIT root trees must have matching, unique tip labels.")
@@ -82,15 +110,10 @@ def select_root(args):
             "nwkit", "drop", "--infile", str(selected), "--outfile", str(work / "selected.nwk"),
             "--target", "intnode", "--name", "yes", "--support", "yes",
         ], check=True)
-        subprocess.run([
-            "nwkit", "rootcompare", "--infile", str(args.in_tree),
-            "--methods", "midpoint,mad", "--species-parser", args.species_parser,
-            "--outfile", str(work / "comparison.tsv"),
-            "--figure-out", str(work / "comparison.pdf"),
-        ], check=True)
         with output_transaction(outputs, create_parents=True) as staged:
             for source, target in zip(("selected.nwk", "comparison.tsv", "comparison.pdf"), outputs, strict=True):
                 shutil.copyfile(work / source, staged[target])
+            inputs.check()
 
 
 def main():

@@ -1117,3 +1117,88 @@ def test_audited_database_pipeline_publishes_only_after_source_fence(tmp_path, m
     import json
     result = json.loads(report.with_suffix('.tsv.result.json').read_text())
     assert result['exit_code'] != 0
+
+
+@pytest.mark.parametrize('layout', ['raw', 'zip'])
+def test_selected_catalog_scopes_audit_and_database_without_removing_old_results(tmp_path, monkeypatch, layout):
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
+    import artifact_provenance as p
+    import gene_family_database_pipeline as pipeline
+    from gene_family_output_store import orthogroup_id_from_name
+    root = tmp_path / 'output/orthogroup'
+    global_root = tmp_path / 'output/.gg_global_artifacts'
+    global_root.mkdir(parents=True)
+    sources = {}
+    for family in ('OG0001', 'HOG0000'):
+        source = tmp_path / (family + '.fa')
+        source.write_text('>a\nACGT\n')
+        sources[family] = source
+        branch = root / 'stat_branch' / (family + '_stat.branch.tsv')
+        tree = root / 'stat_tree' / (family + '_stat.tree.tsv')
+        branch.parent.mkdir(parents=True, exist_ok=True)
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        branch.write_text('branch_id\tnode_name\tnum_sp\tso_event\n0\tg1\t1\tL\n')
+        tree.write_text('num_branch\tnum_spe\tnum_dup\tnum_sp\n1\t2\t0\t1\n')
+        assert p.dispatch(['record','--workspace-root',str(tmp_path),'--logical-root',str(root),
+            '--family-id',family,'--step','summary_statistics',
+            '--manifest',str(root/'artifact_provenance'/f'{family}.summary_statistics.json'),
+            '--input','alignment='+str(source),'--output','branch='+str(branch),'--output','tree='+str(tree)]) == 0
+    sources['HOG0000'].write_text('>old\nCHANGED\n')
+    if layout == 'zip':
+        archive_completed_outputs(root, 'orthogroup', {'OG0001', 'HOG0000'}, orthogroup_id_from_name)
+    preserved = {str(path): path.read_bytes() for path in root.rglob('*')
+                 if path.is_file() and (path.suffix == '.zip' or 'HOG0000' in path.name)}
+    catalog = tmp_path / 'selected.tsv'
+    catalog.write_text('Orthogroup\tsp\nOG0001\t2\n')
+    database, manifest, report = (tmp_path / name for name in ('database.db', 'database.json', 'audit.tsv'))
+    audit = ['--workspace-root',str(tmp_path),'--logical-root',str(root),
+             '--output-tsv',str(report),'--mode','orthogroup','--progress-interval','0']
+    assert p.dispatch(['audit', *audit]) == 1  # Old material must still fail an unscoped audit.
+    db = ['--overwrite','1','--dbpath',str(database),'--dir_gene_family',str(root),
+          '--dir_stat_tree',str(root/'stat_tree'),'--dir_stat_branch',str(root/'stat_branch')]
+    record = ['--workspace-root',str(tmp_path),'--logical-root',str(global_root),'--family-id','orthogroup',
+              '--step','gene_family_database','--manifest',str(manifest),
+              '--input-gene-family-store','families='+str(root),'--output','database='+str(database),
+              '--input','family_catalog='+str(catalog),'--parameter','family_scope=selected_orthogroups_v1']
+    assert pipeline.run(audit, db, record) == 0
+    with sqlite3.connect(database) as connection:
+        for table, in connection.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+            columns = {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+            if 'orthogroup' in columns:
+                assert {row[0] for row in connection.execute(f'SELECT DISTINCT orthogroup FROM "{table}"')} == {'OG0001'}
+    assert 'HOG0000' not in report.read_text()
+    assert all(Path(path).read_bytes() == body for path, body in preserved.items())
+    saved = database.read_bytes(), manifest.read_bytes()
+    original = pipeline.database._populate_database
+    def mutate(*args):
+        build = original(*args)
+        catalog.write_text('Orthogroup\tsp\nOG0001\t3\n')
+        return build
+    monkeypatch.setattr(pipeline.database, '_populate_database', mutate)
+    with pytest.raises(ValueError, match='changed before publication'):
+        pipeline.run(audit, db, record)
+    assert (database.read_bytes(), manifest.read_bytes()) == saved
+    monkeypatch.setattr(pipeline.database, '_populate_database', original)
+    catalog.write_text('Orthogroup\tsp\nOG0001\t2\nOG0002\t2\n')
+    with pytest.raises(ValueError, match='statistics are incomplete'):
+        pipeline.run(audit, db, record)
+    assert (database.read_bytes(), manifest.read_bytes()) == saved
+    catalog.write_text('Orthogroup\tsp\nOG0001\t2\nOG0001\t2\n')
+    with pytest.raises(ValueError, match='duplicate family'):
+        pipeline.run(audit, db, record)
+
+
+def test_schema_specific_indexes_accept_empty_association_table(tmp_path, caplog):
+    mod = load_module()
+    mod.require_sqlalchemy()
+    engine = mod.sqlalchemy.create_engine("sqlite:///" + str(tmp_path / "tables.db"))
+    with engine.begin() as connection:
+        connection.execute(mod.sqlalchemy.text("CREATE TABLE tree (orthogroup TEXT)"))
+        connection.execute(mod.sqlalchemy.text("CREATE TABLE branch (orthogroup TEXT)"))
+        connection.execute(mod.sqlalchemy.text("CREATE TABLE pgls_association (tree_id TEXT)"))
+    mod.create_indexes(engine, ["tree", "branch", "pgls_association"])
+    with engine.connect() as connection:
+        for table, column in [("tree", "orthogroup"), ("branch", "orthogroup"), ("pgls_association", "tree_id")]:
+            assert connection.execute(mod.sqlalchemy.text(f"PRAGMA index_info(idx_{column}_{table})")).fetchone()[2] == column
+    assert "Failed to create index" not in caplog.text
+    engine.dispose()

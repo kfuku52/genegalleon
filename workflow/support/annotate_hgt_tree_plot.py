@@ -34,6 +34,8 @@ def build_arg_parser():
     parser.add_argument("--gene_tsv", metavar="PATH", required=True, type=str)
     parser.add_argument("--orthogroup", metavar="TEXT", required=True, type=str)
     parser.add_argument("--outfile", metavar="PATH", required=True, type=str)
+    parser.add_argument("--candidate_index", default="", help="Private source-bound HGT family index")
+    parser.add_argument("--ortholog_prefix_out", default="", help="Write the existing majority-species prefix")
     return parser
 
 
@@ -195,8 +197,16 @@ def main():
         pandas.DataFrame().to_csv(args.outfile, sep="\t", index=False)
         return
 
-    branch_df = safe_read_tsv(args.branch_tsv)
-    gene_df = safe_read_tsv(args.gene_tsv)
+    if args.candidate_index:
+        from hgt_plot_inputs import read_family
+        branch_df, gene_df, prefix = read_family(args.candidate_index, args.branch_tsv, args.gene_tsv, args.orthogroup)
+        if args.ortholog_prefix_out:
+            ensure_parent_dir(args.ortholog_prefix_out)
+            with open(args.ortholog_prefix_out, "w") as handle:
+                handle.write(prefix + "\n")
+    else:
+        branch_df = safe_read_tsv(args.branch_tsv)
+        gene_df = safe_read_tsv(args.gene_tsv)
 
     out = stat_branch.copy()
     out = annotate_branch_rows(out, branch_df, args.orthogroup)

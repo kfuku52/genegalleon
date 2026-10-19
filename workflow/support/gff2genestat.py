@@ -24,8 +24,10 @@ try:
     from format_species_annotation.organelle import gff_organelle_seqids
     from gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from gff_source_contract import source_bound_gff_names
+    from input_generation_array_state import FreshDigestBatch
     from representative_selection import load_representative_map, matching_identifier
     from species_labeling import extract_species_label, strip_species_label
+    from trait_table_index import read_subset
 except ImportError:  # pragma: no cover - package import path used in tests
     from .content_digest_cache import cached_sha256_file
     from .fasta_sequence_store import fasta_records
@@ -33,8 +35,10 @@ except ImportError:  # pragma: no cover - package import path used in tests
     from .format_species_annotation.organelle import gff_organelle_seqids
     from .gff_feature_structure import ordered_annotated_blocks, ordered_feature_blocks
     from .gff_source_contract import source_bound_gff_names
+    from .input_generation_array_state import FreshDigestBatch
     from .representative_selection import load_representative_map, matching_identifier
     from .species_labeling import extract_species_label, strip_species_label
+    from .trait_table_index import read_subset
 
 pandas.options.mode.chained_assignment = None
 
@@ -116,6 +120,7 @@ def build_arg_parser():
             "deterministically by transcript identifier and report the choice."
         ),
     )
+    parser.add_argument("--table-cache", default="", metavar="PATH", help="Reuse content-verified CDS trait indexes.")
     parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     return parser
 
@@ -614,6 +619,11 @@ def extract_by_ids(gff, seq_names, feature, multiple_hits, representative_map=No
         # under that gene are alternative models; repeated IDs are CDS parts.
         gene_features = {parse_attribute_fields(a)[0] for a in
                          gff.loc[gff["feature"].str.lower().isin(["gene", "pseudogene"]), "attributes"]}
+        # An explicit RNA remains the CDS parent when a source reuses its gene
+        # ID for that RNA. Only parents without RNA rows are direct-gene models.
+        transcript_features = {parse_attribute_fields(a)[0] for a in
+                               gff.loc[feature_names.str.endswith(("rna", "transcript")), "attributes"]}
+        gene_features.difference_update(transcript_features)
         parent_proteins = {}
         for gene_id, attr in zip(out["gene_id"], out["attributes"], strict=True):
             protein_values = _parse_gff_attributes(attr).get("protein_id", [])
@@ -1251,21 +1261,27 @@ def disable_structure(traits, index, reason):
             indexer[index, column] = ""
 
 
-def apply_cds_resolution(traits, records, directory):
+def load_resolution_traits(path):
+    return pandas.read_csv(path, sep="\t")
+
+
+def apply_cds_resolution(traits, records, directory, cache_dir=None):
     sequences = {identifier: sequence for identifier, _header, sequence in records}
-    indices = {row.gene_id: index for index, row in traits.iterrows()}
+    indices = dict(zip(traits.gene_id, traits.index, strict=True))
     species = {extract_species_label(identifier) for identifier in sequences}
     for path in sorted(directory.glob('*.resolution.meta.json')):
         if extract_species_label(path.name) not in species:
             continue
         report = json.loads(path.read_text())
         traits_path = path.with_name(path.name.removesuffix('.resolution.meta.json') + '.traits.tsv')
-        if cached_sha256_file(traits_path)[0] != report['traits_sha256']:
+        traits_proof = FreshDigestBatch()
+        if traits_proof.read([traits_path])[str(traits_path)] != report['traits_sha256']:
             raise ValueError(f'Changed CDS resolution traits: {traits_path.name}')
         for source in report['contract']['sources'].values():
             if cached_sha256_file(Path(source['path']))[0] != source['sha256']:
                 raise ValueError(f'Stale CDS resolution source: {Path(source["path"]).name}')
-        resolved_traits = pandas.read_csv(traits_path, sep="\t").set_index('gene_id')
+        resolved_traits = read_subset(traits_path, set(indices), load_resolution_traits, cache_dir,
+                                     source_proof=traits_proof).set_index('gene_id')
         for identifier in set(indices) & set(resolved_traits.index):
             selected_hash = resolved_traits.at[identifier, 'cds_sequence_sha256']
             if selected_hash != hashlib.sha256(sequences[identifier].encode('ascii')).hexdigest():
@@ -1401,7 +1417,7 @@ def main():
         else:
             validate_cds_lengths(df_all, records)
     if args.cds_resolution_dir:
-        apply_cds_resolution(df_all, records, Path(args.cds_resolution_dir))
+        apply_cds_resolution(df_all, records, Path(args.cds_resolution_dir), args.table_cache)
     num_input = len(seq_names)
     num_output = df_all.shape[0]
     print("Number of input genes: {}".format(num_input), flush=True)

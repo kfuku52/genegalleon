@@ -70,6 +70,109 @@ def test_mutating_restored_candidate_does_not_change_other_candidates(tmp_path):
     assert list(iterator) == []
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_model_id_selection_keeps_duplicate_order_fields_and_statuses(tmp_path, legacy):
+    records = [{**model(i), "model_id": f"gene{i % 3}"} for i in range(9)]
+    records[6]["status"] = "unresolved"
+    if legacy:
+        directory = tmp_path
+        (directory / "models.json").write_text(json.dumps(records))
+        receipt(directory)
+    else:
+        directory, _ = published(tmp_path, records)
+    expected = [r for r in records if r["model_id"] == "gene0"]
+    actual = list(store.iter_models(directory, model_ids={"gene0", "absent"}))
+    assert json.dumps(actual, ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
+    assert list(store.iter_models(directory, model_ids={"gene0"}, statuses={"unresolved"})) == [records[6]]
+    assert list(store.iter_models(directory, model_ids=set())) == []
+
+
+@pytest.mark.parametrize("codec", ["gzip", "zstd"])
+def test_model_id_selection_only_reconstructs_matches(tmp_path, monkeypatch, codec):
+    if codec == "zstd":
+        pytest.importorskip("zstandard")
+    records = [{**model(i), "model_id": f"gene{i}"} for i in range(12)]
+    directory, _ = published(tmp_path, records, codec=codec)
+    calls = []
+    unpack = store._unpack
+
+    def counted(envelope, *args, **kwargs):
+        calls.append(envelope["context"]["model_id"])
+        return unpack(envelope, *args, **kwargs)
+
+    monkeypatch.setattr(store, "_unpack", counted)
+    assert list(store.iter_models(directory, model_ids={"gene2", "gene10"})) == [records[2], records[10]]
+    assert calls == ["gene2", "gene10"]
+
+
+@pytest.mark.parametrize("selected", [set(), {"gene0"}])
+@pytest.mark.parametrize("member", ["bodies.sqlite", "models-000001.jsonl.gz"])
+def test_model_id_selection_checks_unselected_source_bytes(tmp_path, selected, member):
+    records = [{**model(i), "model_id": f"gene{i}"} for i in range(4)]
+    directory, _ = published(tmp_path, records)
+    key = store.frozen_model_store_key(directory)
+    path = directory / "model_store" / member
+    with path.open("ab") as handle:
+        handle.write(gzip.compress(b"") if member.endswith(".gz") else b"changed")
+    with pytest.raises(ValueError, match="checksum"):
+        list(store.iter_models(directory, model_ids=selected, frozen_key=key))
+
+
+@pytest.mark.parametrize("member", ["receipt.json", "model_store/bodies.sqlite"])
+def test_model_id_selection_preserves_end_generation_and_member_fences(tmp_path, member):
+    records = [{**model(i), "model_id": f"gene{i}"} for i in range(3)]
+    directory, _ = published(tmp_path, records)
+    iterator = store.iter_models(directory, model_ids={"gene0"})
+    assert next(iterator) == records[0]
+    with (directory / member).open("ab") as handle:
+        handle.write(b" ")
+    with pytest.raises(ValueError, match="generation|during consumption"):
+        list(iterator)
+
+
+def test_model_id_selection_checks_counts_even_without_matches(tmp_path):
+    directory, _ = published(tmp_path, [model(0)])
+    path = directory / "model_store/manifest.json"
+    value = json.loads(path.read_text())
+    value["shards"][0]["count"] += 1
+    value["counts"]["models"] += 1
+    path.write_text(json.dumps(value))
+    receipt(directory)
+    with pytest.raises(ValueError, match="shard count"):
+        list(store.iter_models(directory, model_ids={"absent"}))
+
+
+@pytest.mark.parametrize("bad", ["gene0", b"gene0", {1}])
+def test_model_id_selection_rejects_ambiguous_id_collections(tmp_path, bad):
+    directory, _ = published(tmp_path, [model(0)])
+    with pytest.raises(ValueError, match="collection of strings"):
+        list(store.iter_models(directory, model_ids=bad))
+
+
+@pytest.mark.parametrize("legacy_layout", [False, True])
+def test_donor_metrics_preserve_all_views_without_duplicating_dna(tmp_path, monkeypatch, legacy_layout):
+    records = [model(0, "accepted"), model(1, "accepted")]
+    metrics = {"coverage", "identity", "query_span_coverage", "query_start", "query_end", "query_length"}
+    for i, record in enumerate(records):
+        values = dict(coverage=.91 + i * .01, identity=.8 + i * .05, query_span_coverage=.95,
+                      query_start=i, query_end=100 + i, query_length=110 + i)
+        record.update(values)
+        record["raw_prediction"].update(values)
+    revisions = [copy.deepcopy(records[1])]
+    with monkeypatch.context() as patch:
+        if legacy_layout:
+            patch.setattr(store, "BODY_FIELDS", store.BODY_FIELDS | metrics)
+        directory, manifest = published(tmp_path, records, revisions=revisions)
+    assert manifest["counts"]["bodies"] == (2 if legacy_layout else 1)
+    for read, expected in [(store.iter_models, records), (store.iter_accepted_models, records),
+                           (store.iter_partial_models, [records[1]]), (store.iter_revision_models, revisions)]:
+        assert json.dumps(list(read(directory)), ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
+    restored = list(store.iter_models(directory))
+    restored[0]["coverage"] = .1
+    restored[0]["raw_prediction"]["query_end"] = -1
+    assert list(store.iter_models(directory)) == records
+
+
 @pytest.mark.parametrize("prefix", ["##PAF\t", "#PAF\t", ""])
 @pytest.mark.parametrize("newline", ["\n", "\r\n", ""])
 def test_real_miniprot_paf_aliases_share_body_with_exact_nested_binding(tmp_path, prefix, newline):
@@ -259,6 +362,70 @@ def test_member_mutation_after_initial_verification_rejected_at_end(tmp_path):
         handle.write(b"changed while reading")
     with pytest.raises(ValueError, match="during consumption"):
         list(iterator)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_live_accepted_verification_reads_each_member_once_and_keeps_copies_independent(tmp_path, monkeypatch, legacy):
+    from workflow.support import input_generation_array_state as state
+
+    records = [model(0, "accepted"), model(1)]
+    if legacy:
+        directory = tmp_path
+        (directory / "models.json").write_text(json.dumps(records))
+        receipt(directory)
+    else:
+        directory, _ = published(tmp_path, records)
+    key = store.frozen_model_store_key(directory, kind="accepted")
+    calls = []
+    real_digest = state.digest
+
+    def hashed(path):
+        calls.append(str(path))
+        return real_digest(path)
+
+    monkeypatch.setattr(state, "digest", hashed)
+    monkeypatch.setattr(store, "_digest", hashed)
+    proof = state.FreshDigestBatch()
+    expected = {str(directory / member): sha for member, sha in key["files"].items()}
+    expected[str(directory / "receipt.json")] = key["producer_receipt_sha256"]
+    assert proof.read(expected) == expected
+    first = list(store.iter_accepted_models(directory, frozen_key=key, verification=proof))
+    assert first == records[:1]
+    first[0]["cds"][0][0] = -99
+    assert list(store.iter_accepted_models(directory, frozen_key=key, verification=proof)) == records[:1]
+    assert sorted(calls) == sorted(expected)
+    proof.check()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("when", ["before_read", "after_prehash", "during_consumption", "after_consumption"])
+def test_live_accepted_verification_rejects_content_mutation(tmp_path, legacy, when):
+    from workflow.support.input_generation_array_state import FreshDigestBatch
+
+    records = [model(0, "accepted"), model(1, "accepted")]
+    if legacy:
+        directory = tmp_path
+        (directory / "models.json").write_text(json.dumps(records))
+        receipt(directory)
+    else:
+        directory, _ = published(tmp_path, records)
+    key = store.frozen_model_store_key(directory, kind="accepted")
+    member = directory / ("models.json" if legacy else "model_store/accepted.sqlite")
+    proof = FreshDigestBatch()
+    if when == "after_prehash":
+        proof.read([member])
+    iterator = store.iter_accepted_models(directory, frozen_key=key, verification=proof)
+    if when == "during_consumption":
+        assert next(iterator) == records[0]
+    if when == "after_consumption":
+        assert list(iterator) == records
+    with member.open("ab") as handle:
+        handle.write(b" ")
+    with pytest.raises((ValueError, OSError), match="checksum|changed"):
+        if when == "after_consumption":
+            proof.check()
+        else:
+            list(iterator)
 
 
 @pytest.mark.parametrize("bad", ["../outside", "/absolute", "a/../b", "a\\b", "a//b", "./a", "bad\nname"])

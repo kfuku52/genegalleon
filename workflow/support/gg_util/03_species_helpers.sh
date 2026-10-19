@@ -509,7 +509,7 @@ gg_find_python_exec() {
 workspace_busco_placement_root() {
   local gg_workspace_dir=$1
   local dir_db
-  dir_db=$(workspace_downloads_root "${gg_workspace_dir}")
+  dir_db=$(workspace_downloads_root "${gg_workspace_dir}") || return 1
   echo "${dir_db}/busco_downloads/placement_files"
 }
 

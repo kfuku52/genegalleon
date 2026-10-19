@@ -9,6 +9,39 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" / "reformat_uniprot_diamond.py"
 
 
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('prefix', ['sp', 'tr'])
+def test_official_uniprot_headers_match_saved_accessions_and_retain_product(tmp_path, compressed, prefix):
+    reference = tmp_path / ('uniprot.fa.gz' if compressed else 'uniprot.fa')
+    text = (f'>{prefix}|P77526|YFCG_ECOLI Disulfide-bond oxidoreductase YfcG '
+            'OS=Escherichia coli (strain K12) OX=83333 GN=yfcG PE=1 SV=1\nMKT\n')
+    if compressed:
+        with gzip.open(reference, 'wt') as handle:
+            handle.write(text)
+    else:
+        reference.write_text(text)
+    hits = tmp_path / 'hits.tsv'
+    hits.write_text('gene1\tP77526\t48.2\t208\t3.447e-52\t200\t218\n')
+    output = tmp_path / 'annotations.tsv'
+    result = subprocess.run([sys.executable, str(SCRIPT_PATH), '--diamond_tsv', str(hits),
+                             '--uniprot_fasta', str(reference), '--outfile', str(output)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    row = pandas.read_csv(output, sep='\t', dtype=str, keep_default_na=False).iloc[0]
+    assert row.sprot_best == 'P77526'
+    assert row.sprot_recname == 'Disulfide-bond oxidoreductase YfcG'
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+    token = f'{prefix}|P77526|YFCG_ECOLI'
+    assert read_uniprot_descriptions(str(reference), {token}) == {token: row.sprot_recname}
+
+
+def test_description_reader_does_not_reinterpret_non_uniprot_pipe_ids(tmp_path):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+    reference = tmp_path / 'local.fa'
+    reference.write_text('>custom|P1|ENTRY Local protein OS=literal text\nMKT\n')
+    assert read_uniprot_descriptions(str(reference), {'P1'}) == {}
+    assert read_uniprot_descriptions(str(reference)) == {'custom|P1|ENTRY': 'Local protein OS=literal text'}
+
+
 @pytest.mark.parametrize('with_query_fasta', [False, True])
 @pytest.mark.parametrize('with_metadata', [False, True])
 def test_no_hits_preserve_queries_and_empty_annotations(tmp_path, with_query_fasta, with_metadata):
@@ -91,6 +124,48 @@ def test_diamond_reader_keeps_empty_ids_and_numeric_na_handling(tmp_path):
     assert pandas.isna(first.sseqid)
     assert result.qseqid.isna().sum() == 1
     assert first[['pident', 'length', 'evalue', 'bitscore', 'qlen', 'coverage']].isna().all()
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('key', ['accession', 'sprot_best'])
+def test_filtered_metadata_preserves_quoted_fields_and_first_duplicate_across_chunks(tmp_path, compressed, key):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_metadata
+
+    path = tmp_path / ('metadata.tsv.gz' if compressed else 'metadata.tsv')
+    text = (f'{key}\tgo_terms\tgene_name_primary\tunused\n'
+            'NA\t"first\tquoted\nterm"\t001\tignored\n'
+            + ''.join(f'P{i}\tbackground\tname{i}\tignored\n' for i in range(16384))
+            + 'NA\tlast duplicate\twrong\tignored\n'
+            '001\tliteral numeric ID\tNULL\tignored\n'
+            '\tblank accession\tblank\tignored\n')
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    selected = {'NA', '001', ''}
+    full = read_uniprot_metadata(str(path))
+    actual = read_uniprot_metadata(str(path), selected)
+    expected = full.loc[full.accession.isin(selected)]
+    pandas.testing.assert_frame_equal(actual.reset_index(drop=True), expected.reset_index(drop=True))
+    assert actual.accession.tolist() == ['NA', '001', '']
+    assert actual.iloc[0].go_terms == 'first\tquoted\nterm'
+    assert read_uniprot_metadata(str(path), set()).empty
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+def test_filtered_descriptions_keep_last_duplicate_and_ignore_empty_headers(tmp_path, compressed):
+    from workflow.support.reformat_uniprot_diamond import read_uniprot_descriptions
+
+    path = tmp_path / ('reference.fa.gz' if compressed else 'reference.fa')
+    text = '>NA first\nMKT\n>unrelated background\nAAA\n>\n>001\nM\n>NA last\nAA\n'
+    if compressed:
+        with gzip.open(path, 'wt') as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    assert read_uniprot_descriptions(str(path), {'NA', '001'}) == {'NA': 'last', '001': ''}
+    assert read_uniprot_descriptions(str(path), set()) == {}
 
 
 def test_reformat_uniprot_diamond_adds_metadata_columns_except_rnammer(tmp_path):

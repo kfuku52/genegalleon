@@ -13,6 +13,7 @@ from pathlib import Path
 import format_species_inputs as formatter
 from input_validation_reuse import add_arguments as add_reuse_arguments
 from input_validation_reuse import implementation_identity, partition
+from transcriptome_orfs import input_type, verify_existing
 from validate_source_gene_selection import SourceGeneSelection
 
 FASTA_EXTENSIONS = (
@@ -170,6 +171,7 @@ def build_task_from_summary_row(row):
         "gene_grouping_mode": formatter.normalize_gene_grouping_mode(row.get("gene_grouping_mode", "strict")),
         "gff_repair_mode": formatter.normalize_gff_repair_mode(row.get("gff_repair_mode", "safe")),
         "genetic_code": int(row.get("cds_genetic_code") or 1),
+        "cds_input_type": input_type(row),
         "cds_path": None,
         "gff_path": None,
         "gbff_path": None,
@@ -335,6 +337,7 @@ def validate_single_species(task, missing_limit):
     try:
         format_task = build_task_from_summary_row(row)
         validate_task_inputs_exist(format_task)
+        verify_existing(format_task, cds_file)
         expected_records, expected_stats = collect_expected_longest_records(format_task)
         actual_records, duplicate_output_ids = read_fasta_records(cds_file)
 

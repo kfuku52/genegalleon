@@ -2263,7 +2263,7 @@ if [[ ${query_blast_needs_update} -eq 1 && ${run_query_blast} -eq 1 && "${mode_g
 
   export BLASTDB_LMDB_MAP_SIZE=100000000
   check_species_cds_dir "${query_reference_dir}"
-  check_if_species_files_unique "${query_reference_dir}"
+  check_if_species_files_unique "${query_reference_dir}" fasta
 
   if [[ -e "${og_id}".blastQuery.fasta ]]; then
     rm -f -- "${og_id}.blastQuery.fasta"
@@ -2656,7 +2656,7 @@ if [[ ${primary_fasta_needs_update} -eq 1 && ${run_extract_primary_fasta} -eq 1 
   num_gene=${#genes[@]}
   if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
     check_species_protein_dir "${dir_sp_protein_input}"
-    check_if_species_files_unique "${dir_sp_protein_input}"
+    check_if_species_files_unique "${dir_sp_protein_input}" fasta
     if [[ -s "${file_species_genetic_code}" ]]; then
       echo "species_genetic_code.tsv is ignored because species_protein inputs are provided: ${file_species_genetic_code}"
     fi
@@ -2873,7 +2873,8 @@ if [[ ${gff_info_needs_update} -eq 1 && ${run_collect_gff_info} -eq 1 ]]; then
   if [[ "${input_sequence_mode}" == "cds" ]]; then
     gff_cds_validation_args+=(--validate-cds-length --structure-policy report --phase-policy report)
     if [[ -z "${representative_inputs}" ]]; then
-      gff_cds_validation_args+=(--cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved")
+      gff_cds_validation_args+=(--cds-resolution-dir "${gg_workspace_output_dir}/species_cds_resolved"
+        --table-cache "${gg_workspace_dir}/.gg_cache/trait_tables")
     fi
   fi
   python "${gg_support_dir}/gff2genestat.py" \
@@ -4541,6 +4542,7 @@ if [[ ${expression_needs_update} -eq 1 && ${run_generate_expression_matrix} -eq 
 
   python "${gg_support_dir}/get_trait_matrix.py" \
     --dir_trait "${dir_sp_expression}" \
+    --table-cache "${gg_workspace_dir}/.gg_cache/trait_tables" \
     --seqfile "${og_id}.trait_matrix_input.fasta" \
     --ncpu "${GG_TASK_CPUS}" \
     --outfile expression_matrix.tsv

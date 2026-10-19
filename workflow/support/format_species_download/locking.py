@@ -33,7 +33,7 @@ from format_species_constants import (
     DEFAULT_DOWNLOAD_RETRY_BASE_SECONDS,
     DOWNLOAD_DIAGNOSTIC_KEYS,
 )
-from format_species_network import download_retry_delay
+from format_species_network import download_retry_delay, share_download_cooldown
 from format_species_network import guarded_urlopen as urlopen
 from shared_lock import acquire_lock, release_lock
 
@@ -41,6 +41,7 @@ from .integrity import byte_integrity_contract, validate_download
 from .local import (
     quarantine_existing_file,
 )
+from .recovery import DownloadRecovery
 
 RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
 RAR5_SIGNATURE = b"Rar!\x1a\x07\x01\x00"
@@ -149,8 +150,12 @@ def resolve_download_retry_base_seconds():
     return value
 
 
-def sleep_before_download_retry(attempt, base_seconds, error=None):
+def sleep_before_download_retry(attempt, base_seconds, error=None, *, url=None, recovery=None):
     delay = download_retry_delay(attempt, base_seconds, error)
+    if url is not None:
+        share_download_cooldown(url, delay)
+    if recovery is not None:
+        delay = min(delay, recovery.remaining())
     if delay > 0:
         time.sleep(delay)
 
@@ -266,7 +271,7 @@ class DownloadBodyProgress:
             self.warnings.append("{} could not record body progress ({})".format(self.lock_context, type(exc).__name__))
 
 
-def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_context, *, expected_sha256=None, expected_size=None):
+def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_context, *, expected_sha256=None, expected_size=None, recovery=None):
     """Download sequential ranges, preserving only bytes from one representation."""
     contract = byte_integrity_contract(expected_sha256, expected_size)
     identity_path = Path(str(partial_path) + ".identity.json")
@@ -285,9 +290,11 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
     request_headers = {k: v for k, v in (headers or {}).items()
                        if k.lower() not in ("range", "if-range", "accept-encoding")}
     request_headers["Accept-Encoding"] = "identity"
-    # Bound CNGB connection lifetimes; other providers retain streaming by default.
+    # Bound CNGB/CNCB connections; other providers retain streaming by default.
     host = urlparse(url).hostname or ""
     default_chunk = 128 * 1024 * 1024 if host == "cngb.org" or host.endswith(".cngb.org") else 0
+    if host == "cncb.ac.cn" or host.endswith(".cncb.ac.cn"):
+        default_chunk = 64 * 1024 * 1024
     try:
         chunk_size = max(0, int(os.environ.get("GG_DOWNLOAD_RANGE_CHUNK_BYTES", default_chunk)))
     except ValueError:
@@ -296,6 +303,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
     if not math.isfinite(max_seconds) or max_seconds < 0:
         raise ValueError("GG_DOWNLOAD_MAX_RESPONSE_SECONDS must be finite and nonnegative")
     while True:
+        if recovery is not None:
+            recovery.check()
         response_started = time.monotonic()
         resume_from = partial_path.stat().st_size if partial_path.exists() else 0
         current_headers = dict(request_headers)
@@ -308,7 +317,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
         try:
             # The outer file loop owns retries, including errors while reading bodies.
             response_context = urlopen(Request(url, headers=current_headers),
-                                       timeout=min(timeout, max_seconds) if max_seconds else timeout,
+                                       timeout=min(timeout, max_seconds or timeout,
+                                                   recovery.remaining() if recovery else timeout),
                                        retry_attempts=1)
         except HTTPError as exc:
             # A size alone cannot establish that a partial file is still current.
@@ -388,6 +398,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                 identity_tmp.write_text(json.dumps(identity))
                 identity_tmp.replace(identity_path)
                 response_bytes = 0
+                if recovery is not None:
+                    recovery.response(identity, resume_from)
                 progress = DownloadBodyProgress(url, partial_path, warnings, lock_context)
                 progress.record("reading", resume_from, force=True)
                 body_ok = False
@@ -396,6 +408,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                     # trickles data forever. read1 exposes each received block.
                     read = getattr(response, "read1", response.read)
                     while True:
+                        if recovery is not None:
+                            recovery.check()
                         if max_seconds and time.monotonic() - response_started >= max_seconds:
                             raise TimeoutError("download response exceeded elapsed-time limit")
                         chunk = read(1024 * 1024)
@@ -409,6 +423,8 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
                             raise ValueError("response exceeded expected byte-integrity size")
                         out.write(chunk)
                         response_bytes += len(chunk)
+                        if recovery is not None:
+                            recovery.progress(resume_from + response_bytes)
                         progress.record("reading", resume_from + response_bytes)
                     body_ok = expected is None or response_bytes == expected
                 finally:
@@ -673,7 +689,11 @@ def _download_url_to_file(
             partial_path, partial_url_hash_path = prepare_partial_download(
                 destination, url, overwrite, expected_sha256=expected_sha256, expected_size=expected_size)
             last_validation_error = None
-            for attempt in range(1, attempts + 1):
+            recovery = DownloadRecovery(attempts)
+            attempt = 0
+            while True:
+                recovery.check()
+                attempt += 1
                 try:
                     download_url_to_partial(
                         url,
@@ -682,6 +702,7 @@ def _download_url_to_file(
                         timeout,
                         warnings,
                         lock_context,
+                        recovery=recovery,
                         **byte_options,
                     )
                     if contract is None and destination.name.lower().endswith(".gz"):
@@ -722,16 +743,17 @@ def _download_url_to_file(
                     raise OSError("downloaded {} failed integrity check: {}".format(validation_label, validation_error))
                 except Exception as exc:
                     transient_error = is_transient_network_error(exc)
-                    if attempt < attempts and transient_error:
+                    if transient_error and recovery.retry():
                         warnings.append(
                             "{} download attempt {}/{} failed transiently; retrying ({})".format(
                                 lock_context,
-                                attempt,
+                                recovery.failures,
                                 attempts,
                                 exc,
                             )
                         )
-                        sleep_before_download_retry(attempt, retry_base_seconds, exc)
+                        sleep_before_download_retry(recovery.failures, retry_base_seconds, exc,
+                                                    url=url, recovery=recovery)
                         continue
                     if not transient_error and not isinstance(exc, HTTPError) and getattr(exc, "errno", None) not in (errno.ENOSPC, errno.EDQUOT):
                         discard_partial_download(partial_path, partial_url_hash_path)

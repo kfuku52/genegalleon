@@ -25,6 +25,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -34,7 +35,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from artifact_audit_runtime import AuditDigests, AuditProgress, source_identity
+from artifact_audit_runtime import AuditCapacityError, AuditDigests, AuditProgress, source_identity
 from artifact_audit_runtime import signature as audit_signature
 from content_digest_cache import cache as digest_cache
 from content_digest_cache import cached_sha256_file
@@ -108,7 +109,7 @@ def _runtime_path(path: Path) -> Path:
 
 
 @contextlib.contextmanager
-def digest_observation(*, workers=1, progress=None):
+def digest_observation(*, workers=1, progress=None, spill_guards=False):
     """Share content reads within one query, then rehash every unique source.
 
     Never reuse persistent digests as read-only verification evidence. Nested
@@ -118,7 +119,7 @@ def digest_observation(*, workers=1, progress=None):
     if existing is not None:
         yield existing
         return
-    memo = AuditDigests()
+    memo = AuditDigests(spill_guards=spill_guards)
     previous = digest_cache()
     configure_digest_cache(None)
     token = _DIGEST_OBSERVATION.set(memo)
@@ -128,6 +129,7 @@ def digest_observation(*, workers=1, progress=None):
     finally:
         _DIGEST_OBSERVATION.reset(token)
         configure_digest_cache(previous.database if previous is not None else None)
+        memo.close()
 
 
 def without_digest_reuse(compute):
@@ -282,7 +284,10 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
         compute = scoped_digest_reader(lambda: sha256_path(path)[:2])
         if path.is_file() or path.is_dir():
             directory = path.is_dir()
-            digest, size = memo.read(path, compute, directory=directory)
+            if directory:
+                digest, size, _count = _directory_digest(path)
+            else:
+                digest, size = memo.read(path, compute)
             return digest, size, "directory" if directory else "file"
         artifact = observation_artifact(path)
         if artifact is not None:
@@ -304,8 +309,24 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
             return digest, size, "file"
         raise FileNotFoundError(path)
 
+    digest, size, _count = _directory_digest(path)
+    return digest, size, "directory"
+
+
+def _directory_digest(path: Path) -> tuple[str, int, int]:
+    """One inventory supplies both the existing digest and its file count."""
+    path = _runtime_path(path)
+    observe_path(path)
+    if path.is_symlink():
+        raise ProvenanceError(f"Symlinked provenance inputs and outputs are unsupported: {path}")
+    if not path.is_dir():
+        raise ProvenanceError(f"Managed logical directory path is not a directory: {path}")
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is not None:
+        return memo.read(path, scoped_digest_reader(lambda: _directory_digest(path)), directory=True)
     digest = hashlib.sha256()
     total_size = 0
+    member_count = 0
     for child in sorted(path.rglob("*")):
         observe_path(child)
         if child.is_symlink():
@@ -319,7 +340,8 @@ def sha256_path(path: Path) -> tuple[str, int, str]:
         digest.update(bytes.fromhex(child_digest))
         digest.update(child_size.to_bytes(8, "big"))
         total_size += child_size
-    return digest.hexdigest(), total_size, "directory"
+        member_count += 1
+    return digest.hexdigest(), total_size, member_count
 
 
 def is_relative_to(path: Path, parent: Path) -> bool:
@@ -420,8 +442,16 @@ def describe_optional_paths(
     return entries
 
 
-def gene_family_store_digest(root: Path) -> tuple[str, int, int]:
-    return _gene_family_collection_digest(root)
+def gene_family_store_digest(root: Path, *, workers: int | None = None) -> tuple[str, int, int]:
+    """Hash every logical member in canonical order with bounded I/O workers.
+
+    Workflow calls use at most their allocated CPUs (capped at four). Small
+    per-family/subdirectory digests remain serial inside parallel full audits.
+    """
+    requested = int(os.environ.get("GG_TASK_CPUS", "1")) if workers is None else workers
+    if type(requested) is not int or requested < 1:
+        raise ValueError("store digest workers must be a positive integer")
+    return _gene_family_collection_digest(root, workers=min(4, requested))
 
 
 def _store_artifact_digest(store, artifact):
@@ -437,12 +467,33 @@ def _store_artifact_digest(store, artifact):
         return sha256_stream(handle)
 
 
-def _gene_family_collection_digest(root, subdir=None):
+def _store_member_digest(store, subdir, name):
+    memo = _DIGEST_OBSERVATION.get()
+    if memo is None:
+        artifact = store.source_artifact(subdir, name)
+    else:
+        # Seed the same resolver used by audit_entry_digest. Re-resolving each
+        # member here repeats metadata I/O, including on a content-cache hit.
+        def resolve_source():
+            artifact = store.source_artifact(subdir, name)
+            return artifact, _audit_artifact_identity(artifact)
+        artifact, _identity = memo.resolve((str(store.root), f"{subdir}/{name}"), resolve_source)
+    if artifact is None:
+        raise FileNotFoundError(store.root / subdir / name)
+    digest, size = _store_artifact_digest(store, artifact)
+    return artifact.logical_path, digest, size
+
+
+def _gene_family_collection_digest(root, subdir=None, *, workers=1):
     store = GeneFamilyOutputStore(root)
     digest = hashlib.sha256()
     total_size = 0
     member_count = 0
-    with store.read_snapshot():
+    pool = (concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+            if workers > 1 else contextlib.nullcontext(None))
+    # Join every worker before the store closes its snapshot ZIP readers,
+    # including exceptions while the coordinator combines member digests.
+    with store.read_snapshot(), pool as executor:
         subdirs = [subdir] if subdir is not None else [s for s in store.logical_subdirs() if s != MANIFEST_SUBDIR]
         memo = _DIGEST_OBSERVATION.get()
         if memo is not None:
@@ -453,18 +504,23 @@ def _gene_family_collection_digest(root, subdir=None):
             if memo is not None:
                 memo.guard((str(store.root), "collection_inventory", selected), tuple(names),
                            lambda selected=selected: tuple(store.file_names(selected)))
-            for name in names:
-                artifact = store.source_artifact(selected, name)
-                if artifact is None:
-                    raise FileNotFoundError(store.root / selected / name)
-                artifact_digest, artifact_size = _store_artifact_digest(store, artifact)
-                logical_path = artifact.logical_path.encode("utf-8")
-                digest.update(len(logical_path).to_bytes(8, "big"))
-                digest.update(logical_path)
-                digest.update(bytes.fromhex(str(artifact_digest)))
-                digest.update(int(artifact_size).to_bytes(8, "big"))
-                total_size += int(artifact_size)
-                member_count += 1
+            context = contextvars.copy_context()
+            def read_member(name, selected=selected, context=context):
+                return context.copy().run(_store_member_digest, store, selected, name)
+            for offset in range(0, len(names), workers * 8):
+                batch = names[offset:offset + workers * 8]
+                # map retains canonical input order; batching bounds futures and
+                # keeps read-only/runtime-path contexts in every worker.
+                members = (executor.map(read_member, batch) if executor and len(batch) > 1
+                           else map(read_member, batch))
+                for name, artifact_digest, artifact_size in members:
+                    logical_path = name.encode("utf-8")
+                    digest.update(len(logical_path).to_bytes(8, "big"))
+                    digest.update(logical_path)
+                    digest.update(bytes.fromhex(str(artifact_digest)))
+                    digest.update(int(artifact_size).to_bytes(8, "big"))
+                    total_size += int(artifact_size)
+                    member_count += 1
     return digest.hexdigest(), total_size, member_count
 
 
@@ -480,7 +536,13 @@ def gene_family_subdir_digest(root: Path, subdir: str) -> tuple[str, int, int]:
         raise ProvenanceError(f"Unsafe gene-family logical subdirectory: {subdir!r}")
     if not root.is_dir() or root.is_symlink():
         raise FileNotFoundError(root)
-    return _gene_family_collection_digest(root, subdir)
+    requested = int(os.environ.get("GG_TASK_CPUS", "1"))
+    if requested < 1:
+        raise ValueError("store digest workers must be a positive integer")
+    # Full audits already parallelize families. Only a scalar caller overlaps
+    # subdirectory I/O, keeping nested audit workers within their original cap.
+    workers = min(4, requested) if threading.current_thread() is threading.main_thread() else 1
+    return _gene_family_collection_digest(root, subdir, workers=workers)
 
 
 def gene_family_artifact_digest(root: Path, subdir: str, name: str) -> tuple[str, int]:
@@ -610,11 +672,7 @@ def raw_or_zip_directory_digest(path: Path) -> tuple[str, int, int]:
     raw_result: tuple[str, int, int] | None = None
     archive_result: tuple[str, int, int] | None = None
     if path.exists():
-        digest, size, artifact_type = sha256_path(path)
-        if artifact_type != "directory":
-            raise ProvenanceError(f"Managed logical directory path is not a directory: {path}")
-        member_count = sum(1 for child in path.rglob("*") if child.is_file())
-        raw_result = (digest, size, member_count)
+        raw_result = _directory_digest(path)
     if archive_path.exists():
         if archive_path.is_symlink() or not archive_path.is_file():
             raise ProvenanceError(f"Managed logical directory archive is not a regular file: {archive_path}")
@@ -1299,7 +1357,7 @@ def audit_entry_digest(entry, store, logical_root, workspace_root, memo=None):
             if artifact is None:
                 raise FileNotFoundError(logical_root / raw)
             return memo.read(artifact.live_path or artifact.zip_path,
-                             lambda: audit_entry_digest(entry, store, logical_root, workspace_root),
+                             scoped_digest_reader(lambda: audit_entry_digest(entry, store, logical_root, workspace_root)),
                              member=artifact.member_name)
         path = resolve_reference(entry, logical_root, workspace_root)
         # Absent optional outputs retain the exact existing missing/type rules.
@@ -1370,6 +1428,8 @@ def audit_manifest(
                         digest, size, member_count = gene_family_store_digest(store_path)
                 except FileNotFoundError:
                     return "missing_input", label
+                except AuditCapacityError:
+                    raise
                 except Exception as exc:
                     return "invalid_manifest", f"{label}: {exc}"
                 if (
@@ -1386,6 +1446,8 @@ def audit_manifest(
                 digest, size = audit_entry_digest(entry, store, logical_root, workspace_root, memo)
             except FileNotFoundError:
                 return f"missing_{collection_name[:-1]}", label
+            except AuditCapacityError:
+                raise
             except Exception as exc:
                 return "invalid_manifest", f"{label}: {exc}"
             if digest != entry.get("sha256") or size != entry.get("size_bytes"):
@@ -1407,6 +1469,8 @@ def audit_manifest(
             if state == "absent":
                 continue
             return "missing_optional_output", label
+        except AuditCapacityError:
+            raise
         except Exception as exc:
             return "invalid_manifest", f"{label}: {exc}"
         if state == "absent":
@@ -1535,7 +1599,7 @@ def branch_identity_rows(
 def audit(args: argparse.Namespace) -> int:
     workers = getattr(args, "workers", 1)
     interval = getattr(args, "progress_interval", 10)
-    memo = AuditDigests()
+    memo = AuditDigests(spill_guards=True)
     source_sha256 = source_identity(SCRIPT_DIR)
     previous_cache = digest_cache()
     previous_path = previous_cache.database if previous_cache is not None else None
@@ -1547,6 +1611,7 @@ def audit(args: argparse.Namespace) -> int:
             return _audit(args, memo, progress, workers)
     finally:
         configure_digest_cache(previous_path)
+        memo.close()
 
 
 def _audit(args, memo, progress, workers):
@@ -1592,6 +1657,8 @@ def _collect_audit_rows(args, memo, progress, workers, store, rows, inventory_di
             if not family_id or not step:
                 raise ProvenanceError("family_id and step are required")
             status, reason = audit_manifest(payload, store, logical_root, workspace_root, memo)
+        except AuditCapacityError:
+            raise
         except Exception as exc:
             family_id, step = infer_orthogroup_id(name) or "-", "unknown"
             if args.mode == "query2family" and query_matcher_list:

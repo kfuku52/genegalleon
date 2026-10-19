@@ -1409,7 +1409,11 @@ def test_correspondence_binds_prepared_id_map_content_while_reading(tmp_path, mo
                   [dict(jcvi_id='g', locus_id='g', original_id='g', status='selected')])
         refinement.atomic_json(directory / 'receipt.json', {'key': {'plan': refinement.digest(anchor_root / 'plan.json'), 'species': name},
                                                            'files': {'genes.id_map.tsv': refinement.digest(mapping)}})
-    monkeypatch.setattr(refinement.rescue, 'load', lambda *_args: anchor_plan)
+    def frozen_producer(_root, *, inspect_only):
+        assert inspect_only is True
+        return anchor_plan
+
+    monkeypatch.setattr(refinement.rescue, 'load', frozen_producer)
     original = refinement.read_table
     damaged = anchor_root / 'prepared' / value['species'][-1] / 'genes.id_map.tsv'
 

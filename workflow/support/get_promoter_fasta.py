@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas
@@ -133,6 +134,68 @@ def run_seqkit(args, df, i, genome_file):
     return fasta
 
 
+def run_seqkit_batch(args, df, indices, genome_file):
+    """Extract one species in one SeqKit call, restoring input gene order."""
+    from input_generation_array_state import FreshDigestBatch
+
+    # Retain the legacy interpretation of nonpositive region lengths.
+    if args.promoter_bp <= 0:
+        return [run_seqkit(args, df, i, genome_file) for i in indices]
+    source = FreshDigestBatch()
+    source.read([genome_file])
+    with tempfile.TemporaryDirectory(prefix="gg-promoters-") as temporary:
+        work = Path(temporary)
+        requests = []
+        names = {}
+        for i in indices:
+            strand = df.at[i, "strand"]
+            if strand == "+":
+                end = int(df.at[i, "start"]) - 1
+                if end <= 0:
+                    print_edge_seq(df, i, mode="all")
+                    continue
+                start = end - args.promoter_bp + 1
+                if start <= 0:
+                    print_edge_seq(df, i, mode="part")
+                    start = 1
+            elif strand == "-":
+                start = int(df.at[i, "end"]) + 1
+                end = start + args.promoter_bp - 1
+            else:
+                sys.stderr.write(f"Invalid strand value for {df.at[i, 'gene_id']}: {strand}. Skipping.\n")
+                continue
+            token = "request" + str(len(names))
+            names[token] = df.at[i, "gene_id"]
+            requests.append(f"{df.at[i, 'chromosome']}\t{start - 1}\t{end}\t{token}\t0\t{strand}\n")
+        if not requests:
+            source.check()
+            return []
+        bed = work / "requests.bed"
+        bed.write_text("".join(requests))
+        command = [args.seqkit_exe, "subseq", "--bed", str(bed), "--threads", str(args.ncpu),
+                   "--seq-type", "DNA"]
+        print("Command:", shlex.join(command))
+        # Streaming supports gzip, irregular FASTA wrapping and repeated contig
+        # IDs exactly as the legacy grep pipeline, without adjacent index files.
+        with open(genome_file, "rb") as genome:
+            result = subprocess.run(command, stdin=genome, check=True, capture_output=True, text=True)
+        # SeqKit may return chromosomes in index order. Its BED comment carries
+        # the unique request token, independent of gene/contig punctuation.
+        records = {token: [] for token in names}
+        current = None
+        for line in result.stdout.splitlines(keepends=True):
+            if line.startswith(">"):
+                fields = line.rstrip().split()
+                if len(fields) < 2 or fields[-1] not in names:
+                    raise ValueError("SeqKit omitted the BED request identity")
+                current = fields[-1]
+                records[current].append(">" + names[current] + "\n")
+            elif current is not None:
+                records[current].append(line)
+        source.check()
+        return ["".join(records[token]) for token in names]
+
+
 def sanitize_fasta(fasta_records):
     fasta_records = [f for f in fasta_records if f != ""]
     new_fasta_records = list()
@@ -168,8 +231,7 @@ def main():
         genome_file = get_genome_file(dir_genome=args.dir_genome, sp=sp)
         if genome_file is None:
             continue
-        for i in sp_ind:
-            fasta_records.append(run_seqkit(args, df, i, genome_file))
+        fasta_records.extend(run_seqkit_batch(args, df, sp_ind, genome_file))
 
     new_fasta_records = sanitize_fasta(fasta_records)
     print("Number of rows in input tsv: {:,}".format(df.shape[0]))

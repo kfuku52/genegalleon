@@ -664,3 +664,47 @@ def test_root_adapter_consumes_real_nwkit_candidates(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Selected root: mad_compatible_with_reconciliation" in result.stdout
     assert plot.read_bytes().startswith(b"%PDF-")
+
+
+def test_root_comparison_reuse_keeps_native_internal_singleton_shape(tmp_path):
+    source, candidate, expected = (tmp_path / name for name in ('source.nwk', 'candidate.nwk', 'expected.nwk'))
+    source.write_text('(((A:1):2,B:4):3,(C:2,D:4):5);')
+    result = run('nwkit', 'root', '--method', 'mad', '--infile', source, '--outfile', candidate)
+    assert result.returncode == 0, result.stderr
+    result = run('nwkit', 'drop', '--infile', candidate, '--outfile', expected,
+                 '--target', 'intnode', '--name', 'yes', '--support', 'yes')
+    assert result.returncode == 0, result.stderr
+    output = tmp_path / 'selected.nwk'
+    result = run(sys.executable, SUPPORT / 'species_tree_guided_gene_tree_rooting.py',
+                 '--in-tree', source, '--candidate-trees', candidate, '--out-tree', output,
+                 '--comparison-table', tmp_path / 'comparison.tsv', '--comparison-plot', tmp_path / 'comparison.pdf')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_bytes() == expected.read_bytes()
+    assert 'mad_compatible_with_reconciliation' in result.stdout
+
+
+def test_root_reuse_rejects_input_replacement_before_publishing_bundle(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import nwkit.root_compare
+
+    from workflow.support.species_tree_guided_gene_tree_rooting import select_root
+
+    source, candidates = tmp_path / 'source.nwk', tmp_path / 'candidates.nwk'
+    source.write_text('((A:1,B:2):3,(C:2,D:4):5);')
+    candidates.write_bytes(source.read_bytes())
+    outputs = [tmp_path / name for name in ('selected.nwk', 'comparison.tsv', 'comparison.pdf')]
+    for path in outputs:
+        path.write_bytes(b'previous output')
+    original = nwkit.root_compare.root_compare_main
+    def replace(*args, **kwargs):
+        result = original(*args, **kwargs)
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(candidates.read_bytes())
+        replacement.replace(candidates)
+        return result
+    monkeypatch.setattr(nwkit.root_compare, 'root_compare_main', replace)
+    with pytest.raises(OSError, match='changed'):
+        select_root(SimpleNamespace(in_tree=source, candidate_trees=candidates,
+                    out_tree=outputs[0], comparison_table=outputs[1], comparison_plot=outputs[2], species_parser='taxonomic'))
+    assert all(path.read_bytes() == b'previous output' for path in outputs)

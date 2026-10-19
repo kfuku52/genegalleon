@@ -6,6 +6,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_multispecies_transcriptome_summary_runtime.py",
     "test_query_gene_orthologs_runtime.py",
     "test_gene_model_refinement.py",
     "test_gene_model_refinement_downstream.py",
@@ -51,7 +52,9 @@
     "test_fractionation_selected_inputs.py",
     "test_gbif_runtime_integration.py",
     "test_tree_plot_batch.py",
+    "test_progress_summary_runtime.py",
     "test_rescue_gene_models_runtime.py",
+    "test_rescue_admission_replay.py",
     "test_rescue_model_evidence.py",
     "test_rescue_swissprot_evidence.py",
     "test_genome_format_streaming_runtime.py",

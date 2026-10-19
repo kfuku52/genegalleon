@@ -208,8 +208,15 @@ configurable. A large/rearranged/poorly anchored region can remain unexamined.
 No candidate or no alignment therefore does not imply gene loss.
 
 The default engine is [miniprot](https://github.com/lh3/miniprot), including its
-embedded PAF evidence. Automatic acceptance requires at least 95% donor protein
-coverage and 50% identity, an intact start and terminal stop, consistent CDS
+embedded PAF evidence. Default homology support requires either at least 90%
+donor protein coverage and 50% identity, or at least 70% coverage and 70%
+identity. A hard `minimum_coverage` floor (default 0.70) and the configured
+`minimum_identity` still apply. `minimum_broad_coverage=0.90` and
+`minimum_lower_coverage_identity=0.70` define the stronger identity requirement
+below broad coverage; setting broad coverage to zero restores a fixed cutoff.
+An explicit coverage floor of 0.95 remains strict. Frozen legacy requests
+without these new fields retain their fixed cutoffs when revalidated.
+Automatic annotation additionally requires an intact start and terminal stop, consistent CDS
 phases, canonical GT–AG/GC–AG/AT–AC splice junctions, and no assembly ambiguities,
 frameshifts or internal stops. If the predictor omits the terminal stop from CDS,
 the actual next genomic stop is added. Incomplete termini may additionally undergo
@@ -222,7 +229,12 @@ models are reconstructed in transcription order. Coverage is the fraction of
 donor residues aligned to genomic residues, including split codons, excluding
 query insertions; an alignment spanning both ends is insufficient. Both the
 aligned fraction and query-span fraction are retained in model evidence. These are conservative
-defaults, not calibrated species-independent sensitivity estimates.
+defaults, not calibrated species-independent sensitivity estimates. Coverage
+and identity are separate from genomic integrity: lower donor coverage does
+not permit frameshifts, internal stops or unsupported coding boundaries.
+`presence_evidence` retains intact homologue support when placement, ownership
+or representative choice remains unresolved. Verified ambiguous boundary paths
+can support presence without resolving the chosen annotation.
 
 Unresolved queries optionally receive a whole-genome search. Selected donor genes
 without a two-anchor nomination are also screened against the existing protein
@@ -244,8 +256,8 @@ again under the current acceptance policy; previous acceptance and support
 decisions are never imported.
 
 An outside or unanchored hit can become an intact homologue annotation only with
-at least two independent donor species and compatible, unique coding-locus
-support. Two paralogs from one donor remain one species of support. These hits
+at least one independent external donor species and compatible, unique coding-locus
+support by default. A stricter two-species threshold remains available. Two paralogs from one donor remain one species of support. These hits
 retain `orthology=unassigned` and `expected_copy=unassigned`; annotation is not
 evidence that an expected lost copy was recovered. Incompatible or ambiguous
 placements remain proposals. No genomic disruption is repaired or masked.
@@ -269,17 +281,30 @@ overlap does not by itself veto an intact coding model. A single existing owner
 receives revision nominations (direct compact access or legacy
 `revision_candidates.json`) for the refinement stage's normal donor,
 structure and representative-adoption checks. Multi-owner split/merge ambiguity
-is withheld. Same-locus alternative paths require at least 80% overlap of the
-shorter CDS in the same frame. More nearest-species support, then more donor
+is withheld. Same-locus alternative paths require shared coding bases in the
+same frame. At least 80% overlap of the shorter CDS remains a sufficient
+structural condition. Lower overlap can qualify when a whole-protein alignment
+has at least 90% coverage on both sides and 50% identity, and every shared
+complete genomic codon maps to a homologous protein position. The start or
+first exon need not be shared. Unknown/unsupported genetic codes, inconsistent
+optimal projections and exceeded comparison budgets abstain. Distinct original
+annotation owners cannot be merged by this similarity rule. Pairwise
+compatibility across the entire coding-connected component still prevents
+bridging fusions. These thresholds govern path integration separately from
+donor homology support. More nearest-species support, then more donor
 species, distinguishes a representative; with equal species support, an identity
 advantage of at least 0.10 is required. If that rank is tied but every path is
-compatible and the locus has validated support from at least two independent
+compatible and the locus has validated support from at least one independent
 external donor species, the locus is retained with all paths. The longest CDS,
 then coding coordinates, supplies a deterministic primary; it remains explicitly
 `representative_status=ambiguous`. Locus support is recorded separately from
 each path's own donor support, coverage and identity, including in exported GFF
-attributes. Same-donor ties and
-incompatible paths remain proposals. Compatible alternatives are additional
+attributes. A predictor's presence in the evidence does not veto this fallback.
+When adding native predictions creates an incompatible component, those native
+additions remain proposals and the checked donor-genomic paths are resolved
+independently. A native bridge cannot fuse two transferred loci. Conflicts among
+the transferred paths themselves still remain proposals. Failed CDS never
+become alternatives or disqualify a separate valid path. Compatible alternatives are additional
 transcripts under one gene,
 with one primary CDS FASTA record. They are marked as homology predictions and
 pass the existing RNA/conservation adoption policy; they are not confirmed RNA
@@ -289,6 +314,54 @@ preserve the original locus evidence. The new transcript retains only its own
 path support; the old representative ambiguity is historical evidence and does
 not determine the new path's status. A subsequent catalog import keeps these
 two sources of evidence separate. Existing gene IDs are retained.
+When reusing a compatible prediction cache, its previously adopted primary and
+alternative CDS are read from their separately verified annotation publication.
+Verified cache history is followed while the source-genome checksum is unchanged,
+so a CDS lost before the immediate cache can still retain its annotation position.
+Each ancestor is bound through the saved plan and worker-receipt checksums; the
+closest producer supplies model IDs when a path appears more than once. Missing
+archived history stops discovery and is recorded in `retained_annotation_sources.json`.
+Available history with a checksum failure is rejected, rather than skipped.
+The accepted-model reader shares the caller's live verification batch: every
+consumed physical file is freshly hashed once, then checked for changes through
+the end of reading and publication. This avoids duplicate hashing within one
+command without trusting saved digests, changing selected records, or reusing a
+verification batch across writes or subsequent commands.
+Finalization also retains independently verified prepared, synteny and rescue
+publications within that command. Repeated dependency guards check the observed
+generations instead of rescanning all their contents. Original and native inputs
+keep a separate fresh byte proof. Both scopes are fenced before publication and
+when reusing an existing export, and a later command starts from full verification.
+They retain annotation position only after passing current genomic and homology
+checks with exactly the same CDS coordinates and nucleotide sequence. Old status
+never replaces these checks or adds donor support. A new conflicting prediction
+cannot invalidate such a CDS or join independent existing loci. If a historical
+path is absent from current valid predictions, its fixed CDS is reconstructed
+from the current genome and aligned anew to its still-available current donors.
+Current transfer searches finish before this reconstruction, so existing
+predictor mappings retain their provenance without redundant derived candidates.
+It must pass the same structural and coverage/identity policy. One optimal
+traceback can establish homology for these fixed coordinates; this does not
+infer new coding boundaries or reuse historical alignment metrics. These derived
+candidates may align to a donor containing X. Aligned X supplies no identity,
+and the target CDS must remain unambiguous. These candidates are regenerated,
+rather than replayed as pristine predictor output.
+Other paths remain review proposals when they conflict. Recent annotation
+anchors take priority over older conflicting paths. Older bridges cannot join
+independent annotations; conflicting paths from the same historical generation
+remain explicit review records without an arbitrary winner. Verified prior
+publications also retain each path's primary/alternative locus membership. When
+the current primary and every alternative pass fresh QC and each alternative
+agrees with that primary, the existing locus remains intact. Two short paths
+need not overlap each other merely because both agree with a longer primary.
+Separate prior loci remain separate; overlapping primary conflicts, missing
+primary witnesses and ambiguous membership still use the strict conflict review.
+Retention does not assign
+orthology or an expected copy, and original-annotation ownership still applies.
+New alternatives supported only by the target species cannot revoke a retained
+CDS. In a tied component without an external donor, only the currently validated
+prior paths remain annotated; the new self-only alternatives stay unresolved.
+This retention is explicitly recorded and contributes no external donor support.
 Identical coordinates from multiple donors are consolidated with each donor's
 own coverage and identity. Accepted IDs are stable hashes of genomic exon
 coordinates; neither orthogroup IDs nor run order define them.
@@ -377,6 +450,16 @@ contain all three arrays and their own provenance receipt. Automatic compression
 uses zstd when its Python module is available, otherwise gzip; the manifest
 records the selected codec. Shards have a bounded target size, though a single
 record can exceed it.
+
+For targeted inspection, `rescue_model_store.iter_models(..., model_ids={...})`
+restores only matching `model_id` values, retaining their source order and all
+duplicate evidence records. Exhaust the iterator: it still verifies all raw
+shard bytes, the full body database and the enclosing producer generation.
+Only selected bodies are decompressed and layout-validated; omit `model_ids`
+for a full record-layout audit. Existing publications need no rewritten index.
+`workflow/benchmarks/benchmark_rescue_model_selection.py baseline` and `selected`,
+run through the normal runtime wrapper, reproduce a 35,000-candidate synthetic
+comparison with full input hashing and exact ordered output fingerprints.
 
 Within one immutable genome and genetic-code context, raw DNA validation also
 reuses exact candidate-independent results through a bounded cache (8,192 entries,
@@ -564,3 +647,73 @@ for _ in range(3):
            'sha256': hashlib.sha256(json.dumps(output, sort_keys=True).encode()).hexdigest()})
 PY
 ```
+
+### Nearby coding-boundary revalidation
+
+Strong predictions that still lack a coding terminus or have a noncanonical
+splice are rechecked against the original genome after terminal completion.
+The bounded search examines canonical splice boundaries within 30 nt and
+uses the existing terminal extension bound (300 nt by default), with at most
+128 strict-QC passing CDS paths (up to 4,096 genomic hypotheses). Failed
+genomic hypotheses are rejected before donor alignment. It reconstructs phases
+and the complete genomic CDS,
+then requires the unchanged strict ORF, splice, genetic-code, coverage and
+identity checks plus reciprocal donor-protein coverage. A fully aligned donor
+permits at most the existing two-residue genomic C-terminal overhang.
+
+Multiple optimal donor alignments to one identical genomic CDS do not create
+multiple CDS paths. Different genomic paths within the existing score margin
+retain an ambiguous representative. After rechecking their source sequence and
+complete donor alignments, these paths enter the same final locus selection as
+other complete CDS. Compatible paths are retained as alternatives under one
+locus; conflicting paths remain proposals. The failed original prediction is
+preserved, and derived alternatives are regenerated from that original during
+cache replay. Independently verified intact paths still supply presence
+evidence from a single external donor. Checked alignments retain this evidence
+even when additional optimal tracebacks exceed the alignment budget, while
+annotation selection remains unresolved when a budget is exceeded. This does not
+assign orthology or a biologically preferred CDS. Frame disruptions, assembly ambiguity and unsupported long
+tails remain failures. The original predictor coordinates and PAF are retained;
+`boundary_revalidation` records attempted paths and the admission decision.
+Prediction-cache replay rechecks raw predictions with the current implementation.
+Frozen result and preparation files are hashed in groups, with full-byte reads
+and generation checks before and after each group and before cache use. This
+avoids repeated per-file scans of every previously verified pathname.
+This step does not assign orthology or relax coding-path compatibility.
+
+For an admission-only change, completed compact outputs can instead use the
+standard verified reclassification path:
+
+```bash
+python workflow/support/rescue_gene_models.py reclassify-plan \
+  --previous-output /previous/rescue --producer-source /previous/fixed/source \
+  --output /new/rescue
+python workflow/support/rescue_gene_models.py reclassify-prepare --output /new/rescue --cpus 4
+python workflow/support/rescue_gene_models.py rescue --output /new/rescue --cpus 4
+python workflow/support/rescue_gene_models.py finalize --output /new/rescue --cpus 4
+```
+
+The archived source must match the producer plan's implementation digests.
+Strict validation, boundary completion, donor alignments, native structure
+confirmation, preparation and comparison semantics must match the current
+implementation, with unchanged scientific parameters, inputs, donor graph and
+relevant runtime identities. Unknown or changed contracts fail before workers
+publish; use ordinary prediction-cache replay when raw evidence must change.
+GeMoMa and legacy JSON publications are not qualified by this narrower path.
+
+Reclassification imports full-byte-verified prepared and comparison outputs
+into the new plan, then runs current placement, ownership, coding-path admission
+and fresh genomic QC on admitted primary and alternative CDS. It preserves
+native structure decisions under the unchanged source-bound contract; it does
+not clear unconfirmed-native or structural failures. Every raw candidate,
+unknown field, original ordinal, partial-reference order and no-alignment audit
+row survives. Unselected DNA bodies need not be reconstructed, but all source
+bytes and the final generation fence are verified. Immutable copies avoid shared
+writable files, and each worker retains an `admission_replay.json` proof.
+Earlier v1 stores with donor metrics inside shared bodies remain readable.
+Changed records may normalize that layout only after exact predictor/DNA
+comparison; unselected records and partial references retain their original order.
+Separately declared annotation ancestors in older integration publications are
+retained through frozen plan/worker receipts and matching genome/code identity.
+Their accepted CDS nominate historical paths only; current QC, donor support and
+admission still apply. They cannot supply reusable native support or extra donors.

@@ -68,7 +68,12 @@ def test_program_source_defaults_are_moving_branches_not_commit_pins():
     assert "GG_PIN_" not in branches
     assert "_REPO_SHA=" not in branches
     branch_assignments = re.findall(r"^GG_SOURCE_[A-Z0-9_]+_REPO_REF=(\S+)$", branches, re.MULTILINE)
-    assert len(branch_assignments) == len(PROGRAM_SHA_VARS)
+    # OrionGeno is acquired lazily in an isolated optional runtime rather than
+    # compiled into the base image's PROGRAM_SHA_VARS inventory.
+    assert len(branch_assignments) == len(PROGRAM_SHA_VARS) + 1
+    assert "GG_SOURCE_ORIONGENO_REPO_REF=main" in branches
+    optional_runtime = (REPO_ROOT / 'workflow/support/oriongeno_runtime.py').read_text()
+    assert "['GG_SOURCE_ORIONGENO_REPO_REF']" in optional_runtime
     assert "GG_SOURCE_PAML_REPO_REF=master" in branches
     assert "GG_SOURCE_IQTREE_REPO_REF=master" in branches
     assert set(branch_assignments) <= {"main", "master"}

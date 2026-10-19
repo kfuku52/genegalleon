@@ -57,7 +57,18 @@ def attempt_directory(output):
         shutil.rmtree(path)
 
 
-def cache_matches(path, metadata):
+def cache_matches(path, metadata, *, proof=None):
+    if proof is not None:
+        if not path.is_file() or not metadata.is_file():
+            return False
+        hashes = proof.read([path, metadata])
+        try:
+            matches = json.loads(metadata.read_text()).get('sha256') == hashes[str(path)]
+        except (ValueError, AttributeError):
+            proof.check()
+            return False
+        proof.check()
+        return matches
     try:
         return path.is_file() and json.loads(metadata.read_text()).get("sha256") == digest(path)
     except (OSError, ValueError, AttributeError):
@@ -318,7 +329,8 @@ def build(args):
                 meta = args.cache / (key + ".json")
                 reject_cache_overlap([destination, meta], protected)
                 with exclusive_lock(args.cache / (key + ".lock")):
-                    if cache_matches(destination, meta):
+                    sketch_proof = FreshDigestBatch()
+                    if cache_matches(destination, meta, proof=sketch_proof):
                         reused += 1
                     else:
                         input_path, output_path = root / "sketch.input", root / "sketch.bin"
@@ -327,9 +339,13 @@ def build(args):
                         tools_boundary.check()
                         copy_atomic(output_path, destination, expected_sha256=digest(output_path))
                         atomic_json(meta, {"key": key, "sha256": digest(destination)})
-                    observed = digest(destination)
+                        # A repaired cache is a new generation; discard the
+                        # unaccepted miss proof and verify its fresh bytes.
+                        sketch_proof = FreshDigestBatch()
+                    observed = sketch_proof.read([destination, meta])[str(destination)]
                     if observed != json.loads(meta.read_text())["sha256"]:
                         raise ValueError("Guide sketch changed after cache verification")
+                    sketch_proof.check()
                     sketch_hashes.append(observed)
                 sketch_paths.append(str(destination.resolve()))
             observed_sketches = cache_boundary.read(sketch_paths)

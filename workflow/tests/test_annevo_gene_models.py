@@ -2,6 +2,7 @@
 import copy
 import importlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,6 +15,13 @@ annevo = importlib.import_module('annevo_gene_models')
 catalog_module = importlib.import_module('gene_model_catalog')
 rescue = importlib.import_module('rescue_gene_models')
 refinement = importlib.import_module('gene_model_refinement')
+
+
+def test_package_import_works_without_support_on_python_path():
+    root = SUPPORT.parents[1]
+    code = 'import sys;sys.path.insert(0,' + repr(str(root)) + ');import workflow.support.annevo_gene_models'
+    result = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 def native_fixture(tmp_path, *, strand='+'):
@@ -47,23 +55,56 @@ def native_fixture(tmp_path, *, strand='+'):
     return genome, gff, receipt, table, sources, coding, blocks
 
 
+@pytest.mark.parametrize('engine', ['annevo', 'oriongeno'])
 @pytest.mark.parametrize('strand', ['+', '-'])
-def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, strand):
+def test_actual_native_path_coordinates_and_real_donor_alignment(tmp_path, strand, engine):
     genome, _gff, _receipt, table, sources, coding, blocks = native_fixture(tmp_path, strand=strand)
-    frozen = annevo.freeze_inputs(table, sources)
+    if engine == 'oriongeno':
+        value = json.loads(_receipt.read_text())
+        value.update(kind='genegalleon-oriongeno-native-prediction', model_profile='plants', inference_settings={'lineage': 'plants'})
+        _receipt.write_text(json.dumps(value))
+    frozen = annevo.freeze_inputs(table, sources, engine=engine)
     regions = [dict(id='q' + donor, donor=donor, query='protein', seqid='chr', start=0, end=394)
                for donor in ('Donor_one', 'Donor_two')]
     protein = str(Seq(coding).translate()).removesuffix('*')
     proteins = {r['donor']: {'protein': protein} for r in regions}
     with catalog_module.indexed_genome(genome) as sequence:
-        models, audit = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS)
+        models, audit = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS, engine=engine)
         checked = [rescue.validate_model(m, sequence, 1, refinement.DEFAULTS) for m in models]
     assert len(models) == 2 and audit['native_paths'] == 1 and audit['proposals'] == []
     assert all(m['sequence'] == coding and m['cds'] == blocks and m['problems'] == [] for m in checked)
     assert all(m['coverage'] == m['identity'] == 1 for m in models)
-    assert all(m['evidence']['annevo']['native_transcript_id'] == 'native.t' for m in models)
-    assert all(m['evidence']['annevo']['alignment']['junction_information_available'] is False for m in models)
-    assert all('score' in m['evidence']['annevo']['alignment'] and 'junction_similarity' in m['evidence']['annevo']['alignment'] for m in models)
+    assert all(m['evidence'][engine]['native_transcript_id'] == 'native.t' for m in models)
+    assert all(m['evidence'][engine]['alignment']['junction_information_available'] is False for m in models)
+    assert all('score' in m['evidence'][engine]['alignment'] and 'junction_similarity' in m['evidence'][engine]['alignment'] for m in models)
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_parallel_nomination_retains_exact_order_scores_audit_and_inputs(tmp_path, strand):
+    genome, _gff, _receipt, table, sources, coding, _blocks = native_fixture(tmp_path, strand=strand)
+    frozen = annevo.freeze_inputs(table, sources)
+    regions = [dict(id=f'q{i}', donor='Donor_one' if i % 2 else 'Donor_two', query='protein',
+                    seqid='chr', start=0, end=394) for i in range(600)]
+    regions += [dict(id='unbounded', donor='Donor_one', query='protein', seqid='chr',
+                     start=0, end=394, genome_only=True),
+                dict(id='no_hit', donor='Donor_two', query='protein', seqid='chr', start=0, end=20)]
+    protein = str(Seq(coding).translate()).removesuffix('*')
+    proteins = {'Donor_one': {'protein': protein}, 'Donor_two': {'protein': 'M' + 'K' * 100}}
+    before = copy.deepcopy((frozen, regions, proteins))
+    with catalog_module.indexed_genome(genome) as sequence:
+        serial = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS)
+        parallel = annevo.nominate(frozen, 'Target_species', regions, proteins, sequence, refinement.DEFAULTS, cpus=2)
+    assert parallel == serial
+    assert [row['query'] for row in parallel[0]] == [f'q{i}' for i in range(600)]
+    assert (frozen, regions, proteins) == before
+    parallel[0][0]['cds'][0][0] += 1
+    assert parallel[0][0]['cds'] != parallel[0][1]['cds']
+
+
+@pytest.mark.parametrize('cpus', [0, -1, True, 1.5, '2'])
+def test_nomination_rejects_invalid_cpu_budget(cpus):
+    with pytest.raises(ValueError, match='CPUs must be a positive integer'):
+        annevo.nominate(None, 'Target_species', [], {}, None, {}, cpus=cpus)
 
 
 @pytest.mark.parametrize('profile', annevo.PROFILES)
@@ -83,6 +124,25 @@ def test_legacy_magnoliopsida_receipt_remains_compatible(tmp_path):
     document.pop('inference_settings')
     receipt.write_text(json.dumps(document))
     assert annevo.freeze_inputs(table, sources)['predictions']['Target_species']['identity']['model_profile'] == 'Magnoliopsida'
+
+
+@pytest.mark.parametrize('code', [1, 6, 12])
+def test_candidate_export_cli_checks_the_actual_genetic_code(tmp_path, code):
+    genome, gff, receipt, _table, sources, *_ = native_fixture(tmp_path)
+    output = tmp_path / 'export.tsv'
+    if code != 1:
+        output.write_text('existing candidate export')
+    result = subprocess.run([sys.executable, str(SUPPORT / 'annevo_gene_models.py'),
+        '--species', 'Target_species', '--genome', str(genome), '--gff', str(gff),
+        '--receipt', str(receipt), '--genetic-code', str(code), '--output', str(output)],
+        capture_output=True, text=True, timeout=30)
+    if code == 1:
+        assert result.returncode == 0, result.stderr
+        assert annevo.freeze_inputs(output, sources)['predictions']['Target_species']['identity']['model_profile'] == 'Magnoliopsida'
+    else:
+        assert result.returncode != 0 and 'genetic code 1' in result.stderr
+        assert output.read_text() == 'existing candidate export'
+        assert not output.with_suffix('.tsv.provenance.json').exists()
 
 
 @pytest.mark.parametrize('profile,settings', [('Mammalia', None), ('Actinopteri', {'lineage': 'Magnoliopsida'}),
@@ -260,6 +320,7 @@ def test_transfer_confirmation_needs_actual_same_query_and_junctions(tmp_path, s
     annevo.confirm_transferred_structure([positive], [transferred])
     assert positive['evidence']['annevo']['genomic_structure_transfer']['confirmed']
     for bad in [copy.deepcopy(checked), {**copy.deepcopy(transferred), 'evidence': {**region, 'query': 'other'}},
+                {**copy.deepcopy(transferred), 'evidence': {**region, 'retained_annotation_candidate': True}},
                 {**copy.deepcopy(transferred), 'problems': ['frameshift']},
                 {**copy.deepcopy(transferred), 'cds': [[30, 364, 0]]}]:
         negative = copy.deepcopy(checked)

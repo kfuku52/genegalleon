@@ -79,15 +79,27 @@ def fetch_json(url, timeout):
 def normalize_ncbi_ftp_path(ftppath):
     if ftppath == "":
         return ""
-    ftp_base = resolve_ncbi_ftp_base_url()
-    if ftppath.startswith("ftp://ftp.ncbi.nlm.nih.gov"):
-        return ftp_base + ftppath[len("ftp://ftp.ncbi.nlm.nih.gov") :]
-    if ftppath.startswith("https://ftp.ncbi.nlm.nih.gov"):
-        return ftp_base + ftppath[len("https://ftp.ncbi.nlm.nih.gov") :]
-    if ftppath.startswith("http://ftp.ncbi.nlm.nih.gov"):
-        return ftp_base + ftppath[len("http://ftp.ncbi.nlm.nih.gov") :]
-    if ftppath.startswith("ftp://"):
-        return "https://" + ftppath[len("ftp://") :]
+    parsed = urlparse(ftppath)
+    default_ports = {"ftp": 21, "http": 80, "https": 443}
+    if (
+        parsed.scheme in default_ports
+        and (parsed.hostname or "").removesuffix(".") == "ftp.ncbi.nlm.nih.gov"
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.port in (None, default_ports[parsed.scheme])
+    ):
+        # Append the parsed resource to the configured mirror, preserving its
+        # base path. urljoin would let a source path beginning with // replace
+        # the mirror's host instead.
+        mirror = urlparse(resolve_ncbi_ftp_base_url())
+        return mirror._replace(
+            path=mirror.path + parsed.path,
+            params=parsed.params,
+            query=parsed.query,
+            fragment=parsed.fragment,
+        ).geturl()
+    if parsed.scheme == "ftp":
+        return parsed._replace(scheme="https").geturl()
     return ftppath
 
 

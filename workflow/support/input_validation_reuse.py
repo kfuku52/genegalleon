@@ -22,7 +22,7 @@ def implementation_identity():
     support = Path(__file__).resolve().parent
     sources.extend(("support/" + str(path.relative_to(support)), path) for path in support.rglob("*.py"))
     versions = {"python": list(sys.version_info[:3])}
-    for package in ("kffractbias", "Bio", "pysam"):
+    for package in ("kffractbias", "Bio", "pysam", "cdskit"):
         spec = importlib.util.find_spec(package)
         if spec is None:
             versions[package] = "unavailable"
@@ -32,7 +32,7 @@ def implementation_identity():
             for path in root.rglob("*"):
                 if path.is_file() and path.suffix in {".py", ".so"}:
                     sources.append((package + "/" + str(path.relative_to(root)), path))
-    for package in ("biopython", "pysam", "kffractbias", "pandas", "polars"):
+    for package in ("biopython", "pysam", "kffractbias", "pandas", "polars", "cdskit"):
         try:
             versions[package + "_version"] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -203,9 +203,10 @@ def partition(tasks, args, parser, stage, *, session=None):
 def main():
     """Keep the public validators separate, sharing one final-QC invocation."""
     parser = argparse.ArgumentParser(description=__doc__)
-    for option in ("species-cds-dir", "species-gff-dir", "species-genome-dir", "species-summary",
+    for option in ("species-cds-dir", "species-gff-dir", "species-summary",
                    "mapping-stats-output", "ownership-stats-output"):
         parser.add_argument("--" + option, required=True)
+    parser.add_argument("--species-genome-dir", default="")
     parser.add_argument("--nthreads", default="1")
     parser.add_argument("--strict", action="store_true")
     add_arguments(parser)
@@ -218,8 +219,18 @@ def main():
     from validate_cds_gff_mapping import main as mapping
     from validate_longest_cds_selection import main as ownership
     session = VerificationSession()
+    genome_args = ["--species-genome-dir", args.species_genome_dir] if args.species_genome_dir else []
+    if not genome_args:
+        try:
+            with Path(args.species_summary).open(encoding="utf-8", newline="") as handle:
+                declared_genomes = any((row.get("genome_output_path") or "").strip()
+                                       for row in csv.DictReader(handle, delimiter="\t"))
+        except (OSError, UnicodeError, csv.Error) as error:
+            parser.error("Cannot inspect declared genome outputs: " + str(error))
+        if declared_genomes:
+            parser.error("Species summary declares genome outputs; --species-genome-dir is required")
     status = mapping([*common, "--species-gff-dir", args.species_gff_dir,
-                      "--species-genome-dir", args.species_genome_dir,
+                      *genome_args,
                       "--stats-output", args.mapping_stats_output, *( ["--strict"] if args.strict else [])],
                      verification_session=session)
     if status:

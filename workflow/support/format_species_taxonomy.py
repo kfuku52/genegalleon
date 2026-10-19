@@ -218,7 +218,7 @@ def normalize_species_key_for_runtime(value):
     if species_key == "":
         return ""
     tokens = [token for token in Path(species_key).name.split("_") if token != ""]
-    if len(tokens) >= 2 and tokens[1].lower() == "sp" and len(tokens) < 3:
+    if len(tokens) == 2 and taxonomic_token_key(tokens[1]) == "sp":
         return "{}_sp_unknown".format(tokens[0])
     return species_key
 

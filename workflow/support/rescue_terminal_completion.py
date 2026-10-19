@@ -15,6 +15,11 @@ from Bio.Align import PairwiseAligner
 from Bio.Data import CodonTable
 from Bio.Seq import Seq
 
+try:
+    from rescue_homology_policy import homology_problems
+except ImportError:
+    from .rescue_homology_policy import homology_problems
+
 _TERMINAL_PROBLEMS = {"missing_start", "missing_stop"}
 _RECHECKABLE = _TERMINAL_PROBLEMS | {"low_coverage", "low_identity"}
 _AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
@@ -262,9 +267,10 @@ def complete_terminals(model, genome, genetic_code, params, donor_protein, valid
         evidence = _protein_evidence(protein, donor, n_added, c_added, begin, end, aligner, c_overhang, alignment_limit)
         attempt["alignment"] = evidence
         attempt["reasons"].extend(evidence["reasons"])
-        if evidence["identity"] < params["minimum_identity"]:
+        failures = homology_problems(min(evidence["coverage"], evidence["recipient_coverage"]), evidence["identity"], params)
+        if 'low_identity' in failures:
             attempt["reasons"].append("low_identity_after_extension")
-        if min(evidence["coverage"], evidence["recipient_coverage"]) < params["minimum_coverage"]:
+        if 'low_coverage' in failures:
             attempt["reasons"].append("low_reciprocal_coverage_after_extension")
         uncertain_reasons = {"ambiguous_donor_terminal_alignment", "donor_alignment_budget_exceeded"}
         if "donor_alignment_budget_exceeded" in attempt["reasons"]:

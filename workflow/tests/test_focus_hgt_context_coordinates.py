@@ -1,5 +1,6 @@
 """Indexed compression must retain the scalar genomic-coordinate geometry."""
 
+import hashlib
 import math
 import random
 import re
@@ -16,6 +17,71 @@ sys.path.insert(0, str(SUPPORT))
 
 from focus_hgt_context import GapCompressedCoordinates, GenomeCoordinates, model_span, render_context  # noqa: E402
 from focus_hgt_gene_trees import write  # noqa: E402
+
+
+def test_native_mixed_coordinate_table_keeps_integral_spans_and_missing_loci(tmp_path):
+    import pandas
+    from gff2genestat import summarize_gene_features
+
+    # An explicitly ordered cross-contig model has no single genomic span.
+    # Its missing values make native pandas TSV coordinates integral decimals.
+    gff = pandas.DataFrame(dict(
+        gene_id=['A_gene', 'A_split', 'A_split'], sequence=['s1', 's2', 's3'],
+        strand=['+'] * 3, start=[50222, 10, 30], end=[50321, 19, 39],
+        feature=['CDS'] * 3,
+        attributes=['ID=c1;Parent=t1', 'ID=c2;Parent=t2;number=1', 'ID=c3;Parent=t2;number=2']))
+    fields = ['gene_id', 'chromosome', 'start', 'end', 'strand', 'feature_type',
+              'feature_blocks', 'splice_mode', 'feature_block_sequences', 'feature_block_strands']
+    path = tmp_path / 'A.gff_info.tsv'
+    summarize_gene_features(gff, fields).to_csv(path, sep='\t', index=False)
+    original = path.read_bytes()
+    assert b'50222.0' in original
+    coordinates = GenomeCoordinates(tmp_path)
+    focal, neighbors, status = coordinates.neighborhood(dict(gene_species='A', gene_id='A_gene'))
+    assert (focal['start'], focal['end']) == ('50222', '50321')
+    assert neighbors == [focal] and status == 'coding_exons_utr_unavailable'
+    assert coordinates.neighborhood(dict(gene_species='A', gene_id='A_split')) == (
+        None, [], 'gff_coordinates_unavailable')
+    assert coordinates.sources[str(path.resolve())] == hashlib.sha256(original).hexdigest()
+    coordinates.verify()
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize('start,end', [
+    ('50222.000', '50321.0'), ('5.0222e4', '5.0321e4'),
+    ('9007199254740993.0', '9007199254741093.0')])
+def test_integral_decimal_spans_are_exact_without_float_rounding(tmp_path, start, end):
+    row = model('g', 1, 2)
+    row.update(start=start, end=end,
+               feature_blocks=f'{int(Decimal(start))}-{int(Decimal(end))}')
+    write(tmp_path / 'A.gff_info.tsv', list(row), [row])
+    focal, _, _ = GenomeCoordinates(tmp_path).neighborhood(dict(gene_species='A', gene_id='g'))
+    assert int(focal['start']) == int(Decimal(start))
+    assert int(focal['end']) == int(Decimal(end))
+
+
+@pytest.mark.parametrize('start,end', [
+    ('50222.5', '50321'), ('50222', '50321.5'), ('Infinity', '50321'),
+    ('50222', '-Infinity'), ('bad', '50321'), ('0.0', '50321'),
+    ('-1.0', '50321'), ('50322.0', '50321.0')])
+def test_nonintegral_nonfinite_and_invalid_spans_still_fail(tmp_path, start, end):
+    row = model('g', 1, 2)
+    row.update(start=start, end=end)
+    write(tmp_path / 'A.gff_info.tsv', list(row), [row])
+    with pytest.raises(ValueError, match='Invalid GFF coordinate span: A:g'):
+        GenomeCoordinates(tmp_path).load('A')
+
+
+def test_existing_integer_spelling_and_missing_coordinates_are_preserved(tmp_path):
+    row = model('g', 1, 2)
+    row.update(start='0001', end='+2')
+    missing = dict(row, gene_id='missing', start='NaN', end='')
+    write(tmp_path / 'A.gff_info.tsv', list(row), [row, missing])
+    coordinates = GenomeCoordinates(tmp_path)
+    focal, _, _ = coordinates.neighborhood(dict(gene_species='A', gene_id='g'))
+    assert focal['start'] == '0001' and focal['end'] == '+2'
+    assert coordinates.neighborhood(dict(gene_species='A', gene_id='missing')) == (
+        None, [], 'gff_coordinates_unavailable')
 
 
 def scalar_transform(display, position):
@@ -159,3 +225,27 @@ def test_native_context_pdf_and_complete_audit_match_scalar_compression(tmp_path
     def normalize(path):
         return re.sub(rb'/(CreationDate|ModDate) \([^)]*\)', b'', path.read_bytes())
     assert normalize(indexed) == normalize(baseline)
+
+
+def test_indexed_neighbors_match_scalar_with_nested_loci_and_literal_ties(tmp_path):
+    rng = random.Random(18)
+    models = [model(f'g{i}', 1 + rng.randrange(10000), 1) for i in range(300)]
+    for row in models:
+        row['end'] = str(int(row['start']) + rng.randrange(1, 10000))
+        row['feature_blocks'] = row['start'] + '-' + row['end']
+    models.extend([model('g2_tie', 30, 40), model('g10_tie', 30, 40), model('outer', 1, 30000)])
+    write(tmp_path / 'A.gff_info.tsv', list(models[0]), models)
+    coordinates = GenomeCoordinates(tmp_path)
+    for focal in models:
+        others = [r for r in models if r['gene_id'] != focal['gene_id']]
+        start, end = int(focal['start']), int(focal['end'])
+        left = sorted([r for r in others if int(r['end']) < start], key=lambda r: (-int(r['end']), r['gene_id']))[:2]
+        right = sorted([r for r in others if int(r['start']) > end], key=lambda r: (int(r['start']), r['gene_id']))[:2]
+        overlapping = sorted([r for r in others if int(r['start']) <= end and int(r['end']) >= start],
+            key=lambda r: (abs((int(r['start']) + int(r['end'])) / 2 - (start + end) / 2), r['gene_id']))[:2]
+        link = dict(gene_species='A', gene_id=focal['gene_id'])
+        actual = coordinates.neighborhood(link)
+        assert actual[0] == focal
+        assert actual[1] == sorted(left + right + overlapping + [focal], key=lambda r: (int(r['start']), r['gene_id']))
+        assert coordinates.scaffold_models(link, focal) == sorted(models, key=lambda r: (int(r['start']), r['gene_id']))
+    coordinates.verify()

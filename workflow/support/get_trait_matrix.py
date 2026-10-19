@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from species_labeling import extract_species_label, strip_species_label
+from trait_table_index import read_subset
 
 
 def read_fasta_seqname(file_path):
@@ -51,7 +52,7 @@ def trait_filename_to_species_name(trait_file):
     return trait_file.split(".", 1)[0] if "." in trait_file else trait_file
 
 
-def process_trait_file(trait_path, search_ids, id_map):
+def load_trait_table(trait_path):
     # Identifiers are literal text; numeric traits retain normal NA/type inference.
     trait = pandas.read_csv(trait_path, sep="\t", header=0, comment="#", converters={0: str})
     if trait.shape[0] == 0:
@@ -60,7 +61,11 @@ def process_trait_file(trait_path, search_ids, id_map):
         trait = trait.reset_index(drop=False)
     trait = trait.rename(columns={trait.columns.to_list()[0]: "gene_id"})
     trait["gene_id"] = trait["gene_id"].astype(str)
-    trait2 = trait.loc[trait["gene_id"].isin(search_ids), :].copy()
+    return trait
+
+
+def process_trait_file(trait_path, search_ids, id_map, cache_dir=None):
+    trait2 = read_subset(trait_path, search_ids, load_trait_table, cache_dir)
     if trait2.shape[0] == 0:
         return trait2
     trait2.loc[:, "gene_id"] = trait2["gene_id"].map(id_map).fillna(trait2["gene_id"])
@@ -72,6 +77,7 @@ def main():
     parser.add_argument("--dir_trait", metavar="PATH", default="", type=str, help="Path used by --dir_trait.")
     parser.add_argument("--seqfile", metavar="PATH", default="", type=str, help="Path used by --seqfile.")
     parser.add_argument("--outfile", metavar="PATH", default="trait.tsv", type=str, help="Path used by --outfile.")
+    parser.add_argument("--table-cache", default="", metavar="PATH", help="Reuse content-verified species table indexes.")
     parser.add_argument("--ncpu", metavar="INT", default=1, type=int, help="Number of worker threads.")
     args = parser.parse_args()
     args.ncpu = max(1, int(args.ncpu))
@@ -98,7 +104,7 @@ def main():
     frames = []
     if args.ncpu == 1 or len(tasks) <= 1:
         for trait_file, trait_path, id_map in tasks:
-            trait2 = process_trait_file(trait_path=trait_path, search_ids=set(id_map), id_map=id_map)
+            trait2 = process_trait_file(trait_path=trait_path, search_ids=set(id_map), id_map=id_map, cache_dir=args.table_cache)
             if trait2.shape[0] > 0:
                 frames.append(trait2)
             print("Finished processing {}: Number of identified genes = {:,}".format(trait_file, trait2.shape[0]))
@@ -106,7 +112,7 @@ def main():
         max_workers = min(args.ncpu, len(tasks))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(process_trait_file, trait_path, set(id_map), id_map): (idx, trait_file)
+                executor.submit(process_trait_file, trait_path, set(id_map), id_map, args.table_cache): (idx, trait_file)
                 for idx, (trait_file, trait_path, id_map) in enumerate(tasks)
             }
             ordered_results = {}

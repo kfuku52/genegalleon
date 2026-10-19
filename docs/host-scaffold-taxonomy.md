@@ -212,6 +212,9 @@ unknown. Host-species taxonomy still determines modeled transfer direction,
 and Swiss-Prot best hits remain separate product annotations. Optional saved
 taxonomy/classification inputs participate in provenance even when plots are
 disabled; no new sequence search or gene-tree inference is run.
+Direction filtering is off by default. General endpoint selection is available
+with `custom` and a [versioned rule file](hgt-direction-filtering.md); it supports
+any saved taxonomy rank, explicit tip sets and exact branch lists.
 Set `hgt_summary_focus_direction_filter=non_arthropoda_to_arthropoda` to insert a
 direction filter immediately after the exact-pair filter. The filtering-flow
 figure shows `Non-Arthropoda donor → Arthropoda recipient` and

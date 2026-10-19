@@ -7,7 +7,6 @@ import os
 import platform
 import re
 import shutil
-import uuid
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin, urlsplit
@@ -21,31 +20,9 @@ MANIFEST_MEDIA = "application/vnd.genegalleon.annevo.manifest.v1+json"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 
 
-def file_sha(path):
-    result = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            result.update(chunk)
-    return result.hexdigest()
-
-
-def canonical_bytes(value):
-    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
-
-
-def atomic_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
-    try:
-        with temporary.open("xb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(canonical_bytes(value))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+from runtime_asset_io import atomic_json as atomic_json
+from runtime_asset_io import canonical_bytes as canonical_bytes
+from runtime_asset_io import file_sha as file_sha
 
 
 def platform_name():

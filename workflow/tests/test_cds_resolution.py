@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +12,102 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 import cds_resolution as resolution
 
 pytestmark = pytest.mark.fast
+
+
+def resolved_view_fixture(tmp_path):
+    sources = tmp_path / 'sources'
+    sources.mkdir()
+    source = sources / 'Plant_species.fa'
+    source.write_text('>Plant_species_gene1\nATGAAATAA\n')
+    target, _, _ = resolution.resolve(source, None, None, tmp_path / 'resolved')
+    return sources, source, target, tmp_path / 'views'
+
+
+def test_warm_view_hashes_resolved_target_once_per_invocation(tmp_path, monkeypatch):
+    sources, _source, target, views = resolved_view_fixture(tmp_path)
+    initial = resolution.resolved_view(sources, target.parent, views)
+    state = sys.modules[resolution.FreshDigestBatch.__module__]
+    original = state.digest
+    reads = []
+    def digest(path):
+        reads.append(Path(path))
+        return original(path)
+    monkeypatch.setattr(state, 'digest', digest)
+    assert resolution.resolved_view(sources, target.parent, views) == initial
+    assert reads.count(target) == 1
+    resolution.resolved_view(sources, target.parent, views)
+    assert reads.count(target) == 2
+
+
+def test_warm_view_rejects_target_replacement_while_alias_is_checked(tmp_path, monkeypatch):
+    sources, _source, target, views = resolved_view_fixture(tmp_path)
+    initial = resolution.resolved_view(sources, target.parent, views)
+    state = sys.modules[resolution.FreshDigestBatch.__module__]
+    original = state.digest
+    def changed(path):
+        value = original(path)
+        if Path(path).parent == initial:
+            replacement = tmp_path / 'replacement'
+            replacement.write_bytes(target.read_bytes())
+            replacement.replace(target)
+        return value
+    monkeypatch.setattr(state, 'digest', changed)
+    with pytest.raises(OSError, match='changed'):
+        resolution.resolved_view(sources, target.parent, views)
+
+
+@pytest.mark.parametrize('change', ['rewrite', 'replace'])
+def test_cold_view_revalidates_after_hardlink_writes_before_publication(tmp_path, monkeypatch, change):
+    sources, _source, target, views = resolved_view_fixture(tmp_path)
+    original = resolution.os.link
+    def changed(source, destination):
+        original(source, destination)
+        if change == 'rewrite':
+            target.write_text('>Plant_species_gene1\nATGCCCTAA\n')
+        else:
+            replacement = tmp_path / 'replacement'
+            replacement.write_bytes(target.read_bytes())
+            replacement.replace(target)
+    monkeypatch.setattr(resolution.os, 'link', changed)
+    with pytest.raises(ValueError, match='changed while creating view'):
+        resolution.resolved_view(sources, target.parent, views)
+    assert not list(views.iterdir())
+
+
+def test_cold_view_keeps_valid_physical_aliases_and_unresolved_inputs(tmp_path):
+    sources = tmp_path / 'sources'
+    sources.mkdir()
+    source = sources / 'Species_one.fa'
+    source.write_text('>gene\nATGAAATAA\n')
+    os.link(source, sources / 'Species_two.fa')
+    view = resolution.resolved_view(sources, tmp_path / 'no-resolution', tmp_path / 'views')
+    assert sorted(path.name for path in view.iterdir()) == ['Species_one.fa', 'Species_two.fa']
+    assert all(os.path.samefile(path, source) for path in view.iterdir())
+
+
+@pytest.mark.parametrize('change', ['extra', 'symlink-member', 'symlink-root', 'concurrent-extra'])
+def test_view_rejects_unrecorded_members_and_redirects(tmp_path, monkeypatch, change):
+    sources, _source, target, views = resolved_view_fixture(tmp_path)
+    if change == 'concurrent-extra':
+        def competing_view(staged, destination):
+            shutil.copytree(staged, destination)
+            (destination / 'Unexpected_species.fa').write_text('>extra\nATGAAATAA\n')
+            raise FileExistsError('another publisher won')
+        monkeypatch.setattr(resolution.os, 'rename', competing_view)
+    else:
+        view = resolution.resolved_view(sources, target.parent, views)
+        if change == 'extra':
+            (view / 'Unexpected_species.fa').write_text('>extra\nATGAAATAA\n')
+        elif change == 'symlink-member':
+            member = view / target.name
+            member.unlink()
+            member.symlink_to(target)
+        else:
+            moved = tmp_path / 'redirected'
+            view.rename(moved)
+            view.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(ValueError, match='CDS.*view'):
+        resolution.resolved_view(sources, target.parent, views)
 
 
 def test_phase_is_constraint_and_padding_does_not_mask_stops():
@@ -191,16 +289,17 @@ def test_negative_strand_reference_and_explicit_fragment_order(tmp_path):
     assert resolution.extract_genomic_candidates(traits, genome) == {'g': 'ATGTAA'}
 
 
-def test_resolution_traits_are_bound_to_exact_selected_sequence(tmp_path):
+@pytest.mark.parametrize('indexed', [False, True])
+def test_resolution_traits_are_bound_to_exact_selected_sequence(tmp_path, indexed):
     from gff2genestat import apply_cds_resolution
     fasta, gff, ref = inputs(tmp_path)
     output, traits_path, _ = resolution.resolve(fasta, gff, ref, tmp_path / 'resolved')
     traits = pd.read_csv(traits_path, sep='\t')
     records = list(resolution.fasta_records(output))
-    apply_cds_resolution(traits, records, output.parent)
+    apply_cds_resolution(traits, records, output.parent, tmp_path / 'table-cache' if indexed else None)
     assert traits.iloc[0].structure_status == 'sequence_verified'
     records[0] = (records[0][0], records[0][1], 'ATGCCCTAA')
-    apply_cds_resolution(traits, records, output.parent)
+    apply_cds_resolution(traits, records, output.parent, tmp_path / 'table-cache' if indexed else None)
     assert traits.iloc[0].structure_status == 'sequence_not_coordinate_matched'
     assert pd.isna(traits.iloc[0].feature_size)
 

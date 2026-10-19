@@ -31,6 +31,7 @@ DEFAULT_INPUT_RELATIVE_DIRS = {
     "dictybase": Path("dictyBase") / "species_wise_original",
     "insectbase": Path("InsectBase") / "species_wise_original",
     ORYZA_MINUTA_PROVIDER: Path("OryzaMinuta") / "species_wise_original",
+    "onekp": Path("OneKP") / "species_wise_original",
     "direct": Path("Direct") / "species_wise_original",
     "local": Path("Local") / "species_wise_original",
 }
@@ -61,6 +62,7 @@ PROVIDERS = (
     "dictybase",
     "insectbase",
     ORYZA_MINUTA_PROVIDER,
+    "onekp",
     "direct",
     "local",
 )
@@ -89,6 +91,7 @@ DOWNLOAD_MANIFEST_SUPPORTED_PROVIDERS = (
     "dictybase",
     "insectbase",
     ORYZA_MINUTA_PROVIDER,
+    "onekp",
     "direct",
     "local",
 )

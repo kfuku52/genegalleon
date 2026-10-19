@@ -139,6 +139,9 @@ exact input hashes; ordinary input-generation reference checks remain unchanged.
 Direct/local CDS downloads retain model identity from structured CoGe headers;
 the transport provider does not replace the CoGe model ID with the species name.
 Malformed structured CDS identities and identifier sanitization collisions fail.
+JGI GeneCatalog names also retain their portal and numeric protein identity when
+CDS inputs arrive through direct/local transport or carry a previous species
+prefix. Grouping uses that complete JGI namespace; conflicting matches still fail.
 For supplied CDS, an explicit RNA-to-gene Parent remains usable when its GFF
 omits CDS blocks; this does not invent missing genomic coding coordinates.
 
@@ -171,6 +174,60 @@ consistent exon/UTR coordinates on that reference. Missing or conflicting
 evidence remains an error. Every correction is recorded in the repair audit.
 Overlap rescue also preserves distinct declared gene-shaped `Parent` identities
 such as `499.g7` when the corresponding gene rows are absent.
+
+A self-parented gene/RNA export can use the RNA's distinct `Name` in child
+`Parent` fields. Safe/strict repair recovers that explicit RNA ID only with one
+gene/RNA model, an unused unique name, and supporting CDS children inside the
+RNA on the same contig and strand. Only the RNA ID changes; its original ID is
+retained in attributes and the locus-identity audit. Ambiguous names, shared
+children, collisions and inconsistent geometry remain unresolved.
+
+### Sequence-supported UTR coordinate curation
+
+An erroneous source UTR can be curated explicitly with
+`workflow/support/curate_gff_utr_coordinates.py`. This is separate from automatic
+safe formatting. Supply the original GFF, genome, published CDS and independently
+supplied full transcript FASTA; CDS and transcript records must use the exact
+RNA ID. The tool requires unique RNA/UTR identities, consistent CDS phases,
+complete stop-free coding sequence, exact genome/exon/RNA agreement and one
+contiguous CDS occurrence in that RNA. Every proposed UTR interval must equal
+the resulting strand-aware exon projection. Missing, shared, partial or
+contradictory evidence fails without publishing a corrected GFF.
+
+The proposal JSON binds the compressed-or-plain GFF SHA-256 and exact source
+line, feature ID and coordinates:
+
+```json
+{"schema_version":1,"gff_sha256":"SOURCE_SHA256","changes":[
+  {"line":123,"transcript_id":"tx1","feature_id":"tx1.utr3p1",
+   "old_start":100,"old_end":900,"new_start":801,"new_end":900}
+]}
+```
+
+Run in the GeneGalleon container:
+
+```bash
+python workflow/support/curate_gff_utr_coordinates.py \
+  --gff original.gff.gz --genome genome.fa.gz --cds published_cds.fa.gz \
+  --transcripts published_transcripts.fa.gz --proposal corrections.json \
+  --outfile corrected.gff.gz --audit corrected.gff.gz.curation.json
+```
+
+Only the proposed UTR coordinate columns change. CDS sequence files and all
+CDS, exon, RNA and gene rows remain intact. The audit retains input hashes,
+sequence proof, original/proposed coordinates and the output hash. Outputs must
+be new paths. Preserve the original dataset and frozen plans, publish the audit
+with the corrected input, and use a new ordinary input-generation plan with
+unchanged strict validation before adopting the result.
+
+Complementary or inconsistent numeric phase fields can be canonicalized for a
+partial terminal codon as well as a complete CDS. The proof requires one exact
+genomic model, a declared first phase of zero and no internal translation stop.
+An independently supplied CDS can also correct a contradictory first phase when
+it matches that entire genomic CDS and only frame zero has a valid translation.
+Shared, ordered, exceptional, nonnumeric or mismatched models are not corrected.
+Coordinates and all source CDS bases stay intact; ordinary terminal padding,
+partial-model status and the original decision remain visible in the CDS audit.
 
 For a gene/exon-only GFF supplied with a genome and published CDS, safe/strict
 formatting can reconstruct coding bounds when gene, exon-parent and CDS IDs
@@ -347,6 +404,11 @@ Family expression matrices also read the first column as literal gene IDs,
 preserving leading zeros and IDs such as `NA`, `NULL`, and `nan`. Numeric trait
 columns retain their normal type inference and missing-value handling.
 
+Family workflows reuse typed row indexes under `workspace/.gg_cache/trait_tables`
+for expression and resolved CDS tables. Each retrieval verifies source and index
+content, preserving duplicate rows and source order. Direct helper calls can opt
+in with `--table-cache PATH`; a first query pays the index construction cost.
+
 Minimal example:
 
 ```tsv
@@ -506,6 +568,16 @@ same detected or declared factor levels and reference coding.
   - by default, GeneGalleon appends `amalgkit_sra_strategy_query` to keep transcriptome-oriented SRA strategies (`RNA-seq`, `EST`, `CLONE`); set that variable empty or broaden it if you intentionally need other strategies
 - `mode_transcriptome_assembly="fastq"`
   - input: `workspace/input/species_rnaseq/GENUS_SPECIES/*.fastq.gz`
+  - accepts regular files and readable absolute or relative symlinks to regular
+    FASTQ files at that directory's first level; hidden files and nested files
+    are excluded. Broken, unreadable or non-file FASTQ links stop discovery.
+    External link targets must also be visible inside the execution container.
+    Metadata provenance hashes each physical FASTQ target and records its input
+    basename. Link retargeting or a changed FASTQ inventory during metadata
+    generation stops publication; ordinary directory-provenance checks stay strict.
+    Launchers can source the core with `GG_CORE_SOURCE_ONLY=1` and call
+    `discover_native_fastq_files INPUT_DIRECTORY` inside that same container to
+    qualify the exact discovery path without starting analysis.
 - `mode_transcriptome_assembly="metadata"`
   - input: `workspace/input/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
   - for a reviewed cohort within the same workspace, set
@@ -523,6 +595,35 @@ For `mode_transcriptome_assembly="sraid"` and `mode_transcriptome_assembly="fast
 - `workspace/output/transcriptome_assembly/amalgkit_metadata/GENUS_SPECIES_metadata.tsv`
 
 This keeps `workspace/input/amalgkit_metadata` reserved for explicit `mode_transcriptome_assembly="metadata"` inputs.
+
+For separate acquisition and assembly hosts, the frozen-package runner
+`workflow/support/transcriptome_read_preparation.py` runs the native metadata
+workflow with only getfastq enabled, then repeats it with acquisition disabled
+to verify the persistent cache. It qualifies the exact metadata/RUN set inside
+the selected container and audits native completion with the same cache mounts.
+Its receipt reports read preparation; it does not certify assembly or expression
+analysis. Transfer the verified cache separately before starting assembly.
+
+If cleanup failed after getfastq completed, the same runner's
+`--recover-source-job-id ORIGINAL_ARRAY_ID` mode verifies existing reads in a
+separate Slurm allocation. Run it after the source allocation has terminated.
+It audits native provenance, selected metadata/RUNs, preprocessing parameters
+and the container's current cache index without starting acquisition or assembly.
+A new receipt records its verification `job_id` and the original `source_job_id`
+separately; an already valid original receipt is preserved. Artifact readiness
+does not change the source allocation's failed exit status.
+
+Completed scratch is moved to a private sibling while its active lock is held,
+then the lock is closed before deletion. This avoids an open lock becoming an
+undeletable `.nfs` file. A failed retirement/deletion retains the affected tree
+and propagates the error; persistent read caches remain outside that tree.
+
+Quant reference aliases preserve the capitalization of metadata `scientific_name`
+and follow AMALGKIT's filename-token rules, including an explicit `species_token`
+when supplied. Metadata names do not need to be lowercased. Species-key and
+TaxID validation still checks that every reference alias belongs to the selected
+species. `quant/reference_aliases.tsv` records the actual staged prefix; merge
+uses a temporary metadata table that groups validated aliases under that species.
 
 ### Automated provider formatting helper
 
@@ -677,6 +778,10 @@ Notes:
   corresponding GFF CDS boundaries and recompute standard GFF3 phases. Genome
   sequence and downloaded sources remain unchanged. This runs independently of
   `GG_INPUT_RUN_GENE_MODEL_RESCUE`, including provided and GFF-derived CDS,
+- a uniquely bound CDS model with complementary or inconsistent numeric phase
+  fields is converted to standard GFF3 phases under the genomic sequence and
+  coding-frame proof described above. This phase-only correction preserves
+  bases, coordinates and IDs, and is recorded separately from sequence changes,
 - `*.fa.gz.cds-normalisation.json` records source/output SHA-256 hashes,
   translation code, corrections, GFF coordinate changes and unresolved records.
   Translation exceptions, pseudogenes, ambiguous phase conventions and
@@ -746,6 +851,27 @@ python workflow/support/format_species_inputs.py \
 ```
 
 Manifest required columns:
+
+For 1KP, use `provider=onekp`, the original four-letter sample code as `id`,
+and an explicit curated `species_key` when a published name has changed. The
+resolver uses the official CNGB sample index and downloads the published
+`CODE-translated-nucleotides.fa.gz` CDS. It records the reported species and
+sample code in the resolved manifest, rejects flagged or unknown sample identities,
+and keeps translated proteins separate from nucleotide inputs. An explicit
+`cds_input_type=transcriptome` selects `CODE-SOAPdenovo-Trans-assembly.fa.gz` and sends
+it through the native audited ORF extractor. This is useful when the published
+translated CDS set is incomplete. The four-letter 1KP sample `id` is sufficient;
+the planner accepts it without requiring a redundant explicit `cds_url`, and
+staging verifies the sample through the official provider resolver.
+There is no automatic source switch after a
+validation failure; the input kind and source remain frozen in the manifest/plan.
+When a new plan changes a species from supplied CDS to transcriptome input,
+that species is computed afresh; verified compatible species in `resume_from`
+can still be reused. Changed donor files, plans and source identities remain errors.
+When input validation is required, donor formatting without a current validation
+checkpoint or a verified worker completion is recomputed from its original inputs.
+This avoids carrying an intermediate result from a failed validator into a new plan.
+Explicit local/public `cds_url` values remain supported for verified sources.
 
 - `provider` (required; first column in XLSX templates)
 - `id` (required; second column in XLSX templates)
@@ -1071,3 +1197,12 @@ Gene-ID repair checks collisions against every GFF feature type, including
 alignment evidence. It retains only proposed source and target IDs; unrelated
 feature IDs do not accumulate in memory. This requires a second annotation
 pass and preserves the same conservative collision decisions.
+
+A separately qualified `metadata-cached-assembly` package consumes a transferred
+native getfastq cache. The handoff must bind the source preparation receipt,
+completion/file SHA contracts, exact selected metadata and native file identity
+index. It keeps metadata retrieval, public read acquisition and quantification
+disabled, and runs native assembly, longest CDS, statistics and
+`embryophyta_odb12` BUSCO. The native workflow retains its full cache validation
+and resume behavior. A changed transfer index or missing native result proof
+prevents an assembly completion receipt.

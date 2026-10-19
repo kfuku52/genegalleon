@@ -91,15 +91,24 @@ disable_if_no_matching_input_file() {
 
 check_if_species_files_unique() {
   local species_dir=$1
+  local file_type=${2:-all}
   local files=()
   local file
-  shopt -s nullglob dotglob
-  for file in "${species_dir}"/*; do
-    [[ -f "${file}" ]] || continue
-    [[ "$(basename "${file}")" == .* ]] && continue
-    files+=( "${file}" )
-  done
-  shopt -u nullglob dotglob
+  case "${file_type}" in
+    fasta)
+      while IFS= read -r file; do files+=( "${file}" ); done < <(gg_find_fasta_files "${species_dir}" 1)
+      ;;
+    all)
+      shopt -s nullglob dotglob
+      for file in "${species_dir}"/*; do
+        [[ -f "${file}" ]] || continue
+        [[ "$(basename "${file}")" == .* ]] && continue
+        files+=( "${file}" )
+      done
+      shopt -u nullglob dotglob
+      ;;
+    *) echo "Unknown species file type: ${file_type}" >&2; return 1 ;;
+  esac
   local num_sp=${#files[@]}
   local sp_names=()
   local file_base
@@ -181,7 +190,7 @@ gg_prepare_cmd_runtime() {
 	gg_workspace_layout_resolved=$(gg_resolve_workspace_layout "${gg_workspace_dir_local}")
 	gg_workspace_input_dir=$(workspace_input_root "${gg_workspace_dir_local}")
 	gg_workspace_output_dir=$(workspace_output_root "${gg_workspace_dir_local}")
-	gg_workspace_downloads_dir=$(workspace_downloads_root "${gg_workspace_dir_local}")
+	gg_workspace_downloads_dir=$(workspace_downloads_root "${gg_workspace_dir_local}") || return 1
 	export gg_workspace_layout_resolved gg_workspace_input_dir gg_workspace_output_dir gg_workspace_downloads_dir
 	: "${CSUBST_CACHE_DIR:=${gg_workspace_downloads_dir}/csubst}"
 	: "${HF_HOME:=${gg_workspace_downloads_dir}/huggingface}"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +59,49 @@ def normalize_species_prefix(value: object) -> str:
     if label != "":
         return label
     return text.replace("/", "_").replace("\\", "_").replace(" ", "_")
+
+
+def amalgkit_species_prefix(scientific_name: object, species_token: object = "") -> str:
+    """Mirror AMALGKIT's case-preserving token contract, without taxonomic parsing.
+
+    Runtime tests compare this boundary with amalgkit.runtime_utils so its
+    filename rules can evolve independently of GeneGalleon's species keys.
+    """
+    explicit = str(species_token or "").strip()
+    text = explicit or str(scientific_name or "").strip()
+    if not text or text in {".", ".."} or re.search(r"[/\\\x00-\x1f\x7f]", text):
+        raise SpeciesAliasError("AMALGKIT species token must be a safe path component: {!r}".format(text))
+    if explicit:
+        if re.fullmatch(r"[0-9A-Za-z._-]+", explicit) is None:
+            raise SpeciesAliasError("AMALGKIT species_token must contain only ASCII letters, digits, '.', '_' or '-'")
+        return explicit
+    token = re.sub(r"[^0-9A-Za-z._-]+", "_", text)
+    token = re.sub(r"_+", "_", token).strip("_.")
+    if not token:
+        raise SpeciesAliasError("AMALGKIT scientific_name-derived token must not be empty: {!r}".format(text))
+    return token
+
+
+def amalgkit_species_prefixes(rows: list[Mapping[str, object]]) -> dict[str, str]:
+    """Resolve metadata tokens and reject conflicting or colliding output names."""
+    prefixes = {}
+    species_by_token = {}
+    for row in rows:
+        name = str(row.get("scientific_name", "") or "").strip()
+        if not name:
+            continue
+        prefix = amalgkit_species_prefix(name, row.get("species_token", ""))
+        previous_prefix = prefixes.get(name)
+        if previous_prefix is not None and previous_prefix != prefix:
+            raise SpeciesAliasError("Scientific name has conflicting species_token values: {!r}".format(name))
+        previous_name = species_by_token.get(prefix.casefold())
+        if previous_name is not None and previous_name != name:
+            raise SpeciesAliasError(
+                "Scientific names resolve to colliding AMALGKIT species tokens: {!r}, {!r}".format(previous_name, name)
+            )
+        prefixes[name] = prefix
+        species_by_token[prefix.casefold()] = name
+    return prefixes
 
 
 def metadata_declared_species_taxid(row: Mapping[str, object]) -> str:

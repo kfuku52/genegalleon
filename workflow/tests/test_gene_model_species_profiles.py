@@ -89,3 +89,51 @@ def test_cached_genome_mutation_during_use_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="cache changed"):
         with catalog.indexed_genome(source) as genome:
             Path(genome.filename.decode()).write_text(">chr\nATGCCCTAA\n")
+
+
+@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('warm', [False, True])
+@pytest.mark.parametrize('change', ['rewrite', 'replace', 'delete'])
+def test_index_source_changes_are_rejected_in_cold_and_warm_scopes(tmp_path, monkeypatch, compressed, warm, change):
+    import gzip
+    source = tmp_path / ('source.fa.gz' if compressed else 'source.fa')
+    data = b'>chr\nATGAAATAA\n'
+    source.write_bytes(gzip.compress(data) if compressed else data)
+    monkeypatch.setenv('GG_GENOME_INDEX_CACHE', str(tmp_path / 'cache'))
+    if warm:
+        with catalog.indexed_genome(source):
+            pass
+    with pytest.raises(OSError, match='Genome source changed'):
+        with catalog.indexed_genome(source) as indexed:
+            assert indexed.fetch('chr') == 'ATGAAATAA'
+            if change == 'rewrite':
+                source.write_bytes(gzip.compress(data.replace(b'AAA', b'CCC')) if compressed else data.replace(b'AAA', b'CCC'))
+            elif change == 'replace':
+                replacement = tmp_path / 'replacement'
+                replacement.write_bytes(source.read_bytes())
+                replacement.replace(source)
+            else:
+                source.unlink()
+
+
+@pytest.mark.parametrize('boundary', ['build', 'hash-outputs'])
+def test_index_source_is_fenced_before_publication(tmp_path, monkeypatch, boundary):
+    import rescue_gene_models as rescue
+
+    source = tmp_path / 'source.fa'
+    source.write_bytes(b'>chr\nATGAAATAA\n')
+    cache = tmp_path / 'cache'
+    monkeypatch.setenv('GG_GENOME_INDEX_CACHE', str(cache))
+    owner, name = (catalog, 'create_index') if boundary == 'build' else (rescue, 'hash_outputs')
+    original = getattr(owner, name)
+    def changed(*a, **kw):
+        result = original(*a, **kw)
+        replacement = tmp_path / 'replacement'
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+        return result
+    monkeypatch.setattr(owner, name, changed)
+    with pytest.raises(OSError, match='Genome source changed'):
+        with catalog.indexed_genome(source):
+            pytest.fail('changed source reached the index consumer')
+    assert not [path for path in cache.glob('*/receipt.json') if not path.parent.name.endswith('.failed')]

@@ -4,7 +4,65 @@ from threading import Event
 
 import pytest
 
-from workflow.support.parallel_io import bounded_results
+from workflow.support.parallel_io import bounded_results, ordered_bounded_results
+
+
+@pytest.mark.parametrize('limit', [1, 8])
+def test_ordered_results_bound_completed_work_behind_slow_first_task(limit):
+    release, filled = Event(), Event()
+    consumed = []
+    def arguments():
+        for value in range(100):
+            consumed.append(value)
+            if len(consumed) == limit:
+                filled.set()
+            yield (value,)
+    def worker(value):
+        if value == 0:
+            assert release.wait(10)
+        return value
+    with ThreadPoolExecutor(max_workers=4) as pool, ThreadPoolExecutor(max_workers=1) as consumer:
+        results = ordered_bounded_results(pool, worker, arguments(), limit)
+        first = consumer.submit(next, results)
+        try:
+            assert filled.wait(10)
+            assert consumed == list(range(limit))
+            assert not first.done()
+        finally:
+            release.set()
+        assert [first.result(timeout=10), *results] == list(range(100))
+
+
+def test_ordered_close_cancels_pending_work_without_consuming_remainder():
+    pool = ManualExecutor()
+    arguments = iter((value,) for value in range(100))
+    results = ordered_bounded_results(pool, lambda value: value, arguments, 4)
+    assert next(results) == 0
+    results.close()
+    assert len(pool.futures) == 4
+    assert all(future.cancelled() for future in pool.futures[1:])
+    assert next(arguments) == (4,)
+
+
+def test_ordered_worker_error_cancels_pending_work():
+    pool = ManualExecutor()
+    def fail(_value):
+        raise RuntimeError('alignment failed')
+    with pytest.raises(RuntimeError, match='alignment failed'):
+        list(ordered_bounded_results(pool, fail, ((value,) for value in range(100)), 4))
+    assert len(pool.futures) == 4
+    assert all(future.cancelled() for future in pool.futures[1:])
+
+
+def test_ordered_argument_error_cancels_already_submitted_work():
+    pool = ManualExecutor()
+    def arguments():
+        yield (0,)
+        yield (1,)
+        raise ValueError('invalid pair')
+    with pytest.raises(ValueError, match='invalid pair'):
+        list(ordered_bounded_results(pool, lambda value: value, arguments(), 4))
+    assert pool.futures[1].cancelled()
 
 
 @pytest.mark.parametrize('limit', [1, 4])

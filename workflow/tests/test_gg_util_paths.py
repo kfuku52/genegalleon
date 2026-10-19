@@ -58,6 +58,39 @@ def run_bash(cmd: str, cwd: Path):
     )
 
 
+def test_shared_download_cache_is_explicit_and_rejects_aliases(tmp_path):
+    cache = tmp_path / "assets"
+    cache.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(cache, target_is_directory=True)
+    source = f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+    default = run_bash(source + 'workspace_downloads_root /workspace', tmp_path)
+    assert default.returncode == 0
+    assert default.stdout.strip() == "/workspace/downloads"
+    shared = run_bash(source + f"GG_COMMON_DOWNLOADS_ROOT={shlex.quote(str(cache))}; "
+                      'workspace_downloads_root /workspace/one; workspace_downloads_root /workspace/two', tmp_path)
+    assert shared.returncode == 0, shared.stderr
+    assert shared.stdout.splitlines() == [str(cache), str(cache)]
+    for path in ("relative", "/", str(tmp_path / "missing"), str(alias), str(alias / ".." / "alias"), str(cache) + "/"):
+        result = run_bash(source + f"GG_COMMON_DOWNLOADS_ROOT={shlex.quote(path)}; workspace_downloads_root /workspace", tmp_path)
+        assert result.returncode != 0, path
+        assert result.stdout == ""
+
+
+def test_shared_download_cache_is_forwarded_to_both_container_engines(tmp_path):
+    cache = tmp_path / "assets"
+    cache.mkdir()
+    # Exercise the common-variable forwarding path used by real entrypoints.
+    command = (f"source {shlex.quote(str(GG_UTIL_PATH))}; "
+               f"GG_COMMON_DOWNLOADS_ROOT={shlex.quote(str(cache))}; "
+               f'gg_workspace_dir={shlex.quote(str(tmp_path))}; gg_workflow_dir={shlex.quote(str(WORKFLOW_DIR))}; gg_container_image_path={shlex.quote(str(GG_UTIL_PATH))}; '
+               'gg_configure_task_tmp_mount() { :; }; set_singularityenv; '
+               'printf "%s\\n" "${APPTAINERENV_GG_COMMON_DOWNLOADS_ROOT}" "${SINGULARITYENV_GG_COMMON_DOWNLOADS_ROOT}"')
+    result = run_bash(command, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-2:] == [str(cache), str(cache)]
+
+
 @pytest.mark.parametrize("cache_enabled", [True, False])
 def test_transcriptome_cache_bind_survives_container_runtime_reset(tmp_path, cache_enabled):
     entrypoint = (WORKFLOW_DIR / "gg_transcriptome_generation_entrypoint.sh").read_text()
@@ -2504,6 +2537,31 @@ def test_check_if_species_files_unique_ignores_hidden_files(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert "Species files are unique in" in completed.stdout
+
+
+@pytest.mark.parametrize("suffix", [".fa", ".fa.gz", ".fna"])
+def test_species_fasta_uniqueness_keeps_audits_and_rejects_real_duplicates(tmp_path, suffix):
+    directory = tmp_path / "species_cds"
+    directory.mkdir()
+    data = b">Arabidopsis_thaliana_gene1\nATGAAATAA\n"
+    fasta = directory / ("Arabidopsis_thaliana" + suffix)
+    fasta.write_bytes(gzip.compress(data) if suffix.endswith(".gz") else data)
+    audit = directory / (fasta.name + ".cds-normalisation.json")
+    audit.write_text('{"source_sha256":"retained"}\n')
+    grouping = directory / "Arabidopsis_thaliana.grouping.tsv"
+    grouping.write_text("source_gene\toutput_gene\ngene1\tgene1\n")
+    before = {p.name: p.read_bytes() for p in directory.iterdir()}
+    command = f"source {shlex.quote(str(GG_UTIL_PATH))}; check_if_species_files_unique {shlex.quote(str(directory))} fasta"
+    passed = run_bash(command, cwd=tmp_path)
+    assert passed.returncode == 0, passed.stdout + passed.stderr
+    assert "scientific name unique: 1 and 1" in passed.stdout
+    assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
+    legacy = run_bash(command.removesuffix(" fasta"), cwd=tmp_path)
+    assert legacy.returncode != 0 and "not unique" in legacy.stdout
+    duplicate = directory / "Arabidopsis_thaliana_duplicate.fasta"
+    duplicate.write_bytes(data)
+    failed = run_bash(command, cwd=tmp_path)
+    assert failed.returncode != 0 and "not unique" in failed.stdout
 
 
 def test_gg_find_fasta_files_excludes_hidden_files(tmp_path):

@@ -84,6 +84,63 @@ fi
 # Named stage functions for gg_transcriptome_generation_core.sh.
 # This file is sourced by workflow/core/gg_transcriptome_generation_core.sh.
 
+discover_native_fastq_files() {
+  # Shared by analysis and container-side launch qualification. Validate the
+  # complete shallow inventory before publishing any paths to the caller.
+  python - "$1" "${2:-files}" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+try:
+    mode = sys.argv[2]
+    if mode not in {'files', 'provenance'}:
+        raise ValueError(f"Unknown FASTQ discovery output mode: {mode}")
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"FASTQ input directory must be a physical directory: {root}")
+    selected = []
+    provenance = []
+    for path in sorted(root.iterdir()):
+        if path.name.startswith('.') or not path.name.endswith(('.fq', '.fastq', '.fq.gz', '.fastq.gz')):
+            continue
+        if '\n' in str(path) or '\r' in str(path):
+            raise ValueError(f"FASTQ input path contains a line break: {path!s}")
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode):
+            if path.is_symlink():
+                raise ValueError(f"FASTQ input symlink does not resolve to a regular file: {path}")
+            continue
+        if not os.access(path, os.R_OK):
+            raise ValueError(f"FASTQ input is not readable in the current runtime: {path}")
+        with path.open('rb') as handle:
+            handle.read(1)
+        selected.append(str(path))
+        if mode == 'provenance':
+            target = str(path.resolve(strict=True))
+            if '\n' in target or '\r' in target:
+                raise ValueError(f"FASTQ target path contains a line break: {target!s}")
+            index = len(selected)
+            provenance.extend(('--input', f'fastq_{index}={target}',
+                               '--parameter', f'fastq_name_{index}={path.name}'))
+except (OSError, ValueError) as exc:
+    print(f"Native FASTQ input discovery failed: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+for value in selected if mode == 'files' else provenance:
+    print(value)
+PY
+}
+
+validate_native_fastq_provenance_bindings() {
+  local actual
+  actual=$(discover_native_fastq_files "$1" provenance) || return $?
+  if [[ "${actual}" != "$2" ]]; then
+    echo "Native FASTQ input bindings changed during metadata generation; provenance was not published." >&2
+    return 1
+  fi
+}
+
 resolve_busco_lineage_for_current_species() {
   if [[ -n "${busco_lineage_resolved}" ]]; then
     return 0
@@ -610,6 +667,7 @@ if reference_suffix == "":
 sys.path.insert(0, str(support_dir))
 from transcriptome_species_aliases import (
     SpeciesAliasError,
+    amalgkit_species_prefixes,
     metadata_declared_species_taxid,
     normalize_species_prefix,
     validate_species_alias,
@@ -626,39 +684,47 @@ if metadata_path.exists() and metadata_path.stat().st_size > 0:
             metadata_rows = [row for row in reader if str(row.get("scientific_name", "") or "").strip()]
 
 if not metadata_rows:
-    metadata_rows = [{"scientific_name": canonical_prefix_normalized.replace("_", " ")}]
+    metadata_rows = [{"scientific_name": canonical_prefix.replace("_", " ")}]
 
 if canonical_prefix_normalized == "":
     raise SystemExit("Could not determine quant reference prefix for species_key: {}".format(canonical_prefix))
 
 resolutions = []
 resolution_by_prefix = {}
+resolution_by_name_taxid = {}
+declared_taxid_by_prefix = {}
 try:
+    # Species identity is validated with normalized labels/TaxIDs; AMALGKIT
+    # discovers references using its separate, case-preserving metadata token.
+    metadata_prefixes = amalgkit_species_prefixes(metadata_rows)
     for row in metadata_rows:
         declared_taxid = metadata_declared_species_taxid(row)
-        resolution = validate_species_alias(
-            canonical_prefix,
-            row.get("scientific_name", ""),
-            taxonomy_dbfile=taxonomy_dbfile,
-            declared_taxid=declared_taxid,
-        )
-        previous = resolution_by_prefix.get(resolution.metadata_prefix)
-        if previous is not None:
-            if (
-                previous.declared_taxid
-                and resolution.declared_taxid
-                and previous.declared_taxid != resolution.declared_taxid
-            ):
+        metadata_name = str(row.get("scientific_name", "") or "").strip()
+        resolution_key = (metadata_name, declared_taxid)
+        resolution = resolution_by_name_taxid.get(resolution_key)
+        if resolution is None:
+            resolution = validate_species_alias(
+                canonical_prefix,
+                metadata_name,
+                taxonomy_dbfile=taxonomy_dbfile,
+                declared_taxid=declared_taxid,
+            )
+            resolution_by_name_taxid[resolution_key] = resolution
+        metadata_prefix = metadata_prefixes[resolution.metadata_scientific_name]
+        if declared_taxid:
+            previous_taxid = declared_taxid_by_prefix.setdefault(metadata_prefix, declared_taxid)
+            if previous_taxid != declared_taxid:
                 raise SpeciesAliasError(
                     "Metadata has inconsistent species taxids for {!r}: {!r} and {!r}".format(
                         resolution.metadata_scientific_name,
-                        previous.declared_taxid,
-                        resolution.declared_taxid,
+                        previous_taxid,
+                        declared_taxid,
                     )
                 )
+        if metadata_prefix in resolution_by_prefix:
             continue
-        resolution_by_prefix[resolution.metadata_prefix] = resolution
-        resolutions.append(resolution)
+        resolution_by_prefix[metadata_prefix] = resolution
+        resolutions.append((metadata_prefix, resolution))
 except SpeciesAliasError as exc:
     raise SystemExit(str(exc))
 
@@ -757,9 +823,9 @@ def materialize_regular_alias(alias_path):
 
 
 audit_rows = []
-for resolution in resolutions:
+for metadata_prefix, resolution in resolutions:
     alias_path = output_dir / "{}_for_kallisto_index{}".format(
-        resolution.metadata_prefix,
+        metadata_prefix,
         reference_suffix,
     )
     materialize_regular_alias(alias_path)
@@ -768,7 +834,7 @@ for resolution in resolutions:
             "canonical_species_key": resolution.canonical_prefix,
             "canonical_scientific_name": resolution.canonical_scientific_name,
             "metadata_scientific_name": resolution.metadata_scientific_name,
-            "metadata_prefix": resolution.metadata_prefix,
+            "metadata_prefix": metadata_prefix,
             "declared_taxid": resolution.declared_taxid,
             "resolved_taxid": resolution.resolved_taxid,
             "resolution_method": resolution.method,
@@ -824,6 +890,8 @@ if not support_dir.exists():
 sys.path.insert(0, str(support_dir))
 from transcriptome_species_aliases import (
     SpeciesAliasError,
+    amalgkit_species_prefix,
+    amalgkit_species_prefixes,
     metadata_declared_species_taxid,
     validate_species_alias,
 )
@@ -838,14 +906,26 @@ with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
     rows = list(reader)
 
 try:
+    amalgkit_species_prefixes(rows)
+    resolution_by_name_taxid = {}
     for row in rows:
-        resolution = validate_species_alias(
-            canonical_prefix,
-            row.get("scientific_name", ""),
-            taxonomy_dbfile=taxonomy_dbfile,
-            declared_taxid=metadata_declared_species_taxid(row),
-        )
+        metadata_name = str(row.get("scientific_name", "") or "").strip()
+        declared_taxid = metadata_declared_species_taxid(row)
+        resolution_key = (metadata_name, declared_taxid)
+        resolution = resolution_by_name_taxid.get(resolution_key)
+        if resolution is None:
+            resolution = validate_species_alias(
+                canonical_prefix,
+                metadata_name,
+                taxonomy_dbfile=taxonomy_dbfile,
+                declared_taxid=declared_taxid,
+            )
+            resolution_by_name_taxid[resolution_key] = resolution
         row["scientific_name"] = resolution.canonical_scientific_name
+        if "species_token" in fieldnames:
+            # Merge intentionally collapses aliases onto one species; its token
+            # must follow the staged name rather than each quant reference.
+            row["species_token"] = amalgkit_species_prefix(resolution.canonical_scientific_name)
 except SpeciesAliasError as exc:
     raise SystemExit(str(exc))
 
@@ -868,44 +948,32 @@ resolve_amalgkit_merge_output_prefix() {
   local metadata_file=$1
   local merge_dir=$2
   local canonical_prefix=$3
+  local support_dir=${4:-${gg_support_dir:-}}
 
-  python - "${metadata_file}" "${merge_dir}" "${canonical_prefix}" <<'PY'
+  python - "${metadata_file}" "${merge_dir}" "${canonical_prefix}" "${support_dir}" <<'PY'
 import csv
-import re
 import sys
 from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
 merge_dir = Path(sys.argv[2])
 canonical_prefix = sys.argv[3]
+support_dir = Path(sys.argv[4])
+sys.path.insert(0, str(support_dir))
+from transcriptome_species_aliases import SpeciesAliasError, amalgkit_species_prefix, amalgkit_species_prefixes
 
-def normalize_prefix(raw_value):
-    text = str(raw_value or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"\s+", "_", text)
-    text = text.replace("/", "_").replace("\\", "_")
-    return text
-
-canonical_prefix_normalized = normalize_prefix(canonical_prefix)
-metadata_prefixes = []
-seen_prefixes = set()
-
-def add_metadata_prefix(raw_value):
-    prefix = normalize_prefix(raw_value)
-    if (not prefix) or (prefix in seen_prefixes):
-        return
-    seen_prefixes.add(prefix)
-    metadata_prefixes.append(prefix)
+metadata_rows = []
 
 if metadata_path.exists() and metadata_path.stat().st_size > 0:
     with metadata_path.open("rt", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        fieldnames = reader.fieldnames or []
-        candidate_fields = ["scientific_name"] if "scientific_name" in fieldnames else []
-        for row in reader:
-            for fieldname in candidate_fields:
-                add_metadata_prefix(row.get(fieldname, ""))
+        metadata_rows = list(reader)
+
+try:
+    canonical_prefix_normalized = amalgkit_species_prefix(canonical_prefix)
+    metadata_prefixes = list(dict.fromkeys(amalgkit_species_prefixes(metadata_rows).values()))
+except SpeciesAliasError as exc:
+    raise SystemExit(str(exc))
 
 if len(metadata_prefixes) > 1:
     raise SystemExit(
@@ -986,6 +1054,7 @@ import pathlib
 import re
 import shutil
 import sys
+import tempfile
 import time
 
 root = pathlib.Path(sys.argv[1])
@@ -1053,16 +1122,28 @@ for candidate, _, _, size, files in sorted(entries, key=lambda item: (-item[2], 
     kept_bytes += size
     kept_files += files
 
+closed = set()
 try:
     for candidate, fd, newest, _, _ in entries:
         expired = cutoff is not None and newest < cutoff
         excess = limited and candidate not in keep
         if expired or excess:
-            shutil.rmtree(candidate)
+            # Unlinking our own open lock creates a .nfs file on NFS. Move the
+            # exclusively held tree away first, then close before deleting it.
+            retired = pathlib.Path(tempfile.mkdtemp(prefix=".gg-tmp-retire-", dir=root))
+            retired.chmod(0o700)
+            candidate.rename(retired / "scratch")
+            os.close(fd)
+            closed.add(fd)
+            shutil.rmtree(retired)
             print("Removed expired transcriptome scratch: {}".format(candidate))
-        os.close(fd)
+        else:
+            os.close(fd)
+            closed.add(fd)
 finally:
     for _, fd, _, _, _ in entries:
+        if fd in closed:
+            continue
         try:
             os.close(fd)
         except OSError:
@@ -1092,6 +1173,27 @@ release_transcriptome_tmp_lock() {
     eval "exec ${transcriptome_tmp_lock_fd}>&-" 2>/dev/null || true
     transcriptome_tmp_lock_fd=""
   fi
+}
+
+retire_transcriptome_tmp() {
+  python - "${dir_tmp}" "${transcriptome_tmp_root}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+import tempfile
+
+source, root = (pathlib.Path(value) for value in sys.argv[1:])
+if (not source.is_absolute() or source.is_symlink() or not source.is_dir()
+        or source.parent != root or root.is_symlink() or not root.is_dir()
+        or not re.fullmatch(r'[0-9]+_.+', source.name)
+        or source.stat().st_uid != os.getuid()):
+    raise SystemExit('Refusing an unsafe transcriptome scratch retirement')
+retired = pathlib.Path(tempfile.mkdtemp(prefix='.gg-tmp-retire-', dir=root))
+retired.chmod(0o700)
+source.rename(retired / 'scratch')
+print(retired)
+PY
 }
 
 write_getfastq_cache_contract() {
@@ -3751,7 +3853,11 @@ if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
   dir_species_fastq="${dirs[${id}]}"
   sp_ub="$(basename "${dir_species_fastq}")"
   files_fastq=()
-  mapfile -t files_fastq < <(find "${dir_species_fastq}" -maxdepth 1 -type f ! -name '.*' \( -name "*.fq" -o -name "*.fastq" -o -name "*.fq.gz" -o -name "*.fastq.gz" \) | sort)
+  native_fastq_listing=$(discover_native_fastq_files "${dir_species_fastq}") || exit 1
+  if [[ -n "${native_fastq_listing}" ]]; then
+    mapfile -t files_fastq <<< "${native_fastq_listing}"
+  fi
+  unset native_fastq_listing
   echo "Input fastq directory: ${dir_species_fastq}"
   echo "Species: ${sp_ub}"
   printf 'Input fastq files: %s\n' "${files_fastq[*]}"
@@ -3878,7 +3984,9 @@ gg_artifact_contract_init metadata_provenance_args "transcriptome_metadata" "${s
 if [[ "${selected_transcriptome_mode}" == "sraid" ]]; then
   metadata_provenance_args+=(--input "sra_list=${file_input_sra_list}")
 elif [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
-  metadata_provenance_args+=(--input "fastq_directory=${dir_species_fastq}")
+  native_fastq_metadata_bindings=$(discover_native_fastq_files "${dir_species_fastq}" provenance) || exit $?
+  mapfile -t native_fastq_metadata_inputs <<< "${native_fastq_metadata_bindings}"
+  metadata_provenance_args+=("${native_fastq_metadata_inputs[@]}")
 fi
 metadata_provenance_args+=(
   --output "metadata=${file_amalgkit_metadata}"
@@ -3960,6 +4068,9 @@ if [[ "${selected_transcriptome_mode}" != "metadata" && ${metadata_needs_update}
     exit 1
   fi
 
+  if [[ "${selected_transcriptome_mode}" == "fastq" ]]; then
+    validate_native_fastq_provenance_bindings "${dir_species_fastq}" "${native_fastq_metadata_bindings}" || exit $?
+  fi
   gg_artifact_record "${metadata_provenance_args[@]}"
 
   echo "$(date): End: ${task}"
@@ -5235,7 +5346,8 @@ if [[ ${merge_needs_update} -eq 1 && ${run_amalgkit_merge} -eq 1 ]]; then
   if merge_output_prefix=$(resolve_amalgkit_merge_output_prefix \
     "${merge_metadata_file}" \
     "./merge" \
-    "${sp_ub}"); then
+    "${sp_ub}" \
+    "${gg_support_dir}"); then
     merge_output_dir="./merge/${merge_output_prefix}"
     echo "Copying amalgkit merge outputs from: ${merge_output_dir}"
     mv_out "${merge_output_dir}/${merge_output_prefix}_eff_length.tsv" "${file_amalgkit_merge_efflen}"
@@ -5389,7 +5501,10 @@ fi
 if [[ ${delete_tmp_dir} -eq 1 ]]; then
   echo "delete_tmp_dir=1: Normal completion. Deleting ${dir_tmp}"
   if [[ -n "${dir_tmp:-}" && "${dir_tmp}" != "/" ]]; then
-    rm -rf -- "${dir_tmp}"
+    cd "${transcriptome_tmp_root}"
+    retired_transcriptome_tmp=$(retire_transcriptome_tmp) || exit 1
+    release_transcriptome_tmp_lock
+    rm -rf -- "${retired_transcriptome_tmp}"
   else
     echo "Refusing to delete unsafe tmp directory: '${dir_tmp:-}'"
   fi

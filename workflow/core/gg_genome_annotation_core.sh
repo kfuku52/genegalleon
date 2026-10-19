@@ -15,7 +15,17 @@ gg_source_common_params_from_core "${BASH_SOURCE[0]:-$0}"
 busco_lineage="${busco_lineage:-${GG_COMMON_BUSCO_LINEAGE:-auto}}"
 genetic_code="${genetic_code:-${GG_COMMON_GENETIC_CODE:-1}}"
 representative_inputs="${representative_inputs:-${GG_COMMON_REPRESENTATIVE_INPUTS:-}}"
-genome_annotation_backend="${genome_annotation_backend:-none}"
+genome_annotation_backend="${genome_annotation_backend:-oriongeno}"
+oriongeno_model_profile="${oriongeno_model_profile:-auto}"
+oriongeno_taxid_map="${oriongeno_taxid_map:-}"
+oriongeno_genome_metadata="${oriongeno_genome_metadata:-}"
+oriongeno_taxonomy_db="${oriongeno_taxonomy_db:-}"
+oriongeno_source_ref="${oriongeno_source_ref:-}"
+oriongeno_python="${oriongeno_python:-}"
+oriongeno_checkpoint="${oriongeno_checkpoint:-}"
+oriongeno_source_commit="${oriongeno_source_commit:-}"
+oriongeno_no_download="${oriongeno_no_download:-0}"
+oriongeno_batch_size="${oriongeno_batch_size:-1}"
 annevo_model_profile="${annevo_model_profile:-Magnoliopsida}"
 annevo_taxid_map="${annevo_taxid_map:-}"
 annevo_genome_metadata="${annevo_genome_metadata:-}"
@@ -108,17 +118,32 @@ resolve_species_file() {
 gg_validate_genome_annotation_backend() {
   case "${genome_annotation_backend}" in
     none) return 0 ;;
-    annevo) ;;
-    *) echo "genome_annotation_backend must be none or annevo." >&2; return 1 ;;
+    annevo|oriongeno) ;;
+    *) echo "genome_annotation_backend must be none or annevo or oriongeno." >&2; return 1 ;;
   esac
   if [[ -n "${representative_inputs}" ]]; then
-    echo "ANNEVO prediction cannot replace a verified representative_inputs view." >&2
+    echo "${genome_annotation_backend} prediction cannot replace a verified representative_inputs view." >&2
     return 1
+  fi
+  if [[ "${genome_annotation_backend}" == oriongeno ]]; then
+    case "${oriongeno_model_profile}" in
+      auto|plants|mammals|birds|fish|other_vertebrates|arthropods|other_invertebrates|fungi) ;;
+      *) echo "Unsupported oriongeno_model_profile: ${oriongeno_model_profile}" >&2; return 1 ;;
+    esac
+    if [[ "${genetic_code}" != 1 || ! "${oriongeno_batch_size}" =~ ^[1-9][0-9]*$ || ( "${oriongeno_no_download}" != 0 && "${oriongeno_no_download}" != 1 ) ]]; then
+      echo "OrionGeno requires genetic_code=1, a positive batch size and no_download=0 or 1." >&2
+      return 1
+    fi
+    return 0
   fi
   case "${annevo_model_profile}" in
     auto|Magnoliopsida|Mammalia|Aves|Actinopteri|Insecta|Fungi) ;;
     *) echo "Unsupported annevo_model_profile: ${annevo_model_profile}" >&2; return 1 ;;
   esac
+  if [[ "${genetic_code}" != 1 ]]; then
+    echo "The qualified ANNEVO annotation/candidate pipeline requires genetic_code=1; received ${genetic_code}." >&2
+    return 1
+  fi
   if [[ "${annevo_no_download}" != 0 && "${annevo_no_download}" != 1 ]]; then
     echo "annevo_no_download must be 0 or 1." >&2
     return 1
@@ -164,9 +189,11 @@ gg_check_annevo_cds_directory() {
 gg_generate_annevo_annotation() {
   # The species lock also serializes publication and formatter checkpoints.
   # Everything is generated under output; curated input files remain intact.
-  local prediction_dir="${gg_workspace_output_dir}/genome_prediction/annevo/${sp_ub}"
-  local cache_root="${gg_workspace_downloads_dir}/annotation/annevo"
-  local selected_inputs="${dir_sp_tmp}/annevo.selected_inputs.tsv"
+  local prediction_label="ANNEVO"
+  [[ "${genome_annotation_backend}" != oriongeno ]] || prediction_label="OrionGeno"
+  local prediction_dir="${gg_workspace_output_dir}/genome_prediction/${genome_annotation_backend}/${sp_ub}"
+  local cache_root="${gg_workspace_downloads_dir}/annotation/${genome_annotation_backend}"
+  local selected_inputs="${dir_sp_tmp}/${genome_annotation_backend}.selected_inputs.tsv"
   local native_gff="${prediction_dir}/${sp_ub}.gff3"
   local native_receipt="${prediction_dir}/native_prediction.json"
   local runtime_receipt="${cache_root}/selected/${annevo_model_profile}.json"
@@ -182,15 +209,23 @@ gg_generate_annevo_annotation() {
     }
     trap cleanup_annevo_prediction_lock EXIT
     local resolved_profile="${annevo_model_profile}"
+    local taxid_map="${annevo_taxid_map}" genome_metadata="${annevo_genome_metadata}"
+    local taxonomy_db="${annevo_taxonomy_db}" no_download="${annevo_no_download}"
+    if [[ "${genome_annotation_backend}" == oriongeno ]]; then
+      resolved_profile="${oriongeno_model_profile}"
+      taxid_map="${oriongeno_taxid_map}"
+      genome_metadata="${oriongeno_genome_metadata}"
+      taxonomy_db="${oriongeno_taxonomy_db}"
+      no_download="${oriongeno_no_download}"
+    fi
     local selection_receipt="${prediction_dir}/model_selection.json"
     local -a selection_inputs=() selection_run_args=()
-    if [[ "${annevo_model_profile}" == auto ]]; then
-      local taxonomy_db="${annevo_taxonomy_db}"
+    if [[ "${resolved_profile}" == auto ]]; then
       local taxonomy_selection_lock=""
       if [[ -z "${taxonomy_db}" ]]; then
         taxonomy_db=$(workspace_taxonomy_dbfile "${gg_workspace_dir}") || exit $?
         taxonomy_selection_lock="${gg_workspace_downloads_dir}/locks/ete_taxonomy.lock"
-        if [[ ! -s "${taxonomy_db}" && "${annevo_no_download}" != 1 && ( -n "${annevo_taxid_map}" || -n "${annevo_genome_metadata}" ) ]]; then
+        if [[ ! -s "${taxonomy_db}" && "${no_download}" != 1 && ( -n "${taxid_map}" || -n "${genome_metadata}" ) ]]; then
           ensure_ete_taxonomy_db "${gg_workspace_dir}" || exit $?
         fi
       fi
@@ -199,7 +234,7 @@ gg_generate_annevo_annotation() {
         # Readers must wait for that existing writer, even if the file is nonempty.
         trap - EXIT
         if [[ -n "${taxonomy_selection_lock}" ]]; then
-          gg_shared_lock_acquire "${taxonomy_selection_lock}" "ANNEVO taxonomy snapshot" || exit 1
+          gg_shared_lock_acquire "${taxonomy_selection_lock}" "${prediction_label} taxonomy snapshot" || exit 1
           gg_shared_lock_start_heartbeat "${taxonomy_selection_lock}" || exit 1
           taxonomy_selection_heartbeat="${GG_SHARED_LOCK_HEARTBEAT_PID:-}"
           cleanup_annevo_taxonomy_selection_lock() {
@@ -209,8 +244,9 @@ gg_generate_annevo_annotation() {
           trap cleanup_annevo_taxonomy_selection_lock EXIT
         fi
         python "${gg_support_dir}/annevo_model_selection.py" \
+          --engine "${genome_annotation_backend}" \
           --species "${sp_ub}" --genome "${file_sp_genome}" --model-profile auto \
-          --taxid-map "${annevo_taxid_map}" --genome-metadata "${annevo_genome_metadata}" \
+          --taxid-map "${taxid_map}" --genome-metadata "${genome_metadata}" \
           --taxonomy-db "${taxonomy_db}" --output "${selection_receipt}"
       ) || exit $?
       resolved_profile=$(python - "${selection_receipt}" <<'PYPROFILE'
@@ -224,26 +260,42 @@ PYPROFILE
       runtime_receipt="${prediction_dir}/runtime.json"
       selection_inputs=(--input "model_selection=${selection_receipt}")
       selection_run_args=(--selection-receipt "${selection_receipt}" --species "${sp_ub}")
-    elif [[ "${resolved_profile}" != Magnoliopsida ]]; then
+    elif [[ "${genome_annotation_backend}" == annevo && "${resolved_profile}" != Magnoliopsida ]]; then
       runtime_receipt="${prediction_dir}/runtime.json"
     fi
-    local -a prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
-    [[ -z "${annevo_runtime_manifest}" ]] || prepare_args+=(--runtime-manifest "${annevo_runtime_manifest}")
-    [[ "${annevo_no_download}" != 1 ]] || prepare_args+=(--no-download)
-    python "${gg_support_dir}/annevo_runtime.py" "${prepare_args[@]}" || exit $?
+    local runner="${gg_support_dir}/annevo_runtime.py"
+    local batch_size="${annevo_batch_size}"
+    local -a prepare_args=() native_args=()
+    if [[ "${genome_annotation_backend}" == oriongeno ]]; then
+      runner="${gg_support_dir}/oriongeno_runtime.py"
+      batch_size="${oriongeno_batch_size}"
+      runtime_receipt="${cache_root}/selected/${resolved_profile}.json"
+      prepare_args=(prepare --cache-root "${cache_root}/${resolved_profile}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
+      [[ -z "${oriongeno_source_ref}" ]] || prepare_args+=(--source-ref "${oriongeno_source_ref}")
+      [[ -z "${oriongeno_python}" ]] || prepare_args+=(--python "${oriongeno_python}" --source-commit "${oriongeno_source_commit}")
+      [[ -z "${oriongeno_checkpoint}" ]] || prepare_args+=(--checkpoint "${oriongeno_checkpoint}")
+      [[ "${oriongeno_no_download}" != 1 ]] || prepare_args+=(--no-download)
+      native_args=("${selection_run_args[@]}")
+    else
+      prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
+      [[ -z "${annevo_runtime_manifest}" ]] || prepare_args+=(--runtime-manifest "${annevo_runtime_manifest}")
+      [[ "${annevo_no_download}" != 1 ]] || prepare_args+=(--no-download)
+      native_args=(--model-profile "${resolved_profile}" --sequence-threshold "${annevo_sequence_threshold}" "${selection_run_args[@]}")
+    fi
+    python "${runner}" "${prepare_args[@]}" || exit $?
 
     local prediction_needs_update=0
     local run_annevo_prediction=1
     local -a prediction_provenance_args=()
-    gg_artifact_contract_init prediction_provenance_args "genome_annotation_annevo_prediction" "${sp_ub}" "${prediction_dir}/prediction.provenance.json"
+    gg_artifact_contract_init prediction_provenance_args "genome_annotation_${genome_annotation_backend}_prediction" "${sp_ub}" "${prediction_dir}/prediction.provenance.json"
     prediction_provenance_args+=(
       --input "genome=${file_sp_genome}"
       --input "runtime_receipt=${runtime_receipt}"
-      --input "runner=${gg_support_dir}/annevo_runtime.py"
+      --input "runner=${runner}"
       --output "gff=${native_gff}"
       --output "native_receipt=${native_receipt}"
       --parameter "model_profile=${resolved_profile}"
-      --parameter "batch_size=${annevo_batch_size}"
+      --parameter "batch_size=${batch_size}"
       --parameter "sequence_threshold=${annevo_sequence_threshold}"
       --parameter "threads=${GG_TASK_CPUS}"
       --parameter "require_gpu=1"
@@ -251,19 +303,19 @@ PYPROFILE
     prediction_provenance_args+=("${selection_inputs[@]}")
     gg_artifact_prepare_stage prediction_needs_update run_annevo_prediction "${prediction_provenance_args[@]}" || exit $?
     if [[ ${prediction_needs_update} -eq 1 ]]; then
-      gg_step_start "ANNEVO native genome prediction"
-      python "${gg_support_dir}/annevo_runtime.py" run \
+      gg_step_start "${prediction_label} native genome prediction"
+      python "${runner}" run \
         --receipt "${runtime_receipt}" --genome "${file_sp_genome}" --output "${native_gff}" \
-        --model-profile "${resolved_profile}" --threads "${GG_TASK_CPUS}" \
-        --batch-size "${annevo_batch_size}" --sequence-threshold "${annevo_sequence_threshold}" \
-        --output-receipt "${native_receipt}" "${selection_run_args[@]}" || exit $?
+        --threads "${GG_TASK_CPUS}" --batch-size "${batch_size}" \
+        --output-receipt "${native_receipt}" "${native_args[@]}" || exit $?
       gg_artifact_record "${prediction_provenance_args[@]}" || exit $?
     else
-      gg_step_skip "ANNEVO native genome prediction"
+      gg_step_skip "${prediction_label} native genome prediction"
     fi
 
-    python "${gg_support_dir}/annevo_gene_models.py" --species "${sp_ub}" \
+    python "${gg_support_dir}/annevo_gene_models.py" --engine "${genome_annotation_backend}" --species "${sp_ub}" \
       --genome "${file_sp_genome}" --gff "${native_gff}" --receipt "${native_receipt}" \
+      --genetic-code "${genetic_code}" \
       --output "${prediction_dir}/candidate_inputs.tsv" || exit $?
 
     local format_key
@@ -272,7 +324,7 @@ PYPROFILE
     local format_needs_update=0
     local run_annevo_format=1
     local -a format_provenance_args=()
-    gg_artifact_contract_init format_provenance_args "genome_annotation_annevo_format" "${sp_ub}" "${prediction_dir}/format.provenance.json"
+    gg_artifact_contract_init format_provenance_args "genome_annotation_${genome_annotation_backend}_format" "${sp_ub}" "${prediction_dir}/format.provenance.json"
     format_provenance_args+=(
       --input "genome=${file_sp_genome}" --input "gff=${native_gff}" --input "native_receipt=${native_receipt}"
       --output "formatted=${format_dir}" --parameter "generation=${format_key}"
@@ -365,7 +417,7 @@ dir_mmseqs2_db="${gg_workspace_downloads_dir}/mmseqs2"
 dir_tmp="${gg_workspace_output_dir}/tmp"
 
 infiles=()
-if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+if [[ "${genome_annotation_backend}" != "none" ]]; then
   if [[ ! -d "${dir_sp_genome}" ]]; then
     echo "Genome input directory not found: ${dir_sp_genome}. Exiting." >&2
     exit 1
@@ -393,7 +445,7 @@ if [[ ${task_index} -lt 0 || ${task_index} -ge ${#infiles[@]} ]]; then
 fi
 file_annotation_input="${infiles[${task_index}]}"
 file_sp_cds="${file_annotation_input}"
-[[ "${genome_annotation_backend}" != "annevo" ]] || file_sp_cds=""
+[[ "${genome_annotation_backend}" == "none" ]] || file_sp_cds=""
 sp_ub=$(gg_species_name_from_path "${file_annotation_input}")
 if [[ -n "${file_representative_genetic_code}" ]]; then
   genetic_code=$(python - "${file_representative_genetic_code}" "${sp_ub}" <<'PY'
@@ -418,7 +470,7 @@ file_orthogroup="${gg_workspace_output_dir}/orthofinder/Orthogroups/Orthogroups.
 file_sp_expression="$(resolve_species_file "${gg_workspace_input_dir}/species_expression" "${sp_ub}" "expression")"
 file_sp_gff="$(resolve_species_file "${dir_sp_gff}" "${sp_ub}" "gff")"
 file_sp_genome="$(resolve_species_file "${dir_sp_genome}" "${sp_ub}" "genome")"
-if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+if [[ "${genome_annotation_backend}" != "none" ]]; then
   file_sp_genome="${file_annotation_input}"
 fi
 file_sp_subphaser_cfg="$(resolve_species_file "${gg_workspace_input_dir}/species_genome_subphaser_cfg" "${sp_ub}" "subphaser cfg")"
@@ -472,7 +524,7 @@ ensure_dir "${dir_sp_tmp}"
 cd "${dir_sp_tmp}"
 ensure_dir "${dir_tmp}"
 species_cds_validation_inputs=("${infiles[@]}")
-if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+if [[ "${genome_annotation_backend}" != "none" ]]; then
   gg_generate_annevo_annotation || exit $?
   species_cds_validation_inputs=("${file_sp_cds}")
 fi
@@ -508,10 +560,10 @@ if [[ ! -s "${species_cds_validation_stamp}" ]]; then
     trap cleanup_species_cds_validation_lock EXIT
     if [[ ! -s "${species_cds_validation_stamp}" ]]; then
       check_species_cds_dir "${dir_sp_cds%/}/."
-      if [[ "${genome_annotation_backend}" == "annevo" ]]; then
+      if [[ "${genome_annotation_backend}" != "none" ]]; then
         gg_check_annevo_cds_directory || exit 1
       else
-        check_if_species_files_unique "${dir_sp_cds%/}/."
+        check_if_species_files_unique "${dir_sp_cds%/}/." fasta
       fi
       printf '%s\n' "${species_cds_validation_signature}" > "${species_cds_validation_stamp}"
     fi

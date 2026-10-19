@@ -14,7 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import pandas
-from hgt_species_tree import read_species_tree
+from hgt_species_tree import event_species_branch, read_species_tree
 from plot_hgt_summary import DEFAULT_TRANSFER_ARROW_ALPHA, validate_transfer_arrow_alpha
 from species_trait_contract import select_foreground_traits
 from species_trait_schema import schema_path, schema_payload, trait_value_types
@@ -25,7 +25,8 @@ EVENT_REQUIRED = {"event_id", "orthogroup", "generax_transfer", "generax_donor_n
 LINK_REQUIRED = {"event_id", "orthogroup", "gene_id", "gene_species", "side", "eligible_for_context"}
 FOCUS_FIELDS = ["focus_trait", "focus_category", "focus_recipient_basis", "focus_ancestral_state_inferred"]
 PAIR_FIELDS = ["generax_donor_node", "generax_recipient_node", "event_count", "orthogroup_count",
-               "event_ids", "orthogroups", "donor_clade_tip_labels", "recipient_clade_tip_labels"]
+               "event_ids", "orthogroups", "donor_clade_tip_labels", "recipient_clade_tip_labels",
+               "analysis_donor_node", "analysis_recipient_node"]
 
 
 def digest(path):
@@ -137,9 +138,13 @@ def add_clade_labels(events, fields, nodes):
             if name not in fields:
                 fields.append(name)
         for event in events:
-            tips = nodes.get(key(event[f"generax_{side}_node"]), ())
+            tips = nodes.get(event_species_branch(event, side), ())
             if not tips:
                 continue
+            if event.get(f'analysis_{side}_node') and event.get(f'{side}_descendant_species'):
+                observed = {key(tip) for tip in event[f'{side}_descendant_species'].split(';') if tip.strip()}
+                if observed != set(tips):
+                    raise ValueError('Mapped event descendants disagree with the analysis species tree')
             if f"{side}_clade_tip_labels" in event:
                 existing = {key(tip) for tip in event[f"{side}_clade_tip_labels"].split(";") if tip.strip()}
                 if existing != set(tips):
@@ -186,10 +191,12 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
         counts[f"{side}_gene_count"] = len({gene_id for _, gene_id in genes})
     pairs = defaultdict(list)
     for row in events:
-        pairs[(row["generax_donor_node"], row["generax_recipient_node"])].append(row)
+        pairs[(row["generax_donor_node"], row["generax_recipient_node"],
+               event_species_branch(row, 'donor'), event_species_branch(row, 'recipient'))].append(row)
     pair_rows = []
-    for (donor, recipient), group in sorted(pairs.items()):
+    for (donor, recipient, analysis_donor, analysis_recipient), group in sorted(pairs.items()):
         pair_rows.append(dict(generax_donor_node=donor, generax_recipient_node=recipient,
+                              analysis_donor_node=analysis_donor, analysis_recipient_node=analysis_recipient,
                               event_count=len(group), orthogroup_count=len({r["orthogroup"] for r in group}),
                               event_ids="; ".join(sorted(r["event_id"] for r in group)),
                               orthogroups="; ".join(sorted({r["orthogroup"] for r in group})),
@@ -197,7 +204,8 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
                               recipient_clade_tip_labels=group[0]["recipient_clade_tip_labels"]))
     write_tsv(directory / "branch_pairs.tsv", PAIR_FIELDS, pair_rows)
     summary = dict(event_count=len(events), direct_event_count=len(direct), ancestral_recipient_event_count=len(ancestral),
-                   orthogroup_count=len({row["orthogroup"] for row in events}), branch_pair_count=len(pairs), **counts)
+                   orthogroup_count=len({row["orthogroup"] for row in events}),
+                   branch_pair_count=len({pair[2:] for pair in pairs}), **counts)
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if plots:
         from plot_hgt_summary import plot_transfer_tree
@@ -213,8 +221,8 @@ def export_bundle(directory, events, fields, links, link_fields, trait, trait_ta
 def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
                 context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
-                mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='any', species_taxonomy='', taxonomy_dbfile='',
-                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5):
+                mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='off', species_taxonomy='', taxonomy_dbfile='',
+                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules='', uniprot_fasta=''):
     from focus_hgt_pfam import (
         binary_option,
         validate_length_ratio,
@@ -227,12 +235,9 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     min_shared_pfam_coverage = validate_shared_pfam_coverage(min_shared_pfam_coverage)
     min_length_ratio = validate_length_ratio(min_length_ratio)
     pair_filter_enabled = require_shared_pfam or require_length_ratio
-    from focus_hgt_direction import DIRECTION_CHOICES
+    from focus_hgt_direction import DISABLED, validate_options
     from focus_hgt_direction import EVENT_FIELDS as DIRECTION_FIELDS
-    if direction_filter not in DIRECTION_CHOICES:
-        raise ValueError('Invalid focused HGT direction filter')
-    if direction_filter != 'any' and not species_taxonomy:
-        raise ValueError('Focused direction filtering requires existing species taxonomy')
+    validate_options(direction_filter, direction_rules, species_taxonomy)
     csv.field_size_limit(100_000_000)
     fields, events = read_tsv(event_path, EVENT_REQUIRED)
     link_fields, links = read_tsv(link_path, LINK_REQUIRED)
@@ -256,7 +261,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     for row in links:
         if str(row.get('eligible_for_context', '')).lower() in {'true', '1'}:
             event = events_by_id[row['event_id']]
-            branch = key(event[f"generax_{row['side']}_node"])
+            branch = event_species_branch(event, row['side'])
             species = key(row.get('gene_species', ''))
             if branch in nodes and species not in nodes[branch]:
                 raise ValueError('Eligible context gene is outside its species branch: ' + row['gene_id'])
@@ -318,9 +323,11 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
     audit_fields = output_fields
     pfam_cohort = cohort
     direction_report = {}
-    if direction_filter != 'any':
+    if direction_filter not in DISABLED:
         from focus_hgt_direction import filter_events as filter_direction
-        cohort, direction_events, branch_audit, taxonomy_sha = filter_direction(cohort, nodes, species_taxonomy, direction_filter)
+        direction_args = dict(direction_rules=direction_rules) if direction_filter == 'custom' else {}
+        cohort, direction_events, branch_audit, taxonomy_sha = filter_direction(
+            cohort, nodes, species_taxonomy, direction_filter, **direction_args)
         output_fields = output_fields + DIRECTION_FIELDS
         write_tsv(stage / 'direction_events.tsv', output_fields, cohort)
         write_tsv(stage / 'direction_event_audit.tsv', output_fields, direction_events)
@@ -330,6 +337,11 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                                 excluded_event_count=sum(r['direction_filter_status'] == 'excluded_direction' for r in direction_events),
                                 withheld_event_count=sum(r['direction_filter_status'] == 'withheld' for r in direction_events),
                                 species_taxonomy_sha256=taxonomy_sha, scope='after_pfam_before_trait_selection')
+        if direction_rules:
+            from focus_hgt_direction import read_rules
+            rules, rules_sha = read_rules(direction_rules)
+            direction_report['rules_sha256'] = rules_sha
+            (stage / 'direction_rules.json').write_text(json.dumps(rules, indent=2) + '\n')
     output_fields = output_fields + FOCUS_FIELDS
     traits, reports, audit = focused_traits(trait_path)
     trait_dirs = safe_names(traits)
@@ -355,7 +367,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         write_tsv(root / "species_branches.tsv", list(branch_rows[0]), branch_rows)
         selected, withheld = [], []
         for event in cohort:
-            donor, recipient = key(event["generax_donor_node"]), key(event["generax_recipient_node"])
+            donor, recipient = event_species_branch(event, 'donor'), event_species_branch(event, 'recipient')
             if donor not in nodes or recipient not in nodes:
                 reason = "species_branch_unmapped"
             elif event["generax_transfer"] != f"Y@{event['generax_donor_node']}@{event['generax_recipient_node']}":
@@ -376,20 +388,20 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             # Keep the existing per-trait audit paths as a view of global
             # decisions, including failed events whose recipients have trait=1.
             trait_ids = {r['event_id'] for r in domain_events
-                         if key(r['generax_recipient_node']) in selected_nodes}
+                         if event_species_branch(r, 'recipient') in selected_nodes}
             write_tsv(root / 'pfam_event_audit.tsv', audit_fields + FOCUS_FIELDS,
                       [dict(r, focus_trait=trait, focus_category='1', focus_ancestral_state_inferred='0',
                             focus_recipient_basis='observed_tip_category1'
-                            if key(r['generax_recipient_node']) in terminals
+                            if event_species_branch(r, 'recipient') in terminals
                             else 'all_descendant_tips_category1_no_ancestral_reconstruction')
                        for r in domain_events if r['event_id'] in trait_ids])
             write_tsv(root / 'pfam_pair_audit.tsv', pair_fields, [r for r in pairs if r['event_id'] in trait_ids])
             write_tsv(root / 'pfam_gene_audit.tsv', gene_fields, [r for r in genes if r['event_id'] in trait_ids])
             pfam_reports[trait] = dict(pfam_report, category1_input_event_count=len(trait_ids),
                                       category1_passed_event_count=sum(r['event_id'] in trait_ids for r in pfam_cohort))
-        if direction_filter != 'any':
+        if direction_filter not in DISABLED:
             write_tsv(root / 'direction_event_audit.tsv', output_fields,
-                      [r for r in direction_events if key(r['generax_recipient_node']) in selected_nodes])
+                      [r for r in direction_events if event_species_branch(r, 'recipient') in selected_nodes])
         aggregate = export_bundle(root / "all_category1", selected, output_fields, links, link_fields,
                                   trait, indicator, tree_path, plots, arrow_alpha=arrow_alpha, render_tree=False)
         if plots and gene_family_root:
@@ -397,7 +409,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
 
             sequence_options = {name: path for name, path in (
                 ('mmseqs2_taxonomy_dir', mmseqs2_taxonomy_dir), ('scaffold_taxonomy_dir', scaffold_taxonomy_dir),
-                ('taxonomy_dbfile', taxonomy_dbfile)) if path}
+                ('taxonomy_dbfile', taxonomy_dbfile), ('uniprot_fasta', uniprot_fasta)) if path}
             gene_trees[trait] = export_gene_trees(root / "all_category1/tree_plot", selected, links, gene_family_root,
                                                  gff_root=gff_root, context_annotations=context_annotations, **sequence_options)
             from focus_hgt_figures import export_figures
@@ -415,14 +427,14 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             figures[trait] = export_figures(root / 'all_category1/plots', events, figure_events,
                                             [r for r in links if r['event_id'] in ids], tree, values,
                                             gene_family_root, trait, filter_audit=filter_audit,
-                                            context_annotations=context_annotations,
+                                            context_annotations=context_annotations, uniprot_fasta=uniprot_fasta,
                                             pfam_selected=pfam_cohort if pair_filter_enabled else None,
                                             pair_filter_label=('Event-pair ' + ' & '.join(
                                                 ([f'Pfam >={100 * min_shared_pfam_coverage:g}% each query']
                                                  if require_shared_pfam else []) +
                                                 ([f'length ratio >={min_length_ratio:g}'] if require_length_ratio else [])))
                                             if pair_filter_enabled else None,
-                                            direction_selected=cohort if direction_filter != 'any' else None,
+                                            direction_selected=cohort if direction_filter not in DISABLED else None,
                                             direction_filter=direction_filter,
                                             analyzed_orthogroups=analyzed if not inventory_missing else None)
             figures[trait]['analysis_inventory_missing_event_families'] = inventory_missing
@@ -431,8 +443,8 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         target_dirs = safe_names(selected_nodes)
         for target in sorted(selected_nodes):
             terminal = target in terminals
-            selected_events = [row for row in selected if key(row["generax_recipient_node"]) == target
-                               or (terminal and target in nodes[key(row["generax_recipient_node"])])]
+            selected_events = [row for row in selected if event_species_branch(row, 'recipient') == target
+                               or (terminal and target in nodes[event_species_branch(row, 'recipient')])]
             destination = root / ("tips" if terminal else "internal_branches") / target_dirs[target]
             summary = export_bundle(destination, selected_events, output_fields, links, link_fields,
                                     trait, indicator, tree_path, plots, tip=target if terminal else None,
@@ -461,6 +473,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
         "Pfam uses saved query RPS-BLAST accessions, never best-hit or neighbor annotations. Missing records cannot pass the no-hit exception.\n"
         "Enabled Pfam/length requirements are applied together to each exact pair once over the shared input cohort, followed by the optional species-branch direction filter, then category-1 trait selection.\n"
         f"Species-branch direction filter: {direction_filter}.\n"
+        "Direction filtering is off by default (off; any remains an alias). custom uses hash-bound JSON donor/recipient selectors for taxonomy ranks, tip sets or exact branches.\n"
         "non_arthropoda_to_insecta requires all donor descendant tips outside Arthropoda and all recipient tips within Insecta.\n"
         "non_arthropoda_to_arthropoda instead requires all recipient descendant tips within Arthropoda. Taxonomy and trait are separate filtering-flow stages with their own event/orthogroup counts.\n"
         "Direction uses the analysis species tree and host-species taxonomy, never query MMseqs2 or best-hit proxies. Mixed, unknown and unmapped branches stay withheld.\n"
@@ -500,14 +513,14 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 direction_filter=direction_filter, shared_direction_filter=direction_report,
                 filtering_order=['input_cohort'] + (['pfam_pair_filter'] if require_shared_pfam
                                                     else ['protein_length_pair_filter'] if require_length_ratio else [])
-                + (['species_branch_direction_filter'] if direction_filter != 'any' else []) + ['trait_category1'])
+                + (['species_branch_direction_filter'] if direction_filter not in DISABLED else []) + ['trait_category1'])
 
 
 def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
              arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
              context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
-             mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='any', species_taxonomy='', taxonomy_dbfile='',
-             min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5):
+             mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='off', species_taxonomy='', taxonomy_dbfile='',
+             min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules='', uniprot_fasta=''):
     from focus_hgt_pfam import binary_option, validate_length_ratio, validate_shared_pfam_coverage
     require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
     require_length_ratio = binary_option(require_length_ratio, 'require_length_ratio')
@@ -516,15 +529,18 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     min_length_ratio = validate_length_ratio(min_length_ratio)
     arrow_alpha = validate_transfer_arrow_alpha(arrow_alpha)
     inputs = [Path(path).resolve() for path in (event_path, link_path, tree_path, trait_path)]
-    if direction_filter != 'any':
-        if not species_taxonomy:
-            raise ValueError('Focused direction filtering requires existing species taxonomy')
+    from focus_hgt_direction import validate_options
+    validate_options(direction_filter, direction_rules, species_taxonomy)
+    if direction_rules:
+        inputs.append(Path(direction_rules).resolve())
     if species_taxonomy:
         inputs.append(Path(species_taxonomy).resolve())
     if filter_audit and plots:
         inputs.append(Path(filter_audit).resolve())
     if context_annotations and plots and gene_family_root:
         inputs.append(Path(context_annotations).resolve())
+    if uniprot_fasta and plots and gene_family_root:
+        inputs.append(Path(uniprot_fasta).resolve())
     if taxonomy_dbfile and plots and gene_family_root:
         inputs.append(Path(taxonomy_dbfile).resolve())
     for suffix in (".schema.json", ".metadata.json"):
@@ -538,7 +554,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     if gene_family_root and plots:
         code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r', 'tree_plot_batch.r',
                                                 'focus_hgt_context.py', 'focus_hgt_context_annotations.py',
-                                                'focus_hgt_figures.py', 'gene_tree_plot_config.py', 'scaffold_taxonomy.py')]
+                                                'focus_hgt_figures.py', 'gene_tree_plot_config.py', 'scaffold_taxonomy.py',
+                                                'reformat_uniprot_diamond.py')]
         code += sorted((helper_root / "treevis/R").glob("*.R"))
     output = Path(output).absolute()
     # These directories are read inputs too. Replacing a managed report must
@@ -564,7 +581,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                min_shared_pfam_coverage=min_shared_pfam_coverage,
                                require_length_ratio=require_length_ratio, min_length_ratio=min_length_ratio,
                                scaffold_taxonomy_dir=scaffold_taxonomy_dir, direction_filter=direction_filter,
-                               species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile)
+                               species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile, direction_rules=direction_rules,
+                               uniprot_fasta=uniprot_fasta)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
         if any(digest(path) != code_before[path.name] for path in code):
@@ -604,6 +622,7 @@ def main():
     parser.add_argument("--gene_family_root", default="",
                         help="Existing raw/ZIP-backed family outputs for scaffold-supported category-1 gene-tree PDFs")
     parser.add_argument('--gff_info_root', default='', help='Existing per-species gff_info TSVs for context-page structures')
+    parser.add_argument('--uniprot_fasta', default='', help='Existing Swiss-Prot reference FASTA for missing saved best-hit protein names; never downloads or changes hit assignments')
     parser.add_argument('--context_annotations_tsv', default='',
                         help='Existing per-gene product and best-hit taxonomy annotations for context pages')
     parser.add_argument('--mmseqs2_taxonomy_dir', default='', help='Existing raw MMseqs2 focal classifications for origin review and context pages')
@@ -622,8 +641,9 @@ def main():
     parser.add_argument('--min_length_ratio', type=validate_length_ratio, default=0.5,
                         help='Inclusive shorter/longer protein length ratio for the same pair (fraction 0..1; default: 0.5)')
     from focus_hgt_direction import DIRECTION_CHOICES
-    parser.add_argument('--direction_filter', choices=DIRECTION_CHOICES, default='any',
+    parser.add_argument('--direction_filter', choices=DIRECTION_CHOICES, default='off',
                         help='Optional host-species branch direction filter, applied after exact-pair criteria and before trait selection')
+    parser.add_argument('--direction_rules', default='', help='JSON donor/recipient rules; requires --direction_filter custom')
     parser.add_argument('--species_taxonomy', default='', help='Existing species_taxonomy.tsv for direction filtering and focal origin review')
     parser.add_argument("--transfer_arrow_alpha", type=validate_transfer_arrow_alpha,
                         default=DEFAULT_TRANSFER_ARROW_ALPHA)
@@ -636,7 +656,7 @@ def main():
                         min_shared_pfam_coverage=args.min_shared_pfam_coverage,
                         require_length_ratio=args.require_length_ratio == '1', min_length_ratio=args.min_length_ratio,
                         scaffold_taxonomy_dir=args.scaffold_taxonomy_dir, taxonomy_dbfile=args.taxonomy_dbfile, direction_filter=args.direction_filter,
-                        species_taxonomy=args.species_taxonomy)
+                        species_taxonomy=args.species_taxonomy, direction_rules=args.direction_rules, uniprot_fasta=args.uniprot_fasta)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],
                           result_sets=len(manifest["result_index"])), indent=2))
 

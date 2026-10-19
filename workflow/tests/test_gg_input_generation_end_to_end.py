@@ -1,5 +1,6 @@
 import csv
 import gzip
+import hashlib
 import json
 import os
 import sqlite3
@@ -131,8 +132,12 @@ def _write_minimal_ete_taxonomy_db(workspace: Path) -> None:
         cur.executemany(
             "INSERT INTO species (taxid, spname, common, rank, track) VALUES (?, ?, ?, ?, ?)",
             [
-                (3702, "Arabidopsis thaliana", "", "species", "1,131567,2759,33090,35493,3700,3701,3702"),
-                (4530, "Oryza sativa", "", "species", "1,131567,2759,33090,35493,4527,4528,4530"),
+                (1, "root", "", "no rank", "1"),
+                (33090, "Viridiplantae", "", "kingdom", "33090,1"),
+                (3701, "Arabidopsis", "", "genus", "3701,33090,1"),
+                (4527, "Oryza", "", "genus", "4527,33090,1"),
+                (3702, "Arabidopsis thaliana", "", "species", "3702,3701,33090,1"),
+                (4530, "Oryza sativa", "", "species", "4530,4527,33090,1"),
             ],
         )
         cur.executemany(
@@ -351,7 +356,7 @@ def _install_fake_toolchain(root: Path) -> Path:
             (result_dir / "short_summary.txt").write_text(
                 "# BUSCO version is: fixture\\n"
                 f"# The lineage dataset is: {lineage} (Creation date: 2026-01-01)\\n"
-                "# BUSCO was run in mode: transcriptome\\n"
+                f"# BUSCO was run in mode: {parse('--mode', 'transcriptome')}\\n"
                 "C:100.0%[S:100.0%,D:0.0%],F:0.0%,M:0.0%,n:1\\n",
                 encoding="utf-8",
             )
@@ -456,9 +461,30 @@ def _core_env(
         "trait_species_source": "download_manifest",
         "trait_databases": "auto",
     }
+    # Parent plans and child workers must use the same explicitly selected
+    # Python dependencies, including separately qualified runtime extensions.
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
     if task_id is not None:
         env["GG_ARRAY_TASK_ID"] = str(task_id)
     return env
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_core_env_keeps_explicit_dependency_selection(tmp_path, monkeypatch, selected):
+    extension = tmp_path / "extension"
+    extension.mkdir()
+    (extension / "gg_fixture_dependency.py").write_text("VALUE = 'frozen'\n")
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    if selected:
+        monkeypatch.setenv("PYTHONPATH", str(extension))
+    env = _core_env(tmp_path, None, tmp_path / "fake", "single")
+    code = ("import importlib.util; "
+            "spec = importlib.util.find_spec('gg_fixture_dependency'); "
+            "print('base' if spec is None else 'frozen')")
+    result = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
+                            env=env, capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == ("frozen" if selected else "base")
 
 
 def _run_core(
@@ -988,6 +1014,135 @@ def test_array_cds_only_validates_and_completes_busco_with_native_receipts(tmp_p
     assert all(row["qc_status"] == "not_recorded" for row in _read_tsv_rows(root / "species_mapping_qc.tsv"))
 
 
+def test_array_cds_gff_without_optional_genomes_finalizes_with_native_receipts(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    for genome in input_dir.glob("*/*.genome.fa"):
+        genome.unlink()
+    workspace = tmp_path / "cds_gff_without_genomes"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    def run(mode, task_id=None):
+        env = _core_env(workspace, input_dir, fake_bin, mode, task_id, require_cds=True)
+        env.update(strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True, timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    for mode, index in (("array_prepare", None), ("array_worker", 1), ("array_worker", 2)):
+        run(mode, index)
+    root = workspace / "output/input_generation"
+    # Imported CDS/GFF-only workers need not create an unused genome directory.
+    optional = root / "species_genome"
+    if optional.exists():
+        optional.rmdir()
+    receipts = [json.loads((root / f"tmp/task_plan.json.completed/{i}.json").read_text())
+                for i in (1, 2)]
+    assert all(not any("/species_genome/" in path for path in receipt["files"]) for receipt in receipts)
+    for _ in range(2):
+        run("array_finalize")
+        for receipt in receipts:
+            assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha
+                       for path, sha in receipt["files"].items())
+    assert all(row["genome_output_path"] == "" for row in
+               _read_tsv_rows(root / "gg_input_generation_species.tsv"))
+    qc = _read_tsv_rows(root / "species_mapping_qc.tsv")
+    assert len(qc) == 2 and all(row["qc_status"] == "available" for row in qc)
+    assert (workspace / "output/species_taxonomy/species_taxonomy.tsv").is_file()
+
+
+@pytest.mark.parametrize("mode", ["single", "array"])
+def test_strict_mixed_optional_gff_inputs_validate_every_species(tmp_path: Path, mode):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    (input_dir / "Arabidopsis_thaliana/Arabidopsis_thaliana.gff").unlink()
+    for genome in input_dir.glob("*/*.genome.fa"):
+        genome.unlink()
+    workspace = tmp_path / "strict_mixed_roles"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    def run(phase, index=None, succeeds=True):
+        env = _core_env(workspace, input_dir, fake_bin, phase, index, require_cds=True)
+        env.update(strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True, timeout=180)
+        assert (result.returncode == 0) == succeeds, result.stdout + result.stderr
+        return result
+
+    root = workspace / "output/input_generation"
+    if mode == "array":
+        for phase, index in (("array_prepare", None), ("array_worker", 1), ("array_worker", 2)):
+            run(phase, index)
+        receipts = [json.loads((root / f"tmp/task_plan.json.completed/{i}.json").read_text()) for i in (1, 2)]
+        before = {path: (hashlib.sha256(Path(path).read_bytes()).hexdigest(), Path(path).stat().st_mtime_ns)
+                  for receipt in receipts for path in receipt["files"]}
+        for _ in range(2):
+            result = run("array_finalize")
+            assert before == {path: (hashlib.sha256(Path(path).read_bytes()).hexdigest(), Path(path).stat().st_mtime_ns)
+                              for path in before}
+    else:
+        result = run("single")
+    rows = _read_tsv_rows(root / "gg_input_generation_species.tsv")
+    assert len(rows) == 2
+    assert sum(bool(row["gff_output_path"]) for row in rows) == 1
+    assert not any(row["genome_output_path"] for row in rows)
+    assert (workspace / "output/species_taxonomy/species_taxonomy.tsv").is_file()
+    assert "Longest CDS validation summary: species_checked=2, species_passed=2" in result.stdout
+    assert "CDS-to-GFF mapping validation summary: species_checked=1, species_passed=1" in result.stdout
+    assert _read_tsv_rows(root / "gg_input_generation_runs.tsv")[-1]["stage_validate_status"] == "ok"
+    if mode == "array":
+        source = next((root / "species_gff").glob("*.gff.gz"))
+        (source.parent / "Orphan_extra.gff.gz").write_bytes(source.read_bytes())
+        failed = run("array_finalize", succeeds=False)
+        assert "Undeclared formatted GFF outputs" in failed.stderr
+
+
+def test_array_transcript_orf_audits_are_required_completion_outputs(tmp_path: Path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        _write_text(input_dir / species / f"{species}.cds.fa",
+                    ">forward\nCCCATGAAATAACCCC\n>reverse\nGGGGTTATTTCATGGG\n")
+    workspace = tmp_path / "transcript_orfs"
+    workspace.mkdir()
+    manifest = workspace / "transcripts.tsv"
+    with manifest.open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["provider", "id", "species_key", "cds_url", "cds_input_type"], delimiter="\t")
+        writer.writeheader()
+        for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+            writer.writerow(dict(provider="local", id=species, species_key=species,
+                                 cds_url=(input_dir / species / f"{species}.cds.fa").as_uri(),
+                                 cds_input_type="transcriptome"))
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    for mode, task_id in (("array_prepare", None), ("array_worker", 1),
+                          ("array_worker", 2), ("array_finalize", None)):
+        env = _core_env(workspace, None, fake_bin, mode, task_id, require_cds=True)
+        env.update(provider="all", download_manifest=str(manifest), download_dir=str(workspace / "downloads"),
+                   strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                                capture_output=True, text=True, timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+    plan = workspace / "output/input_generation/tmp/task_plan.json"
+    rows = _read_tsv_rows(workspace / "output/input_generation/gg_input_generation_species.tsv")
+    assert all(row["cds_input_type"] == "transcriptome" for row in rows)
+    for row in rows:
+        with gzip.open(row["cds_output_path"], "rt") as stream:
+            assert [line.strip() for line in stream if not line.startswith(">")] == ["ATGAAATAA", "ATGAAATAA"]
+    for index in (1, 2):
+        receipt = json.loads(Path(str(plan) + f".completed/{index}.json").read_text())
+        audits = [path for path in receipt["files"] if path.endswith(".orf-extraction.json")]
+        assert len(audits) == 1
+        assert json.loads(Path(audits[0]).read_text())["coordinate_system"] == "source transcript; not genomic"
+        command = [sys.executable, str(REPO_ROOT / "workflow/support/input_generation_array_state.py"),
+                   "verify", "--task-plan", str(plan), "--task-index", str(index)]
+        assert subprocess.run(command, capture_output=True).returncode == 0
+        Path(audits[0]).write_text("{}\n")
+        assert subprocess.run(command, capture_output=True).returncode != 0
+
+
 def test_gg_input_generation_missing_input_dirs_do_not_emit_find_errors(tmp_path: Path):
     workspace = tmp_path / "missing_inputs_workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -1376,3 +1531,30 @@ def test_failed_final_shared_stage_preserves_canonical_tables_and_frozen_species
     _run_core(workspace, None, fake_bin, "array_finalize")
     assert len(_read_tsv_rows(summary)) == 2
     assert len(_read_tsv_rows(resolved)) == 2
+
+
+def test_busco_failure_keeps_native_empty_predictions_and_exit_status(tmp_path):
+    input_dir = _write_direct_species_fixture(tmp_path)
+    workspace = tmp_path / 'failed_busco_workspace'
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+    _run_core(workspace, input_dir, fake_bin, 'array_prepare')
+    _write_text(fake_bin / 'busco', '#!/bin/bash\n'
+                'mkdir -p busco_tmp/run_eukaryota_odb12/metaeuk_output/initial_results\n'
+                ': > busco_tmp/run_eukaryota_odb12/metaeuk_output/initial_results/input.fasta.fas\n'
+                'exit 37\n', mode=0o755)
+    env = _core_env(workspace, input_dir, fake_bin, 'array_worker', 1)
+    result = subprocess.run(['bash', str(CORE_PATH)], cwd=REPO_ROOT, env=env,
+                            capture_output=True, text=True, timeout=180)
+    assert result.returncode == 37, result.stdout + result.stderr
+    root = workspace / 'output/input_generation'
+    records = list(root.glob('tmp/busco.*/failure-context.json'))
+    assert len(records) == 1
+    context = json.loads(records[0].read_text())
+    assert context['status'] == 'failed' and context['exit_code'] == 37
+    assert context['mode'] == 'transcriptome'
+    assert any(row['path'].endswith('.fas') and row['size'] == 0 for row in context['files'])
+    assert 'complete_percent' not in context
+    assert not list((root / 'species_cds_busco_short').glob('*.txt'))
+    assert not (root / 'tmp/task_plan.json.completed/1.json').exists()

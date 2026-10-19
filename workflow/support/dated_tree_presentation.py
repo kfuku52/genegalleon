@@ -285,7 +285,8 @@ def render_dated_tree(
             raise ValueError("A requested age label is not an internal clade in the tree.")
     nodes = list(tree.traverse())
     count = len(species)
-    ys = {leaf: count - 1 - order.index(leaf.name) for leaf in leaves}
+    ranks = {name: index for index, name in enumerate(order)}
+    ys = {leaf: count - 1 - ranks[leaf.name] for leaf in leaves}
     for node in tree.traverse(strategy="postorder"):
         if not node.is_leaf:
             ys[node] = (ys[node.children[0]] + ys[node.children[-1]]) / 2

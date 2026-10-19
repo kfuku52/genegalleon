@@ -5,8 +5,10 @@ from collections import defaultdict
 
 try:
     from format_species_annotation.common import parse_gff_attributes
+    from rescue_path_compatibility import protein_path_support
 except ImportError:
     from .format_species_annotation.common import parse_gff_attributes
+    from .rescue_path_compatibility import protein_path_support
 
 
 def coding_shape(model):
@@ -33,13 +35,18 @@ def coding_overlap(a, b):
     return shared, in_frame
 
 
-def compatible_paths(a, b):
+def compatible_paths(a, b, *, owners_a=(), owners_b=()):
+    # Similar proteins and shared exons cannot override distinct original loci.
+    if owners_a and owners_b and set(owners_a).isdisjoint(owners_b):
+        return False
     shared, in_frame = coding_overlap(a, b)
     shorter = min(sum(e - s for s, e, *_ in a['cds']), sum(e - s for s, e, *_ in b['cds']))
     # A complete sequence and donor provenance are required before a new path
     # can resolve a conflict. Bare coordinate records remain review proposals.
-    return (bool(a.get('sequence')) and bool(b.get('sequence')) and bool(alignment_support(a)) and bool(alignment_support(b)) and shorter > 0
-            and shared / shorter >= .80 and in_frame == shared)
+    if not (a.get('sequence') and b.get('sequence') and alignment_support(a) and alignment_support(b)
+            and shorter > 0 and shared > 0 and in_frame == shared):
+        return False
+    return shared / shorter >= .80 or protein_path_support(a, b)['supported']
 
 
 def overlap_components(models):
@@ -215,6 +222,177 @@ def path_rank(model, nearest=()):
     return len(donors & set(nearest)), len(donors), identity, coverage
 
 
+def transferred_support(model):
+    """A native predictor flag cannot erase a checked donor genomic mapping."""
+    evidence = model.get('support') or [model.get('evidence', {})]
+    return any(not (row.get('annevo') or row.get('oriongeno') or row.get('boundary_candidate')
+                   or row.get('retained_annotation_candidate'))
+               and alignment_support({**model, 'support': [row]}) for row in evidence)
+
+
+def _witnessed_retained_loci(rows):
+    """Preserve one verified producer's primary/alternative locus membership.
+
+    Alternatives must each agree with their freshly validated source primary.
+    Separate source loci stay separate, including nonoverlapping short paths
+    connected only by a longer isoform. True primary frame conflicts still fail.
+    Incomplete, mixed-generation or ambiguous witnesses use the strict resolver.
+    """
+    groups, generations = defaultdict(list), set()
+    for row in rows:
+        source = row['retained_coding_path']
+        loci = source.get('locus_model_ids', ())
+        if len(loci) != 1 or not source.get('source_directory') or not source.get('producer_receipt_sha256'):
+            return None
+        generations.add((source['source_directory'], source['producer_receipt_sha256'], source.get('history_depth', 0)))
+        groups[loci[0]].append(row)
+    if len(generations) != 1:
+        return None
+    primaries = []
+    for locus, members in groups.items():
+        primary = [row for row in members if locus in row['retained_coding_path'].get('primary_model_ids', ())
+                   and locus in row['retained_coding_path'].get('model_ids', ())]
+        if len(primary) != 1 or any(row is not primary[0] and not compatible_paths(row, primary[0]) for row in members):
+            return None
+        primaries.append(primary[0])
+    if any(coding_overlap(a, b)[0] and not compatible_paths(a, b)
+           for i, a in enumerate(primaries) for b in primaries[i + 1:]):
+        return None
+    return list(groups.values())
+
+
+def _coherent_retained_components(rows):
+    """Keep recent annotation anchors; older bridges remain explicit proposals."""
+    def coherent(group):
+        return all(compatible_paths(a, b) for i, a in enumerate(group) for b in group[i + 1:])
+
+    def hold(row, previous):
+        row['status'] = 'unresolved'
+        row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+        row['integration_conflict'] = {'disposition': 'retain_previous_validated_annotation',
+            'reason': 'conflicting_historical_coding_path',
+            'retained_model_ids': sorted(r['model_id'] for r in previous)}
+
+    for component in overlap_components(rows):
+        group = [rows[i] for i in component]
+        witnessed = _witnessed_retained_loci(group)
+        if witnessed is not None:
+            yield from witnessed
+            continue
+        if coherent(group):
+            yield group
+            continue
+        depth = min(row['retained_coding_path'].get('history_depth', 0) for row in group)
+        anchors = [row for row in group if row['retained_coding_path'].get('history_depth', 0) == depth]
+        anchor_ids = {id(row) for row in anchors}
+        bases = []
+        for indexes in overlap_components(anchors):
+            nearest = [anchors[i] for i in indexes]
+            witnessed = _witnessed_retained_loci(nearest)
+            if witnessed is not None:
+                bases.extend(witnessed)
+            elif coherent(nearest):
+                bases.append(nearest)
+            else:
+                # No historical priority can choose between conflicting paths
+                # from the same generation. Preserve their full review records.
+                for row in nearest:
+                    hold(row, [other for other in nearest if other is not row])
+        older = [row for row in group if id(row) not in anchor_ids]
+        independent = [row for row in older if not any(coding_overlap(row, anchor)[0] for anchor in anchors)]
+        independent_ids = {id(row) for row in independent}
+        bases.extend(_coherent_retained_components(independent))
+        additions = [[] for _ in bases]
+        for row in older:
+            if id(row) in independent_ids:
+                continue
+            owners = [i for i, base in enumerate(bases) if any(coding_overlap(row, other)[0] for other in base)]
+            if len(owners) == 1 and all(compatible_paths(row, other) for other in bases[owners[0]]):
+                additions[owners[0]].append(row)
+            else:
+                hold(row, [other for i in owners for other in bases[i]])
+        for base, proposed in zip(bases, additions, strict=True):
+            conflicting = {id(row) for row in proposed for other in proposed
+                           if row is not other and not compatible_paths(row, other)}
+            for row in proposed:
+                if id(row) in conflicting:
+                    hold(row, base)
+            yield [*base, *(row for row in proposed if id(row) not in conflicting)]
+
+
+def compatible_components(models):
+    """Hold conflicting native additions without invalidating transferred CDS.
+
+    Reassess the transferred paths as their own coding components. This also
+    prevents a native bridge from joining two otherwise independent loci. A
+    conflict among transferred paths themselves still requires review.
+    """
+    for component in overlap_components(models):
+        rows = [models[i] for i in component]
+        valid = []
+        for row in rows:
+            if row.get('status') == 'accepted' and not row.get('problems'):
+                valid.append(row)
+            else:
+                row['status'] = 'unresolved'
+        def coherent(group):
+            return all(compatible_paths(a, b) for i, a in enumerate(group) for b in group[i + 1:])
+        if coherent(valid) and not any(row.get('retained_coding_path', {}).get('locus_model_ids') for row in valid):
+            yield valid
+            continue
+        retained = [row for row in valid if row.get('retained_coding_path')]
+        if retained:
+            retained_groups = list(_coherent_retained_components(retained))
+            additions = [[] for _ in retained_groups]
+            independent = []
+            def hold(row, previous):
+                row['status'] = 'unresolved'
+                row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+                row['integration_conflict'] = {'disposition': 'retain_previous_validated_annotation',
+                    'retained_model_ids': sorted(r['model_id'] for r in previous)}
+            for row in valid:
+                if row.get('retained_coding_path'):
+                    continue
+                owners = [i for i, group in enumerate(retained_groups)
+                          if any(coding_overlap(row, other)[0] for other in group)]
+                if not owners:
+                    independent.append(row)
+                    continue
+                if len(owners) == 1 and all(compatible_paths(row, other) for other in retained_groups[owners[0]]):
+                    additions[owners[0]].append(row)
+                else:
+                    hold(row, [other for i in owners for other in retained_groups[i]])
+            # Existing independent genes remain separate even when a new
+            # bridging prediction connected them in the combined graph.
+            for previous, proposed in zip(retained_groups, additions, strict=True):
+                conflicting = {id(row) for row in proposed for other in proposed
+                               if row is not other and not compatible_paths(row, other)}
+                for row in proposed:
+                    if id(row) in conflicting:
+                        hold(row, previous)
+                yield [*previous, *(row for row in proposed if id(row) not in conflicting)]
+            yield from compatible_components(independent)
+            continue
+        transferred = [row for row in valid if transferred_support(row)]
+        if transferred and len(transferred) < len(valid):
+            for row in valid:
+                if not transferred_support(row):
+                    row['status'] = 'unresolved'
+                    row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+                    row['integration_conflict'] = {'disposition': 'retain_transferred_coding_paths',
+                        'transferred_model_ids': sorted(r['model_id'] for r in transferred)}
+            groups = [[transferred[i] for i in group] for group in overlap_components(transferred)]
+        else:
+            groups = [valid]
+        for group in groups:
+            if coherent(group):
+                yield group
+            else:
+                for row in group:
+                    row['status'] = 'unresolved'
+                    row['problems'] = sorted(set(row['problems']) | {'competing_new_models'})
+
+
 def resolve_coding_paths(models, nearest=()):
     """Admit a supported locus separately from ranking its coding paths.
 
@@ -222,46 +400,39 @@ def resolve_coding_paths(models, nearest=()):
     original annotation ownership. A canonical fallback establishes neither
     translation initiation nor orthology; its support remains path-specific.
     """
-    for component in overlap_components(models):
-        if len(component) < 2:
-            continue
-        rows = [models[i] for i in component]
-        # Pairwise compatibility prevents a bridging fusion from silently
-        # joining two independent loci into one rescued gene.
-        # Coding-connected components contain at least one collision. A pair
-        # with no shared coding bases also fails compatibility, so this tests
-        # the same clique/fusion rule without storing O(n^2) pair objects.
-        if (not all(row.get('status') == 'accepted' and not row.get('problems') for row in rows)
-                or not all(compatible_paths(a, b) for i, a in enumerate(rows) for b in rows[i + 1:])):
-            for row in rows:
-                row['status'] = 'unresolved'
-                row['problems'].append('competing_new_models')
+    for rows in compatible_components(models):
+        if len(rows) < 2:
             continue
         ranked = sorted(rows, key=lambda r: (path_rank(r, nearest), repr(coding_shape(r))), reverse=True)
         best, second = ranked[:2]
         first_rank, second_rank = path_rank(best, nearest), path_rank(second, nearest)
         decisive = first_rank[:2] > second_rank[:2] or first_rank[2] - second_rank[2] >= .10
-        # Distinct donor species corroborate existence of this coding locus.
-        # They do not corroborate every path in it. Self evidence cannot supply
-        # the independent cross-species support required for this fallback.
+        # One external species can support a complete, coherent genomic locus.
+        # Locus admission does not establish a biologically preferred isoform.
         targets = {evidence['target'] for row in rows
                    for evidence in [row.get('evidence', {}), *row.get('support', [])]
                    if evidence.get('target')}
         donors = sorted({donor for row in rows for donor, _, _ in alignment_support(row)} - targets)
+        retained_annotation_fallback = False
         if not decisive:
-            if any(evidence.get('annevo') for row in rows
-                   for evidence in [row.get('evidence', {}), *row.get('support', [])]):
-                # A new predictor must not make an unresolved initiation/splice
-                # choice publishable through the longest-path fallback.
+            if not donors:
+                previous = [row for row in rows if row.get('retained_coding_path')]
                 for row in rows:
-                    row['status'] = 'unresolved'
-                    row['problems'].append('ambiguous_annevo_coding_path_representative')
-                continue
-            if len(donors) < 2:
-                for row in rows:
+                    if row.get('retained_coding_path'):
+                        continue
                     row['status'] = 'unresolved'
                     row['problems'].append('ambiguous_coding_path_representative')
-                continue
+                    if previous:
+                        row['integration_conflict'] = {'disposition': 'retain_previous_validated_annotation',
+                            'retained_model_ids': sorted(r['model_id'] for r in previous)}
+                if not previous:
+                    continue
+                # New self-only alternatives cannot revoke a source-verified
+                # annotation. Keep only the currently valid prior paths; this
+                # supplies no external evidence for the novel alternatives.
+                rows = previous
+                ranked = [row for row in ranked if row.get('retained_coding_path')]
+                retained_annotation_fallback = True
             # A reproducible CDS choice is needed by downstream one-sequence
             # inputs. Prefer the longest validated path without claiming it
             # is the biologically preferred isoform. Tie-break on coordinates.
@@ -274,13 +445,17 @@ def resolve_coding_paths(models, nearest=()):
             row['status'] = 'accepted_alternative_path'
             row['parent_model_id'] = best['model_id']
             alternatives.append({k: row[k] for k in ('model_id', 'seqid', 'strand', 'cds', 'sequence', 'support', 'coverage', 'identity',
-                                                    'evidence', 'placement_evidence', 'problems') if k in row})
+                                                    'evidence', 'placement_evidence', 'problems', 'boundary_candidate',
+                                                    'boundary_revalidation', 'partial_evidence', 'retained_coding_path') if k in row})
         best['alternative_coding_paths'] = alternatives
         best['locus_support'] = {'counting_unit': 'independent_donor_species',
-                                 'independent_donor_species': donors, 'minimum_species_for_fallback': 2,
+                                 'independent_donor_species': donors, 'minimum_species_for_fallback': 1,
                                  'orthology': 'unassigned', 'expected_copy': 'unassigned'}
+        if retained_annotation_fallback:
+            best['locus_support']['admission_basis'] = 'source_bound_currently_validated_prior_annotation'
         best['path_selection'] = {
-            'reason': 'supported_same_locus_coding_paths' if decisive else 'compatible_locus_canonical_fallback',
+            'reason': ('retained_annotation_canonical_fallback' if retained_annotation_fallback else
+                       'supported_same_locus_coding_paths' if decisive else 'compatible_locus_canonical_fallback'),
             'rank': list(path_rank(best, nearest)), 'alternative_paths': len(alternatives),
             'representative_status': 'supported_priority' if decisive else 'ambiguous',
             'selection_policy': 'validated_donor_rank' if decisive else 'longest_cds_then_coding_shape',

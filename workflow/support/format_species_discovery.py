@@ -599,6 +599,7 @@ def discover_tasks(provider, input_dir, allowed_species_keys=None):
         "dictybase",
         "insectbase",
         ORYZA_MINUTA_PROVIDER,
+        "onekp",
         "direct",
     ):
         return discover_generic_species_dir_tasks(provider, input_dir, allowed_species_keys)
@@ -630,12 +631,15 @@ def prepare_cds_identifier_task(task):
 
 
 def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing=False):
+    from transcriptome_orfs import verify_existing, write_audit
     cds_input = task.get("cds_path")
     if cds_input is not None:
         output_name = normalize_cds_output_basename(cds_input.name, task["species_prefix"])
     else:
         output_name = build_derived_cds_output_basename(task)
     output_path = output_dir / output_name
+    if output_path.exists() and not overwrite:
+        verify_existing(task, output_path)
     if task.get("paired_curation"):
         from curate_paired_species_inputs import preserve_formatted_role
         return preserve_formatted_role(task, "cds", output_path, overwrite, dry_run)
@@ -939,6 +943,7 @@ def format_cds(task, output_dir, overwrite, dry_run, strict=None, reuse_existing
             ((records_by_gene[gene_id]["id"], records_by_gene[gene_id]["sequence"]) for gene_id in ordered_ids),
         )
         write_cds_normalisation_audit(cds_task, output_path, normalisation_state)
+        write_audit(cds_task, output_path, write_json_atomic)
         task["_cds_normalisation_required"] = cds_normalisation_applicable(task)
     if grouping_index is not None and not dry_run:
         audit_payload = write_cds_gff_grouping_audit(

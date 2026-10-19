@@ -19,6 +19,9 @@ inputs:
   shard:
     description: Optional INDEX/COUNT partition for runtime-python.
     default: ""
+  workers:
+    description: Pytest processes per SIF Python partition; other suites retain their own execution.
+    default: "2"
   prepared-runtime-input:
     description: Exact runtime input prepared once by an earlier job in this run.
     default: ""
@@ -192,7 +195,8 @@ runs:
       env:
         CACHE_FROM: type=gha,scope=container-linux-amd64
         BUILD_TARGET: runtime
-        CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=max,scope=container-linux-amd64,ignore-error=true' || '' }}
+        # Leave room for the validated SIF in the shared Actions cache quota.
+        CACHE_TO: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'type=gha,mode=min,scope=container-linux-amd64,ignore-error=true' || '' }}
         SECURITY_REFRESH_EPOCH: ${{ steps.runtime-input.outputs.security_refresh_epoch }}
       run: |
         set -euo pipefail
@@ -350,8 +354,12 @@ runs:
         GG_RUNTIME_FRESHNESS: "off"
         VALIDATION_SUITE: ${{ inputs.validation-suite }}
         VALIDATION_SHARD: ${{ inputs.shard }}
+        VALIDATION_WORKERS: ${{ inputs.workers }}
       run: |
         args=()
+        if [[ "${VALIDATION_SUITE}" == "runtime-python" ]]; then
+          args+=("--workers=${VALIDATION_WORKERS}")
+        fi
         if [[ -n "${VALIDATION_SHARD}" ]]; then
           if [[ "${VALIDATION_SUITE}" != "runtime-python" ]]; then
             echo "Shards apply only to runtime-python; R and extra checks run separately."
