@@ -7,6 +7,7 @@ import math
 import re
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 ORANGE = "#b34d00"
@@ -245,8 +246,22 @@ class GenomeCoordinates:
         from focus_hgt_context_annotations import available
         for row in rows:
             if all(available(row.get(k)) for k in ('chromosome', 'start', 'end')):
-                if int(row['start']) < 1 or int(row['end']) < int(row['start']):
-                    raise ValueError('Invalid GFF coordinate span: ' + row['gene_id'])
+                for field in ('start', 'end'):
+                    try:
+                        number = Decimal(row[field])
+                    except InvalidOperation as exc:
+                        raise ValueError('Invalid GFF coordinate span: ' + species + ':' + row['gene_id']) from exc
+                    if not number.is_finite() or number < 1 or number != number.to_integral_value():
+                        raise ValueError('Invalid GFF coordinate span: ' + species + ':' + row['gene_id'])
+                    # Native tables with unavailable spans serialize numeric
+                    # columns as e.g. "50222.0". Keep exact integral values,
+                    # never round fractional coordinates or alter source TSVs.
+                    try:
+                        int(row[field])
+                    except ValueError:
+                        row[field] = str(int(number))
+                if int(row['end']) < int(row['start']):
+                    raise ValueError('Invalid GFF coordinate span: ' + species + ':' + row['gene_id'])
                 by_scaffold[row["chromosome"]].append(row)
         self.scaffold_indices[species] = {sid: ScaffoldIndex(group) for sid, group in by_scaffold.items()}
         self.cache[species] = by_gene, by_scaffold

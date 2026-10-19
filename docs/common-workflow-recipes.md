@@ -133,6 +133,11 @@ Main outputs:
 - `workspace/output/transcriptome_assembly/assembled_transcripts_with_isoforms`
 - `workspace/output/transcriptome_assembly/longest_cds`
 
+When no BUSCO genes are detected, the multispecies summary still exports
+assembly statistics and the empty BUSCO table. It reports that BUSCO-linked
+expression summaries and dimensional reduction were skipped; it does not
+invent zero expression values or establish assembly completeness.
+
 ## 4. Build the species tree, orthogroups, and genome-evolution outputs
 
 Use `gg_genome_evolution_entrypoint.sh` when you already have multispecies CDS

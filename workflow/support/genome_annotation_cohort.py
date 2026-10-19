@@ -246,17 +246,61 @@ def annotate(manifest, member, workspace, phase):
             raise ValueError('BUSCO artifact has the wrong lineage')
 
 
+def phase_runtime(manifest, phase, root, sha256, *, acquisition):
+    """Bind a qualified owning release while retaining the frozen data contract."""
+    if root is None and sha256 is None:
+        return manifest
+    phases = ('acquire',) if acquisition else ('predict', 'busco')
+    if phase not in phases or root is None or not re.fullmatch(r'[0-9a-f]{64}', sha256 or ''):
+        raise ValueError('Runtime override requires its exact release digest and owning phase')
+    release = physical(root, directory=True)
+    project = physical(manifest['project_root'], directory=True)
+    if release == project or not release.is_relative_to(project):
+        raise ValueError('Runtime override escapes the bound project')
+    path = physical(release / '.kfauto-release.json')
+    if path.stat().st_size > 4 * 1024**2 or file_sha(path) != sha256:
+        raise ValueError('Runtime override changed')
+    value = json.loads(path.read_text())
+    contract = {k: v for k, v in value.items() if k != 'contract_sha256'}
+    canonical = hashlib.sha256(json.dumps(contract, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    if (value['kind'] != 'immutable-genegalleon-runtime-release-v1'
+            or value['workflow'] != ('gg_input_generation' if acquisition else 'gg_genome_annotation')
+            or value['project_root'] != str(project)
+            or value['release_root'] != str(release) or canonical != value['contract_sha256']):
+        raise ValueError('Runtime override contract changed')
+    prefix = 'acquisition_' if acquisition else ''
+    return {**manifest, prefix + 'runtime_root': str(release), prefix + 'runtime_manifest_sha256': sha256}
+
+
+def acquisition_runtime(manifest, phase, root=None, sha256=None):
+    """Bind a new acquisition-only release without rewriting a frozen cohort."""
+    return phase_runtime(manifest, phase, root, sha256, acquisition=True)
+
+
+def annotation_runtime(manifest, phase, root=None, sha256=None):
+    """Resume prediction/BUSCO in the real workspace with a new owning release."""
+    return phase_runtime(manifest, phase, root, sha256, acquisition=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--task', type=int, required=True)
     parser.add_argument('--phase', choices=('acquire', 'predict', 'busco'), required=True)
+    parser.add_argument('--acquisition-runtime-root', type=Path)
+    parser.add_argument('--acquisition-runtime-manifest-sha256')
+    parser.add_argument('--annotation-runtime-root', type=Path)
+    parser.add_argument('--annotation-runtime-manifest-sha256')
     args = parser.parse_args()
     path = physical(args.manifest)
     if file_sha(path) != args.manifest_sha256:
         parser.error('Cohort manifest changed')
     manifest = json.loads(path.read_text())
+    manifest = acquisition_runtime(manifest, args.phase, args.acquisition_runtime_root,
+                                   args.acquisition_runtime_manifest_sha256)
+    manifest = annotation_runtime(manifest, args.phase, args.annotation_runtime_root,
+                                  args.annotation_runtime_manifest_sha256)
     member = select(manifest, args.task)
     work_root = physical(manifest['work_root'], directory=True)
     workspace = work_root / member['species']

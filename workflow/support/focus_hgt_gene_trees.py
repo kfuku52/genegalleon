@@ -242,7 +242,7 @@ def render_native_batch(requests, workspace):
 
 
 def export_gene_trees(directory, events, links, family_root, renderer=None, gff_root='', context_annotations='',
-                      mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None):
+                      mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', taxonomy_dbfile='', minimum_ufboot=None, uniprot_fasta=''):
     """Export one native PDF per family; unavailable mappings remain in the audit."""
     links = validated_event_links(events, links)
     csv.field_size_limit(100_000_000)
@@ -261,7 +261,7 @@ def export_gene_trees(directory, events, links, family_root, renderer=None, gff_
 
     coordinates = GenomeCoordinates(gff_root)
     annotations = ContextAnnotations(context_annotations, mmseqs2_taxonomy_dir=mmseqs2_taxonomy_dir,
-                                     scaffold_taxonomy_dir=scaffold_taxonomy_dir, taxonomy_dbfile=taxonomy_dbfile)
+                                     scaffold_taxonomy_dir=scaffold_taxonomy_dir, taxonomy_dbfile=taxonomy_dbfile, uniprot_fasta=uniprot_fasta)
     index, audit, sources, context_audit, configurations = [], [], {}, [], {}
     with read_only_observation():
         store = GeneFamilyOutputStore(family_root)

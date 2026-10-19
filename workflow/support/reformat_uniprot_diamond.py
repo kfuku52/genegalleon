@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import os
+import re
 
 import pandas
 
@@ -100,11 +101,23 @@ def read_uniprot_descriptions(path, accessions=None):
                 if header == '':
                     continue
                 parts = header.split(None, 1)
-                acc = parts[0]
-                if accessions is None or acc in accessions:
-                    text = parts[1] if len(parts) > 1 else ''
-                    desc[acc] = text
+                identifier = parts[0]
+                acc = uniprot_accession(identifier)
+                text = parts[1] if len(parts) > 1 else ''
+                if acc != identifier:
+                    # Official UniProt FASTA headers carry accession and entry
+                    # name; search tools commonly return only the accession.
+                    text = re.split(r'\s(?:OS|OX|GN|PE|SV)=', text, maxsplit=1)[0]
+                keys = (acc,) if accessions is None else {acc, identifier} & accessions
+                for key in keys:
+                    desc[key] = text
     return desc
+
+
+def uniprot_accession(identifier):
+    """Recognize official UniProt tokens without rewriting other literal IDs."""
+    match = re.fullmatch(r'(?:sp|tr)\|([^|\s]+)\|[^|\s]+', identifier)
+    return match.group(1) if match else identifier
 
 
 def read_uniprot_metadata(path, accessions=None):

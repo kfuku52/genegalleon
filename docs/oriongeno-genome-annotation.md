@@ -37,6 +37,14 @@ Scoped overrides use `GG_GENOME_ANNOTATION_`, for example
 `GG_GENOME_ANNOTATION_GENOME_ANNOTATION_BACKEND=annevo`.
 The integrated native/candidate path requires nuclear genetic code 1.
 
+The frozen-cohort driver can resume `predict` or `busco` with
+`--annotation-runtime-root` and `--annotation-runtime-manifest-sha256` when a
+qualified annotation runtime fixes an earlier failure. Both arguments are
+required together. It retains the original manifest digest, species, acquired
+genomes, workspace, download cache and BUSCO lineage, and validates the new
+owning release before invoking the standard entrypoint. Acquisition has its
+separate `--acquisition-runtime-*` options.
+
 ### Automatic model selection
 
 The default `oriongeno_model_profile="auto"` uses the same verified TaxID evidence

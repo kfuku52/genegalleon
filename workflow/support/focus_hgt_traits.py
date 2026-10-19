@@ -222,7 +222,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
                 arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
                 context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
                 mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='off', species_taxonomy='', taxonomy_dbfile='',
-                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules=''):
+                min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules='', uniprot_fasta=''):
     from focus_hgt_pfam import (
         binary_option,
         validate_length_ratio,
@@ -409,7 +409,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
 
             sequence_options = {name: path for name, path in (
                 ('mmseqs2_taxonomy_dir', mmseqs2_taxonomy_dir), ('scaffold_taxonomy_dir', scaffold_taxonomy_dir),
-                ('taxonomy_dbfile', taxonomy_dbfile)) if path}
+                ('taxonomy_dbfile', taxonomy_dbfile), ('uniprot_fasta', uniprot_fasta)) if path}
             gene_trees[trait] = export_gene_trees(root / "all_category1/tree_plot", selected, links, gene_family_root,
                                                  gff_root=gff_root, context_annotations=context_annotations, **sequence_options)
             from focus_hgt_figures import export_figures
@@ -427,7 +427,7 @@ def build_focus(stage, event_path, link_path, tree_path, trait_path, plots=True,
             figures[trait] = export_figures(root / 'all_category1/plots', events, figure_events,
                                             [r for r in links if r['event_id'] in ids], tree, values,
                                             gene_family_root, trait, filter_audit=filter_audit,
-                                            context_annotations=context_annotations,
+                                            context_annotations=context_annotations, uniprot_fasta=uniprot_fasta,
                                             pfam_selected=pfam_cohort if pair_filter_enabled else None,
                                             pair_filter_label=('Event-pair ' + ' & '.join(
                                                 ([f'Pfam >={100 * min_shared_pfam_coverage:g}% each query']
@@ -520,7 +520,7 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
              arrow_alpha=DEFAULT_TRANSFER_ARROW_ALPHA, gene_family_root="", gff_root='', filter_audit='',
              context_annotations='', require_shared_pfam=True, allow_both_no_pfam=False,
              mmseqs2_taxonomy_dir='', scaffold_taxonomy_dir='', direction_filter='off', species_taxonomy='', taxonomy_dbfile='',
-             min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules=''):
+             min_shared_pfam_coverage=0.5, require_length_ratio=True, min_length_ratio=0.5, direction_rules='', uniprot_fasta=''):
     from focus_hgt_pfam import binary_option, validate_length_ratio, validate_shared_pfam_coverage
     require_shared_pfam = binary_option(require_shared_pfam, 'require_shared_pfam')
     require_length_ratio = binary_option(require_length_ratio, 'require_length_ratio')
@@ -539,6 +539,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
         inputs.append(Path(filter_audit).resolve())
     if context_annotations and plots and gene_family_root:
         inputs.append(Path(context_annotations).resolve())
+    if uniprot_fasta and plots and gene_family_root:
+        inputs.append(Path(uniprot_fasta).resolve())
     if taxonomy_dbfile and plots and gene_family_root:
         inputs.append(Path(taxonomy_dbfile).resolve())
     for suffix in (".schema.json", ".metadata.json"):
@@ -552,7 +554,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
     if gene_family_root and plots:
         code += [helper_root / name for name in ('focus_hgt_gene_trees.py', 'stat_branch2tree_plot.r', 'tree_plot_batch.r',
                                                 'focus_hgt_context.py', 'focus_hgt_context_annotations.py',
-                                                'focus_hgt_figures.py', 'gene_tree_plot_config.py', 'scaffold_taxonomy.py')]
+                                                'focus_hgt_figures.py', 'gene_tree_plot_config.py', 'scaffold_taxonomy.py',
+                                                'reformat_uniprot_diamond.py')]
         code += sorted((helper_root / "treevis/R").glob("*.R"))
     output = Path(output).absolute()
     # These directories are read inputs too. Replacing a managed report must
@@ -578,7 +581,8 @@ def generate(event_path, link_path, tree_path, trait_path, output, plots=True,
                                min_shared_pfam_coverage=min_shared_pfam_coverage,
                                require_length_ratio=require_length_ratio, min_length_ratio=min_length_ratio,
                                scaffold_taxonomy_dir=scaffold_taxonomy_dir, direction_filter=direction_filter,
-                               species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile, direction_rules=direction_rules)
+                               species_taxonomy=species_taxonomy, taxonomy_dbfile=taxonomy_dbfile, direction_rules=direction_rules,
+                               uniprot_fasta=uniprot_fasta)
         if any(digest(path) != before[str(path)] for path in inputs):
             raise ValueError("Focused-analysis inputs changed during generation")
         if any(digest(path) != code_before[path.name] for path in code):
@@ -618,6 +622,7 @@ def main():
     parser.add_argument("--gene_family_root", default="",
                         help="Existing raw/ZIP-backed family outputs for scaffold-supported category-1 gene-tree PDFs")
     parser.add_argument('--gff_info_root', default='', help='Existing per-species gff_info TSVs for context-page structures')
+    parser.add_argument('--uniprot_fasta', default='', help='Existing Swiss-Prot reference FASTA for missing saved best-hit protein names; never downloads or changes hit assignments')
     parser.add_argument('--context_annotations_tsv', default='',
                         help='Existing per-gene product and best-hit taxonomy annotations for context pages')
     parser.add_argument('--mmseqs2_taxonomy_dir', default='', help='Existing raw MMseqs2 focal classifications for origin review and context pages')
@@ -651,7 +656,7 @@ def main():
                         min_shared_pfam_coverage=args.min_shared_pfam_coverage,
                         require_length_ratio=args.require_length_ratio == '1', min_length_ratio=args.min_length_ratio,
                         scaffold_taxonomy_dir=args.scaffold_taxonomy_dir, taxonomy_dbfile=args.taxonomy_dbfile, direction_filter=args.direction_filter,
-                        species_taxonomy=args.species_taxonomy, direction_rules=args.direction_rules)
+                        species_taxonomy=args.species_taxonomy, direction_rules=args.direction_rules, uniprot_fasta=args.uniprot_fasta)
     print(json.dumps(dict(output_dir=str(Path(args.output_dir).resolve()), source_event_count=manifest["source_event_count"],
                           result_sets=len(manifest["result_index"])), indent=2))
 

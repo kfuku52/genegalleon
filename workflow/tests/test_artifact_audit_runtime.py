@@ -336,6 +336,109 @@ def test_guard_capacity_fails_closed_instead_of_dropping_source_checks():
         memo.guard("two", 2, lambda: 2)
 
 
+@pytest.mark.parametrize('kind', ['content', 'guards', 'spilled_guards'])
+def test_final_revalidation_refills_idle_workers_before_a_slow_window_tail(tmp_path, kind):
+    """A late slow source must not leave every other reader idle at a batch boundary."""
+    memo = AuditDigests(limit=2 if kind == 'spilled_guards' else 64,
+                        spill_guards=kind == 'spilled_guards')
+    next_window_started = threading.Event()
+    validating = False
+    checked = []
+
+    def check(index):
+        if index == 15:
+            assert next_window_started.wait(5), 'idle readers waited for the whole batch'
+        if index == 16:
+            next_window_started.set()
+        checked.append(index)
+
+    try:
+        for index in range(40):
+            if kind == 'content':
+                path = tmp_path / str(index)
+                path.write_text(str(index))
+
+                def compute(path=path, index=index):
+                    if validating:
+                        check(index)
+                    raw = path.read_bytes()
+                    return hashlib.sha256(raw).hexdigest(), len(raw)
+
+                memo.read(path, compute)
+            else:
+                def read(index=index):
+                    check(index)
+                    return index
+                memo.guard(str(index), index, read)
+        validating = True
+        memo.validate(workers=2)
+        assert sorted(checked) == list(range(40))
+        if kind == 'content':
+            assert memo.metrics()['digest_revalidation_reads'] == 40
+    finally:
+        memo.close()
+
+
+def test_revalidation_submission_window_does_not_eagerly_consume_all_sources():
+    consumed, results, errors = [], [], []
+    window_ready, release = threading.Event(), threading.Event()
+
+    def sources():
+        for index in range(100):
+            consumed.append(index)
+            if len(consumed) == 16:
+                window_ready.set()
+            yield index
+
+    def check(index):
+        if index == 0:
+            assert release.wait(5)
+        return index
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        def consume():
+            try:
+                results.extend(runtime._validation_results(pool, check, sources(), 16))
+            except BaseException as exc:
+                errors.append(exc)
+        thread = threading.Thread(target=consume)
+        thread.start()
+        try:
+            assert window_ready.wait(5)
+            assert consumed == list(range(16))
+        finally:
+            release.set()
+            thread.join(5)
+        assert not thread.is_alive() and not errors
+    assert results == list(range(100))
+
+
+def test_revalidation_reports_first_input_failure_and_joins_submitted_readers():
+    later_failure = threading.Event()
+    consumed, finished = [], []
+
+    def sources():
+        for index in range(100):
+            consumed.append(index)
+            yield index
+
+    def check(index):
+        if index == 0:
+            assert later_failure.wait(5)
+            raise ValueError('first source failed')
+        if index == 1:
+            later_failure.set()
+            raise ValueError('second source failed earlier')
+        time.sleep(0.001)
+        finished.append(index)
+
+    with pytest.raises(ValueError, match='^first source failed$'):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            list(runtime._validation_results(pool, check, sources(), 16))
+    assert consumed == list(range(16))
+    assert sorted(finished) == list(range(2, 16))
+
+
 @pytest.mark.parametrize('workers', [1, 4])
 def test_spilled_guards_retain_every_final_check_and_detect_late_mutation(workers):
     memo = AuditDigests(limit=2, spill_guards=True)
