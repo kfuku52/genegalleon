@@ -359,3 +359,11 @@ def test_gtf_gene_transcript_collision_across_rows_is_rejected(tmp_path):
         'chr1\ts\tgene\t1\t9\t.\t+\t.\tgene_id "t1";\n')
     with pytest.raises(ValueError, match="identity collision"):
         SourceGeneSelection(path)
+
+
+def test_gfacs_bare_source_identity_remains_unresolved_without_gtf_inference(tmp_path):
+    path = tmp_path / "bare.gff"
+    path.write_text("chr1\tGFACS\tCDS\t1\t9\t.\t+\t0\tg1.t1\n")
+    check = SourceGeneSelection(path)
+    check.observe("g1.t1", "one", True)
+    assert not check.validate()["source_gene_complete"]

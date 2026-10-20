@@ -52,7 +52,7 @@ class SourceGeneSelection:
                 if len(fields) != 9:
                     continue
                 attrs = defaultdict(list)
-                is_gtf = fields[8].strip() not in ("", ".") and not re.match(r"^[^\s=;]+=", fields[8].strip())
+                is_gtf = re.match(r"^[^=\s;]+\s+\S", fields[8].strip()) is not None
                 if is_gtf:
                     lexer = shlex.shlex(fields[8], posix=True, punctuation_chars=";")
                     lexer.whitespace_split = True
