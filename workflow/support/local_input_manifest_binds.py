@@ -49,7 +49,7 @@ def source_files(source, workspace, plan=False):
         if str(parent) == "/workspace" or str(parent).startswith("/workspace/"):
             parent = workspace / str(parent).removeprefix("/workspace").lstrip("/")
         for key, value in row.items():
-            if not value or key not in {"cds_url", "gff_url", "gbff_url", "genome_url", "cds_path", "gff_path", "gbff_path", "genome_path", "local_source_path", "local_cds_path", "local_gff_path", "local_gbff_path", "local_genome_path"}:
+            if not value or key not in {"cds_url", "gff_url", "gbff_url", "genome_url", "cds_path", "gff_path", "gbff_path", "genome_path", "local_source_path", "local_cds_path", "local_gff_path", "local_gbff_path", "local_genome_path", "cloned_cds_fasta", "cloned_cds_path"}:
                 continue
             path = local_path(str(value), parent, workspace)
             if path is not None:

@@ -1387,7 +1387,8 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
 def _gff_source_graph(original):
     """Parse source relationships once without retaining derived view edits."""
     records, parents, implicit = [], {}, {}
-    for line in original.splitlines(keepends=True):
+    lines = original.splitlines(keepends=True) if isinstance(original, str) else original
+    for line in lines:
         if line.strip() == '##FASTA':
             break
         if line.startswith('#') or not line.strip():
@@ -1440,13 +1441,15 @@ def _gff_source_graph(original):
     return records, parents, implicit
 
 
-def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False):
+def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False, synthetic_parents_only=False):
     """Render a selected or complete view without mutating the parsed graph."""
+    if synthetic_parents_only and not retain_all:
+        raise ValueError('Synthetic parent export requires the complete source graph')
     records, parents, implicit = source_graph
     if retain_all:
         transcript_ids = set(transcript_ids) | set(implicit)
     ancestors, pending = set(), list(transcript_ids)
-    while pending:
+    while pending and not retain_all:
         identifier = pending.pop()
         for parent in parents.get(identifier, set()) - ancestors - {''}:
             ancestors.add(parent)
@@ -1456,7 +1459,7 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False)
     selected_ancestors = transcript_ids | ancestors
     descendants = set(transcript_ids)
     changed = True
-    while changed:
+    while changed and not retain_all:
         changed = False
         for _, fields, attributes, parent_ids in records:
             if fields is None or attributes.get('ID') in ancestors or attributes.get('ID') in excluded_coding_owners:
@@ -1487,6 +1490,8 @@ def _selected_gff_source_rows(source_graph, transcript_ids, *, retain_all=False)
             start, end = min(a for a, _ in spans), max(b for _, b in spans)
             synthesized_genes.append(f'{seqid}\tGeneGalleon\tgene\t{start}\t{end}\t.\t{strand}\t.\tID={quote(gid, safe="._-:")}\n')
     lines = ['##gff-version 3\n'] + synthesized_genes + lines
+    if synthetic_parents_only:
+        return ''.join(lines)
     for line, fields, attributes, parent_ids in records:
         if fields is None:
             if not line.startswith('##gff-version'):

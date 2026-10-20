@@ -1601,7 +1601,7 @@ prepare_species_protein_tmp() {
     echo "Translation started: ${cds} (genetic_code=${species_code}) -> ${translated_file}"
 
     seqkit seq --remove-gaps --threads "${GG_TASK_CPUS}" "${cds_path}" |
-      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" |
+      gg_prepare_cds_fasta_stream "${GG_TASK_CPUS}" "${species_code}" preserve-frame |
       seqkit translate --transl-table "${species_code}" --threads "${GG_TASK_CPUS}" |
       sed -e "s/^>${sp_ub}[-_\.]/>/" -e "s/^>/>${sp_ub}_/" |
       sed -e '/^1 1$/d' -e 's/_frame=1[[:space:]]*//' |

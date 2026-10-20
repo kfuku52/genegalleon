@@ -1069,19 +1069,18 @@ def read_family_cds_fasta_ids(store, family_id):
 
 
 def _read_family_cds_fasta_ids(store, family_id):
-    candidates = [
-        f"{family_id}_cds.fa.gz",
-        f"{family_id}_cds.fasta.gz",
-        f"{family_id}_cds.fasta",
-        f"{family_id}_cds.fa",
-    ]
-    for name in candidates:
-        artifact = store.artifact("cds_fasta", name)
+    candidates = [("cds_fasta", f"{family_id}_cds{suffix}")
+                  for suffix in (".fa.gz", ".fasta.gz", ".fasta", ".fa")]
+    candidates.extend(("protein_fasta", f"{family_id}_pep{suffix}")
+                      for suffix in (".fa.gz", ".fasta.gz", ".fasta", ".fa"))
+    observed_ids = None
+    for directory, name in candidates:
+        artifact = store.artifact(directory, name)
         if artifact is not None and artifact.size:
             inputs = _FAMILY_INPUTS.get()
             if inputs is not None:
                 inputs.observe(artifact)
-            ids = read_fasta_ids_from_store(store, "cds_fasta", name)
+            ids = read_fasta_ids_from_store(store, directory, name)
             if ids:
                 seen_ids = set()
                 duplicate_ids = set()
@@ -1091,12 +1090,17 @@ def _read_family_cds_fasta_ids(store, family_id):
                     seen_ids.add(cds_fasta_id)
                 if duplicate_ids:
                     raise ValueError(
-                        "Family CDS FASTA contains duplicate sequence IDs: "
+                        "Family sequence FASTA contains duplicate sequence IDs: "
                         f"family={family_id}, ids={sorted(duplicate_ids)}"
                     )
-                return ids
+                if observed_ids is not None and set(ids) != set(observed_ids):
+                    raise ValueError("Family sequence FASTA inputs have conflicting IDs: " + family_id)
+                if observed_ids is None:
+                    observed_ids = ids
+    if observed_ids is not None:
+        return observed_ids
     raise FileNotFoundError(
-        f"No non-empty CDS FASTA was found for reference-gene labels: family={family_id}, "
+        f"No non-empty CDS or protein FASTA was found for reference-gene labels: family={family_id}, "
         f"checked={candidates}"
     )
 

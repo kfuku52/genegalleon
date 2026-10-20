@@ -50,8 +50,20 @@ def test_formatter_publishes_orf_audit_and_reuses_only_unchanged_input(tmp_path)
     assert evidence["coordinate_system"] == "source transcript; not genomic"
     assert evidence["records"][0]["start"] == 4
     assert evidence["contract"]["selection"] == "complete-first"
+    assert evidence["contract"]["gene_grouping"] == "declared-trinity-gene-v1"
     assert formatter.format_cds(copy.deepcopy(value), tmp_path / "out", False, False)["status"] == "skip"
     value["cds_path"].write_text(">TRINITY_DN1_c0_g1_i1\nATGCCCTAA\n")
+    with pytest.raises(ValueError, match="stale transcript ORF audit"):
+        formatter.format_cds(value, tmp_path / "out", False, False)
+
+
+def test_old_transcript_grouping_audit_is_not_reused(tmp_path):
+    value = task(tmp_path)
+    result = formatter.format_cds(value, tmp_path / "out", False, False)
+    audit = Path(str(result["output_path"]) + ".orf-extraction.json")
+    evidence = json.loads(audit.read_text())
+    evidence["contract"].pop("gene_grouping")
+    audit.write_text(json.dumps(evidence))
     with pytest.raises(ValueError, match="stale transcript ORF audit"):
         formatter.format_cds(value, tmp_path / "out", False, False)
 
@@ -62,6 +74,32 @@ def test_existing_ordinary_cds_cannot_be_reused_as_derived_orf(tmp_path):
     formatter.format_cds(ordinary, tmp_path / "out", False, False)
     with pytest.raises(ValueError, match="ORF audit"):
         formatter.format_cds(value, tmp_path / "out", False, False)
+
+
+def test_declared_trinity_transcripts_select_one_longest_cds_per_gene(tmp_path):
+    value = task(tmp_path,
+                 ">TRINITY_DN1_c0_g1_i1\nATGAAATAA\n"
+                 ">TRINITY_DN1_c0_g1_i2\nATGAAAAAATAA\n"
+                 ">TRINITY_DN1_c0_g2_i1\nATGCCCTAA\n")
+    result = formatter.format_cds(value, tmp_path / "out", False, False)
+    assert result["before_count"] == 3 and result["after_count"] == 2
+    with gzip.open(result["output_path"], "rt") as stream:
+        assert stream.read() == (
+            ">Test_species_TRINITY_DN1_c0_g1\nATGAAAAAATAA\n"
+            ">Test_species_TRINITY_DN1_c0_g2\nATGCCCTAA\n")
+
+
+@pytest.mark.parametrize("source_type,identifier", [
+    ("cds", "TRINITY_DN1_c0_g1_i1"),
+    ("transcriptome", "other_i1"),
+    ("transcriptome", "TRINITY_DN1_c0_g1_i1_extra"),
+])
+def test_transcript_gene_grouping_leaves_other_identifiers_unchanged(tmp_path, source_type, identifier):
+    value = task(tmp_path, f">{identifier}\nATGAAATAA\n")
+    value["cds_input_type"] = source_type
+    result = formatter.format_cds(value, tmp_path / "out", False, False)
+    with gzip.open(result["output_path"], "rt") as stream:
+        assert stream.readline().strip() == ">Test_species_" + identifier
 
 
 @pytest.mark.parametrize("role", ["gff", "gbff", "genome"])

@@ -1063,7 +1063,7 @@ def test_gene_evolution_uses_shared_input_mode_and_limits_protein_mode_to_suppor
     assert "assert_gene_evolution_aa_model_for_protein_mode() {" in core
     assert 'if [[ "${input_sequence_mode}" != "protein" ]]; then' in core
     assert 'if [[ "${mode_gene_evolution}" == "query2family" ]]; then' in core
-    assert "query2family currently requires species_cds-backed search and CDS extraction." in core
+    assert "query2family protein mode requires query_blast_method=diamond and species_protein inputs." in core
     assert 'dir_sp_protein_input="$(gg_species_protein_input_dir_path "${gg_workspace_input_dir}")"' in core
     assert 'file_species_genetic_code="$(gg_species_genetic_code_table_path "${gg_workspace_input_dir}")"' in core
     assert 'file_og_pep_fasta="${dir_output_active}/protein_fasta/${og_id}_pep.fa.gz"' in core

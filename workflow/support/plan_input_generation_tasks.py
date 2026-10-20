@@ -150,6 +150,12 @@ def main():
                               "gff_repair_mode": args.gff_repair_mode, "format_strict": bool(args.strict),
                               "genetic_code": args.genetic_code}
             apply_input_type(task, row)
+            from cloned_cds_models import attach
+            attach(task, row, manifest.parent)
+            if task.get('cloned_cds_path'):
+                source_paths.append(str(task['cloned_cds_path']))
+                if any(row.get(k) for k in ('reuse_staged_plan', 'reuse_staged_plan_sha256', 'reuse_staged_receipt_sha256')):
+                    raise ValueError('Cloned CDS replacement requires fresh input staging')
             reuse = reuse_reader.resolve(task)
             if reuse is not None:
                 if not args.stage_downloads:

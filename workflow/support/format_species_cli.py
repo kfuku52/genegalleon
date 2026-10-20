@@ -54,6 +54,10 @@ def build_arg_parser():
         help="Output directory for formatted species CDS FASTA files.",
     )
     parser.add_argument(
+        '--cloned-model-root', default='',
+        help='Persistent derived CDS/GFF sources for cloned model replacement; defaults beside species CDS output.',
+    )
+    parser.add_argument(
         "--species-gff-dir",
         default=default_output_path("species_gff"),
         help="Output directory for formatted species GFF files.",

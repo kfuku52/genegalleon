@@ -1,7 +1,7 @@
 # Gene-family presence/absence plots
 
 Run the `gg_gene_summary` stage to reuse existing reconciled family trees, CDS
-FASTA files and optional local-synteny tables. No sequence search or phylogeny
+FASTA files (or protein FASTA files for protein-mode families) and optional local-synteny tables. No sequence search or phylogeny
 reconstruction is required. See [stage outputs and defaults](main-stages-and-what-they-do.md#gg_gene_summary_entrypointsh).
 
 The default remains `presence_absence_ortholog_basis=reference_species`, with

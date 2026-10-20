@@ -268,3 +268,102 @@ def test_exact_shared_coordinates_do_not_define_one_gene(reused_accession):
     check = SourceGeneSelection(reused_accession)
     check.observe("lcl|chr1_cds_anonymous_1 [location=1..9]", "first", True)
     assert not check.validate()["source_gene_complete"]
+
+
+@pytest.fixture
+def gtf_annotation(tmp_path):
+    path = tmp_path / "source.gtf"
+    path.write_text(
+        'chr1\ts\tCDS\t1\t9\t.\t+\t0\tgene_id "g1"; transcript_id "t1.1"; protein_id "p1"; note "quoted; metadata";\n'
+        'chr1\ts\ttranscript\t1\t9\t.\t+\t.\tgene_id "g1"; transcript_id "t1.1";\n'
+        'chr1\ts\ttranscript\t1\t12\t.\t+\t.\tgene_id "g1"; transcript_id "t1.2";\n'
+        'chr2\ts\tCDS\t1\t9\t.\t-\t0\tgene_id "g2,opaque%20"; transcript_id "t2.1";\n')
+    return path
+
+
+def test_gtf_explicit_hierarchy_resolves_transcripts_proteins_and_plain_gene_tags(gtf_annotation):
+    check = SourceGeneSelection(gtf_annotation)
+    for header in ("t1.1", "p1", "unknown gene=g1"):
+        assert check.header_roots(header) == {"g1"}
+    assert check.header_roots("t2.1") == {"g2,opaque%20"}
+    assert check.header_roots("t1") == set()  # Never guess a numeric suffix.
+    assert check.header_roots("t1.1 gene=g2,opaque%20") == {"g1"}
+    check.observe("t1.1", "one", True)
+    check.observe("t1.2", "one", False)
+    check.observe("unknown gene=g2,opaque%20", "two", True)
+    assert check.validate()["source_gene_complete"]
+
+
+def test_gtf_independent_hierarchy_rejects_splits_and_merges(gtf_annotation):
+    check = SourceGeneSelection(gtf_annotation)
+    check.observe("t1.1", "one", True)
+    check.observe("t1.2", "two", True)
+    with pytest.raises(ValueError, match="retained_isoform_gene_groups=1"):
+        check.validate()
+    check = SourceGeneSelection(gtf_annotation)
+    check.observe("t1.1", "one", True)
+    check.observe("t2.1", "one", False)
+    with pytest.raises(ValueError, match="distinct_source_gene_merges=1"):
+        check.validate()
+
+
+@pytest.mark.parametrize("attributes", [
+    'transcript_id "g1.2";',
+    'transcript_id "t1"; gene_name "g1";',
+])
+def test_gtf_missing_gene_id_stays_unresolved(tmp_path, attributes):
+    path = tmp_path / "missing.gtf"
+    path.write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\t' + attributes + '\n')
+    check = SourceGeneSelection(path)
+    check.observe(attributes.split('"')[1], "one", True)
+    assert not check.validate()["source_gene_complete"]
+
+
+@pytest.mark.parametrize("second", [
+    'chr1\ts\texon\t1\t9\t.\t+\t.\tgene_id "g2"; transcript_id "t1";\n',
+    'chr2\ts\texon\t1\t9\t.\t+\t.\tgene_id "g1"; transcript_id "t1";\n',
+    'chr1\ts\texon\t1\t9\t.\t-\t.\tgene_id "g1"; transcript_id "t2";\n',
+])
+def test_gtf_conflicting_explicit_hierarchy_is_rejected(tmp_path, second):
+    path = tmp_path / "conflict.gtf"
+    path.write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\tgene_id "g1"; transcript_id "t1";\n' + second)
+    with pytest.raises(ValueError, match="Conflicting"):
+        SourceGeneSelection(path)
+
+
+@pytest.mark.parametrize("attributes", [
+    'gene_id "g1"; gene_id "g2"; transcript_id "t1";',
+    'gene_id "g1"; transcript_id "t1"; transcript_id "t2";',
+    'gene_id "g1"; transcript_id "g1";',
+    'gene_id "g1" transcript_id "t1";',
+])
+def test_gtf_malformed_or_ambiguous_identity_is_rejected(tmp_path, attributes):
+    path = tmp_path / "invalid.gtf"
+    path.write_text('chr1\ts\tCDS\t1\t9\t.\t+\t0\t' + attributes + '\n')
+    with pytest.raises(ValueError, match="GTF"):
+        SourceGeneSelection(path)
+
+
+def test_absent_gff_attributes_remain_unresolved(tmp_path):
+    path = tmp_path / "empty.gff"
+    path.write_text("chr1\ts\tCDS\t1\t9\t.\t+\t0\t.\n")
+    check = SourceGeneSelection(path)
+    check.observe("unknown", "one", True)
+    assert not check.validate()["source_gene_complete"]
+
+
+def test_gtf_gene_transcript_collision_across_rows_is_rejected(tmp_path):
+    path = tmp_path / "collision.gtf"
+    path.write_text(
+        'chr1\ts\tCDS\t1\t9\t.\t+\t0\tgene_id "g1"; transcript_id "t1";\n'
+        'chr1\ts\tgene\t1\t9\t.\t+\t.\tgene_id "t1";\n')
+    with pytest.raises(ValueError, match="identity collision"):
+        SourceGeneSelection(path)
+
+
+def test_gfacs_bare_source_identity_remains_unresolved_without_gtf_inference(tmp_path):
+    path = tmp_path / "bare.gff"
+    path.write_text("chr1\tGFACS\tCDS\t1\t9\t.\t+\t0\tg1.t1\n")
+    check = SourceGeneSelection(path)
+    check.observe("g1.t1", "one", True)
+    assert not check.validate()["source_gene_complete"]

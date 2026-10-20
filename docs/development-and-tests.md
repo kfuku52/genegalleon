@@ -459,11 +459,15 @@ bash ./dev config-schema markdown
 Use `bash ./dev bump patch` (or `minor`/`major`) for an atomic Semantic Version
 update; `python workflow/support/bump_version.py patch --dry-run` previews it.
 
-`gg_genome_annotation_core.sh` and `gg_transcriptome_generation_core.sh`
+`gg_gene_evolution_core.sh`, `gg_genome_annotation_core.sh` and `gg_transcriptome_generation_core.sh`
 support `GG_CORE_SOURCE_ONLY=1` when a
 focused shell test needs to load its helper functions without starting a
 workflow. Its functions and ordered stages remain in the self-contained core
-file; the switch is a test boundary, not a sourced production architecture.
+file; the switch loads native helpers without starting a full analysis.
+For per-species protein preparation, `translate_orthogroup_cds_to_protein_fasta`
+accepts an optional fourth argument declaring the species. This avoids parsing
+every header for its species, while the source/output record-count check still
+rejects records outside that prefix.
 FASTQ recovery tests load the real transcriptome helper this way and exercise
 connection interruption, process restart, changed objects, and invalid HTTP
 ranges against a loopback server.

@@ -6154,3 +6154,63 @@ def test_coge_gi_alias_rejects_a_distinct_matching_canonical_record(tmp_path, re
     with pytest.raises(ValueError, match="alias"):
         with genome_intervals(genome, [("1", 0, 9)]):
             pass
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_organelle_detection_reuses_stable_annotation_scan(tmp_path, monkeypatch, compressed):
+    load_module()
+    from format_species_annotation import organelle
+    path = tmp_path / ("source.gff.gz" if compressed else "source.gff")
+    text = "chrM\ts\tregion\t1\t9\t.\t+\t.\tID=mt;genome=mitochondrion\n"
+    if compressed:
+        with gzip.open(path, "wt") as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    original = organelle.open_text
+    reads = []
+    def counted(*args, **kwargs):
+        reads.append(args[0])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(organelle, "open_text", counted)
+    assert organelle.gff_organelle_seqids(path) == frozenset({"chrM"})
+    assert organelle.gff_organelle_seqids(path) == frozenset({"chrM"})
+    assert len(reads) == 1
+
+
+@pytest.mark.parametrize("metadata_unchanged", [False, True])
+def test_organelle_detection_invalidates_same_size_rewrite_with_restored_mtime(
+        tmp_path, monkeypatch, metadata_unchanged):
+    load_module()
+    from format_species_annotation.organelle import gff_organelle_seqids
+    path = tmp_path / "source.gff"
+    path.write_text("chrM\ts\tregion\t1\t9\t.\t+\t.\tID=mt;genome=mitochondrion\n")
+    assert gff_organelle_seqids(path) == frozenset({"chrM"})
+    before = path.stat()
+    if metadata_unchanged:
+        original_stat = Path.stat
+        monkeypatch.setattr(Path, "stat", lambda self, *args, **kwargs: (
+            before if self == path else original_stat(self, *args, **kwargs)))
+    path.write_text(path.read_text().replace("mitochondrion", "nucleargenome"))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_size == before.st_size
+    assert gff_organelle_seqids(path) == frozenset()
+
+
+def test_organelle_detection_rejects_source_change_during_scan(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    load_module()
+    from format_species_annotation import organelle
+    path = tmp_path / "source.gff"
+    path.write_text("chrM\ts\tregion\t1\t9\t.\t+\t.\tID=mt;genome=mitochondrion\n")
+    original = organelle.open_text
+    @contextmanager
+    def changed(*args, **kwargs):
+        with original(*args, **kwargs) as handle:
+            yield handle
+        path.write_text(path.read_text() + "# changed\n")
+    monkeypatch.setattr(organelle, "open_text", changed)
+    with pytest.raises(OSError, match="GFF changed during organelle detection"):
+        organelle.gff_organelle_seqids(path)
+    monkeypatch.setattr(organelle, "open_text", original)
+    assert organelle.gff_organelle_seqids(path) == frozenset({"chrM"})

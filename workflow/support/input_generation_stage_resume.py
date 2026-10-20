@@ -57,6 +57,12 @@ def context(plan_path, index, root, stage, *, namespace_root=None):
     if meta.get("gff_output_path"):
         paths["gff"] = meta["gff_output_path"]
     if stage == "format":
+        if task.get('cloned_cds_path'):
+            from cloned_cds_models import EVIDENCE_FIELDS
+            for key in EVIDENCE_FIELDS:
+                if not meta.get(key):
+                    raise ValueError('Cloned model evidence is missing from stage metadata')
+                paths[key] = meta[key]
         if task.get("cds_input_type") == "transcriptome":
             expected = meta["cds_output_path"] + ".orf-extraction.json"
             if meta.get("orf_audit_output_path") != expected:
@@ -330,6 +336,9 @@ def _import_stages(args):
                 skipped.append(species)
                 continue
             donor_task = source["tasks"][old_index - 1]
+            if task.get('cloned_cds_path') or donor_task.get('cloned_cds_path'):
+                skipped.append(species)
+                continue
             if any(task.get(key) != donor_task.get(key) for key in ("provider", "species_key")):
                 raise ValueError("Source/target species identity differs: " + species)
             # A donor worker holds this same task lock while writing. Root
@@ -390,7 +399,19 @@ def start_worker(args):
     command.extend(["--auth-bearer-token-env", args.auth_bearer_token_env])
     # An incompatible checkpoint may have performed partial checks. Discard
     # them rather than carrying their fences across an attempted import.
-    describe_task(build_arg_parser().parse_args(command), batch=batch if current else FreshDigestBatch())
+    preserve_cloned_evidence = current and bool(
+        load_plan(args.task_plan)["tasks"][args.task_index - 1].get("cloned_cds_path"))
+    _, description = describe_task(build_arg_parser().parse_args(command),
+                                  batch=batch if current else FreshDigestBatch(),
+                                  write_meta=not preserve_cloned_evidence)
+    if preserve_cloned_evidence:
+        # A fresh description still verifies the frozen raw sources. Keep the
+        # qualified coupled-source paths already covered by the checkpoint;
+        # replacing them with an unexecuted description loses model evidence.
+        saved = json.loads((args.root / "tmp/task_meta_shards" / f"{args.task_index}.json").read_text())
+        if any(saved.get(key) != value for key, value in description.items()):
+            raise ValueError("Cloned task description differs from its verified format metadata")
+        batch.check()
 
 
 def _import_one(args, source_plan, source_root, source_namespace, source_settings,

@@ -79,6 +79,7 @@ def contract(task):
     from cdskit import longestcds
 
     return dict(version=1, cds_input_type=input_type(task), selection="complete-first",
+                gene_grouping="declared-trinity-gene-v1",
                 genetic_code=int(task.get("genetic_code", 1)), source=signature(task["cds_path"]),
                 implementation=signature(__file__)["sha256"],
                 cdskit_version=importlib.metadata.version("cdskit"),
