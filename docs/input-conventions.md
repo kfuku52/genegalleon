@@ -257,7 +257,11 @@ collisions stop formatting; no parent rows, coding coordinates or biological
 exceptions are invented. Successful mapping is recorded under `locus_identity`
 in the CDS/GFF audits. Repeated standalone `intergenic_region` IDs receive
 separate interval-based IDs without inventing coding parents; parentless CDS,
-exons and UTRs still fail when their identity is ambiguous. Paired CDS repairs
+exons and UTRs still fail when their identity is ambiguous. Discontinuous alignment
+matches with `Target` retain their source records when their IDs are isolated
+from all gene-model IDs and identity references; they do not acquire invented
+coding parents. Missing `Target`, shared model IDs or referenced alignment IDs
+still pass through the strict collision checks. Paired CDS repairs
 preserve quoted GTF attributes when recording their audit markers. Blocked
 formatting writes `.locus-identity.json` beside
 the planned CDS output. Original source files remain unchanged.
