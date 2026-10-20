@@ -16,5 +16,5 @@ tenacity
 tqdm
 openpyxl
 matplotlib<3.11
-pypdf>=6.20.0
+pypdf>=6.21.1
 reportlab
