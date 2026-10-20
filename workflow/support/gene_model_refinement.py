@@ -1387,7 +1387,8 @@ def candidate_gff(gene, candidate, name, *, gene_id=None, gene_token=None):
 def _gff_source_graph(original):
     """Parse source relationships once without retaining derived view edits."""
     records, parents, implicit = [], {}, {}
-    for line in original.splitlines(keepends=True):
+    lines = original.splitlines(keepends=True) if isinstance(original, str) else original
+    for line in lines:
         if line.strip() == '##FASTA':
             break
         if line.startswith('#') or not line.strip():

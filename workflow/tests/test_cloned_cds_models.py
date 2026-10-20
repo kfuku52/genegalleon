@@ -204,6 +204,113 @@ def test_qualified_pair_reuse_is_byte_stable_and_new_process_rejects_changed_clo
         cloned.attach({}, row, tmp_path)
 
 
+@pytest.mark.parametrize("identity", ["gene_prefix", "locus_tag"])
+def test_raw_gene_feature_ids_can_differ_from_native_cds_grouping_tokens(tmp_path, identity):
+    task, sequence, paths, _ = fixture(tmp_path / "inputs")
+    lines = []
+    for line in paths["gff"].read_text().splitlines():
+        if not line.startswith("#"):
+            fields = line.split("\t")
+            for gene in ("N_fragment", "C_fragment", "neighbour"):
+                if fields[2] == "gene" and fields[8] == "ID=" + gene:
+                    fields[8] = "ID=gene-" + gene
+                    if identity == "locus_tag":
+                        fields[8] += ";locus_tag=LOC_" + gene
+                elif fields[2] == "mRNA":
+                    fields[8] = fields[8].replace("Parent=" + gene, "Parent=gene-" + gene)
+            line = "\t".join(fields)
+        lines.append(line)
+    paths["gff"].write_text("\n".join(lines) + "\n")
+    cloned.apply_to_task(task, tmp_path / "curated")
+    records = dict(fsi.iter_fasta_records(task["cds_path"]))
+    assert len(records) == 2 and sequence in records.values()
+    assert "N_fragment.t1" not in records and "C_fragment.t1" not in records
+    audit = json.loads(Path(task["cloned_model_audit"]).read_text())
+    assert audit["replacements"][0]["replaced_gene_ids"] == ["gene-C_fragment", "gene-N_fragment"]
+    out = tmp_path / "formatted"
+    out.mkdir()
+    cds = fsi.format_cds(task, out, False, False)
+    gff = fsi.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    genome = fsi.format_genome(task, out, False, False)
+    from validate_cds_gff_mapping import validate_single_species
+
+    result = validate_single_species(
+        dict(
+            index=1,
+            species_prefix="Test_species",
+            cds_file=cds["output_path"],
+            gff_file=gff["output_path"],
+            genome_file=genome["output_path"],
+            strict=True,
+        ),
+        10,
+    )
+    assert result["ok"], result
+
+
+@pytest.mark.parametrize("suffix,kind", [("", "gene"), (".t1", "mRNA"), (".t1.exon1", "exon"), (".t1.CDS1", "CDS")])
+def test_generated_model_ids_cannot_collide_with_retained_annotation(tmp_path, suffix, kind):
+    task, _, paths, _ = fixture(tmp_path / "inputs")
+    gene = "gg_clone_" + hashlib.sha256(b"experimental/clone:1").hexdigest()[:16]
+    with paths["gff"].open("a") as handle:
+        phase = "0" if kind == "CDS" else "."
+        handle.write(f"chr1\tsource\t{kind}\t1011\t1022\t.\t+\t{phase}\tID={gene}{suffix};Parent=neighbour\n")
+    with pytest.raises(ValueError, match="collid"):
+        cloned.apply_to_task(task, tmp_path / "curated")
+
+
+def test_implicit_gtf_models_are_completed_and_replaced_without_source_mutation(tmp_path):
+    task, sequence, paths, _ = fixture(tmp_path / "inputs")
+    lines = []
+    for line in paths["gff"].read_text().splitlines():
+        fields = line.split("\t")
+        if len(fields) == 9 and fields[2] == "CDS":
+            transcript = fields[8].split("Parent=")[1]
+            gene = transcript.removesuffix(".t1")
+            fields[8] = f'gene_id "{gene}"; transcript_id "{transcript}";'
+            lines.append("\t".join(fields))
+    source = "\n".join(lines) + "\n"
+    paths["gff"].write_text(source)
+    cloned.apply_to_task(task, tmp_path / "curated")
+    records = dict(fsi.iter_fasta_records(task["cds_path"]))
+    assert len(records) == 2 and sequence in records.values()
+    assert paths["gff"].read_text() == source
+    assert task["gff_path"].read_text().count("\tgene\t") == 2
+
+
+def test_source_graph_cycle_remains_an_error_with_shared_parent_cache(tmp_path):
+    path = tmp_path / "cycle.gff3"
+    path.write_text(
+        "chr1\tsource\tmRNA\t1\t30\t.\t+\t.\tID=a;Parent=b\nchr1\tsource\tmRNA\t1\t30\t.\t+\t.\tID=b;Parent=a\n"
+    )
+    with pytest.raises(ValueError, match="Cyclic"):
+        cloned.source_graph(path)
+
+
+@pytest.mark.parametrize("kind", ["gff3", "gtf", "missing_gene", "implicit_parent"])
+def test_streamed_gff_graph_preserves_native_normalization_contract(tmp_path, kind):
+    from gene_model_refinement import _gff_source_graph, _selected_gff_source_rows
+
+    if kind == "gtf":
+        text = 'chr1\tsource\tCDS\t1\t30\t.\t+\t0\tgene_id "g"; transcript_id "t";\n'
+    else:
+        text = (
+            "##gff-version 3\n# metadata\n"
+            "chr1\tsource\tgene\t1\t30\t.\t+\t.\tID=gene-g;gene_id=g\n"
+            "chr1\tsource\tmRNA\t1\t30\t.\t+\t.\tID=t;Parent=gene-g;gene_id=g;transcript_id=t\n"
+            "chr1\tsource\tCDS\t1\t30\t.\t+\t0\tParent=t\n"
+        )
+    if kind == "missing_gene":
+        text = "\n".join(line for line in text.splitlines() if "\tgene\t" not in line) + "\n"
+    if kind == "implicit_parent":
+        text = text.replace("Parent=gene-g;gene_id=g;transcript_id=t", "gene_id=gene-g;transcript_id=t")
+    path = tmp_path / "annotation.gff3"
+    path.write_text(text)
+    expected = _gff_source_graph(_selected_gff_source_rows(_gff_source_graph(text), set(), retain_all=True))[0]
+    records, _, _, _ = cloned.source_graph(path)
+    assert records == expected
+
+
 def test_selected_clone_from_mixed_fasta_preserves_intronic_and_opposite_strand_genes(tmp_path):
     task, sequence, paths, row = fixture(tmp_path / "inputs")
     paths["clone"].write_text(paths["clone"].read_text() + ">published_partial\nATGA\n")
@@ -317,11 +424,17 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     _write_runtime_busco_dataset(workspace)
     fake_bin = _install_fake_toolchain(tmp_path)
 
-    def run(phase, index=None, success=True):
+    def run(phase, index=None, success=True, force=False):
         env = _core_env(
             workspace, None, fake_bin, phase, index, require_cds=True, require_gff=True, require_genome=True
         )
-        env.update(provider="all", download_manifest=str(manifest), strict="1", overwrite="0", run_species_taxonomy="1")
+        env.update(
+            provider="all",
+            download_manifest=str(manifest),
+            strict="1",
+            overwrite="1" if force else "0",
+            run_species_taxonomy="1",
+        )
         result = subprocess.run(
             ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=180
         )
@@ -354,6 +467,11 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     assert len(records) == 2 and sequence in records.values()
     assert not any("fragment" in name for name in records)
     if mode == "single":
+        clone_audit.unlink()
+        missing = run("single", success=False)
+        assert "cloned model evidence" in missing.stderr.lower()
+        run("single", force=True)
+        assert clone_audit.is_file()
         paths["clone"].write_text(paths["clone"].read_text().replace("ATG", "ACG", 1))
         failed = run("single", success=False)
         assert "Cloned CDS SHA256 mismatch" in failed.stderr

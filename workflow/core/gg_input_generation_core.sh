@@ -961,6 +961,8 @@ run_format_stage_single() {
   local existing_genome=()
   local format_needs_update=0
   local cloned_model_signature=""
+  local cloned_evidence_files="" cloned_evidence_path="" cloned_evidence_index=0
+  local -a cloned_evidence_base_args=()
   local format_force_overwrite=${overwrite}
   local format_work_dir=""
   local format_cds_dir="${species_cds_dir}"
@@ -1030,6 +1032,15 @@ run_format_stage_single() {
     )
     if [[ -n "${download_manifest}" ]]; then
       format_provenance_args+=(--optional-output "resolved_manifest=${resolved_manifest_output}")
+    fi
+    cloned_evidence_base_args=("${format_provenance_args[@]}")
+    if [[ -n "${cloned_model_signature}" && ${overwrite} -ne 1 && -s "${species_summary_output}" ]]; then
+      cloned_evidence_files=$(python "${gg_support_dir}/cloned_cds_models.py" evidence-files --species-summary "${species_summary_output}") || return $?
+      while IFS= read -r cloned_evidence_path; do
+        [[ -n "${cloned_evidence_path}" ]] || continue
+        format_provenance_args+=(--output "cloned_model_evidence_${cloned_evidence_index}=${cloned_evidence_path}")
+        cloned_evidence_index=$((cloned_evidence_index + 1))
+      done <<< "${cloned_evidence_files}"
     fi
     if [[ ${overwrite} -eq 1 ]]; then
       format_needs_update=1
@@ -1151,6 +1162,16 @@ run_format_stage_single() {
     rm -f -- "${format_stats_file}"
   fi
   if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    if [[ -n "${cloned_model_signature}" ]]; then
+      format_provenance_args=("${cloned_evidence_base_args[@]}")
+      cloned_evidence_index=0
+      cloned_evidence_files=$(python "${gg_support_dir}/cloned_cds_models.py" evidence-files --species-summary "${species_summary_output}") || return $?
+      while IFS= read -r cloned_evidence_path; do
+        [[ -n "${cloned_evidence_path}" ]] || continue
+        format_provenance_args+=(--output "cloned_model_evidence_${cloned_evidence_index}=${cloned_evidence_path}")
+        cloned_evidence_index=$((cloned_evidence_index + 1))
+      done <<< "${cloned_evidence_files}"
+    fi
     gg_artifact_record "${format_provenance_args[@]}"
   fi
   stage_format_status="ok"

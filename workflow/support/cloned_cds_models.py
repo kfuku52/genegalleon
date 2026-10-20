@@ -5,6 +5,7 @@ This is a coupled source curation step before ordinary native formatting. It
 never changes a genome or accepts a CDS-only override of genomic annotation.
 """
 import argparse
+import csv
 import functools
 import hashlib
 import json
@@ -103,9 +104,24 @@ def source_graph(gff):
     from fasta_sequence_store import open_text
     from gene_model_refinement import _gff_source_graph, _selected_gff_source_rows
     with open_text(gff) as handle:
-        graph = _gff_source_graph(handle.read())
-    # The existing native graph reader also makes implicit GTF parents explicit.
-    records, parents, _ = _gff_source_graph(_selected_gff_source_rows(graph, set(), retain_all=True))
+        graph = _gff_source_graph(handle)
+    records, parents, implicit = graph
+    known = {attrs['ID'] for _, fields, attrs, _ in records if fields and attrs.get('ID')}
+    missing_parents = any(tid not in known or info[0] not in known for tid, info in implicit.items())
+    missing_parents |= any(parent not in known for _, fields, _, pids in records
+                           if fields and fields[2].lower().endswith(('rna', 'transcript')) for parent in pids)
+    if missing_parents:
+        # GTF can require synthesized gene/transcript rows. Ordinary GFF3 is
+        # already normalized by the native parser; avoid rendering and parsing
+        # its entire annotation a second time.
+        records, parents, _ = _gff_source_graph(_selected_gff_source_rows(graph, set(), retain_all=True))
+    else:
+        for _, fields, attrs, pids in records:
+            if fields and pids:
+                attrs.setdefault('Parent', pids[0])
+        records = [('##gff-version 3\n', None, {}, [])] + [
+            row for row in records if not row[0].startswith('##gff-version')]
+    del graph, implicit, known
     genes = {}
     for _line, fields, attrs, _parents in records:
         if fields and fields[2].lower().endswith('gene'):
@@ -114,15 +130,22 @@ def source_graph(gff):
                 raise ValueError('Missing, duplicate or unstranded source gene ID')
             genes[name] = dict(seqid=fields[0], strand=fields[6], start=int(fields[3]) - 1, end=int(fields[4]))
 
+    active = set()
+
     @functools.lru_cache(None)
-    def owners(identifier, visiting=frozenset()):
-        if identifier in visiting:
+    def owners(identifier):
+        if identifier in active:
             raise ValueError('Cyclic GFF parent graph')
         if identifier in genes:
             return frozenset([identifier])
         if identifier not in parents:
             raise ValueError('Unbound GFF parent: ' + identifier)
-        return frozenset(g for p in parents[identifier] for g in owners(p, visiting | {identifier}))
+        active.add(identifier)
+        try:
+            inherited = [owners(parent) for parent in parents[identifier]]
+            return inherited[0] if len(inherited) == 1 else frozenset().union(*inherited)
+        finally:
+            active.remove(identifier)
 
     coding = {g: [] for g in genes}
     ownership = []
@@ -138,6 +161,8 @@ def source_graph(gff):
                         raise ValueError('Source gene/CDS coordinate ownership conflict')
                     coding[gene].append((int(fields[3]) - 1, int(fields[4])))
         ownership.append(owned)
+    owners.cache_clear()
+    parents.clear()
     return records, genes, coding, ownership
 
 
@@ -182,6 +207,21 @@ def replacement_gff(name, clone_id, model, replaced):
     return gene, transcript, ''.join(lines)
 
 
+def removed_cds_gene_tokens(prepared, removed, genes):
+    """Resolve source feature IDs through the same native CDS ownership index."""
+    aliases = prepared['_gff_cds_grouping_index']['alias_to_gene_tokens']
+    tokens = set()
+    for gene in removed:
+        candidates = aliases.get(gene, ())
+        if len(candidates) != 1:
+            raise ValueError('Replaced source gene has no unique native CDS owner: ' + gene)
+        tokens.update(candidates)
+    for gene in genes.keys() - removed:
+        if tokens.intersection(aliases.get(gene, ())):
+            raise ValueError('Replaced and retained genes share a native CDS owner: ' + gene)
+    return tokens
+
+
 def build_pair(task, directory):
     import format_species_inputs as fsi
     from Bio.Seq import Seq
@@ -217,6 +257,7 @@ def build_pair(task, directory):
                  candidates=diagnostics, replacements=[])
     atomic_json(directory / 'audit.json', audit)
     records, genes, coding, ownership = source_graph(task['gff_path'])
+    identifiers = {attrs['ID'] for _, fields, attrs, _ in records if fields and attrs.get('ID')}
     removed = set()
     additions = []
     for name in sorted(clones):
@@ -228,8 +269,11 @@ def build_pair(task, directory):
         if removed.intersection(replaced):
             raise ValueError('Competing cloned CDS would replace the same source gene')
         gene, transcript, text = replacement_gff(task['species_prefix'], name, model, replaced)
-        if gene in genes or gene in {item[0] for item in additions}:
+        new_ids = {gene, transcript} | {f'{transcript}.{kind}{i}' for kind in ('exon', 'CDS')
+                                      for i in range(1, len(model['cds']) + 1)}
+        if new_ids.intersection(identifiers):
             raise ValueError('Cloned model ID collides with existing annotation')
+        identifiers.update(new_ids)
         additions.append((gene, transcript, clones[name], text))
         removed.update(replaced)
         audit['replacements'].append(dict(clone_id=name, gene_id=gene, transcript_id=transcript,
@@ -239,6 +283,7 @@ def build_pair(task, directory):
         if owned & removed and owned - removed:
             raise ValueError('A replaced GFF feature is shared with an unrelated retained gene')
     prepared = fsi.prepare_cds_identifier_task(task)
+    removed_tokens = removed_cds_gene_tokens(prepared, removed, genes)
     removed_cds = []
     cds = directory / Path(task['cds_path']).name
     gff = directory / Path(task['gff_path']).name
@@ -249,11 +294,11 @@ def build_pair(task, directory):
         for header, sequence in fsi.iter_task_cds_records(prepared):
             transcript = fsi.build_formatted_cds_id(prepared, header)
             _gene_id, match = fsi.resolve_gene_aggregate_id(prepared, header, transcript)
-            if match.get('gene_token') in removed:
+            if match.get('status') != 'mapped':
+                raise ValueError('Unresolved source CDS identity prevents coupled model replacement: ' + header.split()[0])
+            if match.get('gene_token') in removed_tokens:
                 removed_cds.append(header.split()[0])
             else:
-                if match.get('status') != 'mapped':
-                    raise ValueError('Unresolved source CDS identity prevents coupled model replacement: ' + header.split()[0])
                 handle.write('>' + header + '\n' + sequence + '\n')
         for gene, transcript, sequence, _text in additions:
             handle.write('>' + transcript + ' gene:' + gene + '\n' + sequence + '\n')
@@ -272,7 +317,7 @@ def build_pair(task, directory):
     shutil.copyfile(task['genome_path'], genome_source)
     # Every accepted path is genome-identical. Keep old annotations and raw CDS
     # outside this derived directory, bound in the stage receipt.
-    audit.update(removed_CDS_ids=removed_cds, original_sources_modified=False,
+    audit.update(removed_CDS_ids=removed_cds, removed_CDS_gene_tokens=sorted(removed_tokens), original_sources_modified=False,
                  outputs={'cds': cds.name, 'gff': gff.name,
                           'genome': str(genome_source.relative_to(directory))})
     atomic_json(directory / 'audit.json', audit)
@@ -319,6 +364,7 @@ def main():
     parser.add_argument('command', choices=['verify-manifest', 'evidence-files'])
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--metadata', type=Path)
+    parser.add_argument('--species-summary', type=Path)
     args = parser.parse_args()
     try:
         if args.command == 'verify-manifest':
@@ -326,15 +372,26 @@ def main():
                 parser.error('--manifest is required')
             print(verify_manifest(args.manifest.resolve()))
         else:
-            if args.metadata is None:
-                parser.error('--metadata is required')
-            meta = json.loads(args.metadata.read_text())
-            if meta.get('cloned_cds_path'):
-                for field in EVIDENCE_FIELDS:
-                    value = meta.get(field)
-                    if not value or not Path(value).is_file() or any(c in value for c in '\r\n'):
+            if (args.metadata is None) == (args.species_summary is None):
+                parser.error('supply exactly one of --metadata and --species-summary')
+            if args.metadata is not None:
+                meta = json.loads(args.metadata.read_text())
+                rows = [meta] if meta.get('cloned_cds_path') else []
+                fields = EVIDENCE_FIELDS
+            else:
+                with args.species_summary.open() as stream:
+                    rows = [row for row in csv.DictReader(stream, delimiter='\t') if row.get('cloned_model_audit_path')]
+                fields = ('cloned_model_audit_path', 'cds_input_path', 'gff_input_path', 'genome_input_path')
+            seen = set()
+            for row in rows:
+                for field in fields:
+                    value = row.get(field)
+                    if (not value or not Path(value).is_file() or not Path(value).stat().st_size
+                            or any(c in value for c in '\r\n')):
                         raise ValueError('Missing or unsafe cloned model evidence: ' + field)
-                    print(value)
+                    if value not in seen:
+                        print(value)
+                        seen.add(value)
     except (OSError, ValueError, KeyError) as error:
         parser.error(str(error))
 

@@ -972,6 +972,12 @@ opposite-strand and neighbouring genes remain. An overlapping model with coding
 bases outside the clone path, a shared feature with a retained gene, or competing
 clones stops replacement for review.
 
+Source gene feature IDs are resolved through the native CDS ownership index:
+`gene-...` feature prefixes and distinct `locus_tag` identities do not leave old
+CDS behind. Ambiguous or shared retained/replaced ownership stops replacement.
+Every generated gene, transcript, exon and CDS ID is checked against existing
+feature IDs before publication.
+
 The output contains a coupled CDS/GFF bundle with gene, mRNA, exon and CDS
 features, followed by ordinary native formatting and validation. New gene IDs
 start with `gg_clone_`; GFF attributes record the clone ID and replaced gene IDs.
@@ -994,6 +1000,11 @@ recomputed for cloned tasks, while unchanged same-plan workers reuse their
 verified model bundle. Clone hashes, selections and implementation are frozen
 in the plan; changed inputs require a new plan/workspace. Use `array_prepare`
 to qualify and stage inputs without performing the model mapping.
+Single-run cache verification also binds the model audit and retained coupled
+CDS/GFF/genome sources. Missing evidence stops reuse; after diagnosing loss,
+an explicit overwrite can regenerate the bundle from unchanged qualified inputs.
+Ordinary GFF3 graphs are streamed and their parent ownership is memoized once
+per feature. GTF inputs retain native implicit-parent synthesis.
 
 XLSX template notes:
 
