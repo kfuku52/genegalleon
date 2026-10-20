@@ -1294,3 +1294,58 @@ def test_gene_summary_wires_query_gene_ortholog_tables_and_plot():
     assert "query2family_reference_gene_orthologs.pdf" in text
     assert 'presence_absence_ortholog_basis="${presence_absence_ortholog_basis:-reference_species}"' in entrypoint_text
     assert "presence_absence_ortholog_basis" in registry_text
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_presence_labels_accept_protein_only_family_output(tmp_path, compressed):
+    import gzip
+    mod = load_module("query_gene_orthologs.py")
+    proteins = tmp_path / "families" / "protein_fasta"
+    proteins.mkdir(parents=True)
+    path = proteins / ("FAM_pep.fa.gz" if compressed else "FAM_pep.fa")
+    text = ">Reference_species_gene1\nMQQW\n>Other_species_gene2\nMKKW\n"
+    if compressed:
+        with gzip.open(path, "wt") as handle:
+            handle.write(text)
+    else:
+        path.write_text(text)
+    assert mod.read_family_cds_fasta_ids(mod.GeneFamilyOutputStore(proteins.parent), "FAM") == [
+        "Reference_species_gene1", "Other_species_gene2"]
+
+
+def test_presence_labels_reject_conflicting_protein_and_cds_ids(tmp_path):
+    mod = load_module("query_gene_orthologs.py")
+    for directory, name, gene, sequence in [
+        ("cds_fasta", "FAM_cds.fa", "Species_one_old", "ATG"),
+        ("protein_fasta", "FAM_pep.fa", "Species_one_new", "MQQ"),
+    ]:
+        path = tmp_path / directory / name
+        path.parent.mkdir()
+        path.write_text(f">{gene}\n{sequence}\n")
+    with pytest.raises(ValueError, match="conflicting IDs"):
+        mod.read_family_cds_fasta_ids(mod.GeneFamilyOutputStore(tmp_path), "FAM")
+
+
+def test_presence_labels_reject_duplicate_protein_ids(tmp_path):
+    mod = load_module("query_gene_orthologs.py")
+    path = tmp_path / "protein_fasta" / "FAM_pep.fa"
+    path.parent.mkdir()
+    path.write_text(">Species_one_gene\nMQQ\n>Species_one_gene\nMQQ\n")
+    with pytest.raises(ValueError, match="duplicate sequence IDs"):
+        mod.read_family_cds_fasta_ids(mod.GeneFamilyOutputStore(tmp_path), "FAM")
+
+
+def test_protein_family_query_ortholog_tables_match_cds_labels(weak_duplication_fixture, tmp_path):
+    import pandas.testing
+    fixture = weak_duplication_fixture
+    collect_weak_fixture(fixture, tmp_path / "cds_summary", 0, basis="query_gene")
+    cds = fixture["output_root"] / "cds_fasta" / "FAM_cds.fasta"
+    protein = fixture["output_root"] / "protein_fasta" / "FAM_pep.fa"
+    protein.parent.mkdir()
+    protein.write_text(cds.read_text().replace("ATG", "MQQW"))
+    cds.unlink()
+    collect_weak_fixture(fixture, tmp_path / "protein_summary", 0, basis="query_gene")
+    for name in ("columns.tsv", "glyphs.tsv", "tree.tsv", "query_map.tsv"):
+        pandas.testing.assert_frame_equal(
+            pandas.read_csv(tmp_path / "cds_summary" / name, sep="\t"),
+            pandas.read_csv(tmp_path / "protein_summary" / name, sep="\t"))

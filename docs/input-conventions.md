@@ -314,6 +314,15 @@ species	genetic_code
 Tetrahymena_thermophila	6
 ```
 
+For `gg_gene_evolution` with `mode_gene_evolution="query2family"` and
+`input_sequence_mode="protein"`, supply the complete `species_protein` inventory
+and use `query_blast_method="diamond"`. Gene-list queries are extracted from
+those proteins and are never translated again. Prepare proteins using each
+species' nuclear genetic code before this run; the code table does not alter
+prebuilt protein sequences. Native per-species protein preparation preserves the
+supplied CDS reading frame and internal stops, adding only terminal padding.
+CDS-only query2family remains available in CDS mode.
+
 ### `workspace/input/query_gene`
 
 Each file is one family-level task in `mode_gene_evolution=query2family`.
@@ -865,6 +874,9 @@ the planner accepts it without requiring a redundant explicit `cds_url`, and
 staging verifies the sample through the official provider resolver.
 There is no automatic source switch after a
 validation failure; the input kind and source remain frozen in the manifest/plan.
+For explicitly declared transcriptomes, standard Trinity IDs ending in `_iN`
+are grouped by their full `TRINITY_DNn_cn_gn` gene ID, retaining the longest
+extracted CDS per gene. Other identifier patterns remain unchanged.
 When a new plan changes a species from supplied CDS to transcriptome input,
 that species is computed afresh; verified compatible species in `resume_from`
 can still be reused. Changed donor files, plans and source identities remain errors.

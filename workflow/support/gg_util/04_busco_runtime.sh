@@ -461,14 +461,15 @@ gg_seqkit_grep_by_patterns_from_infile_list() {
 gg_prepare_cds_fasta_stream() {
   local threads=${1:-1}
   local codontable=${2:-}
+  local padding_mode=${3:-min-stop}
   if [[ -n "${codontable}" ]]; then
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" \
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
-    | cdskit pad --codon_table "${codontable}"
+    | cdskit pad --codon_table "${codontable}" --mode "${padding_mode}"
   else
     seqkit replace --pattern X --replacement N --by-seq --ignore-case --threads "${threads}" \
     | seqkit replace --pattern " .*" --replacement "" --ignore-case --threads "${threads}" \
-    | cdskit pad
+    | cdskit pad --mode "${padding_mode}"
   fi
 }
 

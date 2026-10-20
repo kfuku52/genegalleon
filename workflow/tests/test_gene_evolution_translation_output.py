@@ -1,4 +1,5 @@
 import gzip
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -14,6 +15,28 @@ pytestmark = pytest.mark.skipif(
     not BASH_HAS_MAPFILE,
     reason="the workflow requires Bash 4 mapfile; macOS Bash 3 cannot exercise this helper",
 )
+
+
+def test_native_preparation_uses_each_species_code_and_preserves_internal_stops(tmp_path):
+    cds = tmp_path / "mixed.fa"
+    cds.write_text(">Standard_species_gene1\nATGTAATAGTGATGG\n>Ciliate_species_gene2\nATGTAATAGTGATGG\n")
+    codes = tmp_path / "codes.tsv"
+    codes.write_text("species\tgenetic_code\nStandard_species\t1\nCiliate_species\t6\n")
+    protein = tmp_path / "mixed.pep.fa.gz"
+    env = os.environ.copy()
+    env.update(GG_CORE_SOURCE_ONLY="1", GG_TASK_CPUS="1", GG_TASK_MEM_GB="2",
+               gg_workspace_dir=str(tmp_path / "workspace"), gg_support_dir=str(CORE_PATH.parent.parent / "support"))
+    result = subprocess.run([
+        "bash", "-c",
+        'source "$1"; og_id=mixed; translate_orthogroup_cds_to_protein_fasta "$2" "$3" "$4"',
+        "_", str(CORE_PATH), str(cds), str(protein), str(codes),
+    ], cwd=tmp_path, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    with gzip.open(protein, "rt") as handle:
+        observed = handle.read()
+    assert ">Standard_species_gene1\nM***W\n" in observed
+    assert ">Ciliate_species_gene2\nMQQ*W\n" in observed
+    assert not (tmp_path / "workspace" / "output" / "query2family").exists()
 
 
 def _shell_function_source(name: str) -> str:
