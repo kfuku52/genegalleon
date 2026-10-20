@@ -5,6 +5,7 @@ This is a coupled source curation step before ordinary native formatting. It
 never changes a genome or accepts a CDS-only override of genomic annotation.
 """
 import argparse
+import bisect
 import csv
 import functools
 import hashlib
@@ -111,17 +112,20 @@ def source_graph(gff):
     missing_parents |= any(parent not in known for _, fields, _, pids in records
                            if fields and fields[2].lower().endswith(('rna', 'transcript')) for parent in pids)
     if missing_parents:
-        # GTF can require synthesized gene/transcript rows. Ordinary GFF3 is
-        # already normalized by the native parser; avoid rendering and parsing
-        # its entire annotation a second time.
-        records, parents, _ = _gff_source_graph(_selected_gff_source_rows(graph, set(), retain_all=True))
+        # Parse only the synthetic parents. Original records were normalized
+        # during their first read; never serialize/reparse the full annotation.
+        prefix, prefix_parents, _ = _gff_source_graph(_selected_gff_source_rows(
+            graph, set(), retain_all=True, synthetic_parents_only=True))
+        for identifier, parent_ids in prefix_parents.items():
+            parents.setdefault(identifier, set()).update(parent_ids)
+        del prefix_parents
     else:
-        for _, fields, attrs, pids in records:
-            if fields and pids:
-                attrs.setdefault('Parent', pids[0])
-        records = [('##gff-version 3\n', None, {}, [])] + [
-            row for row in records if not row[0].startswith('##gff-version')]
-    del graph, implicit, known
+        prefix = [('##gff-version 3\n', None, {}, [])]
+    for _, fields, attrs, pids in records:
+        if fields and pids:
+            attrs.setdefault('Parent', pids[0])
+    records = prefix + [row for row in records if not row[0].startswith('##gff-version')]
+    del graph, implicit, known, prefix
     genes = {}
     for _line, fields, attrs, _parents in records:
         if fields and fields[2].lower().endswith('gene'):
@@ -152,7 +156,12 @@ def source_graph(gff):
     for _line, fields, attrs, parent_ids in records:
         owned = frozenset()
         if fields:
-            owned = owners(attrs['ID']) if attrs.get('ID') else frozenset(g for p in parent_ids for g in owners(p))
+            if attrs.get('ID'):
+                owned = owners(attrs['ID'])
+            elif len(parent_ids) == 1:
+                owned = owners(parent_ids[0])
+            else:
+                owned = frozenset(g for p in parent_ids for g in owners(p))
             if fields[2] == 'CDS':
                 if not owned:
                     raise ValueError('CDS has no source gene owner')
@@ -187,6 +196,45 @@ def overlapping_genes(model, genes, coding):
     if not matches:
         raise ValueError('No existing gene model overlaps the cloned coding path')
     return sorted(matches)
+
+
+def overlap_gene_candidates(genes, coding, models):
+    """Query coding extents once per clone, retaining original admission order."""
+    if len(models) < 2:
+        return None
+    groups = {(model['seqid'], model['strand']): [] for model in models.values()}
+    for rank, (name, gene) in enumerate(genes.items()):
+        group = groups.get((gene['seqid'], gene['strand']))
+        if group is not None:
+            blocks = coding[name]
+            start = min(a for a, _ in blocks) if blocks else gene['start']
+            end = max(b for _, b in blocks) if blocks else gene['end']
+            group.append((start, end, rank, name))
+    indexes = {}
+    for key, group in groups.items():
+        group.sort()
+        maximum = -1
+        ends = []
+        for _, end, _, _ in group:
+            maximum = max(maximum, end)
+            ends.append(maximum)
+        indexes[key] = (group, [row[0] for row in group], ends)
+    result = {}
+    for name, model in models.items():
+        matches = []
+        if model['cds']:
+            start = min(a for a, _, _ in model['cds'])
+            end = max(b for _, b, _ in model['cds'])
+            rows, starts, ends = indexes[(model['seqid'], model['strand'])]
+            i = bisect.bisect_left(starts, end) - 1
+            while i >= 0 and ends[i] > start:
+                if rows[i][1] > start:
+                    matches.append(rows[i])
+                i -= 1
+        # The original first conflicting model must still be the first error.
+        matches.sort(key=lambda row: row[2])
+        result[name] = {row[3]: genes[row[3]] for row in matches}
+    return result
 
 
 def replacement_gff(name, clone_id, model, replaced):
@@ -256,16 +304,21 @@ def build_pair(task, directory):
     audit = dict(schema_version=1, species=task['species_prefix'], genomic_CDS_identity_required=True,
                  candidates=diagnostics, replacements=[])
     atomic_json(directory / 'audit.json', audit)
-    records, genes, coding, ownership = source_graph(task['gff_path'])
-    identifiers = {attrs['ID'] for _, fields, attrs, _ in records if fields and attrs.get('ID')}
-    removed = set()
-    additions = []
+    selected_models = {}
     for name in sorted(clones):
         models = list(candidates[name].values())
         if len(models) != 1 or len(diagnostics[name]) >= 100:
             raise ValueError(f'Cloned CDS {name} has {len(models)} complete genome-identical paths; inspect audit.json')
-        model = models[0]
-        replaced = overlapping_genes(model, genes, coding)
+        selected_models[name] = models[0]
+    records, genes, coding, ownership = source_graph(task['gff_path'])
+    scoped_genes = overlap_gene_candidates(genes, coding, selected_models)
+    identifiers = {attrs['ID'] for _, fields, attrs, _ in records if fields and attrs.get('ID')}
+    removed = set()
+    additions = []
+    for name in sorted(clones):
+        model = selected_models[name]
+        scope = scoped_genes[name] if scoped_genes is not None else genes
+        replaced = overlapping_genes(model, scope, coding)
         if removed.intersection(replaced):
             raise ValueError('Competing cloned CDS would replace the same source gene')
         gene, transcript, text = replacement_gff(task['species_prefix'], name, model, replaced)

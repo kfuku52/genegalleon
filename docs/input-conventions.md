@@ -1007,8 +1007,14 @@ to qualify and stage inputs without performing the model mapping.
 Single-run cache verification also binds the model audit and retained coupled
 CDS/GFF/genome sources. Missing evidence stops reuse; after diagnosing loss,
 an explicit overwrite can regenerate the bundle from unchanged qualified inputs.
-Ordinary GFF3 graphs are streamed and their parent ownership is memoized once
-per feature. GTF inputs retain native implicit-parent synthesis.
+GFF3/GTF source records are streamed and their parent ownership is memoized once
+per feature. Missing GTF parents are synthesized separately without rendering
+and reparsing all source records. Complete-view export skips the ancestry walks
+needed only for partial selection. Multiple clones share an index of source CDS
+extents on the requested contigs/strands; exact block checks and the original
+first-conflict order remain unchanged. A single clone retains direct scanning.
+Ambiguous clone mappings stop with candidate diagnostics before annotation
+interpretation; input hash verification still covers every declared source.
 
 XLSX template notes:
 

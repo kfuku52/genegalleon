@@ -17,9 +17,9 @@ cloned = import_module("cloned_cds_models")
 fsi = import_module("format_species_inputs")
 
 
-def fixture(root, strand="+", duplicate=False, split=300):
+def fixture(root, strand="+", duplicate=False, split=300, seed=812):
     root.mkdir(parents=True, exist_ok=True)
-    rng = random.Random(812)
+    rng = random.Random(seed)
     codons = [
         "".join((a, b, c)) for a in "ACGT" for b in "ACGT" for c in "ACGT" if a + b + c not in ("TAA", "TAG", "TGA")
     ]
@@ -287,12 +287,18 @@ def test_source_graph_cycle_remains_an_error_with_shared_parent_cache(tmp_path):
         cloned.source_graph(path)
 
 
-@pytest.mark.parametrize("kind", ["gff3", "gtf", "missing_gene", "implicit_parent"])
+@pytest.mark.parametrize(
+    "kind", ["gff3", "gtf", "gtf_percent", "gtf_noncoding", "missing_gene", "implicit_parent", "shared_parent"]
+)
 def test_streamed_gff_graph_preserves_native_normalization_contract(tmp_path, kind):
     from gene_model_refinement import _gff_source_graph, _selected_gff_source_rows
 
-    if kind == "gtf":
+    if kind.startswith("gtf"):
         text = 'chr1\tsource\tCDS\t1\t30\t.\t+\t0\tgene_id "g"; transcript_id "t";\n'
+        if kind == "gtf_percent":
+            text = text.replace('"g"', '"g%3BA"').replace('"t"', '"t%3BA"')
+        if kind == "gtf_noncoding":
+            text += 'chr1\tsource\texon\t40\t60\t.\t+\t.\tgene_id "nc"; transcript_id "nct";\n'
     else:
         text = (
             "##gff-version 3\n# metadata\n"
@@ -304,11 +310,129 @@ def test_streamed_gff_graph_preserves_native_normalization_contract(tmp_path, ki
         text = "\n".join(line for line in text.splitlines() if "\tgene\t" not in line) + "\n"
     if kind == "implicit_parent":
         text = text.replace("Parent=gene-g;gene_id=g;transcript_id=t", "gene_id=gene-g;transcript_id=t")
+    if kind == "shared_parent":
+        text = (
+            "chr1\tsource\tmRNA\t1\t30\t.\t+\t.\tID=t1;Parent=g1\n"
+            "chr1\tsource\tmRNA\t1\t30\t.\t+\t.\tID=t2;Parent=g2\n"
+            "chr1\tsource\tCDS\t1\t30\t.\t+\t0\tParent=t1,t2\n"
+        )
     path = tmp_path / "annotation.gff3"
     path.write_text(text)
     expected = _gff_source_graph(_selected_gff_source_rows(_gff_source_graph(text), set(), retain_all=True))[0]
     records, _, _, _ = cloned.source_graph(path)
     assert records == expected
+
+
+def test_synthetic_parent_export_is_complete_scope_only_and_does_not_edit_graph():
+    import copy
+
+    from gene_model_refinement import _gff_source_graph, _selected_gff_source_rows
+
+    graph = _gff_source_graph('chr1\tsource\tCDS\t1\t30\t.\t+\t0\tgene_id "g"; transcript_id "t";\n')
+    before = copy.deepcopy(graph)
+    parents = _selected_gff_source_rows(graph, set(), retain_all=True, synthetic_parents_only=True)
+    assert "\tgene\t" in parents and "\tmRNA\t" in parents and "\tCDS\t" not in parents
+    assert graph == before
+    with pytest.raises(ValueError, match="complete source graph"):
+        _selected_gff_source_rows(graph, {"t"}, synthetic_parents_only=True)
+
+
+def test_overlap_index_preserves_matches_errors_and_source_order():
+    rng = random.Random(271)
+    genes, coding, models = {}, {}, {}
+    for i in range(200):
+        start = rng.randrange(60) * 100
+        genes[str(i)] = dict(seqid="chr" + str(i % 3), strand="+" if i % 2 else "-", start=start, end=start + 60)
+        # Some source coding bounds deliberately disagree with gene bounds.
+        coding[str(i)] = [(start + 400, start + 460)] if i % 4 == 0 else [(start, start + 60)] if i % 5 else []
+    for i in range(60):
+        gene = genes[str(i)]
+        blocks = coding[str(i)] or [(gene["start"], gene["end"])]
+        models[i] = dict(seqid=gene["seqid"], strand=gene["strand"], cds=[(s, e, 0) for s, e in blocks])
+    indexed = cloned.overlap_gene_candidates(genes, coding, models)
+    for key, model in models.items():
+        try:
+            expected = cloned.overlapping_genes(model, genes, coding)
+        except ValueError as error:
+            with pytest.raises(ValueError) as actual:
+                cloned.overlapping_genes(model, indexed[key], coding)
+            assert str(actual.value) == str(error)
+        else:
+            assert cloned.overlapping_genes(model, indexed[key], coding) == expected
+    assert cloned.overlap_gene_candidates(genes, coding, {0: models[0]}) is None
+
+
+def test_overlap_index_excludes_touching_boundaries_and_empty_strand_scope():
+    genes = {
+        name: dict(seqid="chr1", strand="+", start=s, end=e)
+        for name, s, e in [("left", 40, 100), ("right", 160, 220), ("target", 100, 160)]
+    }
+    coding = {name: [(g["start"], g["end"])] for name, g in genes.items()}
+    models = {strand: dict(seqid="chr1", strand=strand, cds=[(100, 160, 0)]) for strand in ("+", "-")}
+    indexed = cloned.overlap_gene_candidates(genes, coding, models)
+    assert list(indexed["+"]) == ["target"]
+    assert not indexed["-"]
+    assert cloned.overlapping_genes(models["+"], indexed["+"], coding) == ["target"]
+    with pytest.raises(ValueError, match="No existing gene model"):
+        cloned.overlapping_genes(models["-"], indexed["-"], coding)
+
+
+def test_independent_clones_on_two_contigs_and_strands_replace_both_pairs(tmp_path):
+    task, seq1, paths, row = fixture(tmp_path / "one")
+    _, seq2, other, _ = fixture(tmp_path / "two", strand="-", seed=813)
+
+    def rename(text):
+        for source, target in [
+            ("chr1", "chr2"),
+            ("N_fragment", "N_second"),
+            ("C_fragment", "C_second"),
+            ("neighbour", "other_neighbour"),
+        ]:
+            text = text.replace(source, target)
+        return text
+
+    for role in ("genome", "gff", "cds"):
+        with paths[role].open("a") as handle:
+            handle.write(rename(other[role].read_text()))
+    with paths["clone"].open("a") as handle:
+        handle.write(">second_clone\n" + seq2 + "\n")
+    row["cloned_cds_sha256"] = hashlib.sha256(paths["clone"].read_bytes()).hexdigest()
+    cloned.attach(task, row, tmp_path)
+    out = tmp_path / "formatted"
+    out.mkdir()
+    cds = fsi.format_cds(task, out, False, False)
+    gff = fsi.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    genome = fsi.format_genome(task, out, False, False)
+    sequences = dict(fsi.iter_fasta_records(cds["output_path"]))
+    assert len(sequences) == 4 and seq1 in sequences.values() and seq2 in sequences.values()
+    from validate_cds_gff_mapping import validate_single_species
+
+    result = validate_single_species(
+        dict(
+            index=1,
+            species_prefix="Test_species",
+            cds_file=cds["output_path"],
+            gff_file=gff["output_path"],
+            genome_file=genome["output_path"],
+            strict=True,
+        ),
+        10,
+    )
+    assert result["ok"], result
+    audit = json.loads(Path(task["cloned_model_audit"]).read_text())
+    assert {(r["seqid"], r["strand"]) for r in audit["replacements"]} == {("chr1", "+"), ("chr2", "-")}
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_cloned_mapping_precedes_annotation_but_valid_mapping_still_validates_gff(tmp_path, ambiguous):
+    task, _, paths, _ = fixture(tmp_path / "inputs", duplicate=ambiguous)
+    paths["gff"].write_text("not a usable GFF\n")
+    error = "complete genome-identical paths" if ambiguous else "Invalid source GFF row"
+    with pytest.raises(ValueError, match=error):
+        cloned.apply_to_task(task, tmp_path / "curated")
+    audits = list((tmp_path / "curated").rglob("audit.json"))
+    assert len(audits) == 1 and json.loads(audits[0].read_text())["candidates"]
+    assert paths["gff"].read_text() == "not a usable GFF\n"
 
 
 def test_selected_clone_from_mixed_fasta_preserves_intronic_and_opposite_strand_genes(tmp_path):
