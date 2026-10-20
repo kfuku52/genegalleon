@@ -50,8 +50,20 @@ def test_formatter_publishes_orf_audit_and_reuses_only_unchanged_input(tmp_path)
     assert evidence["coordinate_system"] == "source transcript; not genomic"
     assert evidence["records"][0]["start"] == 4
     assert evidence["contract"]["selection"] == "complete-first"
+    assert evidence["contract"]["gene_grouping"] == "declared-trinity-gene-v1"
     assert formatter.format_cds(copy.deepcopy(value), tmp_path / "out", False, False)["status"] == "skip"
     value["cds_path"].write_text(">TRINITY_DN1_c0_g1_i1\nATGCCCTAA\n")
+    with pytest.raises(ValueError, match="stale transcript ORF audit"):
+        formatter.format_cds(value, tmp_path / "out", False, False)
+
+
+def test_old_transcript_grouping_audit_is_not_reused(tmp_path):
+    value = task(tmp_path)
+    result = formatter.format_cds(value, tmp_path / "out", False, False)
+    audit = Path(str(result["output_path"]) + ".orf-extraction.json")
+    evidence = json.loads(audit.read_text())
+    evidence["contract"].pop("gene_grouping")
+    audit.write_text(json.dumps(evidence))
     with pytest.raises(ValueError, match="stale transcript ORF audit"):
         formatter.format_cds(value, tmp_path / "out", False, False)
 

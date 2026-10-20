@@ -737,6 +737,7 @@ translate_orthogroup_cds_to_protein_fasta() {
   local cds_fasta=$1
   local protein_out=$2
   local table_path=$3
+  local declared_species=${4:-}
   local protein_part="${protein_out}.partial.$$"
   if [[ "${protein_out}" == *.gz ]]; then
     # seqkit selects output compression from the final filename suffix.  Keep
@@ -754,12 +755,18 @@ translate_orthogroup_cds_to_protein_fasta() {
 
   rm -f -- "${translated_tmp}"
   touch "${translated_tmp}"
-  mapfile -t species_names < <(
-    seqkit seq --threads "${GG_TASK_CPUS}" --name "${cds_fasta}" |
-      while IFS= read -r header; do
-        gg_species_name_from_path_or_dot "${header}"
-      done | sed -e '/^$/d' | sort -u
-  )
+  if [[ -n "${declared_species}" ]]; then
+    # Per-species files already declare their species. The record-count check
+    # below still rejects records that do not carry that species prefix.
+    species_names=("${declared_species}")
+  else
+    mapfile -t species_names < <(
+      seqkit seq --threads "${GG_TASK_CPUS}" --name "${cds_fasta}" |
+        while IFS= read -r header; do
+          gg_species_name_from_path_or_dot "${header}"
+        done | sed -e '/^$/d' | sort -u
+    )
+  fi
   if [[ ${#species_names[@]} -eq 0 ]]; then
     echo "No species prefixes were detected in the focal CDS FASTA: ${cds_fasta}"
     rm -f -- "${translated_tmp}"

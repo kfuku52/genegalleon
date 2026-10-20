@@ -17,9 +17,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_native_preparation_uses_each_species_code_and_preserves_internal_stops(tmp_path):
+@pytest.mark.parametrize("known_species", ["", "Standard_species", "Ciliate_species"])
+def test_native_preparation_uses_each_species_code_and_preserves_internal_stops(tmp_path, known_species):
     cds = tmp_path / "mixed.fa"
-    cds.write_text(">Standard_species_gene1\nATGTAATAGTGATGG\n>Ciliate_species_gene2\nATGTAATAGTGATGG\n")
+    cds.write_text("".join(f">{species}_gene1\nATGTAATAGTGATGG\n" for species in
+                           ([known_species] if known_species else ["Standard_species", "Ciliate_species"])))
     codes = tmp_path / "codes.tsv"
     codes.write_text("species\tgenetic_code\nStandard_species\t1\nCiliate_species\t6\n")
     protein = tmp_path / "mixed.pep.fa.gz"
@@ -28,15 +30,35 @@ def test_native_preparation_uses_each_species_code_and_preserves_internal_stops(
                gg_workspace_dir=str(tmp_path / "workspace"), gg_support_dir=str(CORE_PATH.parent.parent / "support"))
     result = subprocess.run([
         "bash", "-c",
-        'source "$1"; og_id=mixed; translate_orthogroup_cds_to_protein_fasta "$2" "$3" "$4"',
-        "_", str(CORE_PATH), str(cds), str(protein), str(codes),
+        'source "$1"; og_id=mixed; translate_orthogroup_cds_to_protein_fasta "$2" "$3" "$4" "$5"',
+        "_", str(CORE_PATH), str(cds), str(protein), str(codes), known_species,
     ], cwd=tmp_path, env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
     with gzip.open(protein, "rt") as handle:
         observed = handle.read()
-    assert ">Standard_species_gene1\nM***W\n" in observed
-    assert ">Ciliate_species_gene2\nMQQ*W\n" in observed
+    if known_species != "Ciliate_species":
+        assert ">Standard_species_gene1\nM***W\n" in observed
+    if known_species != "Standard_species":
+        assert ">Ciliate_species_gene1\nMQQ*W\n" in observed
     assert not (tmp_path / "workspace" / "output" / "query2family").exists()
+
+
+def test_declared_species_cannot_silently_drop_records(tmp_path):
+    cds = tmp_path / "mixed.fa"
+    cds.write_text(">Standard_species_gene1\nATGTAA\n>Ciliate_species_gene2\nATGTAA\n")
+    table = tmp_path / "codes.tsv"
+    table.write_text("species\tgenetic_code\nStandard_species\t1\nCiliate_species\t6\n")
+    protein = tmp_path / "out.fa.gz"
+    env = os.environ.copy()
+    env.update(GG_CORE_SOURCE_ONLY="1", GG_TASK_CPUS="1", GG_MEM_TOTAL_GB="2",
+               gg_workspace_dir=str(tmp_path / "workspace"), gg_support_dir=str(CORE_PATH.parent.parent / "support"))
+    result = subprocess.run([
+        "bash", "-c", 'source "$1"; og_id=check; translate_orthogroup_cds_to_protein_fasta "$2" "$3" "$4" Standard_species',
+        "_", str(CORE_PATH), str(cds), str(protein), str(table),
+    ], cwd=tmp_path, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "different number of sequences" in result.stdout
+    assert not protein.exists()
 
 
 def _shell_function_source(name: str) -> str:
