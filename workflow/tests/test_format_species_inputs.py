@@ -6178,13 +6178,19 @@ def test_organelle_detection_reuses_stable_annotation_scan(tmp_path, monkeypatch
     assert len(reads) == 1
 
 
-def test_organelle_detection_invalidates_same_size_rewrite_with_restored_mtime(tmp_path):
+@pytest.mark.parametrize("metadata_unchanged", [False, True])
+def test_organelle_detection_invalidates_same_size_rewrite_with_restored_mtime(
+        tmp_path, monkeypatch, metadata_unchanged):
     load_module()
     from format_species_annotation.organelle import gff_organelle_seqids
     path = tmp_path / "source.gff"
     path.write_text("chrM\ts\tregion\t1\t9\t.\t+\t.\tID=mt;genome=mitochondrion\n")
     assert gff_organelle_seqids(path) == frozenset({"chrM"})
     before = path.stat()
+    if metadata_unchanged:
+        original_stat = Path.stat
+        monkeypatch.setattr(Path, "stat", lambda self, *args, **kwargs: (
+            before if self == path else original_stat(self, *args, **kwargs)))
     path.write_text(path.read_text().replace("mitochondrion", "nucleargenome"))
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert path.stat().st_size == before.st_size

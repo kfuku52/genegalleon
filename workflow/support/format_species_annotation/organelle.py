@@ -7,6 +7,7 @@ filtering rule in one place so CDS, GFF and genome outputs make the same
 decision.
 """
 
+import hashlib
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -78,11 +79,17 @@ def gff_organelle_seqids(path):
     source = Path(source_annotation_path(path)).resolve()
     metadata = source.stat()
     return _cached_organelle_seqids(str(source), metadata.st_dev, metadata.st_ino,
-                                   metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+                                   metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns,
+                                   _annotation_digest(source))
+
+
+def _annotation_digest(path):
+    with open(path, "rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 @lru_cache(maxsize=8)
-def _cached_organelle_seqids(path, device, inode, size, mtime, ctime):
+def _cached_organelle_seqids(path, device, inode, size, mtime, ctime, content_digest):
     seqids = set()
     with open_text(path, "rt", errors="replace") as handle:
         for raw_line in handle:
@@ -102,7 +109,8 @@ def _cached_organelle_seqids(path, device, inode, size, mtime, ctime):
                 seqids.add(seqid)
     metadata = Path(path).stat()
     if (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns,
-            metadata.st_ctime_ns) != (device, inode, size, mtime, ctime):
+            metadata.st_ctime_ns) != (device, inode, size, mtime, ctime) or (
+                _annotation_digest(path) != content_digest):
         raise OSError("GFF changed during organelle detection: " + path)
     return frozenset(sorted(seqids))
 
