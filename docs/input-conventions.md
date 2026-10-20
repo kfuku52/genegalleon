@@ -945,6 +945,55 @@ Optional columns:
   (for `provider=local`)
   - `local_gbff_path` also accepts an EMBL flatfile; the field name is retained
     for manifest compatibility.
+- `cloned_cds_fasta`, `cloned_cds_sha256`, `cloned_cds_ids` select optional
+  [coupled cloned-CDS model replacement](#cloned-cds-model-replacement).
+
+### Cloned CDS model replacement
+
+Supply `cloned_cds_fasta` and its exact lowercase SHA-256 in a species manifest
+row alongside source CDS, GFF and genome inputs. The FASTA path can be absolute,
+relative to the manifest, or a local `file:` URL. For a mixed reference/clone
+FASTA, set `cloned_cds_ids` to a JSON array of the experimentally confirmed
+FASTA IDs belonging to that species, for example `["clone_A", "clone_B"]`.
+An empty selector uses every record; confirm their species and experimental
+identity before enabling it. IDs are the first whitespace-delimited header
+tokens. Each selected sequence must be a complete, unambiguous CDS with start
+and terminal stop codons, without internal stops, under the configured genetic
+code. Partial reference sequences can remain unselected in the same file.
+
+The standard single and species-array routes translate and map the selected
+clones with miniprot, then reconstruct their spliced genomic CDS. Automatic
+replacement requires one complete genome-identical coding path per clone,
+valid splice sites/phases, and explained same-strand source models. Both an
+N-terminal fragment model and a separate C-terminal model are removed when their
+coding blocks belong to that path. All transcripts/features of those source
+genes and their corresponding CDS records are replaced together. Intronic,
+opposite-strand and neighbouring genes remain. An overlapping model with coding
+bases outside the clone path, a shared feature with a retained gene, or competing
+clones stops replacement for review.
+
+The output contains a coupled CDS/GFF bundle with gene, mRNA, exon and CDS
+features, followed by ordinary native formatting and validation. New gene IDs
+start with `gg_clone_`; GFF attributes record the clone ID and replaced gene IDs.
+Transcript extents cover the supported CDS only; UTRs are not inferred. The
+species summary's `cloned_model_audit_path` links to candidate coordinates,
+removed CDS IDs and the old-to-new model mapping. Original source files are
+preserved. Coupled source files and an exact reference-genome copy remain with
+the audit for subsequent native ownership checks, including after temporary
+download-cache cleanup; account for that genome copy in disk provisioning.
+
+Multiple complete loci, incomplete clones, frameshifts, or any clone/reference
+nucleotide difference (including a synonymous difference) require review;
+there is no automatic best-hit or CDS-only fallback. Failed stages retain their
+alignment logs and candidate audit when mapping has completed. A clone from a
+different allele or assembly therefore needs explicit reference reconciliation
+before it can become a genome-backed model. Transcriptome-only inputs cannot
+establish genomic coordinates. This option cannot be combined with
+`paired_curation` or staged-donor reuse fields. Cross-plan format imports are
+recomputed for cloned tasks, while unchanged same-plan workers reuse their
+verified model bundle. Clone hashes, selections and implementation are frozen
+in the plan; changed inputs require a new plan/workspace. Use `array_prepare`
+to qualify and stage inputs without performing the model mapping.
 
 XLSX template notes:
 

@@ -181,6 +181,15 @@ def main():
         )
         for task in tasks:
             if manifest_rows_for_provider_inputs is not None:
+                from cloned_cds_models import attach
+                clone_rows = [row for row in manifest_rows_for_provider_inputs
+                              if row['provider'] == provider and row['species_key'] == task['species_key']
+                              and any(row.get(k) for k in ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids'))]
+                if clone_rows:
+                    if len(clone_rows) != 1:
+                        raise ValueError('Cloned CDS task has no unique manifest row')
+                    attach(task, clone_rows[0], Path(args.download_manifest).resolve().parent)
+                    task['cloned_model_root'] = str(Path(args.cloned_model_root).expanduser().resolve()) if args.cloned_model_root else str(output_cds_dir.parent / 'cloned_models')
                 matches = [row for row in manifest_rows_for_provider_inputs
                            if row["provider"] == provider and row["species_key"] == task["species_key"]
                            and str(row.get("cds_input_type") or "cds").strip().lower() == "transcriptome"]

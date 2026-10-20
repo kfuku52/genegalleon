@@ -1,0 +1,359 @@
+import csv
+import gzip
+import hashlib
+import json
+import random
+import subprocess
+import sys
+from importlib import import_module
+from pathlib import Path
+
+import pytest
+from Bio.Seq import Seq
+
+SUPPORT = Path(__file__).resolve().parents[1] / "support"
+sys.path.insert(0, str(SUPPORT))
+cloned = import_module("cloned_cds_models")
+fsi = import_module("format_species_inputs")
+
+
+def fixture(root, strand="+", duplicate=False, split=300):
+    root.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(812)
+    codons = [
+        "".join((a, b, c)) for a in "ACGT" for b in "ACGT" for c in "ACGT" if a + b + c not in ("TAA", "TAG", "TGA")
+    ]
+    sequence = "ATG" + "".join(rng.choice(codons) for _ in range(240)) + "TAA"
+    first = sequence[:split]
+    second = sequence[split:]
+    intron = "GT" + "".join(rng.choice("ACGT") for _ in range(80)) + "AG"
+    region = first + intron + second
+    if strand == "-":
+        region = str(Seq(region).reverse_complement())
+    genome = "C" * 100 + region + "C" * 100 + "ATGAAACCCTAA" + "C" * 100
+    if duplicate:
+        genome += "C" * 400 + region + "C" * 100
+    paths = {
+        role: root / name
+        for role, name in dict(cds="source.cds.fa", gff="source.gff3", genome="genome.fa", clone="clones.fa").items()
+    }
+    paths["genome"].write_text(">chr1\n" + genome + "\n")
+    paths["clone"].write_text(">experimental/clone:1\n" + sequence + "\n")
+    start1, end1 = 101, 100 + split
+    start2, end2 = 101 + split + len(intron), 100 + len(region)
+    if strand == "-":
+        start1, end1 = 101 + len(second) + len(intron), 100 + len(region)
+        start2, end2 = 101, 100 + len(second)
+    rows = ["##gff-version 3"]
+    for gene, start, end in [
+        ("N_fragment", start1, end1),
+        ("C_fragment", start2, end2),
+        ("neighbour", 201 + len(region), 212 + len(region)),
+    ]:
+        orientation = "+" if gene == "neighbour" else strand
+        rows += [
+            f"chr1\tsource\tgene\t{start}\t{end}\t.\t{orientation}\t.\tID={gene}",
+            f"chr1\tsource\tmRNA\t{start}\t{end}\t.\t{orientation}\t.\tID={gene}.t1;Parent={gene}",
+            f"chr1\tsource\tCDS\t{start}\t{end}\t.\t{orientation}\t0\tID={gene}.c1;Parent={gene}.t1",
+        ]
+    paths["gff"].write_text("\n".join(rows) + "\n")
+    paths["cds"].write_text(
+        ">N_fragment.t1\n" + first + "\n>C_fragment.t1\n" + second + "\n>neighbour.t1\nATGAAACCCTAA\n"
+    )
+    task = dict(
+        provider="local",
+        species_key="Test_species",
+        species_prefix="Test_species",
+        cds_path=paths["cds"],
+        gff_path=paths["gff"],
+        genome_path=paths["genome"],
+        gene_grouping_mode="strict",
+        gff_repair_mode="safe",
+        format_strict=True,
+        genetic_code=1,
+    )
+    row = dict(
+        cloned_cds_fasta=str(paths["clone"]), cloned_cds_sha256=hashlib.sha256(paths["clone"].read_bytes()).hexdigest()
+    )
+    cloned.attach(task, row, root)
+    return task, sequence, paths, row
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("split", [298, 299, 300])
+def test_native_alignment_replaces_both_split_models_and_publishes_consistent_pair(tmp_path, strand, split):
+    task, sequence, sources, _ = fixture(tmp_path / "inputs", strand, split=split)
+    before = {p: p.read_bytes() for p in sources.values()}
+    out = tmp_path / "formatted"
+    out.mkdir()
+    cds = fsi.format_cds(task, out, False, False)
+    gff = fsi.format_gff(task, out, False, False, formatted_cds_path=cds["output_path"])
+    genome = fsi.format_genome(task, out, False, False)
+    report = json.loads(Path(task["cloned_model_audit"]).read_text())
+    assert report["replacements"][0]["replaced_gene_ids"] == ["C_fragment", "N_fragment"]
+    assert report["removed_CDS_ids"] == ["N_fragment.t1", "C_fragment.t1"]
+    assert report["replacements"][0]["strand"] == strand
+    assert report["original_sources_modified"] is False
+    with gzip.open(cds["output_path"], "rt") as stream:
+        fasta = stream.read()
+    assert sequence in dict(fsi.iter_fasta_records(cds["output_path"])).values() and "fragment" not in fasta
+    assert ">Test_species_neighbour\nATGAAACCCTAA\n" in fasta
+    with gzip.open(gff["output_path"], "rt") as stream:
+        annotation = stream.read()
+    assert annotation.count("\tgene\t") == 2
+    assert annotation.count("\tCDS\t") == 3
+    assert "gg_replaces=C_fragment,N_fragment" in annotation
+    from gene_model_catalog import indexed_genome, reconstruct_sequence
+
+    model = report["replacements"][0]
+    with indexed_genome(genome["output_path"]) as indexed:
+        assert reconstruct_sequence(model["CDS_intervals_0based_halfopen"], "chr1", strand, indexed) == sequence
+    from validate_longest_cds_selection import collect_expected_longest_records
+
+    expected, _ = collect_expected_longest_records(task)
+    assert len(expected) == 2
+    from validate_cds_gff_mapping import validate_single_species
+
+    result = validate_single_species(
+        dict(
+            index=1,
+            species_prefix="Test_species",
+            cds_file=cds["output_path"],
+            gff_file=gff["output_path"],
+            genome_file=genome["output_path"],
+            strict=True,
+        ),
+        10,
+    )
+    assert result["ok"], result
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "duplicate_locus",
+        "synonymous_reference_difference",
+        "conflicting_clones",
+        "unexplained_overlap",
+        "noncoding_overlap",
+        "missing_genome",
+    ],
+)
+def test_rejects_unresolved_coordinate_or_model_identity_without_source_mutation(tmp_path, damage):
+    task, sequence, paths, row = fixture(tmp_path / "inputs", duplicate=damage == "duplicate_locus")
+    if damage == "synonymous_reference_difference":
+        seq = str(Seq(sequence[:-3]).translate())
+        for i in range(3, len(sequence) - 3, 3):
+            changed = sequence[: i + 2] + ("C" if sequence[i + 2] != "C" else "T") + sequence[i + 3 :]
+            if str(Seq(changed[:-3]).translate()) == seq:
+                paths["clone"].write_text(">experimental/clone:1\n" + changed + "\n")
+                break
+    if damage == "conflicting_clones":
+        paths["clone"].write_text(paths["clone"].read_text() + ">another_clone\n" + sequence + "\n")
+    if damage == "unexplained_overlap":
+        paths["gff"].write_text(paths["gff"].read_text().replace("\t101\t400\t", "\t98\t400\t"))
+    if damage == "noncoding_overlap":
+        with paths["gff"].open("a") as handle:
+            handle.write("chr1\tsource\tgene\t120\t140\t.\t+\t.\tID=independent_noncoding\n")
+    if damage == "missing_genome":
+        task["genome_path"] = None
+    row["cloned_cds_sha256"] = hashlib.sha256(paths["clone"].read_bytes()).hexdigest()
+    cloned.attach(task, row, tmp_path)
+    before = {p: p.read_bytes() for p in paths.values()}
+    with pytest.raises(ValueError):
+        cloned.apply_to_task(task, tmp_path / "curated")
+    assert task["cds_path"] == paths["cds"]
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.mark.parametrize(
+    "damage", ["partial", "internal_stop", "ambiguous", "duplicate_id", "unknown_selected", "bad_sha"]
+)
+def test_cloned_fasta_admission_is_explicit_and_strict(tmp_path, damage):
+    task, sequence, paths, row = fixture(tmp_path)
+    if damage == "partial":
+        sequence = sequence[:-1]
+    if damage == "internal_stop":
+        sequence = sequence[:15] + "TAA" + sequence[18:]
+    if damage == "ambiguous":
+        sequence = sequence[:15] + "NNN" + sequence[18:]
+    paths["clone"].write_text(">clone\n" + sequence + "\n")
+    if damage == "duplicate_id":
+        paths["clone"].write_text(paths["clone"].read_text() * 2)
+    row["cloned_cds_sha256"] = hashlib.sha256(paths["clone"].read_bytes()).hexdigest()
+    if damage == "bad_sha":
+        row["cloned_cds_sha256"] = "0" * 64
+    if damage == "unknown_selected":
+        row["cloned_cds_ids"] = '["missing"]'
+    with pytest.raises(ValueError):
+        cloned.attach(task, row, tmp_path)
+        cloned.cloned_records(paths["clone"], task["cloned_cds_ids"], 1)
+
+
+def test_qualified_pair_reuse_is_byte_stable_and_new_process_rejects_changed_clone(tmp_path):
+    task, _, paths, row = fixture(tmp_path / "inputs")
+    cloned.apply_to_task(task, tmp_path / "curated")
+    members = [task["cds_path"], task["gff_path"], Path(task["cloned_model_audit"])]
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in members}
+    other, *_ = fixture(tmp_path / "inputs")
+    cloned.apply_to_task(other, tmp_path / "curated")
+    assert before == {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in members}
+    paths["clone"].write_text(paths["clone"].read_text().replace("ATG", "ACG", 1))
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        cloned.attach({}, row, tmp_path)
+
+
+def test_selected_clone_from_mixed_fasta_preserves_intronic_and_opposite_strand_genes(tmp_path):
+    task, sequence, paths, row = fixture(tmp_path / "inputs")
+    paths["clone"].write_text(paths["clone"].read_text() + ">published_partial\nATGA\n")
+    row.update(
+        cloned_cds_sha256=hashlib.sha256(paths["clone"].read_bytes()).hexdigest(),
+        cloned_cds_ids='["experimental/clone:1"]',
+    )
+    for gene, start, end, strand in [("intronic_gene", 411, 422, "+"), ("antisense_gene", 111, 122, "-")]:
+        with paths["gff"].open("a") as handle:
+            handle.write(
+                f"chr1\tsource\tgene\t{start}\t{end}\t.\t{strand}\t.\tID={gene}\n"
+                f"chr1\tsource\tmRNA\t{start}\t{end}\t.\t{strand}\t.\tID={gene}.t1;Parent={gene}\n"
+                f"chr1\tsource\tCDS\t{start}\t{end}\t.\t{strand}\t0\tParent={gene}.t1\n"
+            )
+        with paths["cds"].open("a") as handle:
+            handle.write(f">{gene}.t1\nATGAAACCCTAA\n")
+    cloned.attach(task, row, tmp_path)
+    cloned.apply_to_task(task, tmp_path / "curated")
+    annotation = task["gff_path"].read_text()
+    assert "ID=intronic_gene\n" in annotation and "ID=antisense_gene\n" in annotation
+    assert set(dict(fsi.iter_fasta_records(task["cds_path"])).values()) == {sequence, "ATGAAACCCTAA"}
+    assert json.loads(Path(task["cloned_model_audit"]).read_text())["replacements"][0]["replaced_gene_ids"] == [
+        "C_fragment",
+        "N_fragment",
+    ]
+
+
+def test_manifest_signature_and_frozen_plan_include_only_explicit_selected_clone_inputs(tmp_path):
+    task, _, paths, row = fixture(tmp_path / "inputs")
+    row.update(
+        provider="local",
+        id="Test_species",
+        species_key="Test_species",
+        bind_local_sources="1",
+        cds_url=paths["cds"].as_uri(),
+        gff_url=paths["gff"].as_uri(),
+        genome_url=paths["genome"].as_uri(),
+        cloned_cds_ids='["experimental/clone:1"]',
+    )
+    manifest = tmp_path / "inputs.tsv"
+    with manifest.open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(row), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+    assert len(cloned.verify_manifest(manifest)) == 64
+    plan = tmp_path / "plan.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(SUPPORT / "plan_input_generation_tasks.py"),
+            "--provider",
+            "all",
+            "--download-manifest",
+            str(manifest),
+            "--download-dir",
+            str(tmp_path / "downloads"),
+            "--stage-downloads",
+            "--strict",
+            "--outfile",
+            str(plan),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    frozen = json.loads(plan.read_text())["tasks"][0]
+    assert frozen["input_sha256"][str(paths["clone"])] == row["cloned_cds_sha256"]
+    assert frozen["cloned_cds_ids"] == ["experimental/clone:1"]
+    from local_input_manifest_binds import source_files
+
+    assert paths["clone"] in source_files(manifest, tmp_path)
+    assert paths["clone"] in source_files(plan, tmp_path, plan=True)
+    from stage_input_generation_downloads import stage_downloads
+
+    stage_downloads(plan, require_gff=True, require_genome=True)
+    paths["clone"].write_text(paths["clone"].read_text() + "\n")
+    with pytest.raises(ValueError, match="changed after planning"):
+        stage_downloads(plan)
+
+
+@pytest.mark.parametrize("mode", ["single", "array"])
+def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_receipts(tmp_path, mode):
+    from test_gg_input_generation_end_to_end import (
+        CORE_PATH,
+        REPO_ROOT,
+        _core_env,
+        _install_fake_toolchain,
+        _read_tsv_rows,
+        _write_minimal_ete_taxonomy_db,
+        _write_runtime_busco_dataset,
+    )
+
+    _task, sequence, paths, row = fixture(tmp_path / "sources")
+    row.update(
+        provider="local",
+        id="Arabidopsis_thaliana",
+        species_key="Arabidopsis_thaliana",
+        bind_local_sources="1",
+        cds_url=paths["cds"].as_uri(),
+        gff_url=paths["gff"].as_uri(),
+        genome_url=paths["genome"].as_uri(),
+        cloned_cds_ids='["experimental/clone:1"]',
+    )
+    manifest = tmp_path / "cloned_inputs.tsv"
+    with manifest.open("w") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(row), delimiter="\t")
+        writer.writeheader()
+        writer.writerow(row)
+    workspace = tmp_path / "workspace"
+    _write_minimal_ete_taxonomy_db(workspace)
+    _write_runtime_busco_dataset(workspace)
+    fake_bin = _install_fake_toolchain(tmp_path)
+
+    def run(phase, index=None, success=True):
+        env = _core_env(
+            workspace, None, fake_bin, phase, index, require_cds=True, require_gff=True, require_genome=True
+        )
+        env.update(provider="all", download_manifest=str(manifest), strict="1", overwrite="0", run_species_taxonomy="1")
+        result = subprocess.run(
+            ["bash", str(CORE_PATH)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=180
+        )
+        assert (result.returncode == 0) == success, result.stdout + result.stderr
+        return result
+
+    root = workspace / "output/input_generation"
+    if mode == "array":
+        run("array_prepare")
+        run("array_worker", 1)
+        receipt = root / "tmp/task_plan.json.completed/1.json"
+        assert receipt.is_file()
+        files = json.loads(receipt.read_text())["files"]
+        metadata = json.loads((root / "tmp/task_meta_shards/1.json").read_text())
+        assert all(metadata[key] in files for key in cloned.EVIDENCE_FIELDS)
+        before = {p: (Path(p).read_bytes(), Path(p).stat().st_mtime_ns) for p in files}
+        run("array_worker", 1)
+        assert before == {p: (Path(p).read_bytes(), Path(p).stat().st_mtime_ns) for p in files}
+        run("array_finalize")
+    else:
+        run("single")
+        run("single")
+    summary = _read_tsv_rows(root / "gg_input_generation_species.tsv")
+    assert len(summary) == 1
+    clone_audit = Path(summary[0]["cloned_model_audit_path"])
+    assert clone_audit.is_file()
+    assert len(json.loads(clone_audit.read_text())["replacements"]) == 1
+    cds = Path(summary[0]["cds_output_path"])
+    records = dict(fsi.iter_fasta_records(cds))
+    assert len(records) == 2 and sequence in records.values()
+    assert not any("fragment" in name for name in records)
+    if mode == "single":
+        paths["clone"].write_text(paths["clone"].read_text().replace("ATG", "ACG", 1))
+        failed = run("single", success=False)
+        assert "Cloned CDS SHA256 mismatch" in failed.stderr

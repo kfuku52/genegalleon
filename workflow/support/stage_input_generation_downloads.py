@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import format_species_inputs as fsi
+from cloned_cds_models import copy_binding
 from format_species_annotation.tasks import task_missing_annotation_label
 from format_species_common import is_fasta_filename, is_gbff_filename, is_gff_filename
 from format_species_download.local import validate_gzip_with_cache
@@ -70,6 +71,7 @@ def explicit_manifest_task(task, row, download_root):
     )
     if row.get("paired_curation"):
         actual["paired_curation"] = row["paired_curation"]
+    copy_binding(actual, task)
     return actual
 
 
@@ -103,6 +105,8 @@ def bound_local_manifest_task(task, verified_inputs=None, *, reuse_gzip=False):
                 raise ValueError("Bound local source does not match the frozen plan: " + str(path))
         actual[role + "_path"] = path
     paths = [actual[key] for key in ("cds_path", "gff_path", "gbff_path", "genome_path") if actual[key]]
+    if task.get("cloned_cds_path"):
+        paths.append(Path(task["cloned_cds_path"]))
     observed_hashes = verified_inputs.verified(paths) if verified_inputs else digest_paths(paths)
     for path, observed in observed_hashes.items():
         if observed != task["input_sha256"][path]:
@@ -119,6 +123,7 @@ def bound_local_manifest_task(task, verified_inputs=None, *, reuse_gzip=False):
     actual["gff_selection_candidates"] = (actual["gff_path"].name,) if actual["gff_path"] else ()
     if row.get("paired_curation"):
         actual["paired_curation"] = row["paired_curation"]
+    copy_binding(actual, task)
     return actual
 
 
@@ -290,6 +295,7 @@ def stage_downloads(plan_path, *, jobs=4, timeout=120, headers=None, require_gff
             actual[setting] = task[setting]
         actual["genetic_code"] = int(task.get("genetic_code", 1))
         apply_input_type(actual, task["manifest_row"])
+        copy_binding(actual, task)
         if fence:
             actual["staged_input_reuse"] = task["staged_input_reuse"]
         rows = [resolved_rows[key]]

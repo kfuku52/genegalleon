@@ -6,6 +6,7 @@
     "PYTHONDONTWRITEBYTECODE": "1"
   },
   "runtime_python_files": [
+    "test_cloned_cds_models.py",
     "test_multispecies_transcriptome_summary_runtime.py",
     "test_query_gene_orthologs_runtime.py",
     "test_gene_model_refinement.py",

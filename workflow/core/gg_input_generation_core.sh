@@ -960,6 +960,7 @@ run_format_stage_single() {
   local existing_gff=()
   local existing_genome=()
   local format_needs_update=0
+  local cloned_model_signature=""
   local format_force_overwrite=${overwrite}
   local format_work_dir=""
   local format_cds_dir="${species_cds_dir}"
@@ -1006,9 +1007,15 @@ run_format_stage_single() {
   fi
 
   if [[ ${download_only} -eq 0 && ${dry_run} -eq 0 ]]; then
+    if [[ -n "${download_manifest}" ]]; then
+      cloned_model_signature=$(python "${gg_support_dir}/cloned_cds_models.py" verify-manifest --manifest "${download_manifest}") || return $?
+    fi
     gg_artifact_contract_init format_provenance_args "input_generation_format" "all_species" "${format_provenance_manifest}"
     gg_artifact_add_input_if_present format_provenance_args "input_directory" "${input_dir}"
     gg_artifact_add_input_if_present format_provenance_args "download_manifest" "${download_manifest}"
+    if [[ -n "${cloned_model_signature}" ]]; then
+      format_provenance_args+=(--parameter "cloned_model_signature=${cloned_model_signature}")
+    fi
     format_provenance_args+=(
       --output "species_cds=${species_cds_dir}"
       --output "species_gff=${species_gff_dir}"
@@ -1067,6 +1074,7 @@ run_format_stage_single() {
   cmd=(python "${gg_support_dir}/format_species_inputs.py")
   cmd+=(--provider "${provider}")
   cmd+=(--species-cds-dir "${format_cds_dir}")
+  cmd+=(--cloned-model-root "${input_generation_root}/cloned_models")
   cmd+=(--species-gff-dir "${format_gff_dir}")
   cmd+=(--species-genome-dir "${format_genome_dir}")
   cmd+=(--species-summary-output "${format_summary_output}")
@@ -2238,6 +2246,7 @@ run_array_worker_mode() {
   local gff_output_path=""
   local genome_output_path=""
   local orf_audit_output_path=""
+  local cloned_model_signature=""
   local format_provenance_manifest=""
   local -a format_provenance_args=()
 
@@ -2289,7 +2298,7 @@ run_array_worker_mode() {
   fi
   read_stats_json_fields "${task_meta_file}" species_prefix cds_input_path=cds_path \
     gff_input_path=gff_path gbff_input_path=gbff_path genome_input_path=genome_path \
-    cds_output_path gff_output_path genome_output_path orf_audit_output_path || exit $?
+    cds_output_path gff_output_path genome_output_path orf_audit_output_path cloned_model_signature || exit $?
   if [[ -z "${species_prefix}" || -z "${cds_output_path}" || ( ${require_gff} -eq 1 && -z "${gff_output_path}" ) ]]; then
     stage_format_status="failed"
     echo "Array task description is missing required species or output paths: ${task_meta_file}"
@@ -2320,6 +2329,9 @@ run_array_worker_mode() {
     gg_artifact_add_input_if_present format_provenance_args "gff_input" "${gff_input_path}"
     gg_artifact_add_input_if_present format_provenance_args "gbff_input" "${gbff_input_path}"
     gg_artifact_add_input_if_present format_provenance_args "genome_input" "${genome_input_path}"
+    if [[ -n "${cloned_model_signature}" ]]; then
+      format_provenance_args+=(--parameter "cloned_model_signature=${cloned_model_signature}")
+    fi
     format_provenance_args+=(--output "formatted_cds=${cds_output_path}")
     [[ -z "${orf_audit_output_path}" ]] || format_provenance_args+=(--output "orf_audit=${orf_audit_output_path}")
     if [[ -n "${gff_output_path}" ]]; then
@@ -2432,6 +2444,11 @@ run_array_worker_mode() {
     receipt_cmd+=(--file "${dir_task_stats_shards}/${GG_ARRAY_TASK_ID}.mapping.json")
   fi
   local raw_input_path
+  local cloned_model_files
+  cloned_model_files=$(python "${gg_support_dir}/cloned_cds_models.py" evidence-files --metadata "${task_meta_file}") || exit $?
+  while IFS= read -r raw_input_path; do
+    [[ -z "${raw_input_path}" ]] || receipt_cmd+=(--file "${raw_input_path}")
+  done <<< "${cloned_model_files}"
   for raw_input_path in "${cds_input_path}" "${gff_input_path}" "${gbff_input_path}" "${genome_input_path}"; do
     [[ -z "${raw_input_path}" ]] || receipt_cmd+=(--file "${raw_input_path}")
   done
