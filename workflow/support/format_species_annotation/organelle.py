@@ -8,6 +8,8 @@ decision.
 """
 
 import re
+from functools import lru_cache
+from pathlib import Path
 
 from format_species_writers import apply_common_replacements, open_text
 from gff_attribute_syntax import normalise_line
@@ -73,8 +75,16 @@ def is_organelle_annotation(feature_type, attrs):
 
 def gff_organelle_seqids(path):
     """Return sequence IDs marked as mitochondrial/plastid in a GFF3 file."""
+    source = Path(source_annotation_path(path)).resolve()
+    metadata = source.stat()
+    return _cached_organelle_seqids(str(source), metadata.st_dev, metadata.st_ino,
+                                   metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+@lru_cache(maxsize=8)
+def _cached_organelle_seqids(path, device, inode, size, mtime, ctime):
     seqids = set()
-    with open_text(source_annotation_path(path), "rt", errors="replace") as handle:
+    with open_text(path, "rt", errors="replace") as handle:
         for raw_line in handle:
             if raw_line.startswith("##FASTA"):
                 break
@@ -90,6 +100,10 @@ def gff_organelle_seqids(path):
             attrs = parse_gff_attributes(parts[8])
             if is_organelle_annotation(parts[2], attrs):
                 seqids.add(seqid)
+    metadata = Path(path).stat()
+    if (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns,
+            metadata.st_ctime_ns) != (device, inode, size, mtime, ctime):
+        raise OSError("GFF changed during organelle detection: " + path)
     return frozenset(sorted(seqids))
 
 

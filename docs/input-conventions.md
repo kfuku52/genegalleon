@@ -264,7 +264,11 @@ coding parents. Missing `Target`, shared model IDs or referenced alignment IDs
 still pass through the strict collision checks. Paired CDS repairs
 preserve quoted GTF attributes when recording their audit markers. Blocked
 formatting writes `.locus-identity.json` beside
-the planned CDS output. Original source files remain unchanged.
+the planned CDS output. Original source files remain unchanged. Repeated organelle detection reuses a bounded,
+file-metadata-bound cache. Rewrites or file replacements invalidate the cached
+sequence IDs, and a source change during scanning stops detection. The filtering
+rules and retained GFF/CDS/genome content are unchanged.
+
 
 Prefer one annotation source per species. Where a workflow retains multiple
 sources, `gg_gene_evolution` passes its read-only FASTA sequence store to
