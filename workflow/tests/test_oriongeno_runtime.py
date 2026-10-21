@@ -196,15 +196,17 @@ def test_native_failure_preserves_previous_complete_pair(local_runtime, tmp_path
     assert gff.read_text() == 'previous GFF' and receipt.read_text() == 'previous receipt'
 
 
-@pytest.mark.parametrize('compressed', [False, True])
+@pytest.mark.parametrize('compression', ['plain', 'gzip-suffix', 'gzip-magic', 'gzip-upper'])
 @pytest.mark.parametrize('auto_selected', [False, True])
-def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime, tmp_path, monkeypatch, compressed, auto_selected):
+def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime, tmp_path, monkeypatch, compression, auto_selected):
     from test_transcript_utrs import model
 
     setup, _package, _model = local_runtime
     runtime = native.prepare(setup)
     original_execute = native.execute
-    genome = tmp_path/('genome.fa.gz' if compressed else 'genome.fa')
+    compressed = compression != 'plain'
+    filename = {'gzip-suffix': 'genome.fa.gz', 'gzip-upper': 'genome.fa.GZ'}.get(compression, 'genome.fa')
+    genome = tmp_path/filename
     sequence = b'>chr\nCCCATGAAATAACCC\n'
     genome.write_bytes(gzip.compress(sequence) if compressed else sequence)
     gff, receipt = tmp_path/'native.gff3', tmp_path/'separate-receipts/native.json'

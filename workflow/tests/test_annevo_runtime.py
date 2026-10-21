@@ -334,9 +334,10 @@ def test_two_parallel_callers_install_one_generation(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("profile", ["Mammalia", "Aves", "Actinopteri", "Insecta", "Fungi", "Magnoliopsida"])
-def test_gzip_genome_is_unpacked_in_short_native_work_and_original_is_bound(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize("filename", ["genome.fa.gz", "genome.fa", "genome.fa.GZ"])
+def test_gzip_genome_is_unpacked_in_short_native_work_and_original_is_bound(tmp_path, monkeypatch, profile, filename):
     import gzip
-    genome, selected, output, receipt = [tmp_path/n for n in ('genome.fa.gz', 'selected.json', 'result.gff3', 'result.json')]
+    genome, selected, output, receipt = [tmp_path/n for n in (filename, 'selected.json', 'result.gff3', 'result.json')]
     fasta = b'>seq\nATGAAATAA\n'
     genome.write_bytes(gzip.compress(fasta))
     selected.write_bytes(b'original selected')

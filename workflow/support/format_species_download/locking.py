@@ -294,7 +294,7 @@ def download_url_to_partial(url, partial_path, headers, timeout, warnings, lock_
     host = urlparse(url).hostname or ""
     default_chunk = 128 * 1024 * 1024 if host == "cngb.org" or host.endswith(".cngb.org") else 0
     if host == "cncb.ac.cn" or host.endswith(".cncb.ac.cn"):
-        default_chunk = 64 * 1024 * 1024
+        default_chunk = 8 * 1024 * 1024
     try:
         chunk_size = max(0, int(os.environ.get("GG_DOWNLOAD_RANGE_CHUNK_BYTES", default_chunk)))
     except ValueError:

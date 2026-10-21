@@ -16,6 +16,7 @@ from annevo_model_selection import protect_outputs, verified_input_sha
 from annevo_runtime import gff_counts, publish_pair, selection_record
 from annevo_runtime_cache import RuntimeVerification, inspect_tree, private_root
 from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
+from format_species_writers import input_compression
 from genome_sequence_identity import genome_sequence_digest
 from oriongeno_model_profiles import PROFILES
 from shared_namespace_lock import namespace_lock
@@ -221,7 +222,7 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
         with tempfile.TemporaryDirectory(prefix='.oriongeno-', dir=output.parent) as temporary:
             staged = Path(temporary) / 'prediction.gff3'
             native_genome = genome.resolve()
-            if genome.name.endswith('.gz'):
+            if input_compression(genome) == 'gzip':
                 native_genome = Path(temporary)/'genome.fa'
                 with gzip.open(genome, 'rb') as source, native_genome.open('wb') as target:
                     shutil.copyfileobj(source, target)

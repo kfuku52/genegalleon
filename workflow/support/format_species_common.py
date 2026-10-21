@@ -1,7 +1,5 @@
 """Shared filename classification, candidate ordering, and network predicates."""
 
-import bz2
-import gzip
 import re
 import socket
 from http.client import IncompleteRead, RemoteDisconnected
@@ -15,6 +13,7 @@ from format_species_constants import (
     TRANSIENT_HTTP_STATUS_CODES,
 )
 from format_species_provider_config import DEFAULT_INPUT_RELATIVE_DIRS, ENSEMBL_LIKE_PROVIDERS, ORYZA_MINUTA_PROVIDER
+from format_species_writers import open_text
 
 FERNBASE_GFF_EXCLUDE_PATTERN = re.compile(
     r"(?:^|[._-])(te|teanno|repeat|repeats|transpos(?:on)?)(?:[._-]|$)",
@@ -163,10 +162,8 @@ def provider_candidate_sort_key(provider, label, name):
 
 def gff_contains_cds_feature(path):
     """Return whether a local GFF candidate contains at least one CDS row."""
-    name = str(path.name or "").lower()
-    opener = gzip.open if name.endswith(".gz") else bz2.open if name.endswith(".bz2") else open
     try:
-        with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
+        with open_text(path, "rt", errors="replace") as handle:
             for raw_line in handle:
                 if raw_line == "" or raw_line.startswith("#"):
                     continue

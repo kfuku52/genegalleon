@@ -38,23 +38,46 @@ def output_compression_threads():
     return max(1, value)
 
 
+def input_compression(path):
+    """Detect downloaded compression, retaining strict declared-suffix checks."""
+    path = Path(path)
+    with path.open("rb") as handle:
+        signature = handle.read(3)
+    if signature.startswith(b"\x1f\x8b"):
+        return "gzip"
+    if signature == b"BZh":
+        return "bz2"
+    name = path.name.lower()
+    return "gzip" if name.endswith(".gz") else "bz2" if name.endswith(".bz2") else ""
+
+
 def open_text(path, mode, errors="strict"):
     path = Path(path)
-    if path.name.endswith(".gz"):
+    writing = any(flag in mode for flag in ("w", "a", "x"))
+    if writing:
+        compression = "gzip" if path.name.endswith(".gz") else "bz2" if path.name.endswith(".bz2") else ""
+    else:
+        compression = input_compression(path)
+    if compression == "gzip":
         kwargs = {"encoding": "utf-8", "errors": errors}
-        if any(flag in mode for flag in ("w", "a", "x")):
+        if writing:
             kwargs["compresslevel"] = output_gzip_compresslevel()
         return gzip.open(path, mode, **kwargs)
-    if path.name.endswith(".bz2"):
+    if compression == "bz2":
         return bz2.open(path, mode, encoding="utf-8", errors=errors)
     return open(path, mode, encoding="utf-8", errors=errors)
 
 
 def open_binary(path, mode="rb"):
     path = Path(path)
-    if path.name.endswith(".gz"):
+    writing = any(flag in mode for flag in ("w", "a", "x"))
+    if writing:
+        compression = "gzip" if path.name.endswith(".gz") else "bz2" if path.name.endswith(".bz2") else ""
+    else:
+        compression = input_compression(path)
+    if compression == "gzip":
         return gzip.open(path, mode)
-    if path.name.endswith(".bz2"):
+    if compression == "bz2":
         return bz2.open(path, mode)
     return open(path, mode)
 

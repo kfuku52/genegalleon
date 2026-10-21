@@ -27,6 +27,7 @@ from annevo_model_selection import (
 )
 from annevo_runtime_cache import RuntimeVerification, prepare, runtime_environment, verify_ready
 from annevo_runtime_download import atomic_json, file_sha
+from format_species_writers import input_compression
 from genome_sequence_identity import genome_sequence_digest
 from shared_namespace_lock import namespace_lock
 
@@ -232,7 +233,7 @@ def run(args):
             work = Path(temporary)
             predicted = work / "prediction.gff3"
             native_genome = genome.absolute()
-            compressed = genome.name.endswith(".gz")
+            compressed = input_compression(genome) == "gzip"
             if compressed:
                 native_genome = work / "genome.fa"
                 with gzip.open(genome, "rb") as source, native_genome.open("xb") as target:

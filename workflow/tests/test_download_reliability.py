@@ -1,7 +1,6 @@
 """Fault injection for resumable downloads; all HTTP stays on loopback."""
 import gzip
 import json
-import os
 import sys
 import threading
 import time
@@ -157,20 +156,17 @@ def test_transient_backoff_is_shared_with_existing_provider_limiter(tmp_path, mo
 
 def test_cncb_default_survives_a_server_that_closes_unbounded_responses(tmp_path, monkeypatch):
     import format_species_download.locking as locking
-    payload = b'>sequence\nACGTACGTACGT\n'
+    limit = 8 * 1024 * 1024
+    payload = b'>sequence\n' + b'ACGT' * (limit // 4)
     seen = []
     parse = locking.urlparse
-    get = os.environ.get
     monkeypatch.delenv('GG_DOWNLOAD_RANGE_CHUNK_BYTES', raising=False)
     monkeypatch.setattr(locking, 'urlparse', lambda url: parse(url)._replace(netloc='download.cncb.ac.cn'))
-    # Scale only the real CNCB default, preserving its selection and transport.
-    monkeypatch.setattr(os.environ, 'get', lambda key, default=None:
-        '7' if key == 'GG_DOWNLOAD_RANGE_CHUNK_BYTES' and default == 64 * 1024 * 1024 else get(key, default))
     def reply(h):
         value = h.headers.get('Range', '')
         seen.append((value, h.headers.get('If-Range')))
         start, _, end = value.removeprefix('bytes=').partition('-')
-        if not value or not end:
+        if not value or not end or int(end) - int(start) + 1 > limit:
             h.send_response(200)
             h.send_header('Content-Length', str(len(payload)))
             h.send_header('ETag', '"stable"')
@@ -188,8 +184,8 @@ def test_cncb_default_survives_a_server_that_closes_unbounded_responses(tmp_path
     with server(reply) as url:
         download(url, tmp_path / 'sequence')
     assert (tmp_path / 'sequence').read_bytes() == payload
-    assert seen == [('bytes=0-6', None), ('bytes=7-13', '"stable"'),
-                    ('bytes=14-20', '"stable"'), ('bytes=21-27', '"stable"')]
+    assert seen == [(f'bytes=0-{limit - 1}', None),
+                    (f'bytes={limit}-{2 * limit - 1}', '"stable"')]
     assert not list(tmp_path.glob('*.part*'))
 
 

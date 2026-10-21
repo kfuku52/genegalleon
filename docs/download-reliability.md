@@ -47,7 +47,7 @@ partial files for a later run. A missing or changed resume validator causes a
 fresh transfer, even when another validator type is present. A 416 response triggers a fresh request rather than declaring success
 from the byte count alone.
 
-CNGB transfers use sequential 128 MiB ranges and CNCB/GWH transfers use 64 MiB
+CNGB transfers use sequential 128 MiB ranges and CNCB/GWH transfers use 8 MiB
 ranges when the server supports validated ranges. These bounded responses avoid
 repeatedly restarting long connections while retaining ETag/Last-Modified and
 byte-integrity checks. Set `GG_DOWNLOAD_RANGE_CHUNK_BYTES=0` to stream, or a positive byte count
@@ -65,6 +65,11 @@ accepted. HTML responses are rejected, and gzip is detected by its signature as
 well as its extension, including numeric Figshare filenames. Empty files and
 compressed or BOM/comment-prefixed HTML are rejected. Version-2 validation
 receipts invalidate earlier checks so cached data receives these stronger checks.
+The formatter also detects gzip and bzip2 input bytes without a compression
+suffix; its text, binary, GFF feature and genome-reference readers agree.
+Gzip CRC/truncation errors still fail, and a declared compression suffix never
+permits a plain-text fallback. Output compression continues to follow the
+destination filename.
 
 NCBI Datasets uses the same resumable transport and retains its downloaded ZIP.
 Extraction requires the requested accession/version and an unambiguous member;

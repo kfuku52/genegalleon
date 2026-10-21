@@ -1028,6 +1028,17 @@ XLSX template notes:
 - curated CDS/GFF entries must form one annotation bundle: transcriptome assemblies
   are not accepted as CDS-only inputs, and repeat/reduced-model GFFs are not accepted
   as the companion gene annotation.
+- catalog membership identifies a usable annotation bundle, not the best or
+  newest genome. A genome-source review must include already cataloged species
+  and unannotated assemblies in NCBI, GWH, specialist databases and author releases.
+  Verify the target taxon and compare the same primary/haplotype and ploidy
+  representation before replacing a source. A newer date, chromosome label or
+  scaffold N50 alone is insufficient: check actual sequence lengths, N content
+  and contig continuity, and record the provenance of completeness measurements.
+  Annotation/transcript BUSCO results do not establish genome completeness.
+  Keep a paired reference genome and annotation together; a superior genome
+  without matching annotation belongs in the genome prediction route. Freeze
+  reviewed URLs, versions, filenames, sizes and checksums before submission.
 - validate catalog edits with
   `python workflow/support/validate_direct_catalog.py --manifest workspace/input/input_generation/direct_catalog_curated.tsv`.
   Add `--check-remote-gff` to stream remote GFFs and reject complete files with no

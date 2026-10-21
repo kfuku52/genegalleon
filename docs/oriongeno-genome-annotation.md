@@ -5,6 +5,9 @@ Set it to `annevo` for the existing ANNEVO route, or `none` for CDS-based
 annotation, including annotation of an existing verified representative bundle.
 Both predictors read `workspace/input/species_genome` and retain curated inputs.
 Each array task handles one sorted genome; provision the array for all species.
+OrionGeno and ANNEVO detect gzip inputs by their bytes as well as the `.gz`
+suffix, and unpack them only in temporary prediction storage. This also handles
+compressed public files named `.fa`; original source bytes and hashes are retained.
 
 ## Native prediction
 
