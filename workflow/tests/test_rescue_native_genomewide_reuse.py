@@ -20,6 +20,11 @@ catalog = importlib.import_module('gene_model_catalog')
 def producer(tmp_path):
     root = tmp_path / 'producer'
     shutil.copytree(SUPPORT, root / 'workflow/support')
+    # Installed sources are immutable. Only this synthetic producer copy is
+    # deliberately editable for corruption/semantic-change rejection tests.
+    for path in (root / 'workflow/support').rglob('*'):
+        if path.is_file():
+            path.chmod(0o600)
     return root, {'request': {'oriongeno': {'predictions': {}}, 'tools': rescue.identities()}}
 
 
