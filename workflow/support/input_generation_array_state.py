@@ -50,7 +50,8 @@ class FreshDigestBatch:
                     or str(Path(path).resolve(strict=True)) != target):
                 raise OSError("File changed while hashing: " + path)
 
-    def read(self, paths):
+    def read(self, paths, *, expected=None):
+        """Hash current members together; expected hashes retain fail-fast reads."""
         self.check()
         paths = list(dict.fromkeys(str(path) for path in paths))
         for path in paths:
@@ -60,6 +61,8 @@ class FreshDigestBatch:
             identity, target = self.paths[path]
             if identity not in self.hashes:
                 self.hashes[identity] = digest(target)
+            if expected is not None and self.hashes[identity] != expected[path]:
+                raise ValueError("File hash mismatch: " + path)
         self.check()
         return {path: self.hashes[self.paths[path][0]] for path in paths}
 
@@ -166,10 +169,15 @@ def verify_receipt(plan, index, plan_sha256=None, *, namespace_root=None):
             return False
         if not isinstance(receipt["files"], dict) or not receipt["files"]:
             return False
+        members = {}
         for name, value in receipt["files"].items():
             member = str(namespace_path(name, namespace_root))
-            if batch.read([member])[member] != value:
+            if member in members and members[member] != value:
                 return False
+            members[member] = value
+        # Fence all names together instead of revisiting every earlier member
+        # after each hash. Expected hashes still stop before later large reads.
+        batch.read(members, expected=members)
         # No saved digest survives this call. Fence metadata, all aliases and
         # earlier members until even the last output has been read.
         batch.check()
