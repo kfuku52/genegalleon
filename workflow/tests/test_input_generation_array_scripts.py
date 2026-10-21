@@ -1876,6 +1876,39 @@ def test_verify_completion_stops_reading_after_a_mismatch(aliased_completion, mo
     assert not state.verify_receipt(plan, 1)
 
 
+def test_verify_completion_uses_linear_metadata_fences(aliased_completion, monkeypatch):
+    state, _, _, _, plan, receipt = aliased_completion
+    value = json.loads(receipt.read_text())
+    for index in range(64):
+        member = plan.parent / f"qc-{index}.json"
+        member.write_text(json.dumps({"species": "Species_a", "member": index}))
+        value["files"][str(member)] = state.digest(member)
+    state.atomic_json(receipt, value)
+    frozen = receipt.read_bytes()
+    checks = []
+    original = state.FreshDigestBatch.check
+
+    def counted(batch):
+        checks.append(len(batch.paths))
+        return original(batch)
+
+    monkeypatch.setattr(state.FreshDigestBatch, "check", counted)
+    assert state.verify_receipt(plan, 1)
+    assert sum(checks) <= 8 * (len(value["files"]) + 2)
+    assert receipt.read_bytes() == frozen
+
+
+@pytest.mark.parametrize("namespace_alias", [False, True])
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_verify_completion_keeps_all_normalized_path_expectations(aliased_completion, namespace_alias, conflicting):
+    state, raw, _, _, plan, receipt = aliased_completion
+    value = json.loads(receipt.read_text())
+    name = "/workspace/raw" if namespace_alias else str(raw.parent) + "/./raw"
+    value["files"][name] = "0" * 64 if conflicting else state.digest(raw)
+    state.atomic_json(receipt, value)
+    assert state.verify_receipt(plan, 1, namespace_root=raw.parent if namespace_alias else None) is not conflicting
+
+
 @pytest.mark.parametrize("changed", ["missing-receipt", "malformed-receipt", "wrong-plan", "wrong-index",
                                    "empty-files", "conflicting-alias", "missing-source", "directory", "fifo"])
 def test_verify_completion_retains_fail_closed_behavior(aliased_completion, changed):

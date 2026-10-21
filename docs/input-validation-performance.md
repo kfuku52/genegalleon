@@ -149,6 +149,50 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_nativ
 
 Repeat with `--receipt-aliases 0` and a different output path for the control.
 
+## Completion receipt metadata fences
+
+Receipt verification fences member identities and resolved paths in one batch,
+instead of checking every earlier member after each new hash. The number of
+metadata fences is linear in receipt size. Every path still has its own expected
+SHA-256; conflicting expectations for normalized paths are rejected. Full content
+reads, physical-file deduplication, fail-fast mismatch handling and final
+receipt/plan/member change detection remain in place. No proof crosses calls.
+
+On 2026-10-21, baseline v0.8.338 (`cceca64`) and this change ran in Docker
+Linux/arm64, Python 3.12.15, immutable runtime
+`sha256:594a13182c692adfa393107910c67cf57591ff8127d7eaad7724f5ea552e83af`.
+One warmup preceded five
+alternating fresh-process trials. Each case verified eight synthetic receipts;
+each contained a 1 MiB source, its alias, a 1 MiB output and the listed number
+of QC files with 4 KiB payloads. All result hashes and receipt bytes matched, including
+rejection of a changed output. SHA read counts and bytes were identical.
+
+| QC files per receipt | Wall seconds before / after | Metadata path fences before / after | Peak RSS MiB before / after |
+|---|---:|---:|---:|
+| 16 (19 declared paths) | 0.0495 / 0.0176 | 3,680 / 368 | 23.77 / 23.78 |
+| 64 (67 declared paths) | 0.3842 / 0.0350 | 38,624 / 1,136 | 24.18 / 23.94 |
+
+A large-file control used four receipts with 64 MiB sources and no QC files.
+An initial five-trial control was noisy; nine follow-up trials measured median
+wall time 0.1168 / 0.1167 seconds and CPU time 0.1167 / 0.1167 seconds.
+Both read exactly 272,632,884 SHA bytes; peak RSS including setup was
+24.63 / 24.80 MiB. This control supports no material speed change.
+These are warm-cache receipt-verification measurements, not whole-worker,
+NAS throughput, BUSCO or finalization timings.
+
+Reproduce with the baseline source visible through a read-only extra bind and
+a new writable output path:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/data/baseline \
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_native_efficiency.py \
+  --mode receipt --baseline-repo /data/baseline --species 8 --genome-mib 1 \
+  --receipt-extra-files 16 --trials 5 --output tmp/receipt-fences.json
+```
+
+Repeat with 64 extra files for the larger receipt. The large-file control uses
+`--species 4 --genome-mib 64 --receipt-extra-files 0 --trials 9`.
+
 ## Genome sequence identity
 
 OrionGeno, ANNEVO and native candidate admission compute a canonical identity
