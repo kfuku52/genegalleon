@@ -184,6 +184,7 @@ taxonomy_taxid_override="" # One explicit species:TaxID correction for a schedul
 representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement effective/inputs.tsv; routes CDS/protein/GFF/genome together.
 input_sequence_mode="${input_sequence_mode:-${GG_COMMON_INPUT_SEQUENCE_MODE:-cds}}" # {cds,protein}; protein mode uses species_protein inputs or per-species CDS->protein translation with optional species_genetic_code/species_genetic_code.tsv overrides.
 strictly_single_copy_only=0 # Restrict marker selection to strictly single-copy orthologs only.
+species_tree_busco_copy_policy="single-copy" # single-copy excludes duplicated species/BUSCO cells; best-score selects one HMM-ranked representative and records its candidates (not proof of orthology).
 bootstrap_params="-bb 1000 -bnni" # Extra IQ-TREE bootstrap parameters.
 nucleotide_model="GTR+R4" # IQ-TREE nucleotide substitution model.
 protein_model="LG+R4" # IQ-TREE protein substitution model.

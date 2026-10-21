@@ -22,6 +22,31 @@ VALIDATE_LONGEST_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "support" /
 SMALL_DATASET_ROOT = Path(__file__).resolve().parent / "data" / "small_gfe_dataset"
 
 
+@pytest.mark.parametrize("mode", ["strict", "rescue_overlap"])
+def test_ensembl_chondrus_t_gene_ids_are_distinct_source_genes(tmp_path, mode):
+    mod = load_module()
+    cds, gff = tmp_path / "Chondrus_crispus.cds.fa", tmp_path / "source.gff"
+    genes = ["CHC_T00001315001", "CHC_T00008975001"]
+    proteins = ["CDF32066", "CDF32067"]
+    cds.write_text("".join(
+        f">{protein} cds gene:{gene} transcript:{protein}\nATGAAATAA\n"
+        for gene, protein in zip(genes, proteins, strict=True)))
+    gff.write_text("##gff-version 3\n" + "".join(
+        f"HG001459\tena\tgene\t{start}\t{start+8}\t.\t+\t.\tID=gene:{gene};gene_id={gene}\n"
+        f"HG001459\tena\tmRNA\t{start}\t{start+8}\t.\t+\t.\tID=transcript:{protein};Parent=gene:{gene};transcript_id={protein}\n"
+        f"HG001459\tena\tCDS\t{start}\t{start+8}\t.\t+\t0\tID=CDS:{protein};Parent=transcript:{protein};protein_id={protein}\n"
+        for start, gene, protein in zip([1, 30], genes, proteins, strict=True)))
+    task = dict(provider="ensemblplants", species_key="Chondrus_crispus", species_prefix="Chondrus_crispus",
+                cds_path=cds, gff_path=gff, genome_path=None, gene_grouping_mode=mode)
+    out = tmp_path / "out"
+    out.mkdir()
+    result = mod.format_cds(task, out, overwrite=False, dry_run=False)
+    assert result["before_count"] == result["after_count"] == 2
+    with gzip.open(result["output_path"], "rt") as handle:
+        headers = [line.strip() for line in handle if line.startswith(">")]
+    assert set(headers) == {">Chondrus_crispus_" + gene for gene in genes}
+
+
 @pytest.mark.parametrize("mutation", ["", "missing_alias", "overlap", "other_gene", "different_metadata"])
 def test_coge_split_feature_ids_require_one_explicit_rna(tmp_path, mutation):
     mod = load_module()

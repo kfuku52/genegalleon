@@ -1510,6 +1510,46 @@ def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp
 @pytest.mark.skipif(
     SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
 )
+def test_species_tree_best_score_selection_is_provenance_bound(tmp_path, monkeypatch):
+    original_prepare = _prepare_stub_binaries
+
+    def prepare_with_real_seqkit(path):
+        binary_dir = original_prepare(path)
+        (binary_dir / "seqkit").unlink()
+        return binary_dir
+
+    monkeypatch.setattr(sys.modules[__name__], "_prepare_stub_binaries", prepare_with_real_seqkit)
+    workspace = tmp_path / "workspace"
+    proteins = workspace / "input/species_protein"
+    proteins.mkdir(parents=True)
+    (proteins / "Arabidopsis_thaliana.pep.fa").write_text(
+        ">Arabidopsis_thaliana_low\nMPEPTIDE\n>Arabidopsis_thaliana_high\nMPEPTIDE\n")
+    output = workspace / "output"
+    full = output / "species_protein_busco_full"
+    full.mkdir(parents=True)
+    (full / "Arabidopsis_thaliana.busco.full.tsv").write_text(
+        "BUSCO1\tDuplicated\tArabidopsis_thaliana_low\t10\t8\n"
+        "BUSCO1\tDuplicated\tArabidopsis_thaliana_high\t20\t8\n")
+    summary = output / "species_tree/busco_summary_table"
+    summary.mkdir(parents=True)
+    (summary / "busco_summary.tsv").write_text(
+        "busco_id\torthodb_url\tdescription\tArabidopsis_thaliana\n"
+        "BUSCO1\tu\td\tArabidopsis_thaliana_low,Arabidopsis_thaliana_high\n")
+    completed = _run_core(tmp_path, {"run_orthofinder": "0", "run_extract_species_tree_fasta": "1",
+                                     "species_tree_busco_copy_policy": "best-score"})
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    audit = output / "species_tree/busco_representative_selection.tsv"
+    assert "Arabidopsis_thaliana_high\t20.0\t8\tDuplicated\t1" in audit.read_text()
+    receipt = json.loads((output / "artifact_provenance/genome_evolution/species_tree.extract_fasta.json").read_text())
+    assert receipt["parameters"]["copy_policy"] == "best-score"
+    assert any(row["label"] == "busco_full_tables" for row in receipt["inputs"])
+    assert any(row["label"] == "representative_selection" and row["sha256"] == hashlib.sha256(audit.read_bytes()).hexdigest()
+               for row in receipt["outputs"])
+
+
+@pytest.mark.skipif(
+    SYSTEM_BASH_MAJOR < 4, reason="gg_genome_evolution_core.sh requires bash 4+ features such as local -n"
+)
 def test_genome_evolution_files_mode_materializes_existing_species_tree_zips(tmp_path: Path):
     workspace = tmp_path / "workspace"
     species_protein_dir = workspace / "input" / "species_protein"

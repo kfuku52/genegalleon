@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import gzip
 import hashlib
 import io
@@ -903,6 +904,54 @@ def test_batch_busco_extraction_streams_inputs_once_for_both_modes(tmp_path: Pat
     assert duplicate_text.count(">") == 3
     assert ">A_dup1" in duplicate_text
     assert ">B_dup2" in duplicate_text
+
+
+@pytest.mark.parametrize("case,winner", [
+    ("score", "A_high"), ("length_tie_break", "A_high"), ("id_tie_break", "A_first"),
+    ("missing", None), ("nan", None), ("duplicate_score", None), ("strict", None),
+])
+def test_busco_representatives_use_scored_candidates_and_fail_closed(tmp_path, case, winner):
+    fasta = tmp_path / "a.fa"
+    fasta.write_text(">A_high\nAAAA\n>A_first\nCCCC\n")
+    fasta_list = tmp_path / "fastas.txt"
+    fasta_list.write_text(str(fasta) + "\n")
+    summary = tmp_path / "summary.tsv"
+    summary.write_text("busco_id\turl\tdescription\tA\nBUSCO1\tu\td\tA_high,A_first\n")
+    full = tmp_path / "full"
+    full.mkdir()
+    high = "BUSCO1\tDuplicated\tA_high\t11\t100\n"
+    first = "BUSCO1\tDuplicated\tA_first\t10\t200\n"
+    if case == "length_tie_break":
+        first = "BUSCO1\tDuplicated\tA_first\t11\t90\n"
+    if case == "id_tie_break":
+        first = "BUSCO1\tDuplicated\tA_first\t11\t100\n"
+    if case == "missing":
+        high = ""
+    if case == "nan":
+        high = high.replace("\t11\t", "\tnan\t")
+    if case == "duplicate_score":
+        high += high
+    (full / "A.busco.full.tsv").write_text(high + first)
+    audit = tmp_path / "selection.tsv"
+    args = ["--summary", summary, "--fasta-list", fasta_list, "--output-dir", tmp_path / "out",
+            "--suffix", ".fa", "--report", tmp_path / "report.tsv", "--mode", "single-copy",
+            "--copy-policy", "best-score", "--busco-full-dir", full, "--selection-report", audit,
+            "--require-complete"]
+    if case == "strict":
+        args += ["--strict"]
+    result = run_helper("batch_extract_busco_fasta.py", *args)
+    if winner is None:
+        assert result.returncode == 2, result.stderr
+        assert not audit.exists()
+        assert not (tmp_path / "out").exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        text = (tmp_path / "out/BUSCO1.fa").read_text()
+        assert text.count(">") == 1 and text.startswith(">" + winner + "\n")
+        rows = list(csv.DictReader(audit.open(), delimiter="\t"))
+        assert len(rows) == 2
+        assert [row["gene_id"] for row in rows if row["selected"] == "1"] == [winner]
+        assert fasta.read_text() == ">A_high\nAAAA\n>A_first\nCCCC\n"
 
 
 def test_batch_busco_extraction_rejects_traversal_identifiers(tmp_path: Path):

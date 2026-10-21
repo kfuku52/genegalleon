@@ -1,5 +1,16 @@
 # Input Conventions
 
+For BUSCO species-tree markers, `species_tree_busco_copy_policy="single-copy"`
+preserves the default exclusion of duplicated species/marker cells. Opt-in
+`"best-score"` with `strictly_single_copy_only=0` retains one candidate per
+species/marker, ranked by BUSCO HMM score, aligned length, then gene ID. The
+original proteins and BUSCO tables remain unchanged; all candidates and the
+selection are recorded in `output/species_tree/busco_representative_selection.tsv`
+and bound to the extraction provenance. This can recover marker coverage for
+duplicated assemblies, but HMM ranking does not establish orthology or distinguish
+alleles from paralogs. Review duplication patterns and tree sensitivity before
+adopting the resulting species tree.
+
 ### Species naming
 
 Species IDs are inferred from filename prefixes such as `GENUS_SPECIES`.

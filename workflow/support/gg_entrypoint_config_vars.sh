@@ -558,6 +558,7 @@ species_tree_zip_compression
 species_tree_zip_compression_level
 species_tree_rooting
 strictly_single_copy_only
+species_tree_busco_copy_policy
 target_branch_go
 timetree_constraint
 undated_species_tree

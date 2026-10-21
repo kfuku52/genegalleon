@@ -127,6 +127,17 @@ orthofinder_memory_gb_per_thread="${orthofinder_memory_gb_per_thread:-4}"
 orthofinder_binary="${orthofinder_binary:-orthofinder}"
 orthofinder_source_manifest="${orthofinder_source_manifest:-}"
 genome_parallel_jobs="${genome_parallel_jobs:-auto}"
+species_tree_busco_copy_policy="${species_tree_busco_copy_policy:-single-copy}"
+case "${species_tree_busco_copy_policy}" in
+  single-copy) ;;
+  best-score)
+    if [[ ${strictly_single_copy_only:-0} -eq 1 ]]; then
+      echo "best-score BUSCO representatives require strictly_single_copy_only=0" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "species_tree_busco_copy_policy must be single-copy or best-score" >&2; exit 2 ;;
+esac
 genome_parallel_memory_gb_per_job="${genome_parallel_memory_gb_per_job:-2}"
 run_busco_dupaware_extract_fasta="${run_busco_dupaware_extract_fasta:-0}"
 run_busco_dupaware_mafft="${run_busco_dupaware_mafft:-0}"
@@ -3123,9 +3134,16 @@ extract_species_tree_fasta_provenance_args+=(
   --output-logical-directory "fasta_directory=${dir_single_copy_fasta}"
   --parameter "input_sequence_mode=${input_sequence_mode}"
   --parameter "strictly_single_copy_only=${strictly_single_copy_only}"
+  --parameter "copy_policy=${species_tree_busco_copy_policy}"
   --parameter "genetic_code=${genetic_code}"
   --parameter "sequence_label=${species_tree_sequence_label}"
 )
+if [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
+  extract_species_tree_fasta_provenance_args+=(
+    --input "busco_full_tables=${dir_species_busco_full}"
+    --output "representative_selection=${dir_species_tree}/busco_representative_selection.tsv"
+  )
+fi
 gg_artifact_prepare_stage extract_species_tree_fasta_needs_update run_extract_species_tree_fasta "${extract_species_tree_fasta_provenance_args[@]}" || exit $?
 if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_tree_fasta} -eq 1 ]]; then
   species_tree_clear_managed_directory "${dir_single_copy_fasta}"
@@ -3146,6 +3164,10 @@ if [[ ${extract_species_tree_fasta_needs_update} -eq 1 && ${run_extract_species_
     --report "${busco_batch_report}"
     --mode single-copy
   )
+  if [[ "${species_tree_busco_copy_policy}" == "best-score" ]]; then
+    busco_batch_args+=(--copy-policy best-score --busco-full-dir "${dir_species_busco_full}"
+      --selection-report "${dir_species_tree}/busco_representative_selection.tsv" --require-complete)
+  fi
   if [[ ${strictly_single_copy_only} -eq 1 ]]; then
     busco_batch_args+=(--strict --require-complete)
   fi
