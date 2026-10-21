@@ -138,6 +138,13 @@ def test_inventory_cannot_silently_lose_evaluated_path():
         native.finish_audit({'native_paths': 1, 'paths': [{'status': 'evaluated', 'native_transcript_id': 't'}]}, [])
 
 
+def test_missing_native_species_leaves_other_rescue_routes_unchanged(tmp_path):
+    models, audit = native.nominate({'predictions': {}}, 'Not_in_native_subset', {}, None, None, {}, tmp_path)
+    assert models == [] and audit['native_prediction_available'] is False
+    assert native.finish_audit(audit, [])['path_status_counts'] == {}
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue(hidden_models, monkeypatch):
     directory, names, coding = hidden_models
     target = names[0]

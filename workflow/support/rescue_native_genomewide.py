@@ -46,7 +46,8 @@ def nominate(frozen, name, proteins, genome, ownership, params, directory, *, cp
     if type(cpus) is not int or cpus < 1:
         raise ValueError('Native genomewide CPUs must be a positive integer')
     if not frozen or name not in frozen['predictions']:
-        raise ValueError('Genomewide native rescue requires frozen OrionGeno inputs')
+        return [], {'contract': CONTRACT, 'native_paths': 0, 'paths': [], 'candidate_pairs': 0,
+                    'native_prediction_available': False}
     native, r = _native(), _r()
     native.verify_inputs(frozen, [name])
     prediction = frozen['predictions'][name]

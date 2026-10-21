@@ -5,8 +5,10 @@
 The independent CLI's opt-in `plan --oriongeno-genomewide --oriongeno-inputs
 native.tsv` evaluates each native coding isoform without same-strand CDS overlap
 with the original annotation. The ordinary bounded route remains enabled for
-other native paths. Every prepared protein from the frozen selected external
-donor species is eligible, including proteins classified as already represented;
+other native paths. Species absent from a frozen native subset keep their
+ordinary rescue route and receive an explicit unavailable-native audit. Every
+prepared protein from the frozen selected external donor species is eligible,
+including proteins classified as already represented;
 `--max-genome-queries` does not cap this candidate-first search. Target proteins
 cannot provide independent donor support.
 
