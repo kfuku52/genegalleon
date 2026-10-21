@@ -156,3 +156,26 @@ def test_reassessment_does_not_reuse_previous_projected_utr_as_independent_donor
     assert audit['utr5']['length'] == 0
     full = reassess.utrs.load_models(result/'full_annotation/S.gff3')['t']
     assert full['exons'] == [[100, 160], [220, 450], [500, 520]]
+
+
+def test_gene_owned_cds_does_not_reuse_legacy_projected_ends():
+    """NCBI gene/CDS-only sources have no transcript row carrying utr_policy."""
+    from test_transcript_utrs import Genome
+    original = ('chr\tsource\tgene\t101\t400\t.\t+\t.\tID=g\n'
+                'chr\tsource\tCDS\t101\t400\t.\t+\t0\tID=c;Parent=g\n')
+    native = reassess.utrs.read_models(model('n', 'ng', exons=((50, 450),)))
+    prior, _, _ = reassess.utrs.complete(original, original, Genome(), 'S', native)
+    # Existing publications did not mark the gene row; explicit derived UTR
+    # children still identify their previous projection without guessing by ID.
+    prior = prior.replace(';utr_policy=projected_longest_per_side', '')
+    seed = reassess._coding_seed(prior)
+    result, audit, _ = reassess.utrs.complete(seed, original, Genome(), 'S')
+    assert audit[0]['utr5']['length'] == audit[0]['utr3']['length'] == 0
+    assert reassess._coding_rows(result) == reassess._coding_rows(original)
+    assert reassess.utrs.read_models(result)['g']['exons'] == [[100, 400]]
+
+
+def test_seed_keeps_independent_utr_features_with_similar_identifiers():
+    original = model('t.ggutr', 'g')
+    original += 'chr\tsource\tfive_prime_UTR\t51\t100\t.\t+\t.\tID=original.ggutr.5;Parent=t.ggutr\n'
+    assert reassess._coding_seed(original) == original

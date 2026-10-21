@@ -65,6 +65,24 @@ def test_spliced_length_ranking_does_not_count_introns():
     assert audit[0]['utr5']['length'] == 60
 
 
+def test_fragmented_genome_reference_metadata_is_read_once_per_completion():
+    class FragmentedGenome(Genome):
+        accesses = 0
+
+        @property
+        def references(self):
+            self.accesses += 1
+            return (*('unused'+str(i) for i in range(16000)), 'chr')
+
+    genome = FragmentedGenome()
+    selected = model() + model('t2', 'g2', cds=((600, 900),), exons=((550, 950),))
+    native = utrs.read_models(model('n', 'ng'))
+    _, audit, sequences = utrs.complete(selected, selected, genome, 'S', native)
+    assert genome.accesses == 1
+    assert all(row['utr5']['length'] == row['utr3']['length'] == 50 for row in audit)
+    assert len(sequences) == 2
+
+
 @pytest.mark.parametrize('strand', ['+', '-'])
 def test_cds_extending_past_one_outer_end_only_removes_that_side(strand):
     selected = model(cds=((20, 350),), exons=((20, 350),), strand=strand)

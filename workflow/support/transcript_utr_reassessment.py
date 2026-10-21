@@ -26,9 +26,28 @@ def _coding_rows(text):
 def _coding_seed(text, selected_ids=None):
     """Remove a preceding completion's derived ends before evaluating donors."""
     models = utrs.read_models(text, strict=False)
+    projected = set()
+    for line in text.splitlines():
+        if line == '##FASTA':
+            break
+        if not line or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        attrs = utrs.parse_gff_attributes(fields[8])
+        kind = fields[2].lower()
+        if kind.endswith(('gene', 'rna', 'transcript')) and attrs.get('utr_policy') == ('projected_longest_per_side',):
+            projected.update(attrs.get('ID', ()))
+        # Legacy gene/CDS-only publications have no transcript policy row.
+        # Require explicit producer provenance, never a generated-looking ID.
+        if (fields[1] == 'GeneGalleon' and kind in {'five_prime_utr', 'three_prime_utr'}
+                and attrs.get('annotation_basis') == ('projected_longest',)):
+            projected.update(attrs.get('Parent', ()))
     replaced = {tid: model for tid, model in models.items()
-                if model['attrs'].get('utr_policy') == ('projected_longest_per_side',)
+                if tid in projected
                 and (selected_ids is None or tid in selected_ids)}
+    gene_models = defaultdict(set)
+    for tid, model in models.items():
+        gene_models[model['gene']].add(tid)
     lines, embedded = [], False
     for line in text.splitlines(keepends=True):
         if embedded:
@@ -52,7 +71,9 @@ def _coding_seed(text, selected_ids=None):
                     continue
                 fields[8] = ';'.join('Parent='+','.join(quote(p, safe='._-:') for p in remaining)
                     if item.startswith('Parent=') else item for item in fields[8].split(';'))
-        if tid in replaced and fields[2].lower().endswith(('rna', 'transcript')):
+        kind = fields[2].lower()
+        if tid in replaced and (kind.endswith(('rna', 'transcript'))
+                or kind.endswith('gene') and gene_models[tid] == {tid}):
             cds = replaced[tid]['cds']
             fields[3], fields[4] = str(min(b[0] for b in cds)+1), str(max(b[1] for b in cds))
             fields[8] = ';'.join(item for item in fields[8].split(';') if not item.startswith('utr_policy='))

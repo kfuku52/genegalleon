@@ -62,6 +62,19 @@ CDS/protein FASTAs and BUSCO results remain in the immutable source publication.
 The summary denominator is the final exported CDS gene set, not all candidates.
 This UTR-only derivative is not a replacement coding-input manifest.
 
+Reassessment also recognises prior GeneGalleon-derived UTR children when the
+source has gene-owned CDS rows without a separate transcript row. Those ends
+are removed from the coding seed before independently evaluating the original
+annotation and frozen native prediction again. Independent original UTRs are
+not inferred from generated-looking identifiers or removed on that basis.
+
+Completion builds one command-local contig-length lookup rather than scanning
+the FASTA reference tuple for every donor and UTR end. In a synthetic fragmented
+assembly benchmark (1,500 genes, 16,307 contigs, pysam 0.23.3, Linux ARM64),
+one warmup and three timed runs gave median 1.104 s before and 0.131 s after.
+The rendered GFF, audit and transcript sequence digest was identical. This is
+a completion-kernel measurement, not whole-cohort or filesystem throughput.
+
 Identical invocations verify and reuse the derivative. A different source,
 species selection or UTR implementation requires a new output directory.
 

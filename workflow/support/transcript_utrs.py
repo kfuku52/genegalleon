@@ -145,9 +145,13 @@ def load_models(path):
         return read_models(stream.read())
 
 
-def project(donor, selected, side, genome):
+def project(donor, selected, side, genome, *, reference_lengths=None):
     """Retain donor exons outside selected CDS; audit any new terminal splice."""
-    if donor['seqid'] not in genome.references or any(b > genome.get_reference_length(donor['seqid']) for _, b in donor['exons']):
+    if reference_lengths is None:
+        length = genome.get_reference_length(donor['seqid']) if donor['seqid'] in genome.references else None
+    else:
+        length = reference_lengths.get(donor['seqid'])
+    if length is None or any(b > length for _, b in donor['exons']):
         return dict(blocks=[], length=0, reason='source_outside_genome', boundary_shift=0, new_junction=False)
     low = (side == '5') == (selected['strand'] == '+')
     old_boundary = min(b[0] for b in donor['cds']) if low else max(b[1] for b in donor['cds'])
@@ -255,12 +259,19 @@ def complete(selected_text, original_text, genome, species, native=None):
     selected, original = read_models(selected_text, strict=False), read_models(original_text, strict=False)
     native_available = native is not None
     native = native or {}
+    # pysam exposes all reference names as a tuple. Repeated membership scans
+    # for every donor/end are costly on fragmented assemblies. Keep this index
+    # local to one completion and retain the same reference/bounds checks.
+    references = set(genome.references)
+    used_references = {m['seqid'] for models in (selected, original, native) for m in models.values()}
+    reference_lengths = {name: genome.get_reference_length(name) for name in used_references & references}
     original_by_gene = defaultdict(list)
     for m in original.values():
         if not m.get('problem'):
             original_by_gene[m['gene']].append(m)
     for model in native.values():
-        if model['seqid'] not in genome.references or any(b > genome.get_reference_length(model['seqid']) for _, b in model['exons']):
+        if (model['seqid'] not in reference_lengths
+                or any(b > reference_lengths[model['seqid']] for _, b in model['exons'])):
             raise ValueError('OrionGeno transcript lies outside target genome')
     donors, correspondence = native_correspondence(selected, native)
     updates, audit, sequences = {}, [], {}
@@ -278,7 +289,7 @@ def complete(selected_text, original_text, genome, species, native=None):
         for side in ('5', '3'):
             rows = []
             for source, donor in candidates:
-                p = project(donor, model, side, genome)
+                p = project(donor, model, side, genome, reference_lengths=reference_lengths)
                 rows.append(dict(source=source, source_transcript=donor['id'], source_gene=donor['gene'], **p))
             ranked = sorted(rows, key=lambda r: (-r['length'], {'existing': 0, 'selected': 1, 'oriongeno': 2}[r['source']], r['source_transcript']))
             choices[side] = ranked[0] if ranked else dict(blocks=[], length=0, reason='no_candidate')
@@ -346,9 +357,10 @@ def render(text, updates):
         if kind.endswith('gene') and tid in gene_bounds:
             # Full annotation can retain other isoforms outside selected bounds.
             f[3], f[4] = str(min(int(f[3]), min(a for a, _ in gene_bounds[tid])+1)), str(max(int(f[4]), max(b for _, b in gene_bounds[tid])))
-        if tid in updates and kind.endswith(('rna', 'transcript')):
+        if tid in updates and kind.endswith(('gene', 'rna', 'transcript')):
             value = updates[tid]
-            f[3], f[4] = str(value['exons'][0][0]+1), str(value['exons'][-1][1])
+            if not kind.endswith('gene'):
+                f[3], f[4] = str(value['exons'][0][0]+1), str(value['exons'][-1][1])
             f[8] = ';'.join(p for p in f[8].split(';') if not p.startswith('utr_policy=')) + ';utr_policy=projected_longest_per_side'
         lines.append('\t'.join(f)+'\n')
     used = {next(iter(parse_gff_attributes(line.split('\t')[8]).get('ID', ())), '')
