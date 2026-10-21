@@ -820,3 +820,17 @@ requires identical species counts for every retained family and appends new
 families in source order. Duplicate or excluded prefix families stop selection
 before either selected table is written. These options do not authorize reuse
 of stale gene-family artifacts; normal per-family provenance checks still apply.
+
+To extend a completed analysis without invalidating its original catalog inputs,
+set `orthogroup_catalog_name` to a new safe directory basename (for example
+`Orthogroups_extended`) in genome evolution and subsequent gene/summary jobs.
+The default remains `Orthogroups_filtered`. Pair the prefix SHA with
+`orthogroup_selection_prefix_name="Orthogroups_filtered"` to retain old indices
+in the new catalog. The original catalog and its selection manifest stay intact.
+Explicitly named summary catalogs never fall back to another catalog.
+
+In audited selection mode, `orthogroup_annotation_cache_name` may identify a
+separate preserved catalog. Reuse requires current native provenance, unchanged
+raw family inputs and search settings, complete counts and membership, and every
+representative belonging to its family. It skips repeated protein preparation,
+reference database setup and annotation searches; failed checks stop selection.

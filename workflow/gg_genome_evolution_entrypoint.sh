@@ -213,6 +213,7 @@ mcmc_clock_model="IND" # {EQUAL, IND, CORR}; MCMCTree clock model, where EQUAL i
 
 # Orthogroup and species-protein QC parameters
 omark_db_path="auto" # Path to the OMArk OMAmer LUCA.h5 database, or "auto" to download it under workspace/downloads/omark/.
+orthogroup_catalog_name="Orthogroups_filtered" # Named selected-catalog directory below output/orthofinder; keep the original name to retain legacy behavior.
 orthogroup_table="HOG" # "OG" or "HOG"; choose whether orthogroup selection starts from OrthoFinder orthogroups or hierarchical orthogroups.
 orthogroup_annotation_method="mmseqs2" # blastp|mmseqs2 for representative-gene UniProt annotation in orthogroup selection.
 min_num_gene=4 # Minimum total gene count required for an orthogroup.
@@ -231,6 +232,8 @@ min_percent_species_coverage=50 # Minimum percent species coverage required for 
 max_num_gene=1000 # Maximum total gene count allowed for an orthogroup.
 remove_unannotated_orthogroups="yes" # {yes,no}; require a representative UniProt hit during orthogroup selection.
 orthogroup_selection_prefix_sha256="" # Optional SHA256 of the previous selected count table; retain its exact family order before new families.
+orthogroup_selection_prefix_name="" # Optional existing catalog name providing the SHA-bound selected-order prefix; empty uses orthogroup_catalog_name.
+orthogroup_annotation_cache_name="" # Optional existing catalog name providing a full annotation table; validate native counts/membership before reuse.
 orthogroup_decay_replicates=1000 # Random species subsets per species-count value for single-copy ortholog decay plotting.
 orthogroup_decay_species_counts="auto" # Species-count values for single-copy ortholog decay plotting: auto, comma list, or ranges such as 1-50:5.
 orthogroup_decay_seed=1 # Random seed for single-copy ortholog decay plotting.

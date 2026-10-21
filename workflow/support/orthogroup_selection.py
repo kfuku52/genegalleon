@@ -4,6 +4,7 @@
 import argparse
 import datetime
 import glob
+import hashlib
 import io
 import os
 import shlex
@@ -115,6 +116,10 @@ def build_arg_parser():
         type=int,
         help="Numeric value for --min_percent_species_coverage.",
     )
+    parser.add_argument("--annotation_cache_manifest", default="", help="Native selection manifest covering the preserved cache.")
+    parser.add_argument("--annotation_cache_workspace", default="", help="Original native workspace mapping for cache verification.")
+    parser.add_argument("--annotation_cache_logical_root", default="", help="Original native logical root for cache verification.")
+    parser.add_argument("--annotation_cache", default="", help="Full representative-annotation table from an unchanged native family catalog.")
     parser.add_argument("--selection_prefix", default="", help="Previous selected count table whose identical families retain their order.")
     parser.add_argument("--ncpu", metavar="INT", default=4, type=int, help="Number of CPU threads.")
     return parser
@@ -491,7 +496,66 @@ def annotate_representative_genes(df_gc_original_quartile, args):
     return _attach_besthits(df_gc_original_quartile, df_hits, cols)
 
 
+def reuse_annotation_cache(args, cache):
+    import artifact_provenance as provenance
+    from gene_family_output_store import GeneFamilyOutputStore
+
+    if not all(getattr(args, name, "") for name in ("annotation_cache_manifest", "annotation_cache_workspace", "annotation_cache_logical_root")):
+        raise ValueError("Annotation cache requires its complete native provenance and workspace mapping")
+    payload = provenance.load_manifest(Path(args.annotation_cache_manifest))
+    parameters = payload.get("parameters", {})
+    if (parameters.get("annotation_search_method") != args.annotation_search_method
+            or parameters.get("gene_size_quantiles") != args.gene_size_quantiles
+            or float(parameters.get("evalue", -1)) != float(args.evalue)):
+        raise ValueError("Annotation cache search parameters changed")
+    logical, workspace = Path(args.annotation_cache_logical_root), Path(args.annotation_cache_workspace)
+    cache_path = Path(cache).resolve()
+    covered = False
+    for entry in payload.get("outputs", []):
+        declared = provenance.resolve_reference(entry, logical, workspace).resolve()
+        covered |= cache_path == declared or declared.is_dir() and cache_path.is_relative_to(declared)
+    if not covered:
+        raise ValueError("Annotation cache is not covered by the native selection outputs")
+    with provenance.digest_observation() as memo:
+        state, reason = provenance.audit_manifest(payload, GeneFamilyOutputStore(logical), logical, workspace, memo)
+        if state != "current":
+            raise ValueError(f"Annotation cache provenance is not current: {state}: {reason}")
+    directory = Path(args.dir_orthofinder_og)
+    for label, filename in (("orthogroups", "Orthogroups.tsv"), ("gene_counts", "Orthogroups.GeneCount.tsv")):
+        entries = [entry for entry in payload.get("inputs", []) if entry.get("label") == label]
+        with (directory / filename).open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        if len(entries) != 1 or entries[0].get("sha256") != digest:
+            raise ValueError("Annotation cache native source identity changed: " + label)
+    annotated = _load_orthogroup_table(cache)
+    counts = _load_orthogroup_table(directory / "Orthogroups.GeneCount.tsv")
+    members = _load_orthogroup_table(directory / "Orthogroups.tsv", gene_membership=True)
+    columns = counts.columns.tolist()
+    if (annotated["Orthogroup"].duplicated().any() or counts["Orthogroup"].duplicated().any()
+            or members["Orthogroup"].duplicated().any() or not set(columns).issubset(annotated.columns)
+            or not annotated[columns].equals(counts)):
+        raise ValueError("Annotation cache does not match the complete native gene-count table")
+    representatives = ["geneid_" + value for value in args.gene_size_quantiles.split(",")]
+    required = representatives + ["besthit_" + value for value in args.gene_size_quantiles.split(",")]
+    if not set(required).issubset(annotated.columns) or members["Orthogroup"].tolist() != counts["Orthogroup"].tolist():
+        raise ValueError("Annotation cache quantiles or native family identities changed")
+    species = [name for name in members.columns if name != "Orthogroup"]
+    for index, row in members.iterrows():
+        cells = [[gene.strip() for gene in str(row[name]).split(",") if gene.strip()] for name in species]
+        genes = {gene for cell in cells for gene in cell}
+        if any(len(cell) != counts.loc[index, name] for name, cell in zip(species, cells, strict=True)) or len(genes) != counts.loc[index, "Total"]:
+            raise ValueError("Native family membership does not match its species counts")
+        if any(value and value not in genes for value in annotated.loc[index, representatives]):
+            raise ValueError("Annotation cache representative lies outside its native family")
+    out = directory / "Orthogroups.GeneCount.annotated.tsv"
+    annotated.to_csv(out, sep="\t", index=False)
+    return str(out)
+
+
 def prepare_annotation(args):
+    cache = getattr(args, "annotation_cache", "")
+    if cache:
+        return reuse_annotation_cache(args, cache)
     file_genecount_annot = os.path.join(args.dir_orthofinder_og, "Orthogroups.GeneCount.annotated.tsv")
     if os.path.exists(file_genecount_annot):
         print("Skipping annotation. Annotated file detected: {}".format(file_genecount_annot))

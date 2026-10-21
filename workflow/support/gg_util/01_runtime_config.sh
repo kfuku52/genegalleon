@@ -678,3 +678,15 @@ gg_requested_container_runtime() {
 			;;
 	esac
 }
+
+
+# A basename keeps all three workflows in one explicit catalog namespace.
+gg_orthogroup_catalog_path() {
+  local name=${1:-${orthogroup_catalog_name:-Orthogroups_filtered}}
+  if [[ ! "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+    echo "Invalid orthogroup catalog name: ${name}" >&2; return 2
+  fi
+  local path="${gg_workspace_output_dir}/orthofinder/${name}"
+  if [[ -L "${path}" ]]; then echo "Orthogroup catalog cannot be a symbolic link" >&2; return 2; fi
+  printf '%s\n' "${path}"
+}

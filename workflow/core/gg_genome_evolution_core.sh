@@ -2742,7 +2742,7 @@ species_tree_archive_managed_directories() {
 dir_sp_protein=$(gg_task_tmp_path "${gg_workspace_downloads_dir}/tmp/species_protein") || exit 1
 dir_orthofinder="${gg_workspace_output_dir}/orthofinder"
 dir_orthofinder_og="${dir_orthofinder}/Orthogroups"
-dir_orthofinder_filtered="${dir_orthofinder}/Orthogroups_filtered"
+dir_orthofinder_filtered=$(gg_orthogroup_catalog_path) || exit $?
 dir_orthofinder_hog2og="${dir_orthofinder}/hog2og"
 dir_orthogroup_decay="${dir_orthofinder}/single_copy_ortholog_decay"
 
@@ -5209,7 +5209,11 @@ if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
     echo "Orthogroup selection prefix cannot be a symbolic link" >&2; exit 2
   fi
   if [[ ! -e "${selection_prefix}" ]]; then
-    previous_counts="${dir_orthofinder_filtered}/Orthogroups.GeneCount.selected.tsv"
+    prefix_catalog="${dir_orthofinder_filtered}"
+    if [[ -n "${orthogroup_selection_prefix_name:-}" ]]; then
+      prefix_catalog=$(gg_orthogroup_catalog_path "${orthogroup_selection_prefix_name}") || exit $?
+    fi
+    previous_counts="${prefix_catalog}/Orthogroups.GeneCount.selected.tsv"
     if [[ ! -f "${previous_counts}" || -L "${previous_counts}" || "$(sha256sum -- "${previous_counts}" | cut -d' ' -f1)" != "${orthogroup_selection_prefix_sha256}" ]]; then
       echo "Previous selected count table does not match the frozen prefix" >&2; exit 3
     fi
@@ -5221,8 +5225,35 @@ if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
   fi
   og_selection_prefix_args=(--selection_prefix "${selection_prefix}")
 fi
+og_annotation_cache_args=()
+orthogroup_annotation_cache_name="${orthogroup_annotation_cache_name:-}"
+if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+  annotation_cache_dir=$(gg_orthogroup_catalog_path "${orthogroup_annotation_cache_name}") || exit $?
+  if [[ "${annotation_cache_dir}" == "${dir_orthofinder_filtered}" ]]; then
+    echo "Annotation cache must belong to a different preserved catalog" >&2; exit 2
+  fi
+  annotation_cache="${annotation_cache_dir}/Orthogroups.GeneCount.annotated.tsv"
+  [[ -s "${annotation_cache}" ]] || { echo "Missing declared orthogroup annotation cache" >&2; exit 3; }
+  if [[ "${genome_evolution_mode}" != orthogroup_selection ]]; then
+    echo "Annotation cache reuse requires audited orthogroup_selection mode" >&2; exit 2
+  fi
+  annotation_cache_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.json"
+  if [[ "${orthogroup_annotation_cache_name}" != Orthogroups_filtered ]]; then
+    annotation_cache_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.${orthogroup_annotation_cache_name}.json"
+  fi
+  og_annotation_cache_args=(--annotation_cache "${annotation_cache}"
+    --annotation_cache_manifest "${annotation_cache_manifest}"
+    --annotation_cache_workspace "${gg_workspace_dir}"
+    --annotation_cache_logical_root "${gg_workspace_output_dir}/.gg_global_artifacts")
+fi
+og_selection_family=all_species
+og_selection_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.json"
+if [[ "${orthogroup_catalog_name:-Orthogroups_filtered}" != Orthogroups_filtered ]]; then
+  og_selection_family="all_species.${orthogroup_catalog_name}"
+  og_selection_manifest="${genome_evolution_provenance_dir}/orthogroup_selection.${orthogroup_catalog_name}.json"
+fi
 og_selection_needs_update=0
-gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "all_species" "${genome_evolution_provenance_dir}/orthogroup_selection.json"
+gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "${og_selection_family}" "${og_selection_manifest}"
 og_selection_provenance_args+=(
   --input "orthogroups=${dir_orthogroup_selection_input}/Orthogroups.tsv"
   --input "gene_counts=${dir_orthogroup_selection_input}/Orthogroups.GeneCount.tsv"
@@ -5238,6 +5269,10 @@ og_selection_provenance_args+=(
   --parameter "annotation_search_method=${orthogroup_annotation_method}"
   --parameter "evalue=1e-2"
 )
+if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+  og_selection_provenance_args+=(--input "annotation_cache=${annotation_cache}"
+    --input "annotation_cache_manifest=${annotation_cache_manifest}")
+fi
 if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
   og_selection_provenance_args+=(--input "selection_prefix=${selection_prefix}")
 fi
@@ -5249,10 +5284,12 @@ fi
 gg_artifact_prepare_stage og_selection_needs_update run_og_selection "${og_selection_provenance_args[@]}" || exit $?
 if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
   gg_step_start "${task}"
-  prepare_species_protein_tmp
+  if [[ -z "${orthogroup_annotation_cache_name}" ]]; then prepare_species_protein_tmp; fi
   rm -rf -- "${dir_orthofinder_filtered}"
   ensure_dir "${dir_orthofinder_filtered}"
-  if [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
+  if [[ -n "${orthogroup_annotation_cache_name}" ]]; then
+    uniprot_db_prefix=/dev/null # Native provenance verifies the original reference; no new search is requested.
+  elif [[ "${orthogroup_annotation_method}" == "blastp" ]]; then
     if ! uniprot_db_prefix=$(ensure_uniprot_sprot_blast_db "${gg_workspace_dir}"); then
       echo "Failed to prepare UniProt Swiss-Prot BLASTP DB. Exiting."
       exit 1
@@ -5288,6 +5325,7 @@ if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
     --min_percent_species_coverage "${min_percent_species_coverage}" \
     --remove_unannotated "${remove_unannotated_orthogroups}" \
     "${og_selection_prefix_args[@]}" \
+    "${og_annotation_cache_args[@]}" \
     --gene_size_quantiles '0.05,0.25,0.5,0.75,0.95' \
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \

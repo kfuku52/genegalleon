@@ -100,6 +100,7 @@ run_hgt_candidate_summary
 run_hgt_summary_plots
 run_hgt_trait_focus
 run_presence_absence_summary
+orthogroup_catalog_name
 EOF
       ;;
     gg_gene_evolution_entrypoint.sh)
@@ -318,6 +319,7 @@ treevis_synteny_similarity
 treevis_synteny_similarity_width_mm
 synteny_search_window
 uniprot_annotation_method
+orthogroup_catalog_name
 EOF
       ;;
     gg_genome_annotation_entrypoint.sh)
@@ -559,6 +561,9 @@ strictly_single_copy_only
 target_branch_go
 timetree_constraint
 undated_species_tree
+orthogroup_catalog_name
+orthogroup_selection_prefix_name
+orthogroup_annotation_cache_name
 EOF
       ;;
     gg_input_generation_entrypoint.sh)

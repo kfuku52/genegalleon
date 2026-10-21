@@ -2206,7 +2206,8 @@ def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
     )
     assert '--out_tsv "${aa_summary_tsv}"' in core
     assert "resolve_orthogroup_genecount_annotated" in core
-    assert '"${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.annotated.tsv"' in core
+    assert 'catalog=$(gg_orthogroup_catalog_path)' in core
+    assert '"${catalog}/Orthogroups.GeneCount.annotated.tsv"' in core
     assert 'if [[ "${gene_family_source}" == "orthogroup" ]]; then' in csubst_summary_body
     assert 'summary_args+=(--orthogroup_annotation_tsv "${file_orthogroup_genecount_annotated}")' in core
     assert 'python "${gg_support_dir}/plot_csubst_aa_change_summary.py" "${summary_args[@]}"' in core
