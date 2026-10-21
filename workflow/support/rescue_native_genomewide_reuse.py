@@ -139,9 +139,12 @@ def prove_contract(previous_plan,producer_source):
     permitted=set(replay.ALLOWED_TOOL_CHANGES)|{'verify_prediction_cache_implementation','transcript_utr_implementation',
         'annevo_genome_identity_implementation','native_genomewide_implementation',
         'cached_validation_implementation','genomewide_reuse_implementation',
-        'oriongeno_candidate_implementation'}
+        'oriongeno_candidate_implementation','nwkit'}
     # The GPU launcher is not invoked here. Its old bytes remain bound, while
     # frozen prediction GFF/receipts and the coding reader/alignment are strict.
+    # NWKit belongs to initial tree/donor selection. This route byte-imports the
+    # frozen selection and requires the complete plan scope unchanged; no tree
+    # command executes during validated extension or completed-worker import.
     if any(before.get(k)!=after.get(k) for k in before.keys()|after.keys() if k not in permitted):
         raise ValueError('Native extension coding runtime/tool identity changed')
     proof.check()
@@ -149,6 +152,7 @@ def prove_contract(previous_plan,producer_source):
         source_files=old_files,current_implementation=after['implementation'],
         checked_prediction_recipe_sha256=hashlib.sha256(caller_contract(current).encode()).hexdigest(),
         native_parser_equivalence_required=before['transcript_utr_implementation']!=after['transcript_utr_implementation'],
+        frozen_tree_selection_reused=True,unused_nwkit_versions={'producer':before.get('nwkit'),'consumer':after.get('nwkit')},
         strict_qc_unchanged=True,native_alignment_and_structure_unchanged=True,
         previous_searches_reexecuted=False,native_prediction_reexecuted=False)
 

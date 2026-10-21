@@ -49,6 +49,17 @@ def test_unused_gpu_launcher_change_does_not_replace_frozen_prediction_evidence(
     assert not proof['native_prediction_reexecuted']
 
 
+def test_unused_tree_tool_version_does_not_reselect_frozen_donors(producer):
+    source, plan = producer
+    plan['request']['tools']['nwkit'] = '0.43.53'
+    proof = reuse.prove_contract(plan, source)
+    assert proof['frozen_tree_selection_reused']
+    assert proof['unused_nwkit_versions'] == {'producer':'0.43.53','consumer':rescue.identities()['nwkit']}
+    plan['request']['tools']['annevo_pairwise_aligner_sha256'] = '0'*64
+    with pytest.raises(ValueError, match='runtime/tool identity changed'):
+        reuse.prove_contract(plan, source)
+
+
 @pytest.mark.parametrize('fault', ['raw-kernel', 'terminal', 'validator', 'caller-context',
                                   'native-confirmation', 'profile', 'runtime', 'unbound-source'])
 def test_changed_or_unbound_scientific_evidence_is_rejected(producer, fault):
