@@ -106,7 +106,8 @@ def prove_contract(previous_plan,producer_source):
     bindings={**replay.MODULES,'rescue_gene_models.py':'implementation',
               'annevo_gene_models.py':'annevo_candidate_implementation',
               'rescue_coding_paths.py':'resolve_coding_paths_implementation',
-              'input_generation_array_state.py':'state_implementation'}
+              'input_generation_array_state.py':'state_implementation',
+              'oriongeno_runtime.py':'oriongeno_candidate_implementation'}
     if 'cached_validation_implementation' in before:
         bindings['rescue_cached_validation.py']='cached_validation_implementation'
         if before['cached_validation_implementation']!=after['cached_validation_implementation']:
@@ -137,7 +138,10 @@ def prove_contract(previous_plan,producer_source):
             raise ValueError('The completed genomewide search/structure decisions changed')
     permitted=set(replay.ALLOWED_TOOL_CHANGES)|{'verify_prediction_cache_implementation','transcript_utr_implementation',
         'annevo_genome_identity_implementation','native_genomewide_implementation',
-        'cached_validation_implementation','genomewide_reuse_implementation'}
+        'cached_validation_implementation','genomewide_reuse_implementation',
+        'oriongeno_candidate_implementation'}
+    # The GPU launcher is not invoked here. Its old bytes remain bound, while
+    # frozen prediction GFF/receipts and the coding reader/alignment are strict.
     if any(before.get(k)!=after.get(k) for k in before.keys()|after.keys() if k not in permitted):
         raise ValueError('Native extension coding runtime/tool identity changed')
     proof.check()

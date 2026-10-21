@@ -37,6 +37,18 @@ def test_source_bound_unchanged_science_is_proven(producer):
     assert str(source/'workflow/support/rescue_raw_validation.py') in proof['source_files']
 
 
+def test_unused_gpu_launcher_change_does_not_replace_frozen_prediction_evidence(producer):
+    source, plan = producer
+    path = source/'workflow/support/oriongeno_runtime.py'
+    path.write_text(path.read_text() + '\n# GPU launcher change; no prediction runs during evidence extension\n')
+    with pytest.raises(ValueError, match='producer source differs'):
+        reuse.prove_contract(plan, source)
+    plan['request']['tools']['oriongeno_candidate_implementation'] = rescue.digest(path)
+    proof = reuse.prove_contract(plan, source)
+    assert proof['source_files'][str(path)] == rescue.digest(path)
+    assert not proof['native_prediction_reexecuted']
+
+
 @pytest.mark.parametrize('fault', ['raw-kernel', 'terminal', 'validator', 'caller-context',
                                   'native-confirmation', 'profile', 'runtime', 'unbound-source'])
 def test_changed_or_unbound_scientific_evidence_is_rejected(producer, fault):
