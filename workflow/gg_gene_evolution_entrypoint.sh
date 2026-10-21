@@ -99,6 +99,7 @@ gg_entrypoint_name="gg_gene_evolution_entrypoint.sh"
 ### Start: Modify this block to tailor your analysis ###
 
 # Mode
+orthogroup_catalog_name="Orthogroups_filtered" # Named selected-catalog directory below output/orthofinder; keep the original name to retain legacy behavior.
 mode_gene_evolution="${mode_gene_evolution:-query2family}" # query2family|orthogroup; query2family starts from query gene IDs or FASTA and retrieves homolog families, while orthogroup analyzes existing OrthoFinder orthogroups directly.
 gene_evolution_profile="${gene_evolution_profile:-default}" # default|hgt; hgt switches to orthogroup mode and enables HGT-oriented defaults for UniProt annotation, GeneRax DTL reconciliation, GFF/expression/intron evidence, and tree plotting.
 representative_inputs="${GG_COMMON_REPRESENTATIVE_INPUTS:-}" # Optional verified refinement effective/inputs.tsv; routes CDS/protein/GFF/genome together.

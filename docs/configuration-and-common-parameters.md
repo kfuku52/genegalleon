@@ -805,3 +805,32 @@ resolver reads explicit genetic-code statements or `--seqtype CODONn`/`-st CODON
 from `csubst.log` and `csubst.iqtree`. Conflicting or absent evidence is an error;
 regenerate the ASR bundle rather than assuming code 1. Existing complete reports
 are retained under the existing artifact reuse rules.
+
+
+For a deliberate expansion of a completed orthogroup analysis, set
+`genome_evolution_mode="orthogroup_selection"` to audit frozen inference and trees
+with stop policy while allowing only selection to rebuild. Genome evolution
+can set `remove_unannotated_orthogroups="no"`, `min_percent_species_coverage=0`
+and an explicit `max_num_gene` covering the largest measured family. Defaults
+retain the existing annotation and size filters. Keep the technical gene/species
+minimums appropriate to the downstream analysis. To retain existing array indices,
+set `orthogroup_selection_prefix_sha256` to the SHA256 of the previous selected
+count table. The standard stage preserves that table as a provenance input,
+requires identical species counts for every retained family and appends new
+families in source order. Duplicate or excluded prefix families stop selection
+before either selected table is written. These options do not authorize reuse
+of stale gene-family artifacts; normal per-family provenance checks still apply.
+
+To extend a completed analysis without invalidating its original catalog inputs,
+set `orthogroup_catalog_name` to a new safe directory basename (for example
+`Orthogroups_extended`) in genome evolution and subsequent gene/summary jobs.
+The default remains `Orthogroups_filtered`. Pair the prefix SHA with
+`orthogroup_selection_prefix_name="Orthogroups_filtered"` to retain old indices
+in the new catalog. The original catalog and its selection manifest stay intact.
+Explicitly named summary catalogs never fall back to another catalog.
+
+In audited selection mode, `orthogroup_annotation_cache_name` may identify a
+separate preserved catalog. Reuse requires current native provenance, unchanged
+raw family inputs and search settings, complete counts and membership, and every
+representative belonging to its family. It skips repeated protein preparation,
+reference database setup and annotation searches; failed checks stop selection.

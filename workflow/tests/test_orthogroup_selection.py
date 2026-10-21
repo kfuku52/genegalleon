@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
@@ -487,3 +489,187 @@ def test_resolve_blast_db_prefix_allows_spaces_but_rejects_control_characters(tm
         (tmp_path / ("uniprot sprot" + ext)).write_text("db\n", encoding="utf-8")
 
     assert mod._resolve_blast_db_prefix(str(prefix)) == str(prefix)
+
+
+@pytest.mark.parametrize("remove_unannotated", [False, True])
+def test_all_computable_selection_includes_unannotated_and_large_families(tmp_path, remove_unannotated):
+    mod = load_module()
+    og = tmp_path / "orthogroups"
+    og.mkdir()
+    rows = [("large", 1001, 2), ("small", 4, 2), ("too_short", 3, 2), ("one_species", 10, 1)]
+    counts, members = [], []
+    for family, total, species in rows:
+        second = 1 if species == 2 else 0
+        counts.append({"Orthogroup": family, "A": total - second, "B": second,
+                       "Total": total, "geneid_0.5": family + "_a0", "besthit_0.5": ""})
+        members.append({"Orthogroup": family,
+                        "A": ", ".join(f"{family}_a{i}" for i in range(total - second)),
+                        "B": family + "_b0" if second else ""})
+    annotated = og / "Orthogroups.GeneCount.annotated.tsv"
+    pandas.DataFrame(counts).to_csv(annotated, sep="\t", index=False)
+    pandas.DataFrame(members).to_csv(og / "Orthogroups.tsv", sep="\t", index=False)
+    args = SimpleNamespace(dir_orthofinder_og=str(og), min_gene_num=4, max_gene_num=9930,
+                           min_species_num=2, min_percent_species_coverage=0,
+                           remove_unannotated=remove_unannotated, annotation_search_method="mmseqs2")
+    before = annotated.read_bytes()
+    _, selected, species = mod.select_orthogroups(args, str(annotated))
+    expected = [] if remove_unannotated else ["large", "small"]
+    assert selected["Orthogroup"].tolist() == expected
+    membership = pandas.read_csv(og / "Orthogroups.selected.tsv", sep="\t", keep_default_na=False)
+    assert membership["Orthogroup"].tolist() == expected
+    assert species == ["A", "B"]
+    assert annotated.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["", "excluded", "changed_counts", "duplicates"])
+def test_selection_prefix_preserves_indices_and_refuses_changed_inputs(tmp_path, failure):
+    mod = load_module()
+    og = tmp_path / "og"
+    og.mkdir()
+    rows = [{"Orthogroup": f"OG{i}", "A": i + 2, "B": 2, "Total": i + 4} for i in range(3)]
+    annotated = og / "annotated.tsv"
+    pandas.DataFrame(rows).to_csv(annotated, sep="\t", index=False)
+    pandas.DataFrame([{"Orthogroup": r["Orthogroup"], "A": "a", "B": "b"} for r in rows]).to_csv(
+        og / "Orthogroups.tsv", sep="\t", index=False)
+    prefix_rows = [rows[2].copy(), rows[0].copy()]
+    if failure == "excluded":
+        prefix_rows[0]["Orthogroup"] = "absent"
+    if failure == "changed_counts":
+        prefix_rows[0]["A"] = 999
+    if failure == "duplicates":
+        prefix_rows.append(prefix_rows[0].copy())
+    prefix = tmp_path / "prefix.tsv"
+    pandas.DataFrame(prefix_rows).to_csv(prefix, sep="\t", index=False)
+    args = SimpleNamespace(dir_orthofinder_og=str(og), min_gene_num=4, max_gene_num=9930,
+                           min_species_num=2, min_percent_species_coverage=0,
+                           remove_unannotated=False, annotation_search_method="mmseqs2",
+                           selection_prefix=str(prefix))
+    if failure:
+        with pytest.raises(ValueError):
+            mod.select_orthogroups(args, str(annotated))
+        assert not (og / "Orthogroups.GeneCount.selected.tsv").exists()
+        assert not (og / "Orthogroups.selected.tsv").exists()
+    else:
+        _, selected, _ = mod.select_orthogroups(args, str(annotated))
+        assert selected["Orthogroup"].tolist() == ["OG2", "OG0", "OG1"]
+        assert pandas.read_csv(og / "Orthogroups.selected.tsv", sep="\t")["Orthogroup"].tolist() == ["OG2", "OG0", "OG1"]
+
+
+@pytest.mark.parametrize("failure", ["", "counts", "representative", "membership", "duplicate", "quantiles", "stale", "parameters", "uncovered", "native_source"])
+def test_annotation_cache_is_bound_to_complete_native_membership(tmp_path, failure, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    mod = load_module()
+    root = tmp_path / "native"
+    root.mkdir()
+    counts = pandas.DataFrame([{"Orthogroup": "OG1", "A": 2, "B": 2, "Total": 4}])
+    counts.to_csv(root / "Orthogroups.GeneCount.tsv", sep="\t", index=False)
+    pandas.DataFrame([{"Orthogroup": "OG1", "A": "a1, a2", "B": "b1, b2"}]).to_csv(
+        root / "Orthogroups.tsv", sep="\t", index=False)
+    cached = counts.assign(geneid_0_5="a1", besthit_0_5="known protein").rename(
+        columns={"geneid_0_5": "geneid_0.5", "besthit_0_5": "besthit_0.5"})
+    if failure == "counts":
+        cached.loc[0, "Total"] = 99
+    if failure == "representative":
+        cached.loc[0, "geneid_0.5"] = "a_different_family_gene"
+    if failure == "membership":
+        counts.loc[0, "A"] = 3
+        counts.loc[0, "Total"] = 5
+        counts.to_csv(root / "Orthogroups.GeneCount.tsv", sep="\t", index=False)
+        cached.loc[0, ["A", "Total"]] = [3, 5]
+    if failure == "duplicate":
+        cached = pandas.concat([cached, cached], ignore_index=True)
+    if failure == "quantiles":
+        cached = cached.drop(columns="besthit_0.5")
+    source = tmp_path / "preserved-annotation.tsv"
+    cached.to_csv(source, sep="\t", index=False)
+    before = source.read_bytes()
+    args = SimpleNamespace(dir_orthofinder_og=str(root), gene_size_quantiles="0.5", annotation_cache=str(source))
+    _annotation_cache_proof(args, source, tmp_path)
+    if failure == "stale":
+        source.write_text(source.read_text() + "\n")
+        before = source.read_bytes()
+    if failure == "parameters":
+        args.evalue = "1e-3"
+    if failure == "uncovered":
+        other = tmp_path / "foreign.tsv"
+        other.write_bytes(source.read_bytes())
+        args.annotation_cache = str(other)
+    if failure == "native_source":
+        (root / "Orthogroups.tsv").write_text((root / "Orthogroups.tsv").read_text().replace("a2", "a3"))
+    target = root / "Orthogroups.GeneCount.annotated.tsv"
+    if failure:
+        with pytest.raises(ValueError):
+            mod.prepare_annotation(args)
+        assert not target.exists()
+    else:
+        assert mod.prepare_annotation(args) == str(target)
+        assert target.read_bytes() == before
+    assert source.read_bytes() == before
+
+
+def test_additional_catalog_leaves_existing_family_provenance_current(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
+    mod = load_module()
+    support = Path(__file__).resolve().parents[1] / "support"
+    workspace = tmp_path / "workspace"
+    old = workspace / "output/orthofinder/Orthogroups_filtered"
+    new = workspace / "output/orthofinder/additional"
+    old.mkdir(parents=True)
+    new.mkdir()
+    counts = pandas.DataFrame([{"Orthogroup": name, "A": 2, "B": 2, "Total": 4} for name in ["old", "new"]])
+    members = pandas.DataFrame([{"Orthogroup": name, "A": f"{name}_a1, {name}_a2",
+                                "B": f"{name}_b1, {name}_b2"} for name in ["old", "new"]])
+    counts.iloc[:1].to_csv(old / "Orthogroups.GeneCount.selected.tsv", sep="\t", index=False)
+    old_members = old / "Orthogroups.selected.tsv"
+    members.iloc[:1].to_csv(old_members, sep="\t", index=False)
+    counts.to_csv(new / "Orthogroups.GeneCount.tsv", sep="\t", index=False)
+    members.to_csv(new / "Orthogroups.tsv", sep="\t", index=False)
+    cache = old / "Orthogroups.GeneCount.annotated.tsv"
+    counts.assign(**{"geneid_0.5": ["old_a1", "new_a1"], "besthit_0.5": ["hit", ""]}).to_csv(cache, sep="\t", index=False)
+    store = workspace / "output/orthogroup"
+    (store / "artifact_provenance").mkdir(parents=True)
+    fasta = store / "cds_fasta/old.fa"
+    fasta.parent.mkdir()
+    fasta.write_text(">old_a1\nATG\n")
+    contract = ["--manifest", str(store / "artifact_provenance/old.primary_fasta.json"),
+                "--step", "primary_fasta", "--family-id", "old", "--logical-root", str(store),
+                "--workspace-root", str(workspace), "--input", "orthogroups=" + str(old_members),
+                "--output", "primary_fasta=" + str(fasta)]
+    def provenance(command):
+        return subprocess.run([sys.executable, str(support / "artifact_provenance.py"), command, *contract],
+                              capture_output=True, text=True)
+    recorded = provenance("record")
+    assert recorded.returncode == 0, recorded.stdout + recorded.stderr
+    assert provenance("needs-run").returncode == 1
+    before = {p.name: p.read_bytes() for p in old.iterdir()}
+    args = SimpleNamespace(dir_orthofinder_og=str(new), annotation_cache=str(cache), gene_size_quantiles="0.5",
+                           selection_prefix=str(old / "Orthogroups.GeneCount.selected.tsv"), min_gene_num=4,
+                           max_gene_num=9930, min_species_num=2, min_percent_species_coverage=0,
+                           remove_unannotated=False, annotation_search_method="mmseqs2")
+    _annotation_cache_proof(args, cache, workspace)
+    annotated = mod.prepare_annotation(args)
+    _, selected, _ = mod.select_orthogroups(args, annotated)
+    assert selected["Orthogroup"].tolist() == ["old", "new"]
+    assert {p.name: p.read_bytes() for p in old.iterdir()} == before
+    current = provenance("needs-run")
+    assert current.returncode == 1, current.stdout + current.stderr
+
+
+def _annotation_cache_proof(args, cache, root):
+    manifest = root / "annotation-source.json"
+    args.annotation_search_method = "mmseqs2"
+    args.evalue = "1e-2"
+    args.annotation_cache_manifest = str(manifest)
+    args.annotation_cache_workspace = str(root)
+    args.annotation_cache_logical_root = str(root / "output/genome_evolution")
+    Path(args.annotation_cache_logical_root).mkdir(parents=True, exist_ok=True)
+    directory = Path(args.dir_orthofinder_og)
+    command = [sys.executable, str(SCRIPT_PATH.parent / "artifact_provenance.py"), "record",
+        "--manifest", str(manifest), "--step", "orthogroup_selection", "--family-id", "all_species",
+        "--logical-root", args.annotation_cache_logical_root, "--workspace-root", str(root),
+        "--input", "orthogroups=" + str(directory / "Orthogroups.tsv"),
+        "--input", "gene_counts=" + str(directory / "Orthogroups.GeneCount.tsv"),
+        "--output", "annotated=" + str(cache), "--parameter", "annotation_search_method=mmseqs2",
+        "--parameter", "evalue=1e-2", "--parameter", "gene_size_quantiles=" + args.gene_size_quantiles]
+    result = subprocess.run(command, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr

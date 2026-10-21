@@ -2569,3 +2569,121 @@ def test_genome_evolution_completes_interrupted_figtree_contract_migration(tmp_p
     assert second.returncode == 0, second.stdout + second.stderr
     assert "figtree" in {entry["label"] for entry in json.loads(manifest.read_text())["outputs"]}
     assert (directory / "FigTree.tre").read_text() == figtree
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("failure", ["", "source_changed", "prefix_changed", "source_symlink"])
+def test_frozen_selection_prefix_is_retained_and_revalidated(tmp_path, failure):
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    previous = filtered / "Orthogroups.GeneCount.selected.tsv"
+    previous.write_text("Orthogroup\tA\tB\tTotal\nOG2\t2\t2\t4\n")
+    digest = hashlib.sha256(previous.read_bytes()).hexdigest()
+    provenance = tmp_path / "provenance"
+    prefix = provenance / "orthogroup_selection_prefix" / (digest + ".tsv")
+    if failure == "source_changed":
+        previous.write_text("changed\n")
+    if failure == "source_symlink":
+        target = tmp_path / "target"
+        previous.rename(target)
+        previous.symlink_to(target)
+    if failure == "prefix_changed":
+        prefix.parent.mkdir(parents=True)
+        prefix.write_text("corrupted\n")
+    core = CORE_PATH.read_text()
+    block = "og_selection_prefix_args=()" + core.split("og_selection_prefix_args=()", 1)[1].split(
+        "og_selection_needs_update=0", 1)[0]
+    program = 'set -euo pipefail\nensure_dir() { mkdir -p -- "$1"; }\ncp_out() { cp -- "$1" "$2"; }\n' + block
+    env = {**os.environ, "genome_evolution_provenance_dir": str(provenance),
+           "dir_orthofinder_filtered": str(filtered), "orthogroup_selection_prefix_sha256": digest}
+    result = subprocess.run([BASH_FOR_TESTS, "-c", program], env=env, capture_output=True, text=True)
+    if failure:
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert prefix.read_bytes() == previous.read_bytes()
+        previous.write_text("a later expanded selection\n")
+        repeated = subprocess.run([BASH_FOR_TESTS, "-c", program], env=env, capture_output=True, text=True)
+        assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+        assert hashlib.sha256(prefix.read_bytes()).hexdigest() == digest
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("stale", [False, True])
+def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tmp_path, stale):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    settings = {**config, "genome_evolution_mode": "orthogroups", "artifact_stale_policy": "rebuild",
+                "run_orthofinder": "1", "run_og_selection": "0"}
+    first = _run_core(tmp_path, settings)
+    assert first.returncode == 0, first.stdout + first.stderr
+    calls = tmp_path / "capture/orthofinder_args.txt"
+    assert calls.exists()
+    calls.unlink()
+    if stale:
+        (workspace / "output/orthofinder/hog2og/Orthogroups.GeneCount.tsv").write_text("changed\n")
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    original_tree = tree.read_bytes()
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection"})
+    assert not calls.exists()
+    assert tree.read_bytes() == original_tree
+    if stale:
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "run_orthofinder=0" in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("name", ["Orthogroups_filtered", "additional-20261021", "../old", "/tmp/other", ".", "a,b"])
+def test_native_catalog_namespace_is_a_bounded_basename(tmp_path, name):
+    helper = WORKFLOW_DIR / "support/gg_util/01_runtime_config.sh"
+    command = f'source {shlex.quote(str(helper))}; gg_orthogroup_catalog_path "$1"'
+    result = subprocess.run([BASH_FOR_TESTS, "-c", command, "_", name],
+        env={**os.environ, "gg_workspace_output_dir": str(tmp_path)}, capture_output=True, text=True)
+    if name in {"Orthogroups_filtered", "additional-20261021"}:
+        assert result.returncode == 0
+        assert result.stdout.strip() == str(tmp_path / "orthofinder" / name)
+    else:
+        assert result.returncode != 0
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+def test_explicit_summary_catalog_never_falls_back_to_the_old_selection(tmp_path):
+    output = tmp_path / "output"
+    original = output / "orthofinder/Orthogroups_filtered"
+    original.mkdir(parents=True)
+    for kind in ("selected", "annotated"):
+        (original / f"Orthogroups.GeneCount.{kind}.tsv").write_text("old data\n")
+    summary = (WORKFLOW_DIR / "core/gg_gene_summary_core.sh").read_text()
+    functions = summary.split("resolve_orthogroup_genecount_selected()", 1)[1].split(
+        'file_orthogroup_genecount_selected=""', 1)[0]
+    functions = "resolve_orthogroup_genecount_selected()" + functions
+    helper = WORKFLOW_DIR / "support/gg_util/01_runtime_config.sh"
+    command = f'source {shlex.quote(str(helper))}; ' + functions + '\nresolve_orthogroup_genecount_selected'
+    env = {**os.environ, "gg_workspace_output_dir": str(output), "orthogroup_catalog_name": "additional"}
+    missing = subprocess.run([BASH_FOR_TESTS, "-c", command], env=env, capture_output=True, text=True)
+    assert missing.returncode != 0
+    assert not missing.stdout
+    target = output / "orthofinder/additional"
+    target.mkdir()
+    (target / "Orthogroups.GeneCount.selected.tsv").write_text("new data\n")
+    found = subprocess.run([BASH_FOR_TESTS, "-c", command], env=env, capture_output=True, text=True)
+    assert found.returncode == 0
+    assert found.stdout.strip() == str(target / "Orthogroups.GeneCount.selected.tsv")
+    assert (original / "Orthogroups.GeneCount.selected.tsv").read_text() == "old data\n"
+
+
+@pytest.mark.parametrize("kind", ["selected", "annotated"])
+def test_incomplete_explicit_summary_catalog_stops_before_analysis(tmp_path, kind):
+    summary = (WORKFLOW_DIR / "core/gg_gene_summary_core.sh").read_text()
+    body = summary.split('file_orthogroup_genecount_selected=""', 1)[1].split(
+        'resolve_presence_absence_species_tree()', 1)[0]
+    body = 'file_orthogroup_genecount_selected=""' + body
+    prelude = 'resolve_orthogroup_genecount_selected() { return 1; }; resolve_orthogroup_genecount_annotated() { return 1; };'
+    prelude += f'resolve_orthogroup_genecount_{kind}() {{ echo /present; }};'
+    env = {**os.environ, "orthogroup_catalog_name": "additional", "gene_family_source": "orthogroup"}
+    result = subprocess.run([BASH_FOR_TESTS, "-c", prelude + body + '\necho ANALYSIS_STARTED'],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 3
+    assert "catalog is incomplete" in result.stderr
+    assert "ANALYSIS_STARTED" not in result.stdout

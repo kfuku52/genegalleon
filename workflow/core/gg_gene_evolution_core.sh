@@ -1525,7 +1525,8 @@ fi
 case "${mode_gene_evolution}" in
   "orthogroup")
     dir_output_active="${gg_workspace_output_dir}/orthogroup"
-    file_orthogroup_genecount_selected="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.GeneCount.selected.tsv"
+    orthogroup_catalog_dir=$(gg_orthogroup_catalog_path "${orthogroup_catalog_name:-Orthogroups_filtered}") || exit $?
+    file_orthogroup_genecount_selected="${orthogroup_catalog_dir}/Orthogroups.GeneCount.selected.tsv"
     if [[ ! -s "${file_orthogroup_genecount_selected}" ]]; then
       echo "Orthogroup gene-count table not found: ${file_orthogroup_genecount_selected}"
       exit 1
@@ -1787,7 +1788,8 @@ fi
 if [[ -n "${species_paralog_sampling_covariance}" && "${species_paralog_sampling_covariance}" != /* ]]; then
   species_paralog_sampling_covariance="${gg_workspace_dir}/${species_paralog_sampling_covariance}"
 fi
-file_og="${gg_workspace_output_dir}/orthofinder/Orthogroups_filtered/Orthogroups.selected.tsv"
+orthogroup_catalog_dir=$(gg_orthogroup_catalog_path "${orthogroup_catalog_name:-Orthogroups_filtered}") || exit $?
+file_og="${orthogroup_catalog_dir}/Orthogroups.selected.tsv"
 file_og_parameters_dir="${dir_output_active}/parameters"
 dir_species_tree="${gg_workspace_output_dir}/species_tree"
 dir_species_tree_summary="${dir_species_tree}/species_tree_summary"
