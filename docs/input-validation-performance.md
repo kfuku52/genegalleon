@@ -148,3 +148,49 @@ bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_nativ
 ```
 
 Repeat with `--receipt-aliases 0` and a different output path for the control.
+
+## Genome sequence identity
+
+OrionGeno, ANNEVO and native candidate admission compute a canonical identity
+from contig names and DNA. Wrapped FASTA previously normalized, validated,
+encoded and updated SHA-256 separately for every sequence line. The reader now
+batches about 64 KiB of stripped sequence fragments before those operations.
+Each contig still receives its own exact length and sequence hash; sorting,
+header identity, case/whitespace semantics and the canonical JSON stay unchanged.
+The parser still reads the complete stream, checks gzip CRC/truncation, rejects
+invalid DNA and duplicate/empty contigs, and checks the open-file/path identities
+before returning. No saved digest or metadata-only reuse is introduced.
+
+On 2026-10-21, baseline v0.8.337 (`f7e1e559`) and the updated reader ran in the
+same Docker Linux/arm64 runtime, Python 3.12.15:
+`sha256:594a13182c692adfa393107910c67cf57591ff8127d7eaad7724f5ea552e83af`.
+One warmup preceded three alternating fresh-process trials per implementation.
+All canonical output hashes matched, including the plain/gzip identity.
+
+| Synthetic workload, 60 columns | Wall seconds before / after | CPU seconds before / after | Peak RSS MiB before / after |
+|---|---:|---:|---:|
+| 128 MiB DNA, eight contigs | 1.083 / 0.527 | 1.082 / 0.527 | 19.92 / 19.92 |
+| Same DNA, gzip | 1.165 / 0.643 | 1.165 / 0.643 | 20.13 / 20.13 |
+| 8 MiB DNA, 4,096 contigs | 0.073 / 0.039 | 0.073 / 0.039 | 21.26 / 21.26 |
+
+These warm-cache measurements cover parsing and identity computation, excluding
+fixture generation, imports and inference. The repeated-pattern gzip fixture
+compresses strongly; it does not model production disk/NAS throughput, native
+GPU prediction time or whole-job speedup. A single unusually long FASTA line
+can still determine peak memory; batching avoids accumulating entire contigs
+across their wrapped lines.
+
+Keep the baseline source visible to the runtime and choose a new output path:
+
+```bash
+GENEGALLEON_DOCKER_EXTRA_BINDS=/data/baseline \
+bash workflow/tests/run_in_runtime.sh python workflow/benchmarks/benchmark_genome_sequence_identity.py \
+  --baseline-source /data/baseline/genome_sequence_identity.py \
+  --mib 128 --trials 3 --output tmp/genome-identity-comparison.json
+```
+
+The report retains input/source hashes, workload, environment, every measured
+wall/CPU/RSS sample and canonical output hashes. Regression tests cover Unicode
+header and legacy case behavior, wrapped/gzip equivalence, invalid symbols
+across batch boundaries, complete gzip trailers and late input replacement or
+same-size edits with a restored mtime.
