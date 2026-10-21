@@ -1,5 +1,54 @@
 # Synteny-guided gene-model rescue
 
+## Evaluate native predictions outside nominated regions
+
+The independent CLI's opt-in `plan --oriongeno-genomewide --oriongeno-inputs
+native.tsv` evaluates each native coding isoform without same-strand CDS overlap
+with the original annotation. The ordinary bounded route remains enabled for
+other native paths. Every prepared protein from the frozen selected external
+donor species is eligible, including proteins classified as already represented;
+`--max-genome-queries` does not cap this candidate-first search. Target proteins
+cannot provide independent donor support.
+
+DIAMOND searches unique translated proteins with `--ultra-sensitive`, no masking
+or composition correction, E-value 1000 and no target cap. Exact protein matches
+are also included independently of seeding. All returned sequence pairs pass the
+existing global reciprocal-coverage alignment. Identical sequences share this
+computation, while donor identifiers, native isoforms and genomic copies remain
+distinct. No search hit means no hit under this declared search, not proof of
+biological absence or an exhaustive comparison of every possible alignment.
+
+The ordinary genomic and unanchored admission gates still apply. Actual Miniprot
+mapping at the candidate locus supplies the existing native coding-structure
+check; a native coordinate window does not assign synteny, orthology or an
+expected copy. Missing confirmation, invalid CDS, insufficient independent donor
+support or ambiguous copies remain unresolved. Previous adopted paths remain
+subject to the existing explicit annotation-retention contract.
+
+For a completed rescue, create a new generation without repeating its already
+covered Miniprot searches:
+
+```bash
+python workflow/support/rescue_gene_models.py native-genomewide-plan \
+  --previous-output /data/completed_rescue --output /data/expanded_rescue
+python workflow/support/rescue_gene_models.py native-genomewide-prepare \
+  --output /data/expanded_rescue --cpus 4
+python workflow/support/rescue_gene_models.py rescue \
+  --output /data/expanded_rescue --task-index 1 --cpus 4
+```
+
+The extension freezes the same sources, reference selection, per-species profiles
+and cutoffs, and explicitly imports byte-verified prepared/comparison inputs.
+The original Miniprot binary must match for raw prediction-cache reuse. Native
+donor alignment, genomic QC and admission run freshly; no native GPU prediction
+is repeated. Complete all species before the ordinary `finalize` command.
+
+Each worker publishes `oriongeno_genomewide.json`, accounting for every native
+transcript as original overlap, invalid translation, no protein-search hit,
+admitted or not admitted. Counts of native genes can overlap across categories
+when their isoforms differ. They are not counts of newly adopted loci. The normal
+model store and admission audit supply final locus counts and preserved evidence.
+
 `workflow/support/rescue_gene_models.py` is an independent, restartable CLI.
 Input generation optionally runs it after formatting and initial BUSCO, before
 augmented CDS/GFF inputs are used in OrthoFinder. Enable it with

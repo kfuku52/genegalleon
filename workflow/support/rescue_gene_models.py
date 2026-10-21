@@ -195,6 +195,7 @@ def identities():
     versions["annevo_alignment_implementation"] = digest(Path(__file__).with_name("gene_model_selection.py"))
     versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
     versions["oriongeno_profiles_implementation"] = digest(Path(__file__).with_name("oriongeno_model_profiles.py"))
+    versions["native_genomewide_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide.py"))
     versions["transcript_utr_implementation"] = digest(Path(__file__).with_name("transcript_utrs.py"))
     versions["annevo_genome_identity_implementation"] = digest(Path(__file__).with_name("genome_sequence_identity.py"))
     from Bio.Align import _pairwisealigner
@@ -370,6 +371,11 @@ def build_plan(args):
             import annevo_gene_models
             request["oriongeno"] = annevo_gene_models.freeze_inputs(args.oriongeno_inputs, sources, engine='oriongeno')
             request["files"].update(request["oriongeno"]["files"])
+        if getattr(args, 'oriongeno_genomewide', False):
+            if not request.get('oriongeno'):
+                raise ValueError('Genomewide rescue requires --oriongeno-inputs')
+            from rescue_native_genomewide import CONTRACT
+            request['oriongeno_genomewide'] = CONTRACT
         if getattr(args, "annevo_inputs", None):
             import annevo_gene_models
             request["annevo"] = annevo_gene_models.freeze_inputs(args.annevo_inputs, sources)
@@ -1282,7 +1288,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         expanded_genome_sha256 = None
         atomic_json(tmp / SEARCH_CONTRACT_FILE, prediction_search_contract())
         atomic_json(tmp / "genome_search_nomination.json", nomination)
-        if not regions and not plan["request"].get("prediction_cache"):
+        genomewide_audit = None
+        if not regions and not plan["request"].get("prediction_cache") and not plan['request'].get('oriongeno_genomewide'):
             # No copy/index/predictor is needed, but invalid source annotations
             # must still fail. Stream contig lengths without materializing DNA.
             lengths = {}
@@ -1486,6 +1493,19 @@ def rescue(root, plan, name, cpus, interval_workers=None):
                 annevo_gene_models.confirm_transferred_structure(native_checked, validated)
                 validated.extend(native_checked)
                 atomic_json(tmp / (engine + '_candidates.json'), annevo_audit)
+            if plan['request'].get('oriongeno_genomewide'):
+                import rescue_native_genomewide
+                require_same_key(rescue_native_genomewide.CONTRACT, plan['request']['oriongeno_genomewide'])
+                native_models, genomewide_audit = rescue_native_genomewide.nominate(
+                    plan['request']['oriongeno'], name, proteins, genome, placement_ownership,
+                    params, tmp, cpus=cpus)
+                native_checked = [checked_prediction(model) for model in native_models]
+                transferred = rescue_native_genomewide.transfer_structure(
+                    native_checked, proteins, genome, source['genetic_code'], params, tmp, cpus=cpus)
+                transferred_checked = [checked_prediction(model) for model in transferred]
+                annevo_gene_models.confirm_transferred_structure(native_checked, [*validated, *transferred_checked])
+                validated.extend(transferred_checked)
+                validated.extend(native_checked)
             if cached:
                 cached.check()
             if searched_genome_ids:
@@ -1498,6 +1518,8 @@ def rescue(root, plan, name, cpus, interval_workers=None):
         placement = reassess_unanchored_models(validated, params["unanchored_min_species"], ownership=placement_ownership)
         models = consolidate(validated, existing, name, plan.get("nearest_references", {}).get(name, ()),
                              retained_paths=retained_paths)
+        if genomewide_audit is not None:
+            atomic_json(tmp / 'oriongeno_genomewide.json', rescue_native_genomewide.finish_audit(genomewide_audit, models))
         for model in models:
             model["quality_evidence"] = model_quality(model, source["genetic_code"])
         atomic_json(tmp / "placement_audit.json", placement)
@@ -2163,6 +2185,12 @@ def export_worker_inputs(root, plan, name, destination, *, combined=False, cpus=
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
+    extension = sub.add_parser('native-genomewide-plan', help='Extend a completed rescue with candidate-first OrionGeno evaluation')
+    extension.add_argument('--previous-output', type=Path, required=True)
+    extension.add_argument('--output', type=Path, required=True)
+    extension = sub.add_parser('native-genomewide-prepare', help='Import the extension plan\'s frozen prepared and comparison stages')
+    extension.add_argument('--output', type=Path, required=True)
+    extension.add_argument('--cpus', type=int, default=1)
     self_parser = sub.add_parser("self-align", help="Internal LAST preparation preserving high-identity paralogs")
     self_parser.add_argument("--cpus", type=int, default=1)
     self_parser.add_argument("--cscore", type=float, default=0.7)
@@ -2202,6 +2230,8 @@ def parser():
     plan.add_argument("--genome-fallback", type=int, choices=(0, 1), default=1)
     plan.add_argument("--prediction-cache", type=Path, help="Frozen, checksum-verified previous rescue output; raw predictions are revalidated")
     plan.add_argument("--oriongeno-inputs", type=Path, help="Native OrionGeno candidate and UTR TSV: species,gff,receipt")
+    plan.add_argument('--oriongeno-genomewide', action='store_true',
+                      help='Also evaluate every native coding path outside the original CDS annotation against all selected external donor proteins')
     plan.add_argument("--annevo-inputs", type=Path, help="Source-bound native ANNEVO candidate TSV: species,gff,receipt; existing evidence/QC gates remain")
     plan.add_argument("--model-storage", choices=("compact", "legacy"), default="compact",
                       help="Versioned shared prediction storage, or explicit legacy JSON arrays")
@@ -2236,6 +2266,11 @@ def parser():
 def main():
     p = parser()
     args = p.parse_args()
+    if args.command == 'native-genomewide-plan':
+        import rescue_native_genomewide
+        plan = rescue_native_genomewide.build_plan(args.previous_output, args.output)
+        print(json.dumps({'species': len(plan['species']), 'native_genomewide': True}))
+        return
     if args.command == "self-align":
         if args.cpus < 1 or not 0 < args.cscore <= 1:
             p.error("Invalid self alignment parameters")
@@ -2263,6 +2298,10 @@ def main():
     plan = load(root, inspect_only=args.command in {"export-search-inputs", "export-models"})
     if getattr(args, "cpus", 1) < 1:
         p.error("cpus must be positive")
+    if args.command == 'native-genomewide-prepare':
+        import rescue_native_genomewide
+        rescue_native_genomewide.prepare(root, plan, args.cpus)
+        return
     if args.command == 'reclassify-prepare':
         import rescue_admission_replay
         rescue_admission_replay.prepare(root, plan, args.cpus)

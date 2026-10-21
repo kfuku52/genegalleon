@@ -107,6 +107,10 @@ def prove_contract(previous_plan, producer_source):
         if _definitions(old / filename, names) != _definitions(current / filename, names):
             raise ValueError('Rescue replay function changed: ' + filename)
     permitted = set(ALLOWED_TOOL_CHANGES)
+    # This route is absent from legacy plans. Once used, its implementation is
+    # strict evidence and cannot change during an admission-only replay.
+    if not previous_plan['request'].get('oriongeno_genomewide'):
+        permitted.add('native_genomewide_implementation')
     if not previous_plan['request'].get('oriongeno'):
         permitted.update(('oriongeno_candidate_implementation', 'oriongeno_profiles_implementation'))
     if any(before.get(k) != after.get(k) for k in before.keys() | after.keys() if k not in permitted):
