@@ -487,3 +487,67 @@ def test_resolve_blast_db_prefix_allows_spaces_but_rejects_control_characters(tm
         (tmp_path / ("uniprot sprot" + ext)).write_text("db\n", encoding="utf-8")
 
     assert mod._resolve_blast_db_prefix(str(prefix)) == str(prefix)
+
+
+@pytest.mark.parametrize("remove_unannotated", [False, True])
+def test_all_computable_selection_includes_unannotated_and_large_families(tmp_path, remove_unannotated):
+    mod = load_module()
+    og = tmp_path / "orthogroups"
+    og.mkdir()
+    rows = [("large", 1001, 2), ("small", 4, 2), ("too_short", 3, 2), ("one_species", 10, 1)]
+    counts, members = [], []
+    for family, total, species in rows:
+        second = 1 if species == 2 else 0
+        counts.append({"Orthogroup": family, "A": total - second, "B": second,
+                       "Total": total, "geneid_0.5": family + "_a0", "besthit_0.5": ""})
+        members.append({"Orthogroup": family,
+                        "A": ", ".join(f"{family}_a{i}" for i in range(total - second)),
+                        "B": family + "_b0" if second else ""})
+    annotated = og / "Orthogroups.GeneCount.annotated.tsv"
+    pandas.DataFrame(counts).to_csv(annotated, sep="\t", index=False)
+    pandas.DataFrame(members).to_csv(og / "Orthogroups.tsv", sep="\t", index=False)
+    args = SimpleNamespace(dir_orthofinder_og=str(og), min_gene_num=4, max_gene_num=9930,
+                           min_species_num=2, min_percent_species_coverage=0,
+                           remove_unannotated=remove_unannotated, annotation_search_method="mmseqs2")
+    before = annotated.read_bytes()
+    _, selected, species = mod.select_orthogroups(args, str(annotated))
+    expected = [] if remove_unannotated else ["large", "small"]
+    assert selected["Orthogroup"].tolist() == expected
+    membership = pandas.read_csv(og / "Orthogroups.selected.tsv", sep="\t", keep_default_na=False)
+    assert membership["Orthogroup"].tolist() == expected
+    assert species == ["A", "B"]
+    assert annotated.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["", "excluded", "changed_counts", "duplicates"])
+def test_selection_prefix_preserves_indices_and_refuses_changed_inputs(tmp_path, failure):
+    mod = load_module()
+    og = tmp_path / "og"
+    og.mkdir()
+    rows = [{"Orthogroup": f"OG{i}", "A": i + 2, "B": 2, "Total": i + 4} for i in range(3)]
+    annotated = og / "annotated.tsv"
+    pandas.DataFrame(rows).to_csv(annotated, sep="\t", index=False)
+    pandas.DataFrame([{"Orthogroup": r["Orthogroup"], "A": "a", "B": "b"} for r in rows]).to_csv(
+        og / "Orthogroups.tsv", sep="\t", index=False)
+    prefix_rows = [rows[2].copy(), rows[0].copy()]
+    if failure == "excluded":
+        prefix_rows[0]["Orthogroup"] = "absent"
+    if failure == "changed_counts":
+        prefix_rows[0]["A"] = 999
+    if failure == "duplicates":
+        prefix_rows.append(prefix_rows[0].copy())
+    prefix = tmp_path / "prefix.tsv"
+    pandas.DataFrame(prefix_rows).to_csv(prefix, sep="\t", index=False)
+    args = SimpleNamespace(dir_orthofinder_og=str(og), min_gene_num=4, max_gene_num=9930,
+                           min_species_num=2, min_percent_species_coverage=0,
+                           remove_unannotated=False, annotation_search_method="mmseqs2",
+                           selection_prefix=str(prefix))
+    if failure:
+        with pytest.raises(ValueError):
+            mod.select_orthogroups(args, str(annotated))
+        assert not (og / "Orthogroups.GeneCount.selected.tsv").exists()
+        assert not (og / "Orthogroups.selected.tsv").exists()
+    else:
+        _, selected, _ = mod.select_orthogroups(args, str(annotated))
+        assert selected["Orthogroup"].tolist() == ["OG2", "OG0", "OG1"]
+        assert pandas.read_csv(og / "Orthogroups.selected.tsv", sep="\t")["Orthogroup"].tolist() == ["OG2", "OG0", "OG1"]

@@ -115,6 +115,7 @@ def build_arg_parser():
         type=int,
         help="Numeric value for --min_percent_species_coverage.",
     )
+    parser.add_argument("--selection_prefix", default="", help="Previous selected count table whose identical families retain their order.")
     parser.add_argument("--ncpu", metavar="INT", default=4, type=int, help="Number of CPU threads.")
     return parser
 
@@ -565,7 +566,6 @@ def select_orthogroups(args, file_genecount_in):
     is_selected = is_big_enough & is_small_enough & is_annotated & is_enough_num_species & is_enough_percent_species
     df_gc = df_gc_original.loc[is_selected, :].reset_index(drop=True)
     print("Number of orthogroups in Orthogroups.GeneCount.selected.tsv: {:,}".format(df_gc.shape[0]))
-    df_gc.to_csv(file_genecount_out, sep="\t", index=False)
 
     file_og_in = os.path.join(args.dir_orthofinder_og, "Orthogroups.tsv")
     file_og_out = os.path.join(args.dir_orthofinder_og, "Orthogroups.selected.tsv")
@@ -574,6 +574,24 @@ def select_orthogroups(args, file_genecount_in):
     df_og = df_og_original.loc[(df_og_original["Orthogroup"].isin(df_gc["Orthogroup"])), :]
     df_og = df_og.reset_index(drop=True)
     print("Number of orthogroups in Orthogroups.selected.tsv: {:,}".format(df_og.shape[0]))
+    prefix_path = getattr(args, "selection_prefix", "")
+    if prefix_path:
+        prefix = _load_orthogroup_table(prefix_path)
+        ids = prefix["Orthogroup"].tolist()
+        selected = df_gc.set_index("Orthogroup", drop=False)
+        if len(ids) != len(set(ids)):
+            raise ValueError("Selection prefix has duplicate family identities")
+        if not set(ids).issubset(selected.index):
+            raise ValueError("Selection prefix contains a family excluded by the new selection")
+        columns = ["Orthogroup", *sp_cols, "Total"]
+        if not set(columns).issubset(prefix.columns) or not prefix[columns].equals(
+                selected.loc[ids, columns].reset_index(drop=True)):
+            raise ValueError("Selection prefix species counts changed")
+        previous = set(ids)
+        order = ids + [family for family in selected.index if family not in previous]
+        df_gc = selected.loc[order].reset_index(drop=True)
+        df_og = df_og.set_index("Orthogroup", drop=False).loc[order].reset_index(drop=True)
+    df_gc.to_csv(file_genecount_out, sep="\t", index=False)
     df_og.to_csv(file_og_out, sep="\t", index=False)
 
     return df_gc_original, df_gc, sp_cols

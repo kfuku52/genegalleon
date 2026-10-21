@@ -63,11 +63,11 @@ synteny_dotplot_min_length="${synteny_dotplot_min_length:-1000000}"
 synteny_dotplot_sort="${synteny_dotplot_sort:-homoeolog}"
 synteny_ds_color_max="${synteny_ds_color_max:-2}"
 case "${genome_evolution_mode}" in
-  all|species_tree|orthogroups) ;;
+  all|species_tree|orthogroups|orthogroup_selection) ;;
   synteny) run_pairwise_synteny=1 ;;
   subgenome) run_subgenome_dominance=1 ;;
   wgd) run_wgd_ssd=1 ;;
-  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, synteny, subgenome or wgd" >&2; exit 2 ;;
+  *) echo "genome_evolution_mode must be all, species_tree, orthogroups, orthogroup_selection, synteny, subgenome or wgd" >&2; exit 2 ;;
 esac
 for synteny_flag in run_pairwise_synteny synteny_plot_only run_subgenome_dominance run_wgd_ssd; do
   case "${!synteny_flag}" in
@@ -196,7 +196,7 @@ gg_bootstrap_core_runtime "${BASH_SOURCE[0]:-$0}" "base" 1 1
 # A rebuild request may rebuild only the two requested orthogroup producers.
 orthogroup_requested_stale_policy="${artifact_stale_policy:-stop}"
 orthogroup_requested_legacy_policy="${artifact_legacy_policy:-adopt}"
-if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   case "${orthogroup_requested_stale_policy}" in
     stop|rebuild) ;;
     *) echo "orthogroups mode requires artifact_stale_policy=stop or rebuild" >&2; exit 2 ;;
@@ -208,6 +208,10 @@ if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
       printf -v "${config_name}" '%s' 0
     fi
   done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+  if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+    run_orthofinder=0
+    run_cds_translation=0
+  fi
   artifact_stale_policy=stop
   artifact_legacy_policy=stop
 fi
@@ -2977,7 +2981,7 @@ if species_tree_summary_generation_requested; then
 fi
 species_tree_recover_mixed_managed_directories
 refresh_species_tree_for_shared_protein_input_signature "${shared_protein_input_signature}" || exit $?
-if [[ "${genome_evolution_mode}" == "orthogroups" && ! -s "${file_undated_species_tree}" ]]; then
+if [[ ( "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ) && ! -s "${file_undated_species_tree}" ]]; then
   echo "orthogroups mode requires an existing audited undated species tree; run species_tree first." >&2
   exit 3
 fi
@@ -3009,6 +3013,18 @@ ensure_dir "${dir_tmp}"
 cd "${dir_tmp}"
 
 enable_all_run_flags_for_debug_mode
+if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+  while IFS= read -r config_name; do
+    if [[ "${config_name}" == run_* && "${config_name}" != run_og_selection ]]; then
+      printf -v "${config_name}" '%s' 0
+    fi
+  done < <(gg_print_entrypoint_config_vars gg_genome_evolution_entrypoint.sh)
+fi
+remove_unannotated_orthogroups="${remove_unannotated_orthogroups:-yes}"
+case "${remove_unannotated_orthogroups}" in
+  yes|no) ;;
+  *) echo "remove_unannotated_orthogroups must be yes or no" >&2; exit 2 ;;
+esac
 orthogroup_annotation_method=$(echo "${orthogroup_annotation_method:-mmseqs2}" | tr '[:upper:]' '[:lower:]')
 if [[ "${orthogroup_annotation_method}" != "blastp" && "${orthogroup_annotation_method}" != "mmseqs2" ]]; then
   echo "Invalid orthogroup_annotation_method: ${orthogroup_annotation_method}"
@@ -5166,6 +5182,12 @@ run_shared_species_omark_stage
 task="Summarizing OMArk species quality results"
 run_shared_omark_summary_stage
 
+# Selection-only must audit frozen inference with stop policy before restoring
+# rebuild solely for the selected-table producer below.
+if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+  artifact_stale_policy="${orthogroup_requested_stale_policy}"
+  artifact_legacy_policy="${orthogroup_requested_legacy_policy}"
+fi
 task="Selecting orthogroups based on gene and species numbers"
 if [[ ${orthogroup_table} == "OG" ]]; then
   dir_orthogroup_selection_input="${dir_orthofinder_og}"
@@ -5174,6 +5196,30 @@ elif [[ ${orthogroup_table} == "HOG" ]]; then
 else
   echo "Unsupported orthogroup_table: ${orthogroup_table}. Allowed values are OG or HOG."
   exit 1
+fi
+og_selection_prefix_args=()
+orthogroup_selection_prefix_sha256="${orthogroup_selection_prefix_sha256:-}"
+if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
+  if [[ ! "${orthogroup_selection_prefix_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "orthogroup_selection_prefix_sha256 must be a SHA256 digest" >&2; exit 2
+  fi
+  selection_prefix_dir="${genome_evolution_provenance_dir}/orthogroup_selection_prefix"
+  selection_prefix="${selection_prefix_dir}/${orthogroup_selection_prefix_sha256}.tsv"
+  if [[ -L "${selection_prefix_dir}" || -L "${selection_prefix}" ]]; then
+    echo "Orthogroup selection prefix cannot be a symbolic link" >&2; exit 2
+  fi
+  if [[ ! -e "${selection_prefix}" ]]; then
+    previous_counts="${dir_orthofinder_filtered}/Orthogroups.GeneCount.selected.tsv"
+    if [[ ! -f "${previous_counts}" || -L "${previous_counts}" || "$(sha256sum -- "${previous_counts}" | cut -d' ' -f1)" != "${orthogroup_selection_prefix_sha256}" ]]; then
+      echo "Previous selected count table does not match the frozen prefix" >&2; exit 3
+    fi
+    ensure_dir "${selection_prefix_dir}"
+    cp_out "${previous_counts}" "${selection_prefix}"
+  fi
+  if [[ "$(sha256sum -- "${selection_prefix}" | cut -d' ' -f1)" != "${orthogroup_selection_prefix_sha256}" ]]; then
+    echo "Preserved orthogroup selection prefix changed" >&2; exit 3
+  fi
+  og_selection_prefix_args=(--selection_prefix "${selection_prefix}")
 fi
 og_selection_needs_update=0
 gg_artifact_contract_init og_selection_provenance_args "orthogroup_selection" "all_species" "${genome_evolution_provenance_dir}/orthogroup_selection.json"
@@ -5187,11 +5233,14 @@ og_selection_provenance_args+=(
   --parameter "max_gene_num=${max_num_gene}"
   --parameter "min_species_num=${min_num_species}"
   --parameter "min_percent_species_coverage=${min_percent_species_coverage}"
-  --parameter "remove_unannotated=yes"
+  --parameter "remove_unannotated=${remove_unannotated_orthogroups}"
   --parameter "gene_size_quantiles=0.05,0.25,0.5,0.75,0.95"
   --parameter "annotation_search_method=${orthogroup_annotation_method}"
   --parameter "evalue=1e-2"
 )
+if [[ -n "${orthogroup_selection_prefix_sha256}" ]]; then
+  og_selection_provenance_args+=(--input "selection_prefix=${selection_prefix}")
+fi
 if [[ -s "/usr/local/db/uniprot_sprot.pep" ]]; then
   og_selection_provenance_args+=(--input "uniprot_sprot=/usr/local/db/uniprot_sprot.pep")
 else
@@ -5237,7 +5286,8 @@ if [[ ${og_selection_needs_update} -eq 1 && ${run_og_selection} -eq 1 ]]; then
     --max_gene_num "${max_num_gene}" \
     --min_species_num "${min_num_species}" \
     --min_percent_species_coverage "${min_percent_species_coverage}" \
-    --remove_unannotated 'yes' \
+    --remove_unannotated "${remove_unannotated_orthogroups}" \
+    "${og_selection_prefix_args[@]}" \
     --gene_size_quantiles '0.05,0.25,0.5,0.75,0.95' \
     --annotation_search_method "${orthogroup_annotation_method}" \
     --path_search_db "${uniprot_db_prefix}" \
@@ -5265,7 +5315,7 @@ else
   gg_step_skip "${task}"
 fi
 
-if [[ "${genome_evolution_mode}" == "orthogroups" ]]; then
+if [[ "${genome_evolution_mode}" == "orthogroups" || "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
   echo "Orthogroup inference and selection stages finished; later genome-evolution stages were not requested."
   exit 0
 fi

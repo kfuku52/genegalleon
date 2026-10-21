@@ -2569,3 +2569,65 @@ def test_genome_evolution_completes_interrupted_figtree_contract_migration(tmp_p
     assert second.returncode == 0, second.stdout + second.stderr
     assert "figtree" in {entry["label"] for entry in json.loads(manifest.read_text())["outputs"]}
     assert (directory / "FigTree.tre").read_text() == figtree
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("failure", ["", "source_changed", "prefix_changed", "source_symlink"])
+def test_frozen_selection_prefix_is_retained_and_revalidated(tmp_path, failure):
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    previous = filtered / "Orthogroups.GeneCount.selected.tsv"
+    previous.write_text("Orthogroup\tA\tB\tTotal\nOG2\t2\t2\t4\n")
+    digest = hashlib.sha256(previous.read_bytes()).hexdigest()
+    provenance = tmp_path / "provenance"
+    prefix = provenance / "orthogroup_selection_prefix" / (digest + ".tsv")
+    if failure == "source_changed":
+        previous.write_text("changed\n")
+    if failure == "source_symlink":
+        target = tmp_path / "target"
+        previous.rename(target)
+        previous.symlink_to(target)
+    if failure == "prefix_changed":
+        prefix.parent.mkdir(parents=True)
+        prefix.write_text("corrupted\n")
+    core = CORE_PATH.read_text()
+    block = "og_selection_prefix_args=()" + core.split("og_selection_prefix_args=()", 1)[1].split(
+        "og_selection_needs_update=0", 1)[0]
+    program = 'set -euo pipefail\nensure_dir() { mkdir -p -- "$1"; }\ncp_out() { cp -- "$1" "$2"; }\n' + block
+    env = {**os.environ, "genome_evolution_provenance_dir": str(provenance),
+           "dir_orthofinder_filtered": str(filtered), "orthogroup_selection_prefix_sha256": digest}
+    result = subprocess.run([BASH_FOR_TESTS, "-c", program], env=env, capture_output=True, text=True)
+    if failure:
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert prefix.read_bytes() == previous.read_bytes()
+        previous.write_text("a later expanded selection\n")
+        repeated = subprocess.run([BASH_FOR_TESTS, "-c", program], env=env, capture_output=True, text=True)
+        assert repeated.returncode == 0, repeated.stdout + repeated.stderr
+        assert hashlib.sha256(prefix.read_bytes()).hexdigest() == digest
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("stale", [False, True])
+def test_selection_mode_never_reenables_frozen_inference_under_rebuild_policy(tmp_path, stale):
+    workspace, config = _prepare_audited_orthogroup_tree(tmp_path)
+    settings = {**config, "genome_evolution_mode": "orthogroups", "artifact_stale_policy": "rebuild",
+                "run_orthofinder": "1", "run_og_selection": "0"}
+    first = _run_core(tmp_path, settings)
+    assert first.returncode == 0, first.stdout + first.stderr
+    calls = tmp_path / "capture/orthofinder_args.txt"
+    assert calls.exists()
+    calls.unlink()
+    if stale:
+        (workspace / "output/orthofinder/hog2og/Orthogroups.GeneCount.tsv").write_text("changed\n")
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    original_tree = tree.read_bytes()
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection"})
+    assert not calls.exists()
+    assert tree.read_bytes() == original_tree
+    if stale:
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "run_orthofinder=0" in result.stdout

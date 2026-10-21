@@ -444,6 +444,8 @@ input_sequence_mode
 representative_inputs
 max_gene_orthogroup_grampa
 max_num_gene
+remove_unannotated_orthogroups
+orthogroup_selection_prefix_sha256
 max_orthofinder_core_species
 mcmctree_divergence_time_constraints_str
 mcmctree_calibration_manifest
