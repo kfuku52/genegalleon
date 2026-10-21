@@ -81,6 +81,96 @@ printf '%s\n' caught
     assert result.stdout.strip() == "caught"
 
 
+@pytest.mark.parametrize("fast_status", [0, 7, 127])
+def test_background_pool_refills_before_the_oldest_worker_finishes(tmp_path: Path, fast_status: int):
+    # The oldest child cannot finish until the newly admitted task releases it.
+    # FIFO waiting reaches the bounded child's expiry instead of refilling.
+    script = r"""
+set -euo pipefail
+source "$1"
+root=$2
+(
+  for ((attempt=0; attempt<100; attempt++)); do
+    [[ ! -f "${root}/release" ]] || exit 0
+    sleep 0.01
+  done
+  printf 'expired\n' > "${root}/expired"
+  exit 31
+) &
+gg_background_register "$!"
+(exit "$3") &
+gg_background_register "$!"
+wait_until_jobn_le 2
+[[ ! -f "${root}/expired" ]]
+printf 'released\n' > "${root}/release"
+if wait_for_background_jobs; then status=0; else status=$?; fi
+printf '%s %s %s\n' "${status}" "${#GG_BACKGROUND_PIDS[@]}" "${GG_BACKGROUND_FAILURE}"
+"""
+    result = run_bash(script, SUPPORT / "gg_util/06_workspace_validation.sh", tmp_path, fast_status, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"{int(fast_status != 0)} 0 0"
+
+
+def test_background_pool_preserves_unregistered_children_and_resets_failures(tmp_path: Path):
+    script = r"""
+set -euo pipefail
+source "$1"
+(sleep 0.02; exit 23) &
+unregistered=$!
+(sleep 0.04; exit 7) &
+gg_background_register "$!"
+(sleep 0.06; exit 0) &
+gg_background_register "$!"
+wait_until_jobn_le 2
+if wait_for_background_jobs; then exit 1; fi
+if wait "${unregistered}"; then exit 2; else [[ $? -eq 23 ]]; fi
+(exit 0) &
+gg_background_register "$!"
+sleep 0.02
+wait_until_jobn_le 1
+wait_for_background_jobs
+printf '%s %s\n' "${#GG_BACKGROUND_PIDS[@]}" "${GG_BACKGROUND_FAILURE}"
+"""
+    result = run_bash(script, SUPPORT / "gg_util/06_workspace_validation.sh", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0 0"
+
+
+def test_background_pool_reports_a_signalled_worker():
+    script = r"""
+set -euo pipefail
+source "$1"
+(sleep 10) &
+child=$!
+gg_background_register "${child}"
+kill -TERM "${child}"
+wait_until_jobn_le 1
+if wait_for_background_jobs; then exit 1; fi
+wait_for_background_jobs
+printf '%s\n' caught
+"""
+    result = run_bash(script, SUPPORT / "gg_util/06_workspace_validation.sh")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "caught"
+
+
+@pytest.mark.parametrize("status", [0, 7, 127])
+def test_background_pool_reaps_workers_that_finish_during_the_jobs_snapshot(status: int):
+    script = r"""
+set -euo pipefail
+source "$1"
+jobs() { builtin jobs "$@"; sleep 0.05; }
+(sleep 0.01; exit "$2") &
+gg_background_register "$!"
+wait_until_jobn_le 1
+if wait_for_background_jobs; then status=0; else status=$?; fi
+printf '%s %s\n' "${status}" "${#GG_BACKGROUND_PIDS[@]}"
+"""
+    result = run_bash(script, SUPPORT / "gg_util/06_workspace_validation.sh", status)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"{int(status != 0)} 0"
+
+
 def test_memory_parallel_job_cap_has_a_one_job_floor():
     script = r"""
 source "$1"

@@ -540,6 +540,9 @@ checks equivalent logical outputs and separates parent/child peak RSS.
 For profiling native two-page HGT PDFs and verifying exact drawing/audit
 equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
 
+For bounded shell pools with uneven worker durations, output equivalence and
+failure propagation, see [background worker scheduling](background-worker-scheduling.md).
+
 ## Reference annotation comparisons
 
 For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot
