@@ -1513,12 +1513,18 @@ def test_genome_evolution_archives_and_reuses_high_count_species_tree_stages(tmp
 def test_species_tree_best_score_selection_is_provenance_bound(tmp_path, monkeypatch):
     original_prepare = _prepare_stub_binaries
 
-    def prepare_with_real_seqkit(path):
+    def prepare_with_gzip_seqkit(path):
         binary_dir = original_prepare(path)
-        (binary_dir / "seqkit").unlink()
+        stub = binary_dir / "seqkit"
+        script = stub.read_text().replace("import re\n", "import gzip\nimport re\n")
+        script = script.replace('with open(path, "r", encoding="utf-8") as handle:',
+                                'with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as handle:')
+        script = script.replace('open(out_path, "w", encoding="utf-8") if out_path else sys.stdout',
+                                '(gzip.open(out_path, "wt") if out_path.endswith(".gz") else open(out_path, "w")) if out_path else sys.stdout')
+        stub.write_text(script)
         return binary_dir
 
-    monkeypatch.setattr(sys.modules[__name__], "_prepare_stub_binaries", prepare_with_real_seqkit)
+    monkeypatch.setattr(sys.modules[__name__], "_prepare_stub_binaries", prepare_with_gzip_seqkit)
     workspace = tmp_path / "workspace"
     proteins = workspace / "input/species_protein"
     proteins.mkdir(parents=True)
