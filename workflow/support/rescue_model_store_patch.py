@@ -1,4 +1,5 @@
 """Immutable admission updates preserving raw ordinals and partial references."""
+import bisect
 import copy
 import hashlib
 import json
@@ -71,19 +72,20 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         source_bodies = store._Bodies(source_db, manifest['body_codec'])
         for ordinal in changes:
             accepted.pop(ordinal, None)
-        updates = {**changes, **{count + i: m for i, m in enumerate(appended)}}
-        packed = {}
-        for ordinal, model in updates.items():
-            body, envelope = store._pack(model)
-            envelope['ordinal'] = ordinal
-            packed[ordinal] = (body, envelope)
+        for ordinal, model in changes.items():
             if model.get('status') == 'accepted':
                 accepted[ordinal] = model
+        for offset, model in enumerate(appended):
+            if model.get('status') == 'accepted':
+                accepted[count + offset] = model
         output = copy.deepcopy(manifest)
         normalized = set()
+        ordered_changes = sorted(changes)
         for shard in manifest['shards']:
             name = shard['path']
-            affected = {i for i in changes if shard['first'] <= i < shard['first'] + shard['count']}
+            first = bisect.bisect_left(ordered_changes, shard['first'])
+            last = bisect.bisect_left(ordered_changes, shard['first'] + shard['count'], lo=first)
+            affected = set(ordered_changes[first:last])
             if not affected:
                 _copy(source_store / name, temporary / name, manifest['files'][name])
                 continue
@@ -94,7 +96,10 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                     if envelope.get('ordinal') != ordinal:
                         raise ValueError('Patch source candidate order changed')
                     if ordinal in affected:
-                        replacement = packed[ordinal][1]
+                        # Serialize only the current record. A cohort can have
+                        # millions of changed candidates with large DNA bodies.
+                        replacement_body, replacement = store._pack(changes[ordinal])
+                        replacement['ordinal'] = ordinal
                         if replacement['context'].get('partial_evidence') != envelope['context'].get('partial_evidence'):
                             raise ValueError('Admission patch changed predictor/DNA or partial evidence')
                         if replacement['body'] != envelope['body']:
@@ -104,7 +109,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                             raw_body = source_bodies.read(envelope['body'])
                             original = store._unpack(envelope, raw_body)
                             body_keys = json.loads(raw_body)
-                            if (store._pack(original)[0] != packed[ordinal][0]
+                            if (store._pack(original)[0] != replacement_body
                                     or any(k not in changes[ordinal]
                                            or store._json(original[k]) != store._json(changes[ordinal][k])
                                            for k in body_keys)):
@@ -130,7 +135,9 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         body_db.execute('PRAGMA journal_mode=OFF')
         body_db.execute('PRAGMA synchronous=OFF')
         for ordinal in [*sorted(normalized), *range(count, count + len(appended))]:
-            store._insert_body(body_db, packed[ordinal][0], manifest['compression_level'], manifest['codec'])
+            model = changes[ordinal] if ordinal < count else appended[ordinal - count]
+            body, _ = store._pack(model)
+            store._insert_body(body_db, body, manifest['compression_level'], manifest['codec'])
         output['counts']['bodies'] = body_db.execute('SELECT COUNT(*) FROM bodies').fetchone()[0]
         body_db.commit()
         body_db.close()
@@ -158,7 +165,9 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
             member = f'models-{len(manifest["shards"]):06d}.jsonl.{suffix}'
             with store._writer(temporary / member, manifest['codec'], manifest['compression_level']) as out:
                 for ordinal in range(count, count + len(appended)):
-                    out.write(store._json(packed[ordinal][1]) + b'\n')
+                    _, envelope = store._pack(appended[ordinal - count])
+                    envelope['ordinal'] = ordinal
+                    out.write(store._json(envelope) + b'\n')
             output['shards'].append({'path': member, 'first': count, 'count': len(appended)})
             if new_partials:
                 previous = output['scopes']['partial'][1:]

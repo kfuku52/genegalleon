@@ -2,12 +2,40 @@
 import copy
 import json
 import os
+import weakref
 
 import pytest
 
 from workflow.support import rescue_model_store as store
 from workflow.support.rescue_model_store_patch import patch_model_store
 from workflow.tests.test_rescue_model_store import model, published, receipt
+
+
+def test_patch_keeps_only_a_bounded_number_of_serialized_envelopes(tmp_path, monkeypatch):
+    rows = [model(i) for i in range(128)]
+    source, _ = published(tmp_path, rows)
+    changes = {i: {**row, 'status': 'unresolved'} for i, row in enumerate(rows)}
+    live = weakref.WeakValueDictionary()
+    original_pack, maximum, serial = store._pack, 0, 0
+
+    class Envelope(dict):
+        pass
+
+    def tracked(*args, **kwargs):
+        nonlocal maximum, serial
+        body, envelope = original_pack(*args, **kwargs)
+        envelope = Envelope(envelope)
+        live[serial] = envelope
+        serial += 1
+        maximum = max(maximum, len(live))
+        return body, envelope
+
+    monkeypatch.setattr(store, '_pack', tracked)
+    output = tmp_path / 'result'
+    patch_model_store(source, output, changes)
+    receipt(output)
+    assert list(store.iter_models(output)) == list(changes.values())
+    assert maximum <= 4
 
 
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
