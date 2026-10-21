@@ -73,6 +73,30 @@ def test_longer_only_equal_length_is_explicitly_retained(tmp_path):
     assert list(fsi.iter_fasta_records(task['cds_path'])) == [('old', sequence)]
 
 
+@pytest.mark.parametrize('longer_only', [False, True])
+def test_complete_exact_clone_in_extended_source_honors_length_policy(tmp_path, longer_only):
+    task, sequence, source, _, _ = fixture(tmp_path / 'inputs', longer=longer_only)
+    source.write_text('>extended\nATG' + 'GCT' * 9 + sequence + '\n')
+    cloned.apply_to_task(task, tmp_path / 'curated')
+    audit = json.loads(Path(task['cloned_model_audit']).read_text())
+    decision = audit['decisions'][0]
+    assert decision['status'] == ('not_longer' if longer_only else 'replace')
+    assert decision['matches'][0]['match_basis'] == 'complete_clone_exact'
+    assert decision['matches'][0]['query_coverage'] == 1.0
+    assert decision['matches'][0]['target_coverage'] < .98
+    if not longer_only:
+        assert list(fsi.iter_fasta_records(task['cds_path']))[0][1] == sequence
+
+
+def test_multiple_extended_models_are_retained_even_when_clone_is_exact(tmp_path):
+    task, sequence, source, _, _ = fixture(tmp_path / 'inputs')
+    source.write_text('>extended1\nATG' + 'GCT' * 9 + sequence + '\n>extended2\nATG' + 'AAC' * 9 + sequence + '\n')
+    cloned.apply_to_task(task, tmp_path / 'curated')
+    audit = json.loads(Path(task['cloned_model_audit']).read_text())
+    assert audit['decisions'][0]['status'] == 'ambiguous_extended_targets'
+    assert Path(task['cds_path']).read_text() == source.read_text()
+
+
 @pytest.mark.parametrize('variant', [True, 'insertion', 'deletion'])
 def test_divergent_overlapping_paralogs_are_preserved_for_review(tmp_path, variant):
     task, _, source, _, _ = fixture(tmp_path / 'inputs', ambiguity=variant)

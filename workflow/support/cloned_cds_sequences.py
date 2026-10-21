@@ -18,7 +18,7 @@ def _run(argv, directory, name):
 
 
 def search_candidates(path, query_names, targets, identity, coverage, query_lengths):
-    """Require a near-complete subject in one unambiguous nucleotide alignment."""
+    """Find source fragments or exact complete clones within extended source CDS."""
     grouped = {name: {} for name in query_names.values()}
     subjects = {name: set() for name in query_names.values()}
     for line in path.read_text().splitlines():
@@ -35,7 +35,9 @@ def search_candidates(path, query_names, targets, identity, coverage, query_leng
                 and slen == targets[subject]['length'] and qlen == query_lengths[query]):
             raise ValueError('Cloned sequence alignment coordinates changed')
         target_coverage = (abs(send - sstart) + 1) / slen
-        if float(fields[2]) / 100 < identity or target_coverage < coverage:
+        complete_clone_exact = (qstart == 1 and qend == qlen and len(fields[12]) == qlen
+                                and fields[12].upper() == fields[13].upper())
+        if float(fields[2]) / 100 < identity or (target_coverage < coverage and not complete_clone_exact):
             continue
         if (len(fields[12]) != int(fields[3]) or len(fields[13]) != int(fields[3])
                 or len(fields[13].replace('-', '')) != abs(send - sstart) + 1):
@@ -59,6 +61,8 @@ def search_candidates(path, query_names, targets, identity, coverage, query_leng
             raise ValueError('Cloned sequence alignment length changed')
         record = dict(subject=subject, target_id=targets[subject]['id'], target_length=slen,
                       identity=float(fields[2]) / 100, target_coverage=target_coverage,
+                      query_coverage=(qend - qstart + 1) / qlen,
+                      match_basis='source_CDS_coverage' if target_coverage >= coverage else 'complete_clone_exact',
                       query_start=qstart, query_end=qend, strand='+' if send >= sstart else '-',
                       bases=bases, insertions=insertions)
         grouped[query].setdefault(subject, []).append(record)
@@ -81,6 +85,9 @@ def choose_replacements(clones, grouped, longer_only):
         row['matches'] = [{k: v for k, v in r.items() if k not in {'bases', 'insertions'}} for r in records]
         if name in longer_only and len(sequence) <= max(r['target_length'] for r in records):
             row['status'] = 'not_longer'
+            continue
+        if len(records) > 1 and any(r['match_basis'] == 'complete_clone_exact' for r in records):
+            row['status'] = 'ambiguous_extended_targets'
             continue
         conflict = False
         for field in ('bases', 'insertions'):

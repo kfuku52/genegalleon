@@ -1037,6 +1037,10 @@ at least 98% nucleotide identity and 98% coverage of each existing CDS in one
 alignment. `cloned_cds_min_identity` and `cloned_cds_min_target_coverage` accept
 explicit fractions in `(0,1]` for this route only. Matching N- and C-terminal
 fragments can be replaced together when their overlapping aligned bases agree.
+A complete clone that matches exactly, without gaps, inside one longer source
+CDS is also supported; the audit records both query and source coverage. Multiple
+targets involving that containment case are retained as ambiguous. The optional
+longer-only policy still keeps an equal or shorter clone unchanged.
 Distinct overlapping target sequences, competing clones, multiple qualifying
 alignments, or a capped search result are retained for review. No supported
 match leaves the source unchanged. The audit records every decision, target
