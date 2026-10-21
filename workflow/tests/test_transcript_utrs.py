@@ -90,6 +90,86 @@ def test_utrs_outside_declared_exons_are_not_silently_ignored():
     assert utrs.read_models(text, strict=False)['t']['problem'] == 'utr_outside_exons'
 
 
+def coge_segments(strand='+'):
+    text = model(cds=((100, 160), (220, 400)), exons=((400, 450), (500, 520)), strand=strand)
+    rows = []
+    for line in text.splitlines():
+        fields = line.replace('\tsource\t', '\tCoGe\t').split('\t')
+        if fields[2] in {'gene', 'mRNA'}:
+            fields[3] = '101'
+        if fields[2] != 'gene':
+            fields[8] += ';coge_fid=' + ('9' if fields[2] == 'CDS' else '7')
+        rows.append('\t'.join(fields)+'\n')
+    return ''.join(rows)
+
+
+@pytest.mark.parametrize('strand', ['+', '-'])
+def test_coge_coding_and_terminal_exon_segments_are_interpreted_automatically(strand):
+    text = coge_segments(strand)
+    parsed = utrs.read_models(text)['t']
+    assert parsed['exons'] == [[100, 160], [220, 450], [500, 520]]
+    assert parsed['exon_path_basis'] == 'coge_coding_plus_terminal_noncoding_segments'
+    result, audit, seq = utrs.complete(text, text, Genome(), 'S')
+    side = 'utr3' if strand == '+' else 'utr5'
+    assert audit[0][side]['length'] == 70
+    assert audit[0]['source_exon_interpretations'][0]['declared_exons'] == [[400, 450], [500, 520]]
+    assert len(seq['t']) == 310
+    assert [r for r in result.splitlines() if '\tCDS\t' in r] == [r for r in text.splitlines() if '\tCDS\t' in r]
+    assert utrs.read_models(result)['t']['exons'] == parsed['exons']
+
+
+@pytest.mark.parametrize('change', ['source', 'identity', 'bounds', 'internal_segment', 'shared_parent', 'rna_identity'])
+def test_coge_interpretation_requires_source_identity_and_terminal_structure(change):
+    text = coge_segments()
+    if change == 'source':
+        text = text.replace('\tCoGe\t', '\tother\t')
+    elif change == 'identity':
+        text = text.replace('Parent=t;coge_fid=7', 'Parent=t;coge_fid=8')
+    elif change == 'bounds':
+        text = text.replace('mRNA\t101\t520', 'mRNA\t91\t520')
+    elif change == 'internal_segment':
+        text = text.replace('exon\t401\t450', 'exon\t181\t190')
+    elif change == 'shared_parent':
+        text = text.replace('Parent=t;coge_fid=7', 'Parent=t,other;coge_fid=7')
+    else:
+        text = text.replace('Parent=g;coge_fid=7', 'Parent=g')
+    with pytest.raises(ValueError):
+        utrs.read_models(text)
+    assert utrs.read_models(text, strict=False)['t'].get('problem')
+
+
+def test_unique_full_coding_intron_chain_resolves_terminal_neighbour_overlap():
+    selected = model('a', 'ga', cds=((100, 200), (300, 400)), exons=((100, 200), (300, 400)))
+    selected += model('b', 'gb', cds=((420, 450),), exons=((420, 450),))
+    native = utrs.read_models(model('n', 'ng', cds=((90, 200), (300, 470)), exons=((30, 200), (300, 500))))
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    by_id = {r['transcript_id']: r for r in audit}
+    assert by_id['a']['utr5']['length'] == 70 and by_id['a']['utr3']['length'] == 100
+    match = by_id['a']['native_correspondence']['candidates'][0]
+    assert match['basis'] == 'identical_coding_intron_chain' and match['assigned_gene'] == 'ga'
+    assert by_id['b']['native_status'] == 'no_unique_coding_overlap'
+
+
+def test_shared_full_intron_chain_remains_ambiguous():
+    selected = model('a', 'ga', cds=((100, 200), (300, 400)), exons=((100, 200), (300, 400)))
+    selected += model('b', 'gb', cds=((110, 200), (300, 390)), exons=((110, 200), (300, 390)))
+    native = utrs.read_models(model('n', 'ng', cds=((90, 200), (300, 470)), exons=((30, 200), (300, 500))))
+    _, audit, _ = utrs.complete(selected, selected, Genome(), 'S', native)
+    assert all(r['native_status'] == 'no_unique_coding_overlap' for r in audit)
+    assert all(r['native_correspondence']['status'] == 'ambiguous_coding_overlap' for r in audit)
+
+
+def test_unmapped_native_diagnostics_distinguish_absence_from_opposite_strand():
+    selected = utrs.read_models(model('a', 'ga', cds=((100, 200),), exons=((100, 200),))
+                                + model('b', 'gb', cds=((600, 700),), exons=((600, 700),)))
+    native = utrs.read_models(model('n', 'ng', cds=((100, 200),), exons=((100, 200),), strand='-'))
+    _, reasons = utrs.native_correspondence(selected, native)
+    assert reasons['a']['status'] == 'opposite_strand_coding_overlap'
+    assert reasons['b']['status'] == 'no_coding_overlap'
+    _, reasons = utrs.native_correspondence(selected, {})
+    assert reasons['a']['status'] == 'no_native_prediction_on_contig'
+
+
 @pytest.mark.parametrize('strand', ['+', '-'])
 def test_mislabeled_source_utr_is_replaced_with_correct_side(strand):
     text = model(strand=strand) + f'chr\tsource\tfive_prime_UTR\t401\t450\t.\t{strand}\t.\tID=wrong;Parent=t\n'

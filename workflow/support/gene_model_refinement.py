@@ -2043,11 +2043,20 @@ def parser():
     check = sub.add_parser('verify-inputs')
     check.add_argument('--inputs', required=True, type=Path)
     check.add_argument('--field', choices=['cds', 'protein', 'gff', 'genome', 'analysis_cds', 'analysis_gff', 'representative_map', 'transcript', 'layout', 'analysis_layout', 'coding_layout'])
+    utr = sub.add_parser('reproject-utrs', help='Re-evaluate UTRs from a completed, immutable coding-model view')
+    utr.add_argument('--source-output', required=True, type=Path)
+    utr.add_argument('--output', required=True, type=Path)
+    utr.add_argument('--source-receipt-sha256', required=True)
+    utr.add_argument('--species', action='append', help='Repeat for a subset; defaults to the complete source cohort')
     return p
 
 
 def _main():
     args = parser().parse_args()
+    if args.command == 'reproject-utrs':
+        import transcript_utr_reassessment
+        transcript_utr_reassessment.reproject(args.source_output, args.output, args.source_receipt_sha256, args.species)
+        return
     if args.command == 'verify-inputs':
         result = verify_inputs(args.inputs, args.field)
         print(result if isinstance(result, str) else json.dumps(result, sort_keys=True))

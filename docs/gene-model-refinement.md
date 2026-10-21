@@ -27,6 +27,44 @@ while producer execution continues to require its own recorded tool identities.
 
 ## Workflow
 
+### Re-evaluate UTRs after coding-model completion
+
+UTR interpretation is automatic during finalization. CoGe annotations whose
+`exon` rows encode terminal noncoding segments separately from CDS rows are
+recognized only with matching CoGe feature identity, unique parents, terminal
+segments and consistent declared transcript bounds. Their exon path is the
+union of those segments and the unchanged CDS. Other inconsistent exon paths
+remain unsupported, with an explicit audit reason.
+
+Native UTR donors are assigned by unique exact CDS first, then a unique identical
+nonempty full coding intron chain, then unique same-strand coding overlap.
+Shared chains and multi-locus coding paths remain ambiguous. The UTR audit
+distinguishes ambiguous overlap, opposite-strand overlap, absence of coding
+overlap and contigs without native predictions.
+
+To apply a corrected interpreter without rerunning coding selection or BUSCO,
+use a separate derivative publication:
+
+```bash
+python workflow/support/gene_model_refinement.py reproject-utrs \
+  --source-output /path/to/completed/refinement_output \
+  --source-receipt-sha256 SHA256_OF_EFFECTIVE_RECEIPT \
+  --output /path/to/new/utr_reassessment \
+  --species Species_name
+```
+
+Repeat `--species` for a subset or omit it for the source cohort. Consumed source
+members and native prediction provenance are freshly verified against frozen
+receipts, with input-change fences through publication. The new `effective/`
+contains selected, analysis and full GFFs, transcript FASTA, UTR audits, a summary
+and provenance. Coding rows are checked byte-for-byte against each source GFF;
+CDS/protein FASTAs and BUSCO results remain in the immutable source publication.
+The summary denominator is the final exported CDS gene set, not all candidates.
+This UTR-only derivative is not a replacement coding-input manifest.
+
+Identical invocations verify and reuse the derivative. A different source,
+species selection or UTR implementation requires a new output directory.
+
 ```mermaid
 flowchart LR
   A[Original CDS + full GFF + genome] --> B[All coding isoforms + provenance]

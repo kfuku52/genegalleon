@@ -25,6 +25,36 @@ def merge_blocks(blocks):
     return result
 
 
+def _coge_terminal_segments(model, rows):
+    """Recognize CoGe's separate coding and terminal noncoding segments.
+
+    This is a source-specific interpretation, not repair of arbitrary incomplete
+    exon paths. CoGe feature identity, unique Parent links and declared RNA bounds
+    must independently support the union. Internal or overlapping segments fail.
+    """
+    fid = model['attrs'].get('coge_fid', ())
+    if (model.get('problem') or model.get('source', '').lower() != 'coge'
+            or len(fid) != 1 or not fid[0].isdecimal() or not model['exons']
+            or model['attrs'].get('ID') != (model['id'],)
+            or model['attrs'].get('Parent') != (model['gene'],)):
+        return None
+    low, high = model['bounds']
+    coding_low, coding_high = model['cds'][0][0], model['cds'][-1][1]
+    for kind, fields, attrs in rows:
+        if (fields[1].lower() != 'coge' or attrs.get('Parent') != (model['id'],)
+                or len(attrs.get('coge_fid', ())) != 1 or not attrs['coge_fid'][0].isdecimal()):
+            return None
+        if kind == 'exon' and attrs['coge_fid'] != fid:
+            return None
+    if any(not (b <= coding_low or a >= coding_high) for a, b in model['exons']):
+        return None
+    blocks = [*model['exons'], *[b[:2] for b in model['cds']], *model['utr']]
+    if any(not low <= a < b <= high for a, b in blocks):
+        return None
+    result = merge_blocks(blocks)
+    return result if (result[0][0], result[-1][1]) == (low, high) else None
+
+
 def read_models(text, *, strict=True):
     """Read explicit GFF3 or GTF transcript relationships, including shared rows."""
     models, children, genes = {}, defaultdict(list), set()
@@ -53,7 +83,8 @@ def read_models(text, *, strict=True):
                 models[tid]['problem'] = 'duplicate_transcript_identity'
                 continue
             models[tid] = dict(id=tid, gene=parents[0] if len(parents) == 1 else '', seqid=f[0], strand=f[6],
-                               cds=[], exons=[], utr=[], attrs=attrs)
+                               cds=[], exons=[], utr=[], attrs=attrs, source=f[1],
+                               bounds=(int(f[3])-1, int(f[4])))
         elif kind in {'exon', 'cds', 'utr', 'five_prime_utr', 'three_prime_utr', '5utr', '3utr'}:
             owners = attrs.get('Parent', ()) or attrs.get('transcript_id', ())
             for tid in owners:
@@ -91,6 +122,12 @@ def read_models(text, *, strict=True):
                 raise ValueError('Overlapping transcript CDS blocks')
             model['problem'] = 'overlapping_cds'
         model['exons'] = merge_blocks(model['exons'] or [*model['cds'], *model['utr']])
+        if any(not any(x <= a < b <= y for x, y in model['exons']) for a, b, _ in model['cds']):
+            interpreted = _coge_terminal_segments(model, rows)
+            if interpreted is not None:
+                model['declared_exons'] = model['exons']
+                model['exons'] = interpreted
+                model['exon_path_basis'] = 'coge_coding_plus_terminal_noncoding_segments'
         for a, b, _ in model['cds']:
             if not any(x <= a < b <= y for x, y in model['exons']):
                 if strict:
@@ -147,37 +184,85 @@ def _overlap(a, b):
     return sum(max(0, min(y, v)-max(x, u)) for x, y, *_ in a for u, v, *_ in b)
 
 
+def _coding_index(models):
+    axes, tracks = defaultdict(list), {}
+    for model in models:
+        axes[model['seqid'], model['strand']].append(model)
+    for axis, rows in axes.items():
+        rows.sort(key=lambda m: min(b[0] for b in m['cds']))
+        starts, ends = [], []
+        for model in rows:
+            starts.append(min(b[0] for b in model['cds']))
+            ends.append(max(ends[-1] if ends else 0, max(b[1] for b in model['cds'])))
+        tracks[axis] = starts, ends, rows
+    return tracks
+
+
+def _coding_overlaps(tracks, model, *, opposite=False):
+    strand = ('-' if model['strand'] == '+' else '+') if opposite else model['strand']
+    starts, ends, rows = tracks.get((model['seqid'], strand), ([], [], []))
+    left = bisect.bisect_right(ends, min(b[0] for b in model['cds']))
+    right = bisect.bisect_left(starts, max(b[1] for b in model['cds']))
+    return [m for m in rows[left:right] if _overlap(m['cds'], model['cds'])]
+
+
+def _coding_introns(model):
+    blocks = merge_blocks(model['cds'])
+    return tuple((a[1], b[0]) for a, b in zip(blocks, blocks[1:], strict=False))
+
+
+def native_correspondence(selected, native):
+    """Resolve exact CDS, then unique full intron chain, then unique overlap.
+
+    A nonempty identical chain is structural evidence for one locus even if a
+    terminal coding extension also touches a neighbour. Shared chains, single
+    exons and genuinely different multi-locus paths remain ambiguous.
+    """
+    tracks = _coding_index(selected.values())
+    donors, evidence = defaultdict(list), defaultdict(list)
+    for model in native.values():
+        overlapping = _coding_overlaps(tracks, model)
+        exact = {m['gene'] for m in overlapping if [b[:2] for b in m['cds']] == [b[:2] for b in model['cds']]}
+        introns = _coding_introns(model)
+        chain = {m['gene'] for m in overlapping if introns and _coding_introns(m) == introns}
+        # Multiple exact owners must not be resolved by weaker evidence.
+        owners = exact or (chain if len(chain) == 1 else {m['gene'] for m in overlapping})
+        basis = ('exact_cds' if exact else 'identical_coding_intron_chain' if len(chain) == 1
+                 else 'unique_coding_overlap')
+        if len(owners) == 1:
+            donors[next(iter(owners))].append(model)
+        record = dict(transcript_id=model['id'], basis=basis if len(owners) == 1 else 'ambiguous_coding_overlap',
+                      assigned_gene=next(iter(owners)) if len(owners) == 1 else None,
+                      overlapping_genes=sorted({m['gene'] for m in overlapping}))
+        for gene in record['overlapping_genes']:
+            evidence[gene].append(record)
+    native_tracks = _coding_index(native.values())
+    native_contigs = {m['seqid'] for m in native.values()}
+    diagnostics = {}
+    for tid, model in selected.items():
+        candidates = evidence[model['gene']]
+        reason = ('mapped' if donors[model['gene']] else
+                  ('ambiguous_coding_overlap' if any(c['assigned_gene'] is None for c in candidates)
+                   else 'overlap_assigned_to_other_gene') if candidates
+                  else 'opposite_strand_coding_overlap' if _coding_overlaps(native_tracks, model, opposite=True)
+                  else 'no_coding_overlap' if model['seqid'] in native_contigs else 'no_native_prediction_on_contig')
+        diagnostics[tid] = dict(status=reason, candidates=candidates)
+    return donors, diagnostics
+
+
 def complete(selected_text, original_text, genome, species, native=None):
     """Return selected GFF, per-transcript audit and spliced transcript sequences."""
     selected, original = read_models(selected_text, strict=False), read_models(original_text, strict=False)
     native_available = native is not None
     native = native or {}
-    donors, original_by_gene, axes = defaultdict(list), defaultdict(list), defaultdict(list)
+    original_by_gene = defaultdict(list)
     for m in original.values():
         if not m.get('problem'):
             original_by_gene[m['gene']].append(m)
-    for m in selected.values():
-        axes[m['seqid'], m['strand']].append(m)
-    tracks = {}
-    for axis, rows in axes.items():
-        rows.sort(key=lambda m: min(b[0] for b in m['cds']))
-        starts, ends = [], []
-        for m in rows:
-            starts.append(min(b[0] for b in m['cds']))
-            ends.append(max(ends[-1] if ends else 0, max(b[1] for b in m['cds'])))
-        tracks[axis] = starts, ends, rows
     for model in native.values():
         if model['seqid'] not in genome.references or any(b > genome.get_reference_length(model['seqid']) for _, b in model['exons']):
             raise ValueError('OrionGeno transcript lies outside target genome')
-        starts, ends, rows = tracks.get((model['seqid'], model['strand']), ([], [], []))
-        left = bisect.bisect_right(ends, min(b[0] for b in model['cds']))
-        right = bisect.bisect_left(starts, max(b[1] for b in model['cds']))
-        overlapping = [m for m in rows[left:right] if _overlap(m['cds'], model['cds'])]
-        shape = [b[:2] for b in model['cds']]
-        exact = {m['gene'] for m in overlapping if [b[:2] for b in m['cds']] == shape}
-        owners = exact or {m['gene'] for m in overlapping}
-        if len(owners) == 1:
-            donors[next(iter(owners))].append(model)
+    donors, correspondence = native_correspondence(selected, native)
     updates, audit, sequences = {}, [], {}
     for tid, model in selected.items():
         if model.get('problem'):
@@ -208,7 +293,13 @@ def complete(selected_text, original_text, genome, species, native=None):
         audit.append(dict(species=species, transcript_id=tid, gene_id=model['gene'],
                           utr5=choices['5'], utr3=choices['3'], candidates=evaluations,
                           native_status='mapped' if donors[model['gene']] else 'no_unique_coding_overlap' if native_available else 'missing_prediction',
-                          annotation_basis='projected_longest_per_side'))
+                          native_correspondence=correspondence[tid] if native_available else dict(status='missing_prediction', candidates=[]),
+                          annotation_basis='projected_longest_per_side',
+                          exon_path_basis=model.get('exon_path_basis', 'declared_or_cds_derived'),
+                          source_exon_interpretations=[dict(transcript_id=m['id'], basis=m['exon_path_basis'],
+                                                           declared_exons=m['declared_exons'])
+                                                       for m in original_by_gene[model['gene']]
+                                                       if m.get('exon_path_basis')]))
     return render(selected_text, updates), audit, sequences
 
 
