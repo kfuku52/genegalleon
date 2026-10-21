@@ -1478,6 +1478,13 @@ refresh_species_tree_for_shared_protein_input_signature() {
   if [[ -s "${stamp_file}" ]]; then
     previous_signature=$(< "${stamp_file}")
   fi
+  if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+    if [[ "${previous_signature}" != "${signature}" ]]; then
+      echo "Frozen species_tree signature is missing or differs from the inference inputs." >&2
+      return 3
+    fi
+    return 0
+  fi
   if [[ -n "${previous_signature}" && "${previous_signature}" != "${signature}" ]]; then
     if ! shared_protein_input_signature_is_current_schema "${previous_signature}"; then
       echo "Legacy shared protein input signature found for species_tree."
@@ -2585,8 +2592,48 @@ species_tree_rooting_value=""
 
 
 # Directories
+# Selection consumes the completed inference, not a newly resolved CDS view.
+# Its original byte-identical inputs remain authoritative even if a later
+# annotation run republishes equivalent compressed FASTA files.
+frozen_orthogroup_sequence_input_dir() {
+  python - "${gg_support_dir}" "${gg_workspace_dir}" "${gg_workspace_output_dir}" \
+    "${input_sequence_mode}" "${genetic_code}" <<'PY_FROZEN'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from artifact_provenance import SCHEMA_VERSION, ProvenanceError, load_manifest, resolve_reference, sha256_path
+
+workspace = Path(sys.argv[2])
+output = Path(sys.argv[3])
+manifest = output / "artifact_provenance/genome_evolution/orthofinder.json"
+try:
+    payload = load_manifest(manifest)
+    if (payload.get("schema_version") != SCHEMA_VERSION or payload.get("step") != "orthofinder"
+            or payload.get("family_id") != "all_species"):
+        raise ValueError("not a completed all-species OrthoFinder contract")
+    for key, value in zip(("input_sequence_mode", "genetic_code"), sys.argv[4:6], strict=True):
+        if payload.get("parameters", {}).get(key) != value:
+            raise ValueError(f"frozen inference parameter changed: {key}")
+    entries = [entry for entry in payload["inputs"] if entry.get("label") == "species_sequences"]
+    if len(entries) != 1 or entries[0].get("artifact_type") != "directory":
+        raise ValueError("expected exactly one species_sequences directory")
+    entry = entries[0]
+    if entry.get("scope") not in {"workspace", "absolute"}:
+        raise ValueError("unsupported species_sequences path scope")
+    path = resolve_reference(entry, output / ".gg_global_artifacts", workspace)
+    digest, size, kind = sha256_path(path)
+    if kind != "directory" or digest != entry.get("sha256") or size != entry.get("size_bytes"):
+        raise ValueError("frozen inference species_sequences changed")
+except (OSError, ValueError, KeyError, TypeError, ProvenanceError) as exc:
+    print(f"Cannot select from frozen OrthoFinder inputs: {exc}", file=sys.stderr)
+    raise SystemExit(3) from exc
+print(path)
+PY_FROZEN
+}
+
 dir_sp_cds="${gg_workspace_input_dir}/species_cds"
-if [[ -z "${representative_inputs}" && -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
+if [[ "${genome_evolution_mode}" != "orthogroup_selection" && -z "${representative_inputs}" && -d "${gg_workspace_output_dir}/species_cds_resolved" ]]; then
   dir_sp_cds=$(python "${gg_support_dir}/cds_resolution.py" \
     --source-dir "${dir_sp_cds}" \
     --output-dir "${gg_workspace_output_dir}/species_cds_resolved" \
@@ -2604,6 +2651,14 @@ fi
 
 file_species_genetic_code="$(species_genetic_code_table_path)"
 [[ -z "${representative_genetic_codes:-}" ]] || file_species_genetic_code="${representative_genetic_codes}"
+if [[ "${genome_evolution_mode}" == "orthogroup_selection" ]]; then
+  frozen_sequence_input=$(frozen_orthogroup_sequence_input_dir) || exit $?
+  if [[ "${input_sequence_mode}" == "protein" ]] && species_protein_input_has_files; then
+    dir_sp_protein_input="${frozen_sequence_input}"
+  else
+    dir_sp_cds="${frozen_sequence_input}"
+  fi
+fi
 dir_og_rooted_tree="${gg_workspace_output_dir}/orthogroup/rooted_tree"
 annotation_species_resolved=""
 annotation_species_candidates=()

@@ -809,7 +809,11 @@ are retained under the existing artifact reuse rules.
 
 For a deliberate expansion of a completed orthogroup analysis, set
 `genome_evolution_mode="orthogroup_selection"` to audit frozen inference and trees
-with stop policy while allowing only selection to rebuild. Genome evolution
+with stop policy while allowing only selection to rebuild. Selection reads
+and hash-verifies the original sequence directory recorded in the completed
+OrthoFinder contract, rather than publishing a new CDS resolution view. Missing
+or changed frozen inputs, tree outputs or inference settings still stop the run;
+the original signature stamps and provenance are retained. Genome evolution
 can set `remove_unannotated_orthogroups="no"`, `min_percent_species_coverage=0`
 and an explicit `max_num_gene` covering the largest measured family. Defaults
 retain the existing annotation and size filters. Keep the technical gene/species

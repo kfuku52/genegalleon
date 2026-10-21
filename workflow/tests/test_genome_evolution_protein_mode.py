@@ -2733,3 +2733,65 @@ def test_incomplete_explicit_summary_catalog_stops_before_analysis(tmp_path, kin
     assert result.returncode == 3
     assert "catalog is incomplete" in result.stderr
     assert "ANALYSIS_STARTED" not in result.stdout
+
+
+@pytest.mark.skipif(SYSTEM_BASH_MAJOR < 4, reason="requires bash 4+")
+@pytest.mark.parametrize("failure", [None, "sequence", "missing", "tree", "parameters", "manifest",
+                                  "missing_stamp", "legacy_stamp"])
+def test_selection_uses_verified_inference_inputs_after_cds_republication(tmp_path, failure):
+    workspace = tmp_path / "workspace"
+    cds = workspace / "input/species_cds"
+    cds.mkdir(parents=True)
+    for species in ("Arabidopsis_thaliana", "Oryza_sativa"):
+        (cds / f"{species}_cds.fa").write_text(f">{species}_gene1\nATGAAA\n")
+    (workspace / "output/species_cds_resolved").mkdir(parents=True)
+    tree = workspace / "output/species_tree/species_tree_summary/undated_species_tree.nwk"
+    tree.parent.mkdir(parents=True)
+    tree.write_text("(Arabidopsis_thaliana:0.1,Oryza_sativa:0.1);\n")
+    settings = {"input_sequence_mode": "cds", "undated_species_tree": "astral_pep",
+                "species_tree_output_storage": "files", "run_cds_translation": "1"}
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "species_tree"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroups"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = workspace / "output/artifact_provenance/genome_evolution/orthofinder.json"
+    recorded = json.loads(manifest.read_text())
+    sequences = next(row for row in recorded["inputs"] if row["label"] == "species_sequences")
+    frozen = workspace / sequences["path"]
+    assert frozen.parent.name == "species_cds_resolved_views"
+    # Republish rather than editing the inode shared with the immutable view.
+    current = cds / "Arabidopsis_thaliana_cds.fa"
+    replacement = cds / "replacement"
+    replacement.write_text(">Arabidopsis_thaliana_gene1\nATGCCC\n")
+    replacement.replace(current)
+    if failure == "sequence":
+        (frozen / current.name).write_text("changed frozen sequence\n")
+    elif failure == "missing":
+        (frozen / current.name).unlink()
+    elif failure == "tree":
+        tree.write_text("(Arabidopsis_thaliana:9,Oryza_sativa:9);\n")
+    elif failure == "parameters":
+        settings["genetic_code"] = "2"
+    elif failure == "manifest":
+        manifest.unlink()
+    elif failure == "missing_stamp":
+        (workspace / "output/species_tree/.shared_protein_input_signature").unlink()
+    elif failure == "legacy_stamp":
+        (workspace / "output/species_tree/.shared_protein_input_signature").write_text("legacy stamp\n")
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for directory in (
+        workspace / "output/species_tree", workspace / "output/artifact_provenance/genome_evolution")
+        for p in directory.rglob("*") if p.is_file()
+        and not p.is_relative_to(workspace / "output/species_tree/tmp")}
+    views = set(frozen.parent.iterdir())
+    calls = tmp_path / "capture/orthofinder_args.txt"
+    calls.unlink()
+    result = _run_core(tmp_path, {**settings, "genome_evolution_mode": "orthogroup_selection",
+                                  "artifact_stale_policy": "rebuild"})
+    assert not calls.exists()
+    assert set(frozen.parent.iterdir()) == views
+    assert all((p.read_bytes(), p.stat().st_mtime_ns) == value for p, value in before.items())
+    if failure:
+        assert result.returncode != 0, result.stdout + result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Orthogroup inference and selection stages finished" in result.stdout
