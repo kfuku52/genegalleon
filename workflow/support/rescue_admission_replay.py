@@ -111,6 +111,10 @@ def prove_contract(previous_plan, producer_source):
     # strict evidence and cannot change during an admission-only replay.
     if not previous_plan['request'].get('oriongeno_genomewide'):
         permitted.add('native_genomewide_implementation')
+    # The worker dispatcher was absent from older raw producers and is not
+    # executed by admission replay. Once declared, retain its exact identity.
+    if 'cached_validation_implementation' not in before:
+        permitted.add('cached_validation_implementation')
     if not previous_plan['request'].get('oriongeno'):
         permitted.update(('oriongeno_candidate_implementation', 'oriongeno_profiles_implementation'))
     if any(before.get(k) != after.get(k) for k in before.keys() | after.keys() if k not in permitted):

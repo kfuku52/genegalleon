@@ -727,6 +727,16 @@ assign orthology or a biologically preferred CDS. Frame disruptions, assembly am
 tails remain failures. The original predictor coordinates and PAF are retained;
 `boundary_revalidation` records attempted paths and the admission decision.
 Prediction-cache replay rechecks raw predictions with the current implementation.
+For at least 512 reusable raw records, `--cpus` also bounds spawned validation
+workers. They open the staged genome independently and apply the same genomic,
+terminal, boundary and homology checks in batches of 64, retaining source order
+with at most two pending batches per worker. Smaller replays use the ordinary
+serial caller. Each worker's DNA memo is limited to 32 MiB; candidate metrics and
+donor-specific completion remain independent. `cached_prediction_validation.json`
+records the replay count, worker budget and memo totals separately from the
+submitting process's `raw_validation_memo.json`. Worker failures abort publication.
+The dispatcher implementation is frozen in new plans; changing it does not
+replace an active generation or authorize reuse of old QC decisions.
 Frozen result and preparation files are hashed in groups, with full-byte reads
 and generation checks before and after each group and before cache use. This
 avoids repeated per-file scans of every previously verified pathname.

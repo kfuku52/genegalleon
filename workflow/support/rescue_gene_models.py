@@ -217,6 +217,7 @@ def identities():
     versions["search_inputs_implementation"] = digest(sys.modules[local_record.__module__].__file__)
     versions["model_store_implementation"] = digest(sys.modules[write_model_store.__module__].__file__)
     versions["raw_validation_implementation"] = digest(sys.modules[RawValidationMemo.__module__].__file__)
+    versions["cached_validation_implementation"] = digest(Path(__file__).with_name("rescue_cached_validation.py"))
     for module in ('rescue_admission_replay', 'rescue_model_store_patch'):
         versions[('admission_replay' if module == 'rescue_admission_replay' else 'admission_patch')
                  + '_implementation'] = digest(Path(__file__).with_name(module + '.py'))
@@ -1368,29 +1369,20 @@ def rescue(root, plan, name, cpus, interval_workers=None):
             validated = []
             raw_validation = RawValidationMemo(validate_model, genome, source["genetic_code"], params,
                                                candidate_homology=homology_problems)
+            import rescue_cached_validation
             def checked_prediction(model):
-                # Preserve predictor coordinates and metrics before any genomic
-                # completion, so a later plan rechecks its own terminal bounds.
-                raw_prediction = {key: model[key] for key in RAW_FIELDS if key in model}
-                raw_prediction["cds"] = [list(block) for block in model["cds"]]
-                raw_prediction["evidence"] = dict(model["evidence"])
-                checked = raw_validation.validate(model)
                 evidence = model["evidence"]
-                checked = complete_terminals(checked, genome, source["genetic_code"], params,
-                                             proteins[evidence["donor"]][evidence["query"]], validate_model)
-                checked = revalidate_boundaries(checked, genome, source["genetic_code"], params,
-                                                proteins[evidence["donor"]][evidence["query"]], validate_model)
-                checked['problems'] = sorted(set(checked['problems']) | set(model.get('annevo_problems', []) + model.get('oriongeno_problems', [])))
-                checked["raw_prediction"] = raw_prediction
-                return check_interval(checked)
+                return rescue_cached_validation.checked_prediction(model, raw_validation, genome,
+                    source['genetic_code'], params, proteins[evidence['donor']][evidence['query']],
+                    engine=sys.modules[__name__])
             if cached:
-                for model in cached.iter_models():
-                    # Native ANNEVO paths are nominated and aligned anew from
-                    # the current source-bound GFF; old cache support cannot
-                    # enable ANNEVO implicitly or survive changed donor gates.
-                    if any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')):
-                        continue
-                    validated.append(checked_prediction(model))
+                # Native paths still require fresh nomination and donor proof.
+                old_models = (model for model in cached.iter_models()
+                              if not any(model.get('evidence', {}).get(e) for e in ('annevo', 'oriongeno')))
+                cached_validation = {}
+                validated.extend(rescue_cached_validation.validate_cached(old_models, genome,
+                    source['genetic_code'], params, proteins, cpus, checked_prediction, cached_validation))
+                atomic_json(tmp / 'cached_prediction_validation.json', cached_validation)
             for model in predictions:
                 region = by_id[model["query"]]
                 model["seqid"] = region["seqid"]
