@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replace coordinate-supported source models with explicitly supplied cloned CDS.
+"""Curate source models or sequence-only inputs with explicitly supplied cloned CDS.
 
 This is a coupled source curation step before ordinary native formatting. It
 never changes a genome or accepts a CDS-only override of genomic annotation.
@@ -19,10 +19,42 @@ from urllib.parse import quote, unquote, urlparse
 
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 
-FIELDS = ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids')
-TASK_FIELDS = ('cloned_cds_path', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_model_implementation')
+FIELDS = ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_cds_mode',
+          'cloned_cds_longer_only_ids', 'cloned_cds_min_identity', 'cloned_cds_min_target_coverage')
+TASK_FIELDS = ('cloned_cds_path', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_model_implementation',
+               'cloned_cds_mode', 'cloned_cds_longer_only_ids', 'cloned_cds_min_identity',
+               'cloned_cds_min_target_coverage', 'cloned_sequence_implementation')
 EVIDENCE_FIELDS = ('cloned_cds_path', 'cloned_model_audit_path', 'cloned_source_cds_path',
                    'cloned_source_gff_path', 'cloned_source_genome_path')
+
+
+def evidence_paths(record, *, summary=False):
+    mode = record.get('cloned_cds_mode') or 'genomic'
+    if mode not in {'genomic', 'sequence'}:
+        raise ValueError('Invalid cloned model evidence mode')
+    fields = ('cloned_model_audit_path', 'cds_input_path') if summary else EVIDENCE_FIELDS[:3]
+    if mode == 'genomic':
+        fields += ('gff_input_path', 'genome_input_path') if summary else EVIDENCE_FIELDS[3:]
+    paths = []
+    for field in fields:
+        value = record.get(field)
+        if not value or any(c in value for c in '\r\n') or not Path(value).is_file() or not Path(value).stat().st_size:
+            raise ValueError('Missing or unsafe cloned model evidence: ' + field)
+        paths.append(value)
+    audit_path = Path(record['cloned_model_audit_path'])
+    audit = json.loads(audit_path.read_text())
+    if (audit.get('mode') or 'genomic') != mode:
+        raise ValueError('Cloned model evidence mode changed')
+    if mode == 'sequence':
+        for value in audit['outputs'].values():
+            relative = Path(value)
+            if relative.is_absolute() or '..' in relative.parts or any(c in value for c in '\r\n'):
+                raise ValueError('Unsafe cloned sequence artifact path')
+            path = audit_path.parent / relative
+            if not path.is_file() or path.is_symlink():
+                raise ValueError('Missing cloned sequence artifact: ' + str(relative))
+            paths.append(str(path))
+    return list(dict.fromkeys(paths))
 
 
 def attach(task, row, parent):
@@ -33,8 +65,16 @@ def attach(task, row, parent):
     expected = str(row.get('cloned_cds_sha256') or '').strip()
     if not reference or not re.fullmatch(r'[0-9a-f]{64}', expected):
         raise ValueError('Cloned CDS requires cloned_cds_fasta and its exact cloned_cds_sha256')
-    if row.get('paired_curation') or str(row.get('cds_input_type') or 'cds').strip().lower() != 'cds':
+    mode = str(row.get('cloned_cds_mode') or 'genomic').strip()
+    if mode not in {'genomic', 'sequence'}:
+        raise ValueError('cloned_cds_mode must be genomic or sequence')
+    if mode == 'genomic' and any(row.get(k) for k in ('cloned_cds_min_identity', 'cloned_cds_min_target_coverage')):
+        raise ValueError('Sequence search thresholds require cloned_cds_mode=sequence')
+    if row.get('paired_curation') or (mode == 'genomic' and str(row.get('cds_input_type') or 'cds').strip().lower() != 'cds'):
         raise ValueError('Cloned model replacement requires genomic CDS/GFF inputs, without paired_curation')
+    if mode == 'sequence' and any(row.get(prefix + role + suffix) for role in ('gff', 'gbff', 'genome')
+                                  for prefix, suffix in (('', '_url'), ('', '_path'), ('local_', '_path'))):
+        raise ValueError('Sequence replacement cannot override a paired genomic annotation')
     parsed = urlparse(reference)
     if parsed.scheme and (parsed.scheme != 'file' or parsed.netloc or parsed.query or parsed.fragment):
         raise ValueError('cloned_cds_fasta must be a local path or file URL')
@@ -47,8 +87,21 @@ def attach(task, row, parent):
     if (not isinstance(ids, list) or any(not isinstance(v, str) or not v or re.search(r'\s', v) for v in ids)
             or len(set(ids)) != len(ids)):
         raise ValueError('cloned_cds_ids must be a JSON array of unique FASTA IDs')
+    longer = json.loads(str(row.get('cloned_cds_longer_only_ids') or '[]'))
+    if (not isinstance(longer, list) or any(not isinstance(v, str) or not v or re.search(r'\s', v) for v in longer)
+            or len(set(longer)) != len(longer) or ids and set(longer) - set(ids)):
+        raise ValueError('cloned_cds_longer_only_ids must select unique cloned CDS IDs')
     task.update(cloned_cds_path=path, cloned_cds_sha256=expected, cloned_cds_ids=ids,
-                cloned_model_implementation=digest(Path(__file__)))
+                cloned_model_implementation=digest(Path(__file__)), cloned_cds_mode=mode,
+                cloned_cds_longer_only_ids=longer)
+    if mode == 'sequence':
+        task['cloned_sequence_implementation'] = digest(Path(__file__).with_name('cloned_cds_sequences.py'))
+        for field in ('cloned_cds_min_identity', 'cloned_cds_min_target_coverage'):
+            raw = row.get(field)
+            value = float(.98 if raw is None or raw == '' else raw)
+            if not 0 < value <= 1:
+                raise ValueError(field + ' must be greater than zero and at most one')
+            task[field] = value
     return task
 
 
@@ -62,7 +115,7 @@ def copy_binding(task, source):
 def binding_signature(task):
     if not task.get('cloned_cds_path'):
         return ''
-    binding = {k: str(task[k]) if isinstance(task[k], Path) else task[k] for k in TASK_FIELDS}
+    binding = {k: str(task[k]) if isinstance(task[k], Path) else task[k] for k in TASK_FIELDS if k in task}
     return hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
 
 
@@ -80,6 +133,7 @@ def cloned_records(path, selected, code):
     from Bio.Data import CodonTable
     from Bio.Seq import Seq
     from format_species_annotation.common import iter_fasta_records
+    from format_species_annotation.rna import extract_input_cds
     table = CodonTable.unambiguous_dna_by_id[code]
     records = {}
     seen = set()
@@ -90,7 +144,7 @@ def cloned_records(path, selected, code):
         seen.add(name)
         if selected and name not in selected:
             continue
-        sequence = sequence.upper()
+        sequence = extract_input_cds({'genetic_code': code}, header, sequence)
         if (len(sequence) < 9 or len(sequence) % 3 or set(sequence) - set('ACGT')
                 or sequence[:3] not in table.start_codons or sequence[-3:] not in table.stop_codons
                 or '*' in str(Seq(sequence[:-3]).translate(table=code))):
@@ -315,10 +369,30 @@ def build_pair(task, directory):
     identifiers = {attrs['ID'] for _, fields, attrs, _ in records if fields and attrs.get('ID')}
     removed = set()
     additions = []
+    prepared = fsi.prepare_cds_identifier_task(task)
+    longer = set(task.get('cloned_cds_longer_only_ids', []))
+    if longer - clones.keys():
+        raise ValueError('Longer-only policy names an unselected cloned CDS')
+    source_lengths = {}
+    if longer:
+        for header, sequence in fsi.iter_task_cds_records(prepared):
+            transcript = fsi.build_formatted_cds_id(prepared, header)
+            _gene, match = fsi.resolve_gene_aggregate_id(prepared, header, transcript)
+            if match.get('status') == 'mapped':
+                token = match['gene_token']
+                source_lengths[token] = max(source_lengths.get(token, 0), len(sequence))
+    audit['skipped'] = []
     for name in sorted(clones):
         model = selected_models[name]
         scope = scoped_genes[name] if scoped_genes is not None else genes
         replaced = overlapping_genes(model, scope, coding)
+        if name in longer:
+            tokens = removed_cds_gene_tokens(prepared, set(replaced), genes)
+            lengths = [source_lengths[t] for t in tokens if t in source_lengths]
+            if not lengths or len(clones[name]) <= max(lengths):
+                audit['skipped'].append(dict(clone_id=name, status='not_longer' if lengths else 'no_target_CDS',
+                                             clone_cds_length=len(clones[name]), target_cds_lengths=lengths))
+                continue
         if removed.intersection(replaced):
             raise ValueError('Competing cloned CDS would replace the same source gene')
         gene, transcript, text = replacement_gff(task['species_prefix'], name, model, replaced)
@@ -335,7 +409,6 @@ def build_pair(task, directory):
     for owned in ownership:
         if owned & removed and owned - removed:
             raise ValueError('A replaced GFF feature is shared with an unrelated retained gene')
-    prepared = fsi.prepare_cds_identifier_task(task)
     removed_tokens = removed_cds_gene_tokens(prepared, removed, genes)
     removed_cds = []
     cds = directory / Path(task['cds_path']).name
@@ -383,10 +456,13 @@ def apply_to_task(task, root, *, dry_run=False):
         return
     if dry_run:
         raise ValueError('Cloned model discovery requires execution; use array_prepare for a download-free preview')
-    if not all(task.get(k) for k in ('cds_path', 'gff_path', 'genome_path')):
-        raise ValueError('Cloned model replacement requires source CDS, GFF and genome together')
     if task.get('cloned_model_implementation') != digest(Path(__file__)):
         raise ValueError('Cloned model implementation changed; prepare a new native task plan')
+    if task.get('cloned_cds_mode') == 'sequence':
+        from cloned_cds_sequences import apply_sequence_task
+        return apply_sequence_task(task, root)
+    if not all(task.get(k) for k in ('cds_path', 'gff_path', 'genome_path')):
+        raise ValueError('Cloned model replacement requires source CDS, GFF and genome together')
     from rescue_gene_models import stage
     tool = shutil.which('miniprot')
     if not tool:
@@ -398,6 +474,7 @@ def apply_to_task(task, root, *, dry_run=False):
         raise ValueError('Cloned CDS changed after input qualification')
     key = dict(schema=1, inputs=hashes, species=task['species_prefix'],
                selected_ids=task.get('cloned_cds_ids', []), genetic_code=int(task.get('genetic_code', 1)),
+               longer_only_ids=task.get('cloned_cds_longer_only_ids', []),
                implementation=digest(Path(__file__)), miniprot=digest(tool),
                native_dependencies={name: digest(Path(__file__).parent / name) for name in (
                    'rescue_gene_models.py', 'gene_model_catalog.py', 'gene_model_refinement.py',
@@ -430,18 +507,12 @@ def main():
             if args.metadata is not None:
                 meta = json.loads(args.metadata.read_text())
                 rows = [meta] if meta.get('cloned_cds_path') else []
-                fields = EVIDENCE_FIELDS
             else:
                 with args.species_summary.open() as stream:
                     rows = [row for row in csv.DictReader(stream, delimiter='\t') if row.get('cloned_model_audit_path')]
-                fields = ('cloned_model_audit_path', 'cds_input_path', 'gff_input_path', 'genome_input_path')
             seen = set()
             for row in rows:
-                for field in fields:
-                    value = row.get(field)
-                    if (not value or not Path(value).is_file() or not Path(value).stat().st_size
-                            or any(c in value for c in '\r\n')):
-                        raise ValueError('Missing or unsafe cloned model evidence: ' + field)
+                for value in evidence_paths(row, summary=args.species_summary is not None):
                     if value not in seen:
                         print(value)
                         seen.add(value)

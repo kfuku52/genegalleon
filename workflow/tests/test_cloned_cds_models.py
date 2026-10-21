@@ -129,6 +129,40 @@ def test_native_alignment_replaces_both_split_models_and_publishes_consistent_pa
     assert all(p.read_bytes() == data for p, data in before.items())
 
 
+@pytest.mark.parametrize('full_model', [False, True])
+def test_longer_only_genomic_policy_compares_owned_cds_and_binds_stage_cache(tmp_path, full_model):
+    task, sequence, paths, row = fixture(tmp_path / 'inputs')
+    if full_model:
+        rows = paths['gff'].read_text().splitlines()
+        end = next(line.split('\t')[4] for line in rows if line.endswith('\tID=C_fragment'))
+        merged = ['##gff-version 3',
+                  f'chr1\tsource\tgene\t101\t{end}\t.\t+\t.\tID=full',
+                  f'chr1\tsource\tmRNA\t101\t{end}\t.\t+\t.\tID=full.t1;Parent=full']
+        for line in rows:
+            if '\tCDS\t' in line and 'fragment' in line:
+                merged.append(line.replace('N_fragment', 'full').replace('C_fragment.c1', 'full.c2')
+                              .replace('C_fragment.t1', 'full.t1'))
+            elif 'neighbour' in line:
+                merged.append(line)
+        paths['gff'].write_text('\n'.join(merged) + '\n')
+        paths['cds'].write_text('>full.t1\n' + sequence + '\n>neighbour.t1\nATGAAACCCTAA\n')
+    original = dict(task)
+    cloned.apply_to_task(task, tmp_path / 'curated')
+    ordinary = Path(task['cloned_model_audit'])
+    guarded = dict(original)
+    cloned.attach(guarded, {**row, 'cloned_cds_longer_only_ids': '["experimental/clone:1"]'}, tmp_path)
+    cloned.apply_to_task(guarded, tmp_path / 'curated')
+    assert Path(guarded['cloned_model_audit']) != ordinary
+    audit = json.loads(Path(guarded['cloned_model_audit']).read_text())
+    if full_model:
+        assert audit['replacements'] == []
+        assert audit['skipped'][0]['status'] == 'not_longer'
+        assert list(fsi.iter_fasta_records(guarded['cds_path']))[0] == ('full.t1', sequence)
+    else:
+        assert audit['skipped'] == []
+        assert audit['replacements'][0]['replaced_gene_ids'] == ['C_fragment', 'N_fragment']
+
+
 @pytest.mark.parametrize(
     "damage",
     [
@@ -516,7 +550,8 @@ def test_manifest_signature_and_frozen_plan_include_only_explicit_selected_clone
 
 
 @pytest.mark.parametrize("mode", ["single", "array"])
-def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_receipts(tmp_path, mode):
+@pytest.mark.parametrize("curation_mode", ["genomic", "sequence"])
+def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_receipts(tmp_path, mode, curation_mode):
     from test_gg_input_generation_end_to_end import (
         CORE_PATH,
         REPO_ROOT,
@@ -538,6 +573,10 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
         genome_url=paths["genome"].as_uri(),
         cloned_cds_ids='["experimental/clone:1"]',
     )
+    if curation_mode == 'sequence':
+        row.pop('gff_url')
+        row.pop('genome_url')
+        row['cloned_cds_mode'] = 'sequence'
     manifest = tmp_path / "cloned_inputs.tsv"
     with manifest.open("w") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(row), delimiter="\t")
@@ -550,7 +589,8 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
 
     def run(phase, index=None, success=True, force=False):
         env = _core_env(
-            workspace, None, fake_bin, phase, index, require_cds=True, require_gff=True, require_genome=True
+            workspace, None, fake_bin, phase, index, require_cds=True,
+            require_gff=curation_mode == 'genomic', require_genome=curation_mode == 'genomic'
         )
         env.update(
             provider="all",
@@ -573,7 +613,7 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
         assert receipt.is_file()
         files = json.loads(receipt.read_text())["files"]
         metadata = json.loads((root / "tmp/task_meta_shards/1.json").read_text())
-        assert all(metadata[key] in files for key in cloned.EVIDENCE_FIELDS)
+        assert all(path in files for path in cloned.evidence_paths(metadata))
         before = {p: (Path(p).read_bytes(), Path(p).stat().st_mtime_ns) for p in files}
         run("array_worker", 1)
         assert before == {p: (Path(p).read_bytes(), Path(p).stat().st_mtime_ns) for p in files}
@@ -585,7 +625,12 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
     assert len(summary) == 1
     clone_audit = Path(summary[0]["cloned_model_audit_path"])
     assert clone_audit.is_file()
-    assert len(json.loads(clone_audit.read_text())["replacements"]) == 1
+    audit = json.loads(clone_audit.read_text())
+    assert summary[0]['cloned_cds_mode'] == curation_mode
+    if curation_mode == 'sequence':
+        assert audit['decisions'][0]['status'] == 'replace'
+    else:
+        assert len(audit["replacements"]) == 1
     cds = Path(summary[0]["cds_output_path"])
     records = dict(fsi.iter_fasta_records(cds))
     assert len(records) == 2 and sequence in records.values()

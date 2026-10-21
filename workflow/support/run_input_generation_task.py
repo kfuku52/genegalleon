@@ -220,6 +220,7 @@ def describe_task(args, *, batch=None, raw_input_error=None, write_meta=True):
     if task.get('cloned_cds_path'):
         metadata['cloned_model_signature'] = binding_signature(task)
         metadata['cloned_cds_path'] = str(task['cloned_cds_path'])
+        metadata['cloned_cds_mode'] = task.get('cloned_cds_mode', 'genomic')
     if task.get("cds_input_type") == "transcriptome":
         metadata["orf_audit_output_path"] = expected_paths["cds_output_path"] + ".orf-extraction.json"
     if batch is not None:
@@ -369,8 +370,9 @@ def main():
     write_json(args.stats_output, stats)
     if task.get('cloned_model_audit'):
         metadata.update(cloned_model_audit_path=task['cloned_model_audit'],
-                        cloned_source_cds_path=str(task['cds_path']), cloned_source_gff_path=str(task['gff_path']),
-                        cloned_source_genome_path=str(task['genome_path']),
+                        cloned_source_cds_path=str(task['cds_path']), cloned_source_gff_path=str(task.get('gff_path') or ''),
+                        cloned_source_genome_path=str(task.get('genome_path') or ''),
+                        cloned_cds_mode=task.get('cloned_cds_mode', 'genomic'),
                         cloned_cds_path=str(task['cloned_cds_path']))
     write_json(
         args.task_meta_output,

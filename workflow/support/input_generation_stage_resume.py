@@ -58,11 +58,14 @@ def context(plan_path, index, root, stage, *, namespace_root=None):
         paths["gff"] = meta["gff_output_path"]
     if stage == "format":
         if task.get('cloned_cds_path'):
-            from cloned_cds_models import EVIDENCE_FIELDS
-            for key in EVIDENCE_FIELDS:
-                if not meta.get(key):
-                    raise ValueError('Cloned model evidence is missing from stage metadata')
-                paths[key] = meta[key]
+            from cloned_cds_models import EVIDENCE_FIELDS, evidence_paths
+            if (meta.get('cloned_cds_mode') or 'genomic') != (task.get('cloned_cds_mode') or 'genomic'):
+                raise ValueError('Cloned model evidence mode changed')
+            evidence = evidence_paths(meta)
+            fields = EVIDENCE_FIELDS if (task.get('cloned_cds_mode') or 'genomic') == 'genomic' else EVIDENCE_FIELDS[:3]
+            paths.update({key: meta[key] for key in fields})
+            for i, path in enumerate(value for value in evidence if value not in paths.values()):
+                paths['cloned_sequence_evidence_' + str(i)] = path
         if task.get("cds_input_type") == "transcriptome":
             expected = meta["cds_output_path"] + ".orf-extraction.json"
             if meta.get("orf_audit_output_path") != expected:

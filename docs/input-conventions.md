@@ -964,6 +964,15 @@ identity before enabling it. IDs are the first whitespace-delimited header
 tokens. Each selected sequence must be a complete, unambiguous CDS with start
 and terminal stop codons, without internal stops, under the configured genetic
 code. Partial reference sequences can remain unselected in the same file.
+For a supplied mRNA with a verified CDS span, append `CDS=9-1085` (one-based,
+inclusive) to its header. The native CDS extractor uses that declared span
+before complete-CDS validation; it does not guess an ORF for a cloned record.
+Keep the received original and the source of the coordinate annotation.
+
+Set `cloned_cds_longer_only_ids` to a JSON array of selected clone IDs when those
+records should replace an existing model only if their extracted CDS is longer
+than every matched source CDS. Equal or shorter records are retained as
+`not_longer` in the audit. The comparison uses CDS length, excluding mRNA UTRs.
 
 The standard single and species-array routes translate and map the selected
 clones with miniprot, then reconstruct their spliced genomic CDS. Automatic
@@ -1015,6 +1024,26 @@ extents on the requested contigs/strands; exact block checks and the original
 first-conflict order remain unchanged. A single clone retains direct scanning.
 Ambiguous clone mappings stop with candidate diagnostics before annotation
 interpretation; input hash verification still covers every declared source.
+
+For species with only CDS or transcriptome sequences, explicitly set
+`cloned_cds_mode=sequence`. This route rejects paired GFF/GBFF/genome inputs;
+the default `genomic` route retains the strict coordinate checks above.
+`cds_input_type=transcriptome` uses native CDSKIT ORF extraction for the source
+search and for subsequent formatting. Supplied clones still require intact
+CDS, or a declared CDS span. No genomic coordinates or GFF are inferred.
+
+The sequence route searches normalized source CDS with BLASTN. Defaults require
+at least 98% nucleotide identity and 98% coverage of each existing CDS in one
+alignment. `cloned_cds_min_identity` and `cloned_cds_min_target_coverage` accept
+explicit fractions in `(0,1]` for this route only. Matching N- and C-terminal
+fragments can be replaced together when their overlapping aligned bases agree.
+Distinct overlapping target sequences, competing clones, multiple qualifying
+alignments, or a capped search result are retained for review. No supported
+match leaves the source unchanged. The audit records every decision, target
+identity/coverage/length and old-to-new mapping; removed sequences, search
+alignments and any source ORF audit remain with the derived input. Original
+source files are preserved. These inputs use the same standard native
+single/array plan, formatting, receipt and resume paths.
 
 XLSX template notes:
 

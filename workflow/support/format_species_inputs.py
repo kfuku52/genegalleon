@@ -181,10 +181,10 @@ def main():
         )
         for task in tasks:
             if manifest_rows_for_provider_inputs is not None:
-                from cloned_cds_models import attach
+                from cloned_cds_models import FIELDS, attach
                 clone_rows = [row for row in manifest_rows_for_provider_inputs
                               if row['provider'] == provider and row['species_key'] == task['species_key']
-                              and any(row.get(k) for k in ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids'))]
+                              and any(row.get(k) for k in FIELDS)]
                 if clone_rows:
                     if len(clone_rows) != 1:
                         raise ValueError('Cloned CDS task has no unique manifest row')

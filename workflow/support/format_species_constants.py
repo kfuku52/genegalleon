@@ -425,6 +425,7 @@ SPECIES_SUMMARY_COLUMNS = (
     "paired_curation",
     "cds_input_type",
     "cloned_model_audit_path",
+    "cloned_cds_mode",
 )
 
 PLASTID_GENETIC_CODE_LINEAGE_DEFAULTS = {
