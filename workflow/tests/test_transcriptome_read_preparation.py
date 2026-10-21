@@ -1,6 +1,7 @@
 """The read-only preparation path cannot start assembly or claim workflow completion."""
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,14 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 sys.path.insert(0, str(SUPPORT))
 prep = importlib.import_module('transcriptome_read_preparation')
+
+
+def file_snapshot(path):
+    info = path.stat()
+    # Reading may advance atime; retain file identity, write metadata and bytes.
+    identity = (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
+                info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    return identity, path.read_bytes()
 
 
 def fixture(tmp_path):
@@ -40,14 +49,9 @@ def fixture(tmp_path):
 def test_inspection_is_exact_and_does_not_write_metadata(tmp_path):
     manifest, row = fixture(tmp_path)
     path = Path(row['files'][0]['path'])
-    def identity():
-        info = path.stat()
-        # A read can update atime on the execution site's filesystem.
-        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
-                info.st_gid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-    before = identity(), path.read_bytes()
+    before = file_snapshot(path)
     assert prep.inspect_metadata(path, row['files'][0]['sha256'], row['runs'])['run_ids'] == row['runs']
-    assert before == (identity(), path.read_bytes())
+    assert before == file_snapshot(path)
     with pytest.raises(ValueError, match='membership'):
         prep.inspect_metadata(path, row['files'][0]['sha256'], row['runs'][:2])
     with pytest.raises(ValueError, match='changed'):
@@ -148,11 +152,11 @@ def recovered_fixture(tmp_path, monkeypatch):
 
 def test_recovery_only_verifies_native_cache_and_preserves_every_existing_byte(tmp_path, monkeypatch):
     manifest, row, _ = recovered_fixture(tmp_path, monkeypatch)
-    before = {str(path): (path.stat(), path.read_bytes()) for path in tmp_path.rglob('*') if path.is_file()}
+    before = {str(path): file_snapshot(path) for path in tmp_path.rglob('*') if path.is_file()}
     result = prep.recover_prepared_cache(manifest, row)
     assert result['status'] == 'read-preparation-completed' and result['assembly_complete'] is False
     assert result['runs'] == row['runs']
-    assert before == {str(path): (path.stat(), path.read_bytes()) for path in tmp_path.rglob('*') if path.is_file()}
+    assert before == {str(path): file_snapshot(path) for path in tmp_path.rglob('*') if path.is_file()}
 
 
 @pytest.mark.parametrize('key,value', [('metadata_sha256', '0' * 64), ('species', 'Other_plant'),
@@ -175,7 +179,8 @@ def test_recovery_rejects_failed_native_audit_and_changed_cache_view(tmp_path, m
         prep.recover_prepared_cache(manifest, row)
 
 
-def test_recovery_receipt_retains_source_failure_identity_and_separate_verification_job(tmp_path, monkeypatch):
+@pytest.mark.parametrize('stale_atime', [False, True])
+def test_recovery_receipt_retains_source_failure_identity_and_separate_verification_job(tmp_path, monkeypatch, stale_atime):
     manifest, row, _ = recovered_fixture(tmp_path, monkeypatch)
     for name, record in manifest['managed_files'].items():
         record['sha256'] = prep.file_sha(tmp_path / name)
@@ -192,16 +197,22 @@ def test_recovery_receipt_retains_source_failure_identity_and_separate_verificat
     value = json.loads(receipt.read_text())
     assert value['job_id'] == value['recovery_job_id'] == '777' and value['source_job_id'] == '123'
     assert value['recovery_kind'] == 'native-read-cache-verification-v1'
-    before = receipt.stat(), receipt.read_bytes()
+    if stale_atime:
+        info = receipt.stat()
+        os.utime(receipt, ns=(info.st_mtime_ns - 86_400_000_000_000, info.st_mtime_ns))
+    before = file_snapshot(receipt)
     prep.main()
-    assert before == (receipt.stat(), receipt.read_bytes())
+    assert before == file_snapshot(receipt)
     original = {key: item for key, item in value.items()
                 if key not in {'source_job_id', 'recovery_job_id', 'recovery_kind', 'recovery_helper_sha256'}}
     original['job_id'] = '123'
     receipt.write_text(json.dumps(original))
-    before = receipt.stat(), receipt.read_bytes()
+    if stale_atime:
+        info = receipt.stat()
+        os.utime(receipt, ns=(info.st_mtime_ns - 86_400_000_000_000, info.st_mtime_ns))
+    before = file_snapshot(receipt)
     prep.main()
-    assert before == (receipt.stat(), receipt.read_bytes())
+    assert before == file_snapshot(receipt)
 
 
 def test_dispatch_preserves_owning_transcriptome_release_through_real_bootstrap(tmp_path, monkeypatch):
