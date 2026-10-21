@@ -378,6 +378,28 @@ receipts permit verified restarts; changed inputs, implementation or settings
 require a new report directory. Failed or incomparable evaluations do not
 produce a completed comparison. Deltas use integer BUSCO counts, avoiding
 rounding errors in the displayed summary percentages.
+Explicit protein assessment is available with `--mode proteins`. The default
+`--protein-input-policy strict` translates declared frame-zero CDS and rejects
+partial terminal codons, internal stops, invalid bases and duplicate identifiers.
+`--protein-input-policy admitted` instead consumes completed native catalogues
+and the exact effective protein/translation-admission publication. It preserves
+the existing annotated-phase and usable/exportable admission rules, recording
+every excluded source identifier and reason. Neither policy guesses a genetic
+code: native codes come from the frozen plan and must agree with an optional
+`--genetic-codes` TSV; CDS-only species require an explicit TSV entry.
+
+Completed admitted-protein evaluations can be reused across separate reports
+with `--reuse-report /path/to/previous/busco --reuse-producer
+/path/to/exact/gene_model_refinement_busco.py`. The producer file must match the
+previous report's implementation hash. Reuse verifies its computational function
+bodies, translation policy and parser/provider dependencies against the current
+implementation, plus every numerical setting, tool/wrapper hash and lineage
+content hash. Different physical lineage/download paths are permitted only
+under those content identities. Identical protein bytes reuse verified scores
+and full tables with a fresh current-DNA/admission receipt; changed proteins run
+BUSCO again. Corrupt prior evidence fails verification rather than being imported.
+The current source records every imported leaf and its original receipt hash.
+
 The comparison also shows per-species missing-gene rescue counts and accepted
 repair/additional-isoform coding paths. Rescue counts are unique gene features
 with source `genegalleon_rescue` in the frozen annotation and are already included
