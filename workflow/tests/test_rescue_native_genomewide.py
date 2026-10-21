@@ -134,6 +134,38 @@ def test_genomewide_native_cache_never_reuses_native_alignment_or_old_admission(
     assert cache._raw_prediction(copy.deepcopy(model), {'q': model['evidence']}) is None
 
 
+@pytest.mark.parametrize('search,engine', [('annevo_nominated_path','annevo'),
+    ('oriongeno_nominated_path','oriongeno'), ('oriongeno_genomewide_path','oriongeno')])
+def test_native_raw_snapshot_precedes_derived_structure_confirmation(search, engine):
+    cache = importlib.import_module('rescue_prediction_cache')
+    model = dict(query='q',search=search,seqid='chr',strand='+',
+        evidence={'donor':'Donor','query':'protein',engine:{'native_transcript_id':'t','alignment':{'identity':.9}}})
+    model['raw_prediction'] = copy.deepcopy(model)
+    model['evidence'][engine]['genomic_structure_transfer'] = {'confirmed':True,'scope':'whole_coding_path'}
+    original = copy.deepcopy(model)
+    assert cache._raw_prediction(model, {'q':{'id':'q'}}) is None
+    assert model == original
+    for key,value in [('donor','Other'),('query','other protein')]:
+        changed = copy.deepcopy(model)
+        changed['evidence'][key] = value
+        with pytest.raises(ValueError,match='model provenance'):
+            cache._raw_prediction(changed, {'q':{'id':'q'}})
+    changed = copy.deepcopy(model)
+    changed['evidence'][engine]['alignment']['identity'] = .1
+    with pytest.raises(ValueError,match='model provenance'):
+        cache._raw_prediction(changed, {'q':{'id':'q'}})
+
+
+def test_miniprot_evidence_cannot_use_native_confirmation_exception():
+    cache = importlib.import_module('rescue_prediction_cache')
+    model = dict(query='q',search='genome_fallback',seqid='chr',strand='+',
+        evidence={'donor':'Donor','query':'protein','oriongeno':{'native_transcript_id':'t'}})
+    model['raw_prediction'] = copy.deepcopy(model)
+    model['evidence']['oriongeno']['genomic_structure_transfer'] = {'confirmed':True}
+    with pytest.raises(ValueError,match='model provenance'):
+        cache._raw_prediction(model, {'q':{'id':'q'}})
+
+
 def test_inventory_cannot_silently_lose_evaluated_path():
     with pytest.raises(ValueError, match='disappeared'):
         native.finish_audit({'native_paths': 1, 'paths': [{'status': 'evaluated', 'native_transcript_id': 't'}]}, [])
