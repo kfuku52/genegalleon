@@ -58,6 +58,7 @@
     "test_rescue_gene_models_runtime.py",
     "test_rescue_cached_validation.py",
     "test_rescue_native_genomewide.py",
+    "test_rescue_native_genomewide_reuse.py",
     "test_rescue_admission_replay.py",
     "test_rescue_model_evidence.py",
     "test_rescue_swissprot_evidence.py",

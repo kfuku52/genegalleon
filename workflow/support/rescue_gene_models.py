@@ -196,6 +196,7 @@ def identities():
     versions["oriongeno_candidate_implementation"] = digest(Path(__file__).with_name("oriongeno_runtime.py"))
     versions["oriongeno_profiles_implementation"] = digest(Path(__file__).with_name("oriongeno_model_profiles.py"))
     versions["native_genomewide_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide.py"))
+    versions["genomewide_reuse_implementation"] = digest(Path(__file__).with_name("rescue_native_genomewide_reuse.py"))
     versions["transcript_utr_implementation"] = digest(Path(__file__).with_name("transcript_utrs.py"))
     versions["annevo_genome_identity_implementation"] = digest(Path(__file__).with_name("genome_sequence_identity.py"))
     from Bio.Align import _pairwisealigner
@@ -1271,6 +1272,9 @@ def rescue(root, plan, name, cpus, interval_workers=None):
     if name not in plan["species"]:
         raise ValueError("Unknown rescue species")
     if plan['request'].get('admission_cache'):
+        if name in plan['request'].get('native_genomewide_worker_imports',{}).get('workers',{}):
+            import rescue_native_genomewide_reuse
+            return rescue_native_genomewide_reuse.import_worker(root,plan,name,cpus)
         import rescue_admission_replay
         return rescue_admission_replay.rescue(root, plan, name, cpus)
     storage = output_storage(plan)
@@ -2180,6 +2184,9 @@ def parser():
     extension = sub.add_parser('native-genomewide-plan', help='Extend a completed rescue with candidate-first OrionGeno evaluation')
     extension.add_argument('--previous-output', type=Path, required=True)
     extension.add_argument('--output', type=Path, required=True)
+    extension.add_argument('--producer-source', type=Path, help='Reuse completed validated evidence only after proving unchanged coding QC')
+    extension.add_argument('--completed-output', type=Path, help='Import completed workers from the identical genomewide scientific scope')
+    extension.add_argument('--completed-producer-source', type=Path, help='Archived source of those completed genomewide workers')
     extension = sub.add_parser('native-genomewide-prepare', help='Import the extension plan\'s frozen prepared and comparison stages')
     extension.add_argument('--output', type=Path, required=True)
     extension.add_argument('--cpus', type=int, default=1)
@@ -2260,7 +2267,8 @@ def main():
     args = p.parse_args()
     if args.command == 'native-genomewide-plan':
         import rescue_native_genomewide
-        plan = rescue_native_genomewide.build_plan(args.previous_output, args.output)
+        plan = rescue_native_genomewide.build_plan(args.previous_output, args.output,producer_source=args.producer_source,
+            completed_output=args.completed_output,completed_producer_source=args.completed_producer_source)
         print(json.dumps({'species': len(plan['species']), 'native_genomewide': True}))
         return
     if args.command == "self-align":

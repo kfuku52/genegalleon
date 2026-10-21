@@ -24,7 +24,8 @@ def _copy(source, destination, expected):
         raise ValueError('Model-store changed during immutable copying')
 
 
-def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None):
+def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None,
+                      append_partial_evidence=False):
     """Amend decisions without rewriting unselected DNA bodies or candidates.
 
     Existing coordinates, sequences, predictor values and partial evidence must
@@ -51,7 +52,8 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
     if any(type(i) is not int or not 0 <= i < count for i in changes):
         raise ValueError('Patch ordinal outside the original model publication')
     appended = list(appended)
-    if any(m.get('partial_evidence', {}).get('partial') for m in appended):
+    new_partials = [i for i, m in enumerate(appended) if m.get('partial_evidence', {}).get('partial')]
+    if new_partials and not append_partial_evidence:
         raise ValueError('Admission append cannot change the partial reference stream')
     target = Path(destination) / 'model_store'
     if target.exists() or target.is_symlink():
@@ -134,6 +136,19 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
         body_db.close()
         databases.remove(body_db)
         _copy(source_store / 'partial.sqlite', temporary / 'partial.sqlite', manifest['files']['partial.sqlite'])
+        if new_partials:
+            partial_db = store.sqlite3.connect(temporary / 'partial.sqlite')
+            databases.append(partial_db)
+            original_count = partial_db.execute('SELECT COUNT(*) FROM refs').fetchone()[0]
+            if original_count != manifest['counts']['partial']:
+                raise ValueError('Original partial reference count changed')
+            for position, line in enumerate(new_partials, original_count):
+                partial_db.execute('INSERT INTO refs VALUES (?,?,?,?)',
+                                   (position, count + line, len(manifest['shards']), line))
+            partial_db.commit()
+            partial_db.close()
+            databases.remove(partial_db)
+            output['counts']['partial'] += len(new_partials)
         known = {'bodies.sqlite', 'partial.sqlite', 'accepted.sqlite', 'revision.sqlite',
                  *[s['path'] for s in manifest['shards']]}
         for name in manifest['files'].keys() - known:
@@ -145,6 +160,10 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                 for ordinal in range(count, count + len(appended)):
                     out.write(store._json(packed[ordinal][1]) + b'\n')
             output['shards'].append({'path': member, 'first': count, 'count': len(appended)})
+            if new_partials:
+                previous = output['scopes']['partial'][1:]
+                output['scopes']['partial'] = ['partial.sqlite', 'bodies.sqlite',
+                    *(name for name in previous if name != 'bodies.sqlite'), member]
         overlay_counts = {}
         for kind, rows in (('accepted', sorted(accepted.items())), ('revision', enumerate(revisions))):
             db = store._overlay(temporary / (kind + '.sqlite'))

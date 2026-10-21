@@ -225,7 +225,7 @@ def transfer_structure(models, proteins, genome, code, params, directory, *, cpu
     return predictions
 
 
-def build_plan(previous_output, output):
+def build_plan(previous_output, output, *, producer_source=None, completed_output=None, completed_producer_source=None):
     """Freeze a new ordinary raw replay plus the explicit native search scope.
 
     Prepared donor proteins and synteny are imported as frozen scientific inputs,
@@ -233,6 +233,12 @@ def build_plan(previous_output, output):
     verification still checks their bytes, all source inputs and Miniprot identity.
     """
     r = _r()
+    if producer_source:
+        import rescue_admission_replay
+        return rescue_admission_replay.build_plan(previous_output,producer_source,output,native_extension=True,
+            completed_output=completed_output,completed_producer_source=completed_producer_source)
+    if completed_output or completed_producer_source:
+        raise ValueError('Completed native workers require the explicit validated-evidence producer source')
     previous, root = Path(previous_output).resolve(strict=True), Path(output).resolve()
     if root.exists() or root == previous or previous in root.parents or root in previous.parents:
         raise ValueError('Native genomewide extension requires a new disjoint output directory')
@@ -270,6 +276,13 @@ def build_plan(previous_output, output):
 def prepare(root, plan, cpus):
     """Import complete receipted stages, with full byte validation during copy."""
     r = _r()
+    if plan['request'].get('admission_cache'):
+        import rescue_admission_replay
+        import rescue_native_genomewide_reuse
+        rescue_admission_replay.prepare(root,plan,cpus)
+        for name in plan['request'].get('native_genomewide_worker_imports',{}).get('workers',{}):
+            rescue_native_genomewide_reuse.import_worker(root,plan,name,cpus)
+        return
     parent = plan['request']['native_genomewide_parent']
     previous = Path(parent['root'])
     prior = r.load(previous, inspect_only=True)

@@ -45,6 +45,23 @@ The original Miniprot binary must match for raw prediction-cache reuse. Native
 donor alignment, genomic QC and admission run freshly; no native GPU prediction
 is repeated. Complete all species before the ordinary `finalize` command.
 
+For large completed compact stores, add `--producer-source /archive/producer`
+to `native-genomewide-plan` to reuse already validated coding evidence. The
+archived source must match the producer plan and prove unchanged genomic,
+homology, terminal, boundary and native coding-structure decisions. A changed
+UTR parser must reconstruct identical coding paths from each actual frozen
+native GFF. Unknown or changed strict evidence stops this route. Prepared donor
+proteins and every old publication member are freshly byte-verified; strict
+rejections remain recorded. The genomewide donor search and Miniprot structure
+confirmation run freshly. Placement and locus admission run on the combined
+old and new evidence, and admitted CDS pass fresh genomic QC.
+
+Completed workers from an identical genomewide scope may be independently copied
+with `--completed-output /data/pilot --completed-producer-source /archive/pilot`.
+Their original plan, source contract and worker receipt remain explicit in
+`completed_native_worker_import.json`. Changed scientific scope, admission rules
+or worker bytes prevent import. Neither route edits its producer generation.
+
 Each worker publishes `oriongeno_genomewide.json`, accounting for every native
 transcript as original overlap, invalid translation, no protein-search hit,
 admitted or not admitted. Counts of native genes can overlap across categories

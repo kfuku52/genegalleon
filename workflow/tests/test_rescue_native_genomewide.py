@@ -3,6 +3,7 @@ import copy
 import importlib
 import json
 import random
+import shutil
 import sys
 from pathlib import Path
 
@@ -203,3 +204,29 @@ def test_completed_extension_reuses_old_searches_and_publishes_new_native_rescue
     assert rescue.verified(new/'rescued'/target, rescue.rescue_key(new, extended, target))
     # A fresh invocation reads the ordinary verified publication idempotently.
     rescue.rescue(new, rescue.load(new), target, 2)
+    # Validated evidence import must produce the same complete native decisions,
+    # while running fresh search/mapping and never replaying the old raw stream.
+    source = directory / 'producer_source'
+    shutil.copytree(Path(rescue.__file__).parent, source / 'workflow/support')
+    fast = directory / 'validated_extension'
+    fast_plan = native.build_plan(old, fast, producer_source=source)
+    native.prepare(fast, fast_plan, 2)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('validated evidence must not repeat old raw QC')
+    monkeypatch.setattr(rescue, 'verify_prediction_cache', forbidden)
+    rescue.rescue(fast, fast_plan, target, 2)
+    assert list(store.iter_models(fast/'rescued'/target)) == list(store.iter_models(new/'rescued'/target))
+    fast_audit = json.loads((fast/'rescued'/target/'oriongeno_genomewide.json').read_text())
+    assert fast_audit['path_status_counts'] == audit['path_status_counts']
+    # A new qualified generation may independently import a completed worker,
+    # retaining its real producer receipt and performing no fresh science.
+    imported = directory / 'imported_extension'
+    imported_plan = native.build_plan(old, imported, producer_source=source,
+        completed_output=new, completed_producer_source=source)
+    native.prepare(imported, imported_plan, 2)
+    monkeypatch.setattr(native, 'nominate', forbidden)
+    rescue.rescue(imported, imported_plan, target, 2)
+    assert list(store.iter_models(imported/'rescued'/target)) == list(store.iter_models(new/'rescued'/target))
+    provenance = json.loads((imported/'rescued'/target/'completed_native_worker_import.json').read_text())
+    assert provenance['source_receipt_sha256'] == rescue.digest(new/'rescued'/target/'receipt.json')
+    assert not provenance['new_scientific_computation']

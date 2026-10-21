@@ -139,3 +139,23 @@ def test_current_layout_also_rejects_changed_predictor_context(tmp_path, field, 
     source, _ = published(tmp_path, [row])
     with pytest.raises(ValueError, match='predictor/DNA'):
         patch_model_store(source, tmp_path / 'output', {0: {**row, field: value}})
+
+
+@pytest.mark.parametrize('codec', ['gzip', 'auto'])
+@pytest.mark.parametrize('explicit_order', [False, True])
+def test_new_partial_candidates_append_without_changing_old_partial_references(tmp_path, codec, explicit_order):
+    rows = [model(0), model(1), model(2), model(3)]
+    partials = [rows[3], rows[1], rows[3]] if explicit_order else [rows[1], rows[3]]
+    source, before = published(tmp_path, rows, partial=partials, codec=codec)
+    original = {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()}
+    appended = [model(4), model(5), model(6), model(7)]
+    with pytest.raises(ValueError, match='partial reference stream'):
+        patch_model_store(source, tmp_path/'unqualified', {}, appended=appended)
+    output = tmp_path/'output'
+    result = patch_model_store(source, output, {}, appended=appended, append_partial_evidence=True)
+    receipt(output)
+    assert list(store.iter_models(output)) == rows + appended
+    assert list(store.iter_partial_models(output)) == partials + [appended[1], appended[3]]
+    assert result['counts']['partial'] == before['counts']['partial'] + 2
+    assert result['partial_ordered'] == before['partial_ordered']
+    assert {str(p.relative_to(source)): p.read_bytes() for p in source.rglob('*') if p.is_file()} == original

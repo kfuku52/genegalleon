@@ -115,6 +115,8 @@ def prove_contract(previous_plan, producer_source):
     # executed by admission replay. Once declared, retain its exact identity.
     if 'cached_validation_implementation' not in before:
         permitted.add('cached_validation_implementation')
+    if 'genomewide_reuse_implementation' not in before:
+        permitted.add('genomewide_reuse_implementation')
     if not previous_plan['request'].get('oriongeno'):
         permitted.update(('oriongeno_candidate_implementation', 'oriongeno_profiles_implementation'))
     if any(before.get(k) != after.get(k) for k in before.keys() | after.keys() if k not in permitted):
@@ -149,13 +151,22 @@ def _legacy_annotation_history(plan):
     return {'root': str(Path(root).resolve(strict=True)), 'plan_sha256': sha, 'worker_receipts': workers}
 
 
-def build_plan(previous_output, producer_source, output):
+def build_plan(previous_output, producer_source, output, *, native_extension=False,
+               completed_output=None, completed_producer_source=None):
     r = _r()
     previous, root = Path(previous_output).resolve(strict=True), Path(output).resolve()
     if root == previous or previous in root.parents or root in previous.parents or root.exists():
         raise ValueError('Admission replay requires a new, disjoint output directory')
     prior = r.load(previous, inspect_only=True)
-    proof = prove_contract(prior, producer_source)
+    if native_extension:
+        if prior['request'].get('oriongeno_genomewide'):
+            raise ValueError('Native evidence extension requires the pre-genomewide producer')
+        import rescue_native_genomewide_reuse
+        proof=rescue_native_genomewide_reuse.prove_contract(prior,producer_source)
+    else:
+        if completed_output or completed_producer_source:
+            raise ValueError('Completed imports require the explicit native extension route')
+        proof = prove_contract(prior, producer_source)
     frozen = r.frozen_prediction_cache_key(previous)
     if set(frozen['species']) != set(prior['species']):
         raise ValueError('Admission replay requires all completed producer workers')
@@ -169,6 +180,14 @@ def build_plan(previous_output, producer_source, output):
                                          'contract': proof, 'species': frozen['species'],
                                          'annotation_history': _legacy_annotation_history(prior)}
     plan['request'].pop('integration_reclassification', None)
+    if native_extension:
+        import rescue_native_genomewide
+        plan['request']['oriongeno_genomewide']=rescue_native_genomewide.CONTRACT
+        if bool(completed_output)!=bool(completed_producer_source):
+            raise ValueError('Completed native workers require their archived producer source')
+        if completed_output:
+            plan['request']['native_genomewide_worker_imports']=rescue_native_genomewide_reuse.freeze_completed(
+                plan,completed_output,completed_producer_source)
     metadata = {}
     for name in ('selection.nwk', 'quality.tsv', 'references.nwk', 'references.tsv'):
         metadata[name] = (previous / name).read_bytes()
@@ -193,13 +212,25 @@ def previous_context(root, plan):
     r.require_same_key(cache['annotation_history'], _legacy_annotation_history(prior))
     if r.plan_digest(previous, prior) != cache['plan_sha256']:
         raise ValueError('Admission producer plan changed')
-    r.require_same_key(cache['contract'], prove_contract(prior, cache['contract']['producer_source']))
+    native=cache['contract'].get('scope')=='native_genomewide_extension'
+    if native:
+        import rescue_native_genomewide
+        import rescue_native_genomewide_reuse
+        proof=rescue_native_genomewide_reuse.prove_contract(prior,cache['contract']['producer_source'])
+        rescue_native_genomewide_reuse.verify_completed(plan)
+    else:
+        proof=prove_contract(prior,cache['contract']['producer_source'])
+    r.require_same_key(cache['contract'],proof)
     expected = copy.deepcopy(prior)
     expected['output'] = str(root)
     expected['request']['tools'] = plan['request']['tools']
     expected['request']['prediction_cache'] = plan['request']['prediction_cache']
     expected['request']['admission_cache'] = cache
     expected['request'].pop('integration_reclassification', None)
+    if native:
+        expected['request']['oriongeno_genomewide']=rescue_native_genomewide.CONTRACT
+        if 'native_genomewide_worker_imports' in plan['request']:
+            expected['request']['native_genomewide_worker_imports']=plan['request']['native_genomewide_worker_imports']
     r.require_same_key(expected, plan)
     r.require_same_key(plan['request']['prediction_cache'], r.frozen_prediction_cache_key(previous))
     for name, sha in cache['metadata_sha256'].items():
@@ -313,6 +344,7 @@ def rescue(root, plan, name, cpus):
     batch = FreshDigestBatch()
     expected = {str(old_worker / member): sha for member, sha in old_receipt['files'].items()}
     expected[str(old_worker / 'receipt.json')] = frozen['receipt_sha256']
+    expected.update(plan['request']['admission_cache']['contract']['source_files'])
     key = r.rescue_key(root, plan, name)
     def guard():
         batch.check()
@@ -346,12 +378,19 @@ def rescue(root, plan, name, cpus):
             existing = r.original_ownership(handle, r.attributes)
         proteins = {donor: {i: s for i, _, s in r.fasta_records(root / 'prepared' / donor / 'genes.pep')}
                     for donor in [name, *plan['donors'][name]]}
+        native_audit = None
         with indexed_genome(source['genome']) as genome:
             extra, historical = r.revalidate_retained_coding_paths(retained, list(current.values()), genome,
                                                                   source['genetic_code'], params, proteins, name)
             models = [*current.values(), *extra]
             for model in models:
                 r.check_interval(model)
+            if plan['request']['admission_cache']['contract'].get('scope') == 'native_genomewide_extension':
+                import rescue_native_genomewide_reuse
+                additions, native_audit = rescue_native_genomewide_reuse.fresh_candidates(
+                    root, plan, name, proteins, genome, r.OwnershipIndex(existing), params, tmp, cpus, models)
+                extra.extend(additions)
+                models.extend(additions)
             placement = r.reassess_unanchored_models(models, params['unanchored_min_species'],
                                                      ownership=r.OwnershipIndex(existing))
             r.consolidate(models, existing, name, plan.get('nearest_references', {}).get(name, ()),
@@ -362,6 +401,10 @@ def rescue(root, plan, name, cpus):
                     if fresh['problems'] or fresh['cds'] != model['cds'] or fresh['sequence'] != model['sequence']:
                         raise ValueError('Admitted historical CDS failed fresh genomic QC')
                 model['quality_evidence'] = r.model_quality(model, source['genetic_code'])
+        if native_audit is not None:
+            import rescue_native_genomewide
+            rescue_native_genomewide.finish_audit(native_audit, models)
+            r.atomic_json(tmp / 'oriongeno_genomewide.json', native_audit)
         if any(m.get('partial_evidence') != partials[i] for i, m in current.items()):
             raise ValueError('Admission replay changed partial evidence')
         revisions = {}
@@ -373,10 +416,13 @@ def rescue(root, plan, name, cpus):
                 revisions.setdefault(shape, {**m, 'support': []})['support'].append(evidence)
         changed = {i: m for i, m in current.items() if hashlib.sha256(store._json(m)).digest() != fingerprints[i]}
         manifest = patch_model_store(old_worker, tmp, changed, appended=extra,
-                                     revisions=revisions.values(), frozen_key=raw_key)
+                                     revisions=revisions.values(), frozen_key=raw_key,
+                                     append_partial_evidence=native_audit is not None)
         # Copy every other receipt member without truncating a shared inode.
         mutable = {'audit.tsv', 'quality_flags.tsv', 'search_inputs.json', 'placement_audit.json',
                    'retained_path_revalidation.json', 'retained_annotation_sources.json', 'admission_replay.json'}
+        if native_audit is not None:
+            mutable.add('oriongeno_genomewide.json')
         for member in old_receipt['files']:
             if member.startswith('model_store/') or member in mutable:
                 continue
@@ -397,7 +443,15 @@ def rescue(root, plan, name, cpus):
                     q['query_alignment']['internal_unaligned_query_fraction'])
         _rewrite_table(old_worker / 'audit.tsv', tmp / 'audit.tsv', current, extra, audit, counts['raw_records'], allow_tail=True)
         _rewrite_table(old_worker / 'quality_flags.tsv', tmp / 'quality_flags.tsv', current, extra, quality, counts['raw_records'])
-        search = json.loads((old_worker / 'search_inputs.json').read_text())
+        if 'search_inputs.json' in old_receipt['files']:
+            search = json.loads((old_worker / 'search_inputs.json').read_text())
+        elif counts['raw_records'] == 0:
+            # Ordinary no-window workers publish an empty store without search
+            # sidecars. Their native extension starts a real search below.
+            search = {'schema': 1, 'empty_producer_search': True,
+                      'prepared_receipts': {n: None for n in [name, *plan['donors'][name]]}}
+        else:
+            raise ValueError('Nonempty admission producer lacks search input identities')
         search.update(plan_sha256=r.plan_digest(root, plan), prediction_cache=plan['request']['prediction_cache'],
                       prepared_receipts={n: r.digest(root / 'prepared' / n / 'receipt.json') for n in search['prepared_receipts']})
         r.atomic_json(tmp / 'search_inputs.json', search)
