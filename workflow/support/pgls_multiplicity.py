@@ -45,17 +45,27 @@ def adjust_associations(frame):
     out["global_multiplicity_scope"] = PAIR_SCOPE
     out["global_n_associations"] = 0
     out["global_n_usable"] = 0
+    family_holm = np.full(len(out), np.nan)
+    family_bh = np.full(len(out), np.nan)
+    global_bh = np.full(len(out), np.nan)
+    global_n_associations = np.zeros(len(out), dtype=np.int64)
+    global_n_usable = np.zeros(len(out), dtype=np.int64)
     for _, group in out.loc[valid].groupby(["tree_id", "analysis_method"], sort=False):
         holm, bh = _adjust_association_p_values(group["p_value"])
-        out.loc[group.index, "p_value_family_holm"] = holm
-        out.loc[group.index, "p_value_family_bh"] = bh
+        family_holm[group.index] = holm
+        family_bh[group.index] = bh
     for _, group in out.groupby(["response", "source_term"], sort=False):
         idx = group.index
         values = raw.loc[idx].where(valid.loc[idx], 1.0)
         _, bh = _adjust_association_p_values(values)
-        out.loc[idx, "p_value_global_bh"] = np.where(valid.loc[idx], bh, np.nan)
-        out.loc[idx, "global_n_associations"] = len(idx)
-        out.loc[idx, "global_n_usable"] = int(valid.loc[idx].sum())
+        global_bh[idx] = np.where(valid.loc[idx], bh, np.nan)
+        global_n_associations[idx] = len(idx)
+        global_n_usable[idx] = int(valid.loc[idx].sum())
+    out["p_value_family_holm"] = family_holm
+    out["p_value_family_bh"] = family_bh
+    out["p_value_global_bh"] = global_bh
+    out["global_n_associations"] = global_n_associations
+    out["global_n_usable"] = global_n_usable
     return out
 
 

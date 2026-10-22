@@ -48,6 +48,30 @@ def test_duplicate_identity_and_missing_schema_are_errors():
         adjust_associations(rows().drop(columns="source_term"))
 
 
+def test_adjustments_use_reset_positions_and_replace_previous_results():
+    frame = rows()
+    frame.index = pd.Index([7, 7, 3, -1, 3], name="old_index")
+    frame["p_value_global_bh"] = -99.0
+    frame["p_value_family_holm"] = -99.0
+    original = frame.copy(deep=True)
+    out = adjust_associations(frame)
+    pd.testing.assert_frame_equal(frame, original)
+    assert out.index.equals(pd.RangeIndex(5))
+    assert out.p_value_global_bh.tolist() == pytest.approx([.04, .08, .2 * 4 / 3, float("nan"), .02], nan_ok=True)
+    assert out.p_value_family_holm.iloc[0] == .02
+    assert str(out.global_n_associations.dtype) == "int64"
+    assert str(out.p_value_global_bh.dtype) == "float64"
+
+
+def test_all_failed_associations_keep_global_denominators_and_missing_adjustments():
+    frame = rows()
+    frame["inference_status"] = "failed"
+    out = adjust_associations(frame)
+    assert out.global_n_associations.tolist() == [4, 4, 4, 4, 1]
+    assert out.global_n_usable.eq(0).all()
+    assert out[["p_value_family_holm", "p_value_family_bh", "p_value_global_bh"]].isna().all().all()
+
+
 def test_intercepts_invalid_values_and_empty():
     frame = rows()
     frame.loc[0, "term"] = "(Intercept)"
