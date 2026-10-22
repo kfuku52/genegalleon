@@ -92,6 +92,7 @@ pd.set_option("display.max_rows", 100)
 pd.set_option("display.max_columns", 1000)
 
 MAX_SQL_VARIABLES = 999
+AA_CHANGE_FDR_UPDATE_BATCH_SIZE = 16384
 AA_CHANGE_TABLE = "aa_change"
 AA_CHANGE_UNIT_TABLE = "aa_change_unit"
 CSUBST_SCAN_BASELINE_COLUMNS = {
@@ -299,22 +300,29 @@ def add_analytical_aa_change_fdr(engine):
     with engine.begin() as conn:
         if not sqlalchemy.inspect(conn).has_table(AA_CHANGE_TABLE):
             return
+        column_names = {column["name"] for column in sqlalchemy.inspect(conn).get_columns(AA_CHANGE_TABLE)}
+        shadowed = {name.casefold() for name in column_names}
+        rowid_alias = next((name for name in ("rowid", "_rowid_", "oid") if name not in shadowed), None)
         frame = pd.read_sql_query(
-            sqlalchemy.text(f'SELECT rowid AS _rowid, "{p_column}" FROM "{AA_CHANGE_TABLE}"'), conn,
+            sqlalchemy.text(f'SELECT {rowid_alias or "NULL"} AS _rowid, "{p_column}" FROM "{AA_CHANGE_TABLE}"'), conn,
         )
+        if rowid_alias is None and len(frame):
+            raise ValueError(
+                "Cannot assign analytical BH-FDR values: aa_change columns shadow all SQLite rowid aliases "
+                "(rowid, _rowid_, oid). Rename an additional column before rebuilding the database."
+            )
         qvalues = calculate_bh_fdr(frame[p_column])
-        if q_column not in {column["name"] for column in sqlalchemy.inspect(conn).get_columns(AA_CHANGE_TABLE)}:
+        if q_column not in column_names:
             conn.execute(sqlalchemy.text(f'ALTER TABLE "{AA_CHANGE_TABLE}" ADD COLUMN "{q_column}" REAL'))
         if len(frame):
-            updates = pd.DataFrame({"_rowid": frame["_rowid"], "qvalue": qvalues})
-            updates.to_sql("_tmp_aa_change_bh", conn, if_exists="replace", index=False,
-                           chunksize=calculate_chunksize(2), method=None)
-            conn.execute(sqlalchemy.text('CREATE INDEX idx_tmp_aa_change_bh ON _tmp_aa_change_bh (_rowid)'))
-            conn.execute(sqlalchemy.text(
-                f'UPDATE "{AA_CHANGE_TABLE}" SET "{q_column}" = '
-                '(SELECT qvalue FROM _tmp_aa_change_bh WHERE _rowid = aa_change.rowid)'
-            ))
-            conn.execute(sqlalchemy.text('DROP TABLE _tmp_aa_change_bh'))
+            rowids = frame["_rowid"].to_numpy(copy=False)
+            for start in range(0, len(frame), AA_CHANGE_FDR_UPDATE_BATCH_SIZE):
+                stop = start + AA_CHANGE_FDR_UPDATE_BATCH_SIZE
+                parameters = [(None if np.isnan(value) else float(value), int(rowid))
+                              for value, rowid in zip(qvalues[start:stop], rowids[start:stop], strict=True)]
+                conn.exec_driver_sql(
+                    f'UPDATE "{AA_CHANGE_TABLE}" SET "{q_column}" = ? WHERE {rowid_alias} = ?', parameters,
+                )
         pd.DataFrame([{
             "method": "Benjamini-Hochberg",
             "p_column": p_column,

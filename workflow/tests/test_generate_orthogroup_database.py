@@ -963,6 +963,148 @@ def test_analytical_bh_pools_orthogroups_traits_and_matches(tmp_path):
     engine.dispose()
 
 
+@pytest.mark.parametrize("shadow_columns", [
+    (), ("rowid",), ("_rowid_",), ("oid",),
+    ("rowid", "_rowid_"), ("rowid", "oid"), ("_rowid_", "oid"), ("RoWiD", "_RoWiD_"),
+])
+def test_analytical_bh_uses_real_row_identity_with_extra_columns(tmp_path, shadow_columns):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
+    rowids = [-23, 7, 101, 2 ** 53 + 1, 2 ** 63 - 2]
+    probabilities = [0.04, 0.01, None, 0.01, 1.0]
+    with engine.begin() as conn:
+        extra = "".join(f', "{column}" TEXT' for column in shadow_columns)
+        conn.exec_driver_sql(
+            'CREATE TABLE aa_change (fixture_id INTEGER PRIMARY KEY, '
+            'p_rate_enrichment_asymptotic REAL' + extra + ')'
+        )
+        values = [(rowid, pvalue, *("repeated-label" for _ in shadow_columns))
+                  for rowid, pvalue in zip(rowids, probabilities, strict=True)]
+        placeholders = ",".join("?" for _ in range(2 + len(shadow_columns)))
+        conn.exec_driver_sql(f'INSERT INTO aa_change VALUES ({placeholders})', values)
+    mod.add_analytical_aa_change_fdr(engine)
+    with engine.connect() as conn:
+        observed = conn.exec_driver_sql(
+            'SELECT fixture_id, q_rate_enrichment_asymptotic_global FROM aa_change ORDER BY fixture_id'
+        ).fetchall()
+        assert [row[0] for row in observed] == rowids
+        assert [observed[index][1] for index in (0, 1, 3, 4)] == pytest.approx([0.04 * 4 / 3, 0.02, 0.02, 1.0])
+        assert observed[2][1] is None
+        for column in shadow_columns:
+            assert conn.exec_driver_sql(f'SELECT "{column}" FROM aa_change').scalars().all() == ["repeated-label"] * 5
+    engine.dispose()
+
+
+@pytest.mark.parametrize("probabilities", [[], [None, None]])
+def test_analytical_bh_records_empty_and_undefined_tests(tmp_path, probabilities):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
+    pandas.DataFrame({"p_rate_enrichment_asymptotic": probabilities}).to_sql("aa_change", engine, index=False)
+    mod.add_analytical_aa_change_fdr(engine)
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql('SELECT q_rate_enrichment_asymptotic_global FROM aa_change').scalars().all() == [None] * len(probabilities)
+        assert conn.exec_driver_sql(
+            'SELECT candidate_count, test_count, undefined_count FROM aa_change_fdr_metadata'
+        ).one() == (len(probabilities), 0, len(probabilities))
+    engine.dispose()
+
+
+def test_analytical_bh_updates_are_bounded_across_real_batch_boundaries(tmp_path):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
+    probabilities = ([0.01, None, 0.04, 1.0, 0.0] * 6554) + [0.01, 0.04, None]
+    pandas.DataFrame({"p_rate_enrichment_asymptotic": probabilities}).to_sql("aa_change", engine, index=False)
+    batch_sizes = []
+    def record_batch(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith('UPDATE "aa_change"'):
+            batch_sizes.append(len(parameters) if executemany else 1)
+    mod.sqlalchemy.event.listen(engine, "before_cursor_execute", record_batch)
+    mod.add_analytical_aa_change_fdr(engine)
+    assert len(batch_sizes) >= 3
+    assert sum(batch_sizes) == len(probabilities)
+    assert max(batch_sizes) <= 16384
+    with engine.connect() as conn:
+        observed = conn.exec_driver_sql('SELECT q_rate_enrichment_asymptotic_global FROM aa_change ORDER BY rowid').scalars().all()
+        mod.np.testing.assert_array_equal(mod.np.asarray(observed, dtype=float), mod.calculate_bh_fdr(probabilities))
+        assert not conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE name LIKE '_tmp_aa_change_bh%'").all()
+    engine.dispose()
+
+
+def test_analytical_bh_rolls_back_an_earlier_batch_on_later_write_failure(tmp_path):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
+    count = 16387
+    pandas.DataFrame({"p_rate_enrichment_asymptotic": [0.01] * count,
+                      "q_rate_enrichment_asymptotic_global": [0.75] * count}).to_sql("aa_change", engine, index=False)
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            'CREATE TRIGGER fail_late BEFORE UPDATE OF q_rate_enrichment_asymptotic_global ON aa_change '
+            f'WHEN old.rowid = {count} BEGIN SELECT RAISE(ABORT, "injected later-batch failure"); END'
+        )
+    with pytest.raises(mod.sqlalchemy.exc.IntegrityError, match="injected later-batch failure"):
+        mod.add_analytical_aa_change_fdr(engine)
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql('SELECT count(*) FROM aa_change WHERE q_rate_enrichment_asymptotic_global = 0.75').scalar_one() == count
+        assert not mod.sqlalchemy.inspect(conn).has_table("aa_change_fdr_metadata")
+    engine.dispose()
+
+
+def test_analytical_bh_rejects_fully_shadowed_identity_before_writing(tmp_path):
+    mod = load_module()
+    path = tmp_path / "fdr.sqlite3"
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{path}")
+    pandas.DataFrame({"p_rate_enrichment_asymptotic": [0.01, 0.4], "rowid": ["same", "same"],
+                      "_rowid_": ["same", "same"], "oid": ["same", "same"]}).to_sql("aa_change", engine, index=False)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="shadow all SQLite rowid aliases"):
+        mod.add_analytical_aa_change_fdr(engine)
+    engine.dispose()
+    assert path.read_bytes() == before
+
+
+def test_analytical_bh_empty_fully_shadowed_table_still_records_completion(tmp_path):
+    mod = load_module()
+    engine = mod.sqlalchemy.create_engine(f"sqlite:///{tmp_path / 'fdr.sqlite3'}")
+    source = pandas.DataFrame(columns=["p_rate_enrichment_asymptotic", "rowid", "_rowid_", "oid"])
+    source.to_sql("aa_change", engine, index=False)
+    mod.add_analytical_aa_change_fdr(engine)
+    with engine.connect() as conn:
+        assert [column["name"] for column in mod.sqlalchemy.inspect(conn).get_columns("aa_change")] == [
+            *source.columns, "q_rate_enrichment_asymptotic_global",
+        ]
+        assert conn.exec_driver_sql('SELECT count(*) FROM aa_change').scalar_one() == 0
+        assert conn.exec_driver_sql(
+            'SELECT candidate_count, test_count, undefined_count FROM aa_change_fdr_metadata'
+        ).one() == (0, 0, 0)
+    engine.dispose()
+
+
+def test_shadowed_fdr_input_cannot_replace_published_database(tmp_path):
+    tree, branch, candidates = (tmp_path / name for name in ("tree", "branch", "aa_change"))
+    for directory in (tree, branch, candidates):
+        directory.mkdir()
+    stat_tree_frame().to_csv(tree / "OG1_stat.tree.tsv", sep="\t", index=False)
+    stat_branch_frame().to_csv(branch / "OG1_stat.branch.tsv", sep="\t", index=False)
+    source = candidates / "OG1_csubst_scan_aa_change.tsv"
+    pandas.DataFrame({
+        "trait": ["A"], "scan_match": ["any2spe"], "site_rate_categorized": [1],
+        "score_rate_enrichment": [1.5], "p_rate_enrichment_asymptotic": [0.01],
+        "q_rate_enrichment_asymptotic_by_trait_match": [0.01], "scan_inference_status": ["ok"],
+        "scan_rate_testable": [True], "rowid": ["label"], "_rowid_": ["label"], "oid": ["label"],
+    }).to_csv(source, sep="\t", index=False)
+    database = tmp_path / "published.db"
+    database.write_bytes(b"previous completed database")
+    previous, original_input = database.read_bytes(), source.read_bytes()
+    process = subprocess.run([sys.executable, str(SCRIPT_PATH), "--dbpath", str(database), "--overwrite", "1",
+                              "--dir_stat_tree", str(tree), "--dir_stat_branch", str(branch),
+                              "--dir_csubst_aa_change", str(candidates), "--ncpu", "1"],
+                             cwd=tmp_path, capture_output=True, text=True)
+    assert process.returncode != 0
+    assert "shadow all SQLite rowid aliases" in process.stderr
+    assert database.read_bytes() == previous
+    assert source.read_bytes() == original_input
+
+
 def test_database_write_modes_preserve_existing_and_reject_duplicate_append(tmp_path):
     tree = tmp_path / "stat_tree"
     branch = tmp_path / "stat_branch"
