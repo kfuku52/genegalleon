@@ -18,6 +18,8 @@ statsmodels
 tenacity
 tqdm
 pytorch>=2.6
+# Lossless model-store zstd publications and their strict runtime checks.
+zstandard
 
 # genegalleon bioinformatics core (intended to be cross-arch)
 blast
