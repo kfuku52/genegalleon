@@ -83,8 +83,25 @@ def get_species_count_table(genecount_df, leaf_names):
             "Orthogroup gene-count table is missing species column(s) from the dated species tree: "
             + ", ".join(missing_species[:20])
         )
-    species_counts = genecount_df.loc[:, leaf_names].apply(pandas.to_numeric, errors="coerce")
-    invalid_cols = [col for col in leaf_names if species_counts[col].isna().any()]
+    numeric = False
+    if (type(genecount_df) is pandas.DataFrame and type(genecount_df.columns) is pandas.Index
+            and type(leaf_names) is list and leaf_names
+            and all(type(name) is str for name in leaf_names)
+            and len(set(leaf_names)) == len(leaf_names) and genecount_df.columns.is_unique):
+        dtypes = genecount_df.dtypes.loc[leaf_names]
+        numeric = all(isinstance(dtype, numpy.dtype) and dtype.kind in "iuf"
+                      and dtype.itemsize <= 8 and dtype.isnative for dtype in dtypes)
+    if numeric:
+        # Valid TSVs normally already have NumPy numeric columns. Keep the
+        # independent output without reassembling them via per-column apply.
+        species_counts = genecount_df.loc[:, leaf_names].copy(deep=True)
+        invalid_cols = []
+        if any(dtype.kind == "f" for dtype in dtypes):
+            invalid = species_counts.isna().any(axis=0)
+            invalid_cols = invalid.index[invalid].tolist()
+    else:
+        species_counts = genecount_df.loc[:, leaf_names].apply(pandas.to_numeric, errors="coerce")
+        invalid_cols = [col for col in leaf_names if species_counts[col].isna().any()]
     if invalid_cols:
         fail(
             "Orthogroup gene-count table contains non-numeric copy numbers in species column(s): "

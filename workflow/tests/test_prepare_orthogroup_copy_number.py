@@ -12,6 +12,37 @@ SCRIPT = REPO_ROOT / "workflow" / "support" / "prepare_orthogroup_copy_number.py
 GENOME_EVOLUTION_CORE = REPO_ROOT / "workflow" / "core" / "gg_genome_evolution_core.sh"
 
 
+@pytest.mark.parametrize("dtype", ["int64", "uint64", "float32", "float64", "Int64", "object"])
+def test_count_table_preserves_types_order_and_independence(dtype):
+    import pandas as pd
+
+    from workflow.support.prepare_orthogroup_copy_number import get_species_count_table
+
+    data = pd.DataFrame({"a": pd.Series([1, 2], dtype=dtype), "b": pd.Series([3, 4], dtype=dtype)})
+    data.index = pd.Index(["001", "NA"], name="Orthogroup")
+    out = get_species_count_table(data, ["b", "a"])
+    expected = pd.DataFrame({"b": [3, 4], "a": [1, 2]}, index=data.index)
+    expected = expected.astype("int64" if dtype == "object" else dtype)
+    pd.testing.assert_frame_equal(out, expected)
+    out.iloc[0, 0] = 97
+    assert data.iloc[0, 1] == 3
+    data.iloc[1, 0] = 98
+    assert out.iloc[1, 1] == 2
+
+
+def test_count_table_keeps_missing_error_precedence_and_numeric_domain():
+    import numpy as np
+    import pandas as pd
+
+    from workflow.support.prepare_orthogroup_copy_number import get_species_count_table
+
+    data = pd.DataFrame({"a": [-1.0, np.nan], "b": [np.nan, -2.0]})
+    with pytest.raises(SystemExit, match="non-numeric copy numbers in species column\\(s\\): b, a"):
+        get_species_count_table(data, ["b", "a"])
+    valid = pd.DataFrame({"a": [0.5, np.inf], "b": [0.0, 2.5]})
+    pd.testing.assert_frame_equal(get_species_count_table(valid, ["b", "a"]), valid[["b", "a"]])
+
+
 def _run_prepare(tmp_path: Path, genecount_text: str, tree_text: str, *extra_args: str) -> subprocess.CompletedProcess[str]:
     genecount = tmp_path / "Orthogroups.GeneCount.selected.tsv"
     tree = tmp_path / "dated_species_tree.nwk"
