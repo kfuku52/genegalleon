@@ -1001,6 +1001,23 @@ opposite-strand and neighbouring genes remain. An overlapping model with coding
 bases outside the clone path, a shared feature with a retained gene, or competing
 clones stops replacement for review.
 
+Large references are searched in complete-contig batches (250 million bases
+by default); `cloned_cds_index_batch_bases` sets the target batch size. A single
+larger contig stays intact and may require more memory. Every batch uses the
+same alignment parameters, and candidate uniqueness is checked across the
+whole reference. `index_batches.json` records coverage; batch FASTAs are
+transient. Changing the batch size changes the frozen task/cache identity.
+
+The default `cloned_cds_unresolved_policy=error` stops for an unmapped,
+ambiguous or search-cap-limited clone. An explicit `retain_source` policy
+records that clone in `audit.json:skipped` and keeps the source models instead;
+uniquely resolved clones still undergo all coupled CDS/GFF checks. This does
+not permit approximate genomic CDS, guessed coordinates or CDS-only overrides.
+The received clone remains available as reference evidence. Native subset
+exports accept the same two options through `cloned_cds_options`, preserving
+source URLs and clone selectors for a newly prepared plan. Conflicting clones
+and unexplained overlapping source models still stop for review.
+
 Source gene feature IDs are resolved through the native CDS ownership index:
 `gene-...` feature prefixes and distinct `locus_tag` identities do not leave old
 CDS behind. Ambiguous or shared retained/replaced ownership stops replacement.

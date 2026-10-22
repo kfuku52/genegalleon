@@ -644,3 +644,87 @@ def test_native_strict_workflow_adopts_coupled_clone_models_with_restartable_rec
         paths["clone"].write_text(paths["clone"].read_text().replace("ATG", "ACG", 1))
         failed = run("single", success=False)
         assert "Cloned CDS SHA256 mismatch" in failed.stderr
+
+
+def test_retain_source_policy_skips_only_unresolved_clone_and_keeps_default_strict(tmp_path):
+    task, sequence, paths, row = fixture(tmp_path / 'inputs')
+    paths['clone'].write_text(paths['clone'].read_text() + '>unmapped\nATG' + 'GCT' * 240 + 'TAA\n')
+    row['cloned_cds_sha256'] = hashlib.sha256(paths['clone'].read_bytes()).hexdigest()
+    cloned.attach(task, row, tmp_path)
+    with pytest.raises(ValueError, match='complete genome-identical paths'):
+        cloned.apply_to_task(dict(task), tmp_path / 'strict')
+    cloned.attach(task, {**row, 'cloned_cds_unresolved_policy': 'retain_source'}, tmp_path)
+    cloned.apply_to_task(task, tmp_path / 'retained')
+    audit = json.loads(Path(task['cloned_model_audit']).read_text())
+    assert [x['clone_id'] for x in audit['replacements']] == ['experimental/clone:1']
+    assert audit['skipped'][0]['clone_id'] == 'unmapped'
+    assert audit['skipped'][0]['complete_genome_identical_paths'] == 0
+    assert audit['genomic_CDS_identity_required'] is True
+
+
+def test_contig_batching_preserves_coordinates_and_detects_cross_batch_paralogs(tmp_path):
+    task, sequence, paths, row = fixture(tmp_path / 'inputs')
+    reference = dict(task)
+    cloned.apply_to_task(reference, tmp_path / 'whole')
+    baseline = json.loads(Path(reference['cloned_model_audit']).read_text())
+    original = paths['genome'].read_text().splitlines()[1]
+    paths['genome'].write_text(paths['genome'].read_text() + '>chr2\n' + 'C' * 1500 + '\n')
+    cloned.attach(task, {**row, 'cloned_cds_index_batch_bases': '1000'}, tmp_path)
+    batched_task = dict(task)
+    cloned.apply_to_task(task, tmp_path / 'parts')
+    audit = json.loads(Path(task['cloned_model_audit']).read_text())
+    assert audit['replacements'] == baseline['replacements']
+    batches = json.loads((Path(task['cloned_model_audit']).parent / 'index_batches.json').read_text())
+    assert len(batches['batches']) == 2
+    assert batches['contigs_split'] is False
+    paths['genome'].write_text('>chr1\n' + original + '\n>chr2\n' + original + '\n')
+    with pytest.raises(ValueError, match='2 complete genome-identical paths'):
+        cloned.apply_to_task(batched_task, tmp_path / 'duplicated')
+
+
+@pytest.mark.parametrize('field,value', [('cloned_cds_unresolved_policy', 'ignore'),
+                                         ('cloned_cds_index_batch_bases', '-1'),
+                                         ('cloned_cds_index_batch_bases', '1.5')])
+def test_genomic_search_configuration_rejects_invalid_values(tmp_path, field, value):
+    _task, _sequence, _paths, row = fixture(tmp_path / 'inputs')
+    with pytest.raises(ValueError, match=field):
+        cloned.attach({}, {**row, field: value}, tmp_path)
+
+
+def test_native_subset_manifest_explicit_options_preserve_source_rows(tmp_path):
+    from input_generation_array_state import export_manifest
+    row = dict(provider='local', id='Test_species', species_key='Test_species', cloned_cds_fasta='/clones.fa',
+               cloned_cds_mode='genomic', cloned_cds_sha256='a' * 64)
+    plan = dict(tasks=[dict(manifest_row=row)])
+    target = tmp_path / 'manifest.tsv'
+    options = dict(cloned_cds_unresolved_policy='retain_source', cloned_cds_index_batch_bases='10000000')
+    export_manifest(plan, target, cloned_cds_options=options)
+    result = next(csv.DictReader(target.open(), delimiter='\t'))
+    assert result == {**row, **options}
+    assert plan['tasks'][0]['manifest_row'] == row
+    for bad in ({'cloned_cds_ids': '[]'}, {'cloned_cds_index_batch_bases': '-1'},
+                {'cloned_cds_unresolved_policy': 'ignore'}):
+        with pytest.raises(ValueError):
+            export_manifest(plan, target, cloned_cds_options=bad)
+    assert next(csv.DictReader(target.open(), delimiter='\t')) == result
+
+
+@pytest.mark.parametrize('counts,capped', [([100], True), ([60, 60], False)])
+def test_search_cap_applies_per_batch_after_global_coordinate_deduplication(tmp_path, monkeypatch, counts, capped):
+    from rescue_gene_models import read_miniprot
+    task, _sequence, _paths, _row = fixture(tmp_path / 'inputs')
+    prepared = dict(task)
+    cloned.apply_to_task(prepared, tmp_path / 'baseline')
+    model_file = Path(prepared['cloned_model_audit']).parent / 'models.gff'
+    raw = list(read_miniprot(model_file))[0]
+    index = iter(counts)
+    monkeypatch.setattr('cloned_cds_search.alignments', lambda *args: [model_file] * len(counts))
+    monkeypatch.setattr('rescue_gene_models.read_miniprot', lambda _path: iter([raw] * next(index)))
+    if capped:
+        with pytest.raises(ValueError, match='complete genome-identical paths'):
+            cloned.apply_to_task(task, tmp_path / 'tested')
+    else:
+        cloned.apply_to_task(task, tmp_path / 'tested')
+        audit = json.loads(Path(task['cloned_model_audit']).read_text())
+        assert len(audit['replacements']) == 1
+        assert audit['search_limit_reached'] == []

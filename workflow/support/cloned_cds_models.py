@@ -20,10 +20,12 @@ from urllib.parse import quote, unquote, urlparse
 from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 
 FIELDS = ('cloned_cds_fasta', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_cds_mode',
-          'cloned_cds_longer_only_ids', 'cloned_cds_min_identity', 'cloned_cds_min_target_coverage')
+          'cloned_cds_longer_only_ids', 'cloned_cds_min_identity', 'cloned_cds_min_target_coverage',
+          'cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases')
 TASK_FIELDS = ('cloned_cds_path', 'cloned_cds_sha256', 'cloned_cds_ids', 'cloned_model_implementation',
                'cloned_cds_mode', 'cloned_cds_longer_only_ids', 'cloned_cds_min_identity',
-               'cloned_cds_min_target_coverage', 'cloned_sequence_implementation')
+               'cloned_cds_min_target_coverage', 'cloned_sequence_implementation', 'cloned_cds_unresolved_policy',
+               'cloned_cds_index_batch_bases', 'cloned_genomic_search_implementation')
 EVIDENCE_FIELDS = ('cloned_cds_path', 'cloned_model_audit_path', 'cloned_source_cds_path',
                    'cloned_source_gff_path', 'cloned_source_genome_path')
 
@@ -94,6 +96,17 @@ def attach(task, row, parent):
     task.update(cloned_cds_path=path, cloned_cds_sha256=expected, cloned_cds_ids=ids,
                 cloned_model_implementation=digest(Path(__file__)), cloned_cds_mode=mode,
                 cloned_cds_longer_only_ids=longer)
+    if mode == 'genomic':
+        policy = str(row.get('cloned_cds_unresolved_policy') or 'error')
+        if policy not in {'error', 'retain_source'}:
+            raise ValueError('cloned_cds_unresolved_policy must be error or retain_source')
+        raw = str(row.get('cloned_cds_index_batch_bases') or '250000000')
+        if not raw.isdecimal() or int(raw) < 1:
+            raise ValueError('cloned_cds_index_batch_bases must be a positive integer')
+        task.update(cloned_cds_unresolved_policy=policy, cloned_cds_index_batch_bases=int(raw),
+                    cloned_genomic_search_implementation=digest(Path(__file__).with_name('cloned_cds_search.py')))
+    elif any(row.get(k) for k in ('cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases')):
+        raise ValueError('Genomic cloned CDS options require genomic mode')
     if mode == 'sequence':
         task['cloned_sequence_implementation'] = digest(Path(__file__).with_name('cloned_cds_sequences.py'))
         for field in ('cloned_cds_min_identity', 'cloned_cds_min_target_coverage'):
@@ -327,8 +340,9 @@ def removed_cds_gene_tokens(prepared, removed, genes):
 def build_pair(task, directory):
     import format_species_inputs as fsi
     from Bio.Seq import Seq
+    from cloned_cds_search import alignments
     from gene_model_catalog import indexed_genome
-    from rescue_gene_models import read_miniprot, run, validate_model
+    from rescue_gene_models import read_miniprot, validate_model
     code = int(task.get('genetic_code', 1))
     clones = cloned_records(Path(task['cloned_cds_path']), task.get('cloned_cds_ids', []), code)
     queries = directory / 'clone_proteins.fa'
@@ -339,29 +353,39 @@ def build_pair(task, directory):
                                for key, name in names.items()))
     cpus = max(1, int(os.environ.get('GG_TASK_CPUS', '1')))
     with indexed_genome(task['genome_path']) as genome:
-        run(['miniprot', '-u', '-T', code, '-t', cpus, '-N', 100, '--outs=0', '--gff', genome.filename.decode(), queries],
-            directory, 'cloned_cds_miniprot', directory / 'models.gff')
         candidates = {name: {} for name in clones}
         diagnostics = {name: [] for name in clones}
-        for raw in read_miniprot(directory / 'models.gff'):
-            if raw['query'] not in names:
-                raise ValueError('Unexpected miniprot query')
-            name = names[raw['query']]
-            model = validate_model(raw, genome, code, dict(minimum_coverage=1.0, minimum_identity=1.0,
-                                                         minimum_broad_coverage=1.0, minimum_lower_coverage_identity=1.0))
-            if model['sequence'] != clones[name]:
-                model['problems'].append('cloned_CDS_genome_mismatch')
-            diagnostics[name].append({k: model[k] for k in ('seqid', 'strand', 'cds', 'coverage', 'identity', 'problems')})
-            if not model['problems']:
-                key = (model['seqid'], model['strand'], tuple(map(tuple, model['cds'])))
-                candidates[name][key] = model
+        capped = set()
+        for alignment in alignments(genome, queries, directory, code, cpus,
+                                    task.get('cloned_cds_index_batch_bases', 250_000_000)):
+            before = {name: len(rows) for name, rows in diagnostics.items()}
+            for raw in read_miniprot(alignment):
+                if raw['query'] not in names:
+                    raise ValueError('Unexpected miniprot query')
+                name = names[raw['query']]
+                model = validate_model(raw, genome, code, dict(minimum_coverage=1.0, minimum_identity=1.0,
+                                                             minimum_broad_coverage=1.0, minimum_lower_coverage_identity=1.0))
+                if model['sequence'] != clones[name]:
+                    model['problems'].append('cloned_CDS_genome_mismatch')
+                diagnostics[name].append({k: model[k] for k in ('seqid', 'strand', 'cds', 'coverage', 'identity', 'problems')})
+                if not model['problems']:
+                    key = (model['seqid'], model['strand'], tuple(map(tuple, model['cds'])))
+                    candidates[name][key] = model
+            capped.update(name for name, rows in diagnostics.items() if len(rows) - before[name] >= 100)
     audit = dict(schema_version=1, species=task['species_prefix'], genomic_CDS_identity_required=True,
-                 candidates=diagnostics, replacements=[])
+                 candidates=diagnostics, replacements=[], skipped=[],
+                 unresolved_policy=task.get('cloned_cds_unresolved_policy', 'error'),
+                 search_limit_reached=sorted(capped))
     atomic_json(directory / 'audit.json', audit)
     selected_models = {}
     for name in sorted(clones):
         models = list(candidates[name].values())
-        if len(models) != 1 or len(diagnostics[name]) >= 100:
+        if len(models) != 1 or name in capped:
+            if task.get('cloned_cds_unresolved_policy', 'error') == 'retain_source':
+                audit['skipped'].append(dict(clone_id=name, status='unresolved_genomic_path',
+                                             complete_genome_identical_paths=len(models),
+                                             candidate_limit_reached=name in capped))
+                continue
             raise ValueError(f'Cloned CDS {name} has {len(models)} complete genome-identical paths; inspect audit.json')
         selected_models[name] = models[0]
     records, genes, coding, ownership = source_graph(task['gff_path'])
@@ -381,9 +405,7 @@ def build_pair(task, directory):
             if match.get('status') == 'mapped':
                 token = match['gene_token']
                 source_lengths[token] = max(source_lengths.get(token, 0), len(sequence))
-    audit['skipped'] = []
-    for name in sorted(clones):
-        model = selected_models[name]
+    for name, model in sorted(selected_models.items()):
         scope = scoped_genes[name] if scoped_genes is not None else genes
         replaced = overlapping_genes(model, scope, coding)
         if name in longer:
@@ -475,10 +497,12 @@ def apply_to_task(task, root, *, dry_run=False):
     key = dict(schema=1, inputs=hashes, species=task['species_prefix'],
                selected_ids=task.get('cloned_cds_ids', []), genetic_code=int(task.get('genetic_code', 1)),
                longer_only_ids=task.get('cloned_cds_longer_only_ids', []),
+               unresolved_policy=task.get('cloned_cds_unresolved_policy', 'error'),
+               index_batch_bases=task.get('cloned_cds_index_batch_bases', 250_000_000),
                implementation=digest(Path(__file__)), miniprot=digest(tool),
                native_dependencies={name: digest(Path(__file__).parent / name) for name in (
                    'rescue_gene_models.py', 'gene_model_catalog.py', 'gene_model_refinement.py',
-                   'rescue_homology_policy.py')})
+                   'rescue_homology_policy.py', 'cloned_cds_search.py')})
     token = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
     destination = stage(Path(root), task['species_prefix'] + '/' + token, key,
                         lambda folder: build_pair(task, folder), guard=batch.check, publication_guard=batch.check)

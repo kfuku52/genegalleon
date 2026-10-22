@@ -200,10 +200,24 @@ def frozen_input_hashes(plan_path, plan, index):
     return expected
 
 
-def export_manifest(plan, outfile, tasks=None):
+def export_manifest(plan, outfile, tasks=None, *, cloned_cds_options=None):
     selected_tasks = plan["tasks"] if tasks is None else list(tasks)
     rows = [dict(task.get("manifest_row") or {"provider": task["provider"],
             "id": task["species_key"], "species_key": task["species_key"]}) for task in selected_tasks]
+    if cloned_cds_options is not None:
+        options = cloned_cds_options
+        if not isinstance(options, dict) or not options or set(options) - {
+                'cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases'}:
+            raise ValueError('Invalid cloned CDS export options')
+        if 'cloned_cds_unresolved_policy' in options and options['cloned_cds_unresolved_policy'] not in {'error', 'retain_source'}:
+            raise ValueError('Invalid cloned CDS unresolved policy')
+        size = options.get('cloned_cds_index_batch_bases', '250000000')
+        if not isinstance(size, str) or not size.isdecimal() or int(size) < 1:
+            raise ValueError('Invalid cloned CDS index batch size')
+        if any(not row.get('cloned_cds_fasta') or (row.get('cloned_cds_mode') or 'genomic') != 'genomic' for row in rows):
+            raise ValueError('Cloned CDS export options require genomic cloned input rows')
+        for row in rows:
+            row.update(options)
     fields = ["provider", "id", "species_key"] + sorted({key for row in rows for key in row} - {"provider", "id", "species_key"})
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fields, delimiter="\t")
