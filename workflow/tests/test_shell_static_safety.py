@@ -1,6 +1,8 @@
 # ruff: noqa: E501
 
+import copy
 import re
+import runpy
 from pathlib import Path
 
 from shell_static_helpers import (
@@ -2170,12 +2172,21 @@ def test_gene_evolution_core_uses_content_and_parameter_provenance_for_csubst_ch
     assert '--iqtree-anc "${file_og_iqtree_anc}"' in core
 
 
-def test_artifact_provenance_versions_are_diagnostic_only():
-    script = _read_text(WORKFLOW_DIR / "support" / "artifact_provenance.py")
-    assert 'contract["diagnostics"] = normalized_diagnostics(args.diagnostic)' in script
-    comparison_body = script.split("def contract_comparison_payload", 1)[1].split("\ndef ", 1)[0]
-    assert '"parameters": contract.get("parameters")' in comparison_body
-    assert "diagnostics" not in comparison_body
+def test_artifact_provenance_versions_are_diagnostic_only(monkeypatch):
+    support = WORKFLOW_DIR / 'support'
+    monkeypatch.syspath_prepend(str(support))
+    compare = runpy.run_path(str(support / 'artifact_provenance.py'))['contract_comparison_payload']
+    for step, family in [('format_inputs', 'Test_species'), ('species_tree_extract_fasta', 'all_buscos')]:
+        contract = dict(schema_version=1, step=step, family_id=family,
+                        inputs=[{'sha256': 'original'}], outputs=[{'path': 'output.fa'}],
+                        parameters={'strict': 1}, diagnostics={'genegalleon_version': 'old'})
+        before = copy.deepcopy(contract)
+        expected = compare(contract)
+        assert compare({**contract, 'diagnostics': {'genegalleon_version': 'new', 'tool_version': 'changed'}}) == expected
+        assert compare({**contract, 'parameters': {'strict': 0}}) != expected
+        assert compare({**contract, 'inputs': [{'sha256': 'changed'}]}) != expected
+        assert compare({**contract, 'outputs': [{'path': 'changed.fa'}]}) != expected
+        assert contract == before
 
 
 def test_gene_summary_database_and_csubst_scan_summary_are_separate_flags():
