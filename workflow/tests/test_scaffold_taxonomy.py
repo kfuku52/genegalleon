@@ -381,6 +381,52 @@ def test_workflow_wiring_and_provenance():
     assert '--input "species_tree_reader=${gg_support_dir}/hgt_species_tree.py"' in hgt
 
 
+def locus_rank_validation_frame(categorical, nonunique_index):
+    rows = []
+    labels = ("compatible", "incompatible", "unresolved")
+    for species_index, species in enumerate(("Host species", "Donor species")):
+        for unit_index, unit in enumerate(("gff_locus", "cds_id")):
+            for isoform in ("a", "b"):
+                for rank_index, rank in enumerate(scaffold.RANKS):
+                    rows.append(dict(species=species, gene_id=f"{unit}_{isoform}",
+                                     scaffold=f"scaffold_{species_index}", locus_id="shared_locus",
+                                     count_unit=unit, rank=rank,
+                                     label=labels[(species_index + unit_index + rank_index) % len(labels)],
+                                     host_taxid=str(species_index + 3)))
+    data = pd.DataFrame(rows).sample(frac=1, random_state=42)
+    if categorical:
+        data = data.astype({column: "category" for column in data.columns})
+    if nonunique_index:
+        data.index = pd.Index([index % 11 for index in range(len(data))], name="reused_row")
+    return data
+
+
+@pytest.mark.parametrize("categorical", [False, True])
+@pytest.mark.parametrize("nonunique_index", [False, True])
+def test_validate_gene_table_keeps_locus_rank_boundaries(categorical, nonunique_index):
+    data = locus_rank_validation_frame(categorical, nonunique_index)
+    expected = data.copy(deep=True)
+    expected["species"] = expected.species.map(scaffold.species_key)
+    # Reused locus IDs and different labels remain independent by species,
+    # counting unit and rank; the two isoforms agree within each complete key.
+    assert scaffold.validate_gene_table(data) is None
+    pd.testing.assert_frame_equal(data, expected)
+
+
+@pytest.mark.parametrize("categorical", [False, True])
+@pytest.mark.parametrize("nonunique_index", [False, True])
+def test_validate_gene_table_rejects_exact_locus_rank_conflict(categorical, nonunique_index):
+    data = locus_rank_validation_frame(categorical, nonunique_index)
+    damaged = (data.species.eq("Host species") & data.gene_id.eq("gff_locus_b")
+               & data["rank"].eq("phylum"))
+    data.loc[damaged, "label"] = "unresolved"
+    expected = data.copy(deep=True)
+    expected["species"] = expected.species.map(scaffold.species_key)
+    with pytest.raises(ValueError, match="^Conflicting isoform labels in scaffold taxonomy input$"):
+        scaffold.validate_gene_table(data)
+    pd.testing.assert_frame_equal(data, expected)
+
+
 @pytest.mark.parametrize("damage, message", [
     ("missing_rank", "Incomplete ranks"),
     ("different_scaffold", "Inconsistent gene identity"),

@@ -118,7 +118,7 @@ def validate_gene_table(data):
     loci = data.groupby(["species", "count_unit", "locus_id"])
     if loci.scaffold.nunique().gt(1).any():
         raise ValueError("Locus maps to multiple scaffolds")
-    if data.groupby(["species", "count_unit", "locus_id", "rank"]).label.nunique().gt(1).any():
+    if data.groupby([loci.ngroup(), data["rank"]]).label.nunique().gt(1).any():
         raise ValueError("Conflicting isoform labels in scaffold taxonomy input")
 
 
