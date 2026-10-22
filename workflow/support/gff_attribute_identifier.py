@@ -25,13 +25,13 @@ def read_fasta_seqname(file_path):
     raw_seqnames = []
     if file_path.endswith(".gz"):
         with gzip.open(file_path, "r") as f:
-            for line in f.readlines():
+            for line in f:
                 line = line.decode("utf-8")
                 if ">" in line:
                     raw_seqnames.append(line)
     else:
         with open(file_path, "r") as f:
-            for line in f.readlines():
+            for line in f:
                 if ">" in line:
                     raw_seqnames.append(line)
     seqnames = pandas.Series(raw_seqnames)
