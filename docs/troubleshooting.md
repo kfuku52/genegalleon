@@ -157,6 +157,15 @@ preserved when time values are scaled. Native NEXUS FigTree files and multiline
 trees are supported without a `TRANSLATE` table. Translation tables are rejected
 rather than silently substituting numeric tip identifiers. Conversion selects
 one dated tree and removes HPD annotations from its no-CI sidecar.
+
+For dated-tree plotting, NWKIT allows a root-to-tip distance spread of at most
+`max(1e-5, 1e-5 * tree_height)` in the supplied time units. This accepts
+serialization rounding in short branches while checking the complete paths so
+errors cannot accumulate unchecked. Both plotting modes preserve supplied age
+intervals and input branch lengths; larger differences stop before replacing
+the plot. Rebuild the GeneGalleon container to obtain this NWKIT fix when an
+older runtime rejects rounded MCMCtree output (issue #50).
+
 Time scaling processes complete multiline tree statements and preserves quoted
 tip names and unrelated comments. Scale factors must be finite and positive;
 nonfinite calibration ages are rejected before choosing a scale factor.

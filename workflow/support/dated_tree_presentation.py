@@ -240,8 +240,8 @@ def render_dated_tree(
     if min(figure_width, font_size) <= 0 or not all(math.isfinite(value) for value in [figure_width, font_size]):
         raise ValueError("Figure width and font size must be finite and positive.")
     tree = read_tree(str(infile), "auto", True, rooted="yes")
-    prepare_time_tree_annotations(tree)
-    if any("age" not in node.props for node in tree.traverse()):
+    annotations = prepare_time_tree_annotations(tree)
+    if not annotations["credible_interval_count"]:
         infer_node_ages_from_branch_lengths(tree)
     leaves = list(tree.leaves())
     species = [leaf.name for leaf in leaves]

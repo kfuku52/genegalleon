@@ -2,71 +2,47 @@
 """Draw a public-unit dated tree and its supplied age intervals with NWKIT."""
 
 import argparse
-import math
-import subprocess
 import sys
-import tempfile
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 
-def _draw_command(infile, outfile, height, time_credible_intervals):
+def _draw_command(infile, outfile, height):
     return [
-        "nwkit", "draw", "--infile", str(infile), "--outfile", str(outfile),
+        "draw", "--infile", str(infile), "--outfile", str(outfile),
         "--species-overlap-node-plot", "no", "--support-labels", "no",
-        "--time-constraints", "no", "--time-credible-intervals", time_credible_intervals,
+        "--time-constraints", "no", "--time-credible-intervals", "auto",
         "--scale-bar", "auto", "--branch-length-unit", "Ma",
         "--figure-width", "7.0", "--figure-height", str(height),
         "--tip-label-wrap", "auto", "--tip-spacing", "label-aware",
     ]
 
 
-def _run_checked(command):
-    return subprocess.run(command, check=True, text=True, capture_output=True)
-
-
-def _replay_failure(result):
-    if result.stdout:
-        sys.stdout.write(result.stdout)
-    if result.stderr:
-        sys.stderr.write(result.stderr)
-
-
 def draw_dated_tree(infile, outfile):
+    from matplotlib import rc_context
+    from nwkit.cli import main as nwkit_main
     from nwkit.file_paths import validate_outputs_do_not_replace_inputs
+    from nwkit.time_tree import infer_node_ages_from_branch_lengths
     from nwkit.util import read_tree
 
     validate_outputs_do_not_replace_inputs([("tree", infile)], [("plot", outfile)])
     tree = read_tree(str(infile), "auto", True)
-    if any(node.dist is None or not math.isfinite(node.dist) or node.dist < 0
-           for node in tree.traverse() if node is not tree):
+    if any(node.dist is None for node in tree.traverse() if node is not tree):
         raise ValueError("Dated-tree branch lengths must be finite and nonnegative.")
+    infer_node_ages_from_branch_lengths(tree)
     height = max(3.0, 1.2 + 0.24 * len(tree))
     Path(outfile).parent.mkdir(parents=True, exist_ok=True)
-    draw_command = _draw_command(infile, outfile, height, "auto")
-    try:
-        _run_checked(draw_command)
-        return
-    except subprocess.CalledProcessError as error:
-        combined = f"{error.stdout or ''}\n{error.stderr or ''}"
-        if "Dated-tree branch lengths are not ultrametric at an internal node." not in combined:
-            _replay_failure(error)
+    # Reuse this interpreter's NWKIT imports instead of starting another Python
+    # process. Keep the CLI parser, validation and transactional output path.
+    with StringIO() as stdout, StringIO() as stderr:
+        try:
+            with rc_context(), redirect_stdout(stdout), redirect_stderr(stderr):
+                nwkit_main(_draw_command(infile, outfile, height))
+        except Exception:
+            sys.stdout.write(stdout.getvalue())
+            sys.stderr.write(stderr.getvalue())
             raise
-
-    # MCMCtree writes rounded posterior means. A tiny rounding discrepancy can
-    # make CI-aware parsing reject an otherwise valid dated tree. Keep the
-    # point estimates, drop only the intervals, and make the limitation clear.
-    print(
-        "Warning: rounded dated-tree branch lengths are slightly non-ultrametric; "
-        "rendering the point estimate without credible intervals.",
-        file=sys.stderr,
-    )
-    with tempfile.TemporaryDirectory(prefix="gg-dated-tree-") as temporary:
-        fallback = Path(temporary) / "dated.nwk"
-        _run_checked([
-            "nwkit", "convert", "--infile", str(infile), "--outfile", str(fallback),
-            "--to", "newick", "--properties", "drop",
-        ])
-        _run_checked(_draw_command(fallback, outfile, height, "no"))
 
 
 def main():

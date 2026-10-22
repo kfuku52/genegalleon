@@ -46,16 +46,23 @@ def test_dated_tree_rejects_ambiguous_metadata_without_replacing_plot(tmp_path, 
     assert plot.read_text() == "previous plot"
 
 
-def test_dated_tree_restores_matplotlib_style_after_render(tmp_path):
+@pytest.mark.parametrize("presentation", [False, True])
+def test_dated_tree_restores_matplotlib_style_after_render(tmp_path, presentation):
     import matplotlib
 
     from workflow.support.dated_tree_presentation import render_dated_tree
+    from workflow.support.plot_dated_tree import draw_dated_tree
 
     tree = tmp_path / "tree.nwk"
     tree.write_text("(A:10,B:10);")
-    with matplotlib.rc_context({"font.family": "serif", "font.size": 13, "pdf.fonttype": 3, "svg.fonttype": "path"}):
-        before = {key: matplotlib.rcParams[key] for key in ("font.family", "font.size", "pdf.fonttype", "svg.fonttype")}
-        render_dated_tree(tree, tmp_path / "plot.svg", geological_background="none")
+    with matplotlib.rc_context({"font.family": "serif", "font.size": 13, "pdf.fonttype": 3,
+                                "svg.fonttype": "path", "svg.hashsalt": "caller"}):
+        before = {key: matplotlib.rcParams[key] for key in
+                  ("font.family", "font.size", "pdf.fonttype", "svg.fonttype", "svg.hashsalt")}
+        if presentation:
+            render_dated_tree(tree, tmp_path / "plot.svg", geological_background="none")
+        else:
+            draw_dated_tree(tree, tmp_path / "plot.svg")
         assert {key: matplotlib.rcParams[key] for key in before} == before
 
 
@@ -454,17 +461,55 @@ def test_dated_tree_plot_accepts_public_unit_nhx_and_figtree(tmp_path, text):
     assert source.read_text() == text
 
 
-def test_dated_tree_plot_drops_ci_when_rounded_tree_is_slightly_non_ultrametric(tmp_path):
-    source, plot = tmp_path / "rounded.nhx", tmp_path / "rounded.pdf"
-    source.write_text(
-        "((A:10.000000,B:9.999000)named:20.000000[&&NHX:age=10:age_ci_low=8:"
-        "age_ci_high=12:age_ci_kind=HPD:age_ci_level=0.95],C:30.000000);"
-    )
-    result = run(sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", source, "--outfile", plot)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "slightly non-ultrametric" in result.stderr
-    assert plot.read_bytes().startswith(b"%PDF-")
-    assert source.read_text().startswith("((A:10.000000")
+@pytest.mark.parametrize("presentation", [False, True])
+def test_dated_tree_plot_keeps_ci_on_issue50_rounded_tree(tmp_path, monkeypatch, presentation):
+    source = ROOT / "workflow/tests/fixtures/dated_tree/issue50.nhx"
+    before = source.read_bytes()
+    plot, report = tmp_path / "rounded.svg", tmp_path / "layout.json"
+    command = [sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", source, "--outfile", plot]
+    if presentation:
+        command.extend(["--layout-report", report])
+        result = run(*command)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(report.read_text())["credible_interval_count"] == 90
+        assert "95% highest posterior density intervals" in plot.read_text()
+    else:
+        from nwkit import cli
+
+        from workflow.support.plot_dated_tree import draw_dated_tree
+
+        main = cli.main
+
+        def draw_with_report(args):
+            return main([*args, "--layout-report", str(report)])
+
+        monkeypatch.setattr(cli, "main", draw_with_report)
+        draw_dated_tree(source, plot)
+        assert json.loads(report.read_text())["time_credible_interval_count"] == 90
+    assert plot.read_text().lstrip().startswith("<?xml")
+    assert source.read_bytes() == before
+
+
+@pytest.mark.parametrize("presentation", [False, True])
+@pytest.mark.parametrize("text", [
+    "((A:0.1,B:0.2):252.2315,C:252.3315);",
+    "((A:0.1,B:0.2):252.2315[&&NHX:age_ci_low=0.08:age_ci_high=0.12:age_ci_kind=HPD:age_ci_level=0.95],C:252.3315);",
+    "(A:1[&&NHX:age=0],B:2[&&NHX:age=0])[&&NHX:age=2];",
+    "((A:100,B:100.0009):0.0009,C:100);",
+])
+def test_dated_tree_rejects_material_time_differences_without_replacing_outputs(tmp_path, presentation, text):
+    source, plot, report = tmp_path / "bad.nhx", tmp_path / "plot.svg", tmp_path / "layout.json"
+    source.write_text(text)
+    plot.write_text("previous plot")
+    report.write_text("previous report")
+    command = [sys.executable, SUPPORT / "plot_dated_tree.py", "--infile", source, "--outfile", plot]
+    if presentation:
+        command.extend(["--layout-report", report])
+    result = run(*command)
+    assert result.returncode != 0 and "not ultrametric" in result.stderr
+    assert plot.read_text() == "previous plot"
+    assert report.read_text() == "previous report"
+    assert source.read_text() == text
 
 
 @pytest.mark.parametrize("candidate_method,reason", [
