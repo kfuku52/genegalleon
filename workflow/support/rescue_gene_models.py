@@ -799,7 +799,9 @@ def synteny(root, plan, index, cpus, comparison_cache=None, prepared_snapshot=No
     return stage(root, Path("synteny") / job["id"], key, build, guard, **publication)
 
 
-def comparison_key(root, job, prepared_snapshot=None):
+def comparison_key(root, job, prepared_snapshot=None, *, dependency_snapshot=None):
+    if prepared_snapshot is not None and dependency_snapshot is not None:
+        raise ValueError('Choose one preparation verification context')
     if prepared_snapshot is not None:
         prepared_snapshot.assert_context(root)
         prepared_snapshot.check_job(job)
@@ -807,8 +809,9 @@ def comparison_key(root, job, prepared_snapshot=None):
                 "prepared": {n: prepared_snapshot.receipt_digest(n) for n in sorted({job["a"], job["b"]})}}
     plan_hash = digest(root / "plan.json")
     names = sorted({job["a"], job["b"]})
+    check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for name in names:
-        if not verified(root / "prepared" / name, {"plan": plan_hash, "species": name}):
+        if not check(root / "prepared" / name, {"plan": plan_hash, "species": name}):
             raise ValueError("Prepared annotation incomplete or corrupted: " + name)
     return {"plan": plan_hash, "job": job,
             "prepared": {n: digest(root / "prepared" / n / "receipt.json") for n in names}}
@@ -923,7 +926,9 @@ def rescue_key(root, plan, name, *, dependency_snapshot=None):
     plan_hash = plan_digest(root, plan)
     check = verified if dependency_snapshot is None else lambda directory, key: verified_dependency(dependency_snapshot, directory, key)
     for job in jobs:
-        if not check(root / "synteny" / job["id"], comparison_key(root, job)):
+        comparison = (comparison_key(root, job) if dependency_snapshot is None
+                      else comparison_key(root, job, dependency_snapshot=dependency_snapshot))
+        if not check(root / "synteny" / job["id"], comparison):
             raise ValueError("Comparison incomplete or corrupted: " + job["id"])
     donors = [name, *plan["donors"][name]]
     for donor in donors:

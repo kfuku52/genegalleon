@@ -1,0 +1,86 @@
+{
+  "baseline_commit": "e8f3f7ab9b7467a7cfda9588c4ee2301933ad10e",
+  "benchmark_source_sha256": "f7a034936c6acd494e627375a1e134290345378f7f2dbc4131b15b2788ea0779",
+  "candidate_source_sha256": "5fb9edac6d2f1e3318896368ebcb2ba7827eaa9212d08b96564db3b60e07f2cb",
+  "command": "GG_TEST_RUNTIME=docker bash workflow/tests/run_in_runtime.sh python -B workflow/benchmarks/benchmark_rescue_dependency_keys.py --compare e8f3f7ab9b7467a7cfda9588c4ee2301933ad10e --repeats 3 --warmups 1",
+  "environment": {
+    "freshness": "all upstreams and current container inputs verified",
+    "image": "sha256:511631634ae824e3fc36d123ab0a245852517d0473b57da3955b292644b1d9d6",
+    "platform": "Linux arm64 through Docker on macOS arm64",
+    "python": "3.12.15"
+  },
+  "medians": {
+    "after": {
+      "max_rss_bytes": 71340032,
+      "sha256_bytes": 1460579891,
+      "sha256_reads": 3614,
+      "wall_seconds": 1.3887667930002863
+    },
+    "before": {
+      "max_rss_bytes": 71618560,
+      "sha256_bytes": 12063780403,
+      "sha256_reads": 4878,
+      "wall_seconds": 6.906533960999695
+    }
+  },
+  "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+  "passes": 2,
+  "repeats": 3,
+  "scope": "Synthetic rescue dependency-key verification only; not whole rescue/refinement throughput",
+  "trials": {
+    "after": [
+      {
+        "max_rss_bytes": 71262208,
+        "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+        "sha256_bytes": 1460579891,
+        "sha256_reads": 3614,
+        "wall_seconds": 1.3096051680004166
+      },
+      {
+        "max_rss_bytes": 71340032,
+        "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+        "sha256_bytes": 1460579891,
+        "sha256_reads": 3614,
+        "wall_seconds": 1.488611708999997
+      },
+      {
+        "max_rss_bytes": 71348224,
+        "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+        "sha256_bytes": 1460579891,
+        "sha256_reads": 3614,
+        "wall_seconds": 1.3887667930002863
+      }
+    ],
+    "before": [
+      {
+        "max_rss_bytes": 71614464,
+        "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+        "sha256_bytes": 12063780403,
+        "sha256_reads": 4878,
+        "wall_seconds": 6.906533960999695
+      },
+      {
+        "max_rss_bytes": 71618560,
+        "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+        "sha256_bytes": 12063780403,
+        "sha256_reads": 4878,
+        "wall_seconds": 6.913985045000118
+      },
+      {
+        "max_rss_bytes": 71659520,
+        "output_sha256": "ab42e2cbf9241048a4cd63b06046d0e6b11f9bc0b9284b0577e777a57054c1f3",
+        "sha256_bytes": 12063780403,
+        "sha256_reads": 4878,
+        "wall_seconds": 6.739599710999755
+      }
+    ]
+  },
+  "warmups": 1,
+  "workload": {
+    "comparisons": 158,
+    "plan_bytes": 1868546,
+    "plan_entries": 20000,
+    "prepared_payload_bytes": 8388608,
+    "species": 23
+  }
+}
