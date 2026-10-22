@@ -12,6 +12,22 @@ import pytest
 SUPPORT = Path(__file__).resolve().parents[1] / 'support'
 
 
+def test_gene_info_normalizes_then_stably_orders_each_chromosome(tmp_path):
+    from workflow.support.synteny_neighbors import load_gene_info
+
+    table = tmp_path / 'genes.tsv'
+    table.write_text('gene_id\tchromosome\tstart\tend\tstrand\n'
+                     '2\t2\t8\t5\t-\n'
+                     '10\t2\t5\t8\t+\n'
+                     '1\t10\t1\t4\t+\n'
+                     '2\t10\t1\t99\t+\n'
+                     '3\t2\tbad\t9\t+\n')
+    out = load_gene_info(table)
+    assert out[['gene_id', 'chromosome', 'start', 'end', 'strand']].values.tolist() == [
+        ['1', '10', 1, 4, '+'], ['10', '2', 5, 8, '+'], ['2', '2', 5, 8, '-']]
+    assert out.index.equals(pd.RangeIndex(3))
+
+
 def test_synteny_cache_rebuilds_when_actual_reader_bytes_change(tmp_path):
     from workflow.support.synteny_neighbors import ensure_species_gene_cache
 

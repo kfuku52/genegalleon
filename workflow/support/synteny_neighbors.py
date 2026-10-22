@@ -562,8 +562,9 @@ def main():
         chrom_genes = {}
         gene_locus = {}
         for chromosome, df_chr in gene_info.groupby("chromosome", sort=False):
-            df_chr = df_chr.sort_values(["start", "end", "gene_id"], kind="mergesort").reset_index(drop=True)
-            genes = df_chr["gene_id"].astype(str).tolist()
+            # load_gene_info already normalizes IDs and stably orders each
+            # chromosome by start/end/gene_id; groupby retains that row order.
+            genes = df_chr["gene_id"].tolist()
             strands = df_chr["strand"].fillna("+").astype(str).tolist()
             chrom_genes[chromosome] = {"genes": genes, "strands": strands}
             for i, gene_id in enumerate(genes):
