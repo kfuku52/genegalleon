@@ -19,7 +19,15 @@ from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
 from format_species_writers import input_compression
 from genome_sequence_identity import genome_sequence_digest
 from oriongeno_model_profiles import PROFILES
-from oriongeno_outputs import UTR_POLICY, artifact_record, companion_paths, validate_repeat_gff, write_explicit_utrs
+from oriongeno_outputs import (
+    AUDIT_SUFFIXES,
+    UTR_POLICY,
+    artifact_record,
+    companion_paths,
+    compress_audit_jsonl,
+    validate_repeat_gff,
+    write_explicit_utrs,
+)
 from shared_namespace_lock import namespace_lock
 from transcript_utrs import load_models
 
@@ -257,6 +265,11 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
                 repeat = Path(temporary) / 'prediction.repeat.gff3'
                 repeat_counts = validate_repeat_gff(repeat, contig_lengths)
                 companion_sources['repeat_gff'] = repeat
+            audit_metadata = {}
+            for name, suffix in AUDIT_SUFFIXES.items():
+                compressed = Path(temporary) / companions[name].name
+                audit_metadata[name] = compress_audit_jsonl(Path(str(predicted) + suffix), compressed)
+                companion_sources[name] = compressed
             if verified_input_sha(genome, verification) != before:
                 raise ValueError('OrionGeno genome changed during prediction')
             if selection_sha is not None:
@@ -268,11 +281,14 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
                           genome_sha256=before, genome_sequence_sha256=sequence_identity,
                           GFF_sha256=file_sha(staged), GFF_bytes=staged.stat().st_size, gpu_probe=gpu,
                           inference_settings={'lineage': runtime['model_profile'], 'batch_size': args.batch_size, 'threads': args.threads,
-                                              'output_repeat': bool(output_repeat), 'output_utrs': bool(output_utrs)},
+                                              'output_repeat': bool(output_repeat), 'output_utrs': bool(output_utrs),
+                                              'audit_log_compression': 'gzip'},
                           argv=command, feature_counts=counts)
-            result['annotation_outputs'] = dict(schema_version=1, output_repeat=bool(output_repeat), output_utrs=bool(output_utrs),
+            result['annotation_outputs'] = dict(schema_version=2, output_repeat=bool(output_repeat), output_utrs=bool(output_utrs),
+                audit_log_compression='gzip',
                 utr_policy=UTR_POLICY if output_utrs else 'native', utr_export=utr_export,
-                files={key: artifact_record(path, companions[key]) for key, path in companion_sources.items()})
+                files={key: artifact_record(path, companions[key]) | audit_metadata.get(key, {})
+                       for key, path in companion_sources.items()})
             if output_repeat:
                 result['annotation_outputs']['repeat_feature_counts'] = repeat_counts
             if selection is not None:

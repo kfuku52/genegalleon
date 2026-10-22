@@ -1,4 +1,6 @@
 """Explicit UTRs preserve coding paths; native repeat companions remain verifiable."""
+import gzip
+import hashlib
 import importlib
 import sys
 from pathlib import Path
@@ -104,23 +106,30 @@ def test_invalid_repeat_outputs_fail(tmp_path, change):
         outputs.validate_repeat_gff(path, {'chr': 30})
 
 
-def test_bundle_publication_failure_restores_every_existing_file(tmp_path, monkeypatch):
-    destinations = [tmp_path / name for name in ['gene.gff3', 'gene.native.gff3', 'gene.repeat.gff3', 'receipt.json']]
-    sources = [tmp_path / ('new' + str(i)) for i in range(3)]
-    for i, path in enumerate(destinations):
-        path.write_text('old' + str(i))
+@pytest.mark.parametrize('previous', [False, True])
+@pytest.mark.parametrize('failed', ['gene.hmm_boundaries.jsonl.gz', 'gene.utr_repairs.jsonl.gz', 'receipt.json'])
+def test_bundle_publication_failure_restores_every_existing_file(tmp_path, monkeypatch, failed, previous):
+    destinations = [tmp_path / name for name in ['gene.gff3', 'gene.native.gff3', 'gene.repeat.gff3',
+                    'gene.hmm_boundaries.jsonl.gz', 'gene.utr_repairs.jsonl.gz', 'receipt.json']]
+    sources = [tmp_path / ('new' + str(i)) for i in range(len(destinations) - 1)]
+    if previous:
+        for i, path in enumerate(destinations):
+            path.write_text('old' + str(i))
     for path in sources:
         path.write_text('new')
     original = runtime.os.replace
     def fail(source, destination):
-        if '.staging-' in str(source) and destination == destinations[-1]:
-            raise OSError('final receipt publication failed')
+        if '.staging-' in str(source) and destination.name == failed:
+            raise OSError('bundle publication failed')
         return original(source, destination)
     monkeypatch.setattr(runtime.os, 'replace', fail)
-    with pytest.raises(OSError, match='receipt publication'):
+    with pytest.raises(OSError, match='bundle publication'):
         runtime.publish_pair(sources[0], destinations[0], destinations[-1], {},
                              companions=list(zip(sources[1:], destinations[1:-1], strict=True)))
-    assert [p.read_text() for p in destinations] == ['old' + str(i) for i in range(4)]
+    if previous:
+        assert [p.read_text() for p in destinations] == ['old' + str(i) for i in range(len(destinations))]
+    else:
+        assert not any(p.exists() for p in destinations)
     assert not list(tmp_path.glob('*.backup-*')) and not list(tmp_path.glob('*.staging-*'))
 
 
@@ -128,6 +137,7 @@ def test_bundle_publication_failure_restores_every_existing_file(tmp_path, monke
 def test_companions_are_required_for_new_receipts_but_not_invented_for_old_ones(tmp_path, damage):
     gff = tmp_path / 'gene.gff3'
     paths = outputs.companion_paths(gff)
+    paths = {key: paths[key] for key in ('native_gff', 'repeat_gff')}
     for path in paths.values():
         path.write_text('sealed companion')
     value = {'inference_settings': {'output_repeat': True, 'output_utrs': True},
@@ -152,6 +162,67 @@ def test_companions_are_required_for_new_receipts_but_not_invented_for_old_ones(
 def test_new_output_flags_cannot_be_passed_off_as_a_historical_receipt(tmp_path):
     with pytest.raises(ValueError, match='missing'):
         outputs.verify_companions({'inference_settings': {'output_repeat': True, 'output_utrs': True}}, tmp_path/'x.gff3')
+
+
+@pytest.mark.parametrize('text', [b'', b'{"status":"joined"}\n{"status":"repaired","note":"\xe6\xa4\x8d\xe7\x89\xa9"}'])
+def test_audit_gzip_retains_exact_bytes_and_is_independent_of_temporary_names(tmp_path, text):
+    source, compressed, again = [tmp_path / name for name in ('audit.jsonl', 'audit.jsonl.gz', 'other.jsonl.gz')]
+    source.write_bytes(text)
+    metadata = outputs.compress_audit_jsonl(source, compressed)
+    source.rename(tmp_path / 'renamed.jsonl')
+    assert outputs.compress_audit_jsonl(tmp_path / 'renamed.jsonl', again) == metadata
+    assert compressed.read_bytes() == again.read_bytes()
+    assert gzip.decompress(compressed.read_bytes()) == text
+    assert metadata == dict(compression='gzip', uncompressed_sha256=hashlib.sha256(text).hexdigest(),
+                            uncompressed_bytes=len(text), jsonl_records=len(text.splitlines()))
+
+
+@pytest.mark.parametrize('damage', ['missing', 'symlink', 'invalid-json', 'nonobject', 'blank'])
+def test_audit_compression_rejects_missing_and_invalid_sources(tmp_path, damage):
+    source = tmp_path / 'audit.jsonl'
+    if damage == 'symlink':
+        target = tmp_path / 'target.jsonl'
+        target.write_text('{}\n')
+        source.symlink_to(target)
+    elif damage != 'missing':
+        source.write_bytes({'invalid-json': b'{broken}\n', 'nonobject': b'[]\n', 'blank': b'\n'}[damage])
+    with pytest.raises(ValueError, match='audit'):
+        outputs.compress_audit_jsonl(source, tmp_path / 'audit.jsonl.gz')
+
+
+@pytest.mark.parametrize('name', ['hmm_boundaries', 'utr_repairs'])
+@pytest.mark.parametrize('damage', ['missing', 'changed', 'contract', 'downgrade', 'metadata'])
+def test_audit_companions_are_bound_to_versioned_receipts(tmp_path, name, damage):
+    gff = tmp_path / 'genes.gff3'
+    paths = outputs.companion_paths(gff)
+    records = {}
+    for key, path in paths.items():
+        if key in outputs.AUDIT_SUFFIXES:
+            source = tmp_path / (key + '.jsonl')
+            source.write_text('{}\n')
+            metadata = outputs.compress_audit_jsonl(source, path)
+        else:
+            path.write_text('sealed companion')
+            metadata = {}
+        records[key] = outputs.artifact_record(path, path) | metadata
+    settings = {'output_repeat': True, 'output_utrs': True, 'audit_log_compression': 'gzip'}
+    value = {'inference_settings': settings.copy(), 'annotation_outputs': {
+        'schema_version': 2, **settings, 'utr_policy': outputs.UTR_POLICY, 'files': records}}
+    outputs.verify_companions(value, gff)
+    if damage == 'missing':
+        paths[name].unlink()
+    elif damage == 'changed':
+        paths[name].write_bytes(b'changed gzip')
+    elif damage == 'contract':
+        records.pop(name)
+    elif damage == 'metadata':
+        records[name]['jsonl_records'] = -1
+    else:
+        value['annotation_outputs']['schema_version'] = 1
+        for key in outputs.AUDIT_SUFFIXES:
+            records.pop(key)
+    with pytest.raises(ValueError, match='companion|audit'):
+        outputs.verify_companions(value, gff)
 
 
 def test_cli_defaults_and_stage_flags_are_explicit(monkeypatch, capsys):
