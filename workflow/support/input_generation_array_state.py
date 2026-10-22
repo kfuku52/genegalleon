@@ -211,8 +211,8 @@ def export_manifest(plan, outfile, tasks=None, *, cloned_cds_options=None):
             raise ValueError('Invalid cloned CDS export options')
         if 'cloned_cds_unresolved_policy' in options and options['cloned_cds_unresolved_policy'] not in {'error', 'retain_source'}:
             raise ValueError('Invalid cloned CDS unresolved policy')
-        size = options.get('cloned_cds_index_batch_bases', '250000000')
-        if not isinstance(size, str) or not size.isdecimal() or int(size) < 1:
+        size = options.get('cloned_cds_index_batch_bases', 'auto')
+        if not isinstance(size, str) or size != 'auto' and (not size.isdecimal() or int(size) < 1):
             raise ValueError('Invalid cloned CDS index batch size')
         if any(not row.get('cloned_cds_fasta') or (row.get('cloned_cds_mode') or 'genomic') != 'genomic' for row in rows):
             raise ValueError('Cloned CDS export options require genomic cloned input rows')

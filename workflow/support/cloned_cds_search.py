@@ -1,39 +1,54 @@
-"""Bound miniprot indexing memory without cutting genomic contigs or changing seeds."""
+"""Memory-aware, resumable miniprot searches without cutting genomic contigs."""
 import json
-import tempfile
+import shutil
 from pathlib import Path
 
+from input_generation_array_state import FreshDigestBatch, atomic_json, digest
 
-def alignments(genome, queries, directory, code, cpus, batch_bases=250_000_000):
-    from rescue_gene_models import run
-    groups, current, bases = [], [], 0
-    for seqid, length in zip(genome.references, genome.lengths, strict=True):
-        if current and bases + length > batch_bases:
-            groups.append(current)
-            current, bases = [], 0
-        current.append((seqid, length))
-        bases += length
-    if current:
-        groups.append(current)
+DEPENDENCIES = ('cloned_cds_search.py', 'cloned_cds_resources.py', 'cloned_cds_checkpoints.py')
+
+
+def implementation():
+    from cloned_cds_checkpoints import token
+    return token({name: digest(Path(__file__).with_name(name)) for name in DEPENDENCIES})
+
+
+def alignments(genome, queries, directory, code, cpus, batch_bases='auto', *, checkpoint_root=None,
+               identity=None, guard=None, verification=None):
+    from cloned_cds_checkpoints import copy_result, run_chunk, search_plan, token
+    from cloned_cds_resources import memory_plan
+    from fasta_sequence_store import exclusive_lock
     directory = Path(directory)
-    (directory / 'index_batches.json').write_text(json.dumps({
-        'batch_bases': batch_bases, 'contigs_split': False,
-        'batches': [dict(contigs=[r[0] for r in group], bases=sum(r[1] for r in group)) for group in groups]
-    }, sort_keys=True) + '\n')
-    with tempfile.TemporaryDirectory(prefix='.index-', dir=directory) as temporary:
-        part = Path(temporary) / 'genome.fa'
+    resources = memory_plan(cpus, batch_bases)
+    contigs = [[name, length] for name, length in zip(genome.references, genome.lengths, strict=True)]
+    tool = shutil.which('miniprot')
+    if not tool:
+        raise ValueError('miniprot is required for cloned CDS search')
+    inputs = verification if verification is not None else FreshDigestBatch()
+    paths = dict(genome=Path(genome.filename.decode()).resolve(), queries=Path(queries), tool=Path(tool))
+    hashes = inputs.read(paths.values())
+    identity = dict(source=identity, inputs={role: hashes[str(path)] for role, path in paths.items()},
+                    implementation=implementation(), code=int(code), cpus=int(cpus), batch_bases=str(batch_bases),
+                    parameters=['-u', '-N', '100', '--outs=0', '--gff'])
+    root = Path(checkpoint_root) if checkpoint_root is not None else directory / 'search_batches' / token(identity)
+
+    def check():
+        inputs.check()
+        if guard:
+            guard()
+    with exclusive_lock(root / '.plan.lock'):
+        groups = search_plan(root, identity, contigs, resources)
+        batches = []
         for index, group in enumerate(groups, 1):
-            if len(groups) == 1:
-                source = genome.filename.decode()
-            else:
-                with part.open('w') as handle:
-                    for seqid, length in group:
-                        handle.write('>' + seqid + '\n')
-                        for start in range(0, length, 1_000_000):
-                            handle.write(genome.fetch(seqid, start, min(length, start + 1_000_000)) + '\n')
-                source = str(part)
-            label = 'cloned_cds_miniprot' if len(groups) == 1 else f'cloned_cds_miniprot.{index}'
+            part = run_chunk(genome, queries, root, identity, group, code, cpus, check)
             target = directory / ('models.gff' if len(groups) == 1 else f'models.{index}.gff')
-            run(['miniprot', '-u', '-T', code, '-t', cpus, '-N', 100, '--outs=0', '--gff', source, queries],
-                directory, label, target)
+            copy_result(part, target)
+            batches.append(dict(contigs=[r[0] for r in group], bases=sum(r[1] for r in group),
+                                checkpoint=str(part), receipt_sha256=digest(part / 'receipt.json'),
+                                metrics=json.loads((part / 'metrics.json').read_text())))
+            atomic_json(directory / 'index_batches.json', dict(schema_version=2, batch_bases=resources['target_bases'],
+                        contigs_split=False, resources=resources, complete=False, batches=batches))
             yield target
+        check()
+        atomic_json(directory / 'index_batches.json', dict(schema_version=2, batch_bases=resources['target_bases'],
+                    contigs_split=False, resources=resources, complete=True, batches=batches))

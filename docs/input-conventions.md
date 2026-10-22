@@ -1001,12 +1001,31 @@ opposite-strand and neighbouring genes remain. An overlapping model with coding
 bases outside the clone path, a shared feature with a retained gene, or competing
 clones stops replacement for review.
 
-Large references are searched in complete-contig batches (250 million bases
-by default); `cloned_cds_index_batch_bases` sets the target batch size. A single
-larger contig stays intact and may require more memory. Every batch uses the
-same alignment parameters, and candidate uniqueness is checked across the
-whole reference. `index_batches.json` records coverage; batch FASTAs are
-transient. Changing the batch size changes the frozen task/cache identity.
+Large references are searched in complete-contig batches. New plans default to
+`cloned_cds_index_batch_bases=auto`: use the smallest finite GeneGalleon tool/job,
+Slurm or effective cgroup memory limit, reserve 25%, then allow 512 MiB plus
+64 MiB per thread and an estimated 16 bytes per indexed base. This is a
+conservative heuristic, not a guaranteed peak bound. Without allocation evidence,
+the target is 250 million bases and the budget is explicitly unknown. A positive
+integer remains supported as an additional target ceiling. Frozen older numeric
+plans retain that ceiling. A single contig may exceed the target, but an estimated
+budget overflow stops before indexing; request more memory for that contig.
+Contigs are never cut across gene models and alignment parameters are unchanged.
+
+Verified per-batch GFFs, command logs, peak-RSS metrics and SHA-bound receipts
+persist under the curation root's `.cloned_search/` directory, outside the final
+stage's temporary publication directory. Restarting with identical inputs, tool
+bytes and search settings reuses complete verified batches. Incomplete or corrupt
+batches are rebuilt. A smaller allocation refines only unfinished groups; plan
+history is retained. Changed sources, selected queries or implementations cannot
+reuse another search's results. Temporary batch FASTAs are removed after each
+attempt. Failed attempts and SIGKILL remnants are diagnostic, never complete.
+
+Every reference contig must be covered, and candidate uniqueness is checked
+across all batches before publishing the coupled CDS/GFF results. Publication
+remains atomic through the standard verified stage. `index_batches.json` records
+allocation evidence, batch receipts, metrics and complete/partial coverage.
+Changing the explicit batch option changes the frozen task/cache identity.
 
 The default `cloned_cds_unresolved_policy=error` stops for an unmapped,
 ambiguous or search-cap-limited clone. An explicit `retain_source` policy

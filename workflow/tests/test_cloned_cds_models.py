@@ -691,13 +691,14 @@ def test_genomic_search_configuration_rejects_invalid_values(tmp_path, field, va
         cloned.attach({}, {**row, field: value}, tmp_path)
 
 
-def test_native_subset_manifest_explicit_options_preserve_source_rows(tmp_path):
+@pytest.mark.parametrize('size', ['10000000', 'auto'])
+def test_native_subset_manifest_explicit_options_preserve_source_rows(tmp_path, size):
     from input_generation_array_state import export_manifest
     row = dict(provider='local', id='Test_species', species_key='Test_species', cloned_cds_fasta='/clones.fa',
                cloned_cds_mode='genomic', cloned_cds_sha256='a' * 64)
     plan = dict(tasks=[dict(manifest_row=row)])
     target = tmp_path / 'manifest.tsv'
-    options = dict(cloned_cds_unresolved_policy='retain_source', cloned_cds_index_batch_bases='10000000')
+    options = dict(cloned_cds_unresolved_policy='retain_source', cloned_cds_index_batch_bases=size)
     export_manifest(plan, target, cloned_cds_options=options)
     result = next(csv.DictReader(target.open(), delimiter='\t'))
     assert result == {**row, **options}
@@ -718,7 +719,7 @@ def test_search_cap_applies_per_batch_after_global_coordinate_deduplication(tmp_
     model_file = Path(prepared['cloned_model_audit']).parent / 'models.gff'
     raw = list(read_miniprot(model_file))[0]
     index = iter(counts)
-    monkeypatch.setattr('cloned_cds_search.alignments', lambda *args: [model_file] * len(counts))
+    monkeypatch.setattr('cloned_cds_search.alignments', lambda *args, **kwargs: [model_file] * len(counts))
     monkeypatch.setattr('rescue_gene_models.read_miniprot', lambda _path: iter([raw] * next(index)))
     if capped:
         with pytest.raises(ValueError, match='complete genome-identical paths'):

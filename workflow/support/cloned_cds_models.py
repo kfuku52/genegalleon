@@ -100,11 +100,12 @@ def attach(task, row, parent):
         policy = str(row.get('cloned_cds_unresolved_policy') or 'error')
         if policy not in {'error', 'retain_source'}:
             raise ValueError('cloned_cds_unresolved_policy must be error or retain_source')
-        raw = str(row.get('cloned_cds_index_batch_bases') or '250000000')
-        if not raw.isdecimal() or int(raw) < 1:
-            raise ValueError('cloned_cds_index_batch_bases must be a positive integer')
-        task.update(cloned_cds_unresolved_policy=policy, cloned_cds_index_batch_bases=int(raw),
-                    cloned_genomic_search_implementation=digest(Path(__file__).with_name('cloned_cds_search.py')))
+        from cloned_cds_search import implementation
+        raw = str(row.get('cloned_cds_index_batch_bases') or 'auto')
+        if raw != 'auto' and (not raw.isdecimal() or int(raw) < 1):
+            raise ValueError('cloned_cds_index_batch_bases must be auto or a positive integer')
+        task.update(cloned_cds_unresolved_policy=policy, cloned_cds_index_batch_bases='auto' if raw == 'auto' else int(raw),
+                    cloned_genomic_search_implementation=implementation())
     elif any(row.get(k) for k in ('cloned_cds_unresolved_policy', 'cloned_cds_index_batch_bases')):
         raise ValueError('Genomic cloned CDS options require genomic mode')
     if mode == 'sequence':
@@ -337,7 +338,7 @@ def removed_cds_gene_tokens(prepared, removed, genes):
     return tokens
 
 
-def build_pair(task, directory):
+def build_pair(task, directory, *, search_root=None, search_key=None, verification=None):
     import format_species_inputs as fsi
     from Bio.Seq import Seq
     from cloned_cds_search import alignments
@@ -357,7 +358,8 @@ def build_pair(task, directory):
         diagnostics = {name: [] for name in clones}
         capped = set()
         for alignment in alignments(genome, queries, directory, code, cpus,
-                                    task.get('cloned_cds_index_batch_bases', 250_000_000)):
+                                    task.get('cloned_cds_index_batch_bases', 'auto'), checkpoint_root=search_root,
+                                    identity=search_key, verification=verification):
             before = {name: len(rows) for name, rows in diagnostics.items()}
             for raw in read_miniprot(alignment):
                 if raw['query'] not in names:
@@ -483,6 +485,9 @@ def apply_to_task(task, root, *, dry_run=False):
     if task.get('cloned_cds_mode') == 'sequence':
         from cloned_cds_sequences import apply_sequence_task
         return apply_sequence_task(task, root)
+    from cloned_cds_search import implementation
+    if task.get('cloned_genomic_search_implementation') != implementation():
+        raise ValueError('Cloned genomic search implementation changed; prepare a new native task plan')
     if not all(task.get(k) for k in ('cds_path', 'gff_path', 'genome_path')):
         raise ValueError('Cloned model replacement requires source CDS, GFF and genome together')
     from rescue_gene_models import stage
@@ -498,14 +503,17 @@ def apply_to_task(task, root, *, dry_run=False):
                selected_ids=task.get('cloned_cds_ids', []), genetic_code=int(task.get('genetic_code', 1)),
                longer_only_ids=task.get('cloned_cds_longer_only_ids', []),
                unresolved_policy=task.get('cloned_cds_unresolved_policy', 'error'),
-               index_batch_bases=task.get('cloned_cds_index_batch_bases', 250_000_000),
+               index_batch_bases=task.get('cloned_cds_index_batch_bases', 'auto'),
                implementation=digest(Path(__file__)), miniprot=digest(tool),
                native_dependencies={name: digest(Path(__file__).parent / name) for name in (
                    'rescue_gene_models.py', 'gene_model_catalog.py', 'gene_model_refinement.py',
-                   'rescue_homology_policy.py', 'cloned_cds_search.py')})
+                   'rescue_homology_policy.py', 'cloned_cds_search.py', 'cloned_cds_resources.py',
+                   'cloned_cds_checkpoints.py')})
     token = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
     destination = stage(Path(root), task['species_prefix'] + '/' + token, key,
-                        lambda folder: build_pair(task, folder), guard=batch.check, publication_guard=batch.check)
+                        lambda folder: build_pair(task, folder, search_root=Path(root) / '.cloned_search' / token,
+                                                  search_key=key, verification=batch),
+                        guard=batch.check, publication_guard=batch.check)
     audit = json.loads((destination / 'audit.json').read_text())
     for role in ('cds', 'gff', 'genome'):
         task[role + '_path'] = destination / audit['outputs'][role]
