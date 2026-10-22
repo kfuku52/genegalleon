@@ -301,8 +301,9 @@ The initial run downloads model resources; subsequent checks reuse
 `workspace/downloads/validation/{csubst,huggingface}`. Set `CSUBST_CACHE_DIR`
 and `HF_HOME` inside the runtime command to override these writable defaults.
 The separate CI SIF predictor check retains its existing explicit cache paths.
-The manifest currently permits no skips, and the image includes system `unzip`
-for archive interoperability checks.
+Only skips explicitly declared by the manifest are permitted; other required
+runtime skips fail validation. The image includes system `unzip` for archive
+interoperability checks.
 
 To inspect the commands without starting a container:
 
