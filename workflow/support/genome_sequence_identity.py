@@ -7,7 +7,7 @@ from pathlib import Path
 
 _DNA = str.maketrans('', '', 'ACGTRYSWKMBDHVN')
 
-def genome_sequence_digest(path):
+def genome_sequence_digest(path, *, contig_lengths=None):
     path = Path(path)
     with path.open('rb') as stream:
         compressed = stream.read(2) == b'\x1f\x8b'
@@ -57,4 +57,8 @@ def genome_sequence_digest(path):
     finish()
     if not entries:
         raise ValueError('Genome has no contigs')
+    if contig_lengths is not None:
+        if contig_lengths:
+            raise ValueError('Contig length destination must initially be empty')
+        contig_lengths.update((name, value[0]) for name, value in entries.items())
     return hashlib.sha256(json.dumps(sorted(entries.items()), separators=(',', ':')).encode()).hexdigest()

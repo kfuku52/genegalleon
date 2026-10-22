@@ -19,6 +19,7 @@ from annevo_runtime_download import atomic_json, canonical_bytes, file_sha
 from format_species_writers import input_compression
 from genome_sequence_identity import genome_sequence_digest
 from oriongeno_model_profiles import PROFILES
+from oriongeno_outputs import UTR_POLICY, artifact_record, companion_paths, validate_repeat_gff, write_explicit_utrs
 from shared_namespace_lock import namespace_lock
 from transcript_utrs import load_models
 
@@ -175,6 +176,10 @@ def read_selected(path, *, verification=None):
 def run(args):
     if args.threads < 1 or args.batch_size < 1:
         raise ValueError('OrionGeno threads and batch size must be positive')
+    output_repeat = getattr(args, 'output_repeat', 1)
+    output_utrs = getattr(args, 'output_utrs', 1)
+    if output_repeat not in (0, 1) or output_utrs not in (0, 1):
+        raise ValueError('OrionGeno output flags must be 0 or 1')
     verification = RuntimeVerification()
     runtime = read_selected(args.receipt, verification=verification)
     genome, output, receipt = map(Path, (args.genome, args.output, args.output_receipt))
@@ -192,9 +197,15 @@ def run(args):
         raise ValueError('OrionGeno outputs overwrite inputs or runtime')
     env = environment(runtime['cache_root'], args.threads)
     logs = output.with_name(output.name+'.logs')
-    destinations = (output, receipt, logs, logs/'native.stdout.txt', logs/'native.stderr.txt')
-    protect_outputs(destinations, protected)
-    protect_outputs(destinations[3:], (output, receipt))
+    companions = companion_paths(output)
+    if not output_repeat:
+        companions.pop('repeat_gff')
+    publications = (output, receipt, *companions.values())
+    for index, destination in enumerate(publications):
+        protect_outputs([destination], (*protected, *publications[:index]))
+    log_destinations = (logs, logs/'native.stdout.txt', logs/'native.stderr.txt')
+    protect_outputs(log_destinations, (*protected, *publications))
+    destinations = (*publications, *log_destinations)
     if any(p.resolve().is_relative_to(Path(t).resolve()) for p in destinations for t in runtime['trees']):
         raise ValueError('OrionGeno outputs overwrite the installed runtime')
     installed_files = {tuple(member['signature'][:2]) for tree in runtime['trees'].values()
@@ -213,28 +224,39 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
 """
     gpu = json.loads(execute([runtime['python'], '-B', '-s', '-c', gpu_code], env, capture_output=True).stdout.strip().splitlines()[-1])
     before = verified_input_sha(genome, verification)
-    sequence_identity = genome_sequence_digest(genome)
+    contig_lengths = {}
+    sequence_identity = genome_sequence_digest(genome, contig_lengths=contig_lengths)
     if verified_input_sha(genome, verification) != before:
         raise ValueError('OrionGeno genome changed during sequence identity reading')
     output.parent.mkdir(parents=True, exist_ok=True)
     receipt.parent.mkdir(parents=True, exist_ok=True)
     with namespace_lock(output.with_suffix(output.suffix+'.lock'), exclusive=True, timeout=86400):
         with tempfile.TemporaryDirectory(prefix='.oriongeno-', dir=output.parent) as temporary:
-            staged = Path(temporary) / 'prediction.gff3'
+            predicted = Path(temporary) / 'prediction.gff3'
+            staged = Path(temporary) / 'annotated.gff3'
             native_genome = genome.resolve()
             if input_compression(genome) == 'gzip':
                 native_genome = Path(temporary)/'genome.fa'
                 with gzip.open(genome, 'rb') as source, native_genome.open('wb') as target:
                     shutil.copyfileobj(source, target)
             command = [runtime['python'], '-B', '-s', '-m', 'oriongeno', '--genome', str(native_genome),
-                       '--checkpoint', runtime['model_path'], '--output', str(staged),
-                       '--batch-size', str(args.batch_size), '--output-gene', 'True', '--output-repeat', 'False',
+                       '--checkpoint', runtime['model_path'], '--output', str(predicted),
+                       '--batch-size', str(args.batch_size), '--output-gene', 'True', '--output-repeat', str(bool(output_repeat)),
                        '--species-name', '']
             logs.mkdir(exist_ok=True)
             with (logs/'native.stdout.txt').open('w') as stdout, (logs/'native.stderr.txt').open('w') as stderr:
                 execute(command, env, stdout=stdout, stderr=stderr, cwd=temporary)
+            gff_counts(predicted)
+            utr_export = write_explicit_utrs(predicted, staged, lengths=contig_lengths) if output_utrs else None
+            if not output_utrs:
+                load_models(predicted)
+                shutil.copyfile(predicted, staged)
             counts = gff_counts(staged)
-            load_models(staged)
+            companion_sources = {'native_gff': predicted}
+            if output_repeat:
+                repeat = Path(temporary) / 'prediction.repeat.gff3'
+                repeat_counts = validate_repeat_gff(repeat, contig_lengths)
+                companion_sources['repeat_gff'] = repeat
             if verified_input_sha(genome, verification) != before:
                 raise ValueError('OrionGeno genome changed during prediction')
             if selection_sha is not None:
@@ -245,8 +267,14 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
             result.update(schema_version=1, kind='genegalleon-oriongeno-native-prediction', native_returncode=0,
                           genome_sha256=before, genome_sequence_sha256=sequence_identity,
                           GFF_sha256=file_sha(staged), GFF_bytes=staged.stat().st_size, gpu_probe=gpu,
-                          inference_settings={'lineage': runtime['model_profile'], 'batch_size': args.batch_size, 'threads': args.threads},
+                          inference_settings={'lineage': runtime['model_profile'], 'batch_size': args.batch_size, 'threads': args.threads,
+                                              'output_repeat': bool(output_repeat), 'output_utrs': bool(output_utrs)},
                           argv=command, feature_counts=counts)
+            result['annotation_outputs'] = dict(schema_version=1, output_repeat=bool(output_repeat), output_utrs=bool(output_utrs),
+                utr_policy=UTR_POLICY if output_utrs else 'native', utr_export=utr_export,
+                files={key: artifact_record(path, companions[key]) for key, path in companion_sources.items()})
+            if output_repeat:
+                result['annotation_outputs']['repeat_feature_counts'] = repeat_counts
             if selection is not None:
                 result.update(model_selection=selection, model_selection_sha256=selection_sha, species=args.species)
             if read_selected(args.receipt, verification=verification) != runtime:
@@ -260,7 +288,8 @@ print(json.dumps({'gpu_verified':True,'torch_version':torch.__version__,'device_
                 _, current_selection_sha = selection_record(args, genome, **selection_options)
                 if current_selection_sha != selection_sha:
                     raise ValueError('OrionGeno model selection changed before publication')
-            publish_pair(staged, output, receipt, result)
+            publish_pair(staged, output, receipt, result,
+                         companions=[(path, companions[key]) for key, path in companion_sources.items()])
     return result
 
 
@@ -318,6 +347,8 @@ def main():
         pred.add_argument('--'+key, required=True)
     pred.add_argument('--threads', type=int, default=1)
     pred.add_argument('--batch-size', type=int, default=1)
+    pred.add_argument('--output-repeat', type=int, choices=(0, 1), default=1)
+    pred.add_argument('--output-utrs', type=int, choices=(0, 1), default=1)
     pred.add_argument('--selection-receipt', default='')
     pred.add_argument('--species', default='')
     args = parser.parse_args()

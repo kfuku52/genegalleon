@@ -336,6 +336,8 @@ oriongeno_checkpoint
 oriongeno_source_commit
 oriongeno_no_download
 oriongeno_batch_size
+oriongeno_output_utrs
+oriongeno_output_repeat
 annevo_model_profile
 annevo_taxid_map
 annevo_genome_metadata

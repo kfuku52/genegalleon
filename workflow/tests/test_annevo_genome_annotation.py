@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -88,7 +89,8 @@ def test_all_backend_options_are_forwarded():
     )
     expected = {"genome_annotation_backend", "annevo_model_profile", "annevo_runtime_manifest",
                 "annevo_no_download", "annevo_batch_size", "annevo_sequence_threshold",
-                "oriongeno_model_profile", "oriongeno_taxid_map", "oriongeno_genome_metadata", "oriongeno_taxonomy_db"}
+                "oriongeno_model_profile", "oriongeno_taxid_map", "oriongeno_genome_metadata", "oriongeno_taxonomy_db",
+                "oriongeno_output_utrs", "oriongeno_output_repeat"}
     assert expected <= set(result.stdout.splitlines())
     assert 'genome_annotation_backend="oriongeno"' in ENTRY.read_text()
     assert 'oriongeno_model_profile="auto"' in ENTRY.read_text()
@@ -126,7 +128,7 @@ from pathlib import Path
 import sys
 
 p=argparse.ArgumentParser();p.add_argument('command')
-for key in ['cache-root','model-profile','runtime-manifest','receipt','genome','output','threads','batch-size','sequence-threshold','output-receipt','selection-receipt','species']:
+for key in ['cache-root','model-profile','runtime-manifest','receipt','genome','output','threads','batch-size','sequence-threshold','output-receipt','selection-receipt','species','output-utrs','output-repeat']:
     p.add_argument('--'+key)
 p.add_argument('--no-download',action='store_true');p.add_argument('--require-gpu',action='store_true')
 a=p.parse_args()
@@ -147,6 +149,10 @@ elif a.command=='run':
          's\\tANNEVO\\texon\\t1\\t306\\t.\\t+\\t.\\tID=exon1;Parent=gene1.t1\\n'
          's\\tANNEVO\\tCDS\\t1\\t306\\t.\\t+\\t0\\tID=cds1;Parent=gene1.t1\\n')
     out.write_text(gff)
+    if a.output_utrs is not None:
+        out.with_name(out.stem+'.native.gff3').write_text(gff)
+    if a.output_repeat == '1':
+        out.with_name(out.stem+'.repeat.gff3').write_text('##gff-version 3\\n')
     Path(a.output_receipt).write_text(json.dumps({'fixture_only':True,'schema_version':1,
         'kind':'genegalleon-annevo-native-prediction','native_returncode':0,
         'gpu_probe':{'gpu_verified':True},'model_profile':'Magnoliopsida',
@@ -156,13 +162,15 @@ elif a.command=='run':
 ''')
 
 
-def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map="", oriongeno_profile="plants"):
+def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False, no_download=False, manifest="", profile="Magnoliopsida", taxonomy_db="", taxid_map="", oriongeno_profile="plants", native_utrs=False):
     workspace = tmp_path / "workspace"
     support = tmp_path / "support"
     if not support.exists():
         support.mkdir()
         for path in SUPPORT.iterdir():
-            if path.name not in {"annevo_runtime.py", "oriongeno_runtime.py"}:
+            if path.name in {'oriongeno_outputs.py', 'transcript_utrs.py'}:
+                shutil.copyfile(path, support / path.name)
+            elif path.name not in {"annevo_runtime.py", "oriongeno_runtime.py"}:
                 (support / path.name).symlink_to(path, target_is_directory=path.is_dir())
         fake_native_runtime(support / "annevo_runtime.py")
         fake_native_runtime(support / "oriongeno_runtime.py")
@@ -172,6 +180,11 @@ def run_selected_stage(tmp_path, *, backend="annevo", policy="stop", fail=False,
             code = code.replace("p=argparse.ArgumentParser()", "PROFILES={'plants'}\np=argparse.ArgumentParser()")
             code = code.replace("'genegalleon-annevo-native-prediction'", "'genegalleon-oriongeno-native-prediction'")
             code = code.replace("'model_profile':'Magnoliopsida',", "'model_profile':json.loads(Path(a.receipt).read_text())['model_profile'],'inference_settings':{'lineage':json.loads(Path(a.receipt).read_text())['model_profile']},")
+            if native_utrs:
+                extra = r'''gff=gff.replace('gene\t1\t306','gene\t1\t321').replace('mRNA\t1\t306','mRNA\t1\t321').replace('exon\t1\t306','exon\t1\t321')
+    gff+='s\tGeneGalleon\tthree_prime_UTR\t307\t321\t.\t+\t.\tID=utr1;Parent=gene1.t1\n'
+    out.write_text(gff)'''
+                code = code.replace('out.write_text(gff)', extra)
             fixture.write_text(code)
     genome = workspace / "input/species_genome/Test_species.fa"
     genome.parent.mkdir(parents=True, exist_ok=True)
@@ -475,9 +488,34 @@ def test_oriongeno_stage_runs_formatter_candidate_export_and_offline_resume(tmp_
     assert [c['command'] for c in calls] == ['prepare', 'run']
     prediction = workspace/'output/genome_prediction/oriongeno/Test_species'
     assert (prediction/'candidate_inputs.tsv').is_file()
+    assert calls[-1]['output_utrs'] == calls[-1]['output_repeat'] == '1'
+    provenance = json.loads((prediction/'prediction.provenance.json').read_text())
+    assert {'native_gff', 'repeat_gff'} <= {row['label'] for row in provenance['outputs']}
+    assert provenance['parameters']['output_utrs'] == provenance['parameters']['output_repeat'] == '1'
     second, calls, _ = run_selected_stage(tmp_path, backend='oriongeno', no_download=True)
     assert second.returncode == 0, second.stdout + second.stderr
     assert [c['command'] for c in calls].count('run') == 1
+
+
+@pytest.mark.parametrize('companion', ['native', 'repeat'])
+def test_oriongeno_missing_companion_cannot_reuse_an_old_completion(tmp_path, companion):
+    first, _, workspace = run_selected_stage(tmp_path, backend='oriongeno')
+    assert first.returncode == 0, first.stdout + first.stderr
+    prediction = workspace/'output/genome_prediction/oriongeno/Test_species'
+    (prediction/('Test_species.'+companion+'.gff3')).unlink()
+    second, calls, _ = run_selected_stage(tmp_path, backend='oriongeno', no_download=True)
+    assert second.returncode == 3, second.stdout + second.stderr
+    assert [c['command'] for c in calls].count('run') == 1
+
+
+def test_explicit_utrs_survive_the_real_formatter_and_selected_cds_resolution(tmp_path):
+    from format_species_writers import open_text
+    first, _, _ = run_selected_stage(tmp_path, backend='oriongeno', native_utrs=True)
+    assert first.returncode == 0, first.stdout + first.stderr
+    layout = re.search(r'^LAYOUT=(.+)$', first.stdout, re.M).group(1).split('\t')
+    with open_text(layout[1], 'rt') as stream:
+        rows = [r.split('\t') for r in stream if '\tthree_prime_UTR\t' in r]
+    assert len(rows) == 1 and rows[0][3:5] == ['307', '321']
 
 
 @pytest.mark.parametrize('profile', ['auto', 'plants', 'mammals', 'birds', 'fish', 'other_vertebrates',

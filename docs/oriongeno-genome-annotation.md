@@ -31,6 +31,8 @@ for its GPU/driver requirements and non-commercial license.
 | `oriongeno_taxonomy_db` | blank | Read-only ETE NCBI SQLite snapshot; blank uses the shared workspace taxonomy cache. |
 | `oriongeno_source_ref` | declared branch | Moving branch read from `container/source_branches.env` on the host and forwarded into the container. |
 | `oriongeno_batch_size` | `1` | Native prediction batch size. |
+| `oriongeno_output_utrs` | `1` | Add explicit terminal exonic `five_prime_UTR` / `three_prime_UTR` rows to the published gene GFF3. |
+| `oriongeno_output_repeat` | `1` | Request and retain the separate native `repeat_region` GFF3. |
 | `oriongeno_no_download` | `0` | `1` requires verified local runtime/model assets. |
 | `oriongeno_python` | blank | Optional external native Python installation. |
 | `oriongeno_checkpoint` | blank | Optional local checkpoint directory; otherwise fetch only the selected checkpoint. |
@@ -110,6 +112,43 @@ retains logs and the previous complete GFF/receipt pair.
 External Python paths retain their virtual-environment prefix. Preparation and
 prediction publication use the shared-filesystem namespace lock; all concurrent
 jobs sharing those paths must use the same lock protocol.
+
+### Retained gene, UTR and repeat annotations
+
+Each species prediction directory retains these outputs by default:
+
+| File | Contents |
+| --- | --- |
+| `<species>.gff3` | Gene annotation with explicit terminal exonic UTR features. |
+| `<species>.native.gff3` | Exact original OrionGeno gene GFF3, before GG's UTR export. |
+| `<species>.repeat.gff3` | Native binary repeat regions; these are not TE family classifications. |
+| `native_prediction.json` | Source/model/genome identities, output flags, feature counts and companion hashes. |
+| `prediction.provenance.json` | The complete required output set and configuration used for resume validation. |
+
+UTR export uses only each transcript's retained exon path and CDS endpoints. It
+adds the strand-correct terminal exonic intervals, excludes introns, and preserves
+every original row, ID and CDS phase. Existing consistent UTR rows are retained
+without duplication. CDS-only models receive no invented extension. This is an
+explicit serialization of the native model, not additional biological evidence
+or the separate longest-UTR selection used by representative completion below.
+
+Both controls accept `0` or `1` and use the usual scoped overrides, for example
+`GG_GENOME_ANNOTATION_ORIONGENO_OUTPUT_REPEAT=0`. Disabling UTR export retains
+the native gene annotation unchanged. Only companions declared in the current
+receipt belong to that prediction; an older undeclared sibling is not adopted.
+Gene GFF, native GFF, enabled repeat GFF and receipt publish together, with the
+receipt last and restoration of the previous complete set on failure. Missing
+or modified declared companions invalidate reuse and candidate import. Repeat
+files with zero predictions are valid GFF3 files containing their header.
+
+Historical receipts retain their historical scope. Earlier GG predictions did
+not request/save repeats, and did not add explicit UTR rows. Their exon/CDS paths
+can still retain terminal UTR coordinates, allowing a later verified CPU export;
+CDS-only annotations cannot supply missing transcript ends. Repeats require native
+prediction when neither repeat labels nor a repeat GFF were retained. The new
+defaults do not modify completed artifacts or jobs using an immutable older
+runtime. Adopting the new output contract changes prediction provenance and uses
+the existing stale-artifact/rebuild policy.
 
 For separate species workspaces, set `GG_COMMON_DOWNLOADS_ROOT` to one existing,
 owned physical absolute directory and bind that directory at the same path in

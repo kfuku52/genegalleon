@@ -26,6 +26,8 @@ oriongeno_checkpoint="${oriongeno_checkpoint:-}"
 oriongeno_source_commit="${oriongeno_source_commit:-}"
 oriongeno_no_download="${oriongeno_no_download:-0}"
 oriongeno_batch_size="${oriongeno_batch_size:-1}"
+oriongeno_output_utrs="${oriongeno_output_utrs:-1}"
+oriongeno_output_repeat="${oriongeno_output_repeat:-1}"
 annevo_model_profile="${annevo_model_profile:-Magnoliopsida}"
 annevo_taxid_map="${annevo_taxid_map:-}"
 annevo_genome_metadata="${annevo_genome_metadata:-}"
@@ -132,6 +134,10 @@ gg_validate_genome_annotation_backend() {
     esac
     if [[ "${genetic_code}" != 1 || ! "${oriongeno_batch_size}" =~ ^[1-9][0-9]*$ || ( "${oriongeno_no_download}" != 0 && "${oriongeno_no_download}" != 1 ) ]]; then
       echo "OrionGeno requires genetic_code=1, a positive batch size and no_download=0 or 1." >&2
+      return 1
+    fi
+    if [[ ( "${oriongeno_output_utrs}" != 0 && "${oriongeno_output_utrs}" != 1 ) || ( "${oriongeno_output_repeat}" != 0 && "${oriongeno_output_repeat}" != 1 ) ]]; then
+      echo "OrionGeno output_utrs and output_repeat must be 0 or 1." >&2
       return 1
     fi
     return 0
@@ -275,7 +281,7 @@ PYPROFILE
       [[ -z "${oriongeno_python}" ]] || prepare_args+=(--python "${oriongeno_python}" --source-commit "${oriongeno_source_commit}")
       [[ -z "${oriongeno_checkpoint}" ]] || prepare_args+=(--checkpoint "${oriongeno_checkpoint}")
       [[ "${oriongeno_no_download}" != 1 ]] || prepare_args+=(--no-download)
-      native_args=("${selection_run_args[@]}")
+      native_args=(--output-utrs "${oriongeno_output_utrs}" --output-repeat "${oriongeno_output_repeat}" "${selection_run_args[@]}")
     else
       prepare_args=(prepare --cache-root "${cache_root}" --model-profile "${resolved_profile}" --receipt "${runtime_receipt}")
       [[ -z "${annevo_runtime_manifest}" ]] || prepare_args+=(--runtime-manifest "${annevo_runtime_manifest}")
@@ -301,6 +307,19 @@ PYPROFILE
       --parameter "require_gpu=1"
     )
     prediction_provenance_args+=("${selection_inputs[@]}")
+    if [[ "${genome_annotation_backend}" == oriongeno ]]; then
+      prediction_provenance_args+=(
+        --input "output_writer=${gg_support_dir}/oriongeno_outputs.py"
+        --input "transcript_reader=${gg_support_dir}/transcript_utrs.py"
+        --output "native_gff=${prediction_dir}/${sp_ub}.native.gff3"
+        --parameter "output_utrs=${oriongeno_output_utrs}"
+        --parameter "output_repeat=${oriongeno_output_repeat}"
+        --parameter "utr_export_policy=exon_cds_boundaries_v1"
+      )
+      if [[ "${oriongeno_output_repeat}" == 1 ]]; then
+        prediction_provenance_args+=(--output "repeat_gff=${prediction_dir}/${sp_ub}.repeat.gff3")
+      fi
+    fi
     gg_artifact_prepare_stage prediction_needs_update run_annevo_prediction "${prediction_provenance_args[@]}" || exit $?
     if [[ ${prediction_needs_update} -eq 1 ]]; then
       gg_step_start "${prediction_label} native genome prediction"

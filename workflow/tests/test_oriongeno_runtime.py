@@ -14,6 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'support'))
 native = importlib.import_module('oriongeno_runtime')
 
 
+def write_prediction(argv, text):
+    path = Path(argv[argv.index('--output')+1])
+    path.write_text(text)
+    if argv[argv.index('--output-repeat')+1] == 'True':
+        path.with_name(path.stem+'.repeat.gff3').write_text('##gff-version 3\nchr\tOrionGeno\trepeat_region\t1\t3\t.\t+\t.\tID=r1\n')
+
+
 @pytest.fixture
 def local_runtime(tmp_path, monkeypatch):
     package, model = tmp_path/'package', tmp_path/'checkpoint'
@@ -213,7 +220,7 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
     def execute(argv, env, **kwargs):
         if '--output' in argv:
             assert Path(argv[argv.index('--genome')+1]).read_bytes() == sequence
-            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            write_prediction(argv, model(cds=((3, 12),), exons=((0, 15),)))
             return subprocess.CompletedProcess(argv, 0, '')
         if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
             return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
@@ -237,6 +244,18 @@ def test_successful_native_publication_binds_actual_gff_and_genome(local_runtime
     assert value['GFF_sha256'] == native.file_sha(gff)
     assert value['runtime_digest'] == runtime['runtime_digest']
     assert value['feature_counts']['CDS'] == 1
+    assert value['feature_counts']['five_prime_UTR'] == value['feature_counts']['three_prime_UTR'] == 1
+    assert value['annotation_outputs']['output_repeat'] is True
+    assert value['annotation_outputs']['output_utrs'] is True
+    for name, artifact in value['annotation_outputs']['files'].items():
+        path = native.companion_paths(gff)[name]
+        assert artifact['sha256'] == native.file_sha(path)
+        assert artifact['bytes'] == path.stat().st_size
+    assert '\tUTR\t' not in native.companion_paths(gff)['native_gff'].read_text()
+    from oriongeno_outputs import verify_companions
+    verify_companions(value, gff)
+    from annevo_gene_models import prediction_identity
+    assert prediction_identity(gff, receipt, value['genome_sha256'], engine='oriongeno')['GFF_sha256'] == value['GFF_sha256']
     assert value['argv'][value['argv'].index('--species-name')+1] == ''
     if auto_selected:
         assert value['model_selection'] == record
@@ -261,7 +280,7 @@ def test_auto_selection_change_during_native_prediction_preserves_previous_pair(
     original_execute = native.execute
     def execute(argv, env, **kwargs):
         if '--output' in argv:
-            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            write_prediction(argv, model(cds=((0, 9),), exons=((0, 9),)))
             if changed == 'taxonomy':
                 with sqlite3.connect(selected.taxonomy_db) as conn:
                     conn.execute("INSERT INTO synonym VALUES(3702,'late synonym')")
@@ -278,6 +297,37 @@ def test_auto_selection_change_during_native_prediction_preserves_previous_pair(
     with pytest.raises((OSError, ValueError, RuntimeError), match='changed'):
         native.run(args)
     assert gff.read_text() == 'previous GFF' and receipt.read_text() == 'previous receipt'
+
+
+@pytest.mark.parametrize('utrs,repeats', [(0, 0), (0, 1), (1, 0)])
+def test_native_output_controls_are_recorded_and_preserve_original_models(local_runtime, tmp_path, monkeypatch, utrs, repeats):
+    from test_transcript_utrs import model
+    setup, _, _ = local_runtime
+    native.prepare(setup)
+    original = native.execute
+    text = model(cds=((3, 12),), exons=((0, 15),))
+    def execute(argv, env, **kwargs):
+        if '--output' in argv:
+            write_prediction(argv, text)
+            return subprocess.CompletedProcess(argv, 0, '')
+        if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))
+        return original(argv, env, **kwargs)
+    monkeypatch.setattr(native, 'execute', execute)
+    genome = tmp_path/'genome.fa'
+    genome.write_text('>chr\nCCCATGAAATAACCC\n')
+    output = tmp_path/'genes.gff3'
+    args = argparse.Namespace(receipt=setup.receipt, genome=str(genome), output=str(output),
+                              output_receipt=str(tmp_path/'prediction.json'), threads=1, batch_size=1,
+                              output_utrs=utrs, output_repeat=repeats)
+    value = native.run(args)
+    paths = native.companion_paths(output)
+    assert paths['native_gff'].read_text() == text
+    assert paths['repeat_gff'].is_file() == bool(repeats)
+    assert ('five_prime_UTR' in output.read_text()) == bool(utrs)
+    assert [r for r in output.read_text().splitlines() if '\tCDS\t' in r] == [r for r in text.splitlines() if '\tCDS\t' in r]
+    from oriongeno_outputs import verify_companions
+    verify_companions(value, output)
 
 
 @pytest.mark.parametrize('changed', ['mapping', 'selection', 'taxonomy', 'taxonomy-wal', 'genome'])
@@ -297,7 +347,7 @@ def test_final_runtime_inventory_cannot_hide_changed_selection_inputs(local_runt
     def execute(argv, env, **kwargs):
         nonlocal inventories
         if '--output' in argv:
-            Path(argv[argv.index('--output')+1]).write_text(model(cds=((3, 12),), exons=((0, 15),)))
+            write_prediction(argv, model(cds=((0, 9),), exons=((0, 9),)))
             return subprocess.CompletedProcess(argv, 0, '')
         if '-c' in argv and 'gpu_verified' in argv[argv.index('-c')+1]:
             return subprocess.CompletedProcess(argv, 0, json.dumps({'gpu_verified': True}))

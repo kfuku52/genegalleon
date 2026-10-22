@@ -19,6 +19,19 @@ def expected(sequences):
     return hashlib.sha256(json.dumps(entries, separators=(',', ':')).encode()).hexdigest()
 
 
+def test_lengths_share_the_same_stable_sequence_pass(tmp_path):
+    path = tmp_path / 'genome.fa'
+    path.write_text('>a\nACGT\n>b\nTTA\n')
+    lengths = {}
+    assert identity.genome_sequence_digest(path, contig_lengths=lengths) == expected({'a': 'ACGT', 'b': 'TTA'})
+    assert lengths == {'a': 4, 'b': 3}
+    path.write_text('>a\nINVALID\n')
+    failed = {}
+    with pytest.raises(ValueError):
+        identity.genome_sequence_digest(path, contig_lengths=failed)
+    assert failed == {}
+
+
 @pytest.mark.parametrize('compressed', [False, True])
 def test_identity_preserves_names_wrapping_case_unicode_and_contig_order(tmp_path, compressed):
     path = tmp_path / 'genome.fa'  # Gzip remains signature-based.

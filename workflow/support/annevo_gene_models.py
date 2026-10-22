@@ -79,6 +79,12 @@ def prediction_identity(gff, receipt, genome_sha256, genetic_code=1, genome=None
     if (type(value.get('GFF_bytes')) is not int or value.get('GFF_sha256') != digest(gff)
             or value['GFF_bytes'] != gff.stat().st_size):
         raise ValueError('ANNEVO candidate GFF differs from its native receipt')
+    if engine == 'oriongeno':
+        try:
+            from oriongeno_outputs import verify_companions
+        except ImportError:
+            from .oriongeno_outputs import verify_companions
+        verify_companions(value, gff)
     for field, size in (('runtime_digest', 64), ('model_sha256', 64), ('source_commit', 40), ('cache_key', 64),
                         ('genome_sha256', 64)):
         if not re.fullmatch('[0-9a-f]{' + str(size) + '}', str(value.get(field, ''))):

@@ -103,22 +103,27 @@ def gff_counts(path):
     return counts
 
 
-def publish_pair(predicted, output, output_receipt, receipt):
-    """Stage both files, then restore the previous pair if publication fails."""
+def publish_pair(predicted, output, output_receipt, receipt, *, companions=()):
+    """Publish the receipt last; restore the complete previous set on failure."""
+    sources = [(predicted, output), *companions]
+    destinations = [target for _, target in sources] + [output_receipt]
+    if len(set(map(lambda p: Path(p).resolve(), destinations))) != len(destinations):
+        raise ValueError('Prediction publication destinations overlap')
     token = uuid.uuid4().hex
-    stages = [p.with_name(p.name + ".staging-" + token) for p in (output, output_receipt)]
-    backups = [p.with_name(p.name + ".backup-" + token) for p in (output, output_receipt)]
+    stages = [p.with_name(p.name + ".staging-" + token) for p in destinations]
+    backups = [p.with_name(p.name + ".backup-" + token) for p in destinations]
     moved, published = [], []
     try:
-        shutil.copyfile(predicted, stages[0])
-        atomic_json(stages[1], receipt)
-        for destination, backup in zip((output, output_receipt), backups, strict=True):
+        for (source, _), stage in zip(sources, stages[:-1], strict=True):
+            shutil.copyfile(source, stage)
+        atomic_json(stages[-1], receipt)
+        for destination, backup in zip(destinations, backups, strict=True):
             if destination.is_symlink() or (destination.exists() and not destination.is_file()):
                 raise ValueError("ANNEVO publication target is redirected or nonregular")
             if destination.exists():
                 os.replace(destination, backup)
                 moved.append((destination, backup))
-        for stage, destination in zip(stages, (output, output_receipt), strict=True):
+        for stage, destination in zip(stages, destinations, strict=True):
             os.replace(stage, destination)
             published.append(destination)
     except BaseException:
