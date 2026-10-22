@@ -169,6 +169,46 @@ def test_current_layout_also_rejects_changed_predictor_context(tmp_path, field, 
         patch_model_store(source, tmp_path / 'output', {0: {**row, field: value}})
 
 
+@pytest.mark.parametrize('before,after', [
+    (1, 1.0), (1, True), (0.0, -0.0), (-0.0, 0.0),
+    ('植物', 'other'), (None, False),
+    ({'a': 1, 'b': 2}, {'b': 2, 'a': 1}),
+    ([1, {'x': -0.0}], [1, {'x': 0.0}]),
+    (1.0, float('nan')), (1.0, float('inf')),
+])
+def test_immutable_comparison_retains_exact_json_distinctions(tmp_path, before, after):
+    row = {**model(), 'query_span_coverage': before}
+    source, _ = published(tmp_path, [row])
+    with pytest.raises(ValueError):
+        patch_model_store(source, tmp_path / 'output', {0: {**row, 'query_span_coverage': after}})
+    assert not (tmp_path / 'output/model_store').exists()
+
+
+@pytest.mark.parametrize('value', [None, True, 12, 1.5, -0.0, '植物', {'b': [1, -0.0], 'a': None}])
+def test_immutable_values_survive_admission_updates_exactly(tmp_path, value):
+    row = {**model(), 'query_span_coverage': value}
+    source, _ = published(tmp_path, [row])
+    changed = {**row, 'status': 'unresolved'}
+    output = tmp_path / 'output'
+    patch_model_store(source, output, {0: changed})
+    receipt(output)
+    assert store._json(list(store.iter_models(output))) == store._json([changed])
+
+
+@pytest.mark.parametrize('route', ['update', 'append', 'revision'])
+def test_patch_still_validates_mutable_context_before_publication(tmp_path, route):
+    row = model()
+    source, _ = published(tmp_path, [row])
+    for i, value in enumerate((float('nan'), float('inf'), '\ud800')):
+        output = tmp_path / str(i)
+        changed = {**row, 'unknown': value}
+        changes = {0: changed} if route == 'update' else {}
+        options = {'appended': [changed]} if route == 'append' else {'revisions': [changed]} if route == 'revision' else {}
+        with pytest.raises((ValueError, UnicodeError)):
+            patch_model_store(source, output, changes, **options)
+        assert not (output / 'model_store').exists()
+
+
 @pytest.mark.parametrize('codec', ['gzip', 'auto'])
 @pytest.mark.parametrize('explicit_order', [False, True])
 def test_new_partial_candidates_append_without_changing_old_partial_references(tmp_path, codec, explicit_order):

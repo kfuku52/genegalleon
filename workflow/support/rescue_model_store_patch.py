@@ -3,6 +3,7 @@ import bisect
 import copy
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -23,6 +24,22 @@ def _copy(source, destination, expected):
             out.write(block)
     if checksum.hexdigest() != expected or store._digest(destination) != expected:
         raise ValueError('Model-store changed during immutable copying')
+
+
+def _same_json_value(a, b):
+    """Compare immutable values before the final envelope's JSON validation.
+
+    Equal built-in scalars need no temporary JSON strings. Containers and
+    subclasses retain the serialized comparison, including field order and
+    JSON's distinctions between numeric types and the signs of zero.
+    """
+    kind = type(a)
+    if kind is type(b):
+        if kind in (str, int, bool, type(None)):
+            return a == b
+        if kind is float and math.isfinite(a) and math.isfinite(b):
+            return a == b and (a != 0.0 or math.copysign(1.0, a) == math.copysign(1.0, b))
+    return store._json(a) == store._json(b)
 
 
 def patch_model_store(source, destination, changes, *, appended=(), revisions=(), frozen_key=None,
@@ -98,7 +115,9 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                     if ordinal in affected:
                         # Serialize only the current record. A cohort can have
                         # millions of changed candidates with large DNA bodies.
-                        replacement_body, replacement = store._pack(changes[ordinal])
+                        # The final write validates the envelope once, with
+                        # its ordinal, before publishing any candidate bytes.
+                        replacement_body, replacement = store._pack(changes[ordinal], _validate_envelope=False)
                         replacement['ordinal'] = ordinal
                         if replacement['context'].get('partial_evidence') != envelope['context'].get('partial_evidence'):
                             raise ValueError('Admission patch changed predictor/DNA or partial evidence')
@@ -111,7 +130,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                             body_keys = json.loads(raw_body)
                             if (store._pack(original)[0] != replacement_body
                                     or any(k not in changes[ordinal]
-                                           or store._json(original[k]) != store._json(changes[ordinal][k])
+                                           or not _same_json_value(original[k], changes[ordinal][k])
                                            for k in body_keys)):
                                 raise ValueError('Admission patch changed predictor/DNA values')
                             normalized.add(ordinal)
@@ -119,7 +138,7 @@ def patch_model_store(source, destination, changes, *, appended=(), revisions=()
                             immutable = ('coverage', 'identity', 'query_span_coverage', 'query_start', 'query_end',
                                          'query_length', 'query', 'id', 'paf', 'raw_prediction', 'genetic_code')
                             a, b = envelope['context'], replacement['context']
-                            if any((k in a) != (k in b) or (k in a and store._json(a[k]) != store._json(b[k]))
+                            if any((k in a) != (k in b) or (k in a and not _same_json_value(a[k], b[k]))
                                    for k in immutable):
                                 raise ValueError('Admission patch changed predictor/DNA values')
                         envelope = replacement

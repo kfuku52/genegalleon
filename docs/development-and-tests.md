@@ -543,6 +543,27 @@ equivalence, see [HGT rendering performance](hgt-rendering-performance.md).
 For bounded shell pools with uneven worker durations, output equivalence and
 failure propagation, see [background worker scheduling](background-worker-scheduling.md).
 
+## Rescue model-store admission comparisons
+
+`benchmark_rescue_model_store_patch.py` generates synthetic candidates and
+measures admission updates separately from input creation and candidate loading.
+Each timed patch runs in a fresh process. With `--baseline`, the runner alternates
+before/after order and requires an identical manifest digest, including every
+output file's SHA-256. Use the same runtime with no concurrent tests or builds:
+
+```bash
+bash workflow/tests/run_in_runtime.sh python workflow/tests/benchmark_rescue_model_store_patch.py \
+  --implementation workflow/support/rescue_model_store_patch.py \
+  --baseline /mounted/baseline/rescue_model_store_patch.py \
+  --records 20000 --repeats 3 --codec gzip
+```
+
+Mount a saved baseline module with `GENEGALLEON_DOCKER_EXTRA_BINDS` when it is
+outside the checkout. Repeat with `--change-every 100` for sparse changes, or
+`--codec zstd` in a runtime containing `zstandard`. The reported peak RSS includes
+candidate loading; timed wall time covers only the patch. These results measure
+synthetic storage updates, not whole-genome prediction or total cohort runtime.
+
 ## Reference annotation comparisons
 
 For WGD Ks-index reuse, species-grouped duplication pairs and bounded Swiss-Prot

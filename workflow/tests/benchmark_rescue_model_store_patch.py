@@ -25,7 +25,8 @@ def worker(args):
     spec=importlib.util.spec_from_file_location('benchmark_patch',args.implementation)
     patch=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(patch)
-    changes={i:{**record,'status':'unresolved','problems':['ambiguous_locus']} for i,record in enumerate(store.iter_models(source))}
+    changes={i:{**record,'status':'unresolved','problems':['ambiguous_locus']}
+             for i,record in enumerate(store.iter_models(source)) if i % args.change_every == 0}
     started=time.perf_counter()
     result=patch.patch_model_store(source,Path(args.destination),changes)
     maximum=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -37,12 +38,16 @@ def main():
     store, model, receipt = modules()
     p=argparse.ArgumentParser()
     p.add_argument('--implementation',required=True)
+    p.add_argument('--baseline',help='Optional prior implementation; alternate fresh before/after workers.')
+    p.add_argument('--change-every',type=int,default=1,help='Change one in every N candidates (default: all).')
     p.add_argument('--repeats',type=int,default=3)
     p.add_argument('--records',type=int,default=20000)
     p.add_argument('--source')
     p.add_argument('--destination')
     p.add_argument('--codec',choices=['auto','gzip','zstd'],default='auto')
     args=p.parse_args()
+    if args.change_every < 1 or args.repeats < 1 or args.records < 1:
+        p.error('records, repeats and change-every must be positive')
     if args.source:
         worker(args)
         return
@@ -56,16 +61,29 @@ def main():
                 yield m
         before=store.write_model_store(source,rows(),codec=args.codec,shard_bytes=65536)
         receipt(source)
-        measurements=[]
+        implementations={'after':args.implementation}
+        if args.baseline:
+            implementations={'before':args.baseline,**implementations}
+        measurements={label:[] for label in implementations}
         for i in range(args.repeats):
-            command=[sys.executable,'-B',str(Path(__file__).resolve()),'--implementation',args.implementation,
-                     '--source',str(source),'--destination',str(base/('output-'+str(i)))]
-            result=subprocess.run(command,capture_output=True,text=True,check=True)
-            measurements.append(json.loads(result.stdout))
-        assert len({x['output_sha256'] for x in measurements})==1
-        print(json.dumps({'records':args.records,'sequence_nt':12006,'shards':len(before['shards']),
+            order=list(implementations)
+            if i % 2:
+                order.reverse()
+            for label in order:
+                command=[sys.executable,'-B',str(Path(__file__).resolve()),'--implementation',implementations[label],
+                         '--change-every',str(args.change_every),
+                         '--source',str(source),'--destination',str(base/(label+'-'+str(i)))]
+                result=subprocess.run(command,capture_output=True,text=True,check=True)
+                measurements[label].append(json.loads(result.stdout))
+        assert len({x['output_sha256'] for runs in measurements.values() for x in runs})==1
+        report={'records':args.records,'changed_records':len(range(0,args.records,args.change_every)),
+                          'sequence_nt':12006,'shards':len(before['shards']),
                           'python':sys.version,'codec':before['codec'],'implementation_sha256':hashlib.sha256(Path(args.implementation).read_bytes()).hexdigest(),
-                          'measurements':measurements}))
+                          'measurements':measurements['after']}
+        if args.baseline:
+            report['baseline_sha256']=hashlib.sha256(Path(args.baseline).read_bytes()).hexdigest()
+            report['comparisons']=measurements
+        print(json.dumps(report))
 
 
 if __name__ == '__main__':
