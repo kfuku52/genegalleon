@@ -450,6 +450,13 @@ The repository includes tests that intentionally enforce shell hygiene, for exam
 
 When editing shell code, `workflow/tests/test_shell_static_safety.py` is often the fastest high-signal check to run first.
 
+For `gg_input_generation` format-contract changes, locate pinned expectations with
+`rg -n format_contract_version workflow/tests`. Run
+`test_gg_input_generation_core_validation.py` and
+`test_gg_input_generation_end_to_end.py::test_provenance_rebuild_reuses_verified_download_cache`
+through the runtime wrapper before publication. The latter checks that a stale
+format contract rebuilds derived outputs while reusing the verified download cache.
+
 The editable entrypoint blocks are also the source for a machine-readable
 configuration schema. Validate the forwarding registry or render current
 JSON/Markdown reference data with:

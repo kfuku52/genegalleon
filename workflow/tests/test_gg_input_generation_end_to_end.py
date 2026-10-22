@@ -732,7 +732,7 @@ def test_provenance_rebuild_reuses_verified_download_cache(tmp_path: Path):
     assert cached == {
         path: (path.read_bytes(), path.stat().st_mtime_ns) for path in cached
     }
-    assert json.loads(manifest.read_text())["parameters"]["format_contract_version"] == "29"
+    assert json.loads(manifest.read_text())["parameters"]["format_contract_version"] == "30"
     assert len(list((root / "species_cds").glob("*.fa.gz"))) == 2
     assert formatted == {
         path: gzip.decompress((root / path).read_bytes()) for path in formatted
