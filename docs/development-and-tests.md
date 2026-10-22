@@ -253,7 +253,11 @@ resource requirements. Fewer concurrent runners favor total Actions minutes;
 the complete SIF Python job may finish later than the former eight-way split.
 Default-branch and manual runs finish their active validation so a long runtime
 build can populate the exact cache. GitHub keeps one pending run per ref and
-replaces intermediate waiting runs with the latest. Superseded PR validation
+replaces intermediate waiting first attempts with the latest. An explicit rerun
+of a trusted workflow uses a run-specific concurrency group: later pushes do not
+discard its exact-commit validation or displace another pending main-branch run.
+PR retries retain branch coalescing. This does not automatically rerun cancelled
+work or skip any checks. Superseded PR validation
 still cancels. This avoids repeatedly discarding cold builds before they finish.
 Main-branch runtime selection compares against the last ancestor whose complete
 SIF check succeeded, so coalescing cannot hide an intermediate code change behind

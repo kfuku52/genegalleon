@@ -197,11 +197,15 @@ def test_tests_workflow_avoids_duplicate_branch_push_and_pull_request_runs():
     assert "pull_request" in triggers
     assert "workflow_dispatch" in triggers
     # Default-branch/manual builds retain progress through repeated pushes.
-    # Waiting runs remain coalesced by the same repository/ref group.
+    # First attempts and PR retries retain repository/ref coalescing. Trusted
+    # exact-run retries must be independent of both later pushes and each other.
     concurrency = workflow["concurrency"]
     assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
     assert "github.event.pull_request.head.repo.full_name || github.repository" in concurrency["group"]
     assert "github.event.pull_request.head.ref || github.ref_name" in concurrency["group"]
+    assert "github.event_name != 'pull_request' && github.run_attempt > 1" in concurrency["group"]
+    assert "format('retry-{0}', github.run_id)" in concurrency["group"]
+    assert workflow["permissions"] == {"contents": "read"}
 
 
 def test_workflow_run_blocks_do_not_interpolate_untrusted_event_data():

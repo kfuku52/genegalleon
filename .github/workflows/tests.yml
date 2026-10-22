@@ -16,9 +16,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event_name != 'pull_request' && github.run_attempt > 1 && format('retry-{0}', github.run_id) || github.event.pull_request.head.ref || github.ref_name }}
   # Let the active default-branch build finish and warm the exact SIF cache.
-  # GitHub coalesces waiting runs; superseded PR validation can still stop.
+  # First attempts still coalesce. An explicit trusted retry gets its own run
+  # group, so later pushes cannot discard required exact-commit validation.
+  # PR retries retain branch coalescing and superseded-PR cancellation.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
